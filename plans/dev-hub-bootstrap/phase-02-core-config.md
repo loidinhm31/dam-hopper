@@ -11,7 +11,7 @@
 
 - **Date**: 2026-03-21
 - **Priority**: Critical
-- **Status**: `pending`
+- **Status**: `done`
 
 Implement the configuration layer in `@dev-hub/core`: TOML schema definition, parsing/validation/serialization, workspace discovery (auto-detect project types by scanning for marker files), and TypeScript type definitions for all config structures.
 
@@ -201,3 +201,7 @@ interface BuildPreset {
 With config parsing and discovery complete, proceed in parallel to:
 - [Phase 03 — Core: Git Operations](./phase-03-core-git.md) — git service uses `ProjectConfig` to locate repos
 - [Phase 04 — Core: Build & Run](./phase-04-core-build-run.md) — build service uses presets and effective commands
+
+## Completed
+
+2026-03-21 — All success criteria met. Config parsing, discovery, finder implemented. 43 tests pass.
