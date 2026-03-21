@@ -6,17 +6,24 @@
     "build": "pnpm -r build",
     "dev": "pnpm -r --parallel dev",
     "lint": "eslint packages/",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "check": "pnpm build && pnpm lint && pnpm test:run"
   },
   "engines": {
     "node": ">=20",
     "pnpm": ">=9"
   },
   "devDependencies": {
+    "@dev-hub/core": "workspace:*",
+    "@dev-hub/server": "workspace:*",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0",
     "prettier": "^3.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.0"
   }
 }
