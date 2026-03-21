@@ -1,0 +1,15 @@
+[workspace]
+name = "my-workspace"
+
+[[projects]]
+name = "api-server"
+path = "./api-server"
+type = "maven"
+build_command = "mvn clean package -DskipTests"
+run_command = "java -jar target/app.jar"
+env_file = ".env"
+
+[[projects]]
+name = "web-app"
+path = "./web-app"
+type = "pnpm"

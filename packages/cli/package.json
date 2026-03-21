@@ -1,0 +1,28 @@
+{
+  "name": "@dev-hub/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "dev-hub": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.9.0",
+    "@dev-hub/core": "workspace:*",
+    "commander": "^12.0.0",
+    "ink": "^5.0.1",
+    "ink-spinner": "^5.0.0",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0"
+  }
+}
