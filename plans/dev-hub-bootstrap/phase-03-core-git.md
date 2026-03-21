@@ -12,7 +12,8 @@
 
 - **Date**: 2026-03-21
 - **Priority**: High
-- **Status**: `pending`
+- **Status**: `done`
+- **Completed**: 2026-03-21
 
 Implement all git operations in `@dev-hub/core`: status queries, fetch/pull/push, branch management, worktree management, and bulk operations across all workspace projects. All operations emit progress events consumable by both CLI (Ink) and server (SSE).
 

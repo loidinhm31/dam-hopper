@@ -2,6 +2,7 @@
 
 **Phase 01: Project Setup** — Complete
 **Phase 02: Core: Config & Discovery** — Complete
+**Phase 03: Core: Git Operations** — Complete
 
 ## Project Overview
 
@@ -150,17 +151,86 @@ All packages are functional stubs ready for feature development:
 #### File Utilities (utils/fs.ts)
 - **fileExists(path)**: Async wrapper around fs.access() for path existence checks
 
+### Phase 03: Git Operations
+
+**@dev-hub/core** now includes comprehensive git operations with real-time progress events:
+
+#### Types & Events (types.ts)
+- **GitStatus**: Project git state (branch, ahead/behind, staged/modified/untracked files, stash, last commit)
+- **GitOperationResult**: Fetch/pull/push outcome with success flag, summary, error, duration
+- **Worktree**: Worktree metadata (path, branch, commit hash, isMain, isLocked)
+- **WorktreeAddOptions**: Branch, path, createBranch, baseBranch parameters
+- **BranchInfo**: Branch metadata (name, isRemote, isCurrent, tracking, ahead/behind counts)
+- **BranchUpdateResult**: Branch update outcome (name, success, reason)
+- **GitProgressEvent**: Real-time progress events (projectName, operation, phase, message, percent)
+
+#### Status Queries (status.ts)
+- **getStatus(projectPath, projectName)**: Retrieve complete GitStatus for a project
+  - Queries branch name, tracking status, commit info, stash presence
+  - Counts staged, modified, untracked files
+  - Calculates ahead/behind commit counts via git rev-list
+
+#### Core Operations (operations.ts)
+- **gitFetch(projectPath, projectName, emitter)**: Fetch all remotes with prune
+  - Emits progress events for UI/CLI feedback
+  - Returns GitOperationResult with duration
+  - Error wrapping via wrapGitError
+- **gitPull(projectPath, projectName, emitter)**: Pull current branch with progress tracking
+  - Same event emission pattern as fetch
+- **gitPush(projectPath, projectName, emitter)**: Push current branch (signature consistent with fetch/pull)
+
+#### Worktree Management (worktree.ts)
+- **listWorktrees(projectPath)**: Query all worktrees in repo
+  - Returns array of Worktree objects with all metadata
+- **addWorktree(projectPath, options)**: Create new worktree
+  - Supports createBranch flag for new branch worktrees
+  - Optional path and baseBranch parameters
+- **removeWorktree(projectPath, worktreePath)**: Delete worktree safely
+- **lockWorktree(projectPath, worktreePath, reason)**: Prevent accidental removal
+- **unlockWorktree(projectPath, worktreePath)**: Release lock
+
+#### Branch Operations (branch.ts)
+- **listBranches(projectPath)**: List all local and remote branches
+  - Includes tracking info, ahead/behind counts per branch
+- **updateBranch(projectPath, branchName, strategy)**: Update single branch
+  - Strategies: merge, rebase, fast-forward
+  - Returns BranchUpdateResult
+- **updateAllBranches(projectPath, emitter)**: Batch update all branches with progress events
+  - Filters out detached HEAD or special branches
+
+#### Error Handling (errors.ts)
+- **GitError**: Base error class extending Error with projectName, originalError, cause chain
+- **wrapGitError(err, projectName)**: Normalize any error into GitError with context
+
+#### Bulk Operations (bulk.ts)
+- **BulkGitService**: Concurrent operations across multiple projects
+  - Configurable concurrency (default: 4) via p-limit
+  - **fetchAll(projects)**: Fetch across all projects with progress aggregation
+  - **pullAll(projects)**: Pull across all projects with progress aggregation
+  - **statusAll(projects)**: Query status for all projects concurrently
+  - **updateAllBranches(projects)**: Batch branch updates returning Map<projectName, results[]>
+  - Progress emitter bubbles up individual and overall completion events
+
 ## Key Files Reference
 
 | File | Purpose |
 |------|---------|
-| packages/core/src/index.ts | VERSION + config module export |
+| packages/core/src/index.ts | VERSION + config + git module exports |
 | packages/core/src/config/schema.ts | Zod schemas for config validation |
 | packages/core/src/config/presets.ts | Build presets for each project type |
 | packages/core/src/config/parser.ts | TOML read/write + validation |
 | packages/core/src/config/finder.ts | Walk-up config file discovery |
 | packages/core/src/config/discovery.ts | Project type detection + directory scan |
 | packages/core/src/config/index.ts | Config module barrel exports |
+| packages/core/src/git/types.ts | Git operation interfaces and enums |
+| packages/core/src/git/errors.ts | GitError wrapper + error handling |
+| packages/core/src/git/progress.ts | GitProgressEmitter + event utilities |
+| packages/core/src/git/status.ts | getStatus branch/file queries |
+| packages/core/src/git/operations.ts | gitFetch, gitPull, gitPush implementations |
+| packages/core/src/git/worktree.ts | Worktree CRUD operations |
+| packages/core/src/git/branch.ts | Branch listing and update operations |
+| packages/core/src/git/bulk.ts | BulkGitService concurrent operations |
+| packages/core/src/git/index.ts | Git module barrel exports |
 | packages/core/src/utils/fs.ts | Shared fileExists utility |
 | packages/cli/src/index.ts | Commander CLI bootstrap |
 | packages/server/src/index.ts | Hono API server + conditional startup |
@@ -172,8 +242,9 @@ All packages are functional stubs ready for feature development:
 | pnpm-workspace.yaml | Workspace package filter |
 | dev-hub.toml | Example workspace configuration |
 
-## Testing Coverage (Phase 02)
+## Testing Coverage
 
+### Phase 02 (Config & Discovery)
 Five test files with 43 tests covering:
 - **schema.test.ts**: Schema validation, type inference, unique name constraint
 - **presets.test.ts**: Preset retrieval, effective command resolution
@@ -181,10 +252,16 @@ Five test files with 43 tests covering:
 - **parser.test.ts**: TOML read/write, validation errors, path resolution
 - **discovery.test.ts**: Project type detection, directory scanning, git detection
 
-## Next Steps (Phase 03+)
+### Phase 03 (Git Operations)
+Three test files covering:
+- **errors.test.ts**: Error wrapping and cause chain preservation
+- **worktree.test.ts**: Worktree CRUD and lock operations
+- **integration.test.ts**: End-to-end git operations (fetch, pull, push, status)
 
-- Implement core git operations (clone, pull, worktree management)
-- Add CLI subcommands (init, add, build, run) with config integration
-- Build server API routes for workspace management and config endpoints
-- Develop web dashboard components and state management
-- Add real-time project discovery and status monitoring
+## Next Steps (Phase 04+)
+
+- Add CLI subcommands (init, add, build, run, sync) with git integration
+- Build server API routes for workspace management, config, and git operations
+- Implement SSE endpoints for real-time git progress streaming
+- Develop web dashboard components for project status and git workflows
+- Add project cloning and remote management capabilities
