@@ -11,7 +11,7 @@
 
 - **Date**: 2026-03-21
 - **Priority**: High
-- **Status**: `pending`
+- **Status**: `done`
 
 Build the `@dev-hub/cli` package — the primary user interface. Uses Commander.js for command parsing, @clack/prompts for interactive setup, and Ink (React terminal renderer) for rich status displays and progress bars. The CLI is a thin layer that delegates all logic to `@dev-hub/core`.
 
@@ -202,26 +202,26 @@ packages/cli/src/
 
 ## Todo List
 
-- [ ] Update cli package.json with all dependencies
-- [ ] Configure tsup for JSX support
-- [ ] Implement workspace loading utility with error handling
-- [ ] Implement `init` command with @clack/prompts flow
-- [ ] Implement `StatusTable` Ink component
-- [ ] Implement `status` command
-- [ ] Implement `ProgressList` Ink component
-- [ ] Implement `git fetch` command with progress display
-- [ ] Implement `git pull` command with dirty-repo warnings
-- [ ] Implement `git push` command
-- [ ] Implement `git worktree add/list/remove` commands
-- [ ] Implement `git branch list/update` commands
-- [ ] Implement `BuildOutput` Ink component
-- [ ] Implement `build` command (single + all)
-- [ ] Implement `run`, `stop`, `logs` commands
-- [ ] Implement `ui` command (spawn server + open browser)
-- [ ] Wire up all commands in index.ts
-- [ ] Test all commands produce correct help text
-- [ ] Test init flow with mocked prompts
-- [ ] Verify `dev-hub --version` works after build
+- [x] Update cli package.json with all dependencies
+- [x] Configure tsup for JSX support
+- [x] Implement workspace loading utility with error handling
+- [x] Implement `init` command with @clack/prompts flow
+- [x] Implement `StatusTable` Ink component
+- [x] Implement `status` command
+- [x] Implement `ProgressList` Ink component
+- [x] Implement `git fetch` command with progress display
+- [x] Implement `git pull` command with dirty-repo warnings
+- [x] Implement `git push` command
+- [x] Implement `git worktree add/list/remove` commands
+- [x] Implement `git branch list/update` commands
+- [x] Implement `BuildOutput` Ink component
+- [x] Implement `build` command (single + all)
+- [x] Implement `run`, `stop`, `logs` commands
+- [x] Implement `ui` command (spawn server + open browser)
+- [x] Wire up all commands in index.ts
+- [x] Test all commands produce correct help text
+- [x] Test init flow with mocked prompts
+- [x] Verify `dev-hub --version` works after build
 
 ## Success Criteria
 
