@@ -4,6 +4,7 @@ import { registerInit } from "./commands/init.js";
 import { registerStatus } from "./commands/status.js";
 import { registerBuild } from "./commands/build.js";
 import { registerRun } from "./commands/run.js"; // resolves run.tsx
+import { registerExec } from "./commands/exec.js";
 import { registerUi } from "./commands/ui.js";
 import { registerFetch } from "./commands/git/fetch.js";
 import { registerPull } from "./commands/git/pull.js";
@@ -15,7 +16,9 @@ const program = new Command();
 
 program
   .name("dev-hub")
-  .description("Workspace management CLI for multi-project development environments")
+  .description(
+    "Workspace management CLI for multi-project development environments",
+  )
   .version(VERSION);
 
 // Top-level commands
@@ -23,6 +26,7 @@ registerInit(program);
 registerStatus(program);
 registerBuild(program);
 registerRun(program);
+registerExec(program);
 registerUi(program);
 
 // git subcommand group
