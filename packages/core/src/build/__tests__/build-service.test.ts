@@ -8,8 +8,6 @@ function makeProject(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
     name: "test-project",
     path: process.cwd(),
     type: "custom",
-    buildCommand: undefined,
-    runCommand: undefined,
     envFile: undefined,
     tags: undefined,
     ...overrides,
@@ -24,7 +22,7 @@ describe("BuildService", () => {
   });
 
   it("runs a simple build command successfully", async () => {
-    const project = makeProject({ buildCommand: 'echo "hello build"' });
+    const project = makeProject({ services: [{ name: "default", buildCommand: 'echo "hello build"' }] });
     const result = await service.build(project, process.cwd());
 
     expect(result.success).toBe(true);
@@ -35,7 +33,7 @@ describe("BuildService", () => {
   });
 
   it("returns failure for non-zero exit code", async () => {
-    const project = makeProject({ buildCommand: "exit 1" });
+    const project = makeProject({ services: [{ name: "default", buildCommand: "exit 1" }] });
     const result = await service.build(project, process.cwd());
 
     expect(result.success).toBe(false);
@@ -43,7 +41,7 @@ describe("BuildService", () => {
   });
 
   it("returns error result when no command configured", async () => {
-    const project = makeProject({ type: "custom", buildCommand: undefined });
+    const project = makeProject({ type: "custom" });
     const result = await service.build(project, process.cwd());
 
     expect(result.success).toBe(false);
@@ -51,7 +49,7 @@ describe("BuildService", () => {
   });
 
   it("emits started, output, and completed events in order", async () => {
-    const project = makeProject({ buildCommand: 'echo "line1"' });
+    const project = makeProject({ services: [{ name: "default", buildCommand: 'echo "line1"' }] });
     const events: BuildProgressEvent["phase"][] = [];
 
     service.emitter.on("progress", (e) => events.push(e.phase));
@@ -64,7 +62,7 @@ describe("BuildService", () => {
   });
 
   it("emits failed event for failing command", async () => {
-    const project = makeProject({ buildCommand: "exit 2" });
+    const project = makeProject({ services: [{ name: "default", buildCommand: "exit 2" }] });
     const phases: BuildProgressEvent["phase"][] = [];
 
     service.emitter.on("progress", (e) => phases.push(e.phase));
@@ -76,8 +74,8 @@ describe("BuildService", () => {
 
   it("buildMultiple runs all projects", async () => {
     const projects = [
-      makeProject({ name: "p1", buildCommand: 'echo "p1"' }),
-      makeProject({ name: "p2", buildCommand: 'echo "p2"' }),
+      makeProject({ name: "p1", services: [{ name: "default", buildCommand: 'echo "p1"' }] }),
+      makeProject({ name: "p2", services: [{ name: "default", buildCommand: 'echo "p2"' }] }),
     ];
     const results = await service.buildMultiple(projects, process.cwd());
 

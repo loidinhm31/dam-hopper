@@ -7,8 +7,7 @@ function makeProject(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
     name: "test-proc",
     path: process.cwd(),
     type: "custom",
-    buildCommand: undefined,
-    runCommand: "node -e \"setInterval(() => {}, 100)\"",
+    services: [{ name: "default", runCommand: "node -e \"setInterval(() => {}, 100)\"" }],
     envFile: undefined,
     tags: undefined,
     ...overrides,
@@ -63,8 +62,8 @@ describe("RunService", () => {
   });
 
   it("getAllProcesses returns all tracked processes", async () => {
-    await service.start(makeProject({ name: "a", runCommand: "node -e \"setInterval(()=>{},100)\"" }), process.cwd());
-    await service.start(makeProject({ name: "b", runCommand: "node -e \"setInterval(()=>{},100)\"" }), process.cwd());
+    await service.start(makeProject({ name: "a", services: [{ name: "default", runCommand: "node -e \"setInterval(()=>{},100)\"" }] }), process.cwd());
+    await service.start(makeProject({ name: "b", services: [{ name: "default", runCommand: "node -e \"setInterval(()=>{},100)\"" }] }), process.cwd());
 
     expect(service.getAllProcesses()).toHaveLength(2);
 
@@ -82,7 +81,7 @@ describe("RunService", () => {
   });
 
   it("throws when no run command configured", async () => {
-    const project = makeProject({ runCommand: undefined, type: "custom" });
+    const project = makeProject({ type: "custom", services: [] });
     await expect(service.start(project, process.cwd())).rejects.toThrow("No run command");
   });
 
@@ -130,7 +129,7 @@ describe("RunService", () => {
 
   it("getLogs returns captured log lines", async () => {
     const project = makeProject({
-      runCommand: "node -e \"console.log('log1'); console.log('log2'); setInterval(()=>{},100)\"",
+      services: [{ name: "default", runCommand: "node -e \"console.log('log1'); console.log('log2'); setInterval(()=>{},100)\"" }],
     });
 
     const outputPromise = waitForPhase(service, "output");
@@ -145,8 +144,8 @@ describe("RunService", () => {
   });
 
   it("stopAll stops all managed processes", async () => {
-    await service.start(makeProject({ name: "x", runCommand: "node -e \"setInterval(()=>{},100)\"" }), process.cwd());
-    await service.start(makeProject({ name: "y", runCommand: "node -e \"setInterval(()=>{},100)\"" }), process.cwd());
+    await service.start(makeProject({ name: "x", services: [{ name: "default", runCommand: "node -e \"setInterval(()=>{},100)\"" }] }), process.cwd());
+    await service.start(makeProject({ name: "y", services: [{ name: "default", runCommand: "node -e \"setInterval(()=>{},100)\"" }] }), process.cwd());
 
     await service.stopAll();
 
@@ -154,7 +153,7 @@ describe("RunService", () => {
   });
 
   it("detects crashed process", async () => {
-    const project = makeProject({ name: "crasher", runCommand: "node -e \"process.exit(1)\"" });
+    const project = makeProject({ name: "crasher", services: [{ name: "default", runCommand: "node -e \"process.exit(1)\"" }] });
 
     const crashedPromise = waitForPhase(service, "crashed");
     await service.start(project, process.cwd());

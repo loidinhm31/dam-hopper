@@ -76,8 +76,6 @@ describe("resolveEnv", () => {
       name: "proj",
       path: dir,
       type: "custom",
-      buildCommand: undefined,
-      runCommand: undefined,
       envFile,
       tags: undefined,
     };

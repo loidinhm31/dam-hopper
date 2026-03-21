@@ -85,8 +85,14 @@ export async function writeConfig(
         name: p.name,
         path: relPath,
         type: p.type,
-        ...(p.buildCommand !== undefined && { build_command: p.buildCommand }),
-        ...(p.runCommand !== undefined && { run_command: p.runCommand }),
+        ...(p.services !== undefined && {
+          services: p.services.map((s) => ({
+            name: s.name,
+            ...(s.buildCommand !== undefined && { build_command: s.buildCommand }),
+            ...(s.runCommand !== undefined && { run_command: s.runCommand }),
+          })),
+        }),
+        ...(p.commands !== undefined && { commands: p.commands }),
         ...(p.envFile !== undefined && { env_file: p.envFile }),
         ...(p.tags !== undefined && { tags: p.tags }),
       };

@@ -39,7 +39,6 @@ name = "my-workspace"
 name = "api"
 path = "./api"
 type = "maven"
-build_command = "mvn package"
 `;
     const configPath = join(tmpDir, "dev-hub.toml");
     await writeFile(configPath, toml);
@@ -48,8 +47,42 @@ build_command = "mvn package"
     expect(config.workspace.name).toBe("my-workspace");
     expect(config.projects).toHaveLength(1);
     expect(config.projects[0].name).toBe("api");
-    expect(config.projects[0].buildCommand).toBe("mvn package");
     expect(config.projects[0].type).toBe("maven");
+  });
+
+  it("parses project with services and commands", async () => {
+    const toml = `
+[workspace]
+name = "my-workspace"
+
+[[projects]]
+name = "app"
+path = "./app"
+type = "pnpm"
+
+[[projects.services]]
+name = "frontend"
+run_command = "pnpm dev:frontend"
+build_command = "pnpm build:frontend"
+
+[[projects.services]]
+name = "backend"
+run_command = "pnpm dev:backend"
+
+[projects.commands]
+test = "pnpm test"
+lint = "pnpm lint"
+`;
+    const configPath = join(tmpDir, "dev-hub.toml");
+    await writeFile(configPath, toml);
+
+    const config = await readConfig(configPath);
+    expect(config.projects[0].services).toHaveLength(2);
+    expect(config.projects[0].services![0].name).toBe("frontend");
+    expect(config.projects[0].services![0].buildCommand).toBe("pnpm build:frontend");
+    expect(config.projects[0].services![1].name).toBe("backend");
+    expect(config.projects[0].services![1].runCommand).toBe("pnpm dev:backend");
+    expect(config.projects[0].commands).toEqual({ test: "pnpm test", lint: "pnpm lint" });
   });
 
   it("resolves project paths to absolute", async () => {
@@ -116,20 +149,54 @@ type = "gradle"
 
     const original = await readConfig(configPath);
 
-    // Write back to the same directory
     const configPath2 = join(tmpDir, "dev-hub2.toml");
     await writeConfig(configPath2, original);
 
-    // Paths must be relative (not absolute) in the written file
     const content = await readFile(configPath2, "utf-8");
     expect(content).toContain("round-trip-ws");
     expect(content).toContain("backend");
     expect(content).toContain("gradle");
-    expect(content).not.toContain(tmpDir); // no absolute paths leaked
+    expect(content).not.toContain(tmpDir);
 
-    // Re-reading should produce the same absolute paths
     const reread = await readConfig(configPath2);
     expect(reread.projects[0].path).toBe(original.projects[0].path);
+  });
+
+  it("round-trips services and commands", async () => {
+    const toml = `
+[workspace]
+name = "ws"
+
+[[projects]]
+name = "app"
+path = "./app"
+type = "pnpm"
+
+[[projects.services]]
+name = "frontend"
+run_command = "pnpm dev:frontend"
+build_command = "pnpm build:frontend"
+
+[[projects.services]]
+name = "backend"
+run_command = "pnpm dev:backend"
+
+[projects.commands]
+test = "pnpm test"
+`;
+    const configPath = join(tmpDir, "dev-hub.toml");
+    await writeFile(configPath, toml);
+
+    const original = await readConfig(configPath);
+    const configPath2 = join(tmpDir, "dev-hub2.toml");
+    await writeConfig(configPath2, original);
+
+    const reread = await readConfig(configPath2);
+    expect(reread.projects[0].services).toHaveLength(2);
+    expect(reread.projects[0].services![0].name).toBe("frontend");
+    expect(reread.projects[0].services![0].buildCommand).toBe("pnpm build:frontend");
+    expect(reread.projects[0].services![1].runCommand).toBe("pnpm dev:backend");
+    expect(reread.projects[0].commands).toEqual({ test: "pnpm test" });
   });
 
   it("writeConfig fails gracefully on unwritable directory", async () => {
