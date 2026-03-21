@@ -1,10 +1,15 @@
 import { execa } from "execa";
 import EventEmitter from "eventemitter3";
-import { getEffectiveCommand } from "../config/index.js";
+import { getProjectServices } from "../config/index.js";
 import type { ProjectConfig } from "../config/index.js";
 import { resolveEnv } from "./env-loader.js";
 import { LogBuffer } from "./log-buffer.js";
-import type { RunningProcess, ProcessLogEntry, RunProgressEvent } from "./types.js";
+import { pipeLines } from "./stream-utils.js";
+import type {
+  RunningProcess,
+  ProcessLogEntry,
+  RunProgressEvent,
+} from "./types.js";
 
 interface ManagedProcess {
   info: RunningProcess;
@@ -23,15 +28,58 @@ export class RunService {
   private readonly processes = new Map<string, ManagedProcess>();
   readonly emitter = new EventEmitter<{ progress: [RunProgressEvent] }>();
 
-  async start(project: ProjectConfig, workspaceRoot: string): Promise<RunningProcess> {
-    const existing = this.processes.get(project.name);
-    if (existing && existing.info.status === "running") {
-      throw new Error(`Process for "${project.name}" is already running. Stop it first.`);
+  // --- Key helpers ---
+  // O(n) scans are acceptable: a workspace has a small, bounded number of services
+  // (typically 1-5 per project, <<50 total). A secondary index would add complexity
+  // for no practical gain.
+
+  private processKey(projectName: string, serviceName: string): string {
+    return `${projectName}:${serviceName}`;
+  }
+
+  private firstKeyForProject(projectName: string): string | undefined {
+    const prefix = `${projectName}:`;
+    for (const key of this.processes.keys()) {
+      if (key.startsWith(prefix)) return key;
+    }
+    return undefined;
+  }
+
+  private allKeysForProject(projectName: string): string[] {
+    const prefix = `${projectName}:`;
+    return Array.from(this.processes.keys()).filter((k) =>
+      k.startsWith(prefix),
+    );
+  }
+
+  // --- Core process spawn ---
+
+  private async _startService(
+    project: ProjectConfig,
+    serviceName: string,
+    workspaceRoot: string,
+  ): Promise<RunningProcess> {
+    const services = getProjectServices(project);
+    const service = services.find((s) => s.name === serviceName);
+
+    // Guard against internal misuse (public callers validate serviceName before calling this).
+    if (!service) {
+      throw new Error(
+        `Service "${serviceName}" not found for project "${project.name}"`,
+      );
     }
 
-    const command = getEffectiveCommand(project, "run");
+    const command = service.runCommand;
     if (!command) {
       throw new Error(`No run command configured for "${project.name}"`);
+    }
+
+    const key = this.processKey(project.name, serviceName);
+    const existing = this.processes.get(key);
+    if (existing && existing.info.status === "running") {
+      throw new Error(
+        `Process for "${project.name}" is already running. Stop it first.`,
+      );
     }
 
     const env = await resolveEnv(project, workspaceRoot);
@@ -50,13 +98,18 @@ export class RunService {
 
     const pid = subprocess.pid;
     if (!pid) {
-      throw new Error(`Failed to spawn process for "${project.name}" — no PID assigned`);
+      throw new Error(
+        `Failed to spawn process for "${project.name}" — no PID assigned`,
+      );
     }
 
-    const prevRestartCount = this.processes.get(project.name)?.info.restartCount ?? 0;
+    const prevRestartCount = this.processes.get(key)?.info.restartCount ?? 0;
 
+    // serviceName is always set here; the RunningProcess.serviceName field is optional
+    // only to remain compatible with external code that constructs RunningProcess objects.
     const info: RunningProcess = {
       projectName: project.name,
+      serviceName,
       command,
       pid,
       startedAt: new Date(),
@@ -66,32 +119,39 @@ export class RunService {
 
     const logs = new LogBuffer();
 
-    const streamLines = (
-      stream: NodeJS.ReadableStream | null,
-      streamName: "stdout" | "stderr",
-    ) => {
-      if (!stream) return;
-      let partial = "";
-      stream.on("data", (chunk: Buffer) => {
-        partial += chunk.toString();
-        const lines = partial.split("\n");
-        partial = lines.pop() ?? "";
-        for (const line of lines) {
-          const entry: ProcessLogEntry = { timestamp: new Date(), stream: streamName, line };
-          logs.push(entry);
-          this.emitter.emit("progress", {
-            projectName: project.name,
-            phase: "output",
-            stream: streamName,
-            line,
-            process: { ...info },
-          });
-        }
+    pipeLines(subprocess.stdout, (line) => {
+      const entry: ProcessLogEntry = {
+        timestamp: new Date(),
+        stream: "stdout",
+        line,
+      };
+      logs.push(entry);
+      this.emitter.emit("progress", {
+        projectName: project.name,
+        serviceName,
+        phase: "output",
+        stream: "stdout",
+        line,
+        process: { ...info },
       });
-    };
+    });
 
-    streamLines(subprocess.stdout, "stdout");
-    streamLines(subprocess.stderr, "stderr");
+    pipeLines(subprocess.stderr, (line) => {
+      const entry: ProcessLogEntry = {
+        timestamp: new Date(),
+        stream: "stderr",
+        line,
+      };
+      logs.push(entry);
+      this.emitter.emit("progress", {
+        projectName: project.name,
+        serviceName,
+        phase: "output",
+        stream: "stderr",
+        line,
+        process: { ...info },
+      });
+    });
 
     const done = subprocess.then(
       () => {
@@ -99,21 +159,21 @@ export class RunService {
         info.exitCode = 0;
         this.emitter.emit("progress", {
           projectName: project.name,
+          serviceName,
           phase: "stopped",
           process: { ...info },
         });
       },
       (err: { exitCode?: number }) => {
-        // A process is "crashed" only when it exits with a non-zero, non-null code
-        // AND was not intentionally stopped by us via stop()/stopAll().
-        // We track this ourselves because err.killed is unreliable with shell:true.
-        const managed = this.processes.get(project.name);
+        const managed = this.processes.get(key);
         const intentional = managed?.intentionallyStopped ?? false;
-        const crashed = !intentional && err.exitCode !== 0 && err.exitCode !== null;
+        // exitCode is non-zero when the error branch fires; `!== 0` is sufficient.
+        const crashed = !intentional && err.exitCode !== 0;
         info.status = crashed ? "crashed" : "stopped";
         info.exitCode = err.exitCode ?? undefined;
         this.emitter.emit("progress", {
           projectName: project.name,
+          serviceName,
           phase: crashed ? "crashed" : "stopped",
           process: { ...info },
         });
@@ -130,10 +190,11 @@ export class RunService {
       intentionallyStopped: false,
     };
 
-    this.processes.set(project.name, managed);
+    this.processes.set(key, managed);
 
     this.emitter.emit("progress", {
       projectName: project.name,
+      serviceName,
       phase: "started",
       process: { ...info },
     });
@@ -141,8 +202,8 @@ export class RunService {
     return { ...info };
   }
 
-  async stop(projectName: string): Promise<void> {
-    const managed = this.processes.get(projectName);
+  private async _stopByKey(key: string): Promise<void> {
+    const managed = this.processes.get(key);
     if (!managed) return;
 
     managed.intentionallyStopped = true;
@@ -150,42 +211,132 @@ export class RunService {
 
     const exited = await Promise.race([
       managed.done.then(() => true),
-      new Promise<false>((resolve) => setTimeout(() => resolve(false), SIGTERM_TIMEOUT_MS)),
+      new Promise<false>((resolve) =>
+        setTimeout(() => resolve(false), SIGTERM_TIMEOUT_MS),
+      ),
     ]);
 
     if (!exited) {
       managed.kill("SIGKILL");
-      await managed.done;
+      try {
+        await managed.done;
+      } catch {
+        // Expected: process killed with SIGKILL; the done-promise rejection is intentional.
+      }
     }
 
-    // The done promise already emitted "stopped"/"crashed" — no duplicate emit here.
     managed.info.status = "stopped";
-    this.processes.delete(projectName);
+    this.processes.delete(key);
   }
 
-  async restart(projectName: string): Promise<RunningProcess> {
-    const managed = this.processes.get(projectName);
+  // --- Public API ---
+
+  /**
+   * Start a specific service (or the first service if no serviceName given).
+   * Throws if the named service is not found — no silent fallback.
+   */
+  async start(
+    project: ProjectConfig,
+    workspaceRoot: string,
+    serviceName?: string,
+  ): Promise<RunningProcess> {
+    const services = getProjectServices(project);
+    if (serviceName) {
+      const service = services.find((s) => s.name === serviceName);
+      if (!service) {
+        throw new Error(
+          `Service "${serviceName}" not found for project "${project.name}"`,
+        );
+      }
+      return this._startService(project, service.name, workspaceRoot);
+    }
+    const first = services[0];
+    if (!first) {
+      throw new Error(`No run command configured for "${project.name}"`);
+    }
+    return this._startService(project, first.name, workspaceRoot);
+  }
+
+  /**
+   * Start all services for a project concurrently.
+   * Services within a project are independent processes — parallel start is intentional.
+   */
+  async startAll(
+    project: ProjectConfig,
+    workspaceRoot: string,
+  ): Promise<RunningProcess[]> {
+    const services = getProjectServices(project);
+    return Promise.all(
+      services.map((s) => this._startService(project, s.name, workspaceRoot)),
+    );
+  }
+
+  /**
+   * Stop a specific service, or all services for a project if no serviceName given.
+   * Backward-compatible: stop(projectName) stops all services for that project.
+   */
+  async stop(projectName: string, serviceName?: string): Promise<void> {
+    if (serviceName) {
+      await this._stopByKey(this.processKey(projectName, serviceName));
+    } else {
+      const keys = this.allKeysForProject(projectName);
+      await Promise.allSettled(keys.map((k) => this._stopByKey(k)));
+    }
+  }
+
+  /**
+   * Restart a specific service (or first service if no serviceName given).
+   * If _startService fails after stopping, the service remains stopped and the
+   * error message reflects that state explicitly.
+   */
+  async restart(
+    projectName: string,
+    serviceName?: string,
+  ): Promise<RunningProcess> {
+    let key: string | undefined;
+    if (serviceName) {
+      key = this.processKey(projectName, serviceName);
+    } else {
+      key = this.firstKeyForProject(projectName);
+    }
+
+    const managed = key ? this.processes.get(key) : undefined;
     if (!managed) {
       throw new Error(`No process found for "${projectName}"`);
     }
 
+    const resolvedServiceName = managed.info.serviceName!; // always set by _startService
     const { project, workspaceRoot } = managed;
+    // Capture restartCount before stop() — _stopByKey deletes the map entry, so the
+    // managed object becomes inaccessible afterwards. _startService then initialises
+    // the new entry with restartCount=0 (key absent), and we patch it to prevCount+1 below.
     const prevRestartCount = managed.info.restartCount;
 
-    await this.stop(projectName);
+    await this.stop(projectName, resolvedServiceName);
 
-    await this.start(project, workspaceRoot);
+    try {
+      await this._startService(project, resolvedServiceName, workspaceRoot);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Failed to restart service "${resolvedServiceName}" for "${projectName}" ` +
+          `(service is now stopped): ${msg}`,
+      );
+    }
 
-    // Apply restartCount to the live info object (not the returned snapshot).
-    const newManaged = this.processes.get(projectName);
+    const newKey = this.processKey(projectName, resolvedServiceName);
+    const newManaged = this.processes.get(newKey);
     if (newManaged) {
       newManaged.info.restartCount = prevRestartCount + 1;
     }
 
-    const result = newManaged ? { ...newManaged.info } : ({ projectName } as RunningProcess);
+    const result = newManaged
+      ? { ...newManaged.info }
+      : ({ projectName } as RunningProcess);
 
     this.emitter.emit("progress", {
       projectName,
+      serviceName: resolvedServiceName,
       phase: "restarted",
       process: { ...result },
     });
@@ -193,24 +344,67 @@ export class RunService {
     return result;
   }
 
-  getProcess(projectName: string): RunningProcess | undefined {
-    const managed = this.processes.get(projectName);
+  /**
+   * Get a specific process, or the first process for a project if no serviceName given.
+   * Backward-compatible: getProcess(projectName) finds the first running service.
+   */
+  getProcess(
+    projectName: string,
+    serviceName?: string,
+  ): RunningProcess | undefined {
+    if (serviceName) {
+      const managed = this.processes.get(
+        this.processKey(projectName, serviceName),
+      );
+      return managed ? { ...managed.info } : undefined;
+    }
+    const key = this.firstKeyForProject(projectName);
+    const managed = key ? this.processes.get(key) : undefined;
     return managed ? { ...managed.info } : undefined;
+  }
+
+  /** Get all running processes for a specific project. */
+  getProcessesForProject(projectName: string): RunningProcess[] {
+    return this.allKeysForProject(projectName)
+      .map((k) => this.processes.get(k))
+      .filter((m): m is ManagedProcess => m !== undefined)
+      .map((m) => ({ ...m.info }));
   }
 
   getAllProcesses(): RunningProcess[] {
     return Array.from(this.processes.values()).map((m) => ({ ...m.info }));
   }
 
+  /**
+   * Get logs for the first (or only) service of a project.
+   * Backward-compatible with server route: getLogs(projectName, lines).
+   */
   getLogs(projectName: string, lines?: number): ProcessLogEntry[] {
-    const managed = this.processes.get(projectName);
+    const key = this.firstKeyForProject(projectName);
+    const managed = key ? this.processes.get(key) : undefined;
     if (!managed) return [];
-    return lines !== undefined ? managed.logs.getLast(lines) : managed.logs.getAll();
+    return lines !== undefined
+      ? managed.logs.getLast(lines)
+      : managed.logs.getAll();
+  }
+
+  /** Get logs for a specific named service. */
+  getServiceLogs(
+    projectName: string,
+    serviceName: string,
+    lines?: number,
+  ): ProcessLogEntry[] {
+    const managed = this.processes.get(
+      this.processKey(projectName, serviceName),
+    );
+    if (!managed) return [];
+    return lines !== undefined
+      ? managed.logs.getLast(lines)
+      : managed.logs.getAll();
   }
 
   async stopAll(): Promise<void> {
-    const names = Array.from(this.processes.keys());
-    // Use allSettled so all processes are stopped even if one throws.
-    await Promise.allSettled(names.map((name) => this.stop(name)));
+    const keys = Array.from(this.processes.keys());
+    await Promise.allSettled(keys.map((key) => this._stopByKey(key)));
   }
 }

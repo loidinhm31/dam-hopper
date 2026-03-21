@@ -2,6 +2,7 @@
 
 export interface BuildResult {
   projectName: string;
+  serviceName?: string;
   command: string;
   success: boolean;
   exitCode: number | null;
@@ -13,6 +14,7 @@ export interface BuildResult {
 
 export interface BuildProgressEvent {
   projectName: string;
+  serviceName?: string;
   phase: "started" | "output" | "completed" | "failed";
   stream?: "stdout" | "stderr";
   line?: string; // single line of output
@@ -23,6 +25,7 @@ export interface BuildProgressEvent {
 
 export interface RunningProcess {
   projectName: string;
+  serviceName?: string;
   command: string;
   pid: number;
   startedAt: Date;
@@ -39,6 +42,7 @@ export interface ProcessLogEntry {
 
 export interface RunProgressEvent {
   projectName: string;
+  serviceName?: string;
   phase: "started" | "output" | "stopped" | "crashed" | "restarted";
   stream?: "stdout" | "stderr";
   line?: string;

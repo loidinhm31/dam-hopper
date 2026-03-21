@@ -31,22 +31,22 @@ dev-hub/
 
 ## Tech Stack
 
-| Component | Technology | Version | Notes |
-|-----------|-----------|---------|-------|
-| Runtime | Node.js | 20+ LTS | Server & CLI execution |
-| Language | TypeScript | 5.7.x | Strict mode across all packages |
-| Package Manager | pnpm | 9.x | Workspaces support |
-| **CLI** | Commander | 12.x | Subcommand framework |
-| **CLI UI** | Ink + React | 5.x / 18.3.x | Terminal UI |
-| **Server** | Hono | 4.7.x | Lightweight HTTP API (14KB) |
-| **Web** | React + Vite | 19.x / 6.x | Full dashboard implementation |
-| **Web Routing** | React Router | 7.x | Client-side navigation |
-| **Web Icons** | Lucide React | 0.577.x | Icon library (30+ icons) |
-| **Styling** | Tailwind CSS | 4.x | v4 with Vite plugin |
-| **State** | TanStack Query | 5.67.x | Server state + SSE |
-| **Build** | tsup | 8.x | Fast bundler for packages |
-| **Linting** | ESLint + TypeScript | 9.x / 8.x | Flat config |
-| **Format** | Prettier | 3.x | Opinionated formatting |
+| Component       | Technology          | Version      | Notes                           |
+| --------------- | ------------------- | ------------ | ------------------------------- |
+| Runtime         | Node.js             | 20+ LTS      | Server & CLI execution          |
+| Language        | TypeScript          | 5.7.x        | Strict mode across all packages |
+| Package Manager | pnpm                | 9.x          | Workspaces support              |
+| **CLI**         | Commander           | 12.x         | Subcommand framework            |
+| **CLI UI**      | Ink + React         | 5.x / 18.3.x | Terminal UI                     |
+| **Server**      | Hono                | 4.7.x        | Lightweight HTTP API (14KB)     |
+| **Web**         | React + Vite        | 19.x / 6.x   | Full dashboard implementation   |
+| **Web Routing** | React Router        | 7.x          | Client-side navigation          |
+| **Web Icons**   | Lucide React        | 0.577.x      | Icon library (30+ icons)        |
+| **Styling**     | Tailwind CSS        | 4.x          | v4 with Vite plugin             |
+| **State**       | TanStack Query      | 5.67.x       | Server state + SSE              |
+| **Build**       | tsup                | 8.x          | Fast bundler for packages       |
+| **Linting**     | ESLint + TypeScript | 9.x / 8.x    | Flat config                     |
+| **Format**      | Prettier            | 3.x          | Opinionated formatting          |
 
 ## Architecture
 
@@ -93,6 +93,7 @@ Each package has its own `build` and `dev` scripts. Web package uses Vite dev se
 ## Core Implementations
 
 ### Phase 01: Project Setup
+
 All packages are functional stubs ready for feature development:
 
 - **@dev-hub/core**: Exports `VERSION` constant (0.1.0)
@@ -105,6 +106,7 @@ All packages are functional stubs ready for feature development:
 **@dev-hub/core** now includes complete configuration system:
 
 #### Configuration Schema (schema.ts)
+
 - **ProjectTypeSchema**: Enum of supported project types (maven, gradle, npm, pnpm, cargo, custom)
 - **ServiceConfigSchema**: Service-level build/run configuration
   - Fields: name (required), buildCommand (optional), runCommand (optional)
@@ -123,6 +125,7 @@ All packages are functional stubs ready for feature development:
   - Enforces unique project names via Zod refine
 
 #### Build Presets (presets.ts)
+
 - **PRESETS**: Predefined build configurations for each project type
   - **maven**: mvn clean install / mvn spring-boot:run
   - **gradle**: ./gradlew build / ./gradlew bootRun
@@ -141,6 +144,7 @@ All packages are functional stubs ready for feature development:
   - Returns empty string if no command defined
 
 #### Config I/O (parser.ts)
+
 - **validateConfig(raw)**: Zod validation returning Result<DevHubConfig, ZodError>
 - **readConfig(filePath)**: Parse TOML file with validation
   - Throws ConfigParseError on file read, TOML parse, or schema validation failure
@@ -154,6 +158,7 @@ All packages are functional stubs ready for feature development:
 - **Result<T, E>**: Discriminated union type for validation results
 
 #### Config System Enhancement: Services & Commands (Phase Update)
+
 - **ServiceConfig** now exported from schema.ts (available as @dev-hub/core export)
 - **BREAKING CHANGE**: ProjectConfig no longer includes buildCommand/runCommand fields
   - Projects without explicit services fall back to synthetic "default" service from type preset
@@ -162,6 +167,7 @@ All packages are functional stubs ready for feature development:
 - **Design decision**: dev command always from preset (services don't define devCommand)
 
 #### Config Discovery (finder.ts)
+
 - **findConfigFile(startDir)**: Walk-up algorithm from startDir to filesystem root
   - Stops at home directory to avoid system scans
   - Returns null if not found (not an error)
@@ -171,17 +177,19 @@ All packages are functional stubs ready for feature development:
 - **ConfigNotFoundError**: Custom error for missing config
 
 #### Project Discovery (discovery.ts)
+
 - **detectProjectType(projectDir)**: Marker-file detection with priority order
   - Order: cargo → maven → gradle → pnpm → npm (first match wins)
   - Fallback: npm if package.json exists
   - Returns null if no recognized markers found
 - **discoverProjects(rootDir)**: Scan directory for projects
-  - Filters out hidden dirs (.*) and node_modules
+  - Filters out hidden dirs (.\*) and node_modules
   - Concurrently detects types and checks for .git directory
   - Returns DiscoveredProject array (name, path, type, isGitRepo)
 - **DiscoveredProject**: Interface with git repo detection flag
 
 #### File Utilities (utils/fs.ts)
+
 - **fileExists(path)**: Async wrapper around fs.access() for path existence checks
 
 ### Phase 03: Git Operations
@@ -189,6 +197,7 @@ All packages are functional stubs ready for feature development:
 **@dev-hub/core** now includes comprehensive git operations with real-time progress events:
 
 #### Types & Events (types.ts)
+
 - **GitStatus**: Project git state (branch, ahead/behind, staged/modified/untracked files, stash, last commit)
 - **GitOperationResult**: Fetch/pull/push outcome with success flag, summary, error, duration
 - **Worktree**: Worktree metadata (path, branch, commit hash, isMain, isLocked)
@@ -198,12 +207,14 @@ All packages are functional stubs ready for feature development:
 - **GitProgressEvent**: Real-time progress events (projectName, operation, phase, message, percent)
 
 #### Status Queries (status.ts)
+
 - **getStatus(projectPath, projectName)**: Retrieve complete GitStatus for a project
   - Queries branch name, tracking status, commit info, stash presence
   - Counts staged, modified, untracked files
   - Calculates ahead/behind commit counts via git rev-list
 
 #### Core Operations (operations.ts)
+
 - **gitFetch(projectPath, projectName, emitter)**: Fetch all remotes with prune
   - Emits progress events for UI/CLI feedback
   - Returns GitOperationResult with duration
@@ -213,6 +224,7 @@ All packages are functional stubs ready for feature development:
 - **gitPush(projectPath, projectName, emitter)**: Push current branch (signature consistent with fetch/pull)
 
 #### Worktree Management (worktree.ts)
+
 - **listWorktrees(projectPath)**: Query all worktrees in repo
   - Returns array of Worktree objects with all metadata
 - **addWorktree(projectPath, options)**: Create new worktree
@@ -223,6 +235,7 @@ All packages are functional stubs ready for feature development:
 - **unlockWorktree(projectPath, worktreePath)**: Release lock
 
 #### Branch Operations (branch.ts)
+
 - **listBranches(projectPath)**: List all local and remote branches
   - Includes tracking info, ahead/behind counts per branch
 - **updateBranch(projectPath, branchName, strategy)**: Update single branch
@@ -232,10 +245,12 @@ All packages are functional stubs ready for feature development:
   - Filters out detached HEAD or special branches
 
 #### Error Handling (errors.ts)
+
 - **GitError**: Base error class extending Error with projectName, originalError, cause chain
 - **wrapGitError(err, projectName)**: Normalize any error into GitError with context
 
 #### Bulk Operations (bulk.ts)
+
 - **BulkGitService**: Concurrent operations across multiple projects
   - Configurable concurrency (default: 4) via p-limit
   - **fetchAll(projects)**: Fetch across all projects with progress aggregation
@@ -248,25 +263,56 @@ All packages are functional stubs ready for feature development:
 
 **@dev-hub/core** now includes build and process management:
 
-#### Build Operations (build.ts)
-- **BuildCommand**: Enum for build, dev, run operations
-- **BuildResult**: Success flag, output, duration, exit code
-- **buildProject(projectPath, command, emitter)**: Execute build/dev/run commands
-  - Returns BuildResult with full output and timing
-  - Emits progress events for real-time streaming
+#### Build Operations (build-service.ts)
 
-#### Process Management (process.ts)
-- **ProcessManager**: Stream-based process execution
-  - **start(projectPath, command)**: Start long-running process (server, dev)
-  - **getLogs(sessionId)**: Retrieve logs for active process
-  - **stop(sessionId)**: Terminate process gracefully
-  - **getStatus(sessionId)**: Query process state
+- **BuildResult**: Success flag, output, duration, exit code, optional `serviceName`
+- **BuildProgressEvent**: Real-time progress with optional `serviceName` context
+- **BuildService**:
+  - **build(project, workspaceRoot, serviceName?)**: Build a service (or first default)
+    - Emits BuildProgressEvent for each phase: started/output/completed/failed
+    - Never throws — errors captured in BuildResult
+  - **buildAll(project, workspaceRoot)**: Build all services within a project concurrently
+    - Services are independent; parallel execution is intentional
+  - **buildMultiple(projects, workspaceRoot, concurrency?)**: Build across multiple projects
+    - Cross-project concurrency controlled via p-limit (default: 4)
+
+#### Process Management (run-service.ts)
+
+- **RunningProcess**: Process state with optional `serviceName`, pid, status (running|stopped|crashed)
+- **RunProgressEvent**: Real-time progress with optional `serviceName` context
+- **RunService**:
+  - **start(project, workspaceRoot, serviceName?)**: Start a service (or first default)
+  - **startAll(project, workspaceRoot)**: Start all services concurrently
+  - **stop(projectName, serviceName?)**: Stop one service or all for project
+  - **restart(projectName, serviceName?)**: Stop and restart a service
+  - **getProcess(projectName, serviceName?)**: Get process state (or first running)
+  - **getProcessesForProject(projectName)**: Get all running services for a project
+  - **getAllProcesses()**: Get all running processes system-wide
+  - **getLogs(projectName, lines?)**: Get logs for first service
+  - **getServiceLogs(projectName, serviceName, lines?)**: Get logs for specific service
+  - **stopAll()**: Stop all running processes
+  - Processes keyed internally as `projectName:serviceName` for multi-service projects
+
+#### Custom Commands (command-service.ts)
+
+- **CommandService**:
+  - **execute(project, commandName, workspaceRoot)**: Execute named custom command
+    - Looks up command in `project.commands[commandName]`
+    - Emits BuildProgressEvent (reuses same event type)
+    - Never throws — errors captured in BuildResult
+
+#### Streaming Utilities (stream-utils.ts)
+
+- **pipeLines(stream, onLine)**: Shared line-splitter for stdout/stderr
+  - Splits chunks on newlines, buffers partial lines
+  - Flushes remaining partial on stream end
 
 ### Phase 05: CLI Commands & Components
 
 **@dev-hub/cli** now includes full command suite with Ink-based terminal UI:
 
 #### Command Implementations (commands/)
+
 - **init.ts**: Interactive workspace initialization via @clack/prompts
   - Guided project discovery and config generation
 - **status.ts**: Display git status for all projects via StatusTable component
@@ -280,6 +326,7 @@ All packages are functional stubs ready for feature development:
 - **git/branch.ts**: List and update branches with strategy selection
 
 #### CLI Utilities (utils/)
+
 - **workspace.ts**:
   - **loadWorkspace()**: Load config from current directory
   - **resolveProjects(name?, type?)**: Filter projects by name or type
@@ -289,19 +336,22 @@ All packages are functional stubs ready for feature development:
   - **printSuccess/Error/Warn()**: Colored console output
 
 #### Ink Components (components/)
+
 - **StatusTable.tsx**: Render git status in table format (project, branch, status, commits)
 - **ProgressList.tsx**: Display concurrent progress bars for bulk operations
 - **BuildOutput.tsx**: Live-streaming build command output
 - **LogViewer.tsx**: Tail and scroll logs from running processes
 
 #### Dependencies
+
 - **chalk**: Colored terminal text
 - **open**: Open URLs/files in default browser
 - **ink-table**: Terminal table rendering
 - **@clack/prompts**: Interactive CLI prompts
 - **vitest**: Unit testing framework
 
-#### Testing (src/__tests__/)
+#### Testing (src/**tests**/)
+
 - **help.test.ts**: CLI help text and command discovery
 - **workspace.test.ts**: Config loading and project resolution
 - **format.test.ts**: Color and formatting utilities
@@ -311,6 +361,7 @@ All packages are functional stubs ready for feature development:
 **@dev-hub/server** now includes complete HTTP API with Hono, SSE streaming, and type-safe RPC export:
 
 #### Server Context (services/context.ts)
+
 - **ServerContext**: Factory function returning shared state container
   - **emitter**: EventEmitter3 for progress events across routes
   - **sseClients**: Set tracking active SSE connections
@@ -319,6 +370,7 @@ All packages are functional stubs ready for feature development:
 - Isolation ensures multiple server instances don't interfere
 
 #### Error Handler (middleware/error-handler.ts)
+
 - **onError**: Hono error handler mapping GitError categories to HTTP status codes
   - GitError with "fetch" operation → 503 Service Unavailable
   - GitError with "merge" operation → 409 Conflict
@@ -328,6 +380,7 @@ All packages are functional stubs ready for feature development:
   - Returns JSON error response with message and operation context
 
 #### Workspace API Routes (routes/workspace.ts)
+
 - **GET /api/workspace**: Return workspace info (name, root directory)
   - 404 if no config loaded
 - **GET /api/projects**: List all projects with cached status
@@ -341,6 +394,7 @@ All packages are functional stubs ready for feature development:
   - 404 if project not found
 
 #### Git API Routes (routes/git.ts)
+
 - **POST /api/git/fetch**: Bulk fetch across all projects
   - Streams progress events via SSE connection
   - Returns { success: boolean, duration: number }
@@ -366,6 +420,7 @@ All packages are functional stubs ready for feature development:
   - 404 if project not found
 
 #### Build API Routes (routes/build.ts)
+
 - **POST /api/build/:project**: Trigger build with concurrency limit
   - Body: { command } (build | dev | run)
   - Returns { success: boolean, output: string, duration: number }
@@ -374,6 +429,7 @@ All packages are functional stubs ready for feature development:
   - 404 if project not found
 
 #### Processes API Routes (routes/processes.ts)
+
 - **GET /api/processes**: List all active process sessions
   - Returns ProcessSession[] array (id, projectName, command, startTime, status)
 - **POST /api/run/:project**: Start long-running process
@@ -392,6 +448,7 @@ All packages are functional stubs ready for feature development:
   - Returns { sessionId: string } (new session)
 
 #### Events API (routes/events.ts)
+
 - **GET /api/events**: SSE endpoint for real-time progress events
   - Streams GitProgressEvent objects as event data
   - Includes 30-second heartbeat to keep connection alive
@@ -400,6 +457,7 @@ All packages are functional stubs ready for feature development:
   - Manages SSE client set (add on connect, remove on disconnect)
 
 #### App Setup (app.ts)
+
 - **Hono app**: All routes mounted with middleware
   - **onError handler**: Global error catching (Hono v4 requirement)
   - Routes: workspace, git, build, processes, events
@@ -408,6 +466,7 @@ All packages are functional stubs ready for feature development:
 - Clean middleware composition with error context propagation
 
 #### Server Startup (index.ts)
+
 - **startServer(configPath?)**: Bootstrap Hono server
   - Loads workspace config from path or discovery
   - Creates shared ServerContext
@@ -419,8 +478,10 @@ All packages are functional stubs ready for feature development:
   - Allows 5-second grace period
   - Exits with code 0
 
-#### Testing (src/__tests__/)
+#### Testing (src/**tests**/)
+
 27 tests covering:
+
 - **workspace.test.ts**: GET /api/workspace, /api/projects, /api/projects/:name, status caching
 - **git.test.ts**: Fetch, pull, worktrees, branches endpoints with GitError mapping
 - **build.test.ts**: Build endpoint with 409 concurrency conflict, inProgressBuilds cleanup
@@ -431,73 +492,75 @@ All packages are functional stubs ready for feature development:
 
 ## Key Files Reference
 
-| File | Purpose |
-|------|---------|
-| packages/core/src/index.ts | VERSION + config + git + build module exports |
-| packages/core/src/config/schema.ts | Zod schemas for config validation |
-| packages/core/src/config/presets.ts | Build presets for each project type |
-| packages/core/src/config/parser.ts | TOML read/write + validation |
-| packages/core/src/config/finder.ts | Walk-up config file discovery |
-| packages/core/src/config/discovery.ts | Project type detection + directory scan |
-| packages/core/src/config/index.ts | Config module barrel exports |
-| packages/core/src/git/types.ts | Git operation interfaces and enums |
-| packages/core/src/git/errors.ts | GitError wrapper + error handling |
-| packages/core/src/git/progress.ts | GitProgressEmitter + event utilities |
-| packages/core/src/git/status.ts | getStatus branch/file queries |
-| packages/core/src/git/operations.ts | gitFetch, gitPull, gitPush implementations |
-| packages/core/src/git/worktree.ts | Worktree CRUD operations |
-| packages/core/src/git/branch.ts | Branch listing and update operations |
-| packages/core/src/git/bulk.ts | BulkGitService concurrent operations |
-| packages/core/src/git/index.ts | Git module barrel exports |
-| packages/core/src/build/build.ts | buildProject command execution |
-| packages/core/src/build/process.ts | ProcessManager for long-running commands |
-| packages/core/src/utils/fs.ts | Shared fileExists utility |
-| packages/cli/src/index.ts | Commander CLI bootstrap + command wiring |
-| packages/cli/src/utils/workspace.ts | loadWorkspace, resolveProjects helpers |
-| packages/cli/src/utils/format.ts | Color helpers + formatting utilities |
-| packages/cli/src/commands/init.ts | Interactive workspace initialization |
-| packages/cli/src/commands/status.ts | Git status table display |
-| packages/cli/src/commands/build.ts | Build single/all projects |
-| packages/cli/src/commands/run.tsx | Run/stop/logs with Ink components |
-| packages/cli/src/commands/ui.ts | Start server + open dashboard |
-| packages/cli/src/commands/git/*.ts | fetch, pull, push, worktree, branch |
-| packages/cli/src/components/*.tsx | StatusTable, ProgressList, BuildOutput, LogViewer |
-| packages/cli/src/__tests__/*.ts | help, workspace, format unit tests |
-| packages/server/src/index.ts | startServer + graceful shutdown |
-| packages/server/src/app.ts | Hono app setup with onError, routes, static serving, AppType export |
-| packages/server/src/services/context.ts | ServerContext factory (emitter, SSE clients, caches) |
-| packages/server/src/middleware/error-handler.ts | Error type mapping and HTTP status codes |
-| packages/server/src/routes/workspace.ts | GET /api/workspace, /api/projects, /api/projects/:name, /api/projects/:name/status |
-| packages/server/src/routes/git.ts | POST/GET/DELETE /api/git/{fetch,pull,worktrees,branches} |
-| packages/server/src/routes/build.ts | POST /api/build/:project with 409 concurrency conflict |
-| packages/server/src/routes/processes.ts | GET /api/processes, POST/DELETE/POST-restart /api/run/:project |
-| packages/server/src/routes/events.ts | GET /api/events SSE endpoint with heartbeat |
-| packages/server/src/__tests__/*.ts | workspace, git, build, processes, events, error-handler, app tests |
-| packages/web/src/main.tsx | React entry point with QueryClient setup |
-| packages/web/src/App.tsx | BrowserRouter + route definitions |
-| packages/web/src/index.css | Dark theme CSS variables and Tailwind v4 setup |
-| packages/web/src/api/client.ts | Typed fetch API client with namespaced endpoints |
-| packages/web/src/api/queries.ts | TanStack Query hooks for all API endpoints |
-| packages/web/src/hooks/useSSE.ts | EventSource connection with auto-reconnect and query invalidation |
-| packages/web/src/hooks/useSSEEvents.ts | Per-event-type SSE subscription hook |
-| packages/web/src/lib/utils.ts | cn() merger, formatDuration, timeAgo helpers |
-| packages/web/src/components/atoms/*.tsx | Badge, Button, BranchBadge, GitStatusBadge, ConnectionDot |
-| packages/web/src/components/molecules/OverviewCard.tsx | Project status overview card |
-| packages/web/src/components/organisms/*.tsx | Sidebar, BuildLog, ProgressList |
-| packages/web/src/components/templates/AppLayout.tsx | Page layout wrapper with sidebar |
-| packages/web/src/pages/*.tsx | DashboardPage, ProjectsPage, ProjectDetailPage, GitPage, BuildPage, ProcessesPage, SettingsPage |
-| packages/web/tsconfig.json | TypeScript config with @/* path alias |
-| package.json | Root workspace config (Node 20+, pnpm 9+) |
-| tsconfig.base.json | Base TS compiler options |
-| eslint.config.js | ESLint flat config (TS support) |
-| .prettierrc | Code formatter settings |
-| pnpm-workspace.yaml | Workspace package filter |
-| dev-hub.toml | Example workspace configuration |
+| File                                                   | Purpose                                                                                         |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| packages/core/src/index.ts                             | VERSION + config + git + build module exports                                                   |
+| packages/core/src/config/schema.ts                     | Zod schemas for config validation                                                               |
+| packages/core/src/config/presets.ts                    | Build presets for each project type                                                             |
+| packages/core/src/config/parser.ts                     | TOML read/write + validation                                                                    |
+| packages/core/src/config/finder.ts                     | Walk-up config file discovery                                                                   |
+| packages/core/src/config/discovery.ts                  | Project type detection + directory scan                                                         |
+| packages/core/src/config/index.ts                      | Config module barrel exports                                                                    |
+| packages/core/src/git/types.ts                         | Git operation interfaces and enums                                                              |
+| packages/core/src/git/errors.ts                        | GitError wrapper + error handling                                                               |
+| packages/core/src/git/progress.ts                      | GitProgressEmitter + event utilities                                                            |
+| packages/core/src/git/status.ts                        | getStatus branch/file queries                                                                   |
+| packages/core/src/git/operations.ts                    | gitFetch, gitPull, gitPush implementations                                                      |
+| packages/core/src/git/worktree.ts                      | Worktree CRUD operations                                                                        |
+| packages/core/src/git/branch.ts                        | Branch listing and update operations                                                            |
+| packages/core/src/git/bulk.ts                          | BulkGitService concurrent operations                                                            |
+| packages/core/src/git/index.ts                         | Git module barrel exports                                                                       |
+| packages/core/src/build/build.ts                       | buildProject command execution                                                                  |
+| packages/core/src/build/process.ts                     | ProcessManager for long-running commands                                                        |
+| packages/core/src/utils/fs.ts                          | Shared fileExists utility                                                                       |
+| packages/cli/src/index.ts                              | Commander CLI bootstrap + command wiring                                                        |
+| packages/cli/src/utils/workspace.ts                    | loadWorkspace, resolveProjects helpers                                                          |
+| packages/cli/src/utils/format.ts                       | Color helpers + formatting utilities                                                            |
+| packages/cli/src/commands/init.ts                      | Interactive workspace initialization                                                            |
+| packages/cli/src/commands/status.ts                    | Git status table display                                                                        |
+| packages/cli/src/commands/build.ts                     | Build single/all projects                                                                       |
+| packages/cli/src/commands/run.tsx                      | Run/stop/logs with Ink components                                                               |
+| packages/cli/src/commands/ui.ts                        | Start server + open dashboard                                                                   |
+| packages/cli/src/commands/git/\*.ts                    | fetch, pull, push, worktree, branch                                                             |
+| packages/cli/src/components/\*.tsx                     | StatusTable, ProgressList, BuildOutput, LogViewer                                               |
+| packages/cli/src/**tests**/\*.ts                       | help, workspace, format unit tests                                                              |
+| packages/server/src/index.ts                           | startServer + graceful shutdown                                                                 |
+| packages/server/src/app.ts                             | Hono app setup with onError, routes, static serving, AppType export                             |
+| packages/server/src/services/context.ts                | ServerContext factory (emitter, SSE clients, caches)                                            |
+| packages/server/src/middleware/error-handler.ts        | Error type mapping and HTTP status codes                                                        |
+| packages/server/src/routes/workspace.ts                | GET /api/workspace, /api/projects, /api/projects/:name, /api/projects/:name/status              |
+| packages/server/src/routes/git.ts                      | POST/GET/DELETE /api/git/{fetch,pull,worktrees,branches}                                        |
+| packages/server/src/routes/build.ts                    | POST /api/build/:project with 409 concurrency conflict                                          |
+| packages/server/src/routes/processes.ts                | GET /api/processes, POST/DELETE/POST-restart /api/run/:project                                  |
+| packages/server/src/routes/events.ts                   | GET /api/events SSE endpoint with heartbeat                                                     |
+| packages/server/src/**tests**/\*.ts                    | workspace, git, build, processes, events, error-handler, app tests                              |
+| packages/web/src/main.tsx                              | React entry point with QueryClient setup                                                        |
+| packages/web/src/App.tsx                               | BrowserRouter + route definitions                                                               |
+| packages/web/src/index.css                             | Dark theme CSS variables and Tailwind v4 setup                                                  |
+| packages/web/src/api/client.ts                         | Typed fetch API client with namespaced endpoints                                                |
+| packages/web/src/api/queries.ts                        | TanStack Query hooks for all API endpoints                                                      |
+| packages/web/src/hooks/useSSE.ts                       | EventSource connection with auto-reconnect and query invalidation                               |
+| packages/web/src/hooks/useSSEEvents.ts                 | Per-event-type SSE subscription hook                                                            |
+| packages/web/src/lib/utils.ts                          | cn() merger, formatDuration, timeAgo helpers                                                    |
+| packages/web/src/components/atoms/\*.tsx               | Badge, Button, BranchBadge, GitStatusBadge, ConnectionDot                                       |
+| packages/web/src/components/molecules/OverviewCard.tsx | Project status overview card                                                                    |
+| packages/web/src/components/organisms/\*.tsx           | Sidebar, BuildLog, ProgressList                                                                 |
+| packages/web/src/components/templates/AppLayout.tsx    | Page layout wrapper with sidebar                                                                |
+| packages/web/src/pages/\*.tsx                          | DashboardPage, ProjectsPage, ProjectDetailPage, GitPage, BuildPage, ProcessesPage, SettingsPage |
+| packages/web/tsconfig.json                             | TypeScript config with @/\* path alias                                                          |
+| package.json                                           | Root workspace config (Node 20+, pnpm 9+)                                                       |
+| tsconfig.base.json                                     | Base TS compiler options                                                                        |
+| eslint.config.js                                       | ESLint flat config (TS support)                                                                 |
+| .prettierrc                                            | Code formatter settings                                                                         |
+| pnpm-workspace.yaml                                    | Workspace package filter                                                                        |
+| dev-hub.toml                                           | Example workspace configuration                                                                 |
 
 ## Testing Coverage
 
 ### Phase 02 (Config & Discovery)
+
 Five test files with 43 tests covering:
+
 - **schema.test.ts**: Schema validation, type inference, unique name constraint
 - **presets.test.ts**: Preset retrieval, effective command resolution
 - **finder.test.ts**: Walk-up directory traversal, home directory boundary
@@ -505,19 +568,25 @@ Five test files with 43 tests covering:
 - **discovery.test.ts**: Project type detection, directory scanning, git detection
 
 ### Phase 03 (Git Operations)
+
 Three test files covering:
+
 - **errors.test.ts**: Error wrapping and cause chain preservation
 - **worktree.test.ts**: Worktree CRUD and lock operations
 - **integration.test.ts**: End-to-end git operations (fetch, pull, push, status)
 
 ### Phase 05 (CLI Commands & Components)
+
 Three test files covering:
+
 - **help.test.ts**: CLI help text discovery and command parsing
 - **workspace.test.ts**: Config loading from filesystem and project filtering
 - **format.test.ts**: Color output and duration formatting utilities
 
 ### Phase 06 (Server API)
+
 Seven test files with 27 tests covering:
+
 - **workspace.test.ts**: Workspace info endpoint and project listing with status caching
 - **git.test.ts**: Git fetch/pull/worktrees/branches endpoints with error type detection
 - **build.test.ts**: Build concurrency limit and in-progress tracking
@@ -527,10 +596,12 @@ Seven test files with 27 tests covering:
 - **app.test.ts**: App initialization, route mounting, static file serving, AppType export
 
 ### Phase 07 (Web Dashboard)
+
 No tests yet. Future test coverage should include:
-- **components/*.test.tsx**: Atom/molecule/organism snapshot and interaction tests
-- **hooks/*.test.ts**: useSSE reconnect, useSSEEvents subscriptions, custom hook behavior
-- **pages/*.test.tsx**: Page rendering, navigation, data loading
+
+- **components/\*.test.tsx**: Atom/molecule/organism snapshot and interaction tests
+- **hooks/\*.test.ts**: useSSE reconnect, useSSEEvents subscriptions, custom hook behavior
+- **pages/\*.test.tsx**: Page rendering, navigation, data loading
 - **api/queries.test.ts**: Query hook behavior with TanStack Query testing utilities
 - **api/client.test.ts**: API client request/response handling and error cases
 
@@ -539,11 +610,13 @@ No tests yet. Future test coverage should include:
 **@dev-hub/web** now includes a fully functional React 19 dashboard with routing, state management, components, and real-time updates:
 
 #### Configuration & Setup (main.tsx)
+
 - **QueryClient**: TanStack Query with 10-second staleTime and 1-retry defaults
 - **QueryClientProvider**: Wraps App for global query caching
 - **Root DOM mount**: Strict mode for development warnings
 
 #### Routing (App.tsx)
+
 - **BrowserRouter + Routes**: React Router v7 navigation
 - **Route mappings**:
   - `/` → DashboardPage (overview + project status)
@@ -555,6 +628,7 @@ No tests yet. Future test coverage should include:
   - `/settings` → SettingsPage (workspace configuration)
 
 #### API Client (api/client.ts)
+
 - **Typed interfaces**: ProjectType, ProjectConfig, GitStatus, Worktree, Branch, BuildResult, ProcessInfo, GitOpResult
 - **Fetch-based HTTP client**: GET, POST, DELETE methods with error handling
 - **Base path**: `/api` with URL-encoded project names for special characters
@@ -565,12 +639,14 @@ No tests yet. Future test coverage should include:
   - Processes: list, start, stop, restart, logs
 
 #### State Management (api/queries.ts)
+
 - **Query hooks**: useWorkspace, useProjects, useProject, useProjectStatus, useWorktrees, useBranches, useProcesses, useProcessLogs
 - **Refetch intervals**: Projects (30s), Processes (5s), Process logs (3s)
 - **Mutation hooks**: useGitFetch, useGitPull, useGitPush, useBuildStart, useProcessStart, useProcessStop, useProcessRestart
 - **Auto-invalidation**: On mutation success, related queries re-fetch
 
 #### Real-time Updates (hooks/useSSE.ts)
+
 - **EventSource connection**: Connects to `/api/events` on mount
 - **Event subscription system**: Global listener map for event type dispatch
 - **Auto-reconnect**: Exponential backoff (1s → 30s max) on connection failure
@@ -579,10 +655,12 @@ No tests yet. Future test coverage should include:
 - **Timer cleanup**: Cancels pending retry timers on unmount (memory leak fix)
 
 #### Per-Event Subscriptions (hooks/useSSEEvents.ts)
+
 - **useSSEEvents(type)**: Subscribe to specific event type with callback
 - **Manual unsubscribe**: Returned cleanup function removes listener
 
 #### Utilities (lib/utils.ts)
+
 - **cn()**: Tailwind class merging (clsx + tailwind-merge)
 - **formatDuration()**: Convert milliseconds to human-readable (1.5s, 2m 30s, etc)
 - **timeAgo()**: Relative timestamps (2 minutes ago, just now)
@@ -590,6 +668,7 @@ No tests yet. Future test coverage should include:
 #### Component Library
 
 **Atoms** (reusable single-purpose components):
+
 - **Badge.tsx**: Generic badge with color variants (default, success, error, warning, info)
 - **Button.tsx**: Interactive button with size/variant props, loading state
 - **BranchBadge.tsx**: Display branch name with icon and styling
@@ -597,17 +676,21 @@ No tests yet. Future test coverage should include:
 - **ConnectionDot.tsx**: Visual indicator for SSE connection status (green/red)
 
 **Molecules** (multi-atom compositions):
+
 - **OverviewCard.tsx**: Dashboard card showing project overview (status, branch, last commit)
 
 **Organisms** (feature-complete sections):
+
 - **Sidebar.tsx**: Navigation menu with routes and active link highlighting
 - **ProgressList.tsx**: Display concurrent operation progress bars (from CLI, adapted for web)
 - **BuildLog.tsx**: Real-time build output streaming with scrolling
 
 **Templates** (page-level layouts):
+
 - **AppLayout.tsx**: Header + sidebar + main content wrapper with responsive grid
 
 #### Page Components (pages/)
+
 - **DashboardPage.tsx**: Overview dashboard with workspace info and project summary
 - **ProjectsPage.tsx**: Full project listing with filtering and status
 - **ProjectDetailPage.tsx**: Individual project view with git/build operations
@@ -617,12 +700,14 @@ No tests yet. Future test coverage should include:
 - **SettingsPage.tsx**: Workspace and user settings
 
 #### Styling (index.css)
+
 - **Dark theme**: CSS variables for colors (neutral, slate, brand colors)
 - **Tailwind v4**: @-rules for utilities and components
 - **Base styles**: Typography, spacing, transitions
 - **Custom utilities**: Animation classes, grid layouts
 
 #### Dependencies
+
 - **react-router-dom@7.13.1**: Client-side routing with v7 API
 - **@tanstack/react-query@5.67.0**: Server state management and caching
 - **lucide-react@0.577.0**: Icon library (30+ icons for UI)
@@ -632,6 +717,7 @@ No tests yet. Future test coverage should include:
 - **@tailwindcss/vite@4.0.0**: Tailwind integration for Vite
 
 #### TSConfig (tsconfig.json)
+
 - **Path alias**: `@/*` → `src/*` for clean imports
 - Extends base config (strict: true, ES2022, bundler resolution)
 
@@ -642,6 +728,7 @@ Comprehensive test infrastructure with 152 passing tests across 23 test files, c
 #### Test Infrastructure
 
 **Vitest Workspace Configuration** (vitest.workspace.ts):
+
 - Root workspace runner config: `export default ["packages/*/vitest.config.ts"];`
 - Per-package vitest configs (core, cli, server):
   - Core: `environment: "node"`, `testTimeout: 30000` (git operations can be slow), `include: ["src/**/*.test.ts"]`
@@ -650,6 +737,7 @@ Comprehensive test infrastructure with 152 passing tests across 23 test files, c
 - Web package: `environment: "jsdom"`, uses React Testing Library
 
 **Test Files by Package**:
+
 - **@dev-hub/core** (100 tests across 10 files):
   - `src/config/__tests__/`: schema.test.ts, parser.test.ts, discovery.test.ts, presets.test.ts, finder.test.ts
   - `src/git/__tests__/`: errors.test.ts, status.test.ts, operations.test.ts, worktree.test.ts, branch.test.ts, bulk.test.ts
@@ -664,7 +752,8 @@ Comprehensive test infrastructure with 152 passing tests across 23 test files, c
 
 #### Test Utilities & Fixtures
 
-**Test Utilities** (packages/core/src/__test-utils__/):
+**Test Utilities** (packages/core/src/**test-utils**/):
+
 - **git-helpers.ts**:
   - `createTempGitRepo(options)`: Creates temp git repository with optional commits and branches
   - `createBareRemote()`: Creates bare git repository for remote testing
@@ -672,7 +761,8 @@ Comprehensive test infrastructure with 152 passing tests across 23 test files, c
 - **workspace-helpers.ts**:
   - `createTempWorkspace(projects)`: Creates temp dev-hub.toml with marker files for project type detection
 
-**Fixtures Directory** (__fixtures__/workspace/):
+**Fixtures Directory** (**fixtures**/workspace/):
+
 - **dev-hub.toml**: Workspace config with 3 projects (maven, pnpm, cargo)
 - **maven-project/**: pom.xml marker file
 - **pnpm-project/**: package.json + pnpm-lock.yaml
@@ -682,6 +772,7 @@ Comprehensive test infrastructure with 152 passing tests across 23 test files, c
 #### Test Coverage by Area
 
 **Config & Discovery Tests**:
+
 - Schema validation: valid/invalid TOML, type constraints, unique names
 - Parser: read/write, round-trip fidelity, path resolution, error handling
 - Discovery: Project type detection, directory scanning, git repo detection
@@ -689,6 +780,7 @@ Comprehensive test infrastructure with 152 passing tests across 23 test files, c
 - Presets: Build command defaults, effective command resolution
 
 **Git Operation Tests** (integration with real temp repos):
+
 - Status: Branch detection, file counting, ahead/behind calculation
 - Operations: Fetch/pull/push with success/failure paths
 - Worktrees: Add/list/remove/lock operations
@@ -696,12 +788,14 @@ Comprehensive test infrastructure with 152 passing tests across 23 test files, c
 - Bulk operations: Concurrent fetch/pull across multiple projects with concurrency limit (default: 4), progress event aggregation
 
 **Build & Process Tests** (integration):
+
 - Env loader: .env file parsing with various formats
 - Log buffer: Circular buffer eviction, retrieval, clearing
 - Build service: Successful/failed builds, command execution, output capture
 - Run service: Process lifecycle (start/stop/restart), log streaming, status tracking
 
 **API Endpoint Tests** (using Hono's app.request() helper):
+
 - Workspace routes: GET /api/workspace, /api/projects, /api/projects/:name, /api/projects/:name/status
 - Git routes: POST /api/git/fetch, /api/git/pull, /api/git/branches/:project, worktree CRUD
 - Build routes: POST /api/build/:project with concurrency conflict handling (409)
@@ -709,7 +803,8 @@ Comprehensive test infrastructure with 152 passing tests across 23 test files, c
 - Events routes: SSE endpoint with 30-second heartbeat
 - Error handler: GitError category mapping to HTTP status codes
 
-**E2E Test** (__tests__/e2e.test.ts):
+**E2E Test** (**tests**/e2e.test.ts):
+
 - Creates temp workspace with pnpm project
 - Initializes git repos with commits
 - Starts server programmatically
@@ -722,12 +817,14 @@ Comprehensive test infrastructure with 152 passing tests across 23 test files, c
 #### CI/CD Integration
 
 **Root package.json scripts**:
+
 - `"test"`: Vitest watch mode (development)
 - `"test:run"`: Vitest run mode (CI, single pass)
 - `"test:coverage"`: Coverage report with @vitest/coverage-v8
 - `"check"`: Full CI check (pnpm build && pnpm lint && pnpm test:run)
 
 **CI Requirements**:
+
 - Node.js 20+ LTS
 - pnpm 9.x
 - git (pre-installed in most CI environments)
