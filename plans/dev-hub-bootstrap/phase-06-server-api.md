@@ -12,7 +12,8 @@
 
 - **Date**: 2026-03-21
 - **Priority**: High
-- **Status**: `pending`
+- **Status**: `done`
+- **Completion Date**: 2026-03-21
 
 Build the `@dev-hub/server` package — a Hono-based HTTP API that exposes all core services to the web dashboard. REST endpoints for CRUD operations, SSE for real-time streaming (git progress, build output, process logs). Static file serving for the pre-built web dashboard. Hono RPC enables type-safe client generation consumed by the web package.
 
