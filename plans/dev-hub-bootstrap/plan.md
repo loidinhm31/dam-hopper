@@ -22,7 +22,7 @@ Build a tool that manages a workspace of multiple sub-projects (Java/Maven, Grad
 | # | Phase | Status | File |
 |---|-------|--------|------|
 | 1 | Project Setup (monorepo, tooling) | `done` | [phase-01-project-setup.md](./phase-01-project-setup.md) |
-| 2 | Core: Config & Discovery | `pending` | [phase-02-core-config.md](./phase-02-core-config.md) |
+| 2 | Core: Config & Discovery | `done` | [phase-02-core-config.md](./phase-02-core-config.md) |
 | 3 | Core: Git Operations | `pending` | [phase-03-core-git.md](./phase-03-core-git.md) |
 | 4 | Core: Build & Run | `pending` | [phase-04-core-build-run.md](./phase-04-core-build-run.md) |
 | 5 | CLI | `pending` | [phase-05-cli.md](./phase-05-cli.md) |

@@ -12,7 +12,9 @@
   },
   "scripts": {
     "build": "tsup",
-    "dev": "tsup --watch"
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "eventemitter3": "^5.0.1",
@@ -23,7 +25,9 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@types/node": "^22.19.15",
     "tsup": "^8.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.0"
   }
 }
