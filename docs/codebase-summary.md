@@ -3,6 +3,8 @@
 **Phase 01: Project Setup** — Complete
 **Phase 02: Core: Config & Discovery** — Complete
 **Phase 03: Core: Git Operations** — Complete
+**Phase 04: Core: Build & Run** — Complete
+**Phase 05: CLI: Commands & Components** — Complete
 
 ## Project Overview
 

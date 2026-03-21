@@ -25,7 +25,7 @@ Build a tool that manages a workspace of multiple sub-projects (Java/Maven, Grad
 | 2 | Core: Config & Discovery | `done` | [phase-02-core-config.md](./phase-02-core-config.md) |
 | 3 | Core: Git Operations | `done` | [phase-03-core-git.md](./phase-03-core-git.md) |
 | 4 | Core: Build & Run | `done` | [phase-04-core-build-run.md](./phase-04-core-build-run.md) |
-| 5 | CLI | `pending` | [phase-05-cli.md](./phase-05-cli.md) |
+| 5 | CLI | `done` | [phase-05-cli.md](./phase-05-cli.md) |
 | 6 | Server API | `pending` | [phase-06-server-api.md](./phase-06-server-api.md) |
 | 7 | Web Dashboard | `pending` | [phase-07-web-dashboard.md](./phase-07-web-dashboard.md) |
 | 8 | Integration & Testing | `pending` | [phase-08-integration-testing.md](./phase-08-integration-testing.md) |
