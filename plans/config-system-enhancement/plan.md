@@ -55,7 +55,7 @@ migrate = "pnpm db:migrate"
 | --- | ------------------------------------------------------------------ | ------ | ------- | ---------- |
 | 01  | [Schema & Presets](./phase-01-schema-and-presets.md)               | 1.5h   | done    | —          |
 | 02  | [Build & Run Services](./phase-02-build-run-services.md)           | 2h     | done    | 01         |
-| 03  | [CLI Updates](./phase-03-cli-updates.md)                           | 1.5h   | pending | 02         |
+| 03  | [CLI Updates](./phase-03-cli-updates.md)                           | 1.5h   | done    | 02         |
 | 04  | [Server Config API](./phase-04-server-config-api.md)               | 1.5h   | pending | 01         |
 | 05  | [Web Config Editor](./phase-05-web-config-editor.md)               | 2.5h   | pending | 04         |
 | 06  | [Server Build/Run Updates](./phase-06-server-build-run-updates.md) | 1h     | pending | 02, 04     |

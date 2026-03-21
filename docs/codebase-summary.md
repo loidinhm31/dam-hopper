@@ -5,6 +5,7 @@
 **Phase 03: Core: Git Operations** — Complete
 **Phase 04: Core: Build & Run** — Complete
 **Phase 05: CLI: Commands & Components** — Complete
+  - **Phase 03 (Config Enhancement): CLI Service-Aware Updates** — Complete
 **Phase 06: Server API** — Complete
 **Phase 07: Web Dashboard** — Complete
 **Phase 08: Integration & Testing** — Complete (152 tests, 23 test files)
@@ -355,6 +356,47 @@ All packages are functional stubs ready for feature development:
 - **help.test.ts**: CLI help text and command discovery
 - **workspace.test.ts**: Config loading and project resolution
 - **format.test.ts**: Color and formatting utilities
+
+### Phase 03 (Config Enhancement): CLI Service-Aware Updates
+
+**@dev-hub/cli** commands updated to support multi-service projects and custom commands:
+
+#### Enhanced build Command
+
+- **--service <name>** flag to build specific service
+- Single project without --service: builds all services via buildAll()
+- Calls getProjectServices() to determine available services
+- Service names shown in progress output via serviceLabel() helper
+
+#### Enhanced run Command
+
+- **--service <name>** flag to start specific service
+- Single project without --service: starts all services concurrently
+- **MultiRunner** component (new Ink) manages multiple services
+  - Each service displays independently with status (starting/running/stopped/crashed)
+  - Output limited to last 9 lines per service to avoid terminal bloat
+  - Auto-exit when all services terminate
+- Single-service path uses existing **Runner** component
+
+#### New exec Command
+
+- **exec <project> [command-name]**: Execute custom command from project config
+  - Looks up command in `project.commands[commandName]`
+  - Reuses BuildOutput component for command output streaming
+- **--list** flag: Display available custom commands for project
+  - Shows command name and shell command side-by-side
+
+#### Build Progress Bridge (utils/buildProgress.ts)
+
+- **bridgeBuildToGitEmitter()**: Adapts BuildProgressEvent to GitProgressEmitter
+  - Maps started/completed/failed phases to ProgressList-compatible events
+  - Applies service labeling for display
+- **serviceLabel()**: Format (projectName, serviceName) as display string
+  - Omits "default" service label to keep output clean
+
+#### Command Registration
+
+- **index.ts**: registerExec() added to top-level commands
 
 ### Phase 06: Server API
 
