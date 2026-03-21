@@ -1,0 +1,17 @@
+[workspace]
+name = "test-workspace"
+
+[[projects]]
+name = "maven-project"
+path = "./maven-project"
+type = "maven"
+
+[[projects]]
+name = "pnpm-project"
+path = "./pnpm-project"
+type = "pnpm"
+
+[[projects]]
+name = "cargo-project"
+path = "./cargo-project"
+type = "cargo"

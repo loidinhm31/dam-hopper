@@ -8,6 +8,12 @@ importers:
 
   .:
     devDependencies:
+      '@dev-hub/core':
+        specifier: workspace:*
+        version: link:packages/core
+      '@dev-hub/server':
+        specifier: workspace:*
+        version: link:packages/server
       '@typescript-eslint/eslint-plugin':
         specifier: ^8.0.0
         version: 8.57.1(@typescript-eslint/parser@8.57.1(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3)
@@ -23,6 +29,9 @@ importers:
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
+      vitest:
+        specifier: ^4.1.0
+        version: 4.1.0(@types/node@22.19.15)(vite@6.4.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.32.0))
 
   packages/cli:
     dependencies:

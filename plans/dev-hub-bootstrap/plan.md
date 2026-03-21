@@ -28,7 +28,7 @@ Build a tool that manages a workspace of multiple sub-projects (Java/Maven, Grad
 | 5 | CLI | `done` | [phase-05-cli.md](./phase-05-cli.md) |
 | 6 | Server API | `done` | [phase-06-server-api.md](./phase-06-server-api.md) |
 | 7 | Web Dashboard | `done` | [phase-07-web-dashboard.md](./phase-07-web-dashboard.md) |
-| 8 | Integration & Testing | `pending` | [phase-08-integration-testing.md](./phase-08-integration-testing.md) |
+| 8 | Integration & Testing | `done` | [phase-08-integration-testing.md](./phase-08-integration-testing.md) |
 
 ## Dependency Graph
 
