@@ -12,7 +12,7 @@
 
 - **Date**: 2026-03-21
 - **Priority**: High
-- **Status**: `pending`
+- **Status**: `done`
 
 Implement build execution and process management in `@dev-hub/core`. Build service runs one-shot build commands. Run service manages long-running processes (dev servers, API servers) with lifecycle control: start, stop, restart, log viewing. Output is streamed via EventEmitter for live consumption.
 
