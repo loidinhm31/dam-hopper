@@ -11,7 +11,7 @@
 
 - **Date**: 2026-03-21
 - **Priority**: Medium
-- **Status**: `pending`
+- **Status**: `done`
 
 Build the `@dev-hub/web` React dashboard — a single-page app served by the dev-hub server. Provides a visual interface for all workspace operations: project overview, git operations with live progress, build triggering with log streaming, and running process management. Uses TanStack Query for data fetching, SSE for real-time updates, Hono RPC for type-safe API calls, and shadcn/ui for components.
 

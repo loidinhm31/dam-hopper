@@ -1,1 +1,54 @@
 @import "tailwindcss";
+
+@theme {
+  --color-background: oklch(0.12 0.01 264);
+  --color-surface: oklch(0.16 0.01 264);
+  --color-surface-2: oklch(0.2 0.01 264);
+  --color-border: oklch(0.28 0.01 264);
+  --color-text: oklch(0.92 0.01 264);
+  --color-text-muted: oklch(0.6 0.01 264);
+  --color-primary: oklch(0.65 0.18 264);
+  --color-primary-hover: oklch(0.7 0.18 264);
+  --color-success: oklch(0.65 0.18 145);
+  --color-warning: oklch(0.75 0.18 70);
+  --color-danger: oklch(0.65 0.2 20);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-text);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+
+/* Monospace code blocks */
+.log-container {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}

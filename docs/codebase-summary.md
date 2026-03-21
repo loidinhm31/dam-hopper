@@ -6,6 +6,7 @@
 **Phase 04: Core: Build & Run** — Complete
 **Phase 05: CLI: Commands & Components** — Complete
 **Phase 06: Server API** — Complete
+**Phase 07: Web Dashboard** — Complete
 
 ## Project Overview
 
@@ -37,7 +38,9 @@ dev-hub/
 | **CLI** | Commander | 12.x | Subcommand framework |
 | **CLI UI** | Ink + React | 5.x / 18.3.x | Terminal UI |
 | **Server** | Hono | 4.7.x | Lightweight HTTP API (14KB) |
-| **Web** | React + Vite | 19.x / 6.x | Modern build & HMR |
+| **Web** | React + Vite | 19.x / 6.x | Full dashboard implementation |
+| **Web Routing** | React Router | 7.x | Client-side navigation |
+| **Web Icons** | Lucide React | 0.577.x | Icon library (30+ icons) |
 | **Styling** | Tailwind CSS | 4.x | v4 with Vite plugin |
 | **State** | TanStack Query | 5.67.x | Server state + SSE |
 | **Build** | tsup | 8.x | Fast bundler for packages |
@@ -443,7 +446,20 @@ All packages are functional stubs ready for feature development:
 | packages/server/src/routes/processes.ts | GET /api/processes, POST/DELETE/POST-restart /api/run/:project |
 | packages/server/src/routes/events.ts | GET /api/events SSE endpoint with heartbeat |
 | packages/server/src/__tests__/*.ts | workspace, git, build, processes, events, error-handler, app tests |
-| packages/web/src/main.tsx | React entry point |
+| packages/web/src/main.tsx | React entry point with QueryClient setup |
+| packages/web/src/App.tsx | BrowserRouter + route definitions |
+| packages/web/src/index.css | Dark theme CSS variables and Tailwind v4 setup |
+| packages/web/src/api/client.ts | Typed fetch API client with namespaced endpoints |
+| packages/web/src/api/queries.ts | TanStack Query hooks for all API endpoints |
+| packages/web/src/hooks/useSSE.ts | EventSource connection with auto-reconnect and query invalidation |
+| packages/web/src/hooks/useSSEEvents.ts | Per-event-type SSE subscription hook |
+| packages/web/src/lib/utils.ts | cn() merger, formatDuration, timeAgo helpers |
+| packages/web/src/components/atoms/*.tsx | Badge, Button, BranchBadge, GitStatusBadge, ConnectionDot |
+| packages/web/src/components/molecules/OverviewCard.tsx | Project status overview card |
+| packages/web/src/components/organisms/*.tsx | Sidebar, BuildLog, ProgressList |
+| packages/web/src/components/templates/AppLayout.tsx | Page layout wrapper with sidebar |
+| packages/web/src/pages/*.tsx | DashboardPage, ProjectsPage, ProjectDetailPage, GitPage, BuildPage, ProcessesPage, SettingsPage |
+| packages/web/tsconfig.json | TypeScript config with @/* path alias |
 | package.json | Root workspace config (Node 20+, pnpm 9+) |
 | tsconfig.base.json | Base TS compiler options |
 | eslint.config.js | ESLint flat config (TS support) |
@@ -483,11 +499,121 @@ Seven test files with 27 tests covering:
 - **error-handler.test.ts**: GitError category mapping and HTTP status codes
 - **app.test.ts**: App initialization, route mounting, static file serving, AppType export
 
-## Next Steps (Phase 07+)
+### Phase 07 (Web Dashboard)
+No tests yet. Future test coverage should include:
+- **components/*.test.tsx**: Atom/molecule/organism snapshot and interaction tests
+- **hooks/*.test.ts**: useSSE reconnect, useSSEEvents subscriptions, custom hook behavior
+- **pages/*.test.tsx**: Page rendering, navigation, data loading
+- **api/queries.test.ts**: Query hook behavior with TanStack Query testing utilities
+- **api/client.test.ts**: API client request/response handling and error cases
 
-- Develop web dashboard components for project status, git workflows, and builds
-- Implement TanStack Query integration in web client for data fetching and caching
-- Add web-based project discovery and workspace management UI
-- Expand CLI with advanced features (multi-workspace, custom scripts, hooks)
-- Add project cloning and remote management capabilities
-- Implement background task queue for long-running operations
+### Phase 07: Web Dashboard
+
+**@dev-hub/web** now includes a fully functional React 19 dashboard with routing, state management, components, and real-time updates:
+
+#### Configuration & Setup (main.tsx)
+- **QueryClient**: TanStack Query with 10-second staleTime and 1-retry defaults
+- **QueryClientProvider**: Wraps App for global query caching
+- **Root DOM mount**: Strict mode for development warnings
+
+#### Routing (App.tsx)
+- **BrowserRouter + Routes**: React Router v7 navigation
+- **Route mappings**:
+  - `/` → DashboardPage (overview + project status)
+  - `/projects` → ProjectsPage (project listing + filters)
+  - `/projects/:name` → ProjectDetailPage (individual project details)
+  - `/git` → GitPage (fetch/pull/push, worktree, branch operations)
+  - `/build` → BuildPage (build command execution + logs)
+  - `/processes` → ProcessesPage (running process management)
+  - `/settings` → SettingsPage (workspace configuration)
+
+#### API Client (api/client.ts)
+- **Typed interfaces**: ProjectType, ProjectConfig, GitStatus, Worktree, Branch, BuildResult, ProcessInfo, GitOpResult
+- **Fetch-based HTTP client**: GET, POST, DELETE methods with error handling
+- **Base path**: `/api` with URL-encoded project names for special characters
+- **API object**: Namespace-organized endpoints (workspace, projects, git, build, processes)
+  - Projects: list, get, status (fresh)
+  - Git: fetch, pull, push, worktrees (CRUD), branches (list + update)
+  - Build: start command
+  - Processes: list, start, stop, restart, logs
+
+#### State Management (api/queries.ts)
+- **Query hooks**: useWorkspace, useProjects, useProject, useProjectStatus, useWorktrees, useBranches, useProcesses, useProcessLogs
+- **Refetch intervals**: Projects (30s), Processes (5s), Process logs (3s)
+- **Mutation hooks**: useGitFetch, useGitPull, useGitPush, useBuildStart, useProcessStart, useProcessStop, useProcessRestart
+- **Auto-invalidation**: On mutation success, related queries re-fetch
+
+#### Real-time Updates (hooks/useSSE.ts)
+- **EventSource connection**: Connects to `/api/events` on mount
+- **Event subscription system**: Global listener map for event type dispatch
+- **Auto-reconnect**: Exponential backoff (1s → 30s max) on connection failure
+- **Event types**: git:progress, build:progress, process:event, status:changed
+- **Query invalidation**: Automatic cache invalidation on status:changed and process:event
+- **Timer cleanup**: Cancels pending retry timers on unmount (memory leak fix)
+
+#### Per-Event Subscriptions (hooks/useSSEEvents.ts)
+- **useSSEEvents(type)**: Subscribe to specific event type with callback
+- **Manual unsubscribe**: Returned cleanup function removes listener
+
+#### Utilities (lib/utils.ts)
+- **cn()**: Tailwind class merging (clsx + tailwind-merge)
+- **formatDuration()**: Convert milliseconds to human-readable (1.5s, 2m 30s, etc)
+- **timeAgo()**: Relative timestamps (2 minutes ago, just now)
+
+#### Component Library
+
+**Atoms** (reusable single-purpose components):
+- **Badge.tsx**: Generic badge with color variants (default, success, error, warning, info)
+- **Button.tsx**: Interactive button with size/variant props, loading state
+- **BranchBadge.tsx**: Display branch name with icon and styling
+- **GitStatusBadge.tsx**: Show git status (clean, dirty, ahead/behind)
+- **ConnectionDot.tsx**: Visual indicator for SSE connection status (green/red)
+
+**Molecules** (multi-atom compositions):
+- **OverviewCard.tsx**: Dashboard card showing project overview (status, branch, last commit)
+
+**Organisms** (feature-complete sections):
+- **Sidebar.tsx**: Navigation menu with routes and active link highlighting
+- **ProgressList.tsx**: Display concurrent operation progress bars (from CLI, adapted for web)
+- **BuildLog.tsx**: Real-time build output streaming with scrolling
+
+**Templates** (page-level layouts):
+- **AppLayout.tsx**: Header + sidebar + main content wrapper with responsive grid
+
+#### Page Components (pages/)
+- **DashboardPage.tsx**: Overview dashboard with workspace info and project summary
+- **ProjectsPage.tsx**: Full project listing with filtering and status
+- **ProjectDetailPage.tsx**: Individual project view with git/build operations
+- **GitPage.tsx**: Git operations hub (fetch/pull/push, worktrees, branches)
+- **BuildPage.tsx**: Build command execution interface with live output
+- **ProcessesPage.tsx**: Active process management (start/stop/restart/logs)
+- **SettingsPage.tsx**: Workspace and user settings
+
+#### Styling (index.css)
+- **Dark theme**: CSS variables for colors (neutral, slate, brand colors)
+- **Tailwind v4**: @-rules for utilities and components
+- **Base styles**: Typography, spacing, transitions
+- **Custom utilities**: Animation classes, grid layouts
+
+#### Dependencies
+- **react-router-dom@7.13.1**: Client-side routing with v7 API
+- **@tanstack/react-query@5.67.0**: Server state management and caching
+- **lucide-react@0.577.0**: Icon library (30+ icons for UI)
+- **clsx@2.1.1**: Conditional class name utility
+- **tailwind-merge@3.5.0**: Smart class merging for Tailwind conflicts
+- **tailwindcss@4.0.0**: CSS framework with v4 features
+- **@tailwindcss/vite@4.0.0**: Tailwind integration for Vite
+
+#### TSConfig (tsconfig.json)
+- **Path alias**: `@/*` → `src/*` for clean imports
+- Extends base config (strict: true, ES2022, bundler resolution)
+
+## Next Steps (Phase 08+)
+
+- Add project discovery UI for finding and adding new projects
+- Implement advanced git workflows (rebase, squash, cherry-pick)
+- Add build preset customization and command editing in dashboard
+- Implement persistent sidebar preferences and dark/light theme toggle
+- Add real-time log filtering and search across build/process output
+- Implement workspace templates and project scaffolding
+- Add multi-workspace support in both CLI and dashboard

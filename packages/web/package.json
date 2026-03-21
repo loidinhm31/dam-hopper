@@ -9,8 +9,12 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.67.0",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.577.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.13.1",
+    "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",

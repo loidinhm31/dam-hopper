@@ -1,10 +1,24 @@
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { DashboardPage } from "@/pages/DashboardPage.js";
+import { ProjectsPage } from "@/pages/ProjectsPage.js";
+import { ProjectDetailPage } from "@/pages/ProjectDetailPage.js";
+import { GitPage } from "@/pages/GitPage.js";
+import { BuildPage } from "@/pages/BuildPage.js";
+import { ProcessesPage } from "@/pages/ProcessesPage.js";
+import { SettingsPage } from "@/pages/SettingsPage.js";
+
 export function App() {
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 flex items-center justify-center">
-      <div className="text-center">
-        <h1 className="text-4xl font-bold mb-2">Dev Hub</h1>
-        <p className="text-gray-400">Workspace management dashboard</p>
-      </div>
-    </div>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<DashboardPage />} />
+        <Route path="/projects" element={<ProjectsPage />} />
+        <Route path="/projects/:name" element={<ProjectDetailPage />} />
+        <Route path="/git" element={<GitPage />} />
+        <Route path="/build" element={<BuildPage />} />
+        <Route path="/processes" element={<ProcessesPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+      </Routes>
+    </BrowserRouter>
   );
 }
