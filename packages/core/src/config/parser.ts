@@ -1,4 +1,4 @@
-import { readFile, writeFile, rename } from "node:fs/promises";
+import { readFile, writeFile, rename, unlink } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,9 +20,7 @@ export class ConfigParseError extends Error {
   }
 }
 
-export function validateConfig(
-  raw: unknown,
-): Result<DevHubConfig, ZodError> {
+export function validateConfig(raw: unknown): Result<DevHubConfig, ZodError> {
   const result = DevHubConfigSchema.safeParse(raw);
   if (result.success) {
     return { ok: true, value: result.data };
@@ -88,7 +86,9 @@ export async function writeConfig(
         ...(p.services !== undefined && {
           services: p.services.map((s) => ({
             name: s.name,
-            ...(s.buildCommand !== undefined && { build_command: s.buildCommand }),
+            ...(s.buildCommand !== undefined && {
+              build_command: s.buildCommand,
+            }),
             ...(s.runCommand !== undefined && { run_command: s.runCommand }),
           })),
         }),
@@ -102,14 +102,17 @@ export async function writeConfig(
   const toml = stringify(raw as Parameters<typeof stringify>[0]);
 
   // Atomic write: write to temp file in same directory, then rename
-  const tmpPath = join(configDir, `.dev-hub-tmp-${randomBytes(6).toString("hex")}.toml`);
+  const tmpPath = join(
+    configDir,
+    `.dev-hub-tmp-${randomBytes(6).toString("hex")}.toml`,
+  );
   try {
     await writeFile(tmpPath, toml, "utf-8");
     await rename(tmpPath, absFilePath);
   } catch (err) {
-    // Best-effort cleanup
+    // Best-effort cleanup — delete the temp file, don't truncate it
     try {
-      await writeFile(tmpPath, "", "utf-8");
+      await unlink(tmpPath);
     } catch {
       // ignore
     }

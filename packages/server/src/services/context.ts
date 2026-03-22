@@ -5,7 +5,12 @@ import {
   ConfigNotFoundError,
   type DevHubConfig,
 } from "@dev-hub/core";
-import { BulkGitService, BuildService, RunService, type GitProgressEvent } from "@dev-hub/core";
+import {
+  BulkGitService,
+  BuildService,
+  RunService,
+  type GitProgressEvent,
+} from "@dev-hub/core";
 import type { BuildProgressEvent, RunProgressEvent } from "@dev-hub/core";
 
 export interface SSEClient {
@@ -17,6 +22,7 @@ export type SSEEvent =
   | { type: "build:progress"; data: BuildProgressEvent }
   | { type: "process:event"; data: RunProgressEvent }
   | { type: "status:changed"; data: { projectName: string } }
+  | { type: "config:changed"; data: Record<string, unknown> }
   | { type: "heartbeat"; data: { timestamp: number } };
 
 export interface ServerContext {
@@ -28,13 +34,13 @@ export interface ServerContext {
   runService: RunService;
   sseClients: Set<SSEClient>;
   broadcast: (event: SSEEvent) => void;
+  reloadConfig: () => Promise<void>;
 }
 
 export async function createServerContext(
   configPath?: string,
 ): Promise<ServerContext> {
-  const resolvedPath =
-    configPath ?? (await findConfigFile(process.cwd()));
+  const resolvedPath = configPath ?? (await findConfigFile(process.cwd()));
 
   if (!resolvedPath) {
     throw new ConfigNotFoundError(process.cwd());
@@ -71,7 +77,7 @@ export async function createServerContext(
     broadcast({ type: "process:event", data: event });
   });
 
-  return {
+  const ctx: ServerContext = {
     config,
     configPath: resolvedPath,
     workspaceRoot,
@@ -80,5 +86,10 @@ export async function createServerContext(
     runService,
     sseClients,
     broadcast,
+    reloadConfig: async () => {
+      ctx.config = await readConfig(ctx.configPath);
+    },
   };
+
+  return ctx;
 }

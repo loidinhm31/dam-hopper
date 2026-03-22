@@ -41,7 +41,10 @@ export const ProjectConfigSchema = z
       const names = p.services.map((s) => s.name);
       return names.length === new Set(names).size;
     },
-    { message: "Service names must be unique within a project", path: ["services"] },
+    {
+      message: "Service names must be unique within a project",
+      path: ["services"],
+    },
   )
   .transform((p) => ({
     name: p.name,
@@ -59,6 +62,45 @@ export const WorkspaceSchema = z.object({
   name: z.string().min(1, "Workspace name must not be empty"),
   root: z.string().default("."),
 });
+
+// Camelcase schemas for API endpoints (HTTP JSON in/out — no transforms needed)
+export const ApiServiceSchema = z.object({
+  name: z.string().min(1, "Service name must not be empty"),
+  buildCommand: z.string().optional(),
+  runCommand: z.string().optional(),
+});
+
+export const ApiProjectSchema = z
+  .object({
+    name: z.string().min(1, "Project name must not be empty"),
+    path: z.string().min(1, "Project path must not be empty"),
+    type: ProjectTypeSchema,
+    services: z.array(ApiServiceSchema).optional(),
+    commands: z.record(z.string()).optional(),
+    envFile: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+  })
+  .refine(
+    (p) => {
+      if (!p.services) return true;
+      const names = p.services.map((s) => s.name);
+      return names.length === new Set(names).size;
+    },
+    { message: "Service names must be unique within a project", path: ["services"] },
+  );
+
+export const DevHubApiConfigSchema = z
+  .object({
+    workspace: WorkspaceSchema,
+    projects: z.array(ApiProjectSchema).default([]),
+  })
+  .refine(
+    (cfg) => {
+      const names = cfg.projects.map((p: { name: string }) => p.name);
+      return names.length === new Set(names).size;
+    },
+    { message: "Project names must be unique", path: ["projects"] },
+  );
 
 export type WorkspaceInfo = z.infer<typeof WorkspaceSchema>;
 

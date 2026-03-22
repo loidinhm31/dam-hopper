@@ -49,6 +49,10 @@ export async function createTestContext(
     runService,
     sseClients,
     broadcast,
+    reloadConfig: async () => {
+      const fresh = await readConfig(configPath);
+      ctx.config = fresh;
+    },
     ...overrides,
   };
 
