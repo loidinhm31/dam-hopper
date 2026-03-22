@@ -66,6 +66,7 @@ export function useSSE() {
       "build:progress",
       "process:event",
       "status:changed",
+      "config:changed",
     ] as const;
 
     for (const type of eventTypes) {
@@ -77,8 +78,12 @@ export function useSSE() {
     // Invalidate queries on status:changed
     es.addEventListener("status:changed", (e: MessageEvent) => {
       try {
-        const { projectName } = JSON.parse(e.data as string) as { projectName: string };
-        void qc.invalidateQueries({ queryKey: ["project-status", projectName] });
+        const { projectName } = JSON.parse(e.data as string) as {
+          projectName: string;
+        };
+        void qc.invalidateQueries({
+          queryKey: ["project-status", projectName],
+        });
         void qc.invalidateQueries({ queryKey: ["projects"] });
       } catch {
         void qc.invalidateQueries({ queryKey: ["projects"] });
@@ -87,6 +92,12 @@ export function useSSE() {
 
     es.addEventListener("process:event", () => {
       void qc.invalidateQueries({ queryKey: ["processes"] });
+    });
+
+    es.addEventListener("config:changed", () => {
+      void qc.invalidateQueries({ queryKey: ["config"] });
+      void qc.invalidateQueries({ queryKey: ["workspace"] });
+      void qc.invalidateQueries({ queryKey: ["projects"] });
     });
   }, [qc]);
 

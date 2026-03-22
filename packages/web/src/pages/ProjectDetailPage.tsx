@@ -61,7 +61,9 @@ export function ProjectDetailPage() {
   if (!project) {
     return (
       <AppLayout>
-        <div className="text-[var(--color-danger)]">Project "{name}" not found.</div>
+        <div className="text-[var(--color-danger)]">
+          Project "{name}" not found.
+        </div>
       </AppLayout>
     );
   }
@@ -95,7 +97,9 @@ export function ProjectDetailPage() {
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div>
-          <h1 className="text-xl font-semibold text-[var(--color-text)]">{project.name}</h1>
+          <h1 className="text-xl font-semibold text-[var(--color-text)]">
+            {project.name}
+          </h1>
           <div className="flex items-center gap-2 mt-0.5">
             <Badge>{project.type}</Badge>
             <BranchBadge branch={project.status?.branch} />
@@ -129,46 +133,64 @@ export function ProjectDetailPage() {
             <dl className="grid grid-cols-2 gap-3 text-sm">
               <div>
                 <dt className="text-[var(--color-text-muted)]">Path</dt>
-                <dd className="font-mono text-xs mt-0.5 text-[var(--color-text)]">{project.path}</dd>
+                <dd className="font-mono text-xs mt-0.5 text-[var(--color-text)]">
+                  {project.path}
+                </dd>
               </div>
               <div>
                 <dt className="text-[var(--color-text-muted)]">Type</dt>
-                <dd className="mt-0.5"><Badge>{project.type}</Badge></dd>
+                <dd className="mt-0.5">
+                  <Badge>{project.type}</Badge>
+                </dd>
               </div>
-              {project.buildCommand && (
+              {project.services && project.services.length > 0 && (
                 <div>
-                  <dt className="text-[var(--color-text-muted)]">Build Command</dt>
-                  <dd className="font-mono text-xs mt-0.5">{project.buildCommand}</dd>
-                </div>
-              )}
-              {project.runCommand && (
-                <div>
-                  <dt className="text-[var(--color-text-muted)]">Run Command</dt>
-                  <dd className="font-mono text-xs mt-0.5">{project.runCommand}</dd>
+                  <dt className="text-[var(--color-text-muted)]">Services</dt>
+                  <dd className="flex gap-1 mt-0.5 flex-wrap">
+                    {project.services.map((s) => (
+                      <span
+                        key={s.name}
+                        className="font-mono text-xs bg-[var(--color-surface-2)] px-1.5 py-0.5 rounded"
+                      >
+                        {s.name}
+                      </span>
+                    ))}
+                  </dd>
                 </div>
               )}
               {project.tags && project.tags.length > 0 && (
                 <div>
                   <dt className="text-[var(--color-text-muted)]">Tags</dt>
                   <dd className="flex gap-1 mt-0.5 flex-wrap">
-                    {project.tags.map((t) => <Badge key={t}>{t}</Badge>)}
+                    {project.tags.map((t) => (
+                      <Badge key={t}>{t}</Badge>
+                    ))}
                   </dd>
                 </div>
               )}
               {project.status && (
                 <>
                   <div>
-                    <dt className="text-[var(--color-text-muted)]">Ahead / Behind</dt>
+                    <dt className="text-[var(--color-text-muted)]">
+                      Ahead / Behind
+                    </dt>
                     <dd className="font-mono text-xs mt-0.5">
                       +{project.status.ahead} / -{project.status.behind}
                     </dd>
                   </div>
                   {project.status.modified.length > 0 && (
                     <div className="col-span-2">
-                      <dt className="text-[var(--color-text-muted)]">Modified files</dt>
+                      <dt className="text-[var(--color-text-muted)]">
+                        Modified files
+                      </dt>
                       <dd className="mt-1 space-y-0.5">
                         {project.status.modified.map((f) => (
-                          <div key={f} className="font-mono text-xs text-[var(--color-warning)]">{f}</div>
+                          <div
+                            key={f}
+                            className="font-mono text-xs text-[var(--color-warning)]"
+                          >
+                            {f}
+                          </div>
                         ))}
                       </dd>
                     </div>
@@ -183,13 +205,22 @@ export function ProjectDetailPage() {
       {tab === "git" && (
         <div className="space-y-4">
           <div className="flex gap-2">
-            <Button loading={gitFetch.isPending} onClick={() => gitFetch.mutate([name])}>
+            <Button
+              loading={gitFetch.isPending}
+              onClick={() => gitFetch.mutate([name])}
+            >
               Fetch
             </Button>
-            <Button loading={gitPull.isPending} onClick={() => gitPull.mutate([name])}>
+            <Button
+              loading={gitPull.isPending}
+              onClick={() => gitPull.mutate([name])}
+            >
               Pull
             </Button>
-            <Button loading={gitPush.isPending} onClick={() => gitPush.mutate(name)}>
+            <Button
+              loading={gitPush.isPending}
+              onClick={() => gitPush.mutate(name)}
+            >
               Push
             </Button>
           </div>
@@ -200,9 +231,18 @@ export function ProjectDetailPage() {
               </div>
               <ul className="divide-y divide-[var(--color-border)]">
                 {branches.map((b) => (
-                  <li key={b.name} className="flex items-center justify-between px-4 py-2 text-sm">
-                    <span className={cn("font-mono", b.isCurrent && "text-[var(--color-primary)]")}>
-                      {b.isCurrent && "* "}{b.name}
+                  <li
+                    key={b.name}
+                    className="flex items-center justify-between px-4 py-2 text-sm"
+                  >
+                    <span
+                      className={cn(
+                        "font-mono",
+                        b.isCurrent && "text-[var(--color-primary)]",
+                      )}
+                    >
+                      {b.isCurrent && "* "}
+                      {b.name}
                     </span>
                     <div className="flex gap-1">
                       {b.isCurrent && <Badge variant="primary">current</Badge>}
@@ -219,8 +259,13 @@ export function ProjectDetailPage() {
       {tab === "worktrees" && (
         <div className="space-y-4">
           <div className="flex justify-between items-center">
-            <h2 className="text-sm font-medium text-[var(--color-text)]">Worktrees</h2>
-            <Button size="sm" onClick={() => setShowAddWorktree(!showAddWorktree)}>
+            <h2 className="text-sm font-medium text-[var(--color-text)]">
+              Worktrees
+            </h2>
+            <Button
+              size="sm"
+              onClick={() => setShowAddWorktree(!showAddWorktree)}
+            >
               <Plus className="h-3 w-3" /> Add Worktree
             </Button>
           </div>
@@ -229,7 +274,9 @@ export function ProjectDetailPage() {
             <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4 space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-[var(--color-text-muted)]">Path</label>
+                  <label className="text-xs text-[var(--color-text-muted)]">
+                    Path
+                  </label>
                   <input
                     className="mt-1 w-full h-8 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
                     value={worktreePath}
@@ -238,7 +285,9 @@ export function ProjectDetailPage() {
                   />
                 </div>
                 <div>
-                  <label className="text-xs text-[var(--color-text-muted)]">Branch</label>
+                  <label className="text-xs text-[var(--color-text-muted)]">
+                    Branch
+                  </label>
                   <input
                     className="mt-1 w-full h-8 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
                     value={worktreeBranch}
@@ -268,21 +317,30 @@ export function ProjectDetailPage() {
 
           <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)]">
             {worktrees.length === 0 ? (
-              <p className="px-4 py-6 text-sm text-[var(--color-text-muted)]">No worktrees found.</p>
+              <p className="px-4 py-6 text-sm text-[var(--color-text-muted)]">
+                No worktrees found.
+              </p>
             ) : (
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-[var(--color-border)] text-[var(--color-text-muted)]">
                     <th className="px-4 py-2.5 text-left font-medium">Path</th>
-                    <th className="px-4 py-2.5 text-left font-medium">Branch</th>
+                    <th className="px-4 py-2.5 text-left font-medium">
+                      Branch
+                    </th>
                     <th className="px-4 py-2.5 text-left font-medium">Main</th>
                     <th className="px-4 py-2.5" />
                   </tr>
                 </thead>
                 <tbody>
                   {worktrees.map((wt) => (
-                    <tr key={wt.path} className="border-b border-[var(--color-border)] last:border-0">
-                      <td className="px-4 py-2.5 font-mono text-xs">{wt.path}</td>
+                    <tr
+                      key={wt.path}
+                      className="border-b border-[var(--color-border)] last:border-0"
+                    >
+                      <td className="px-4 py-2.5 font-mono text-xs">
+                        {wt.path}
+                      </td>
                       <td className="px-4 py-2.5">
                         <BranchBadge branch={wt.branch} />
                       </td>
@@ -328,7 +386,9 @@ export function ProjectDetailPage() {
                   : "bg-[var(--color-danger)]/10 border-[var(--color-danger)]/30 text-[var(--color-danger)]",
               )}
             >
-              {build.data.success ? "✓ Build succeeded" : `✗ Build failed (exit ${build.data.exitCode})`}
+              {build.data.success
+                ? "✓ Build succeeded"
+                : `✗ Build failed (exit ${build.data.exitCode})`}
               {" — "}
               {(build.data.durationMs / 1000).toFixed(1)}s
             </div>
@@ -367,10 +427,15 @@ export function ProjectDetailPage() {
             </div>
             <div className="log-container overflow-y-auto max-h-96 p-3 bg-[#0a0a0f]">
               {logs.length === 0 ? (
-                <span className="text-[var(--color-text-muted)]">No logs available.</span>
+                <span className="text-[var(--color-text-muted)]">
+                  No logs available.
+                </span>
               ) : (
                 logs.map((line, i) => (
-                  <div key={i} className="whitespace-pre-wrap break-all text-[var(--color-text)]">
+                  <div
+                    key={i}
+                    className="whitespace-pre-wrap break-all text-[var(--color-text)]"
+                  >
                     {line}
                   </div>
                 ))

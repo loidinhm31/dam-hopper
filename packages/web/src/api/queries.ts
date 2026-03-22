@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client.js";
+import type { DevHubConfig, ProjectConfig } from "./client.js";
 
 // ── Queries ─────────────────────────────────────────────────────────────────
 
@@ -67,7 +68,39 @@ export function useProcessLogs(project: string, lines = 100) {
   });
 }
 
+export function useConfig() {
+  return useQuery({
+    queryKey: ["config"],
+    queryFn: () => api.config.get(),
+    staleTime: Infinity, // SSE config:changed events drive invalidation
+  });
+}
+
 // ── Mutations ────────────────────────────────────────────────────────────────
+
+export function useUpdateConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (config: DevHubConfig) => api.config.update(config),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["config"] });
+      void qc.invalidateQueries({ queryKey: ["workspace"] });
+      void qc.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+}
+
+export function useUpdateProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, data }: { name: string; data: Partial<ProjectConfig> }) =>
+      api.config.updateProject(name, data),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["config"] });
+      void qc.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+}
 
 export function useGitFetch() {
   const qc = useQueryClient();
@@ -142,8 +175,11 @@ export function useRestartProcess() {
 export function useAddWorktree(project: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (opts: { path: string; branch: string; createBranch?: boolean }) =>
-      api.git.addWorktree(project, opts),
+    mutationFn: (opts: {
+      path: string;
+      branch: string;
+      createBranch?: boolean;
+    }) => api.git.addWorktree(project, opts),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["worktrees", project] });
     },
