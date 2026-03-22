@@ -1,9 +1,9 @@
 import { FolderGit2, CheckCircle2, AlertCircle, Activity } from "lucide-react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { OverviewCard } from "@/components/molecules/OverviewCard.js";
-import { useProjects, useProcesses } from "@/api/queries.js";
+import { useProjects } from "@/api/queries.js";
 import { useSSEEvent } from "@/hooks/useSSEEvents.js";
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 
 interface ActivityEntry {
   id: number;
@@ -13,24 +13,45 @@ interface ActivityEntry {
 
 export function DashboardPage() {
   const { data: projects = [] } = useProjects();
-  const { data: processes = [] } = useProcesses();
+  const [activeSessions, setActiveSessions] = useState(0);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   // Use ref for id counter to avoid HMR-reset issues (W6 fix)
   const nextIdRef = useRef(1);
 
   const clean = projects.filter((p) => p.status?.isClean === true).length;
   const dirty = projects.filter((p) => p.status?.isClean === false).length;
-  const running = processes.filter((p) => p.status === "running").length;
+
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh() {
+      try {
+        const ids = await window.devhub.terminal.list();
+        if (!cancelled) setActiveSessions(ids.length);
+      } catch { /* ignore */ }
+    }
+    void refresh();
+    const t = setInterval(() => void refresh(), 5_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, []);
 
   useSSEEvent("*", (e) => {
-    const msg = typeof e.data === "object" && e.data !== null
-      ? ((e.data as Record<string, unknown>).message as string | undefined) ??
-        ((e.data as Record<string, unknown>).projectName as string | undefined) ??
-        e.type
-      : String(e.data ?? e.type);
+    const msg =
+      typeof e.data === "object" && e.data !== null
+        ? (((e.data as Record<string, unknown>).message as
+            | string
+            | undefined) ??
+          ((e.data as Record<string, unknown>).projectName as
+            | string
+            | undefined) ??
+          e.type)
+        : String(e.data ?? e.type);
 
     setActivity((prev) => [
-      { id: nextIdRef.current++, message: `[${e.type}] ${msg}`, time: new Date(e.timestamp) },
+      {
+        id: nextIdRef.current++,
+        message: `[${e.type}] ${msg}`,
+        time: new Date(e.timestamp),
+      },
       ...prev.slice(0, 19),
     ]);
   });
@@ -59,8 +80,8 @@ export function DashboardPage() {
         />
         <OverviewCard
           icon={Activity}
-          label="Running Processes"
-          value={running}
+          label="Active Terminals"
+          value={activeSessions}
           color="var(--color-danger)"
         />
       </div>
@@ -68,7 +89,9 @@ export function DashboardPage() {
       {/* Status bar */}
       {projects.length > 0 && (
         <div className="mb-6 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4">
-          <p className="text-sm font-medium text-[var(--color-text)] mb-2">Repository Status</p>
+          <p className="text-sm font-medium text-[var(--color-text)] mb-2">
+            Repository Status
+          </p>
           <div className="flex h-3 overflow-hidden rounded-full bg-[var(--color-surface-2)]">
             {clean > 0 && (
               <div
@@ -104,9 +127,13 @@ export function DashboardPage() {
 
       {/* Recent activity */}
       <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4">
-        <p className="text-sm font-medium text-[var(--color-text)] mb-3">Recent Activity</p>
+        <p className="text-sm font-medium text-[var(--color-text)] mb-3">
+          Recent Activity
+        </p>
         {activity.length === 0 ? (
-          <p className="text-sm text-[var(--color-text-muted)]">No recent events. Waiting for SSE…</p>
+          <p className="text-sm text-[var(--color-text-muted)]">
+            No recent events. Waiting for SSE…
+          </p>
         ) : (
           <ul className="space-y-1.5">
             {activity.map((a) => (
@@ -114,7 +141,9 @@ export function DashboardPage() {
                 <span className="shrink-0 text-[var(--color-text-muted)]">
                   {a.time.toLocaleTimeString()}
                 </span>
-                <span className="text-[var(--color-text)] font-mono">{a.message}</span>
+                <span className="text-[var(--color-text)] font-mono">
+                  {a.message}
+                </span>
               </li>
             ))}
           </ul>

@@ -1,186 +1,66 @@
-import { execa, ExecaError } from "execa";
 import EventEmitter from "eventemitter3";
 import pLimit from "p-limit";
 import { getProjectServices } from "../config/index.js";
 import type { ProjectConfig, ServiceConfig } from "../config/index.js";
 import { resolveEnv } from "./env-loader.js";
-import { pipeLines } from "./stream-utils.js";
 import type { BuildResult, BuildProgressEvent } from "./types.js";
 
 export class BuildService {
   readonly emitter = new EventEmitter<{ progress: [BuildProgressEvent] }>();
 
   /**
-   * Build a single service. Never throws — all errors are captured in the returned BuildResult.
-   * This invariant makes `buildAll`'s use of `Promise.all` safe: a failed service never
-   * rejects the whole array.
+   * Resolve build context (env, command) for a service.
+   * Execution is delegated to the caller (e.g., Electron PTY session manager).
    */
-  private async _buildOneService(
+  async getServiceContext(
     project: ProjectConfig,
     service: ServiceConfig,
     workspaceRoot: string,
-  ): Promise<BuildResult> {
-    const command = service.buildCommand;
-    const start = performance.now();
-
-    if (!command) {
-      const result: BuildResult = {
-        projectName: project.name,
-        serviceName: service.name,
-        command: "",
-        success: false,
-        exitCode: null,
-        durationMs: 0,
-        stdout: "",
-        stderr: "",
-        error: "No build command configured",
-      };
-      this.emitter.emit("progress", {
-        projectName: project.name,
-        serviceName: service.name,
-        phase: "failed",
-        result,
-      });
-      return result;
-    }
-
+  ): Promise<{ command: string; cwd: string; env: Record<string, string> }> {
     const env = await resolveEnv(project, workspaceRoot);
+    return { command: service.buildCommand ?? "", cwd: project.path, env };
+  }
 
+  getServices(project: ProjectConfig): ServiceConfig[] {
+    return getProjectServices(project);
+  }
+
+  emitNoCommand(project: ProjectConfig, service: ServiceConfig): BuildResult {
+    const result: BuildResult = {
+      projectName: project.name,
+      serviceName: service.name,
+      command: "",
+      success: false,
+      exitCode: null,
+      durationMs: 0,
+      stdout: "",
+      stderr: "",
+      error: "No build command configured",
+    };
     this.emitter.emit("progress", {
       projectName: project.name,
       serviceName: service.name,
-      phase: "started",
+      phase: "failed",
+      result,
     });
-
-    const stdoutLines: string[] = [];
-    const stderrLines: string[] = [];
-
-    try {
-      // SECURITY: shell:true is required for preset commands (pipes, env expansions).
-      // Commands come from the user's own dev-hub.toml — treated as trusted input.
-      const subprocess = execa(command, {
-        shell: true,
-        cwd: project.path,
-        env,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-
-      pipeLines(subprocess.stdout, (line) => {
-        stdoutLines.push(line);
-        this.emitter.emit("progress", {
-          projectName: project.name,
-          serviceName: service.name,
-          phase: "output",
-          stream: "stdout",
-          line,
-        });
-      });
-
-      pipeLines(subprocess.stderr, (line) => {
-        stderrLines.push(line);
-        this.emitter.emit("progress", {
-          projectName: project.name,
-          serviceName: service.name,
-          phase: "output",
-          stream: "stderr",
-          line,
-        });
-      });
-
-      await subprocess;
-
-      const durationMs = performance.now() - start;
-      const result: BuildResult = {
-        projectName: project.name,
-        serviceName: service.name,
-        command,
-        success: true,
-        exitCode: 0,
-        durationMs,
-        stdout: stdoutLines.slice(-100).join("\n"),
-        stderr: stderrLines.slice(-100).join("\n"),
-      };
-      this.emitter.emit("progress", {
-        projectName: project.name,
-        serviceName: service.name,
-        phase: "completed",
-        result,
-      });
-      return result;
-    } catch (err: unknown) {
-      const durationMs = performance.now() - start;
-      const exitCode =
-        err instanceof ExecaError ? (err.exitCode ?? null) : null;
-      const message = err instanceof Error ? err.message : String(err);
-      const result: BuildResult = {
-        projectName: project.name,
-        serviceName: service.name,
-        command,
-        success: false,
-        exitCode,
-        durationMs,
-        stdout: stdoutLines.slice(-100).join("\n"),
-        stderr: stderrLines.slice(-100).join("\n"),
-        error: message,
-      };
-      this.emitter.emit("progress", {
-        projectName: project.name,
-        serviceName: service.name,
-        phase: "failed",
-        result,
-      });
-      return result;
-    }
-  }
-
-  /**
-   * Build a specific service (or the first/default service if no serviceName given).
-   * Throws if the named service is not found — no silent fallback.
-   */
-  async build(
-    project: ProjectConfig,
-    workspaceRoot: string,
-    serviceName?: string,
-  ): Promise<BuildResult> {
-    const services = getProjectServices(project);
-    if (serviceName) {
-      const service = services.find((s) => s.name === serviceName);
-      if (!service) {
-        throw new Error(
-          `Service "${serviceName}" not found for project "${project.name}"`,
-        );
-      }
-      return this._buildOneService(project, service, workspaceRoot);
-    }
-    return this._buildOneService(project, services[0], workspaceRoot);
-  }
-
-  /**
-   * Build all services for a project in parallel.
-   * Services within a single project are intentionally run concurrently —
-   * they are independent processes (e.g., frontend + backend) and parallelism
-   * is the desired behaviour. Cross-project concurrency is controlled by buildMultiple.
-   */
-  async buildAll(
-    project: ProjectConfig,
-    workspaceRoot: string,
-  ): Promise<BuildResult[]> {
-    const services = getProjectServices(project);
-    return Promise.all(
-      services.map((s) => this._buildOneService(project, s, workspaceRoot)),
-    );
+    return result;
   }
 
   async buildMultiple(
     projects: ProjectConfig[],
     workspaceRoot: string,
     concurrency = 4,
-  ): Promise<BuildResult[]> {
+  ): Promise<Array<{ project: ProjectConfig; services: ServiceConfig[] }>> {
     const limit = pLimit(concurrency);
-    const results = await Promise.all(
-      projects.map((p) => limit(() => this.buildAll(p, workspaceRoot))),
+    return Promise.all(
+      projects.map((p) =>
+        limit(() =>
+          Promise.resolve({
+            project: p,
+            services: getProjectServices(p),
+          }),
+        ),
+      ),
     );
-    return results.flat();
   }
 }

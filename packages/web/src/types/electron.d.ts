@@ -7,14 +7,20 @@ import type {
   GitStatus,
   Worktree,
   Branch,
-  BuildResult,
-  ProcessInfo,
   GitOpResult,
   DevHubConfig,
   ProjectConfig,
 } from "../api/client.js";
 
 type Unsubscribe = () => void;
+
+export interface TerminalCreateOpts {
+  id: string;
+  project: string;
+  command: string;
+  cols: number;
+  rows: number;
+}
 
 export interface DevHubBridge {
   platform: string;
@@ -60,24 +66,14 @@ export interface DevHubBridge {
     updateProject: (name: string, data: Partial<ProjectConfig>) => Promise<ProjectConfig>;
   };
 
-  build: {
-    start: (project: string, service?: string) => Promise<BuildResult[]>;
-  };
-
-  exec: {
-    run: (project: string, command: string) => Promise<BuildResult>;
-  };
-
-  processes: {
-    list: () => Promise<ProcessInfo[]>;
-    start: (project: string, service?: string) => Promise<ProcessInfo>;
-    stop: (project: string, service?: string) => Promise<void>;
-    restart: (project: string, service?: string) => Promise<ProcessInfo>;
-    logs: (
-      project: string,
-      service?: string,
-      lines?: number,
-    ) => Promise<{ timestamp: string; stream: string; line: string }[]>;
+  terminal: {
+    create: (opts: TerminalCreateOpts) => Promise<string>;
+    write: (id: string, data: string) => void;
+    resize: (id: string, cols: number, rows: number) => void;
+    kill: (id: string) => void;
+    list: () => Promise<string[]>;
+    onData: (id: string, cb: (data: string) => void) => Unsubscribe;
+    onExit: (id: string, cb: (exitCode: number | null) => void) => Unsubscribe;
   };
 
   on: (channel: string, callback: (data: unknown) => void) => Unsubscribe;
@@ -85,8 +81,6 @@ export interface DevHubBridge {
 
   /** Push-event channel names exposed by the preload (from ipc-channels.ts) */
   eventChannels: readonly string[];
-
-  terminal: Record<string, never>; // expanded in Phase 03
 }
 
 declare global {

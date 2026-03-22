@@ -58,26 +58,39 @@ contextBridge.exposeInMainWorld("devhub", {
       ipcRenderer.invoke(CH.CONFIG_UPDATE_PROJECT, name, data),
   },
 
-  build: {
-    start: (project: string, service?: string) =>
-      ipcRenderer.invoke(CH.BUILD_START, project, service),
-  },
+  terminal: {
+    create: (opts: {
+      id: string;
+      project: string;
+      command: string;
+      cols: number;
+      rows: number;
+    }) => ipcRenderer.invoke(CH.TERMINAL_CREATE, opts),
 
-  exec: {
-    run: (project: string, command: string) =>
-      ipcRenderer.invoke(CH.EXEC_RUN, project, command),
-  },
+    write: (id: string, data: string) =>
+      ipcRenderer.send(CH.TERMINAL_WRITE, { id, data }),
 
-  processes: {
-    list: () => ipcRenderer.invoke(CH.PROCESSES_LIST),
-    start: (project: string, service?: string) =>
-      ipcRenderer.invoke(CH.RUN_START, project, service),
-    stop: (project: string, service?: string) =>
-      ipcRenderer.invoke(CH.RUN_STOP, project, service),
-    restart: (project: string, service?: string) =>
-      ipcRenderer.invoke(CH.RUN_RESTART, project, service),
-    logs: (project: string, service?: string, lines?: number) =>
-      ipcRenderer.invoke(CH.RUN_LOGS, project, service, lines),
+    resize: (id: string, cols: number, rows: number) =>
+      ipcRenderer.send(CH.TERMINAL_RESIZE, { id, cols, rows }),
+
+    kill: (id: string) => ipcRenderer.send(CH.TERMINAL_KILL, { id }),
+
+    list: () => ipcRenderer.invoke(CH.TERMINAL_LIST),
+
+    onData: (id: string, cb: (data: string) => void): Unsubscribe => {
+      const channel = `terminal:data:${id}`;
+      const listener = (_e: IpcRendererEvent, data: string) => cb(data);
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
+    },
+
+    onExit: (id: string, cb: (exitCode: number | null) => void): Unsubscribe => {
+      const channel = `terminal:exit:${id}`;
+      const listener = (_e: IpcRendererEvent, payload: { exitCode: number | null }) =>
+        cb(payload.exitCode);
+      ipcRenderer.once(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
+    },
   },
 
   on(channel: string, callback: (data: unknown) => void): Unsubscribe {
@@ -94,7 +107,4 @@ contextBridge.exposeInMainWorld("devhub", {
 
   /** All push-event channel names — renderer uses these to subscribe */
   eventChannels: EVENT_CHANNELS,
-
-  // Phase 03: terminal methods added here
-  terminal: {},
 });
