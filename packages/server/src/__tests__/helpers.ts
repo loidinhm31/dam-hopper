@@ -55,6 +55,8 @@ export async function createTestContext(
       const fresh = await readConfig(configPath);
       ctx.config = fresh;
     },
+    switching: false,
+    switchWorkspace: async () => {},
     ...overrides,
   };
 

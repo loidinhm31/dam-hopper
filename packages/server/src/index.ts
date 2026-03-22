@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { createApp, createServerContext } from "./app.js";
+import { addKnownWorkspace } from "@dev-hub/core";
 
 export interface StartServerOptions {
   port?: number;
@@ -12,6 +13,10 @@ export async function startServer(
   const port = options.port ?? 4800;
 
   const ctx = await createServerContext(options.workspacePath);
+
+  // Auto-register current workspace in known workspaces (deduped by path)
+  await addKnownWorkspace(ctx.config.workspace.name, ctx.workspaceRoot);
+
   const app = createApp(ctx);
 
   const server = serve({ fetch: app.fetch, port }, () => {

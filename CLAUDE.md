@@ -55,14 +55,23 @@ Web: browser → React → Hono RPC client → @dev-hub/server → @dev-hub/core
 
 **Config format**: `dev-hub.toml` uses snake_case on disk (`build_command`, `run_command`, `env_file`) but core types use camelCase. The parser converts on read/write.
 
-**Workspace resolution**: The CLI resolves the workspace directory with the following priority:
-  1. `--workspace <path>` flag (if provided)
+**Workspace resolution**: Both CLI and server resolve the workspace directory with the following priority:
+  1. Explicit flag/arg: `--workspace <path>` (CLI) or `createServerContext(path)` (server)
   2. `DEV_HUB_WORKSPACE` environment variable (if set)
-  3. Current working directory (default)
+  3. `DEV_HUB_CONFIG` environment variable (legacy compatibility, CLI only)
+  4. Current working directory (default)
 
-  Once the workspace directory is determined, `findConfigFile()` walks up from that directory, stopping at the home directory. If no config is found, Step 4 checks `~/.config/dev-hub/config.toml` for a default workspace path. Use `dev-hub config set workspace <path>` to configure this fallback.
+  Once the workspace directory is determined, `findConfigFile()` walks up from that directory, stopping at the home directory. If no config is found, Step 5 checks `~/.config/dev-hub/config.toml` (XDG_CONFIG_HOME fallback) for a default workspace path. Use `dev-hub config set workspace <path>` (CLI) or `PUT /global-config/defaults` (server) to configure this fallback.
 
-**Progress events**: Git and build operations emit `GitProgressEvent` via EventEmitter3. The CLI renders these with Ink components; the server streams them as SSE. Both use the same emitter interface.
+**Known workspaces**: Global config (`~/.config/dev-hub/config.toml`) maintains a list of known workspace names and paths. The server auto-registers any workspace it loads on startup. Clients can:
+  - List known workspaces: `GET /workspace/known`
+  - Add a workspace (auto-inits `dev-hub.toml` if missing): `POST /workspace/known`
+  - Remove a workspace: `DELETE /workspace/known`
+  - Get/set default workspace: `GET/PUT /global-config` and `GET/PUT /global-config/defaults`
+
+**Workspace switching**: Server-side switching via `POST /workspace/switch` stops all running processes, loads a new workspace, and broadcasts `workspace:changed` SSE event. Mutex middleware returns 503 (Service Unavailable) during switch, except `/api/events` (SSE stream remains open).
+
+**Progress events**: Git and build operations emit `GitProgressEvent` via EventEmitter3. The CLI renders these with Ink components; the server streams them as SSE. Both use the same emitter interface. New SSE event types: `workspace:changed` (broadcasts when workspace switches), `heartbeat` (periodic ping to keep connections alive).
 
 **Error handling**: Core uses custom error classes (`GitError`, `ConfigParseError`, `ConfigNotFoundError`) with cause chains for debugging. CLI commands call `process.exit(1)` on errors.
 
@@ -71,6 +80,8 @@ Web: browser → React → Hono RPC client → @dev-hub/server → @dev-hub/core
 **Concurrency**: `BulkGitService` uses `p-limit` (default: 4 concurrent) for bulk operations across projects.
 
 **Hono RPC**: The server exports a typed `AppType` so the web package can generate a type-safe client — no manual API typing needed.
+
+**Global config**: Stored at `~/.config/dev-hub/config.toml` (respects XDG_CONFIG_HOME). Contains known workspaces list and default workspace path. Core module provides `readGlobalConfig()`, `writeGlobalConfig()`, and workspace helpers. Server exposes via `/global-config` routes; XDG lookup in `createServerContext()` provides CLI parity.
 
 ## Workspace Config (`dev-hub.toml`)
 

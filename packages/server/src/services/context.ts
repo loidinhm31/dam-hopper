@@ -4,6 +4,8 @@ import {
   findConfigFile,
   readConfig,
   ConfigNotFoundError,
+  readGlobalConfig,
+  addKnownWorkspace,
   type DevHubConfig,
 } from "@dev-hub/core";
 import {
@@ -26,7 +28,8 @@ export type SSEEvent =
   | { type: "process:event"; data: RunProgressEvent }
   | { type: "status:changed"; data: { projectName: string } }
   | { type: "config:changed"; data: Record<string, unknown> }
-  | { type: "heartbeat"; data: { timestamp: number } };
+  | { type: "heartbeat"; data: { timestamp: number } }
+  | { type: "workspace:changed"; data: { name: string; root: string } };
 
 export interface ServerContext {
   config: DevHubConfig;
@@ -39,6 +42,8 @@ export interface ServerContext {
   sseClients: Set<SSEClient>;
   broadcast: (event: SSEEvent) => void;
   reloadConfig: () => Promise<void>;
+  switching: boolean;
+  switchWorkspace: (workspacePath: string) => Promise<void>;
 }
 
 export async function createServerContext(
@@ -64,7 +69,16 @@ export async function createServerContext(
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 
-  const resolvedPath = await findConfigFile(input);
+  let resolvedPath = await findConfigFile(input);
+
+  // XDG global config fallback (parity with CLI)
+  if (!resolvedPath) {
+    const globalCfg = await readGlobalConfig();
+    if (globalCfg?.defaults?.workspace) {
+      const fallbackDir = resolve(globalCfg.defaults.workspace);
+      resolvedPath = await findConfigFile(fallbackDir);
+    }
+  }
 
   if (!resolvedPath) {
     throw new ConfigNotFoundError(input);
@@ -118,6 +132,82 @@ export async function createServerContext(
     broadcast,
     reloadConfig: async () => {
       ctx.config = await readConfig(ctx.configPath);
+    },
+    switching: false,
+    switchWorkspace: async (workspacePath: string) => {
+      // Reject immediately if already in progress (defense-in-depth; mutex middleware handles most cases)
+      if (ctx.switching) {
+        throw new Error("Workspace switch already in progress");
+      }
+      ctx.switching = true;
+      try {
+        // Stop all running processes first
+        await ctx.runService.stopAll();
+
+        // Resolve + normalize
+        let newInput = workspacePath;
+        if (!isAbsolute(newInput)) {
+          newInput = resolve(process.cwd(), newInput);
+        }
+        try {
+          const s = await stat(newInput);
+          if (s.isFile()) newInput = dirname(newInput);
+        } catch (e: unknown) {
+          if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+        }
+
+        const newConfigPath = await findConfigFile(newInput);
+        if (!newConfigPath) throw new ConfigNotFoundError(newInput);
+
+        const newConfig = await readConfig(newConfigPath);
+        const newWorkspaceRoot = dirname(newConfigPath);
+
+        // Remove all listeners from old service emitters to prevent memory leaks
+        ctx.bulkGitService.emitter.removeAllListeners();
+        ctx.buildService.emitter.removeAllListeners();
+        ctx.runService.emitter.removeAllListeners();
+        ctx.commandService.emitter.removeAllListeners();
+
+        // Create new service instances
+        const newBulkGitService = new BulkGitService();
+        const newBuildService = new BuildService();
+        const newRunService = new RunService();
+        const newCommandService = new CommandService();
+
+        // Wire new emitters to ctx.broadcast (uses monkey-patched version from routes)
+        newBulkGitService.emitter.on("progress", (event) => {
+          ctx.broadcast({ type: "git:progress", data: event });
+        });
+        newBuildService.emitter.on("progress", (event) => {
+          ctx.broadcast({ type: "build:progress", data: event });
+        });
+        newRunService.emitter.on("progress", (event) => {
+          ctx.broadcast({ type: "process:event", data: event });
+        });
+        newCommandService.emitter.on("progress", (event) => {
+          ctx.broadcast({ type: "command:progress", data: event });
+        });
+
+        // Mutate ctx in place
+        ctx.config = newConfig;
+        ctx.configPath = newConfigPath;
+        ctx.workspaceRoot = newWorkspaceRoot;
+        ctx.bulkGitService = newBulkGitService;
+        ctx.buildService = newBuildService;
+        ctx.runService = newRunService;
+        ctx.commandService = newCommandService;
+
+        // Auto-register in known workspaces
+        await addKnownWorkspace(newConfig.workspace.name, newWorkspaceRoot);
+
+        // Notify all SSE clients (via ctx.broadcast so monkey-patches fire)
+        ctx.broadcast({
+          type: "workspace:changed",
+          data: { name: newConfig.workspace.name, root: newWorkspaceRoot },
+        });
+      } finally {
+        ctx.switching = false;
+      }
     },
   };
 

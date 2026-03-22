@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ConfigNotFoundError } from "@dev-hub/core";
@@ -18,17 +18,24 @@ type = "custom"
 describe("createServerContext resolution", () => {
   let tmpDir: string;
   const dirsToClean: string[] = [];
+  const originalXdg = process.env.XDG_CONFIG_HOME;
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "dh-ctx-"));
     dirsToClean.push(tmpDir);
     delete process.env.DEV_HUB_WORKSPACE;
     delete process.env.DEV_HUB_CONFIG;
+    delete process.env.XDG_CONFIG_HOME;
   });
 
   afterEach(async () => {
     delete process.env.DEV_HUB_WORKSPACE;
     delete process.env.DEV_HUB_CONFIG;
+    if (originalXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = originalXdg;
+    }
     for (const dir of dirsToClean) {
       await rm(dir, { recursive: true, force: true });
     }
@@ -122,5 +129,171 @@ describe("createServerContext resolution", () => {
     const ctx = await createServerContext(dir1);
 
     expect(ctx.config.workspace.name).toBe("from-arg");
+  });
+
+  it("falls back to XDG global config defaults.workspace when no config found", async () => {
+    const wsDir = await mkdtemp(join(tmpdir(), "dh-xdg-ws-"));
+    const xdgDir = await mkdtemp(join(tmpdir(), "dh-xdg-cfg-"));
+    dirsToClean.push(wsDir, xdgDir);
+
+    await writeFile(
+      join(wsDir, "dev-hub.toml"),
+      MINIMAL_TOML.replace("test-ws", "from-xdg"),
+    );
+    const cfgDir = join(xdgDir, "dev-hub");
+    await mkdir(cfgDir, { recursive: true });
+    await writeFile(
+      join(cfgDir, "config.toml"),
+      `[defaults]\nworkspace = "${wsDir}"\n`,
+    );
+    process.env.XDG_CONFIG_HOME = xdgDir;
+
+    // Pass an empty dir so findConfigFile returns null and XDG fallback kicks in
+    const emptyDir = await mkdtemp(join(tmpdir(), "dh-xdg-empty-"));
+    dirsToClean.push(emptyDir);
+
+    const ctx = await createServerContext(emptyDir);
+
+    expect(ctx.config.workspace.name).toBe("from-xdg");
+    expect(ctx.workspaceRoot).toBe(wsDir);
+  });
+
+  it("context has switching=false and switchWorkspace function", async () => {
+    await writeFile(join(tmpDir, "dev-hub.toml"), MINIMAL_TOML);
+    const ctx = await createServerContext(tmpDir);
+    expect(ctx.switching).toBe(false);
+    expect(typeof ctx.switchWorkspace).toBe("function");
+  });
+});
+
+describe("switchWorkspace()", () => {
+  const dirsToClean: string[] = [];
+  const originalXdg = process.env.XDG_CONFIG_HOME;
+
+  beforeEach(async () => {
+    // Isolate global config writes so atomic rename doesn't cross filesystems
+    const xdgDir = await mkdtemp(join(tmpdir(), "dh-sw-xdg-"));
+    dirsToClean.push(xdgDir);
+    process.env.XDG_CONFIG_HOME = xdgDir;
+  });
+
+  afterEach(async () => {
+    if (originalXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = originalXdg;
+    }
+    for (const dir of dirsToClean) {
+      await rm(dir, { recursive: true, force: true });
+    }
+    dirsToClean.length = 0;
+  });
+
+  async function makeWorkspaceDir(name: string): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), `dh-sw-${name}-`));
+    dirsToClean.push(dir);
+    await writeFile(
+      join(dir, "dev-hub.toml"),
+      MINIMAL_TOML.replace("test-ws", name),
+    );
+    return dir;
+  }
+
+  it("switches workspace — config and workspaceRoot updated", async () => {
+    const dir1 = await makeWorkspaceDir("ws-one");
+    const dir2 = await makeWorkspaceDir("ws-two");
+
+    const ctx = await createServerContext(dir1);
+    expect(ctx.config.workspace.name).toBe("ws-one");
+
+    await ctx.switchWorkspace(dir2);
+
+    expect(ctx.config.workspace.name).toBe("ws-two");
+    expect(ctx.workspaceRoot).toBe(dir2);
+  });
+
+  it("switching flag is false after a successful switch", async () => {
+    const dir1 = await makeWorkspaceDir("ws-a");
+    const dir2 = await makeWorkspaceDir("ws-b");
+
+    const ctx = await createServerContext(dir1);
+    await ctx.switchWorkspace(dir2);
+
+    expect(ctx.switching).toBe(false);
+  });
+
+  it("old service emitters have no listeners after switch (no memory leak)", async () => {
+    const dir1 = await makeWorkspaceDir("ws-leak-a");
+    const dir2 = await makeWorkspaceDir("ws-leak-b");
+
+    const ctx = await createServerContext(dir1);
+    const oldBulkGit = ctx.bulkGitService;
+    const oldBuild = ctx.buildService;
+    const oldRun = ctx.runService;
+    const oldCommand = ctx.commandService;
+
+    await ctx.switchWorkspace(dir2);
+
+    expect(oldBulkGit.emitter.listenerCount("progress")).toBe(0);
+    expect(oldBuild.emitter.listenerCount("progress")).toBe(0);
+    expect(oldRun.emitter.listenerCount("progress")).toBe(0);
+    expect(oldCommand.emitter.listenerCount("progress")).toBe(0);
+  });
+
+  it("broadcasts workspace:changed SSE event", async () => {
+    const dir1 = await makeWorkspaceDir("ws-bcast-a");
+    const dir2 = await makeWorkspaceDir("ws-bcast-b");
+
+    const ctx = await createServerContext(dir1);
+    const events: unknown[] = [];
+    ctx.sseClients.add({ send: (e) => events.push(e) });
+
+    await ctx.switchWorkspace(dir2);
+
+    const changed = events.find(
+      (e) => (e as { type: string }).type === "workspace:changed",
+    );
+    expect(changed).toBeDefined();
+    expect((changed as { data: { name: string } }).data.name).toBe("ws-bcast-b");
+  });
+
+  it("throws ConfigNotFoundError for invalid path, switching resets to false", async () => {
+    const dir1 = await makeWorkspaceDir("ws-err");
+    const emptyDir = await mkdtemp(join(tmpdir(), "dh-sw-empty-"));
+    dirsToClean.push(emptyDir);
+
+    const ctx = await createServerContext(dir1);
+
+    await expect(ctx.switchWorkspace(emptyDir)).rejects.toThrow(ConfigNotFoundError);
+    expect(ctx.switching).toBe(false);
+  });
+
+  it("rejects concurrent switchWorkspace call while one is in progress", async () => {
+    const dir1 = await makeWorkspaceDir("ws-conc-a");
+    const dir2 = await makeWorkspaceDir("ws-conc-b");
+
+    const ctx = await createServerContext(dir1);
+
+    // Manually set switching to simulate an in-progress switch
+    ctx.switching = true;
+
+    await expect(ctx.switchWorkspace(dir2)).rejects.toThrow(
+      "Workspace switch already in progress",
+    );
+
+    // Reset so cleanup works
+    ctx.switching = false;
+  });
+
+  it("throws ConfigNotFoundError for path with no dev-hub.toml (path guard is at route level)", async () => {
+    const dir1 = await makeWorkspaceDir("ws-path-check");
+    const emptyInsideHome = await mkdtemp(join(tmpdir(), "dh-sw-notoml-"));
+    dirsToClean.push(emptyInsideHome);
+
+    const ctx = await createServerContext(dir1);
+
+    // switchWorkspace itself has no home-dir restriction; that guard is in the HTTP route
+    await expect(ctx.switchWorkspace(emptyInsideHome)).rejects.toThrow(ConfigNotFoundError);
+    expect(ctx.switching).toBe(false);
   });
 });

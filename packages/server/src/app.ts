@@ -25,8 +25,15 @@ export function createApp(ctx: ServerContext) {
   // Global error handler (must use onError, not middleware, for Hono v4+)
   app.onError(onError);
 
-  // API routes
-  const api = new Hono()
+  // API routes — mutex middleware runs before all routes (exempt SSE /events)
+  const api = new Hono();
+  api.use("*", async (c, next) => {
+    if (ctx.switching && c.req.path !== "/api/events") {
+      return c.json({ error: "Workspace switch in progress", code: "SWITCHING" }, 503);
+    }
+    return next();
+  });
+  api
     .route("/", createWorkspaceRoutes(ctx))
     .route("/", createGitRoutes(ctx))
     .route("/", createBuildRoutes(ctx))
