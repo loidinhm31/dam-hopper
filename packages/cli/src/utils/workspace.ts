@@ -33,8 +33,8 @@ export async function resolveWorkspaceDir(
     if (s.isFile()) {
       dir = dirname(dir);
     }
-  } catch {
-    // path doesn't exist yet — let caller handle
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 
   return dir;

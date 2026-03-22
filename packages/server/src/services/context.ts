@@ -1,4 +1,5 @@
-import { dirname } from "node:path";
+import { dirname, resolve, isAbsolute } from "node:path";
+import { stat } from "node:fs/promises";
 import {
   findConfigFile,
   readConfig,
@@ -41,12 +42,32 @@ export interface ServerContext {
 }
 
 export async function createServerContext(
-  configPath?: string,
+  workspacePath?: string,
 ): Promise<ServerContext> {
-  const resolvedPath = configPath ?? (await findConfigFile(process.cwd()));
+  // Priority: explicit arg → DEV_HUB_WORKSPACE → DEV_HUB_CONFIG (compat) → CWD
+  let input =
+    workspacePath ??
+    process.env.DEV_HUB_WORKSPACE ??
+    process.env.DEV_HUB_CONFIG ??
+    process.cwd();
+
+  // Normalise: resolve relative, file → directory
+  if (!isAbsolute(input)) {
+    input = resolve(process.cwd(), input);
+  }
+  try {
+    const s = await stat(input);
+    if (s.isFile()) {
+      input = dirname(input);
+    }
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+
+  const resolvedPath = await findConfigFile(input);
 
   if (!resolvedPath) {
-    throw new ConfigNotFoundError(process.cwd());
+    throw new ConfigNotFoundError(input);
   }
 
   const config = await readConfig(resolvedPath);
