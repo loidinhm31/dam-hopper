@@ -83,25 +83,6 @@ export interface Branch {
   lastCommit?: string;
 }
 
-export interface BuildResult {
-  projectName: string;
-  serviceName: string;
-  command: string;
-  success: boolean;
-  exitCode: number;
-  durationMs: number;
-  stdout: string;
-  stderr: string;
-}
-
-export interface ProcessInfo {
-  projectName: string;
-  command: string;
-  pid?: number;
-  status: "running" | "stopped" | "error";
-  startedAt?: string;
-}
-
 export interface GitOpResult {
   projectName: string;
   success: boolean;
@@ -146,24 +127,5 @@ export const api = {
     update: (config: DevHubConfig) => window.devhub.config.update(config),
     updateProject: (name: string, data: Partial<ProjectConfig>) =>
       window.devhub.config.updateProject(name, data),
-  },
-  build: {
-    start: (project: string, service?: string) =>
-      window.devhub.build.start(project, service),
-  },
-  exec: {
-    run: (project: string, command: string) =>
-      window.devhub.exec.run(project, command),
-  },
-  processes: {
-    list: () => window.devhub.processes.list(),
-    start: (project: string, service?: string) =>
-      window.devhub.processes.start(project, service),
-    stop: (project: string, service?: string) =>
-      window.devhub.processes.stop(project, service),
-    restart: (project: string, service?: string) =>
-      window.devhub.processes.restart(project, service),
-    logs: (project: string, lines = 100, service?: string) =>
-      window.devhub.processes.logs(project, service, lines),
   },
 };

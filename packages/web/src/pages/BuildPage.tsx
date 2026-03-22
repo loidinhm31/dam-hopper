@@ -1,23 +1,27 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button } from "@/components/atoms/Button.js";
-import { BuildLog } from "@/components/organisms/BuildLog.js";
-import { useProjects, useBuild } from "@/api/queries.js";
-import { cn } from "@/lib/utils.js";
+import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
+import { useProjects } from "@/api/queries.js";
+import { getEffectiveCommand } from "@/lib/presets.js";
+import { Badge } from "@/components/atoms/Badge.js";
 
 export function BuildPage() {
   const { data: projects = [] } = useProjects();
   const [selected, setSelected] = useState("");
-  const build = useBuild();
-
-  // Sync selected to first project once projects load (W2 fix)
-  useEffect(() => {
-    if (!selected && projects.length > 0) {
-      setSelected(projects[0].name);
-    }
-  }, [projects, selected]);
+  const [buildKey, setBuildKey] = useState(0);
+  const [buildStarted, setBuildStarted] = useState(false);
+  const [exitCode, setExitCode] = useState<number | null | undefined>(undefined);
 
   const projectName = selected || projects[0]?.name || "";
+  const project = projects.find((p) => p.name === projectName);
+  const buildCmd = project ? getEffectiveCommand(project, "build") : null;
+
+  function handleBuild() {
+    setExitCode(undefined);
+    setBuildKey((k) => k + 1);
+    setBuildStarted(true);
+  }
 
   return (
     <AppLayout title="Build">
@@ -26,7 +30,11 @@ export function BuildPage() {
           <select
             className="h-8 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-text)] outline-none"
             value={selected || projectName}
-            onChange={(e) => setSelected(e.target.value)}
+            onChange={(e) => {
+              setSelected(e.target.value);
+              setBuildStarted(false);
+              setExitCode(undefined);
+            }}
           >
             {projects.map((p) => (
               <option key={p.name} value={p.name}>
@@ -36,31 +44,28 @@ export function BuildPage() {
           </select>
           <Button
             variant="primary"
-            loading={build.isPending}
-            disabled={!projectName}
-            onClick={() => build.mutate(projectName)}
+            disabled={!buildCmd?.command}
+            onClick={handleBuild}
           >
             Build
           </Button>
+          {exitCode !== undefined && (
+            <Badge variant={exitCode === 0 ? "success" : "danger"}>
+              {exitCode === 0 ? "success" : `exit ${exitCode}`}
+            </Badge>
+          )}
         </div>
 
-        {build.data && (
-          <div
-            className={cn(
-              "rounded-lg border px-4 py-3 text-sm",
-              build.data.success
-                ? "bg-[var(--color-success)]/10 border-[var(--color-success)]/30 text-[var(--color-success)]"
-                : "bg-[var(--color-danger)]/10 border-[var(--color-danger)]/30 text-[var(--color-danger)]",
-            )}
-          >
-            {build.data.success
-              ? "✓ Build succeeded"
-              : `✗ Build failed (exit ${build.data.exitCode})`}{" "}
-            — {(build.data.durationMs / 1000).toFixed(1)}s
-          </div>
+        {buildStarted && buildCmd && (
+          <TerminalPanel
+            key={`build-page:${projectName}:${buildKey}`}
+            sessionId={`build-page:${projectName}`}
+            project={projectName}
+            command={buildCmd.command}
+            onExit={(code) => setExitCode(code)}
+            className="h-[60vh]"
+          />
         )}
-
-        <BuildLog project={projectName} className="h-[60vh]" showTimestamps />
       </div>
     </AppLayout>
   );

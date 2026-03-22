@@ -34,12 +34,9 @@ function dispatch(type: string, data: unknown) {
 // Falls back to a local copy for non-Electron environments (tests/storybook).
 const FALLBACK_EVENT_CHANNELS = [
   "git:progress",
-  "build:progress",
-  "process:event",
   "status:changed",
   "config:changed",
   "workspace:changed",
-  "command:progress",
 ] as const;
 
 function getEventChannels(): readonly string[] {
@@ -76,10 +73,6 @@ export function useSSE(): { status: SSEStatus } {
         } catch {
           void qc.invalidateQueries({ queryKey: ["projects"] });
         }
-      }),
-
-      subscribeSSE("process:event", () => {
-        void qc.invalidateQueries({ queryKey: ["processes"] });
       }),
 
       subscribeSSE("config:changed", () => {

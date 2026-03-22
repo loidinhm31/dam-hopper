@@ -17,18 +17,6 @@ export function wireEventEmitters(holder: CtxHolder): void {
     ctx.bulkGitService.emitter.on("progress", (event) => {
       send(EV.GIT_PROGRESS, event);
     });
-
-    ctx.buildService.emitter.on("progress", (event) => {
-      send(EV.BUILD_PROGRESS, event);
-    });
-
-    ctx.runService.emitter.on("progress", (event) => {
-      send(EV.PROCESS_EVENT, event);
-    });
-
-    ctx.commandService.emitter.on("progress", (event) => {
-      send(EV.COMMAND_PROGRESS, event);
-    });
   };
 
   wire();

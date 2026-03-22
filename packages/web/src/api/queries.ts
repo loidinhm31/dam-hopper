@@ -51,23 +51,6 @@ export function useBranches(project: string) {
   });
 }
 
-export function useProcesses() {
-  return useQuery({
-    queryKey: ["processes"],
-    queryFn: () => api.processes.list(),
-    refetchInterval: 5_000,
-  });
-}
-
-export function useProcessLogs(project: string, lines = 100) {
-  return useQuery({
-    queryKey: ["process-logs", project, lines],
-    queryFn: () => api.processes.logs(project, lines),
-    enabled: !!project,
-    refetchInterval: 3_000,
-  });
-}
-
 export function useConfig() {
   return useQuery({
     queryKey: ["config"],
@@ -176,53 +159,6 @@ export function useGitPush() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["projects"] });
     },
-  });
-}
-
-export function useBuild() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (project: string) => api.build.start(project),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["projects"] });
-    },
-  });
-}
-
-export function useStartProcess() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (project: string) => api.processes.start(project),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["processes"] });
-    },
-  });
-}
-
-export function useStopProcess() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (project: string) => api.processes.stop(project),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["processes"] });
-    },
-  });
-}
-
-export function useRestartProcess() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (project: string) => api.processes.restart(project),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["processes"] });
-    },
-  });
-}
-
-export function useExecCommand() {
-  return useMutation({
-    mutationFn: ({ project, command }: { project: string; command: string }) =>
-      api.exec.run(project, command),
   });
 }
 

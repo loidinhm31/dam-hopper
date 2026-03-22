@@ -6,7 +6,11 @@ import { Badge } from "@/components/atoms/Badge.js";
 import { BranchBadge } from "@/components/atoms/BranchBadge.js";
 import { GitStatusBadge } from "@/components/atoms/GitStatusBadge.js";
 import { Button } from "@/components/atoms/Button.js";
-import { useProjects, useGitFetch, useGitPull, useBuild } from "@/api/queries.js";
+import {
+  useProjects,
+  useGitFetch,
+  useGitPull,
+} from "@/api/queries.js";
 import type { ProjectWithStatus } from "@/api/client.js";
 import { cn } from "@/lib/utils.js";
 
@@ -47,7 +51,6 @@ export function ProjectsPage() {
 
   const gitFetch = useGitFetch();
   const gitPull = useGitPull();
-  const build = useBuild();
 
   const types = [...new Set(projects.map((p) => p.type))];
 
@@ -113,14 +116,29 @@ export function ProjectsPage() {
           <thead>
             <tr className="border-b border-[var(--color-border)] text-[var(--color-text-muted)]">
               <th className="px-4 py-3 text-left font-medium">
-                <SortBtn sortKey="name" label="Name" activeSort={sort} onSort={setSort} />
+                <SortBtn
+                  sortKey="name"
+                  label="Name"
+                  activeSort={sort}
+                  onSort={setSort}
+                />
               </th>
               <th className="px-4 py-3 text-left font-medium">
-                <SortBtn sortKey="type" label="Type" activeSort={sort} onSort={setSort} />
+                <SortBtn
+                  sortKey="type"
+                  label="Type"
+                  activeSort={sort}
+                  onSort={setSort}
+                />
               </th>
               <th className="px-4 py-3 text-left font-medium">Branch</th>
               <th className="px-4 py-3 text-left font-medium">
-                <SortBtn sortKey="status" label="Status" activeSort={sort} onSort={setSort} />
+                <SortBtn
+                  sortKey="status"
+                  label="Status"
+                  activeSort={sort}
+                  onSort={setSort}
+                />
               </th>
               <th className="px-4 py-3 text-left font-medium">±</th>
               <th className="px-4 py-3 text-right font-medium">Actions</th>
@@ -129,14 +147,20 @@ export function ProjectsPage() {
           <tbody>
             {isLoading && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-[var(--color-text-muted)]">
+                <td
+                  colSpan={6}
+                  className="px-4 py-8 text-center text-[var(--color-text-muted)]"
+                >
                   Loading…
                 </td>
               </tr>
             )}
             {!isLoading && filtered.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-[var(--color-text-muted)]">
+                <td
+                  colSpan={6}
+                  className="px-4 py-8 text-center text-[var(--color-text-muted)]"
+                >
                   No projects found
                 </td>
               </tr>
@@ -147,7 +171,9 @@ export function ProjectsPage() {
                 className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-surface-2)] cursor-pointer transition-colors"
                 onClick={() => navigate(`/projects/${p.name}`)}
               >
-                <td className="px-4 py-3 font-medium text-[var(--color-text)]">{p.name}</td>
+                <td className="px-4 py-3 font-medium text-[var(--color-text)]">
+                  {p.name}
+                </td>
                 <td className="px-4 py-3">
                   <Badge>{p.type}</Badge>
                 </td>
@@ -158,9 +184,7 @@ export function ProjectsPage() {
                   <GitStatusBadge isClean={p.status?.isClean} />
                 </td>
                 <td className="px-4 py-3 text-[var(--color-text-muted)] text-xs font-mono">
-                  {p.status
-                    ? `+${p.status.ahead} -${p.status.behind}`
-                    : "—"}
+                  {p.status ? `+${p.status.ahead} -${p.status.behind}` : "—"}
                 </td>
                 <td className="px-4 py-3 text-right">
                   <div
@@ -170,7 +194,9 @@ export function ProjectsPage() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      loading={gitFetch.isPending && gitFetch.variables?.[0] === p.name}
+                      loading={
+                        gitFetch.isPending && gitFetch.variables?.[0] === p.name
+                      }
                       onClick={() => gitFetch.mutate([p.name])}
                     >
                       Fetch
@@ -178,18 +204,12 @@ export function ProjectsPage() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      loading={gitPull.isPending && gitPull.variables?.[0] === p.name}
+                      loading={
+                        gitPull.isPending && gitPull.variables?.[0] === p.name
+                      }
                       onClick={() => gitPull.mutate([p.name])}
                     >
                       Pull
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      loading={build.isPending && build.variables === p.name}
-                      onClick={() => build.mutate(p.name)}
-                    >
-                      Build
                     </Button>
                   </div>
                 </td>

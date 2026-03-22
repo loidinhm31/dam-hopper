@@ -34,29 +34,21 @@ export const CH = {
   CONFIG_UPDATE: "config:update",
   CONFIG_UPDATE_PROJECT: "config:updateProject",
 
-  // Build
-  BUILD_START: "build:start",
-
-  // Exec
-  EXEC_RUN: "exec:run",
-
-  // Processes
-  PROCESSES_LIST: "processes:list",
-  RUN_START: "run:start",
-  RUN_STOP: "run:stop",
-  RUN_RESTART: "run:restart",
-  RUN_LOGS: "run:logs",
+  // Terminal (PTY)
+  TERMINAL_CREATE: "terminal:create",
+  TERMINAL_WRITE: "terminal:write",
+  TERMINAL_RESIZE: "terminal:resize",
+  TERMINAL_KILL: "terminal:kill",
+  TERMINAL_LIST: "terminal:list",
 } as const;
 
 // ── Push event channels (main → renderer) ─────────────────────────────────────
 export const EV = {
   GIT_PROGRESS: "git:progress",
-  BUILD_PROGRESS: "build:progress",
-  PROCESS_EVENT: "process:event",
-  COMMAND_PROGRESS: "command:progress",
   STATUS_CHANGED: "status:changed",
   CONFIG_CHANGED: "config:changed",
   WORKSPACE_CHANGED: "workspace:changed",
+  // terminal:data:${id} and terminal:exit:${id} are dynamic — not in this list
 } as const;
 
 export type EventChannel = (typeof EV)[keyof typeof EV];

@@ -1,20 +1,23 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Pencil, Trash2, Play, Plus, Check, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Pencil,
+  Trash2,
+  Play,
+  Square,
+  RotateCcw,
+  Plus,
+  Check,
+  X,
+} from "lucide-react";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import { Badge } from "@/components/atoms/Badge.js";
 import { CommandPreview } from "@/components/atoms/CommandPreview.js";
-import { BuildLog } from "@/components/organisms/BuildLog.js";
-import {
-  useBuild,
-  useStartProcess,
-  useStopProcess,
-  useRestartProcess,
-  useProcessLogs,
-  useExecCommand,
-  useUpdateProject,
-} from "@/api/queries.js";
+import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
+import { useUpdateProject } from "@/api/queries.js";
 import { getEffectiveCommand } from "@/lib/presets.js";
-import type { ProjectWithStatus, BuildResult } from "@/api/client.js";
+import type { ProjectWithStatus } from "@/api/client.js";
 import { cn } from "@/lib/utils.js";
 
 type FilterType = "all" | "build" | "run" | "custom";
@@ -33,6 +36,23 @@ export function UnifiedCommandPanel({ project }: Props) {
   // Expanded output panels (keys: "build", "run", "custom:<key>")
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
+  // Build state
+  const [buildStarted, setBuildStarted] = useState(false);
+  const [buildExitCode, setBuildExitCode] = useState<number | null | undefined>(
+    undefined,
+  );
+
+  // Run state — key increments on restart to force TerminalPanel remount
+  const [runStarted, setRunStarted] = useState(false);
+  const [runKey, setRunKey] = useState(0);
+
+  // Custom command state: which keys have been started
+  const [customStarted, setCustomStarted] = useState<Set<string>>(new Set());
+  const [customKeys, setCustomKeys] = useState<Record<string, number>>({});
+  const [customExitCodes, setCustomExitCodes] = useState<
+    Record<string, number | null>
+  >({});
+
   // Custom command editing state
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editKey, setEditKey] = useState("");
@@ -45,23 +65,6 @@ export function UnifiedCommandPanel({ project }: Props) {
   const [newValue, setNewValue] = useState("");
   const [newKeyError, setNewKeyError] = useState("");
 
-  // Custom command results & loading
-  const [results, setResults] = useState<Record<string, BuildResult>>({});
-  const [runningKey, setRunningKey] = useState<string | null>(null);
-
-  // Build result
-  const [buildResult, setBuildResult] = useState<BuildResult[] | null>(null);
-
-  // Hooks
-  const build = useBuild();
-  const startProcess = useStartProcess();
-  const stopProcess = useStopProcess();
-  const restartProcess = useRestartProcess();
-  const { data: processLogs = [] } = useProcessLogs(
-    expanded.has("run") ? project.name : "",
-    200,
-  );
-  const execCmd = useExecCommand();
   const updateProject = useUpdateProject();
 
   // Expand toggle
@@ -76,11 +79,28 @@ export function UnifiedCommandPanel({ project }: Props) {
 
   // Build
   function handleBuild() {
-    setBuildResult(null);
+    setBuildExitCode(undefined);
+    setBuildStarted(true);
     if (!expanded.has("build")) toggleExpand("build");
-    build.mutate(project.name, {
-      onSuccess: (data) => setBuildResult(data),
-    });
+  }
+
+  // Run
+  function handleRunStart() {
+    setRunKey((k) => k + 1);
+    setRunStarted(true);
+    if (!expanded.has("run")) toggleExpand("run");
+  }
+
+  function handleRunStop() {
+    window.devhub.terminal.kill(`run:${project.name}`);
+    setRunStarted(false);
+  }
+
+  function handleRunRestart() {
+    window.devhub.terminal.kill(`run:${project.name}`);
+    setRunKey((k) => k + 1);
+    setRunStarted(true);
+    if (!expanded.has("run")) toggleExpand("run");
   }
 
   // Custom command editing
@@ -142,19 +162,24 @@ export function UnifiedCommandPanel({ project }: Props) {
     );
   }
 
-  function runCmd(key: string) {
-    setRunningKey(key);
-    execCmd.mutate(
-      { project: project.name, command: key },
-      {
-        onSuccess: (result) => {
-          setResults((prev) => ({ ...prev, [key]: result }));
-          if (!expanded.has(`custom:${key}`)) toggleExpand(`custom:${key}`);
-          setRunningKey(null);
-        },
-        onError: () => setRunningKey(null),
-      },
-    );
+  function runCustomCmd(key: string) {
+    setCustomExitCodes((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setCustomKeys((prev) => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }));
+    setCustomStarted((prev) => new Set([...prev, key]));
+    if (!expanded.has(`custom:${key}`)) toggleExpand(`custom:${key}`);
+  }
+
+  function stopCustomCmd(key: string) {
+    window.devhub.terminal.kill(`custom:${project.name}:${key}`);
+    setCustomStarted((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
   }
 
   // Filter visibility
@@ -206,12 +231,12 @@ export function UnifiedCommandPanel({ project }: Props) {
               <span className="text-xs text-[var(--color-text-muted)]">
                 {buildCmd.source === "service" ? "custom" : "preset"}
               </span>
-              <Button
-                variant="primary"
-                size="sm"
-                loading={build.isPending}
-                onClick={handleBuild}
-              >
+              {buildExitCode !== undefined && (
+                <Badge variant={buildExitCode === 0 ? "success" : "danger"}>
+                  {buildExitCode === 0 ? "success" : `exit ${buildExitCode}`}
+                </Badge>
+              )}
+              <Button variant="primary" size="sm" onClick={handleBuild}>
                 Build
               </Button>
               <button
@@ -226,30 +251,22 @@ export function UnifiedCommandPanel({ project }: Props) {
               </button>
             </div>
 
-            {expanded.has("build") && (
-              <div className="border-t border-[var(--color-border)] p-3 space-y-2">
-                {buildResult && buildResult.length > 0 && (() => {
-                  const allSucceeded = buildResult.every((r) => r.success);
-                  const failed = buildResult.find((r) => !r.success);
-                  const totalMs = buildResult.reduce((sum, r) => sum + r.durationMs, 0);
-                  return (
-                    <div
-                      className={cn(
-                        "rounded border px-3 py-2 text-xs",
-                        allSucceeded
-                          ? "bg-[var(--color-success)]/10 border-[var(--color-success)]/30 text-[var(--color-success)]"
-                          : "bg-[var(--color-danger)]/10 border-[var(--color-danger)]/30 text-[var(--color-danger)]",
-                      )}
-                    >
-                      {allSucceeded
-                        ? "✓ Build succeeded"
-                        : `✗ Build failed (exit ${failed?.exitCode ?? 1})`}
-                      {" — "}
-                      {(totalMs / 1000).toFixed(1)}s
-                    </div>
-                  );
-                })()}
-                <BuildLog project={project.name} />
+            {/* Keep TerminalPanel mounted (hidden when collapsed) to preserve PTY output */}
+            {buildStarted && (
+              <div
+                className={cn(
+                  "border-t border-[var(--color-border)]",
+                  !expanded.has("build") && "hidden",
+                )}
+              >
+                <TerminalPanel
+                  key={`build:${project.name}:${buildExitCode === undefined ? "running" : "done"}`}
+                  sessionId={`build:${project.name}`}
+                  project={project.name}
+                  command={buildCmd.command}
+                  onExit={(code) => setBuildExitCode(code)}
+                  className="min-h-64 max-h-96"
+                />
               </div>
             )}
           </div>
@@ -273,25 +290,25 @@ export function UnifiedCommandPanel({ project }: Props) {
                 <Button
                   variant="primary"
                   size="sm"
-                  loading={startProcess.isPending}
-                  onClick={() => startProcess.mutate(project.name)}
+                  disabled={runStarted}
+                  onClick={handleRunStart}
                 >
-                  Start
+                  <Play className="h-3 w-3" /> Start
                 </Button>
                 <Button
                   variant="danger"
                   size="sm"
-                  loading={stopProcess.isPending}
-                  onClick={() => stopProcess.mutate(project.name)}
+                  disabled={!runStarted}
+                  onClick={handleRunStop}
                 >
-                  Stop
+                  <Square className="h-3 w-3" /> Stop
                 </Button>
                 <Button
                   size="sm"
-                  loading={restartProcess.isPending}
-                  onClick={() => restartProcess.mutate(project.name)}
+                  disabled={!runStarted}
+                  onClick={handleRunRestart}
                 >
-                  Restart
+                  <RotateCcw className="h-3 w-3" /> Restart
                 </Button>
               </div>
               <button
@@ -306,27 +323,21 @@ export function UnifiedCommandPanel({ project }: Props) {
               </button>
             </div>
 
-            {expanded.has("run") && (
-              <div className="border-t border-[var(--color-border)]">
-                <div className="px-3 py-2 border-b border-[var(--color-border)] text-xs text-[var(--color-text-muted)]">
-                  Process Logs
-                </div>
-                <div className="log-container overflow-y-auto max-h-96 p-3 bg-[#0a0a0f]">
-                  {processLogs.length === 0 ? (
-                    <span className="text-[var(--color-text-muted)]">
-                      No logs available.
-                    </span>
-                  ) : (
-                    processLogs.map((entry, i) => (
-                      <div
-                        key={i}
-                        className="whitespace-pre-wrap break-all text-[var(--color-text)]"
-                      >
-                        {entry.line}
-                      </div>
-                    ))
-                  )}
-                </div>
+            {runStarted && (
+              <div
+                className={cn(
+                  "border-t border-[var(--color-border)]",
+                  !expanded.has("run") && "hidden",
+                )}
+              >
+                <TerminalPanel
+                  key={`run:${project.name}:${runKey}`}
+                  sessionId={`run:${project.name}`}
+                  project={project.name}
+                  command={runEffective.command}
+                  onExit={() => setRunStarted(false)}
+                  className="min-h-64 max-h-96"
+                />
               </div>
             )}
           </div>
@@ -351,22 +362,39 @@ export function UnifiedCommandPanel({ project }: Props) {
                       <div className="flex flex-1 gap-2 items-start">
                         <div className="flex flex-col gap-1">
                           <input
-                            className={cn(inputClass, "h-8 flex-none w-32", editKeyError && "border-[var(--color-danger)]")}
+                            className={cn(
+                              inputClass,
+                              "h-8 flex-none w-32",
+                              editKeyError && "border-[var(--color-danger)]",
+                            )}
                             value={editKey}
-                            onChange={(e) => { setEditKey(e.target.value); setEditKeyError(""); }}
+                            onChange={(e) => {
+                              setEditKey(e.target.value);
+                              setEditKeyError("");
+                            }}
                             placeholder="name"
                           />
                           {editKeyError && (
-                            <span className="text-[10px] text-[var(--color-danger)]">{editKeyError}</span>
+                            <span className="text-[10px] text-[var(--color-danger)]">
+                              {editKeyError}
+                            </span>
                           )}
                         </div>
                         <input
-                          className={cn(inputClass, "h-8 flex-1 font-mono text-xs")}
+                          className={cn(
+                            inputClass,
+                            "h-8 flex-1 font-mono text-xs",
+                          )}
                           value={editValue}
                           onChange={(e) => setEditValue(e.target.value)}
                           placeholder="shell command"
                         />
-                        <Button size="sm" variant="primary" loading={updateProject.isPending} onClick={saveEdit}>
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          loading={updateProject.isPending}
+                          onClick={saveEdit}
+                        >
                           <Check className="h-3 w-3" />
                         </Button>
                         <Button size="sm" onClick={cancelEdit}>
@@ -381,13 +409,39 @@ export function UnifiedCommandPanel({ project }: Props) {
                         <code className="flex-1 font-mono text-xs text-[var(--color-text-muted)] truncate">
                           {value}
                         </code>
-                        <Button size="sm" loading={runningKey === key} onClick={() => runCmd(key)}>
-                          <Play className="h-3 w-3" /> Run
-                        </Button>
+                        {customExitCodes[key] !== undefined && (
+                          <Badge
+                            variant={
+                              customExitCodes[key] === 0 ? "success" : "danger"
+                            }
+                          >
+                            {customExitCodes[key] === 0
+                              ? "success"
+                              : `exit ${customExitCodes[key]}`}
+                          </Badge>
+                        )}
+                        {customStarted.has(key) ? (
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            onClick={() => stopCustomCmd(key)}
+                          >
+                            <Square className="h-3 w-3" /> Stop
+                          </Button>
+                        ) : (
+                          <Button size="sm" onClick={() => runCustomCmd(key)}>
+                            <Play className="h-3 w-3" /> Run
+                          </Button>
+                        )}
                         <Button size="sm" onClick={() => startEdit(key)}>
                           <Pencil className="h-3 w-3" />
                         </Button>
-                        <Button size="sm" variant="danger" loading={updateProject.isPending} onClick={() => deleteCmd(key)}>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          loading={updateProject.isPending}
+                          onClick={() => deleteCmd(key)}
+                        >
                           <Trash2 className="h-3 w-3" />
                         </Button>
                         <button
@@ -404,37 +458,31 @@ export function UnifiedCommandPanel({ project }: Props) {
                     )}
                   </div>
 
-                  {/* Exec result */}
-                  {expanded.has(`custom:${key}`) && results[key] && (
-                    <div className="border-t border-[var(--color-border)] p-3">
-                      <div
-                        className={cn(
-                          "rounded border px-3 py-2 text-xs space-y-1.5",
-                          results[key].success
-                            ? "border-[var(--color-success)]/30 bg-[var(--color-success)]/5"
-                            : "border-[var(--color-danger)]/30 bg-[var(--color-danger)]/5",
-                        )}
-                      >
-                        <div className="flex items-center gap-2">
-                          <Badge variant={results[key].success ? "success" : "danger"}>
-                            {results[key].success ? "success" : `exit ${results[key].exitCode}`}
-                          </Badge>
-                          <span className="text-[var(--color-text-muted)]">
-                            {(results[key].durationMs / 1000).toFixed(1)}s
-                          </span>
-                          <button
-                            className="ml-auto text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                            onClick={() => toggleExpand(`custom:${key}`)}
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
-                        {(results[key].stdout || results[key].stderr) && (
-                          <pre className="overflow-y-auto max-h-48 font-mono text-[var(--color-text)] whitespace-pre-wrap break-all bg-[#0a0a0f] rounded p-2">
-                            {results[key].stdout || results[key].stderr}
-                          </pre>
-                        )}
-                      </div>
+                  {customStarted.has(key) && (
+                    <div
+                      className={cn(
+                        "border-t border-[var(--color-border)]",
+                        !expanded.has(`custom:${key}`) && "hidden",
+                      )}
+                    >
+                      <TerminalPanel
+                        key={`custom:${project.name}:${key}:${customKeys[key] ?? 0}`}
+                        sessionId={`custom:${project.name}:${key}`}
+                        project={project.name}
+                        command={value}
+                        onExit={(code) => {
+                          setCustomExitCodes((prev) => ({
+                            ...prev,
+                            [key]: code,
+                          }));
+                          setCustomStarted((prev) => {
+                            const next = new Set(prev);
+                            next.delete(key);
+                            return next;
+                          });
+                        }}
+                        className="min-h-48 max-h-96"
+                      />
                     </div>
                   )}
                 </div>
@@ -447,14 +495,23 @@ export function UnifiedCommandPanel({ project }: Props) {
                 <div className="flex gap-2">
                   <div className="flex flex-col gap-1">
                     <input
-                      className={cn(inputClass, "h-8 flex-none w-32", newKeyError && "border-[var(--color-danger)]")}
+                      className={cn(
+                        inputClass,
+                        "h-8 flex-none w-32",
+                        newKeyError && "border-[var(--color-danger)]",
+                      )}
                       value={newKey}
-                      onChange={(e) => { setNewKey(e.target.value); setNewKeyError(""); }}
+                      onChange={(e) => {
+                        setNewKey(e.target.value);
+                        setNewKeyError("");
+                      }}
                       placeholder="name"
                       autoFocus
                     />
                     {newKeyError && (
-                      <span className="text-[10px] text-[var(--color-danger)]">{newKeyError}</span>
+                      <span className="text-[10px] text-[var(--color-danger)]">
+                        {newKeyError}
+                      </span>
                     )}
                   </div>
                   <input
@@ -464,10 +521,21 @@ export function UnifiedCommandPanel({ project }: Props) {
                     placeholder="shell command"
                     onKeyDown={(e) => e.key === "Enter" && saveNew()}
                   />
-                  <Button size="sm" variant="primary" loading={updateProject.isPending} onClick={saveNew}>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    loading={updateProject.isPending}
+                    onClick={saveNew}
+                  >
                     <Check className="h-3 w-3" /> Add
                   </Button>
-                  <Button size="sm" onClick={() => { setAddMode(false); setNewKeyError(""); }}>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setAddMode(false);
+                      setNewKeyError("");
+                    }}
+                  >
                     <X className="h-3 w-3" />
                   </Button>
                 </div>
