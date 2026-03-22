@@ -1,7 +1,7 @@
 ---
 title: "Workspace Resolution — Web UI"
 description: "Workspace switcher, XDG parity on server, and global config editor in the web dashboard"
-status: pending
+status: done
 priority: P1
 effort: 6.5h
 branch: master
@@ -36,7 +36,7 @@ stored in the XDG config file. Auto-register workspaces on open/switch.
 |-------|--------------------------------|---------|--------|------|
 | 01    | Core & Server Foundation       | done    | 2.5h   | [phase-01](./phase-01-core-server-foundation.md) |
 | 02    | Web UI Workspace Switcher      | done    | 2h     | [phase-02](./phase-02-web-workspace-switcher.md) |
-| 03    | Web UI Global Config Editor    | pending | 1.5h   | [phase-03](./phase-03-web-global-config-editor.md) |
+| 03    | Web UI Global Config Editor    | done    | 1.5h   | [phase-03](./phase-03-web-global-config-editor.md) |
 
 ## Dependency Chain
 

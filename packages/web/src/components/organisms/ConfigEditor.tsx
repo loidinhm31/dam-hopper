@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Button } from "@/components/atoms/Button.js";
+import { Button, inputClass } from "@/components/atoms/Button.js";
 import type { DevHubConfig, ProjectConfig, ServiceConfig } from "@/api/client.js";
 
 // ── Small helpers ──────────────────────────────────────────────────────────
@@ -23,12 +23,6 @@ function Field({
     </div>
   );
 }
-
-const inputClass =
-  "w-full rounded border border-[var(--color-border)] bg-[var(--color-background)] " +
-  "text-sm text-[var(--color-text)] px-2.5 py-1.5 outline-none " +
-  "focus:border-[var(--color-primary)] transition-colors " +
-  "disabled:opacity-50 disabled:cursor-not-allowed";
 
 const selectClass = inputClass;
 
