@@ -6,6 +6,7 @@ import { loadWorkspace, resolveProjects } from "../utils/workspace.js";
 import { BuildOutput } from "../components/BuildOutput.js";
 import { ProgressList } from "../components/ProgressList.js";
 import { printError } from "../utils/format.js";
+import type { GlobalOptions } from "../utils/types.js";
 import {
   bridgeBuildToGitEmitter,
   serviceLabel,
@@ -19,10 +20,12 @@ export function registerBuild(program: Command): void {
     .option("--service <name>", "Build a specific service")
     .action(
       async (
-        project?: string,
-        opts?: { all?: boolean; service?: string },
+        project: string | undefined,
+        opts: { all?: boolean; service?: string },
+        cmd: Command,
       ) => {
-        const { config, workspaceRoot } = await loadWorkspace();
+        const { workspace } = cmd.optsWithGlobals<GlobalOptions>();
+        const { config, workspaceRoot } = await loadWorkspace(workspace);
 
         if (opts?.all || !project) {
           // Build all projects

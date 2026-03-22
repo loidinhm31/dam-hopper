@@ -9,15 +9,18 @@ import {
   type ProjectConfig,
   type ProjectType,
 } from "@dev-hub/core";
+import type { GlobalOptions } from "../utils/types.js";
+import { resolveWorkspaceDir } from "../utils/workspace.js";
 
 export function registerInit(program: Command): void {
   program
     .command("init")
     .description("Interactive workspace setup — writes dev-hub.toml")
-    .action(async () => {
+    .action(async (_opts: Record<string, unknown>, cmd: Command) => {
       p.intro("dev-hub workspace setup");
 
-      const cwd = process.cwd();
+      const { workspace } = cmd.optsWithGlobals<GlobalOptions>();
+      const cwd = await resolveWorkspaceDir(workspace);
 
       // Check if config already exists
       const existing = await findConfigFile(cwd);
@@ -37,7 +40,10 @@ export function registerInit(program: Command): void {
         placeholder: basename(cwd),
         defaultValue: basename(cwd),
       });
-      if (p.isCancel(name)) { p.outro("Aborted."); return; }
+      if (p.isCancel(name)) {
+        p.outro("Aborted.");
+        return;
+      }
 
       p.log.step("Scanning for projects...");
       const discovered = await discoverProjects(cwd);
@@ -57,16 +63,21 @@ export function registerInit(program: Command): void {
           options: choices,
           required: false,
         });
-        if (p.isCancel(selected)) { p.outro("Aborted."); return; }
+        if (p.isCancel(selected)) {
+          p.outro("Aborted.");
+          return;
+        }
 
         selectedProjects = (selected as string[]).flatMap((selectedName) => {
           const d = discovered.find((x) => x.name === selectedName);
           if (!d) return [];
-          return [{
-            name: d.name,
-            path: resolve(cwd, d.path),
-            type: d.type as ProjectType,
-          }];
+          return [
+            {
+              name: d.name,
+              path: resolve(cwd, d.path),
+              type: d.type as ProjectType,
+            },
+          ];
         });
       }
 
@@ -74,7 +85,10 @@ export function registerInit(program: Command): void {
         message: `Write dev-hub.toml to ${cwd}?`,
         initialValue: true,
       });
-      if (p.isCancel(confirm) || !confirm) { p.outro("Aborted."); return; }
+      if (p.isCancel(confirm) || !confirm) {
+        p.outro("Aborted.");
+        return;
+      }
 
       const config: DevHubConfig = {
         workspace: { name: name as string, root: "." },

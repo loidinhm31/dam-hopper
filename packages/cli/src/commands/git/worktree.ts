@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { listWorktrees, addWorktree, removeWorktree } from "@dev-hub/core";
 import { loadWorkspace, resolveProjects } from "../../utils/workspace.js";
 import { printSuccess, printError } from "../../utils/format.js";
+import type { GlobalOptions } from "../../utils/types.js";
 
 export function registerWorktree(gitCmd: Command): void {
   const worktreeCmd = gitCmd
@@ -11,8 +12,9 @@ export function registerWorktree(gitCmd: Command): void {
   worktreeCmd
     .command("list [project]")
     .description("List worktrees for a project or all projects")
-    .action(async (project?: string) => {
-      const { config } = await loadWorkspace();
+    .action(async (project: string | undefined, _opts: Record<string, unknown>, cmd: Command) => {
+      const { workspace } = cmd.optsWithGlobals<GlobalOptions>();
+      const { config } = await loadWorkspace(workspace);
       const projects = resolveProjects(config, project);
 
       for (const p of projects) {
@@ -27,7 +29,9 @@ export function registerWorktree(gitCmd: Command): void {
           const flags = [wt.isMain ? "main" : "", wt.isLocked ? "locked" : ""]
             .filter(Boolean)
             .join(", ");
-          console.log(`  ${wt.path}  [${wt.branch}]${flags ? `  (${flags})` : ""}`);
+          console.log(
+            `  ${wt.path}  [${wt.branch}]${flags ? `  (${flags})` : ""}`,
+          );
         }
       }
     });
@@ -38,8 +42,9 @@ export function registerWorktree(gitCmd: Command): void {
     .option("--create", "Create the branch if it doesn't exist")
     .option("--base <branch>", "Base branch for new branch creation")
     .option("--path <path>", "Custom worktree directory path")
-    .action(async (project: string, branch: string, opts) => {
-      const { config } = await loadWorkspace();
+    .action(async (project: string, branch: string, opts: { create?: boolean; base?: string; path?: string }, cmd: Command) => {
+      const { workspace } = cmd.optsWithGlobals<GlobalOptions>();
+      const { config } = await loadWorkspace(workspace);
       const [p] = resolveProjects(config, project);
 
       const worktree = await addWorktree(p.path, {
@@ -58,8 +63,9 @@ export function registerWorktree(gitCmd: Command): void {
   worktreeCmd
     .command("remove <project> <path>")
     .description("Remove a worktree")
-    .action(async (project: string, wtPath: string) => {
-      const { config } = await loadWorkspace();
+    .action(async (project: string, wtPath: string, _opts: Record<string, unknown>, cmd: Command) => {
+      const { workspace } = cmd.optsWithGlobals<GlobalOptions>();
+      const { config } = await loadWorkspace(workspace);
       const [p] = resolveProjects(config, project);
 
       await removeWorktree(p.path, wtPath).catch((err: Error) => {

@@ -5,14 +5,16 @@ import { BulkGitService } from "@dev-hub/core";
 import { loadWorkspace, resolveProjects } from "../../utils/workspace.js";
 import { ProgressList } from "../../components/ProgressList.js";
 import { printWarn } from "../../utils/format.js";
+import type { GlobalOptions } from "../../utils/types.js";
 import { getStatus } from "@dev-hub/core";
 
 export function registerPull(gitCmd: Command): void {
   gitCmd
     .command("pull [project]")
     .description("Pull from remote for all projects or a specific one")
-    .action(async (project?: string) => {
-      const { config } = await loadWorkspace();
+    .action(async (project: string | undefined, _opts: Record<string, unknown>, cmd: Command) => {
+      const { workspace } = cmd.optsWithGlobals<GlobalOptions>();
+      const { config } = await loadWorkspace(workspace);
       const projects = resolveProjects(config, project);
 
       // Warn about dirty repos
@@ -21,7 +23,9 @@ export function registerPull(gitCmd: Command): void {
       );
       for (const s of statuses) {
         if (s && !s.isClean) {
-          printWarn(`${s.projectName} has uncommitted changes — pull may fail.`);
+          printWarn(
+            `${s.projectName} has uncommitted changes — pull may fail.`,
+          );
         }
       }
 

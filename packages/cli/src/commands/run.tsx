@@ -9,6 +9,7 @@ import {
 } from "@dev-hub/core";
 import { loadWorkspace, resolveProjects } from "../utils/workspace.js";
 import { printError } from "../utils/format.js";
+import type { GlobalOptions } from "../utils/types.js";
 
 // --- Single-service runner UI ---
 interface RunnerProps {
@@ -191,8 +192,9 @@ export function registerRun(program: Command): void {
     .command("run <project>")
     .description("Start a project and stream its output (Ctrl+C to stop)")
     .option("--service <name>", "Start a specific service")
-    .action(async (project: string, opts: { service?: string }) => {
-      const { config, workspaceRoot } = await loadWorkspace();
+    .action(async (project: string, opts: { service?: string }, cmd: Command) => {
+      const { workspace } = cmd.optsWithGlobals<GlobalOptions>();
+      const { config, workspaceRoot } = await loadWorkspace(workspace);
       const [p] = resolveProjects(config, project);
 
       const runSvc = new RunService();
@@ -277,8 +279,9 @@ export function registerRun(program: Command): void {
   program
     .command("stop <project>")
     .description("Stop a running project (requires dev-hub ui to be running)")
-    .action(async (project: string) => {
-      const { config } = await loadWorkspace();
+    .action(async (project: string, _opts: Record<string, unknown>, cmd: Command) => {
+      const { workspace } = cmd.optsWithGlobals<GlobalOptions>();
+      const { config } = await loadWorkspace(workspace);
       const [p] = resolveProjects(config, project);
       // In Phase 05 (CLI-only), stop works via the server's RunService (Phase 06).
       // For foreground `dev-hub run`, Ctrl+C is the stop mechanism.
@@ -293,8 +296,9 @@ export function registerRun(program: Command): void {
     .command("logs <project>")
     .description("View recent logs for a running project")
     .option("--lines <n>", "Number of lines to show", "50")
-    .action(async (project: string) => {
-      const { config } = await loadWorkspace();
+    .action(async (project: string, _opts: Record<string, unknown>, cmd: Command) => {
+      const { workspace } = cmd.optsWithGlobals<GlobalOptions>();
+      const { config } = await loadWorkspace(workspace);
       const [p] = resolveProjects(config, project);
       // Logs are only available during a foreground `dev-hub run` session.
       // Phase 06 (server) provides persistent log access via `dev-hub ui`.

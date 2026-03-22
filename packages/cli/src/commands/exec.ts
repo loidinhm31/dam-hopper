@@ -5,6 +5,7 @@ import { CommandService } from "@dev-hub/core";
 import { loadWorkspace, resolveProjects } from "../utils/workspace.js";
 import { BuildOutput } from "../components/BuildOutput.js";
 import { printError, printSuccess } from "../utils/format.js";
+import type { GlobalOptions } from "../utils/types.js";
 
 export function registerExec(program: Command): void {
   program
@@ -16,8 +17,10 @@ export function registerExec(program: Command): void {
         project: string,
         commandName: string | undefined,
         opts: { list?: boolean },
+        cmd: Command,
       ) => {
-        const { config, workspaceRoot } = await loadWorkspace();
+        const { workspace } = cmd.optsWithGlobals<GlobalOptions>();
+        const { config, workspaceRoot } = await loadWorkspace(workspace);
         const [p] = resolveProjects(config, project);
 
         if (opts.list) {

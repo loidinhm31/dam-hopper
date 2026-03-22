@@ -5,17 +5,17 @@ import { listBranches, BulkGitService } from "@dev-hub/core";
 import { loadWorkspace, resolveProjects } from "../../utils/workspace.js";
 import { ProgressList } from "../../components/ProgressList.js";
 import chalk from "chalk";
+import type { GlobalOptions } from "../../utils/types.js";
 
 export function registerBranch(gitCmd: Command): void {
-  const branchCmd = gitCmd
-    .command("branch")
-    .description("Manage git branches");
+  const branchCmd = gitCmd.command("branch").description("Manage git branches");
 
   branchCmd
     .command("list [project]")
     .description("List branches for a project or all projects")
-    .action(async (project?: string) => {
-      const { config } = await loadWorkspace();
+    .action(async (project: string | undefined, _opts: Record<string, unknown>, cmd: Command) => {
+      const { workspace } = cmd.optsWithGlobals<GlobalOptions>();
+      const { config } = await loadWorkspace(workspace);
       const projects = resolveProjects(config, project);
 
       const allBranches = await Promise.all(
@@ -35,10 +35,13 @@ export function registerBranch(gitCmd: Command): void {
         const localBranches = branches.filter((b) => !b.isRemote);
         for (const b of localBranches) {
           const current = b.isCurrent ? chalk.green("* ") : "  ";
-          const tracking = b.trackingBranch ? chalk.dim(` → ${b.trackingBranch}`) : "";
-          const aheadBehind = (b.ahead > 0 || b.behind > 0)
-            ? chalk.cyan(` ↑${b.ahead}↓${b.behind}`)
+          const tracking = b.trackingBranch
+            ? chalk.dim(` → ${b.trackingBranch}`)
             : "";
+          const aheadBehind =
+            b.ahead > 0 || b.behind > 0
+              ? chalk.cyan(` ↑${b.ahead}↓${b.behind}`)
+              : "";
           console.log(`${current}${b.name}${tracking}${aheadBehind}`);
         }
       }
@@ -47,8 +50,9 @@ export function registerBranch(gitCmd: Command): void {
   branchCmd
     .command("update [project]")
     .description("Update local branches from remote")
-    .action(async (project?: string) => {
-      const { config } = await loadWorkspace();
+    .action(async (project: string | undefined, _opts: Record<string, unknown>, cmd: Command) => {
+      const { workspace } = cmd.optsWithGlobals<GlobalOptions>();
+      const { config } = await loadWorkspace(workspace);
       const projects = resolveProjects(config, project);
       const service = new BulkGitService();
       const done = service.updateAllBranches(projects).then((map) =>
