@@ -5,6 +5,10 @@
   "scripts": {
     "build": "pnpm -r build",
     "dev": "pnpm -r --parallel dev",
+    "dev:server": "pnpm --filter @dev-hub/server dev:run",
+    "dev:debug": "pnpm --filter @dev-hub/server dev:debug",
+    "dev:electron": "pnpm --filter @dev-hub/electron dev",
+    "build:electron": "pnpm --filter @dev-hub/electron build",
     "lint": "eslint packages/",
     "format": "prettier --write .",
     "test": "vitest",
@@ -23,6 +27,7 @@
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0",
     "prettier": "^3.0.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.0",
     "vitest": "^4.1.0"
   }
