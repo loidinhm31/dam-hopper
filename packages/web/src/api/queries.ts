@@ -219,6 +219,13 @@ export function useRestartProcess() {
   });
 }
 
+export function useExecCommand() {
+  return useMutation({
+    mutationFn: ({ project, command }: { project: string; command: string }) =>
+      api.exec.run(project, command),
+  });
+}
+
 export function useAddWorktree(project: string) {
   const qc = useQueryClient();
   return useMutation({

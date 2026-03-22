@@ -84,6 +84,9 @@ export interface Branch {
 }
 
 export interface BuildResult {
+  projectName: string;
+  serviceName: string;
+  command: string;
   success: boolean;
   exitCode: number;
   durationMs: number;
@@ -215,7 +218,11 @@ export const api = {
       patch<ProjectConfig>(`/config/projects/${enc(name)}`, data),
   },
   build: {
-    start: (project: string) => post<BuildResult>(`/build/${enc(project)}`),
+    start: (project: string) => post<BuildResult[]>(`/build/${enc(project)}`),
+  },
+  exec: {
+    run: (project: string, command: string) =>
+      post<BuildResult>(`/exec/${enc(project)}`, { command }),
   },
   processes: {
     list: () => get<ProcessInfo[]>("/processes"),
@@ -224,6 +231,8 @@ export const api = {
     restart: (project: string) =>
       post<ProcessInfo>(`/run/${enc(project)}/restart`),
     logs: (project: string, lines = 100) =>
-      get<string[]>(`/run/${enc(project)}/logs?lines=${lines}`),
+      get<{ timestamp: string; stream: string; line: string }[]>(
+        `/run/${enc(project)}/logs?lines=${lines}`,
+      ),
   },
 };

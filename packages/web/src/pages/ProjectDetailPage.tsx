@@ -7,6 +7,8 @@ import { BranchBadge } from "@/components/atoms/BranchBadge.js";
 import { GitStatusBadge } from "@/components/atoms/GitStatusBadge.js";
 import { Button } from "@/components/atoms/Button.js";
 import { BuildLog } from "@/components/organisms/BuildLog.js";
+import { CommandRunner } from "@/components/organisms/CommandRunner.js";
+import { CommandPreview } from "@/components/atoms/CommandPreview.js";
 import {
   useProject,
   useWorktrees,
@@ -22,9 +24,10 @@ import {
   useAddWorktree,
   useRemoveWorktree,
 } from "@/api/queries.js";
+import { getEffectiveCommand } from "@/lib/presets.js";
 import { cn } from "@/lib/utils.js";
 
-type Tab = "overview" | "git" | "worktrees" | "build" | "run";
+type Tab = "overview" | "git" | "worktrees" | "build" | "run" | "commands";
 
 export function ProjectDetailPage() {
   const { name = "" } = useParams<{ name: string }>();
@@ -68,12 +71,15 @@ export function ProjectDetailPage() {
     );
   }
 
-  const tabs: { key: Tab; label: string }[] = [
+  const cmdCount = Object.keys(project.commands ?? {}).length;
+
+  const tabs: { key: Tab; label: string; badge?: number }[] = [
     { key: "overview", label: "Overview" },
     { key: "git", label: "Git" },
     { key: "worktrees", label: "Worktrees" },
     { key: "build", label: "Build" },
     { key: "run", label: "Run" },
+    { key: "commands", label: "Commands", badge: cmdCount || undefined },
   ];
 
   function handleAddWorktree() {
@@ -110,18 +116,23 @@ export function ProjectDetailPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-[var(--color-border)] mb-5">
-        {tabs.map(({ key, label }) => (
+        {tabs.map(({ key, label, badge }) => (
           <button
             key={key}
             onClick={() => setTab(key)}
             className={cn(
-              "px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
+              "px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors inline-flex items-center gap-1.5",
               tab === key
                 ? "border-[var(--color-primary)] text-[var(--color-primary)]"
                 : "border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
             )}
           >
             {label}
+            {badge !== undefined && (
+              <span className="rounded-full bg-[var(--color-border)] px-1.5 py-0.5 text-[10px] leading-none font-medium text-[var(--color-text-muted)]">
+                {badge}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -370,6 +381,10 @@ export function ProjectDetailPage() {
 
       {tab === "build" && (
         <div className="space-y-4">
+          <CommandPreview
+            label="Build command"
+            {...getEffectiveCommand(project, "build")}
+          />
           <Button
             variant="primary"
             loading={build.isPending}
@@ -377,28 +392,37 @@ export function ProjectDetailPage() {
           >
             Build {name}
           </Button>
-          {build.data && (
-            <div
-              className={cn(
-                "rounded-lg border px-4 py-3 text-sm",
-                build.data.success
-                  ? "bg-[var(--color-success)]/10 border-[var(--color-success)]/30 text-[var(--color-success)]"
-                  : "bg-[var(--color-danger)]/10 border-[var(--color-danger)]/30 text-[var(--color-danger)]",
-              )}
-            >
-              {build.data.success
-                ? "✓ Build succeeded"
-                : `✗ Build failed (exit ${build.data.exitCode})`}
-              {" — "}
-              {(build.data.durationMs / 1000).toFixed(1)}s
-            </div>
-          )}
+          {build.data && build.data.length > 0 && (() => {
+            const allSucceeded = build.data.every((r) => r.success);
+            const failed = build.data.find((r) => !r.success);
+            const totalMs = build.data.reduce((sum, r) => sum + r.durationMs, 0);
+            return (
+              <div
+                className={cn(
+                  "rounded-lg border px-4 py-3 text-sm",
+                  allSucceeded
+                    ? "bg-[var(--color-success)]/10 border-[var(--color-success)]/30 text-[var(--color-success)]"
+                    : "bg-[var(--color-danger)]/10 border-[var(--color-danger)]/30 text-[var(--color-danger)]",
+                )}
+              >
+                {allSucceeded
+                  ? "✓ Build succeeded"
+                  : `✗ Build failed (exit ${failed?.exitCode ?? 1})`}
+                {" — "}
+                {(totalMs / 1000).toFixed(1)}s
+              </div>
+            );
+          })()}
           <BuildLog project={name} />
         </div>
       )}
 
       {tab === "run" && (
         <div className="space-y-4">
+          <CommandPreview
+            label="Run command"
+            {...getEffectiveCommand(project, "run")}
+          />
           <div className="flex gap-2">
             <Button
               variant="primary"
@@ -431,18 +455,21 @@ export function ProjectDetailPage() {
                   No logs available.
                 </span>
               ) : (
-                logs.map((line, i) => (
+                logs.map((entry, i) => (
                   <div
                     key={i}
                     className="whitespace-pre-wrap break-all text-[var(--color-text)]"
                   >
-                    {line}
+                    {entry.line}
                   </div>
                 ))
               )}
             </div>
           </div>
         </div>
+      )}
+      {tab === "commands" && (
+        <CommandRunner project={project} />
       )}
     </AppLayout>
   );
