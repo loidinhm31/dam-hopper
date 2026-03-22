@@ -3,13 +3,15 @@ import { createApp, createServerContext } from "./app.js";
 
 export interface StartServerOptions {
   port?: number;
-  configPath?: string;
+  workspacePath?: string;
 }
 
-export async function startServer(options: StartServerOptions = {}): Promise<void> {
+export async function startServer(
+  options: StartServerOptions = {},
+): Promise<void> {
   const port = options.port ?? 4800;
 
-  const ctx = await createServerContext(options.configPath);
+  const ctx = await createServerContext(options.workspacePath);
   const app = createApp(ctx);
 
   const server = serve({ fetch: app.fetch, port }, () => {
@@ -29,8 +31,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 // Only start when executed directly
 if (import.meta.url === new URL(process.argv[1], "file://").href) {
   const PORT = Number(process.env.PORT ?? 4800);
-  const CONFIG = process.env.DEV_HUB_CONFIG;
-  await startServer({ port: PORT, configPath: CONFIG });
+  // Env var resolution (DEV_HUB_WORKSPACE → DEV_HUB_CONFIG → CWD) handled by createServerContext
+  await startServer({ port: PORT });
 }
 
 export { createApp, createServerContext };
