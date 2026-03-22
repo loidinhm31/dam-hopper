@@ -9,6 +9,7 @@ import {
   BulkGitService,
   BuildService,
   RunService,
+  CommandService,
   type GitProgressEvent,
 } from "@dev-hub/core";
 import type { BuildProgressEvent, RunProgressEvent } from "@dev-hub/core";
@@ -20,6 +21,7 @@ export interface SSEClient {
 export type SSEEvent =
   | { type: "git:progress"; data: GitProgressEvent }
   | { type: "build:progress"; data: BuildProgressEvent }
+  | { type: "command:progress"; data: BuildProgressEvent }
   | { type: "process:event"; data: RunProgressEvent }
   | { type: "status:changed"; data: { projectName: string } }
   | { type: "config:changed"; data: Record<string, unknown> }
@@ -32,6 +34,7 @@ export interface ServerContext {
   bulkGitService: BulkGitService;
   buildService: BuildService;
   runService: RunService;
+  commandService: CommandService;
   sseClients: Set<SSEClient>;
   broadcast: (event: SSEEvent) => void;
   reloadConfig: () => Promise<void>;
@@ -52,6 +55,7 @@ export async function createServerContext(
   const bulkGitService = new BulkGitService();
   const buildService = new BuildService();
   const runService = new RunService();
+  const commandService = new CommandService();
   const sseClients = new Set<SSEClient>();
 
   function broadcast(event: SSEEvent): void {
@@ -77,6 +81,10 @@ export async function createServerContext(
     broadcast({ type: "process:event", data: event });
   });
 
+  commandService.emitter.on("progress", (event) => {
+    broadcast({ type: "command:progress", data: event });
+  });
+
   const ctx: ServerContext = {
     config,
     configPath: resolvedPath,
@@ -84,6 +92,7 @@ export async function createServerContext(
     bulkGitService,
     buildService,
     runService,
+    commandService,
     sseClients,
     broadcast,
     reloadConfig: async () => {

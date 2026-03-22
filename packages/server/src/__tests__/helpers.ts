@@ -1,7 +1,7 @@
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { BulkGitService, BuildService, RunService } from "@dev-hub/core";
+import { BulkGitService, BuildService, RunService, CommandService } from "@dev-hub/core";
 import type { ServerContext } from "../services/context.js";
 
 const MINIMAL_TOML = `
@@ -28,6 +28,7 @@ export async function createTestContext(
   const bulkGitService = new BulkGitService();
   const buildService = new BuildService();
   const runService = new RunService();
+  const commandService = new CommandService();
   const sseClients = new Set<import("../services/context.js").SSEClient>();
 
   function broadcast(event: import("../services/context.js").SSEEvent) {
@@ -47,6 +48,7 @@ export async function createTestContext(
     bulkGitService,
     buildService,
     runService,
+    commandService,
     sseClients,
     broadcast,
     reloadConfig: async () => {
