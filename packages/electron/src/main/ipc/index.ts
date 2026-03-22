@@ -1,7 +1,16 @@
-import type { ElectronContext } from "../index.js";
+import type { CtxHolder } from "../index.js";
+import { registerWorkspaceHandlers } from "./workspace.js";
+import { registerGitHandlers } from "./git.js";
+import { registerConfigHandlers } from "./config.js";
+import { registerBuildHandlers } from "./build.js";
+import { registerProcessHandlers } from "./processes.js";
+import { wireEventEmitters } from "./events.js";
 
-// IPC handler registration — populated in Phase 02
-export function registerIpcHandlers(_ctx: ElectronContext): void {
-  // Phase 02: config, git, build, process, workspace handlers
-  // Phase 03: terminal (node-pty) handlers
+export function registerIpcHandlers(holder: CtxHolder): void {
+  registerWorkspaceHandlers(holder);
+  registerGitHandlers(holder);
+  registerConfigHandlers(holder);
+  registerBuildHandlers(holder);
+  registerProcessHandlers(holder);
+  wireEventEmitters(holder);
 }

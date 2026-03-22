@@ -1,5 +1,5 @@
-// Typed API client using plain fetch — server routes don't use Hono validators
-// so Hono RPC client is not applicable here.
+// IPC-only API client — all calls route through window.devhub (Electron contextBridge).
+// No HTTP fetch or SSE code.
 
 export type ProjectType =
   | "maven"
@@ -108,131 +108,62 @@ export interface GitOpResult {
   error?: string;
 }
 
-const BASE = "/api";
-
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error((err as { error: string }).error ?? res.statusText);
-  }
-  return res.json() as Promise<T>;
-}
-
-async function post<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error((err as { error: string }).error ?? res.statusText);
-  }
-  return res.json() as Promise<T>;
-}
-
-async function put<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error((err as { error: string }).error ?? res.statusText);
-  }
-  return res.json() as Promise<T>;
-}
-
-async function patch<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error((err as { error: string }).error ?? res.statusText);
-  }
-  return res.json() as Promise<T>;
-}
-
-async function del(path: string, body?: unknown): Promise<void> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: "DELETE",
-    headers: body ? { "Content-Type": "application/json" } : {},
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok && res.status !== 204) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error((err as { error: string }).error ?? res.statusText);
-  }
-}
-
-// W3: encode project names so names with slashes/spaces don't break URL paths
-const enc = encodeURIComponent;
-
 export const api = {
   workspace: {
-    get: () => get<WorkspaceInfo>("/workspace"),
-    switch: (path: string) => post<WorkspaceInfo>("/workspace/switch", { path }),
-    known: () => get<KnownWorkspacesResponse>("/workspace/known"),
-    addKnown: (path: string) => post<KnownWorkspace>("/workspace/known", { path }),
-    removeKnown: (path: string) => del("/workspace/known", { path }),
+    get: () => window.devhub.workspace.get(),
+    switch: (path: string) => window.devhub.workspace.switch(path),
+    known: () => window.devhub.workspace.known(),
+    addKnown: (path: string) => window.devhub.workspace.addKnown(path),
+    removeKnown: (path: string) => window.devhub.workspace.removeKnown(path),
   },
   globalConfig: {
-    get: () => get<GlobalConfig>("/global-config"),
+    get: () => window.devhub.globalConfig.get(),
     updateDefaults: (defaults: { workspace?: string }) =>
-      put<{ updated: true }>("/global-config/defaults", defaults),
+      window.devhub.globalConfig.updateDefaults(defaults),
   },
   projects: {
-    list: () => get<ProjectWithStatus[]>("/projects"),
-    get: (name: string) => get<ProjectWithStatus>(`/projects/${enc(name)}`),
-    status: (name: string) =>
-      get<GitStatus | null>(`/projects/${enc(name)}/status`),
+    list: () => window.devhub.projects.list(),
+    get: (name: string) => window.devhub.projects.get(name),
+    status: (name: string) => window.devhub.projects.status(name),
   },
   git: {
-    fetch: (projects?: string[]) =>
-      post<GitOpResult[]>("/git/fetch", { projects }),
-    pull: (projects?: string[]) =>
-      post<GitOpResult[]>("/git/pull", { projects }),
-    push: (project: string) => post<GitOpResult>(`/git/push/${enc(project)}`),
-    worktrees: (project: string) =>
-      get<Worktree[]>(`/git/worktrees/${enc(project)}`),
+    fetch: (projects?: string[]) => window.devhub.git.fetch(projects),
+    pull: (projects?: string[]) => window.devhub.git.pull(projects),
+    push: (project: string) => window.devhub.git.push(project),
+    worktrees: (project: string) => window.devhub.git.worktrees(project),
     addWorktree: (
       project: string,
       options: { path: string; branch: string; createBranch?: boolean },
-    ) => post<Worktree>(`/git/worktrees/${enc(project)}`, options),
+    ) => window.devhub.git.addWorktree(project, options),
     removeWorktree: (project: string, path: string) =>
-      del(`/git/worktrees/${enc(project)}`, { path }),
-    branches: (project: string) =>
-      get<Branch[]>(`/git/branches/${enc(project)}`),
+      window.devhub.git.removeWorktree(project, path),
+    branches: (project: string) => window.devhub.git.branches(project),
     updateBranch: (project: string, branch?: string) =>
-      post<GitOpResult[]>(`/git/branches/${enc(project)}/update`, { branch }),
+      window.devhub.git.updateBranch(project, branch),
   },
   config: {
-    get: () => get<DevHubConfig>("/config"),
-    update: (config: DevHubConfig) => put<DevHubConfig>("/config", config),
+    get: () => window.devhub.config.get(),
+    update: (config: DevHubConfig) => window.devhub.config.update(config),
     updateProject: (name: string, data: Partial<ProjectConfig>) =>
-      patch<ProjectConfig>(`/config/projects/${enc(name)}`, data),
+      window.devhub.config.updateProject(name, data),
   },
   build: {
-    start: (project: string) => post<BuildResult[]>(`/build/${enc(project)}`),
+    start: (project: string, service?: string) =>
+      window.devhub.build.start(project, service),
   },
   exec: {
     run: (project: string, command: string) =>
-      post<BuildResult>(`/exec/${enc(project)}`, { command }),
+      window.devhub.exec.run(project, command),
   },
   processes: {
-    list: () => get<ProcessInfo[]>("/processes"),
-    start: (project: string) => post<ProcessInfo>(`/run/${enc(project)}`),
-    stop: (project: string) => del(`/run/${enc(project)}`),
-    restart: (project: string) =>
-      post<ProcessInfo>(`/run/${enc(project)}/restart`),
-    logs: (project: string, lines = 100) =>
-      get<{ timestamp: string; stream: string; line: string }[]>(
-        `/run/${enc(project)}/logs?lines=${lines}`,
-      ),
+    list: () => window.devhub.processes.list(),
+    start: (project: string, service?: string) =>
+      window.devhub.processes.start(project, service),
+    stop: (project: string, service?: string) =>
+      window.devhub.processes.stop(project, service),
+    restart: (project: string, service?: string) =>
+      window.devhub.processes.restart(project, service),
+    logs: (project: string, lines = 100, service?: string) =>
+      window.devhub.processes.logs(project, service, lines),
   },
 };
