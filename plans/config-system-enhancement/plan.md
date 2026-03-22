@@ -1,7 +1,7 @@
 ---
 title: "Config System Enhancement: Services, Custom Commands & Web Editor"
 description: "Add multi-service support per project, custom commands, and a form-based config editor in the web dashboard"
-status: pending
+status: done
 priority: P1
 effort: 10h
 branch: master
@@ -58,7 +58,7 @@ migrate = "pnpm db:migrate"
 | 03  | [CLI Updates](./phase-03-cli-updates.md)                           | 1.5h   | done    | 02         |
 | 04  | [Server Config API](./phase-04-server-config-api.md)               | 1.5h   | done    | 01         |
 | 05  | [Web Config Editor](./phase-05-web-config-editor.md)               | 2.5h   | done    | 04         |
-| 06  | [Server Build/Run Updates](./phase-06-server-build-run-updates.md) | 1h     | pending | 02, 04     |
+| 06  | [Server Build/Run Updates](./phase-06-server-build-run-updates.md) | 1h     | done    | 02, 04     |
 
 ### Dependency Graph
 

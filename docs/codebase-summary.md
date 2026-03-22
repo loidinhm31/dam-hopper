@@ -405,10 +405,13 @@ All packages are functional stubs ready for feature development:
 #### Server Context (services/context.ts)
 
 - **ServerContext**: Factory function returning shared state container
-  - **emitter**: EventEmitter3 for progress events across routes
-  - **sseClients**: Set tracking active SSE connections
-  - **statusCache**: Per-context cache invalidated on status:changed events
-  - **inProgressBuilds**: Per-context map of concurrent builds by project name
+  - **bulkGitService**: BulkGitService for concurrent git operations
+  - **buildService**: BuildService for project builds with service targeting
+  - **runService**: RunService for long-running processes
+  - **commandService**: CommandService for arbitrary command execution
+  - **sseClients**: Set tracking active SSE connections for real-time events
+- **SSE Event Types**: git:progress, build:progress, command:progress, process:event, status:changed, config:changed, heartbeat
+- Emitter wiring: Each service's progress emitter broadcasts to SSE clients
 - Isolation ensures multiple server instances don't interfere
 
 #### Error Handler (middleware/error-handler.ts)
@@ -463,11 +466,11 @@ All packages are functional stubs ready for feature development:
 
 #### Build API Routes (routes/build.ts)
 
-- **POST /api/build/:project**: Trigger build with concurrency limit
-  - Body: { command } (build | dev | run)
-  - Returns { success: boolean, output: string, duration: number }
-  - **409 Conflict** if build already in progress for project
-  - Removes from inProgressBuilds on completion
+- **POST /api/build/:project**: Trigger build with optional service targeting
+  - Body: { service?: string } (optional service name for multi-service projects)
+  - Returns BuildResult[] (single-element array if service specified, all services otherwise)
+  - **409 Conflict** if build already in progress for project or specific service
+  - Tracks per-project or per-project:service concurrency
   - 404 if project not found
 
 #### Processes API Routes (routes/processes.ts)
@@ -475,24 +478,32 @@ All packages are functional stubs ready for feature development:
 - **GET /api/processes**: List all active process sessions
   - Returns ProcessSession[] array (id, projectName, command, startTime, status)
 - **POST /api/run/:project**: Start long-running process
-  - Body: { command } (run | dev | server)
-  - Returns { sessionId: string }
+  - Body: { service?: string } (optional service name for multi-service projects)
+  - Returns ProcessSession object
+  - 409 Conflict if process already running for project/service
   - 404 if project not found
-- **GET /api/run/:project/logs**: Stream logs from active process
-  - Query: ?sessionId={id}
-  - Streams via SSE text/event-stream
-  - 404 if project or session not found
 - **DELETE /api/run/:project**: Stop process
-  - Query: ?sessionId={id}
-  - Returns { success: boolean }
+  - Query: ?service={name} (optional service name)
+  - Returns 204 No Content
+  - 404 if project not found
 - **POST /api/run/:project/restart**: Restart process
-  - Query: ?sessionId={id}
-  - Returns { sessionId: string } (new session)
+  - Body: { service?: string }
+  - Returns ProcessSession object (new session)
+  - 404 if project not found
+- **GET /api/run/:project/logs**: Get process logs
+  - Query: ?service={name}&lines={n} (service optional, lines defaults to 100)
+  - Returns string array of log lines
+  - 404 if project not found
+- **POST /api/exec/:project**: Execute arbitrary command and return result
+  - Body: { command: string } (required)
+  - Returns CommandResult object
+  - 400 Bad Request if command field missing
+  - 404 if project not found
 
 #### Events API (routes/events.ts)
 
 - **GET /api/events**: SSE endpoint for real-time progress events
-  - Streams GitProgressEvent objects as event data
+  - Streams multiple event types: git:progress, build:progress, command:progress, process:event, status:changed, config:changed, heartbeat
   - Includes 30-second heartbeat to keep connection alive
   - Accepts Accept: text/event-stream header
   - Promise resolves on stream.onAbort() (client disconnect)
@@ -573,7 +584,7 @@ All packages are functional stubs ready for feature development:
 | packages/server/src/routes/workspace.ts                | GET /api/workspace, /api/projects, /api/projects/:name, /api/projects/:name/status              |
 | packages/server/src/routes/git.ts                      | POST/GET/DELETE /api/git/{fetch,pull,worktrees,branches}                                        |
 | packages/server/src/routes/build.ts                    | POST /api/build/:project with 409 concurrency conflict                                          |
-| packages/server/src/routes/processes.ts                | GET /api/processes, POST/DELETE/POST-restart /api/run/:project                                  |
+| packages/server/src/routes/processes.ts                | Process lifecycle routes + new POST /api/exec/:project for arbitrary command execution           |
 | packages/server/src/routes/events.ts                   | GET /api/events SSE endpoint with heartbeat                                                     |
 | packages/server/src/**tests**/\*.ts                    | workspace, git, build, processes, events, error-handler, app tests                              |
 | packages/web/src/main.tsx                              | React entry point with QueryClient setup                                                        |
