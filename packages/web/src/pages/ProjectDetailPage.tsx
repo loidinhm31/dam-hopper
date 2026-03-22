@@ -6,28 +6,20 @@ import { Badge } from "@/components/atoms/Badge.js";
 import { BranchBadge } from "@/components/atoms/BranchBadge.js";
 import { GitStatusBadge } from "@/components/atoms/GitStatusBadge.js";
 import { Button } from "@/components/atoms/Button.js";
-import { BuildLog } from "@/components/organisms/BuildLog.js";
-import { CommandRunner } from "@/components/organisms/CommandRunner.js";
-import { CommandPreview } from "@/components/atoms/CommandPreview.js";
+import { UnifiedCommandPanel } from "@/components/organisms/UnifiedCommandPanel.js";
 import {
   useProject,
   useWorktrees,
   useBranches,
-  useProcessLogs,
   useGitFetch,
   useGitPull,
   useGitPush,
-  useBuild,
-  useStartProcess,
-  useStopProcess,
-  useRestartProcess,
   useAddWorktree,
   useRemoveWorktree,
 } from "@/api/queries.js";
-import { getEffectiveCommand } from "@/lib/presets.js";
 import { cn } from "@/lib/utils.js";
 
-type Tab = "overview" | "git" | "worktrees" | "build" | "run" | "commands";
+type Tab = "overview" | "git" | "worktrees" | "commands";
 
 export function ProjectDetailPage() {
   const { name = "" } = useParams<{ name: string }>();
@@ -41,15 +33,10 @@ export function ProjectDetailPage() {
   const { data: project, isLoading } = useProject(name);
   const { data: worktrees = [] } = useWorktrees(name);
   const { data: branches = [] } = useBranches(name);
-  const { data: logs = [] } = useProcessLogs(tab === "run" ? name : "", 200);
 
   const gitFetch = useGitFetch();
   const gitPull = useGitPull();
   const gitPush = useGitPush();
-  const build = useBuild();
-  const startProcess = useStartProcess();
-  const stopProcess = useStopProcess();
-  const restartProcess = useRestartProcess();
   const addWorktree = useAddWorktree(name);
   const removeWorktree = useRemoveWorktree(name);
 
@@ -71,15 +58,13 @@ export function ProjectDetailPage() {
     );
   }
 
-  const cmdCount = Object.keys(project.commands ?? {}).length;
+  const cmdCount = Object.keys(project.commands ?? {}).length + 2;
 
   const tabs: { key: Tab; label: string; badge?: number }[] = [
     { key: "overview", label: "Overview" },
     { key: "git", label: "Git" },
     { key: "worktrees", label: "Worktrees" },
-    { key: "build", label: "Build" },
-    { key: "run", label: "Run" },
-    { key: "commands", label: "Commands", badge: cmdCount || undefined },
+    { key: "commands", label: "Commands", badge: cmdCount },
   ];
 
   function handleAddWorktree() {
@@ -379,97 +364,8 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      {tab === "build" && (
-        <div className="space-y-4">
-          <CommandPreview
-            label="Build command"
-            {...getEffectiveCommand(project, "build")}
-          />
-          <Button
-            variant="primary"
-            loading={build.isPending}
-            onClick={() => build.mutate(name)}
-          >
-            Build {name}
-          </Button>
-          {build.data && build.data.length > 0 && (() => {
-            const allSucceeded = build.data.every((r) => r.success);
-            const failed = build.data.find((r) => !r.success);
-            const totalMs = build.data.reduce((sum, r) => sum + r.durationMs, 0);
-            return (
-              <div
-                className={cn(
-                  "rounded-lg border px-4 py-3 text-sm",
-                  allSucceeded
-                    ? "bg-[var(--color-success)]/10 border-[var(--color-success)]/30 text-[var(--color-success)]"
-                    : "bg-[var(--color-danger)]/10 border-[var(--color-danger)]/30 text-[var(--color-danger)]",
-                )}
-              >
-                {allSucceeded
-                  ? "✓ Build succeeded"
-                  : `✗ Build failed (exit ${failed?.exitCode ?? 1})`}
-                {" — "}
-                {(totalMs / 1000).toFixed(1)}s
-              </div>
-            );
-          })()}
-          <BuildLog project={name} />
-        </div>
-      )}
-
-      {tab === "run" && (
-        <div className="space-y-4">
-          <CommandPreview
-            label="Run command"
-            {...getEffectiveCommand(project, "run")}
-          />
-          <div className="flex gap-2">
-            <Button
-              variant="primary"
-              loading={startProcess.isPending}
-              onClick={() => startProcess.mutate(name)}
-            >
-              Start
-            </Button>
-            <Button
-              variant="danger"
-              loading={stopProcess.isPending}
-              onClick={() => stopProcess.mutate(name)}
-            >
-              Stop
-            </Button>
-            <Button
-              loading={restartProcess.isPending}
-              onClick={() => restartProcess.mutate(name)}
-            >
-              Restart
-            </Button>
-          </div>
-          <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)]">
-            <div className="px-3 py-2 border-b border-[var(--color-border)] text-xs text-[var(--color-text-muted)]">
-              Process Logs
-            </div>
-            <div className="log-container overflow-y-auto max-h-96 p-3 bg-[#0a0a0f]">
-              {logs.length === 0 ? (
-                <span className="text-[var(--color-text-muted)]">
-                  No logs available.
-                </span>
-              ) : (
-                logs.map((entry, i) => (
-                  <div
-                    key={i}
-                    className="whitespace-pre-wrap break-all text-[var(--color-text)]"
-                  >
-                    {entry.line}
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
       {tab === "commands" && (
-        <CommandRunner project={project} />
+        <UnifiedCommandPanel project={project} />
       )}
     </AppLayout>
   );
