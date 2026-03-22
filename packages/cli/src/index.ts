@@ -11,6 +11,7 @@ import { registerPull } from "./commands/git/pull.js";
 import { registerPush } from "./commands/git/push.js";
 import { registerWorktree } from "./commands/git/worktree.js";
 import { registerBranch } from "./commands/git/branch.js";
+import { registerConfig } from "./commands/config.js";
 
 const program = new Command();
 
@@ -19,9 +20,14 @@ program
   .description(
     "Workspace management CLI for multi-project development environments",
   )
-  .version(VERSION);
+  .version(VERSION)
+  .option(
+    "-w, --workspace <path>",
+    "Path to workspace root directory or dev-hub.toml file (default: current directory)",
+  );
 
 // Top-level commands
+registerConfig(program);
 registerInit(program);
 registerStatus(program);
 registerBuild(program);

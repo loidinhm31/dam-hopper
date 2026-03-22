@@ -177,6 +177,15 @@ All packages are functional stubs ready for feature development:
 - **CONFIG_FILENAME**: Constant "dev-hub.toml"
 - **ConfigNotFoundError**: Custom error for missing config
 
+#### Global Configuration (global.ts)
+
+- **GlobalConfig**: Interface for user preferences (`defaults.workspace` path)
+- **globalConfigPath()**: Resolve XDG config path (`$XDG_CONFIG_HOME/dev-hub/config.toml` or `~/.config/dev-hub/config.toml`)
+- **readGlobalConfig()**: Read and parse global config, returns null if missing (no error)
+  - Gracefully handles read errors and parse failures with stderr warnings
+- **writeGlobalConfig(config)**: Atomically write global config (temp file → rename)
+  - Creates `~/.config/dev-hub/` directory if missing
+
 #### Project Discovery (discovery.ts)
 
 - **detectProjectType(projectDir)**: Marker-file detection with priority order
@@ -316,6 +325,9 @@ All packages are functional stubs ready for feature development:
 
 - **init.ts**: Interactive workspace initialization via @clack/prompts
   - Guided project discovery and config generation
+- **config.ts**: Manage global configuration
+  - **config set workspace <path>**: Set default workspace in `~/.config/dev-hub/config.toml`
+  - **config get**: Display current global configuration
 - **status.ts**: Display git status for all projects via StatusTable component
 - **build.ts**: Build single or all projects with progress streaming
 - **run.tsx**: Run/stop/logs commands with live process output (Ink components)
@@ -329,8 +341,12 @@ All packages are functional stubs ready for feature development:
 #### CLI Utilities (utils/)
 
 - **workspace.ts**:
-  - **loadWorkspace()**: Load config from current directory
-  - **resolveProjects(name?, type?)**: Filter projects by name or type
+  - **loadWorkspace(startDir?)**: Resolve workspace directory with priority: flag → env var → cwd, then search for dev-hub.toml
+    - **Step 1-3**: `resolveWorkspaceDir()` resolves from `--workspace <path>` flag, `DEV_HUB_WORKSPACE` env var, or current working directory
+    - **Step 4**: If no config found via walk-up, checks `~/.config/dev-hub/config.toml` (XDG_CONFIG_HOME) for a default workspace path
+    - Exits with error message if no config found after all steps
+  - **resolveProjects(config, filter?)**: Filter projects by name
+  - **normaliseDirPath()**: Convert file paths to directory paths (internal helper)
 - **format.ts**:
   - Color helpers: success (green), error (red), warn (yellow), info (cyan)
   - **formatDuration()**: Human-readable duration formatting

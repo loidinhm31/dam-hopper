@@ -19,3 +19,5 @@ export {
 export type { Result } from "./parser.js";
 export * from "./finder.js";
 export * from "./discovery.js";
+export { globalConfigPath, readGlobalConfig, writeGlobalConfig } from "./global.js";
+export type { GlobalConfig } from "./global.js";

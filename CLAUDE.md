@@ -41,6 +41,7 @@ Dev-Hub is a monorepo managed with pnpm workspaces. Four packages:
 - **`@dev-hub/web`** — React 19 dashboard (Vite + Tailwind v4). Communicates with the server via Hono RPC (type-safe client). Receives real-time events via SSE.
 
 Data flow:
+
 ```
 CLI: user → Commander → @dev-hub/core → git/execa
 Web: browser → React → Hono RPC client → @dev-hub/server → @dev-hub/core → git/execa
@@ -54,7 +55,12 @@ Web: browser → React → Hono RPC client → @dev-hub/server → @dev-hub/core
 
 **Config format**: `dev-hub.toml` uses snake_case on disk (`build_command`, `run_command`, `env_file`) but core types use camelCase. The parser converts on read/write.
 
-**Config discovery**: `findConfigFile()` walks up from CWD, stopping at the home directory. Never scans system directories.
+**Workspace resolution**: The CLI resolves the workspace directory with the following priority:
+  1. `--workspace <path>` flag (if provided)
+  2. `DEV_HUB_WORKSPACE` environment variable (if set)
+  3. Current working directory (default)
+
+  Once the workspace directory is determined, `findConfigFile()` walks up from that directory, stopping at the home directory. If no config is found, Step 4 checks `~/.config/dev-hub/config.toml` for a default workspace path. Use `dev-hub config set workspace <path>` to configure this fallback.
 
 **Progress events**: Git and build operations emit `GitProgressEvent` via EventEmitter3. The CLI renders these with Ink components; the server streams them as SSE. Both use the same emitter interface.
 
