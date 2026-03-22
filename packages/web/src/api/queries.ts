@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client.js";
-import type { DevHubConfig, ProjectConfig } from "./client.js";
+import type { DevHubConfig, ProjectConfig, GlobalConfig } from "./client.js";
 
 // ── Queries ─────────────────────────────────────────────────────────────────
 
@@ -76,7 +76,54 @@ export function useConfig() {
   });
 }
 
+export function useKnownWorkspaces() {
+  return useQuery({
+    queryKey: ["known-workspaces"],
+    queryFn: () => api.workspace.known(),
+    staleTime: 30_000,
+  });
+}
+
+export function useGlobalConfig() {
+  return useQuery({
+    queryKey: ["global-config"],
+    queryFn: () => api.globalConfig.get(),
+  });
+}
+
 // ── Mutations ────────────────────────────────────────────────────────────────
+
+export function useSwitchWorkspace() {
+  return useMutation({
+    mutationFn: (path: string) => api.workspace.switch(path),
+    // No onSuccess invalidation — SSE workspace:changed handles nuclear cache flush
+  });
+}
+
+export function useAddKnownWorkspace() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (path: string) => api.workspace.addKnown(path),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["known-workspaces"] }),
+  });
+}
+
+export function useRemoveKnownWorkspace() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (path: string) => api.workspace.removeKnown(path),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["known-workspaces"] }),
+  });
+}
+
+export function useUpdateGlobalDefaults() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (defaults: { workspace?: string }) =>
+      api.globalConfig.updateDefaults(defaults),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["global-config"] }),
+  });
+}
 
 export function useUpdateConfig() {
   const qc = useQueryClient();

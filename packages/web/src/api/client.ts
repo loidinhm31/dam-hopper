@@ -55,6 +55,21 @@ export interface WorkspaceInfo {
   projectCount: number;
 }
 
+export interface KnownWorkspace {
+  name: string;
+  path: string;
+}
+
+export interface KnownWorkspacesResponse {
+  workspaces: KnownWorkspace[];
+  current: string;
+}
+
+export interface GlobalConfig {
+  defaults?: { workspace?: string };
+  workspaces?: KnownWorkspace[];
+}
+
 export interface Worktree {
   path: string;
   branch: string;
@@ -158,6 +173,15 @@ const enc = encodeURIComponent;
 export const api = {
   workspace: {
     get: () => get<WorkspaceInfo>("/workspace"),
+    switch: (path: string) => post<WorkspaceInfo>("/workspace/switch", { path }),
+    known: () => get<KnownWorkspacesResponse>("/workspace/known"),
+    addKnown: (path: string) => post<KnownWorkspace>("/workspace/known", { path }),
+    removeKnown: (path: string) => del("/workspace/known", { path }),
+  },
+  globalConfig: {
+    get: () => get<GlobalConfig>("/global-config"),
+    updateDefaults: (defaults: { workspace?: string }) =>
+      put<{ updated: true }>("/global-config/defaults", defaults),
   },
   projects: {
     list: () => get<ProjectWithStatus[]>("/projects"),

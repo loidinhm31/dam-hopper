@@ -67,6 +67,7 @@ export function useSSE() {
       "process:event",
       "status:changed",
       "config:changed",
+      "workspace:changed",
     ] as const;
 
     for (const type of eventTypes) {
@@ -98,6 +99,11 @@ export function useSSE() {
       void qc.invalidateQueries({ queryKey: ["config"] });
       void qc.invalidateQueries({ queryKey: ["workspace"] });
       void qc.invalidateQueries({ queryKey: ["projects"] });
+    });
+
+    es.addEventListener("workspace:changed", () => {
+      void qc.invalidateQueries(); // Nuclear — entire workspace changed
+      void qc.invalidateQueries({ queryKey: ["known-workspaces"] }); // Also explicit for clarity
     });
   }, [qc]);
 

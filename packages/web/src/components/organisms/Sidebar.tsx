@@ -10,7 +10,7 @@ import {
 import { cn } from "@/lib/utils.js";
 import { ConnectionDot } from "@/components/atoms/ConnectionDot.js";
 import { useSSE } from "@/hooks/useSSE.js";
-import { useWorkspace } from "@/api/queries.js";
+import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 
 const nav = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -23,18 +23,12 @@ const nav = [
 
 export function Sidebar() {
   const { status } = useSSE();
-  const { data: workspace } = useWorkspace();
 
   return (
     <aside className="flex h-full w-60 flex-col bg-[var(--color-surface)] border-r border-[var(--color-border)]">
-      {/* Workspace name */}
+      {/* Workspace switcher */}
       <div className="px-4 py-4 border-b border-[var(--color-border)]">
-        <p className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
-          Workspace
-        </p>
-        <p className="mt-0.5 font-semibold text-[var(--color-text)] truncate">
-          {workspace?.name ?? "Dev Hub"}
-        </p>
+        <WorkspaceSwitcher />
       </div>
 
       {/* Nav */}
