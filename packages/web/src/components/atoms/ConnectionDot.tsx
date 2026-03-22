@@ -1,15 +1,9 @@
 import { cn } from "@/lib/utils.js";
-import type { SSEStatus } from "@/hooks/useSSE.js";
 
+// IPC is always connected — status is always "connected"
 interface Props {
-  status: SSEStatus;
+  status: "connected";
 }
-
-const labels: Record<SSEStatus, string> = {
-  connected: "Connected",
-  connecting: "Connecting…",
-  disconnected: "Disconnected",
-};
 
 export function ConnectionDot({ status }: Props) {
   return (
@@ -18,11 +12,9 @@ export function ConnectionDot({ status }: Props) {
         className={cn(
           "inline-block h-2 w-2 rounded-full",
           status === "connected" && "bg-[var(--color-success)]",
-          status === "connecting" && "bg-[var(--color-warning)] animate-pulse",
-          status === "disconnected" && "bg-[var(--color-danger)]",
         )}
       />
-      {labels[status]}
+      Connected
     </span>
   );
 }

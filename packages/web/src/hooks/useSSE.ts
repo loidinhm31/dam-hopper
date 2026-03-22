@@ -1,7 +1,11 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+// IPC event bridge — replaces the former SSE/EventSource implementation.
+// Events are pushed from Electron main process via webContents.send() and
+// received here via window.devhub.on(). No HTTP, no EventSource.
+
+import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-export type SSEStatus = "connecting" | "connected" | "disconnected";
+export type SSEStatus = "connected";
 
 export interface SSEEvent {
   type: string;
@@ -19,106 +23,80 @@ export function subscribeSSE(type: string, cb: Listener): () => void {
   return () => listeners.get(type)?.delete(cb);
 }
 
-function dispatch(type: string, rawData: string) {
-  let data: unknown = rawData;
-  try {
-    data = JSON.parse(rawData);
-  } catch {
-    // leave as string
-  }
+function dispatch(type: string, data: unknown) {
   const event: SSEEvent = { type, data, timestamp: Date.now() };
   listeners.get(type)?.forEach((cb) => cb(event));
   listeners.get("*")?.forEach((cb) => cb(event));
 }
 
-export function useSSE() {
-  const [status, setStatus] = useState<SSEStatus>("connecting");
+// Channel list is authoritative in the electron package (ipc-channels.ts).
+// At runtime, the preload exposes it as window.devhub.eventChannels.
+// Falls back to a local copy for non-Electron environments (tests/storybook).
+const FALLBACK_EVENT_CHANNELS = [
+  "git:progress",
+  "build:progress",
+  "process:event",
+  "status:changed",
+  "config:changed",
+  "workspace:changed",
+  "command:progress",
+] as const;
+
+function getEventChannels(): readonly string[] {
+  return (
+    (window.devhub as { eventChannels?: readonly string[] }).eventChannels ??
+    FALLBACK_EVENT_CHANNELS
+  );
+}
+
+// Register IPC listeners once at module level (not per-component).
+// These forward main-process pushes into the in-memory listener bus.
+const unsubscribers: Array<() => void> = [];
+
+function initIpcListeners() {
+  if (unsubscribers.length > 0) return; // already initialized
+  for (const channel of getEventChannels()) {
+    const unsub = window.devhub.on(channel, (data) => dispatch(channel, data));
+    unsubscribers.push(unsub);
+  }
+}
+
+export function useSSE(): { status: SSEStatus } {
   const qc = useQueryClient();
-  const retryDelay = useRef(1000);
-  const esRef = useRef<EventSource | null>(null);
-  // Track pending retry timer so we can cancel it on unmount (C1 fix)
-  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const connect = useCallback(() => {
-    if (esRef.current) {
-      esRef.current.close();
-    }
-
-    const es = new EventSource("/api/events");
-    esRef.current = es;
-
-    es.onopen = () => {
-      setStatus("connected");
-      retryDelay.current = 1000;
-    };
-
-    es.onerror = () => {
-      setStatus("disconnected");
-      es.close();
-      esRef.current = null;
-      const delay = Math.min(retryDelay.current, 30_000);
-      retryDelay.current = Math.min(delay * 2, 30_000);
-      retryTimerRef.current = setTimeout(connect, delay);
-    };
-
-    const eventTypes = [
-      "git:progress",
-      "build:progress",
-      "process:event",
-      "status:changed",
-      "config:changed",
-      "workspace:changed",
-    ] as const;
-
-    for (const type of eventTypes) {
-      es.addEventListener(type, (e: MessageEvent) => {
-        dispatch(type, e.data as string);
-      });
-    }
-
-    // Invalidate queries on status:changed
-    es.addEventListener("status:changed", (e: MessageEvent) => {
-      try {
-        const { projectName } = JSON.parse(e.data as string) as {
-          projectName: string;
-        };
-        void qc.invalidateQueries({
-          queryKey: ["project-status", projectName],
-        });
-        void qc.invalidateQueries({ queryKey: ["projects"] });
-      } catch {
-        void qc.invalidateQueries({ queryKey: ["projects"] });
-      }
-    });
-
-    es.addEventListener("process:event", () => {
-      void qc.invalidateQueries({ queryKey: ["processes"] });
-    });
-
-    es.addEventListener("config:changed", () => {
-      void qc.invalidateQueries({ queryKey: ["config"] });
-      void qc.invalidateQueries({ queryKey: ["workspace"] });
-      void qc.invalidateQueries({ queryKey: ["projects"] });
-    });
-
-    es.addEventListener("workspace:changed", () => {
-      void qc.invalidateQueries(); // Nuclear — entire workspace changed
-      void qc.invalidateQueries({ queryKey: ["known-workspaces"] }); // Also explicit for clarity
-    });
-  }, [qc]);
 
   useEffect(() => {
-    connect();
-    return () => {
-      // Cancel any pending retry timer before closing (C1 fix)
-      if (retryTimerRef.current !== null) {
-        clearTimeout(retryTimerRef.current);
-        retryTimerRef.current = null;
-      }
-      esRef.current?.close();
-      esRef.current = null;
-    };
-  }, [connect]);
+    initIpcListeners();
 
-  return { status };
+    const unsubs = [
+      subscribeSSE("status:changed", (e) => {
+        try {
+          const { projectName } = e.data as { projectName: string };
+          void qc.invalidateQueries({ queryKey: ["project-status", projectName] });
+          void qc.invalidateQueries({ queryKey: ["projects"] });
+        } catch {
+          void qc.invalidateQueries({ queryKey: ["projects"] });
+        }
+      }),
+
+      subscribeSSE("process:event", () => {
+        void qc.invalidateQueries({ queryKey: ["processes"] });
+      }),
+
+      subscribeSSE("config:changed", () => {
+        void qc.invalidateQueries({ queryKey: ["config"] });
+        void qc.invalidateQueries({ queryKey: ["workspace"] });
+        void qc.invalidateQueries({ queryKey: ["projects"] });
+      }),
+
+      subscribeSSE("workspace:changed", () => {
+        void qc.invalidateQueries(); // Nuclear — full workspace change
+        void qc.invalidateQueries({ queryKey: ["known-workspaces"] });
+      }),
+    ];
+
+    return () => unsubs.forEach((fn) => fn());
+  }, [qc]);
+
+  // IPC is always connected — no reconnect logic needed
+  return { status: "connected" };
 }

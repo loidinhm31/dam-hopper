@@ -48,7 +48,7 @@ Strip execa execution from `@dev-hub/core` (becomes pure config+state+git). Repl
 | Phase | Title | Status | Effort | File |
 |-------|-------|--------|--------|------|
 | 01 | Electron Shell + IPC Foundation | done | 3h | [phase-01](./phase-01-electron-shell.md) |
-| 02 | IPC API Layer (Replace HTTP) | pending | 3h | [phase-02-ipc-api-layer.md](./phase-02-ipc-api-layer.md) |
+| 02 | IPC API Layer (Replace HTTP) | done | 3h | [phase-02-ipc-api-layer.md](./phase-02-ipc-api-layer.md) |
 | 03 | PTY Terminal Integration | pending | 3h | [phase-03-pty-terminal.md](./phase-03-pty-terminal.md) |
 | 04 | Cleanup + Packaging | pending | 3h | [phase-04-cleanup-packaging.md](./phase-04-cleanup-packaging.md) |
 
