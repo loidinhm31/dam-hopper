@@ -701,7 +701,9 @@ No tests yet. Future test coverage should include:
 - **Typed interfaces**: ProjectType, ProjectConfig, GitStatus, Worktree, Branch, BuildResult, ProcessInfo, GitOpResult
 - **Fetch-based HTTP client**: GET, POST, DELETE methods with error handling
 - **Base path**: `/api` with URL-encoded project names for special characters
-- **API object**: Namespace-organized endpoints (workspace, projects, git, build, processes)
+- **API object**: Namespace-organized endpoints (workspace, projects, git, build, processes, globalConfig)
+  - Workspace: get current, switch, known (list/add/remove)
+  - GlobalConfig: get, update defaults (default workspace path)
   - Projects: list, get, status (fresh)
   - Git: fetch, pull, push, worktrees (CRUD), branches (list + update)
   - Build: start command
@@ -709,18 +711,18 @@ No tests yet. Future test coverage should include:
 
 #### State Management (api/queries.ts)
 
-- **Query hooks**: useWorkspace, useProjects, useProject, useProjectStatus, useWorktrees, useBranches, useProcesses, useProcessLogs
-- **Refetch intervals**: Projects (30s), Processes (5s), Process logs (3s)
-- **Mutation hooks**: useGitFetch, useGitPull, useGitPush, useBuildStart, useProcessStart, useProcessStop, useProcessRestart
-- **Auto-invalidation**: On mutation success, related queries re-fetch
+- **Query hooks**: useWorkspace, useGlobalConfig, useKnownWorkspaces, useProjects, useProject, useProjectStatus, useWorktrees, useBranches, useProcesses, useProcessLogs, useConfig
+- **Refetch intervals**: Projects (30s), Processes (5s), Process logs (3s), GlobalConfig (default)
+- **Mutation hooks**: useSwitchWorkspace, useUpdateGlobalDefaults, useAddKnownWorkspace, useRemoveKnownWorkspace, useGitFetch, useGitPull, useGitPush, useBuildStart, useProcessStart, useProcessStop, useProcessRestart, useUpdateConfig
+- **Auto-invalidation**: On mutation success, related queries re-fetch; workspace:changed SSE event triggers nuclear cache invalidation
 
 #### Real-time Updates (hooks/useSSE.ts)
 
 - **EventSource connection**: Connects to `/api/events` on mount
 - **Event subscription system**: Global listener map for event type dispatch
 - **Auto-reconnect**: Exponential backoff (1s → 30s max) on connection failure
-- **Event types**: git:progress, build:progress, process:event, status:changed
-- **Query invalidation**: Automatic cache invalidation on status:changed and process:event
+- **Event types**: git:progress, build:progress, process:event, status:changed, workspace:changed, heartbeat
+- **Query invalidation**: Automatic cache invalidation on status:changed, process:event, and workspace:changed (nuclear flush)
 - **Timer cleanup**: Cancels pending retry timers on unmount (memory leak fix)
 
 #### Per-Event Subscriptions (hooks/useSSEEvents.ts)
@@ -750,9 +752,12 @@ No tests yet. Future test coverage should include:
 
 **Organisms** (feature-complete sections):
 
-- **Sidebar.tsx**: Navigation menu with routes and active link highlighting
+- **Sidebar.tsx**: Navigation menu with routes and active link highlighting (includes WorkspaceSwitcher dropdown)
+- **WorkspaceSwitcher.tsx**: Dropdown for viewing and switching between known workspaces, adding/removing paths
 - **ProgressList.tsx**: Display concurrent operation progress bars (from CLI, adapted for web)
 - **BuildLog.tsx**: Real-time build output streaming with scrolling
+- **ConfigEditor.tsx**: Workspace config (`dev-hub.toml`) editor with project management
+- **GlobalConfigEditor.tsx**: Global config editor for setting default workspace and managing known workspaces registry
 
 **Templates** (page-level layouts):
 
@@ -766,7 +771,7 @@ No tests yet. Future test coverage should include:
 - **GitPage.tsx**: Git operations hub (fetch/pull/push, worktrees, branches)
 - **BuildPage.tsx**: Build command execution interface with live output
 - **ProcessesPage.tsx**: Active process management (start/stop/restart/logs)
-- **SettingsPage.tsx**: Workspace and user settings
+- **SettingsPage.tsx**: Settings with two sections — Global Settings (default workspace, known workspaces) and Workspace Config (project configuration)
 
 #### Styling (index.css)
 
