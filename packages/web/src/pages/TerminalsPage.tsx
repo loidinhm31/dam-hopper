@@ -9,6 +9,7 @@ import { Sidebar } from "@/components/organisms/Sidebar.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import { useTerminalTree } from "@/hooks/useTerminalTree.js";
 import { useTerminalSessions } from "@/api/queries.js";
+import { useSidebarCollapse } from "@/hooks/useSidebarCollapse.js";
 import type { TreeCommand } from "@/hooks/useTerminalTree.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { SessionInfo } from "@/types/electron.js";
@@ -34,6 +35,8 @@ export function TerminalsPage() {
   const qc = useQueryClient();
   const { tree, isLoading } = useTerminalTree();
   const { data: sessions = [] } = useTerminalSessions();
+
+  const { collapsed: sidebarCollapsed, toggle: handleSidebarToggle } = useSidebarCollapse();
 
   const [selection, setSelection] = useState<SelectionState>(null);
   const [openTabs, setOpenTabs] = useState<TabEntry[]>([]);
@@ -217,7 +220,7 @@ export function TerminalsPage() {
 
   return (
     <div className="flex h-screen bg-[var(--color-background)]">
-      <Sidebar />
+      <Sidebar collapsed={sidebarCollapsed} onToggle={handleSidebarToggle} />
 
       {/* Tree sidebar */}
       <div className="w-56 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] flex flex-col">
