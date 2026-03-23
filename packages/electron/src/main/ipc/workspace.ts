@@ -1,7 +1,7 @@
 import { ipcMain, dialog } from "electron";
 import { resolve, basename, join, sep } from "node:path";
 import { homedir } from "node:os";
-import { stat } from "node:fs/promises";
+import { stat, realpath } from "node:fs/promises";
 import {
   findConfigFile,
   readConfig,
@@ -53,10 +53,12 @@ export function registerWorkspaceHandlers(holder: CtxHolder): void {
     if (!path) throw new Error("path is required");
     const absPath = resolve(path);
     const home = homedir();
-    if (absPath !== home && !absPath.startsWith(home + sep)) {
+    // Resolve symlinks to prevent escaping home directory via symlink
+    const realAbs = await realpath(absPath).catch(() => absPath);
+    if (realAbs !== home && !realAbs.startsWith(home + sep)) {
       throw new Error("path must be within home directory");
     }
-    await holder.switchWorkspace(absPath);
+    await holder.switchWorkspace(realAbs);
     const ctx = holder.current!;
     return {
       name: ctx.config.workspace.name,
@@ -69,19 +71,21 @@ export function registerWorkspaceHandlers(holder: CtxHolder): void {
     if (!path) throw new Error("path is required");
     const absPath = resolve(path);
     const home = homedir();
-    if (absPath !== home && !absPath.startsWith(home + sep)) {
+    // Resolve symlinks to prevent escaping home directory via symlink
+    const realAbs = await realpath(absPath).catch(() => absPath);
+    if (realAbs !== home && !realAbs.startsWith(home + sep)) {
       throw new Error("path must be within home directory");
     }
-    const s = await stat(absPath).catch(() => null);
-    if (!s) throw new Error(`Path not found: ${absPath}`);
+    const s = await stat(realAbs).catch(() => null);
+    if (!s) throw new Error(`Path not found: ${realAbs}`);
     if (!s.isDirectory()) throw new Error("path must be a directory");
 
-    let configPath = await findConfigFile(absPath);
+    let configPath = await findConfigFile(realAbs);
     let workspaceName: string;
 
     if (!configPath) {
-      const discovered = await discoverProjects(absPath);
-      workspaceName = basename(absPath);
+      const discovered = await discoverProjects(realAbs);
+      workspaceName = basename(realAbs);
       const newConfig = {
         workspace: { name: workspaceName, root: "." },
         projects: discovered.map((p) => ({
@@ -94,7 +98,7 @@ export function registerWorkspaceHandlers(holder: CtxHolder): void {
           tags: undefined,
         })),
       };
-      const tomlPath = join(absPath, "dev-hub.toml");
+      const tomlPath = join(realAbs, "dev-hub.toml");
       await writeConfig(tomlPath, newConfig);
       configPath = tomlPath;
     } else {
@@ -102,8 +106,8 @@ export function registerWorkspaceHandlers(holder: CtxHolder): void {
       workspaceName = existing.workspace.name;
     }
 
-    await addKnownWorkspace(workspaceName, absPath);
-    return { name: workspaceName, path: absPath };
+    await addKnownWorkspace(workspaceName, realAbs);
+    return { name: workspaceName, path: realAbs };
   });
 
   ipcMain.handle(CH.WORKSPACE_REMOVE_KNOWN, async (_e, path: string) => {

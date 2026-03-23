@@ -55,9 +55,11 @@ Desktop App Flow:
                                            IPC response + real-time events
 ```
 
-**Deferred workspace initialization**: Window now creates immediately on app start (no workspace required). Main process attempts auto-resolve (persisted path, env var). If found, initializes context automatically. If not, renderer detects no-workspace state and shows WelcomePage instead of dashboard. User selects workspace via folder picker or known list, triggering `workspace.init(path)` which loads config and activates full IPC handlers. Three-state gate: `loading` → `welcome` (first launch) or `ready` (auto-resolved) → `ready` (after user selection).
+**Deferred workspace initialization**: BrowserWindow creates immediately on app startup (no workspace required). Main process auto-resolves workspace path: 1) persisted `lastWorkspacePath` from electron-store, 2) `DEV_HUB_WORKSPACE` environment variable, 3) clears path on failure. If resolved, workspace loads automatically. If not, renderer detects `ready: false` and shows WelcomePage instead of dashboard. User selects workspace via folder picker or known list, triggering `workspace.init(path)` which validates (realpath), loads config, and activates full IPC handlers. Three-state gate: `loading` → `welcome` (no auto-resolve) or `ready` (auto-resolved) → `ready` (after user selection).
 
-**IPC channels for workspace lifecycle**: `workspace.status()` returns `{ready: boolean, name?, root?}`. `workspace.init(path)` loads workspace and emits `workspace:ready` event. `workspace.known()` and `workspace.addKnown()` work pre-init (reads global config only).
+**Workspace initialization lifecycle**: `registerPreWorkspaceHandlers()` runs before workspace loads, handling `workspace:status`, `workspace:known`, `workspace:open-dialog`. Full IPC registration deferred until `workspace.init()`. Promise-based race guard (`loadWorkspacePromise`) + `fullIpcRegistered` flag prevents double-registration. Real-time events (`workspace:changed`, `git:progress`, `build:progress`, `process:event`) broadcast via `webContents.send()` after full IPC loaded.
+
+**Security**: `realpath()` resolves symlinks in workspace paths during `workspace:switch`, `workspace:addKnown`, `workspace:init` to prevent symlink escape attacks.
 
 ## Package Dependencies
 
@@ -326,24 +328,46 @@ All packages are functional stubs ready for feature development:
 
 #### Electron Main Process (main.ts)
 
-- **createWindow()**: BrowserWindow initialization
+- **createWindow()**: BrowserWindow initialization (runs first, before workspace load)
   - Loads prebuilt web/dist/index.html
-  - Injects preload script exposing `window.api` (IPC handlers)
+  - Injects preload script exposing `window.devhub` (IPC handlers via contextBridge)
   - Configures security: nodeIntegration disabled, contextIsolation enabled, enableRemoteModule disabled
-- **ipcMain handlers**: Async IPC endpoints for core operations
-  - workspace operations (load, switch, getProjects)
+- **Auto-resolve workspace**: After window creation, attempts to load workspace from:
+  1. `electron-store` persisted `lastWorkspacePath`
+  2. `DEV_HUB_WORKSPACE` environment variable
+  3. Returns null on error (clears persisted path if invalid)
+- **registerPreWorkspaceHandlers()**: IPC handlers available before workspace loads
+  - `workspace:status` returns `{ready: boolean, name?, root?}` — indicates if workspace initialized
+  - `workspace:known()` list known workspaces (reads global config only)
+  - `workspace:open-dialog` open folder picker, returns path or null
+  - `workspace:init(path)` validate (realpath), load workspace config, register full IPC
+- **Full IPC registration**: Deferred until `workspace.init()` completes
+  - `workspace:switch(path)` stop PTY sessions, reload workspace, broadcast `workspace:changed`
+  - `workspace:addKnown(path, name)` add to global config (uses realpath)
   - git operations (fetch, pull, push, status, branches, worktrees)
   - build/run operations (build, start, stop, getLogs)
   - custom commands (execute)
-- **Event broadcasting**: IpcEvent emitted to all renderer processes
-  - git:progress, build:progress, process:event, workspace:changed
+  - PTY session management via `PtySessionManager`
+- **Race guard**: `loadWorkspacePromise` + `fullIpcRegistered` flag prevent concurrent initialization and double-registration
+- **Event broadcasting**: IpcEvent emitted to all renderer processes via `webContents.send()`
+  - git:progress, build:progress, process:event, workspace:changed, heartbeat
 
 #### Preload Script (preload.ts)
 
-- **window.api**: Exposed IPC interface (type-safe via preload-generated types)
-  - `api.invoke(channel, data)`: Send IPC request to main, await response
-  - `api.on(channel, callback)`: Listen for broadcast events
+- **window.devhub**: Exposed IPC interface (contextBridge, type-safe via preload-generated types)
+  - `devhub.invoke(channel, data)`: Send IPC request to main, await response
+  - `devhub.on(channel, callback)`: Listen for broadcast events
+  - `devhub.off(channel, callback)`: Unsubscribe from events (listener registry tracked per function)
   - Only whitelisted handlers exposed (security boundary)
+  - Listener registry (Map) ensures proper per-listener removal without memory leaks
+
+#### App Router & Workspace Gating
+
+- **App.tsx**: Root component gates rendering on `workspace:status`
+  - Initial state: `loading` (waits for `workspace:status` response)
+  - If `ready: true` → renders AppRoutes (dashboard)
+  - If `ready: false` → renders WelcomePage (first-launch screen)
+  - Subscribes to `workspace:changed` event to re-check status on workspace switches
 
 #### IPC Event System
 
@@ -371,6 +395,11 @@ All packages are functional stubs ready for feature development:
 
 #### Web Components
 
+- **WelcomePage.tsx**: First-launch workspace selection
+  - Shows folder picker button (via `workspace:open-dialog` IPC)
+  - Displays known workspaces list (from `workspace:known()`)
+  - Allows adding new workspaces or opening existing ones
+  - Routes to dashboard on successful `workspace:init()`
 - **OverviewCard.tsx**: Workspace/project summary cards (git status, last operation)
 - **BuildLog.tsx**: DELETED in Phase 04 cleanup (redundant with LogViewer)
 - **ConfigEditor.tsx**: Edit dev-hub.toml with schema validation
@@ -436,7 +465,8 @@ All packages are functional stubs ready for feature development:
 | File                            | Purpose                           |
 | ------------------------------- | --------------------------------- |
 | src/main.tsx                    | React entry + QueryClient setup   |
-| src/App.tsx                     | React Router + route definitions  |
+| src/App.tsx                     | Workspace status gate + router    |
+| src/pages/WelcomePage.tsx       | First-launch workspace selection  |
 | src/hooks/useIpc.ts             | IPC event subscription hook       |
 | src/hooks/useIpcEvent.ts        | Per-event-type IPC hook           |
 | src/api/queries.ts              | TanStack Query for IPC data       |

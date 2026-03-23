@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from "electron";
-import { join, dirname, resolve } from "node:path";
-import { stat } from "node:fs/promises";
+import { join, dirname, resolve, sep } from "node:path";
+import { homedir } from "node:os";
+import { stat, realpath } from "node:fs/promises";
 import Store from "electron-store";
 import {
   findConfigFile,
@@ -105,7 +106,7 @@ function createWindow(): BrowserWindow {
 
 let appHolder: CtxHolder | null = null;
 let fullIpcRegistered = false;
-let initInProgress = false;
+let loadWorkspacePromise: Promise<void> | null = null;
 
 app.whenReady().then(async () => {
   const ptyManager = new PtySessionManager();
@@ -166,15 +167,19 @@ app.whenReady().then(async () => {
   // Register handlers that work without a loaded workspace
   registerPreWorkspaceHandlers(holder);
 
-  // Initialize full IPC exactly once; prevent concurrent calls during initial load
+  // Initialize full IPC exactly once; serialize concurrent first-load calls.
   async function loadWorkspace(workspacePath: string): Promise<void> {
     if (fullIpcRegistered) {
       await holder.switchWorkspace(workspacePath);
       return;
     }
-    if (initInProgress) throw new Error("Workspace initialization already in progress");
-    initInProgress = true;
-    try {
+    // If a first-load is already in progress, wait for it then switch.
+    if (loadWorkspacePromise) {
+      await loadWorkspacePromise;
+      if (fullIpcRegistered) await holder.switchWorkspace(workspacePath);
+      return;
+    }
+    loadWorkspacePromise = (async () => {
       const ctx = await initContext(workspacePath);
       holder.current = ctx;
       registerIpcHandlers(holder);
@@ -184,14 +189,29 @@ app.whenReady().then(async () => {
         name: ctx.config.workspace.name,
         root: ctx.workspaceRoot,
       });
+    })();
+    try {
+      await loadWorkspacePromise;
     } finally {
-      initInProgress = false;
+      loadWorkspacePromise = null;
     }
   }
 
   // workspace:init — called from WelcomePage when user selects a folder
   ipcMain.handle(CH.WORKSPACE_INIT, async (_e, path: string) => {
-    if (!path) throw new Error("path is required");
+    if (!path || typeof path !== "string") throw new Error("path is required");
+    // Resolve symlinks and validate path is within home directory
+    const absPath = resolve(path);
+    const home = homedir();
+    let realAbs: string;
+    try {
+      realAbs = await realpath(absPath);
+    } catch {
+      realAbs = absPath; // path may not exist yet (new workspace); boundary check still applies
+    }
+    if (realAbs !== home && !realAbs.startsWith(home + sep)) {
+      throw new Error("Workspace path must be within home directory");
+    }
     await loadWorkspace(path);
     return {
       name: holder.current!.config.workspace.name,
@@ -212,9 +232,11 @@ app.whenReady().then(async () => {
         await loadWorkspace(autoPath);
       } else {
         // Stored path no longer has a config — clear it so welcome page shows
+        console.warn(`[dev-hub] Auto-resolve: no dev-hub.toml found at "${autoPath}", clearing persisted path`);
         store.delete("lastWorkspacePath");
       }
-    } catch {
+    } catch (err) {
+      console.warn(`[dev-hub] Auto-resolve failed for "${autoPath}":`, err);
       store.delete("lastWorkspacePath");
     }
   }

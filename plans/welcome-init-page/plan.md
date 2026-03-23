@@ -1,7 +1,7 @@
 ---
 title: "Welcome/Init Page for First Launch"
 description: "Replace OS folder picker with in-app welcome page on first launch"
-status: pending
+status: done
 priority: P2
 effort: 5h
 branch: master
@@ -37,7 +37,7 @@ new channel: `workspace:status` returning `{ ready: boolean }`.
 | ----- | ------------------------ | ------ | ------ | ------------------------------------------------- |
 | 01    | Electron Main Changes    | done   | 2h     | [phase-01](./phase-01-electron-main-changes.md)   |
 | 02    | Welcome Page UI          | done   | 2h     | [phase-02](./phase-02-welcome-page-ui.md)         |
-| 03    | Integration Testing      | pending | 1h     | [phase-03](./phase-03-integration-testing.md)     |
+| 03    | Integration Testing      | done    | 1h     | [phase-03](./phase-03-integration-testing.md)     |
 
 ## Dependency Chain
 

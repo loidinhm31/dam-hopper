@@ -4,6 +4,12 @@ import { CH, EVENT_CHANNELS } from "../ipc-channels.js";
 
 type Unsubscribe = () => void;
 
+/** Stores wrapped listeners so off() can remove the correct wrapper. */
+const listenerRegistry = new Map<
+  string,
+  Map<(data: unknown) => void, (_e: IpcRendererEvent, data: unknown) => void>
+>();
+
 contextBridge.exposeInMainWorld("devhub", {
   platform: process.platform,
   versions: {
@@ -104,12 +110,23 @@ contextBridge.exposeInMainWorld("devhub", {
     const listener = (_event: IpcRendererEvent, data: unknown) =>
       callback(data);
     ipcRenderer.on(channel, listener);
-    return () => ipcRenderer.removeListener(channel, listener);
+    // Register wrapper so off() can remove the correct listener
+    if (!listenerRegistry.has(channel)) {
+      listenerRegistry.set(channel, new Map());
+    }
+    listenerRegistry.get(channel)!.set(callback, listener);
+    return () => {
+      ipcRenderer.removeListener(channel, listener);
+      listenerRegistry.get(channel)?.delete(callback);
+    };
   },
 
   off(channel: string, callback: (data: unknown) => void): void {
-    ipcRenderer.removeAllListeners(channel);
-    void callback;
+    const listener = listenerRegistry.get(channel)?.get(callback);
+    if (listener) {
+      ipcRenderer.removeListener(channel, listener);
+      listenerRegistry.get(channel)!.delete(callback);
+    }
   },
 
   /** All push-event channel names — renderer uses these to subscribe */
