@@ -22,6 +22,16 @@ export interface TerminalCreateOpts {
   rows: number;
 }
 
+export interface SessionInfo {
+  id: string;
+  project: string;
+  command: string;
+  type: "build" | "run" | "custom" | "shell" | "unknown";
+  alive: boolean;
+  exitCode?: number | null;
+  startedAt: number;
+}
+
 export interface DevHubBridge {
   platform: string;
   versions: { electron: string; node: string };
@@ -79,6 +89,8 @@ export interface DevHubBridge {
     resize: (id: string, cols: number, rows: number) => void;
     kill: (id: string) => void;
     list: () => Promise<string[]>;
+    listDetailed: () => Promise<SessionInfo[]>;
+    getBuffer: (id: string) => Promise<string>;
     onData: (id: string, cb: (data: string) => void) => Unsubscribe;
     onExit: (id: string, cb: (exitCode: number | null) => void) => Unsubscribe;
   };

@@ -1,12 +1,5 @@
 import { NavLink } from "react-router-dom";
-import {
-  LayoutDashboard,
-  FolderGit2,
-  GitMerge,
-  Hammer,
-  Activity,
-  Settings,
-} from "lucide-react";
+import { LayoutDashboard, TerminalSquare, GitMerge, Settings } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { ConnectionDot } from "@/components/atoms/ConnectionDot.js";
 import { useIpc } from "@/hooks/useSSE.js";
@@ -14,10 +7,8 @@ import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 
 const nav = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
-  { to: "/projects", icon: FolderGit2, label: "Projects" },
+  { to: "/terminals", icon: TerminalSquare, label: "Terminals" },
   { to: "/git", icon: GitMerge, label: "Git" },
-  { to: "/build", icon: Hammer, label: "Build" },
-  { to: "/processes", icon: Activity, label: "Processes" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ];
 

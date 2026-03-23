@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client.js";
-import type { DevHubConfig, ProjectConfig, GlobalConfig } from "./client.js";
+import type { DevHubConfig, ProjectConfig } from "./client.js";
+import type { SessionInfo } from "@/types/electron.js";
 
 export function useWorkspaceStatus() {
   return useQuery({
@@ -89,6 +90,15 @@ export function useGlobalConfig() {
   return useQuery({
     queryKey: ["global-config"],
     queryFn: () => api.globalConfig.get(),
+  });
+}
+
+export function useTerminalSessions() {
+  return useQuery<SessionInfo[]>({
+    queryKey: ["terminal-sessions"],
+    queryFn: () => window.devhub.terminal.listDetailed(),
+    refetchInterval: 3_000,
+    refetchIntervalInBackground: false,
   });
 }
 

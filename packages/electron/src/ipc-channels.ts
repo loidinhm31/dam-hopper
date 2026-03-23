@@ -42,6 +42,8 @@ export const CH = {
   TERMINAL_RESIZE: "terminal:resize",
   TERMINAL_KILL: "terminal:kill",
   TERMINAL_LIST: "terminal:list",
+  TERMINAL_LIST_DETAILED: "terminal:listDetailed",
+  TERMINAL_BUFFER: "terminal:buffer",
 } as const;
 
 // ── Push event channels (main → renderer) ─────────────────────────────────────
