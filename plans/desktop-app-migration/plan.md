@@ -1,7 +1,7 @@
 ---
 title: "Desktop App Migration (Electron + PTY Terminal)"
 description: "Migrate dev-hub from server+web to Electron desktop app with full interactive PTY terminals"
-status: pending
+status: done
 priority: P1
 effort: 12h
 branch: master
@@ -50,7 +50,7 @@ Strip execa execution from `@dev-hub/core` (becomes pure config+state+git). Repl
 | 01 | Electron Shell + IPC Foundation | done | 3h | [phase-01](./phase-01-electron-shell.md) |
 | 02 | IPC API Layer (Replace HTTP) | done | 3h | [phase-02-ipc-api-layer.md](./phase-02-ipc-api-layer.md) |
 | 03 | PTY Terminal Integration | done | 3h | [phase-03-pty-terminal.md](./phase-03-pty-terminal.md) |
-| 04 | Cleanup + Packaging | pending | 3h | [phase-04-cleanup-packaging.md](./phase-04-cleanup-packaging.md) |
+| 04 | Cleanup + Packaging | done | 3h | [phase-04-cleanup-packaging.md](./phase-04-cleanup-packaging.md) |
 
 ## Dependency Graph
 

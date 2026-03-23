@@ -1,11 +1,11 @@
 import { useEffect, useRef } from "react";
-import { subscribeSSE, type SSEEvent } from "./useSSE.js";
+import { subscribeIpc, type IpcEvent } from "./useSSE.js";
 
-export function useSSEEvent(type: string, handler: (event: SSEEvent) => void) {
+export function useIpcEvent(type: string, handler: (event: IpcEvent) => void) {
   const handlerRef = useRef(handler);
   handlerRef.current = handler;
 
   useEffect(() => {
-    return subscribeSSE(type, (e) => handlerRef.current(e));
+    return subscribeIpc(type, (e) => handlerRef.current(e));
   }, [type]);
 }

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
-import { useSSEEvent } from "@/hooks/useSSEEvents.js";
+import { useIpcEvent } from "@/hooks/useSSEEvents.js";
 import { cn } from "@/lib/utils.js";
 
 interface ProgressEntry {
@@ -19,12 +19,17 @@ export function ProgressList({ initialProjects = [] }: Props) {
     new Map(
       initialProjects.map((name) => [
         name,
-        { projectName: name, message: "Waiting…", status: "pending", progress: 0 },
+        {
+          projectName: name,
+          message: "Waiting…",
+          status: "pending",
+          progress: 0,
+        },
       ]),
     ),
   );
 
-  useSSEEvent("git:progress", (e) => {
+  useIpcEvent("git:progress", (e) => {
     const data = e.data as {
       projectName?: string;
       message?: string;
@@ -89,7 +94,9 @@ export function ProgressList({ initialProjects = [] }: Props) {
               <span className="text-sm font-medium text-[var(--color-text)] truncate">
                 {entry.projectName}
               </span>
-              <span className="text-xs text-[var(--color-text-muted)] shrink-0">{entry.message}</span>
+              <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+                {entry.message}
+              </span>
             </div>
             {entry.status === "running" && (
               <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-[var(--color-surface-2)]">

@@ -8,10 +8,4 @@ export default defineConfig({
   resolve: {
     alias: { "@": "/src" },
   },
-  // Proxy used only in @dev-hub/server mode (pnpm dev). Not active in Electron.
-  server: {
-    proxy: {
-      "/api": "http://localhost:4800",
-    },
-  },
 });

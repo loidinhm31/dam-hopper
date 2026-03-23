@@ -5,26 +5,26 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-export type SSEStatus = "connected";
+export type IpcStatus = "connected";
 
-export interface SSEEvent {
+export interface IpcEvent {
   type: string;
   data: unknown;
   timestamp: number;
 }
 
-type Listener = (event: SSEEvent) => void;
+type Listener = (event: IpcEvent) => void;
 
 const listeners = new Map<string, Set<Listener>>();
 
-export function subscribeSSE(type: string, cb: Listener): () => void {
+export function subscribeIpc(type: string, cb: Listener): () => void {
   if (!listeners.has(type)) listeners.set(type, new Set());
   listeners.get(type)!.add(cb);
   return () => listeners.get(type)?.delete(cb);
 }
 
 function dispatch(type: string, data: unknown) {
-  const event: SSEEvent = { type, data, timestamp: Date.now() };
+  const event: IpcEvent = { type, data, timestamp: Date.now() };
   listeners.get(type)?.forEach((cb) => cb(event));
   listeners.get("*")?.forEach((cb) => cb(event));
 }
@@ -58,14 +58,14 @@ function initIpcListeners() {
   }
 }
 
-export function useSSE(): { status: SSEStatus } {
+export function useIpc(): { status: IpcStatus } {
   const qc = useQueryClient();
 
   useEffect(() => {
     initIpcListeners();
 
     const unsubs = [
-      subscribeSSE("status:changed", (e) => {
+      subscribeIpc("status:changed", (e) => {
         try {
           const { projectName } = e.data as { projectName: string };
           void qc.invalidateQueries({ queryKey: ["project-status", projectName] });
@@ -75,13 +75,13 @@ export function useSSE(): { status: SSEStatus } {
         }
       }),
 
-      subscribeSSE("config:changed", () => {
+      subscribeIpc("config:changed", () => {
         void qc.invalidateQueries({ queryKey: ["config"] });
         void qc.invalidateQueries({ queryKey: ["workspace"] });
         void qc.invalidateQueries({ queryKey: ["projects"] });
       }),
 
-      subscribeSSE("workspace:changed", () => {
+      subscribeIpc("workspace:changed", () => {
         void qc.invalidateQueries(); // Nuclear — full workspace change
         void qc.invalidateQueries({ queryKey: ["known-workspaces"] });
       }),
