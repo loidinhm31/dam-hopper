@@ -2,7 +2,7 @@ import { FolderGit2, CheckCircle2, AlertCircle, Activity } from "lucide-react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { OverviewCard } from "@/components/molecules/OverviewCard.js";
 import { useProjects } from "@/api/queries.js";
-import { useSSEEvent } from "@/hooks/useSSEEvents.js";
+import { useIpcEvent } from "@/hooks/useSSEEvents.js";
 import { useRef, useState, useEffect } from "react";
 
 interface ActivityEntry {
@@ -34,7 +34,7 @@ export function DashboardPage() {
     return () => { cancelled = true; clearInterval(t); };
   }, []);
 
-  useSSEEvent("*", (e) => {
+  useIpcEvent("*", (e) => {
     const msg =
       typeof e.data === "object" && e.data !== null
         ? (((e.data as Record<string, unknown>).message as

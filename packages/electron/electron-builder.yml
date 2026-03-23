@@ -1,0 +1,19 @@
+appId: dev.hub.app
+productName: Dev Hub
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+asarUnpack:
+  - "**/node_modules/node-pty/**"
+nativeRebuilder: legacy
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Development
+win:
+  target:
+    - nsis
+    - portable

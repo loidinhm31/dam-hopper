@@ -55,7 +55,7 @@ export function useConfig() {
   return useQuery({
     queryKey: ["config"],
     queryFn: () => api.config.get(),
-    staleTime: Infinity, // SSE config:changed events drive invalidation
+    staleTime: Infinity, // IPC config:changed events drive invalidation
   });
 }
 

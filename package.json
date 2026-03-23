@@ -4,11 +4,12 @@
   "type": "module",
   "scripts": {
     "build": "pnpm -r build",
-    "dev": "pnpm -r --parallel dev",
-    "dev:server": "pnpm --filter @dev-hub/server dev:run",
-    "dev:debug": "pnpm --filter @dev-hub/server dev:debug",
+    "dev": "pnpm --filter @dev-hub/core dev & pnpm --filter @dev-hub/electron dev",
     "dev:electron": "pnpm --filter @dev-hub/electron dev",
     "build:electron": "pnpm --filter @dev-hub/electron build",
+    "package": "pnpm --filter @dev-hub/electron package",
+    "package:linux": "pnpm --filter @dev-hub/electron package:linux",
+    "package:win": "pnpm --filter @dev-hub/electron package:win",
     "lint": "eslint packages/",
     "format": "prettier --write .",
     "test": "vitest",
@@ -22,7 +23,6 @@
   },
   "devDependencies": {
     "@dev-hub/core": "workspace:*",
-    "@dev-hub/server": "workspace:*",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0",

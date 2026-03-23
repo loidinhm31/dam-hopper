@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { ConnectionDot } from "@/components/atoms/ConnectionDot.js";
-import { useSSE } from "@/hooks/useSSE.js";
+import { useIpc } from "@/hooks/useSSE.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 
 const nav = [
@@ -22,7 +22,7 @@ const nav = [
 ];
 
 export function Sidebar() {
-  const { status } = useSSE();
+  const { status } = useIpc();
 
   return (
     <aside className="flex h-full w-60 flex-col bg-[var(--color-surface)] border-r border-[var(--color-border)]">
