@@ -33,6 +33,8 @@ export interface DevHubBridge {
     addKnown: (path: string) => Promise<KnownWorkspace>;
     removeKnown: (path: string) => Promise<{ removed: boolean }>;
     openDialog: () => Promise<string | null>;
+    status: () => Promise<{ ready: boolean; name?: string; root?: string }>;
+    init: (path: string) => Promise<{ name: string; root: string }>;
   };
 
   globalConfig: {

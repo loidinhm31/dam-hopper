@@ -9,6 +9,8 @@ export const CH = {
   WORKSPACE_ADD_KNOWN: "workspace:addKnown",
   WORKSPACE_REMOVE_KNOWN: "workspace:removeKnown",
   WORKSPACE_OPEN_DIALOG: "workspace:open-dialog",
+  WORKSPACE_STATUS: "workspace:status",
+  WORKSPACE_INIT: "workspace:init",
 
   // Global config
   GLOBAL_CONFIG_GET: "globalConfig:get",

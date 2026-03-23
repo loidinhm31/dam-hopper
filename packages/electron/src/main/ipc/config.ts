@@ -42,11 +42,11 @@ function createWriteLock() {
 export function registerConfigHandlers(holder: CtxHolder): void {
   const withLock = createWriteLock();
 
-  ipcMain.handle(CH.CONFIG_GET, () => holder.current.config);
+  ipcMain.handle(CH.CONFIG_GET, () => holder.current!.config);
 
   ipcMain.handle(CH.CONFIG_UPDATE, (_e, body: unknown) =>
     withLock(async () => {
-      const ctx = holder.current;
+      const ctx = holder.current!;
       const result = DevHubApiConfigSchema.safeParse(body);
       if (!result.success) {
         throw Object.assign(new Error("Config validation failed"), {
@@ -71,7 +71,7 @@ export function registerConfigHandlers(holder: CtxHolder): void {
     CH.CONFIG_UPDATE_PROJECT,
     (_e, name: string, patch: Partial<ProjectConfig>) =>
       withLock(async () => {
-        const ctx = holder.current;
+        const ctx = holder.current!;
         const idx = ctx.config.projects.findIndex((p) => p.name === name);
         if (idx === -1) throw new Error(`Project "${name}" not found`);
 

@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld("devhub", {
     removeKnown: (path: string) =>
       ipcRenderer.invoke(CH.WORKSPACE_REMOVE_KNOWN, path),
     openDialog: () => ipcRenderer.invoke(CH.WORKSPACE_OPEN_DIALOG),
+    status: () => ipcRenderer.invoke(CH.WORKSPACE_STATUS),
+    init: (path: string) => ipcRenderer.invoke(CH.WORKSPACE_INIT, path),
   },
 
   globalConfig: {

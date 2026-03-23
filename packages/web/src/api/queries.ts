@@ -2,6 +2,24 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client.js";
 import type { DevHubConfig, ProjectConfig, GlobalConfig } from "./client.js";
 
+export function useWorkspaceStatus() {
+  return useQuery({
+    queryKey: ["workspace-status"],
+    queryFn: () => api.workspace.status(),
+    staleTime: Infinity, // driven by workspace:changed event invalidation
+  });
+}
+
+export function useInitWorkspace() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (path: string) => api.workspace.init(path),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["workspace-status"] });
+    },
+  });
+}
+
 // ── Queries ─────────────────────────────────────────────────────────────────
 
 export function useWorkspace() {

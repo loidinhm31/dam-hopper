@@ -1,5 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
-import { join, dirname, resolve, isAbsolute } from "node:path";
+import { app, BrowserWindow, ipcMain } from "electron";
+import { join, dirname, resolve } from "node:path";
 import { stat } from "node:fs/promises";
 import Store from "electron-store";
 import {
@@ -13,6 +13,7 @@ import {
 } from "@dev-hub/core";
 import { PtySessionManager } from "./pty/session-manager.js";
 import { registerIpcHandlers } from "./ipc/index.js";
+import { registerPreWorkspaceHandlers } from "./ipc/workspace.js";
 import { getMainWindow } from "./window.js";
 import { CH, EV } from "../ipc-channels.js";
 
@@ -31,7 +32,7 @@ export interface ElectronContext {
 
 /** Mutable container passed to all IPC handlers so they always read the latest ctx. */
 export interface CtxHolder {
-  current: ElectronContext;
+  current: ElectronContext | null;
   ptyManager: PtySessionManager;
   /** Send an event to the renderer (called by config handlers after write) */
   sendEvent: (channel: string, data: unknown) => void;
@@ -41,41 +42,20 @@ export interface CtxHolder {
   onSwitch: (() => void) | null;
 }
 
-async function resolveWorkspace(): Promise<string> {
-  const last = store.get("lastWorkspacePath");
-  if (last) {
-    try {
-      const found = await findConfigFile(last);
-      if (found) return last;
-    } catch (e: unknown) {
-      const code = (e as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== undefined) throw e;
-    }
-  }
-
-  const result = await dialog.showOpenDialog({
-    title: "Select workspace folder",
-    properties: ["openDirectory"],
-  });
-
-  if (result.canceled || result.filePaths.length === 0) {
-    app.quit();
-    throw new Error("No workspace selected");
-  }
-
-  return result.filePaths[0];
-}
-
-async function initContext(workspacePath: string): Promise<ElectronContext> {
-  let input = resolve(workspacePath);
-
-  // Normalise file → directory
+/** Resolve path and normalise file → parent directory. */
+async function normalizeInputPath(input: string): Promise<string> {
+  const abs = resolve(input);
   try {
-    const s = await stat(input);
-    if (s.isFile()) input = dirname(input);
+    const s = await stat(abs);
+    if (s.isFile()) return dirname(abs);
   } catch (e: unknown) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
+  return abs;
+}
+
+async function initContext(workspacePath: string): Promise<ElectronContext> {
+  const input = await normalizeInputPath(workspacePath);
 
   let resolvedPath = await findConfigFile(input);
 
@@ -124,25 +104,14 @@ function createWindow(): BrowserWindow {
 }
 
 let appHolder: CtxHolder | null = null;
+let fullIpcRegistered = false;
+let initInProgress = false;
 
 app.whenReady().then(async () => {
-  let ctx: ElectronContext;
-  try {
-    const workspacePath = await resolveWorkspace();
-    ctx = await initContext(workspacePath);
-  } catch (err) {
-    dialog.showErrorBox(
-      "Failed to load workspace",
-      err instanceof Error ? err.message : String(err),
-    );
-    app.quit();
-    return;
-  }
-
   const ptyManager = new PtySessionManager();
 
   const holder: CtxHolder = {
-    current: ctx,
+    current: null,
     ptyManager,
 
     sendEvent(channel: string, data: unknown) {
@@ -153,15 +122,7 @@ app.whenReady().then(async () => {
       // Kill all active PTY sessions
       ptyManager.dispose();
 
-      // Normalise input
-      let newInput = workspacePath;
-      if (!isAbsolute(newInput)) newInput = resolve(process.cwd(), newInput);
-      try {
-        const s = await stat(newInput);
-        if (s.isFile()) newInput = dirname(newInput);
-      } catch (e: unknown) {
-        if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-      }
+      const newInput = await normalizeInputPath(workspacePath);
 
       const newConfigPath = await findConfigFile(newInput);
       if (!newConfigPath) throw new ConfigNotFoundError(newInput);
@@ -169,8 +130,8 @@ app.whenReady().then(async () => {
       const newConfig = await readConfig(newConfigPath);
       const newWorkspaceRoot = dirname(newConfigPath);
 
-      // Remove all listeners from old git service emitter
-      holder.current.bulkGitService.emitter.removeAllListeners();
+      // Remove all listeners from old git service emitter (guard if no current context)
+      holder.current?.bulkGitService.emitter.removeAllListeners();
 
       // Swap in new context
       holder.current = {
@@ -198,19 +159,65 @@ app.whenReady().then(async () => {
   };
 
   appHolder = holder;
-  registerIpcHandlers(holder);
 
-  // Handle workspace open-dialog from renderer (folder picker)
-  ipcMain.handle(CH.WORKSPACE_OPEN_DIALOG, async () => {
-    const result = await dialog.showOpenDialog({
-      title: "Select workspace folder",
-      properties: ["openDirectory"],
-    });
-    if (result.canceled || result.filePaths.length === 0) return null;
-    return result.filePaths[0];
+  // Create window immediately — before workspace resolution
+  createWindow();
+
+  // Register handlers that work without a loaded workspace
+  registerPreWorkspaceHandlers(holder);
+
+  // Initialize full IPC exactly once; prevent concurrent calls during initial load
+  async function loadWorkspace(workspacePath: string): Promise<void> {
+    if (fullIpcRegistered) {
+      await holder.switchWorkspace(workspacePath);
+      return;
+    }
+    if (initInProgress) throw new Error("Workspace initialization already in progress");
+    initInProgress = true;
+    try {
+      const ctx = await initContext(workspacePath);
+      holder.current = ctx;
+      registerIpcHandlers(holder);
+      fullIpcRegistered = true;
+      // Notify renderer workspace is ready (drives workspace-status query invalidation)
+      getMainWindow()?.webContents.send(EV.WORKSPACE_CHANGED, {
+        name: ctx.config.workspace.name,
+        root: ctx.workspaceRoot,
+      });
+    } finally {
+      initInProgress = false;
+    }
+  }
+
+  // workspace:init — called from WelcomePage when user selects a folder
+  ipcMain.handle(CH.WORKSPACE_INIT, async (_e, path: string) => {
+    if (!path) throw new Error("path is required");
+    await loadWorkspace(path);
+    return {
+      name: holder.current!.config.workspace.name,
+      root: holder.current!.workspaceRoot,
+    };
   });
 
-  createWindow();
+  // Try auto-resolve from persisted path or env var
+  const lastPath = store.get("lastWorkspacePath");
+  const envPath = process.env.DEV_HUB_WORKSPACE;
+  const autoPath = lastPath ?? envPath;
+
+  if (autoPath) {
+    try {
+      const normalizedAutoPath = await normalizeInputPath(autoPath);
+      const found = await findConfigFile(normalizedAutoPath);
+      if (found) {
+        await loadWorkspace(autoPath);
+      } else {
+        // Stored path no longer has a config — clear it so welcome page shows
+        store.delete("lastWorkspacePath");
+      }
+    } catch {
+      store.delete("lastWorkspacePath");
+    }
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

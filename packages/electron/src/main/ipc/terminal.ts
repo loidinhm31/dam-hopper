@@ -16,7 +16,7 @@ export function registerTerminalHandlers(holder: CtxHolder): void {
         rows: number;
       },
     ) => {
-      const ctx = holder.current;
+      const ctx = holder.current!;
       const project = ctx.config.projects.find((p) => p.name === opts.project);
       if (!project) throw new Error(`Project "${opts.project}" not found`);
 

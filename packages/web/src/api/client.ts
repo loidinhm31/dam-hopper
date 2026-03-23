@@ -62,7 +62,13 @@ export interface KnownWorkspace {
 
 export interface KnownWorkspacesResponse {
   workspaces: KnownWorkspace[];
-  current: string;
+  current: string | null;
+}
+
+export interface WorkspaceStatus {
+  ready: boolean;
+  name?: string;
+  root?: string;
 }
 
 export interface GlobalConfig {
@@ -96,6 +102,8 @@ export const api = {
     known: () => window.devhub.workspace.known(),
     addKnown: (path: string) => window.devhub.workspace.addKnown(path),
     removeKnown: (path: string) => window.devhub.workspace.removeKnown(path),
+    status: () => window.devhub.workspace.status(),
+    init: (path: string) => window.devhub.workspace.init(path),
   },
   globalConfig: {
     get: () => window.devhub.globalConfig.get(),

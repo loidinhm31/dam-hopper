@@ -12,7 +12,7 @@ function send(channel: string, data: unknown): void {
 
 export function wireEventEmitters(holder: CtxHolder): void {
   const wire = () => {
-    const ctx = holder.current;
+    const ctx = holder.current!;
 
     ctx.bulkGitService.emitter.on("progress", (event) => {
       send(EV.GIT_PROGRESS, event);

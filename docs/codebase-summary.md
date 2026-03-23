@@ -55,7 +55,9 @@ Desktop App Flow:
                                            IPC response + real-time events
 ```
 
-App lifecycle: `electron/main.ts` creates BrowserWindow, preload script exposes `window.api` with type-safe IPC handlers. Web (React) communicates via `api.invoke('handler', data)` and listens to events.
+**Deferred workspace initialization**: Window now creates immediately on app start (no workspace required). Main process attempts auto-resolve (persisted path, env var). If found, initializes context automatically. If not, renderer detects no-workspace state and shows WelcomePage instead of dashboard. User selects workspace via folder picker or known list, triggering `workspace.init(path)` which loads config and activates full IPC handlers. Three-state gate: `loading` → `welcome` (first launch) or `ready` (auto-resolved) → `ready` (after user selection).
+
+**IPC channels for workspace lifecycle**: `workspace.status()` returns `{ready: boolean, name?, root?}`. `workspace.init(path)` loads workspace and emits `workspace:ready` event. `workspace.known()` and `workspace.addKnown()` work pre-init (reads global config only).
 
 ## Package Dependencies
 

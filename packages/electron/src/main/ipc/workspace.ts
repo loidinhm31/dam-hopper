@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { ipcMain, dialog } from "electron";
 import { resolve, basename, join, sep } from "node:path";
 import { homedir } from "node:os";
 import { stat } from "node:fs/promises";
@@ -16,9 +16,32 @@ import {
 import { CH } from "../../ipc-channels.js";
 import type { CtxHolder } from "../index.js";
 
+/** Handlers that work before a workspace is loaded (no context required). */
+export function registerPreWorkspaceHandlers(holder: CtxHolder): void {
+  ipcMain.handle(CH.WORKSPACE_STATUS, () => {
+    const ctx = holder.current;
+    if (!ctx) return { ready: false };
+    return { ready: true, name: ctx.config.workspace.name, root: ctx.workspaceRoot };
+  });
+
+  ipcMain.handle(CH.WORKSPACE_KNOWN, async () => {
+    const workspaces = await listKnownWorkspaces();
+    return { workspaces, current: holder.current?.workspaceRoot ?? null };
+  });
+
+  ipcMain.handle(CH.WORKSPACE_OPEN_DIALOG, async () => {
+    const result = await dialog.showOpenDialog({
+      title: "Select workspace folder",
+      properties: ["openDirectory"],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+  });
+}
+
 export function registerWorkspaceHandlers(holder: CtxHolder): void {
   ipcMain.handle(CH.WORKSPACE_GET, () => {
-    const ctx = holder.current;
+    const ctx = holder.current!;
     return {
       name: ctx.config.workspace.name,
       root: ctx.workspaceRoot,
@@ -34,17 +57,12 @@ export function registerWorkspaceHandlers(holder: CtxHolder): void {
       throw new Error("path must be within home directory");
     }
     await holder.switchWorkspace(absPath);
-    const ctx = holder.current;
+    const ctx = holder.current!;
     return {
       name: ctx.config.workspace.name,
       root: ctx.workspaceRoot,
       projectCount: ctx.config.projects.length,
     };
-  });
-
-  ipcMain.handle(CH.WORKSPACE_KNOWN, async () => {
-    const workspaces = await listKnownWorkspaces();
-    return { workspaces, current: holder.current.workspaceRoot };
   });
 
   ipcMain.handle(CH.WORKSPACE_ADD_KNOWN, async (_e, path: string) => {
@@ -116,7 +134,7 @@ export function registerWorkspaceHandlers(holder: CtxHolder): void {
   );
 
   ipcMain.handle(CH.PROJECTS_LIST, async () => {
-    const ctx = holder.current;
+    const ctx = holder.current!;
     const statuses = await ctx.bulkGitService.statusAll(ctx.config.projects);
     const statusMap = new Map(statuses.map((s) => [s.projectName, s]));
     return ctx.config.projects.map((p) => ({
@@ -126,7 +144,7 @@ export function registerWorkspaceHandlers(holder: CtxHolder): void {
   });
 
   ipcMain.handle(CH.PROJECTS_GET, async (_e, name: string) => {
-    const ctx = holder.current;
+    const ctx = holder.current!;
     const project = ctx.config.projects.find((p) => p.name === name);
     if (!project) throw new Error(`Project "${name}" not found`);
     const [status] = await ctx.bulkGitService.statusAll([project]);
@@ -134,7 +152,7 @@ export function registerWorkspaceHandlers(holder: CtxHolder): void {
   });
 
   ipcMain.handle(CH.PROJECTS_STATUS, async (_e, name: string) => {
-    const ctx = holder.current;
+    const ctx = holder.current!;
     const project = ctx.config.projects.find((p) => p.name === name);
     if (!project) throw new Error(`Project "${name}" not found`);
     const [status] = await ctx.bulkGitService.statusAll([project]);
