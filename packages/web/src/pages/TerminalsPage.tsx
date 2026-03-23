@@ -10,6 +10,7 @@ import { Button, inputClass } from "@/components/atoms/Button.js";
 import { useTerminalTree } from "@/hooks/useTerminalTree.js";
 import { useTerminalSessions } from "@/api/queries.js";
 import { useSidebarCollapse } from "@/hooks/useSidebarCollapse.js";
+import { useResizeHandle } from "@/hooks/useResizeHandle.js";
 import type { TreeCommand } from "@/hooks/useTerminalTree.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { SessionInfo } from "@/types/electron.js";
@@ -37,6 +38,12 @@ export function TerminalsPage() {
   const { data: sessions = [] } = useTerminalSessions();
 
   const { collapsed: sidebarCollapsed, toggle: handleSidebarToggle } = useSidebarCollapse();
+  const { width: treeWidth, handleProps: resizeHandleProps, isDragging } = useResizeHandle({
+    min: 160,
+    max: 400,
+    defaultWidth: 224,
+    storageKey: "devhub:tree-width",
+  });
 
   const [selection, setSelection] = useState<SelectionState>(null);
   const [openTabs, setOpenTabs] = useState<TabEntry[]>([]);
@@ -219,11 +226,11 @@ export function TerminalsPage() {
         : null;
 
   return (
-    <div className="flex h-screen bg-[var(--color-background)]">
+    <div className={`flex h-screen bg-[var(--color-background)]${isDragging ? " select-none" : ""}`}>
       <Sidebar collapsed={sidebarCollapsed} onToggle={handleSidebarToggle} />
 
       {/* Tree sidebar */}
-      <div className="w-56 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] flex flex-col">
+      <div style={{ width: treeWidth }} className="shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] flex flex-col overflow-hidden">
         <div className="px-3 py-2 border-b border-[var(--color-border)]">
           <h2 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
             Projects
@@ -244,6 +251,14 @@ export function TerminalsPage() {
             onAddShell={handleAddShell}
           />
         )}
+      </div>
+
+      {/* Resize handle */}
+      <div
+        {...resizeHandleProps}
+        className="w-1 shrink-0 cursor-col-resize group relative hover:bg-[var(--color-primary)]/20"
+      >
+        <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 bg-[var(--color-primary)]/50 opacity-0 group-hover:opacity-100 transition-opacity" />
       </div>
 
       {/* Right panel — context-switching */}

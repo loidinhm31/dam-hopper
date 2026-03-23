@@ -4,10 +4,12 @@
 **Phase 05-08: CLI/Server/Web** — Archived (replaced by Electron)
 **Phase 09: Desktop Transition** — Complete
 **Phase 10: Terminal Tree Redesign** — Complete (unified terminals page with tree sidebar)
+**Phase 02: Resizable TreeView** — Complete (drag-to-resize terminal tree panel with persistence)
 
 - **Phase 01-03: Electron Shell & IPC Foundation** — Complete
 - **Phase 04: Cleanup & Packaging** — Complete (CLI/Server removed, Electron packaging added)
 - **Phase 10: Terminal Tree Redesign** — Complete (unified terminals UI, tree view, session metadata)
+- **Phase 02: Sidebar Collapse & Resize** — Complete (collapsible sidebar + resizable tree panel)
 
 ## Project Overview
 
@@ -445,6 +447,8 @@ Deleted pages (consolidated into Terminals page):
   - Layout: 3-column (tree | info panel | terminals)
   - Tree selection controls which project/command is displayed
   - Context switches via project tree or tab bar
+  - Uses `useResizeHandle` hook to manage tree panel width (160–400px, default 224px, persisted to localStorage key `devhub:tree-width`)
+  - Draggable resize handle div between tree panel and content area with visual hover indicator
 - **TerminalTreeView.tsx**: Tree sidebar with collapsible project structure
   - Projects displayed as tree nodes (from useTerminalTree hook)
   - Each project shows child command nodes (build, run, dev, custom commands)
@@ -495,6 +499,11 @@ Deleted pages (consolidated into Terminals page):
   - Manages sidebar collapsed state with localStorage persistence (key: `devhub:sidebar-collapsed`)
   - Returns `{collapsed: boolean, toggle: () => void}`
   - Shared across AppLayout and TerminalsPage for consistent state
+- **useResizeHandle.ts**: NEW (Phase 02)
+  - Custom hook for drag-to-resize with min/max clamping and localStorage persistence
+  - Options: `{min, max, defaultWidth, storageKey?}`
+  - Returns `{width, handleProps: {onMouseDown}, isDragging}`
+  - Handles mouse drag on DOM element, clamps width between min and max, persists to localStorage if storageKey provided
 
 #### Web API Layer (queries.ts)
 
@@ -570,7 +579,7 @@ CLI and Server tests DELETED during Electron migration. Core tests (config, git,
 - **@dev-hub/electron**: Tests TBD (IPC handler coverage, PTY session metadata)
 - **@dev-hub/web**: Tests TBD (React component + hook coverage, TerminalTree integration)
 
-### Phase 01: Collapsible Sidebar (Sidebar Collapse/Resize)
+### Phase 01: Collapsible Sidebar (Sidebar Collapse)
 
 **Sidebar collapse/expand toggle** with persistent state via localStorage:
 
@@ -603,9 +612,33 @@ CLI and Server tests DELETED during Electron migration. Core tests (config, git,
 
 **Implementation Note**: All four pages (Dashboard, Terminals, Git, Settings) now support sidebar collapse with consistent behavior and shared localStorage persistence.
 
-## Next Steps (Phase 02+)
+### Phase 02: Resizable Terminal TreeView (Sidebar Width Adjustment)
 
-- Phase 02: Resizable Terminal TreeView (sidebar width adjustment)
+**Dynamic tree panel width** with drag-to-resize handle and localStorage persistence:
+
+#### New Hook (useResizeHandle.ts)
+
+- **useResizeHandle(options)**: Custom hook for drag-to-resize functionality
+  - Options: `{min: number, max: number, defaultWidth: number, storageKey?: string}`
+  - Returns: `{width: number, handleProps: {onMouseDown}, isDragging: boolean}`
+  - Width clamped between min and max throughout drag operation
+  - Persists final width to localStorage if storageKey provided
+  - Uses useRef for start position/width tracking, cleans up event listeners on unmount
+  - Changes cursor to `col-resize` during drag, disables text selection for smooth UX
+
+#### Updated TerminalsPage.tsx
+
+- Integrates `useResizeHandle` hook with tree panel constraints
+  - Min width: 160px, Max width: 400px, Default width: 224px
+  - Storage key: `devhub:tree-width` (persists across app restarts)
+- Tree panel width set dynamically via `style={{ width: treeWidth }}`
+- Resize handle div positioned between tree and content areas
+  - CSS classes: `w-1 cursor-col-resize` with hover effect (`hover:bg-[var(--color-primary)]/20`)
+  - Visual indicator: vertical line that appears on hover (`group-hover:opacity-100`)
+- Page layout applies `select-none` class during drag to prevent text selection artifacts
+
+## Next Steps (Phase 03+)
+
 - Enhance terminal tree with search/filter for large projects
 - Add terminal session persistence (save/restore active terminals on app restart)
 - Implement advanced git workflows (rebase, squash, cherry-pick) in Git page
