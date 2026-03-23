@@ -477,7 +477,7 @@ Deleted pages (consolidated into Terminals page):
 - **ProgressList.tsx**: Display real-time build/git operation progress
 - **GitPage.tsx**: Project git operations (fetch, pull, push, branches, worktrees)
 
-#### Web Hooks (IPC + Terminal Tree)
+#### Web Hooks (IPC + Terminal Tree + Sidebar)
 
 - **useIpc.ts**: Subscribe to IPC events
   - `useIpc(channel, callback)`: Subscribe to IPC events
@@ -491,6 +491,10 @@ Deleted pages (consolidated into Terminals page):
   - Each TreeProject includes: name, path, children (commands as tree nodes), sessions
   - Used by TerminalTreeView to render hierarchical project/command structure
   - Tracks which sessions are active per project/command
+- **useSidebarCollapse.ts**: NEW (Phase 01)
+  - Manages sidebar collapsed state with localStorage persistence (key: `devhub:sidebar-collapsed`)
+  - Returns `{collapsed: boolean, toggle: () => void}`
+  - Shared across AppLayout and TerminalsPage for consistent state
 
 #### Web API Layer (queries.ts)
 
@@ -566,14 +570,48 @@ CLI and Server tests DELETED during Electron migration. Core tests (config, git,
 - **@dev-hub/electron**: Tests TBD (IPC handler coverage, PTY session metadata)
 - **@dev-hub/web**: Tests TBD (React component + hook coverage, TerminalTree integration)
 
-## Next Steps (Phase 11+)
+### Phase 01: Collapsible Sidebar (Sidebar Collapse/Resize)
 
+**Sidebar collapse/expand toggle** with persistent state via localStorage:
+
+#### New Hook (useSidebarCollapse.ts)
+
+- **useSidebarCollapse()**: Encapsulates sidebar collapsed state management
+  - Reads/writes `devhub:sidebar-collapsed` key to localStorage
+  - Returns `{collapsed: boolean, toggle: () => void}`
+  - Initial state hydrated from localStorage on first render
+
+#### Updated Sidebar.tsx
+
+- **Props**: Added `collapsed?: boolean` (default: false) and `onToggle?: () => void`
+- **Width transition**: CSS class switches between `w-12` (collapsed) and `w-60` (expanded) with smooth `transition-[width] duration-200 ease-in-out`
+- **Icon-only mode**: When collapsed, labels hidden (`{!collapsed && <span>{label}</span>}`), nav items centered, title attrs added for native tooltips
+- **WorkspaceSwitcher**: Conditionally rendered (full component when expanded, Folder icon only when collapsed)
+- **Toggle button**: ChevronsLeft/ChevronsRight icons with aria-expanded attribute, positioned above ConnectionDot in footer section
+- **Overflow handling**: `overflow-hidden` on aside element to prevent layout shift during transition
+
+#### Updated AppLayout.tsx
+
+- Uses `useSidebarCollapse()` hook to manage collapsed state
+- Passes `collapsed` and `onToggle` to Sidebar component
+- State persists across navigation and app restart
+
+#### Updated TerminalsPage.tsx
+
+- Same pattern: `useSidebarCollapse()` hook manages state, passes props to Sidebar
+- Sidebar rendered with collapsed state and toggle handler
+
+**Implementation Note**: All four pages (Dashboard, Terminals, Git, Settings) now support sidebar collapse with consistent behavior and shared localStorage persistence.
+
+## Next Steps (Phase 02+)
+
+- Phase 02: Resizable Terminal TreeView (sidebar width adjustment)
 - Enhance terminal tree with search/filter for large projects
 - Add terminal session persistence (save/restore active terminals on app restart)
 - Implement advanced git workflows (rebase, squash, cherry-pick) in Git page
 - Add build preset customization and command editing in Settings
 - Implement persistent tree expand/collapse state per workspace
-- Add dark/light theme toggle and sidebar width adjustment
+- Add dark/light theme toggle and sidebar color customization
 - Add real-time log filtering and search across terminal output
 - Implement workspace templates and project scaffolding
 - Add multi-window support for terminal management
