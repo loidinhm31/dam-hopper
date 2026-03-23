@@ -106,7 +106,7 @@ interface ServerContext {
   bulkGitService: BulkGitService;
   buildService: BuildService;
   runService: RunService;
-  sseClients: Set<SSEClient>;            // active SSE connections
+  sseClients: Set<SSEClient>; // active SSE connections
 }
 ```
 
@@ -167,7 +167,13 @@ interface ServerContext {
      ```typescript
      app.get("/api/events", async (c) => {
        return streamSSE(c, async (stream) => {
-         const client = { send: (event: SSEEvent) => stream.writeSSE({ data: JSON.stringify(event), event: event.type }) };
+         const client = {
+           send: (event: SSEEvent) =>
+             stream.writeSSE({
+               data: JSON.stringify(event),
+               event: event.type,
+             }),
+         };
          ctx.sseClients.add(client);
          // Heartbeat every 30 seconds to keep connection alive
          const heartbeat = setInterval(() => {
@@ -258,14 +264,15 @@ interface ServerContext {
 
 ## Risk Assessment
 
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
-| Long-running git/build operations block the response | High | High | Return immediately with an operation ID; stream results via SSE. Alternatively, use a simple approach: the response waits but SSE streams progress in parallel. |
-| SSE connection drops silently | Medium | Medium | Client-side EventSource auto-reconnects. Server heartbeat detects stale connections. |
-| Static file path resolution differs between dev and production | Medium | Medium | Use `import.meta.resolve` or `require.resolve` to find @dev-hub/web/dist at runtime |
-| Multiple concurrent builds on same project cause conflicts | Low | Medium | Reject build if one is already in progress for that project (409 Conflict) |
+| Risk                                                           | Likelihood | Impact | Mitigation                                                                                                                                                      |
+| -------------------------------------------------------------- | ---------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Long-running git/build operations block the response           | High       | High   | Return immediately with an operation ID; stream results via SSE. Alternatively, use a simple approach: the response waits but SSE streams progress in parallel. |
+| SSE connection drops silently                                  | Medium     | Medium | Client-side EventSource auto-reconnects. Server heartbeat detects stale connections.                                                                            |
+| Static file path resolution differs between dev and production | Medium     | Medium | Use `import.meta.resolve` or `require.resolve` to find @dev-hub/web/dist at runtime                                                                             |
+| Multiple concurrent builds on same project cause conflicts     | Low        | Medium | Reject build if one is already in progress for that project (409 Conflict)                                                                                      |
 
 ## Next Steps
 
 The server API is consumed by:
+
 - [Phase 07 — Web Dashboard](./phase-07-web-dashboard.md) — React app using Hono RPC client

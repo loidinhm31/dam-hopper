@@ -3,8 +3,9 @@
 **Phase 01-04: Core Foundation** — Complete (config, git, build/run)
 **Phase 05-08: CLI/Server/Web** — Archived (replaced by Electron)
 **Phase 09: Desktop Transition** — Complete
-  - **Phase 01-03: Electron Shell & IPC Foundation** — Complete
-  - **Phase 04: Cleanup & Packaging** — Complete (CLI/Server removed, Electron packaging added)
+
+- **Phase 01-03: Electron Shell & IPC Foundation** — Complete
+- **Phase 04: Cleanup & Packaging** — Complete (CLI/Server removed, Electron packaging added)
 
 ## Project Overview
 
@@ -27,23 +28,23 @@ dev-hub/
 
 ## Tech Stack
 
-| Component        | Technology          | Version      | Notes                           |
-| ---------------- | ------------------- | ------------ | ------------------------------- |
-| **Desktop**      | Electron            | 35.x         | Cross-platform app shell        |
-| **IPC**          | Electron IPC        | Built-in     | Main/renderer communication     |
-| **Terminal**     | node-pty            | 1.1.x        | PTY process for shell commands  |
-| **Runtime**      | Node.js             | 20+ LTS      | Electron embedded runtime       |
-| **Language**     | TypeScript          | 5.7.x        | Strict mode across all packages |
-| **Package Mgr**  | pnpm                | 9.x          | Workspaces support              |
-| **Web**          | React + Vite        | 19.x / 6.x   | Full dashboard (bundled in app) |
-| **Web Routing**  | React Router        | 7.x          | Client-side navigation          |
-| **Web Icons**    | Lucide React        | 0.577.x      | Icon library                    |
-| **Styling**      | Tailwind CSS        | 4.x          | v4 with Vite plugin             |
-| **State**        | TanStack Query      | 5.67.x       | Client state + IPC              |
-| **Packaging**    | electron-builder    | 25.x         | Build installers & distributable |
-| **Build**        | tsup                | 8.x          | Fast bundler for packages       |
-| **Linting**      | ESLint + TypeScript | 9.x / 8.x    | Flat config                     |
-| **Format**       | Prettier            | 3.x          | Opinionated formatting          |
+| Component       | Technology          | Version    | Notes                            |
+| --------------- | ------------------- | ---------- | -------------------------------- |
+| **Desktop**     | Electron            | 35.x       | Cross-platform app shell         |
+| **IPC**         | Electron IPC        | Built-in   | Main/renderer communication      |
+| **Terminal**    | node-pty            | 1.1.x      | PTY process for shell commands   |
+| **Runtime**     | Node.js             | 20+ LTS    | Electron embedded runtime        |
+| **Language**    | TypeScript          | 5.7.x      | Strict mode across all packages  |
+| **Package Mgr** | pnpm                | 9.x        | Workspaces support               |
+| **Web**         | React + Vite        | 19.x / 6.x | Full dashboard (bundled in app)  |
+| **Web Routing** | React Router        | 7.x        | Client-side navigation           |
+| **Web Icons**   | Lucide React        | 0.577.x    | Icon library                     |
+| **Styling**     | Tailwind CSS        | 4.x        | v4 with Vite plugin              |
+| **State**       | TanStack Query      | 5.67.x     | Client state + IPC               |
+| **Packaging**   | electron-builder    | 25.x       | Build installers & distributable |
+| **Build**       | tsup                | 8.x        | Fast bundler for packages        |
+| **Linting**     | ESLint + TypeScript | 9.x / 8.x  | Flat config                      |
+| **Format**      | Prettier            | 3.x        | Opinionated formatting           |
 
 ## Architecture
 
@@ -403,30 +404,30 @@ All packages are functional stubs ready for feature development:
 
 ### @dev-hub/core
 
-| File                        | Purpose                                     |
-| --------------------------- | ------------------------------------------- |
-| src/index.ts                | VERSION + config + git + build exports      |
-| src/config/schema.ts        | Zod schemas for config validation           |
-| src/config/presets.ts       | Build presets by project type               |
-| src/config/parser.ts        | TOML read/write + validation                |
-| src/config/finder.ts        | Walk-up config discovery                    |
-| src/config/discovery.ts     | Project type detection                      |
-| src/git/types.ts            | Git operation types + events                |
-| src/git/operations.ts       | gitFetch, gitPull, gitPush                  |
-| src/git/status.ts           | getStatus queries                           |
-| src/git/worktree.ts         | Worktree CRUD                               |
-| src/git/branch.ts           | Branch listing + updates                    |
-| src/git/bulk.ts             | BulkGitService                              |
-| src/build/build-service.ts  | BuildService (async process exec)           |
-| src/build/run-service.ts    | RunService (process lifecycle)              |
+| File                       | Purpose                                |
+| -------------------------- | -------------------------------------- |
+| src/index.ts               | VERSION + config + git + build exports |
+| src/config/schema.ts       | Zod schemas for config validation      |
+| src/config/presets.ts      | Build presets by project type          |
+| src/config/parser.ts       | TOML read/write + validation           |
+| src/config/finder.ts       | Walk-up config discovery               |
+| src/config/discovery.ts    | Project type detection                 |
+| src/git/types.ts           | Git operation types + events           |
+| src/git/operations.ts      | gitFetch, gitPull, gitPush             |
+| src/git/status.ts          | getStatus queries                      |
+| src/git/worktree.ts        | Worktree CRUD                          |
+| src/git/branch.ts          | Branch listing + updates               |
+| src/git/bulk.ts            | BulkGitService                         |
+| src/build/build-service.ts | BuildService (async process exec)      |
+| src/build/run-service.ts   | RunService (process lifecycle)         |
 
 ### @dev-hub/electron
 
-| File                    | Purpose                             |
-| ----------------------- | ----------------------------------- |
-| main.ts                 | Electron main process + IPC setup   |
-| preload.ts              | Security-scoped IPC interface       |
-| electron-builder.yml    | Cross-platform packaging config     |
+| File                 | Purpose                           |
+| -------------------- | --------------------------------- |
+| main.ts              | Electron main process + IPC setup |
+| preload.ts           | Security-scoped IPC interface     |
+| electron-builder.yml | Cross-platform packaging config   |
 
 ### @dev-hub/web
 
@@ -437,8 +438,8 @@ All packages are functional stubs ready for feature development:
 | src/hooks/useIpc.ts             | IPC event subscription hook       |
 | src/hooks/useIpcEvent.ts        | Per-event-type IPC hook           |
 | src/api/queries.ts              | TanStack Query for IPC data       |
-| src/components/organisms/*.tsx  | Page components (Build, Git, etc) |
-| src/pages/*.tsx                 | Route pages (Dashboard, Settings)  |
+| src/components/organisms/\*.tsx | Page components (Build, Git, etc) |
+| src/pages/\*.tsx                | Route pages (Dashboard, Settings) |
 
 ## Testing Status (Phase 04 Migration)
 

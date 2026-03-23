@@ -1,7 +1,15 @@
 import pLimit from "p-limit";
 import type { ProjectConfig } from "../config/schema.js";
-import type { GitOperationResult, GitStatus, BranchUpdateResult } from "./types.js";
-import { GitProgressEmitter, createProgressEmitter, emitProgress } from "./progress.js";
+import type {
+  GitOperationResult,
+  GitStatus,
+  BranchUpdateResult,
+} from "./types.js";
+import {
+  GitProgressEmitter,
+  createProgressEmitter,
+  emitProgress,
+} from "./progress.js";
 import { getStatus } from "./status.js";
 import { gitFetch, gitPull } from "./operations.js";
 import { updateAllBranches } from "./branch.js";
@@ -36,7 +44,13 @@ export class BulkGitService {
         }),
       ),
     );
-    emitProgress(this.emitter, "", "bulk-fetch", "completed", `All ${projects.length} projects fetched`);
+    emitProgress(
+      this.emitter,
+      "",
+      "bulk-fetch",
+      "completed",
+      `All ${projects.length} projects fetched`,
+    );
     return results;
   }
 
@@ -60,14 +74,41 @@ export class BulkGitService {
         }),
       ),
     );
-    emitProgress(this.emitter, "", "bulk-pull", "completed", `All ${projects.length} projects pulled`);
+    emitProgress(
+      this.emitter,
+      "",
+      "bulk-pull",
+      "completed",
+      `All ${projects.length} projects pulled`,
+    );
     return results;
   }
 
   async statusAll(projects: ProjectConfig[]): Promise<GitStatus[]> {
     const limit = pLimit(this.concurrency);
     const results = await Promise.all(
-      projects.map((p) => limit(() => getStatus(p.path, p.name))),
+      projects.map((p) =>
+        limit(async () => {
+          try {
+            return await getStatus(p.path, p.name);
+          } catch (err) {
+            return {
+              projectName: p.name,
+              branch: "",
+              isClean: true,
+              ahead: 0,
+              behind: 0,
+              staged: 0,
+              modified: 0,
+              untracked: 0,
+              hasStash: false,
+              lastCommit: { hash: "", message: "", date: "" },
+              pathExists: true,
+              statusError: err instanceof Error ? err.message : String(err),
+            } satisfies GitStatus;
+          }
+        }),
+      ),
     );
     return results;
   }

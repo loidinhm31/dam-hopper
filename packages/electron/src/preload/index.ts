@@ -15,7 +15,8 @@ contextBridge.exposeInMainWorld("devhub", {
     get: () => ipcRenderer.invoke(CH.WORKSPACE_GET),
     switch: (path: string) => ipcRenderer.invoke(CH.WORKSPACE_SWITCH, path),
     known: () => ipcRenderer.invoke(CH.WORKSPACE_KNOWN),
-    addKnown: (path: string) => ipcRenderer.invoke(CH.WORKSPACE_ADD_KNOWN, path),
+    addKnown: (path: string) =>
+      ipcRenderer.invoke(CH.WORKSPACE_ADD_KNOWN, path),
     removeKnown: (path: string) =>
       ipcRenderer.invoke(CH.WORKSPACE_REMOVE_KNOWN, path),
     openDialog: () => ipcRenderer.invoke(CH.WORKSPACE_OPEN_DIALOG),
@@ -45,8 +46,7 @@ contextBridge.exposeInMainWorld("devhub", {
     ) => ipcRenderer.invoke(CH.GIT_ADD_WORKTREE, project, options),
     removeWorktree: (project: string, path: string) =>
       ipcRenderer.invoke(CH.GIT_REMOVE_WORKTREE, project, path),
-    branches: (project: string) =>
-      ipcRenderer.invoke(CH.GIT_BRANCHES, project),
+    branches: (project: string) => ipcRenderer.invoke(CH.GIT_BRANCHES, project),
     updateBranch: (project: string, branch?: string) =>
       ipcRenderer.invoke(CH.GIT_UPDATE_BRANCH, project, branch),
   },
@@ -84,10 +84,15 @@ contextBridge.exposeInMainWorld("devhub", {
       return () => ipcRenderer.removeListener(channel, listener);
     },
 
-    onExit: (id: string, cb: (exitCode: number | null) => void): Unsubscribe => {
+    onExit: (
+      id: string,
+      cb: (exitCode: number | null) => void,
+    ): Unsubscribe => {
       const channel = `terminal:exit:${id}`;
-      const listener = (_e: IpcRendererEvent, payload: { exitCode: number | null }) =>
-        cb(payload.exitCode);
+      const listener = (
+        _e: IpcRendererEvent,
+        payload: { exitCode: number | null },
+      ) => cb(payload.exitCode);
       ipcRenderer.once(channel, listener);
       return () => ipcRenderer.removeListener(channel, listener);
     },

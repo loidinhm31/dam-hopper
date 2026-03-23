@@ -61,8 +61,8 @@ interface BuildResult {
   success: boolean;
   exitCode: number | null;
   durationMs: number;
-  stdout: string;                 // last 100 lines
-  stderr: string;                 // last 100 lines
+  stdout: string; // last 100 lines
+  stderr: string; // last 100 lines
   error?: string;
 }
 
@@ -70,7 +70,7 @@ interface BuildProgressEvent {
   projectName: string;
   phase: "started" | "output" | "completed" | "failed";
   stream?: "stdout" | "stderr";
-  line?: string;                  // single line of output
+  line?: string; // single line of output
   result?: BuildResult;
 }
 
@@ -134,14 +134,23 @@ interface RunProgressEvent {
 
 4. **Implement `build/build-service.ts`**
    - `BuildService` class:
+
      ```typescript
      class BuildService {
        readonly emitter: EventEmitter3;
 
-       async build(project: ProjectConfig, workspaceRoot: string): Promise<BuildResult>;
-       async buildMultiple(projects: ProjectConfig[], workspaceRoot: string, concurrency?: number): Promise<BuildResult[]>;
+       async build(
+         project: ProjectConfig,
+         workspaceRoot: string,
+       ): Promise<BuildResult>;
+       async buildMultiple(
+         projects: ProjectConfig[],
+         workspaceRoot: string,
+         concurrency?: number,
+       ): Promise<BuildResult[]>;
      }
      ```
+
    - `build()` implementation:
      - Resolve the effective build command from `getEffectiveCommand(project, "build")`.
      - If command is empty, return error result immediately.
@@ -156,12 +165,16 @@ interface RunProgressEvent {
 
 5. **Implement `build/run-service.ts`**
    - `RunService` class — singleton process manager:
+
      ```typescript
      class RunService {
        private processes: Map<string, ManagedProcess>;
        readonly emitter: EventEmitter3;
 
-       async start(project: ProjectConfig, workspaceRoot: string): Promise<RunningProcess>;
+       async start(
+         project: ProjectConfig,
+         workspaceRoot: string,
+       ): Promise<RunningProcess>;
        async stop(projectName: string): Promise<void>;
        async restart(projectName: string): Promise<RunningProcess>;
        getProcess(projectName: string): RunningProcess | undefined;
@@ -170,6 +183,7 @@ interface RunProgressEvent {
        async stopAll(): Promise<void>;
      }
      ```
+
    - Internal `ManagedProcess` type:
      ```typescript
      interface ManagedProcess {
@@ -239,15 +253,16 @@ interface RunProgressEvent {
 
 ## Risk Assessment
 
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
-| Orphaned child processes on CLI crash | Medium | Medium | Use `detached: false` (default). Register process.on("exit") handler to kill children. |
-| Shell command parsing issues (quotes, pipes) | Medium | Low | Use `shell: true` in execa, which delegates to the system shell |
-| Large build output causes memory pressure | Low | Medium | LogBuffer caps at 1000 lines. BuildResult captures only last 100 lines. |
-| Env file with export prefix (`export KEY=VAL`) | Medium | Low | Strip `export ` prefix in parser |
+| Risk                                           | Likelihood | Impact | Mitigation                                                                             |
+| ---------------------------------------------- | ---------- | ------ | -------------------------------------------------------------------------------------- |
+| Orphaned child processes on CLI crash          | Medium     | Medium | Use `detached: false` (default). Register process.on("exit") handler to kill children. |
+| Shell command parsing issues (quotes, pipes)   | Medium     | Low    | Use `shell: true` in execa, which delegates to the system shell                        |
+| Large build output causes memory pressure      | Low        | Medium | LogBuffer caps at 1000 lines. BuildResult captures only last 100 lines.                |
+| Env file with export prefix (`export KEY=VAL`) | Medium     | Low    | Strip `export ` prefix in parser                                                       |
 
 ## Next Steps
 
 Combined with Phase 03 (git), this completes the core library. Next:
+
 - [Phase 05 — CLI](./phase-05-cli.md) — wraps BuildService/RunService with terminal UI
 - [Phase 06 — Server API](./phase-06-server-api.md) — exposes build/run via REST + SSE

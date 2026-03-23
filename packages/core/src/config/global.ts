@@ -63,7 +63,10 @@ export async function addKnownWorkspace(
     await writeGlobalConfig({ ...cfg, workspaces: updated });
     return;
   }
-  await writeGlobalConfig({ ...cfg, workspaces: [...existing, { name, path }] });
+  await writeGlobalConfig({
+    ...cfg,
+    workspaces: [...existing, { name, path }],
+  });
 }
 
 export async function removeKnownWorkspace(path: string): Promise<void> {

@@ -15,7 +15,9 @@ function validateProjectPaths(
   projects: { name: string; path: string }[],
   workspaceRoot: string,
 ): string | null {
-  const root = workspaceRoot.endsWith("/") ? workspaceRoot : workspaceRoot + "/";
+  const root = workspaceRoot.endsWith("/")
+    ? workspaceRoot
+    : workspaceRoot + "/";
   for (const p of projects) {
     const resolved = resolve(workspaceRoot, p.path);
     if (resolved !== workspaceRoot && !resolved.startsWith(root)) {
@@ -47,12 +49,15 @@ export function registerConfigHandlers(holder: CtxHolder): void {
       const ctx = holder.current;
       const result = DevHubApiConfigSchema.safeParse(body);
       if (!result.success) {
-        throw Object.assign(
-          new Error("Config validation failed"),
-          { code: "VALIDATION_ERROR", issues: result.error.issues },
-        );
+        throw Object.assign(new Error("Config validation failed"), {
+          code: "VALIDATION_ERROR",
+          issues: result.error.issues,
+        });
       }
-      const pathError = validateProjectPaths(result.data.projects, ctx.workspaceRoot);
+      const pathError = validateProjectPaths(
+        result.data.projects,
+        ctx.workspaceRoot,
+      );
       if (pathError) throw new Error(pathError);
 
       await writeConfig(ctx.configPath, result.data as DevHubConfig);
@@ -73,12 +78,15 @@ export function registerConfigHandlers(holder: CtxHolder): void {
         const merged = { ...ctx.config.projects[idx], ...(patch as object) };
         const projectResult = ApiProjectSchema.safeParse(merged);
         if (!projectResult.success) {
-          throw Object.assign(
-            new Error("Project validation failed"),
-            { code: "VALIDATION_ERROR", issues: projectResult.error.issues },
-          );
+          throw Object.assign(new Error("Project validation failed"), {
+            code: "VALIDATION_ERROR",
+            issues: projectResult.error.issues,
+          });
         }
-        const pathError = validateProjectPaths([projectResult.data], ctx.workspaceRoot);
+        const pathError = validateProjectPaths(
+          [projectResult.data],
+          ctx.workspaceRoot,
+        );
         if (pathError) throw new Error(pathError);
 
         const updatedProjects: ProjectConfig[] = [
@@ -86,10 +94,13 @@ export function registerConfigHandlers(holder: CtxHolder): void {
           projectResult.data as ProjectConfig,
           ...ctx.config.projects.slice(idx + 1),
         ];
-        const updatedConfig: DevHubConfig = { ...ctx.config, projects: updatedProjects };
+        const updatedConfig: DevHubConfig = {
+          ...ctx.config,
+          projects: updatedProjects,
+        };
         await writeConfig(ctx.configPath, updatedConfig);
-        ctx.config = await import("@dev-hub/core").then(
-          ({ readConfig }) => readConfig(ctx.configPath),
+        ctx.config = await import("@dev-hub/core").then(({ readConfig }) =>
+          readConfig(ctx.configPath),
         );
         holder.sendEvent("config:changed", {});
         return ctx.config.projects.find((p) => p.name === name);

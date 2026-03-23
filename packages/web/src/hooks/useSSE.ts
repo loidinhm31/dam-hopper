@@ -68,7 +68,9 @@ export function useIpc(): { status: IpcStatus } {
       subscribeIpc("status:changed", (e) => {
         try {
           const { projectName } = e.data as { projectName: string };
-          void qc.invalidateQueries({ queryKey: ["project-status", projectName] });
+          void qc.invalidateQueries({
+            queryKey: ["project-status", projectName],
+          });
           void qc.invalidateQueries({ queryKey: ["projects"] });
         } catch {
           void qc.invalidateQueries({ queryKey: ["projects"] });

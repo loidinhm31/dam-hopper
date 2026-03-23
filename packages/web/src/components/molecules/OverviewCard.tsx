@@ -7,7 +7,12 @@ interface Props {
   color?: string;
 }
 
-export function OverviewCard({ icon: Icon, label, value, color = "var(--color-primary)" }: Props) {
+export function OverviewCard({
+  icon: Icon,
+  label,
+  value,
+  color = "var(--color-primary)",
+}: Props) {
   return (
     <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4">
       <div className="flex items-center gap-3">

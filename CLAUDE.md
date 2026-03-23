@@ -72,11 +72,12 @@ Electron Renderer (Chromium)
 **Config format**: `dev-hub.toml` uses snake_case on disk (`build_command`, `run_command`, `env_file`) but core types use camelCase. The parser converts on read/write.
 
 **Workspace resolution**: Electron resolves workspace with the following priority:
-  1. Last-used path persisted in `electron-store` (userData)
-  2. `DEV_HUB_WORKSPACE` environment variable
-  3. First launch: shows folder picker dialog
 
-  Once determined, `findConfigFile()` walks up from that directory, stopping at the home directory. Falls back to `~/.config/dev-hub/config.toml` (XDG_CONFIG_HOME) for a default workspace path.
+1. Last-used path persisted in `electron-store` (userData)
+2. `DEV_HUB_WORKSPACE` environment variable
+3. First launch: shows folder picker dialog
+
+Once determined, `findConfigFile()` walks up from that directory, stopping at the home directory. Falls back to `~/.config/dev-hub/config.toml` (XDG_CONFIG_HOME) for a default workspace path.
 
 **Known workspaces**: Global config (`~/.config/dev-hub/config.toml`) maintains a list of known workspace names and paths. IPC handlers expose: `workspace.known`, `workspace.addKnown`, `workspace.removeKnown`, `workspace.switch`.
 

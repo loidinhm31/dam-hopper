@@ -49,12 +49,11 @@ export async function discoverProjects(
     return [];
   }
 
-  const dirEntries = entries
-    .filter((e) => {
-      if (!e.isDirectory()) return false;
-      const name = String(e.name);
-      return !name.startsWith(".") && name !== "node_modules";
-    });
+  const dirEntries = entries.filter((e) => {
+    if (!e.isDirectory()) return false;
+    const name = String(e.name);
+    return !name.startsWith(".") && name !== "node_modules";
+  });
 
   const results = await Promise.all(
     dirEntries.map(async (entry) => {
@@ -64,7 +63,12 @@ export async function discoverProjects(
       if (type === null) return null;
 
       const isGitRepo = await fileExists(join(projectPath, ".git"));
-      return { name: entryName, path: projectPath, type, isGitRepo } satisfies DiscoveredProject;
+      return {
+        name: entryName,
+        path: projectPath,
+        type,
+        isGitRepo,
+      } satisfies DiscoveredProject;
     }),
   );
 

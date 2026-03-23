@@ -36,7 +36,16 @@ Replace the current execa-based command execution with node-pty PTY sessions. Ad
 class PtySessionManager {
   private sessions: Map<string, IPty>;
 
-  create(id: string, opts: { command: string; cwd: string; env: Record<string,string>; cols: number; rows: number }): void;
+  create(
+    id: string,
+    opts: {
+      command: string;
+      cwd: string;
+      env: Record<string, string>;
+      cols: number;
+      rows: number;
+    },
+  ): void;
   write(id: string, data: string): void;
   resize(id: string, cols: number, rows: number): void;
   kill(id: string, signal?: string): void;
@@ -63,12 +72,17 @@ PTY exit forwarded as: `terminal:exit:${id}` events.
 
 ```typescript
 window.devhub.terminal = {
-  create: (opts) => ipcRenderer.invoke('terminal:create', opts),
-  write: (id, data) => ipcRenderer.send('terminal:write', { id, data }),
-  resize: (id, cols, rows) => ipcRenderer.send('terminal:resize', { id, cols, rows }),
-  kill: (id) => ipcRenderer.send('terminal:kill', { id }),
-  onData: (id, cb) => { /* ipcRenderer.on listener, returns unsubscribe */ },
-  onExit: (id, cb) => { /* ipcRenderer.once listener */ },
+  create: (opts) => ipcRenderer.invoke("terminal:create", opts),
+  write: (id, data) => ipcRenderer.send("terminal:write", { id, data }),
+  resize: (id, cols, rows) =>
+    ipcRenderer.send("terminal:resize", { id, cols, rows }),
+  kill: (id) => ipcRenderer.send("terminal:kill", { id }),
+  onData: (id, cb) => {
+    /* ipcRenderer.on listener, returns unsubscribe */
+  },
+  onExit: (id, cb) => {
+    /* ipcRenderer.once listener */
+  },
 };
 ```
 
@@ -80,13 +94,14 @@ New: `packages/web/src/components/organisms/TerminalPanel.tsx`
 interface TerminalPanelProps {
   sessionId: string;
   cwd: string;
-  command?: string;      // auto-execute on mount
+  command?: string; // auto-execute on mount
   onExit?: (code: number) => void;
   className?: string;
 }
 ```
 
 Features:
+
 - Mount: create xterm.js Terminal + FitAddon, open in container div
 - Auto-create PTY session via `window.devhub.terminal.create()`
 - Stream data: `onData` → `term.write()`
@@ -100,27 +115,30 @@ Features:
 Replace current output panels with `TerminalPanel`:
 
 **Build card:**
+
 - Before: `<BuildLog>` (SSE streaming) + result badge
 - After: `<TerminalPanel command={buildCommand} />` + result badge on exit
 
 **Run card:**
+
 - Before: process logs polling + start/stop/restart
 - After: `<TerminalPanel>` for active process + start/stop/restart
 - Stop/restart kills PTY session and optionally creates new one
 
 **Custom command cards:**
+
 - Before: `useExecCommand()` → POST /exec → BuildResult display
 - After: `<TerminalPanel command={customCommand} />` with result on exit
 
 ### 6. Session Lifecycle for Each Command Type
 
-| Type | On Action | PTY Behavior |
-|------|-----------|-------------|
-| Build | Click "Build" | Spawn PTY with build command. Auto-close session on exit. Show exit code badge. |
-| Run | Click "Start" | Spawn PTY with run command. Keep alive until "Stop". |
-| Run | Click "Stop" | Send SIGTERM to PTY. 5s timeout → SIGKILL. |
-| Run | Click "Restart" | Stop → recreate PTY with same command. |
-| Custom | Click "Run" | Spawn PTY with custom command. Auto-close on exit. Show result. |
+| Type   | On Action       | PTY Behavior                                                                    |
+| ------ | --------------- | ------------------------------------------------------------------------------- |
+| Build  | Click "Build"   | Spawn PTY with build command. Auto-close session on exit. Show exit code badge. |
+| Run    | Click "Start"   | Spawn PTY with run command. Keep alive until "Stop".                            |
+| Run    | Click "Stop"    | Send SIGTERM to PTY. 5s timeout → SIGKILL.                                      |
+| Run    | Click "Restart" | Stop → recreate PTY with same command.                                          |
+| Custom | Click "Run"     | Spawn PTY with custom command. Auto-close on exit. Show result.                 |
 
 ### 7. Concurrent Terminals
 
@@ -159,16 +177,16 @@ Remove execa-based execution from core services:
 
 ## Related Code Files
 
-| File | Role |
-|------|------|
-| `packages/web/src/components/organisms/UnifiedCommandPanel.tsx` | Add TerminalPanel integration |
-| `packages/web/src/components/organisms/BuildLog.tsx` | Will be replaced by TerminalPanel |
-| `packages/core/src/build/build-service.ts` | Strip execa execution, keep command resolution |
-| `packages/core/src/build/run-service.ts` | Strip execa spawn, keep types/interfaces |
-| `packages/core/src/build/command-service.ts` | Strip execa execution, keep command lookup |
-| `packages/core/src/build/stream-utils.ts` | Remove (pipeLines no longer needed) |
-| `packages/core/src/build/log-buffer.ts` | Remove (PTY handles output buffering) |
-| `packages/web/src/api/queries.ts` | Hooks to simplify (useBuild, useProcessLogs → terminal) |
+| File                                                            | Role                                                    |
+| --------------------------------------------------------------- | ------------------------------------------------------- |
+| `packages/web/src/components/organisms/UnifiedCommandPanel.tsx` | Add TerminalPanel integration                           |
+| `packages/web/src/components/organisms/BuildLog.tsx`            | Will be replaced by TerminalPanel                       |
+| `packages/core/src/build/build-service.ts`                      | Strip execa execution, keep command resolution          |
+| `packages/core/src/build/run-service.ts`                        | Strip execa spawn, keep types/interfaces                |
+| `packages/core/src/build/command-service.ts`                    | Strip execa execution, keep command lookup              |
+| `packages/core/src/build/stream-utils.ts`                       | Remove (pipeLines no longer needed)                     |
+| `packages/core/src/build/log-buffer.ts`                         | Remove (PTY handles output buffering)                   |
+| `packages/web/src/api/queries.ts`                               | Hooks to simplify (useBuild, useProcessLogs → terminal) |
 
 ## Implementation Steps
 

@@ -27,10 +27,10 @@ Users can run multiple commands simultaneously, each with its own collapsible ou
 
 ## Phases
 
-| Phase | Title | Status | Effort | File |
-|-------|-------|--------|--------|------|
-| 01 | UnifiedCommandPanel Component | pending | 2h | [phase-01](./phase-01-unified-command-panel.md) |
-| 02 | ProjectDetailPage Tab Cleanup | pending | 1h | [phase-02](./phase-02-tab-cleanup.md) |
+| Phase | Title                         | Status  | Effort | File                                            |
+| ----- | ----------------------------- | ------- | ------ | ----------------------------------------------- |
+| 01    | UnifiedCommandPanel Component | pending | 2h     | [phase-01](./phase-01-unified-command-panel.md) |
+| 02    | ProjectDetailPage Tab Cleanup | pending | 1h     | [phase-02](./phase-02-tab-cleanup.md)           |
 
 ## Dependency Graph
 
@@ -44,11 +44,11 @@ Sequential: Phase 02 depends on Phase 01.
 
 ## File Ownership Matrix
 
-| File | Phase |
-|------|-------|
-| `packages/web/src/components/organisms/UnifiedCommandPanel.tsx` (new) | 01 |
-| `packages/web/src/pages/ProjectDetailPage.tsx` | 02 |
-| `packages/web/src/components/organisms/CommandRunner.tsx` (delete) | 02 |
+| File                                                                  | Phase |
+| --------------------------------------------------------------------- | ----- |
+| `packages/web/src/components/organisms/UnifiedCommandPanel.tsx` (new) | 01    |
+| `packages/web/src/pages/ProjectDetailPage.tsx`                        | 02    |
+| `packages/web/src/components/organisms/CommandRunner.tsx` (delete)    | 02    |
 
 ## Affected Packages
 

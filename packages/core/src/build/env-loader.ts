@@ -6,7 +6,9 @@ import type { ProjectConfig } from "../config/index.js";
  * Parse a .env file and return key-value pairs.
  * Handles: quoted values (single/double), comments, empty lines, export prefix.
  */
-export async function loadEnvFile(envFilePath: string): Promise<Record<string, string>> {
+export async function loadEnvFile(
+  envFilePath: string,
+): Promise<Record<string, string>> {
   const content = await readFile(envFilePath, "utf-8");
   const result: Record<string, string> = {};
 

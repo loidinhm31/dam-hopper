@@ -49,14 +49,15 @@ Delete the `{tab === "run" && (...)}` block (lines 420-470).
 ### 3. Replace Commands Tab Content
 
 ```tsx
-{tab === "commands" && (
-  <UnifiedCommandPanel project={project} />
-)}
+{
+  tab === "commands" && <UnifiedCommandPanel project={project} />;
+}
 ```
 
 ### 4. Clean Up Imports
 
 Remove unused:
+
 - `BuildLog` from `@/components/organisms/BuildLog.js`
 - `CommandRunner` from `@/components/organisms/CommandRunner.js`
 - `CommandPreview` from `@/components/atoms/CommandPreview.js`
@@ -64,6 +65,7 @@ Remove unused:
 - `useBuild`, `useStartProcess`, `useStopProcess`, `useRestartProcess`, `useProcessLogs` from `@/api/queries.js`
 
 Add:
+
 - `UnifiedCommandPanel` from `@/components/organisms/UnifiedCommandPanel.js`
 
 ### 5. Update Badge Count
@@ -77,11 +79,11 @@ New: include build + run as built-in commands → `cmdCount + 2`
 
 ## Related Code Files
 
-| File | Action |
-|------|--------|
-| `packages/web/src/pages/ProjectDetailPage.tsx` | Modify: remove tabs, swap component |
-| `packages/web/src/components/organisms/CommandRunner.tsx` | Delete |
-| `packages/web/src/components/organisms/UnifiedCommandPanel.tsx` | Import (created in Phase 01) |
+| File                                                            | Action                              |
+| --------------------------------------------------------------- | ----------------------------------- |
+| `packages/web/src/pages/ProjectDetailPage.tsx`                  | Modify: remove tabs, swap component |
+| `packages/web/src/components/organisms/CommandRunner.tsx`       | Delete                              |
+| `packages/web/src/components/organisms/UnifiedCommandPanel.tsx` | Import (created in Phase 01)        |
 
 ## Implementation Steps
 

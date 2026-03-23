@@ -54,17 +54,20 @@ export async function createServerContext(
   workspacePath?: string,
 ): Promise<ServerContext> {
   // Priority: explicit arg → DEV_HUB_WORKSPACE → DEV_HUB_CONFIG (compat) → CWD
-  let input = workspacePath
-    ?? process.env.DEV_HUB_WORKSPACE
-    ?? process.env.DEV_HUB_CONFIG
-    ?? process.cwd();
+  let input =
+    workspacePath ??
+    process.env.DEV_HUB_WORKSPACE ??
+    process.env.DEV_HUB_CONFIG ??
+    process.cwd();
 
   // Normalise: resolve relative, file → directory
   if (!isAbsolute(input)) input = resolve(process.cwd(), input);
   try {
     const s = await stat(input);
     if (s.isFile()) input = dirname(input);
-  } catch { /* non-existent: let findConfigFile handle */ }
+  } catch {
+    /* non-existent: let findConfigFile handle */
+  }
 
   const resolvedPath = await findConfigFile(input);
   if (!resolvedPath) throw new ConfigNotFoundError(input);

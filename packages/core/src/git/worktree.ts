@@ -77,7 +77,10 @@ export async function addWorktree(
   // Resolve relative to projectPath's parent so result is predictable regardless of CWD
   const worktreePath = options.path
     ? resolve(options.path)
-    : resolve(dirname(projectPath), `${basename(projectPath)}-${options.branch}`);
+    : resolve(
+        dirname(projectPath),
+        `${basename(projectPath)}-${options.branch}`,
+      );
 
   try {
     const args = ["worktree", "add"];
@@ -97,7 +100,9 @@ export async function addWorktree(
     const worktrees = await listWorktrees(projectPath);
     const created = worktrees.find((w) => w.path === worktreePath);
     if (!created) {
-      throw new Error(`Worktree created at ${worktreePath} but not found in list`);
+      throw new Error(
+        `Worktree created at ${worktreePath} but not found in list`,
+      );
     }
     return created;
   } catch (err) {

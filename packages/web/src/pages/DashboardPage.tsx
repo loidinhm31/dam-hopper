@@ -27,11 +27,16 @@ export function DashboardPage() {
       try {
         const ids = await window.devhub.terminal.list();
         if (!cancelled) setActiveSessions(ids.length);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
     void refresh();
     const t = setInterval(() => void refresh(), 5_000);
-    return () => { cancelled = true; clearInterval(t); };
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
   }, []);
 
   useIpcEvent("*", (e) => {

@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { findConfigFile, loadWorkspaceConfig, ConfigNotFoundError } from "../finder.js";
+import {
+  findConfigFile,
+  loadWorkspaceConfig,
+  ConfigNotFoundError,
+} from "../finder.js";
 
 const MINIMAL_TOML = `
 [workspace]

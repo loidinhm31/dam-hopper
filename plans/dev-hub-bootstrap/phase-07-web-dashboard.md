@@ -171,9 +171,12 @@ Server (Hono)
    - Parses incoming events by type.
    - Returns event state and connection status.
    - Auto-reconnects on disconnect with exponential backoff (1s, 2s, 4s, max 30s).
+
    ```typescript
    export function useSSE() {
-     const [connectionStatus, setStatus] = useState<"connected" | "connecting" | "disconnected">("connecting");
+     const [connectionStatus, setStatus] = useState<
+       "connected" | "connecting" | "disconnected"
+     >("connecting");
      const queryClient = useQueryClient();
 
      useEffect(() => {
@@ -181,12 +184,20 @@ Server (Hono)
        es.onopen = () => setStatus("connected");
        es.onerror = () => setStatus("disconnected");
 
-       es.addEventListener("git:progress", (e) => { /* dispatch to subscribers */ });
-       es.addEventListener("build:progress", (e) => { /* dispatch */ });
-       es.addEventListener("process:event", (e) => { /* dispatch */ });
+       es.addEventListener("git:progress", (e) => {
+         /* dispatch to subscribers */
+       });
+       es.addEventListener("build:progress", (e) => {
+         /* dispatch */
+       });
+       es.addEventListener("process:event", (e) => {
+         /* dispatch */
+       });
        es.addEventListener("status:changed", (e) => {
          const { projectName } = JSON.parse(e.data);
-         queryClient.invalidateQueries({ queryKey: ["project-status", projectName] });
+         queryClient.invalidateQueries({
+           queryKey: ["project-status", projectName],
+         });
          queryClient.invalidateQueries({ queryKey: ["projects"] });
        });
 
@@ -315,14 +326,15 @@ Server (Hono)
 
 ## Risk Assessment
 
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
-| Hono RPC type import from server package causes build issues | Medium | High | If problematic, extract shared API types to `@dev-hub/core` instead |
-| SSE reconnection storms after server restart | Low | Medium | Exponential backoff with jitter in useSSE hook |
-| Large build logs cause browser memory pressure | Medium | Medium | Cap log buffer at 5000 lines in the UI; offer "download full log" |
-| shadcn/ui component styling conflicts with Tailwind v4 | Low | Medium | Pin shadcn/ui component versions; test each component after adding |
+| Risk                                                         | Likelihood | Impact | Mitigation                                                          |
+| ------------------------------------------------------------ | ---------- | ------ | ------------------------------------------------------------------- |
+| Hono RPC type import from server package causes build issues | Medium     | High   | If problematic, extract shared API types to `@dev-hub/core` instead |
+| SSE reconnection storms after server restart                 | Low        | Medium | Exponential backoff with jitter in useSSE hook                      |
+| Large build logs cause browser memory pressure               | Medium     | Medium | Cap log buffer at 5000 lines in the UI; offer "download full log"   |
+| shadcn/ui component styling conflicts with Tailwind v4       | Low        | Medium | Pin shadcn/ui component versions; test each component after adding  |
 
 ## Next Steps
 
 With the web dashboard complete, proceed to:
+
 - [Phase 08 — Integration & Testing](./phase-08-integration-testing.md) — end-to-end testing of the full stack

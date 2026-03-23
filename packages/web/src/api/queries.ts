@@ -87,7 +87,8 @@ export function useAddKnownWorkspace() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (path: string) => api.workspace.addKnown(path),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["known-workspaces"] }),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: ["known-workspaces"] }),
   });
 }
 
@@ -95,7 +96,8 @@ export function useRemoveKnownWorkspace() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (path: string) => api.workspace.removeKnown(path),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["known-workspaces"] }),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: ["known-workspaces"] }),
   });
 }
 
@@ -123,8 +125,13 @@ export function useUpdateConfig() {
 export function useUpdateProject() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ name, data }: { name: string; data: Partial<ProjectConfig> }) =>
-      api.config.updateProject(name, data),
+    mutationFn: ({
+      name,
+      data,
+    }: {
+      name: string;
+      data: Partial<ProjectConfig>;
+    }) => api.config.updateProject(name, data),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["config"] });
       void qc.invalidateQueries({ queryKey: ["projects"] });

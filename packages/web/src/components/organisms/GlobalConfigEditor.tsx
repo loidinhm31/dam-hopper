@@ -77,11 +77,14 @@ function DefaultWorkspaceSection() {
           )}
         </div>
         <p className="text-xs text-[var(--color-text-muted)]">
-          Bare <code className="font-mono">dev-hub</code> invocations will use this workspace when no config is found in CWD.
+          Bare <code className="font-mono">dev-hub</code> invocations will use
+          this workspace when no config is found in CWD.
         </p>
       </div>
       {saved && !updateDefaults.error && (
-        <p className="text-xs text-[var(--color-success)]">Saved successfully</p>
+        <p className="text-xs text-[var(--color-success)]">
+          Saved successfully
+        </p>
       )}
       {updateDefaults.error && (
         <p className="text-xs text-[var(--color-danger)]">
@@ -122,13 +125,19 @@ function KnownWorkspacesSection() {
       {isLoading ? (
         <p className="text-sm text-[var(--color-text-muted)]">Loading…</p>
       ) : (known?.workspaces ?? []).length === 0 ? (
-        <p className="text-sm text-[var(--color-text-muted)]">No registered workspaces.</p>
+        <p className="text-sm text-[var(--color-text-muted)]">
+          No registered workspaces.
+        </p>
       ) : (
         <table className="w-full text-sm border-collapse">
           <thead>
             <tr className="border-b border-[var(--color-border)]">
-              <th className="text-left text-xs font-medium text-[var(--color-text-muted)] pb-1.5">Name</th>
-              <th className="text-left text-xs font-medium text-[var(--color-text-muted)] pb-1.5">Path</th>
+              <th className="text-left text-xs font-medium text-[var(--color-text-muted)] pb-1.5">
+                Name
+              </th>
+              <th className="text-left text-xs font-medium text-[var(--color-text-muted)] pb-1.5">
+                Path
+              </th>
               <th className="w-8" />
             </tr>
           </thead>
@@ -140,7 +149,9 @@ function KnownWorkspacesSection() {
                 <tr
                   key={ws.path}
                   className={`border-b border-[var(--color-border)] last:border-0 ${
-                    isCurrent ? "text-[var(--color-primary)]" : "text-[var(--color-text)]"
+                    isCurrent
+                      ? "text-[var(--color-primary)]"
+                      : "text-[var(--color-text)]"
                   }`}
                 >
                   <td className="py-2 pr-3 font-medium">
@@ -184,7 +195,9 @@ function KnownWorkspacesSection() {
           <input
             value={addPath}
             onChange={(e) => setAddPath(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleAdd();
+            }}
             placeholder="/path/to/workspace"
             className={inputClass}
             disabled={addMutation.isPending}
@@ -216,12 +229,16 @@ export function GlobalConfigEditor() {
   return (
     <div className="space-y-6">
       <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-3">
-        <h3 className="text-sm font-medium text-[var(--color-text)]">Default Workspace</h3>
+        <h3 className="text-sm font-medium text-[var(--color-text)]">
+          Default Workspace
+        </h3>
         <DefaultWorkspaceSection />
       </section>
 
       <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-3">
-        <h3 className="text-sm font-medium text-[var(--color-text)]">Known Workspaces</h3>
+        <h3 className="text-sm font-medium text-[var(--color-text)]">
+          Known Workspaces
+        </h3>
         <KnownWorkspacesSection />
       </section>
     </div>

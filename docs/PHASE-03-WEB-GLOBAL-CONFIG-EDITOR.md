@@ -15,6 +15,7 @@ New organism component with two main sections: Default Workspace and Known Works
 #### A. Default Workspace Section
 
 **Features:**
+
 - Text input field showing current default workspace path (empty if not set)
 - "Set" button: Saves the input value as default workspace
 - "Clear" button: Removes the default (appears only if default is set)
@@ -22,12 +23,14 @@ New organism component with two main sections: Default Workspace and Known Works
 - Help text explaining that bare `dev-hub` invocations use this fallback when no config found in CWD
 
 **State management:**
+
 - `draft`: Tracks unsaved user input
 - `saved`: Displays success message for 3 seconds
 - `isDirty`: Enables "Set" button only when input differs from current default
 - `isPending`: Disables controls during API call
 
 **API interaction:**
+
 ```typescript
 const updateDefaults = useUpdateGlobalDefaults();
 await updateDefaults.mutateAsync({ workspace: trimmed || undefined });
@@ -38,6 +41,7 @@ await updateDefaults.mutateAsync({ workspace: trimmed || undefined });
 #### B. Known Workspaces Section
 
 **Features:**
+
 - Table showing registered workspaces (name + path columns)
 - Current workspace highlighted in primary color with "(current)" label
 - Remove button (X icon) per row; disabled for current workspace
@@ -46,10 +50,12 @@ await updateDefaults.mutateAsync({ workspace: trimmed || undefined });
 - Inline error display for add/remove failures
 
 **State management:**
+
 - `addPath`: Input field value for new workspace path
 - `removingPath`: Tracks which workspace is being removed (UI feedback during delete)
 
 **API interactions:**
+
 ```typescript
 const { data: known } = useKnownWorkspaces();
 addMutation.mutate(trimmed, { onSuccess: () => setAddPath("") });
@@ -57,6 +63,7 @@ removeMutation.mutate(path, { onSettled: () => setRemovingPath(null) });
 ```
 
 **Special handling:**
+
 - Fetch current workspace path via `useWorkspace()` to highlight current workspace
 - Enter key in input field triggers add (line 187)
 - Reset opposing mutation's error state when starting opposite operation (lines 108, 113)
@@ -80,6 +87,7 @@ Modified to display two distinct sections with clear headings:
 ```
 
 **Changes:**
+
 - Imported `GlobalConfigEditor` (line 4)
 - Wrapped both editors in separate `<section>` elements (lines 13–16, 18–42)
 - Added heading elements to distinguish global vs workspace config
@@ -91,10 +99,12 @@ Modified to display two distinct sections with clear headings:
 Extracted shared input styling into exportable constant:
 
 ```typescript
-export const inputClass = "rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm ...";
+export const inputClass =
+  "rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm ...";
 ```
 
 **Usage:**
+
 - `GlobalConfigEditor` imports and uses `inputClass` (lines 3, 50, 189)
 - `ConfigEditor` also uses this constant (ensures consistent styling)
 
@@ -149,14 +159,14 @@ SettingsPage
 
 All endpoints pre-existing from Phase 02:
 
-| Operation | Endpoint | Status |
-|-----------|----------|--------|
-| Get global config | `GET /api/global-config` | ✓ Available |
+| Operation                | Endpoint                          | Status      |
+| ------------------------ | --------------------------------- | ----------- |
+| Get global config        | `GET /api/global-config`          | ✓ Available |
 | Update default workspace | `PUT /api/global-config/defaults` | ✓ Available |
-| List known workspaces | `GET /api/workspace/known` | ✓ Available |
-| Add workspace | `POST /api/workspace/known` | ✓ Available |
-| Remove workspace | `DELETE /api/workspace/known` | ✓ Available |
-| Get current workspace | `GET /api/workspace` | ✓ Available |
+| List known workspaces    | `GET /api/workspace/known`        | ✓ Available |
+| Add workspace            | `POST /api/workspace/known`       | ✓ Available |
+| Remove workspace         | `DELETE /api/workspace/known`     | ✓ Available |
+| Get current workspace    | `GET /api/workspace`              | ✓ Available |
 
 ## Testing Checklist
 
@@ -177,12 +187,14 @@ All success criteria met:
 ## Styling & UX
 
 **Styling:**
+
 - Uses CSS custom properties for consistency (--color-surface, --color-text, --color-danger, etc.)
 - Input class matches existing ConfigEditor style
 - Section cards: rounded borders, subtle background
 - Table styling: monospace font for paths, hover effects on remove button
 
 **UX Features:**
+
 - Informative help text for default workspace field
 - Spinners during loading and mutations
 - "Current" indicator prevents accidental removal
@@ -210,25 +222,29 @@ Web implementation exactly matches documented architecture. Global config manage
 ## Architecture Notes
 
 **Query/Mutation Cache Strategy:**
+
 - `["global-config"]`: Invalidated after `updateDefaults` mutation
 - `["known-workspaces"]`: Invalidated after add/remove mutations
 - `["workspace"]`: Used only to determine current path for highlighting (not invalidated by global config changes)
 
 **Error Handling:**
+
 - Network errors: Standard React Query error flow, displayed inline
 - Invalid path on add: Server validates; error message shown
 - Remove non-current: Mutation prevents removal of current workspace (server-side validation)
 
 **Concurrency:**
+
 - Add and remove mutations can't run simultaneously (reset opposing mutation on new operation)
 - Default workspace update is independent of known workspaces operations
 
 ## Next Steps
 
 → All three workspace resolution phases complete:
-  - Phase 01: Workspace resolution foundation (CLI + server)
-  - Phase 02: Workspace switcher in web sidebar
-  - Phase 03: Global config editor in settings page
+
+- Phase 01: Workspace resolution foundation (CLI + server)
+- Phase 02: Workspace switcher in web sidebar
+- Phase 03: Global config editor in settings page
 
 Users can now manage workspaces entirely from the web dashboard. No CLI needed.
 

@@ -364,9 +364,7 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      {tab === "commands" && (
-        <UnifiedCommandPanel project={project} />
-      )}
+      {tab === "commands" && <UnifiedCommandPanel project={project} />}
     </AppLayout>
   );
 }

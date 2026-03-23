@@ -18,7 +18,9 @@ function validateProjectPath(
   project: ProjectConfig,
   workspaceRoot: string,
 ): void {
-  const root = workspaceRoot.endsWith("/") ? workspaceRoot : workspaceRoot + "/";
+  const root = workspaceRoot.endsWith("/")
+    ? workspaceRoot
+    : workspaceRoot + "/";
   const resolved = resolve(workspaceRoot, project.path);
   if (resolved !== workspaceRoot && !resolved.startsWith(root)) {
     throw new Error(
@@ -32,9 +34,12 @@ export function registerGitHandlers(holder: CtxHolder): void {
 
   function guard(key: string, fn: () => Promise<unknown>) {
     if (inProgress.has(key)) {
-      throw Object.assign(new Error(`Operation already in progress: "${key}"`), {
-        code: "CONFLICT",
-      });
+      throw Object.assign(
+        new Error(`Operation already in progress: "${key}"`),
+        {
+          code: "CONFLICT",
+        },
+      );
     }
     inProgress.add(key);
     return fn().finally(() => inProgress.delete(key));

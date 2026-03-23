@@ -89,12 +89,24 @@ packages/
 
 ```typescript
 // packages/core/src/__test-utils__/git-helpers.ts
-async function createTempGitRepo(options?: { commits?: number; branches?: string[] }): Promise<{ path: string; cleanup: () => void }>;
-async function createBareRemote(): Promise<{ path: string; cleanup: () => void }>;
-async function createCloneWithRemote(): Promise<{ localPath: string; remotePath: string; cleanup: () => void }>;
+async function createTempGitRepo(options?: {
+  commits?: number;
+  branches?: string[];
+}): Promise<{ path: string; cleanup: () => void }>;
+async function createBareRemote(): Promise<{
+  path: string;
+  cleanup: () => void;
+}>;
+async function createCloneWithRemote(): Promise<{
+  localPath: string;
+  remotePath: string;
+  cleanup: () => void;
+}>;
 
 // packages/core/src/__test-utils__/workspace-helpers.ts
-async function createTempWorkspace(projects: Array<{ name: string; type: ProjectType }>): Promise<{ rootPath: string; configPath: string; cleanup: () => void }>;
+async function createTempWorkspace(
+  projects: Array<{ name: string; type: ProjectType }>,
+): Promise<{ rootPath: string; configPath: string; cleanup: () => void }>;
 ```
 
 ## Related Code Files
@@ -317,17 +329,18 @@ async function createTempWorkspace(projects: Array<{ name: string; type: Project
 
 ## Risk Assessment
 
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
-| Git integration tests are slow due to repo creation | Medium | Medium | Use `git init` + `git commit --allow-empty` for fast setup; share repos across tests in a describe block with beforeAll |
-| Temp directories not cleaned up on test failure | Medium | Low | Use `afterAll` + `afterEach` with try/catch; also use OS temp dir which is cleaned periodically |
-| Run service tests leave orphan processes | Medium | High | Always call `stopAll()` in afterEach; set short timeouts on test processes |
-| SSE test is timing-sensitive | Medium | Medium | Use generous timeouts (35s for heartbeat test); mock time if needed |
-| CI environment lacks git | Low | High | Document git as a CI requirement; most CI environments have git pre-installed |
+| Risk                                                | Likelihood | Impact | Mitigation                                                                                                              |
+| --------------------------------------------------- | ---------- | ------ | ----------------------------------------------------------------------------------------------------------------------- |
+| Git integration tests are slow due to repo creation | Medium     | Medium | Use `git init` + `git commit --allow-empty` for fast setup; share repos across tests in a describe block with beforeAll |
+| Temp directories not cleaned up on test failure     | Medium     | Low    | Use `afterAll` + `afterEach` with try/catch; also use OS temp dir which is cleaned periodically                         |
+| Run service tests leave orphan processes            | Medium     | High   | Always call `stopAll()` in afterEach; set short timeouts on test processes                                              |
+| SSE test is timing-sensitive                        | Medium     | Medium | Use generous timeouts (35s for heartbeat test); mock time if needed                                                     |
+| CI environment lacks git                            | Low        | High   | Document git as a CI requirement; most CI environments have git pre-installed                                           |
 
 ## Next Steps
 
 With testing complete, the project reaches Milestone M3 (Stable). Future enhancements:
+
 - Add `--watch` mode for builds (file system watching with chokidar).
 - Add project dependency graph for ordered builds.
 - Add plugin system for custom project types.

@@ -6,11 +6,7 @@ import { Badge } from "@/components/atoms/Badge.js";
 import { BranchBadge } from "@/components/atoms/BranchBadge.js";
 import { GitStatusBadge } from "@/components/atoms/GitStatusBadge.js";
 import { Button } from "@/components/atoms/Button.js";
-import {
-  useProjects,
-  useGitFetch,
-  useGitPull,
-} from "@/api/queries.js";
+import { useProjects, useGitFetch, useGitPull } from "@/api/queries.js";
 import type { ProjectWithStatus } from "@/api/client.js";
 import { cn } from "@/lib/utils.js";
 

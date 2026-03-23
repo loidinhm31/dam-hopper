@@ -10,6 +10,10 @@ export interface GitStatus {
   untracked: number;
   hasStash: boolean;
   lastCommit: { hash: string; message: string; date: string };
+  /** false when the project directory does not exist on disk */
+  pathExists?: boolean;
+  /** populated when status could not be retrieved */
+  statusError?: string;
 }
 
 // --- Operations ---

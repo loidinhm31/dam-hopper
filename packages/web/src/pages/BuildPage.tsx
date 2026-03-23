@@ -11,7 +11,9 @@ export function BuildPage() {
   const [selected, setSelected] = useState("");
   const [buildKey, setBuildKey] = useState(0);
   const [buildStarted, setBuildStarted] = useState(false);
-  const [exitCode, setExitCode] = useState<number | null | undefined>(undefined);
+  const [exitCode, setExitCode] = useState<number | null | undefined>(
+    undefined,
+  );
 
   const projectName = selected || projects[0]?.name || "";
   const project = projects.find((p) => p.name === projectName);

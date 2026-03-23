@@ -9,7 +9,15 @@ function makeProgressCallback(
   projectName: string,
   operation: string,
 ) {
-  return ({ method, stage, progress }: { method: string; stage: string; progress: number }) => {
+  return ({
+    method,
+    stage,
+    progress,
+  }: {
+    method: string;
+    stage: string;
+    progress: number;
+  }) => {
     emitter?.emit("progress", {
       projectName,
       operation,
@@ -35,12 +43,24 @@ export async function gitFetch(
     await git.fetch(["--all", "--prune"]);
     const durationMs = performance.now() - start;
     emitProgress(emitter, projectName, "fetch", "completed", "Fetch complete");
-    return { projectName, operation: "fetch", success: true, summary: "Fetched all remotes", durationMs };
+    return {
+      projectName,
+      operation: "fetch",
+      success: true,
+      summary: "Fetched all remotes",
+      durationMs,
+    };
   } catch (err) {
     const durationMs = performance.now() - start;
     const gitError = wrapGitError(err, projectName);
     emitProgress(emitter, projectName, "fetch", "failed", gitError.message);
-    return { projectName, operation: "fetch", success: false, error: gitError, durationMs };
+    return {
+      projectName,
+      operation: "fetch",
+      success: false,
+      error: gitError,
+      durationMs,
+    };
   }
 }
 
@@ -58,15 +78,33 @@ export async function gitPull(
     emitProgress(emitter, projectName, "pull", "started", "Pulling...");
     const result = await git.pull(["--ff-only"]);
     const durationMs = performance.now() - start;
-    const pulled = result.summary.changes + result.summary.insertions + result.summary.deletions;
-    const summary = pulled > 0 ? `${result.summary.changes} file(s) changed` : "Already up to date";
+    const pulled =
+      result.summary.changes +
+      result.summary.insertions +
+      result.summary.deletions;
+    const summary =
+      pulled > 0
+        ? `${result.summary.changes} file(s) changed`
+        : "Already up to date";
     emitProgress(emitter, projectName, "pull", "completed", summary);
-    return { projectName, operation: "pull", success: true, summary, durationMs };
+    return {
+      projectName,
+      operation: "pull",
+      success: true,
+      summary,
+      durationMs,
+    };
   } catch (err) {
     const durationMs = performance.now() - start;
     const gitError = wrapGitError(err, projectName);
     emitProgress(emitter, projectName, "pull", "failed", gitError.message);
-    return { projectName, operation: "pull", success: false, error: gitError, durationMs };
+    return {
+      projectName,
+      operation: "pull",
+      success: false,
+      error: gitError,
+      durationMs,
+    };
   }
 }
 
@@ -85,11 +123,23 @@ export async function gitPush(
     await git.push();
     const durationMs = performance.now() - start;
     emitProgress(emitter, projectName, "push", "completed", "Push complete");
-    return { projectName, operation: "push", success: true, summary: "Pushed to remote", durationMs };
+    return {
+      projectName,
+      operation: "push",
+      success: true,
+      summary: "Pushed to remote",
+      durationMs,
+    };
   } catch (err) {
     const durationMs = performance.now() - start;
     const gitError = wrapGitError(err, projectName);
     emitProgress(emitter, projectName, "push", "failed", gitError.message);
-    return { projectName, operation: "push", success: false, error: gitError, durationMs };
+    return {
+      projectName,
+      operation: "push",
+      success: false,
+      error: gitError,
+      durationMs,
+    };
   }
 }

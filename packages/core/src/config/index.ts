@@ -8,7 +8,13 @@ export {
   ApiProjectSchema,
   DevHubApiConfigSchema,
 } from "./schema.js";
-export type { ProjectType, ServiceConfig, ProjectConfig, WorkspaceInfo, DevHubConfig } from "./schema.js";
+export type {
+  ProjectType,
+  ServiceConfig,
+  ProjectConfig,
+  WorkspaceInfo,
+  DevHubConfig,
+} from "./schema.js";
 export * from "./presets.js";
 export {
   readConfig,

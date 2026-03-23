@@ -13,7 +13,9 @@ export function AppLayout({ children, title }: Props) {
       <main className="flex-1 overflow-y-auto">
         <div className="px-6 py-6">
           {title && (
-            <h1 className="text-xl font-semibold text-[var(--color-text)] mb-6">{title}</h1>
+            <h1 className="text-xl font-semibold text-[var(--color-text)] mb-6">
+              {title}
+            </h1>
           )}
           {children}
         </div>

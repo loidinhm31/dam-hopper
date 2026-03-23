@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { getPreset, getEffectiveCommand, getProjectServices } from "../presets.js";
+import {
+  getPreset,
+  getEffectiveCommand,
+  getProjectServices,
+} from "../presets.js";
 import type { ProjectConfig } from "../schema.js";
 
 describe("getPreset", () => {
@@ -36,7 +40,11 @@ describe("getProjectServices", () => {
       ...baseProject,
       type: "pnpm",
       services: [
-        { name: "frontend", runCommand: "pnpm dev:frontend", buildCommand: "pnpm build:frontend" },
+        {
+          name: "frontend",
+          runCommand: "pnpm dev:frontend",
+          buildCommand: "pnpm build:frontend",
+        },
         { name: "backend", runCommand: "pnpm dev:backend" },
       ],
     };
@@ -79,15 +87,19 @@ describe("getEffectiveCommand", () => {
     expect(getEffectiveCommand(baseProject, "build")).toBe(
       "mvn clean install -DskipTests",
     );
-    expect(getEffectiveCommand(baseProject, "run")).toBe(
-      "mvn spring-boot:run",
-    );
+    expect(getEffectiveCommand(baseProject, "run")).toBe("mvn spring-boot:run");
   });
 
   it("returns first service command when services defined", () => {
     const project: ProjectConfig = {
       ...baseProject,
-      services: [{ name: "main", buildCommand: "mvn package", runCommand: "java -jar app.jar" }],
+      services: [
+        {
+          name: "main",
+          buildCommand: "mvn package",
+          runCommand: "java -jar app.jar",
+        },
+      ],
     };
     expect(getEffectiveCommand(project, "build")).toBe("mvn package");
     expect(getEffectiveCommand(project, "run")).toBe("java -jar app.jar");
