@@ -45,12 +45,12 @@ Strip execa execution from `@dev-hub/core` (becomes pure config+state+git). Repl
 
 ## Phases
 
-| Phase | Title | Status | Effort | File |
-|-------|-------|--------|--------|------|
-| 01 | Electron Shell + IPC Foundation | done | 3h | [phase-01](./phase-01-electron-shell.md) |
-| 02 | IPC API Layer (Replace HTTP) | done | 3h | [phase-02-ipc-api-layer.md](./phase-02-ipc-api-layer.md) |
-| 03 | PTY Terminal Integration | done | 3h | [phase-03-pty-terminal.md](./phase-03-pty-terminal.md) |
-| 04 | Cleanup + Packaging | done | 3h | [phase-04-cleanup-packaging.md](./phase-04-cleanup-packaging.md) |
+| Phase | Title                           | Status | Effort | File                                                             |
+| ----- | ------------------------------- | ------ | ------ | ---------------------------------------------------------------- |
+| 01    | Electron Shell + IPC Foundation | done   | 3h     | [phase-01](./phase-01-electron-shell.md)                         |
+| 02    | IPC API Layer (Replace HTTP)    | done   | 3h     | [phase-02-ipc-api-layer.md](./phase-02-ipc-api-layer.md)         |
+| 03    | PTY Terminal Integration        | done   | 3h     | [phase-03-pty-terminal.md](./phase-03-pty-terminal.md)           |
+| 04    | Cleanup + Packaging             | done   | 3h     | [phase-04-cleanup-packaging.md](./phase-04-cleanup-packaging.md) |
 
 ## Dependency Graph
 
@@ -68,13 +68,13 @@ Sequential: each phase depends on the previous.
 
 ## Package Changes
 
-| Package | Action |
-|---------|--------|
-| `@dev-hub/core` | Keep — imported directly in main process |
-| `@dev-hub/cli` | Remove in Phase 04 |
-| `@dev-hub/server` | Absorb into Electron main process, remove in Phase 04 |
-| `@dev-hub/web` | Becomes renderer app, add xterm.js |
-| `@dev-hub/electron` (new) | Electron main process + preload |
+| Package                   | Action                                                |
+| ------------------------- | ----------------------------------------------------- |
+| `@dev-hub/core`           | Keep — imported directly in main process              |
+| `@dev-hub/cli`            | Remove in Phase 04                                    |
+| `@dev-hub/server`         | Absorb into Electron main process, remove in Phase 04 |
+| `@dev-hub/web`            | Becomes renderer app, add xterm.js                    |
+| `@dev-hub/electron` (new) | Electron main process + preload                       |
 
 ## Validation Summary
 

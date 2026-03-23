@@ -32,11 +32,11 @@ stored in the XDG config file. Auto-register workspaces on open/switch.
 
 ## Phases
 
-| Phase | Title                          | Status  | Effort | File |
-|-------|--------------------------------|---------|--------|------|
-| 01    | Core & Server Foundation       | done    | 2.5h   | [phase-01](./phase-01-core-server-foundation.md) |
-| 02    | Web UI Workspace Switcher      | done    | 2h     | [phase-02](./phase-02-web-workspace-switcher.md) |
-| 03    | Web UI Global Config Editor    | done    | 1.5h   | [phase-03](./phase-03-web-global-config-editor.md) |
+| Phase | Title                       | Status | Effort | File                                               |
+| ----- | --------------------------- | ------ | ------ | -------------------------------------------------- |
+| 01    | Core & Server Foundation    | done   | 2.5h   | [phase-01](./phase-01-core-server-foundation.md)   |
+| 02    | Web UI Workspace Switcher   | done   | 2h     | [phase-02](./phase-02-web-workspace-switcher.md)   |
+| 03    | Web UI Global Config Editor | done   | 1.5h   | [phase-03](./phase-03-web-global-config-editor.md) |
 
 ## Dependency Chain
 

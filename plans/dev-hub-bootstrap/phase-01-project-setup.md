@@ -81,12 +81,14 @@ All files are new. No existing code to modify.
    - DevDependencies: `typescript@^5.7`, `eslint@^9`, `prettier@^3`, `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser`
 
 2. **Create `pnpm-workspace.yaml`**
+
    ```yaml
    packages:
      - "packages/*"
    ```
 
 3. **Create `tsconfig.base.json`**
+
    ```json
    {
      "compilerOptions": {
@@ -123,6 +125,7 @@ All files are new. No existing code to modify.
    - DevDependencies: `tsup`, `typescript`
 
 5. **Create `packages/core/tsup.config.ts`**
+
    ```ts
    import { defineConfig } from "tsup";
    export default defineConfig({
@@ -163,6 +166,7 @@ All files are new. No existing code to modify.
     - DevDependencies: `vite`, `@vitejs/plugin-react`, `@tailwindcss/vite`, `typescript`, `@types/react`, `@types/react-dom`
 
 14. **Create `packages/web/vite.config.ts`**
+
     ```ts
     import { defineConfig } from "vite";
     import react from "@vitejs/plugin-react";
@@ -183,6 +187,7 @@ All files are new. No existing code to modify.
     - `{ "semi": true, "singleQuote": false, "tabWidth": 2, "trailingComma": "all" }`
 
 18. **Create `dev-hub.toml` example config**
+
     ```toml
     [workspace]
     name = "my-workspace"
@@ -231,15 +236,16 @@ All files are new. No existing code to modify.
 
 ## Risk Assessment
 
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
-| ESM/CJS interop issues with dependencies | Medium | Medium | Pin to ESM-compatible versions; use tsup to bundle problematic deps |
-| Ink (React terminal) conflicts with web React version | Low | Medium | Ink uses its own React renderer; keep separate in cli package |
-| pnpm workspace resolution issues | Low | Low | Use `workspace:*` protocol consistently |
+| Risk                                                  | Likelihood | Impact | Mitigation                                                          |
+| ----------------------------------------------------- | ---------- | ------ | ------------------------------------------------------------------- |
+| ESM/CJS interop issues with dependencies              | Medium     | Medium | Pin to ESM-compatible versions; use tsup to bundle problematic deps |
+| Ink (React terminal) conflicts with web React version | Low        | Medium | Ink uses its own React renderer; keep separate in cli package       |
+| pnpm workspace resolution issues                      | Low        | Low    | Use `workspace:*` protocol consistently                             |
 
 ## Next Steps
 
 Once this phase is complete, proceed to [Phase 02 — Core Config](./phase-02-core-config.md) to implement the TOML config parser and workspace discovery in `@dev-hub/core`.
 
 ## Completed
+
 2026-03-21 — All success criteria met. Build passes, CLI prints version, server starts on port 4800.

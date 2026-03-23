@@ -170,7 +170,10 @@ describe("addKnownWorkspace", () => {
     await addKnownWorkspace("my-project", "/abs/path/my-project");
     const workspaces = await listKnownWorkspaces();
     expect(workspaces).toHaveLength(1);
-    expect(workspaces[0]).toEqual({ name: "my-project", path: "/abs/path/my-project" });
+    expect(workspaces[0]).toEqual({
+      name: "my-project",
+      path: "/abs/path/my-project",
+    });
   });
 
   it("appends to existing workspaces", async () => {

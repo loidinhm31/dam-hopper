@@ -37,7 +37,9 @@ export interface DevHubBridge {
 
   globalConfig: {
     get: () => Promise<GlobalConfig>;
-    updateDefaults: (defaults: { workspace?: string }) => Promise<{ updated: true }>;
+    updateDefaults: (defaults: {
+      workspace?: string;
+    }) => Promise<{ updated: true }>;
   };
 
   projects: {
@@ -63,7 +65,10 @@ export interface DevHubBridge {
   config: {
     get: () => Promise<DevHubConfig>;
     update: (config: DevHubConfig) => Promise<DevHubConfig>;
-    updateProject: (name: string, data: Partial<ProjectConfig>) => Promise<ProjectConfig>;
+    updateProject: (
+      name: string,
+      data: Partial<ProjectConfig>,
+    ) => Promise<ProjectConfig>;
   };
 
   terminal: {

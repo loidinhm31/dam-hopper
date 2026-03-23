@@ -48,6 +48,7 @@ commands with type filtering, concurrent execution, and collapsible output panel
 ### 2. Command Card Layout (consistent for all types)
 
 Each card:
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ [type badge] command-name    `shell command`   [actions]│
@@ -110,16 +111,16 @@ UnifiedCommandPanel
 
 ## Related Code Files
 
-| File | Role |
-|------|------|
-| `packages/web/src/components/atoms/CommandPreview.tsx` | Reuse for build/run command display |
-| `packages/web/src/components/atoms/Badge.tsx` | Type badges |
-| `packages/web/src/components/atoms/Button.tsx` | Action buttons + inputClass |
-| `packages/web/src/components/organisms/BuildLog.tsx` | Reuse for build SSE output |
-| `packages/web/src/lib/presets.ts` | `getEffectiveCommand()` for build/run resolution |
-| `packages/web/src/api/queries.ts` | All hooks: `useBuild`, `useStartProcess`, `useStopProcess`, `useRestartProcess`, `useProcessLogs`, `useExecCommand`, `useUpdateProject` |
-| `packages/web/src/api/client.ts` | Types: `ProjectWithStatus`, `BuildResult`, `ProcessInfo` |
-| `packages/web/src/components/organisms/CommandRunner.tsx` | Source of custom command logic to absorb |
+| File                                                      | Role                                                                                                                                    |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/web/src/components/atoms/CommandPreview.tsx`    | Reuse for build/run command display                                                                                                     |
+| `packages/web/src/components/atoms/Badge.tsx`             | Type badges                                                                                                                             |
+| `packages/web/src/components/atoms/Button.tsx`            | Action buttons + inputClass                                                                                                             |
+| `packages/web/src/components/organisms/BuildLog.tsx`      | Reuse for build SSE output                                                                                                              |
+| `packages/web/src/lib/presets.ts`                         | `getEffectiveCommand()` for build/run resolution                                                                                        |
+| `packages/web/src/api/queries.ts`                         | All hooks: `useBuild`, `useStartProcess`, `useStopProcess`, `useRestartProcess`, `useProcessLogs`, `useExecCommand`, `useUpdateProject` |
+| `packages/web/src/api/client.ts`                          | Types: `ProjectWithStatus`, `BuildResult`, `ProcessInfo`                                                                                |
+| `packages/web/src/components/organisms/CommandRunner.tsx` | Source of custom command logic to absorb                                                                                                |
 
 ## Implementation Steps
 

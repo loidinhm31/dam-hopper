@@ -40,9 +40,12 @@ export function registerTerminalHandlers(holder: CtxHolder): void {
   );
 
   // Write stdin to PTY (fire-and-forget, no invoke needed)
-  ipcMain.on(CH.TERMINAL_WRITE, (_e, { id, data }: { id: string; data: string }) => {
-    holder.ptyManager.write(id, data);
-  });
+  ipcMain.on(
+    CH.TERMINAL_WRITE,
+    (_e, { id, data }: { id: string; data: string }) => {
+      holder.ptyManager.write(id, data);
+    },
+  );
 
   // Resize PTY dimensions
   ipcMain.on(

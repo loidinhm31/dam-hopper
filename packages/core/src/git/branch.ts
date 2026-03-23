@@ -69,11 +69,12 @@ export async function updateBranch(
   } catch (err) {
     const gitError = wrapGitError(err, basename(projectPath));
     const msg = gitError.message.toLowerCase();
-    const reason = msg.includes("non-fast-forward") || msg.includes("would clobber")
-      ? "non-fast-forward"
-      : msg.includes("couldn't find remote ref")
-      ? "not-tracking"
-      : gitError.message;
+    const reason =
+      msg.includes("non-fast-forward") || msg.includes("would clobber")
+        ? "non-fast-forward"
+        : msg.includes("couldn't find remote ref")
+          ? "not-tracking"
+          : gitError.message;
     return { branch, success: false, reason };
   }
 }
@@ -88,10 +89,22 @@ export async function updateAllBranches(
 
   const results: BranchUpdateResult[] = [];
   for (const b of localBranches) {
-    emitProgress(emitter, projectName, "update-branches", "progress", `Updating ${b.name}...`);
+    emitProgress(
+      emitter,
+      projectName,
+      "update-branches",
+      "progress",
+      `Updating ${b.name}...`,
+    );
     const result = await updateBranch(projectPath, b.name);
     results.push(result);
   }
-  emitProgress(emitter, projectName, "update-branches", "completed", `Updated ${results.length} branches`);
+  emitProgress(
+    emitter,
+    projectName,
+    "update-branches",
+    "completed",
+    `Updated ${results.length} branches`,
+  );
   return results;
 }

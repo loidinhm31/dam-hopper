@@ -72,11 +72,13 @@ New file: `packages/web/src/components/organisms/GlobalConfigEditor.tsx`
 **Sections:**
 
 #### A. Default Workspace
+
 - Text input with current default workspace path (or empty placeholder)
 - "Set Default" / "Clear" buttons
 - Help text: "Bare `dev-hub` invocations will use this workspace when no config is found in CWD"
 
 #### B. Known Workspaces
+
 - Table/list of registered workspaces (name + path columns)
 - Current workspace highlighted
 - Remove button per row (disabled for current workspace)

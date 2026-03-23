@@ -19,5 +19,11 @@ export function emitProgress(
   message: string,
   percent?: number,
 ): void {
-  emitter?.emit("progress", { projectName, operation, phase, message, percent });
+  emitter?.emit("progress", {
+    projectName,
+    operation,
+    phase,
+    message,
+    percent,
+  });
 }

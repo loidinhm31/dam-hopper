@@ -80,7 +80,7 @@ type ProjectType = "maven" | "gradle" | "npm" | "pnpm" | "cargo" | "custom";
 
 interface ProjectConfig {
   name: string;
-  path: string;                   // resolved to absolute at runtime
+  path: string; // resolved to absolute at runtime
   type: ProjectType;
   buildCommand?: string;
   runCommand?: string;
@@ -98,7 +98,7 @@ interface BuildPreset {
   buildCommand: string;
   runCommand: string;
   devCommand?: string;
-  markerFiles: string[];          // files that identify this type
+  markerFiles: string[]; // files that identify this type
 }
 ```
 
@@ -190,15 +190,16 @@ interface BuildPreset {
 
 ## Risk Assessment
 
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
-| smol-toml stringify doesn't preserve comments | High | Low | Accept: comments lost on write. Document this behavior. |
-| Project type detection ambiguity (dir has both pom.xml and package.json) | Medium | Low | Use priority ordering; first match wins. Document detection order. |
-| Deep workspace nesting causes slow discovery | Low | Low | Only scan immediate children by default; add `depth` option later if needed. |
+| Risk                                                                     | Likelihood | Impact | Mitigation                                                                   |
+| ------------------------------------------------------------------------ | ---------- | ------ | ---------------------------------------------------------------------------- |
+| smol-toml stringify doesn't preserve comments                            | High       | Low    | Accept: comments lost on write. Document this behavior.                      |
+| Project type detection ambiguity (dir has both pom.xml and package.json) | Medium     | Low    | Use priority ordering; first match wins. Document detection order.           |
+| Deep workspace nesting causes slow discovery                             | Low        | Low    | Only scan immediate children by default; add `depth` option later if needed. |
 
 ## Next Steps
 
 With config parsing and discovery complete, proceed in parallel to:
+
 - [Phase 03 — Core: Git Operations](./phase-03-core-git.md) — git service uses `ProjectConfig` to locate repos
 - [Phase 04 — Core: Build & Run](./phase-04-core-build-run.md) — build service uses presets and effective commands
 

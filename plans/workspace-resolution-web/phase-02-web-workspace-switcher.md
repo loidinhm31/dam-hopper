@@ -39,7 +39,7 @@ In `packages/web/src/hooks/useSSE.ts`:
 
 ```typescript
 // Add to eventTypes array (line 64-70)
-"workspace:changed"
+"workspace:changed";
 
 // Add listener (after config:changed handler)
 es.addEventListener("workspace:changed", () => {
@@ -100,7 +100,8 @@ export function useAddKnownWorkspace() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (path: string) => api.workspace.addKnown(path),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["known-workspaces"] }),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: ["known-workspaces"] }),
   });
 }
 
@@ -108,7 +109,8 @@ export function useRemoveKnownWorkspace() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (path: string) => api.workspace.removeKnown(path),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["known-workspaces"] }),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: ["known-workspaces"] }),
   });
 }
 ```
@@ -118,6 +120,7 @@ export function useRemoveKnownWorkspace() {
 New file: `packages/web/src/components/organisms/WorkspaceSwitcher.tsx`
 
 **Behavior:**
+
 - Default state: shows current workspace name (same as current Sidebar display)
 - Click trigger: toggles dropdown panel below the workspace name
 - Dropdown contents:

@@ -86,7 +86,10 @@ export const ApiProjectSchema = z
       const names = p.services.map((s) => s.name);
       return names.length === new Set(names).size;
     },
-    { message: "Service names must be unique within a project", path: ["services"] },
+    {
+      message: "Service names must be unique within a project",
+      path: ["services"],
+    },
   );
 
 export const DevHubApiConfigSchema = z

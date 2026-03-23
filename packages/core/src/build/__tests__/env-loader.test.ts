@@ -35,7 +35,9 @@ describe("loadEnvFile", () => {
 
   it("handles double-quoted values", async () => {
     const p = await write('DB_URL="postgresql://localhost:5432/db"\n');
-    expect(await loadEnvFile(p)).toEqual({ DB_URL: "postgresql://localhost:5432/db" });
+    expect(await loadEnvFile(p)).toEqual({
+      DB_URL: "postgresql://localhost:5432/db",
+    });
   });
 
   it("handles single-quoted values", async () => {
@@ -84,7 +86,9 @@ describe("resolveEnv", () => {
   it("returns process.env when no envFile set", async () => {
     const env = await resolveEnv(makeProject(), dir);
     expect(env).toMatchObject(
-      Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined)),
+      Object.fromEntries(
+        Object.entries(process.env).filter(([, v]) => v !== undefined),
+      ),
     );
   });
 

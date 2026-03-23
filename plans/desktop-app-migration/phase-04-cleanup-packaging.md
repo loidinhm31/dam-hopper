@@ -118,15 +118,15 @@ dev-hub/
 
 ## Related Code Files
 
-| File | Action |
-|------|--------|
-| `packages/cli/` | Delete entirely |
-| `packages/server/` | Delete entirely |
-| `packages/web/src/components/organisms/BuildLog.tsx` | Delete (replaced by TerminalPanel) |
-| `packages/web/src/api/client.ts` | Verify IPC-only (HTTP removed in Phase 02) |
-| `CLAUDE.md` | Update architecture, commands |
-| `package.json` (root) | Update scripts |
-| `pnpm-workspace.yaml` | Update if needed |
+| File                                                 | Action                                     |
+| ---------------------------------------------------- | ------------------------------------------ |
+| `packages/cli/`                                      | Delete entirely                            |
+| `packages/server/`                                   | Delete entirely                            |
+| `packages/web/src/components/organisms/BuildLog.tsx` | Delete (replaced by TerminalPanel)         |
+| `packages/web/src/api/client.ts`                     | Verify IPC-only (HTTP removed in Phase 02) |
+| `CLAUDE.md`                                          | Update architecture, commands              |
+| `package.json` (root)                                | Update scripts                             |
+| `pnpm-workspace.yaml`                                | Update if needed                           |
 
 ## Implementation Steps
 

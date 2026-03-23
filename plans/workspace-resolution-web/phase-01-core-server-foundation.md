@@ -50,6 +50,7 @@ export interface GlobalConfig {
 ```
 
 Add helpers:
+
 - `addKnownWorkspace(name: string, path: string): Promise<void>` — reads config, appends (dedupes by path), writes
 - `removeKnownWorkspace(path: string): Promise<void>` — reads config, filters out, writes
 - `listKnownWorkspaces(): Promise<KnownWorkspace[]>` — reads config, returns array (empty if absent)
@@ -73,11 +74,13 @@ if (!resolvedPath) throw new ConfigNotFoundError(input);
 ### 3. `switchWorkspace()` on ServerContext
 
 Add to `ServerContext` interface:
+
 ```typescript
 switchWorkspace: (workspacePath: string) => Promise<void>;
 ```
 
 Implementation sequence:
+
 1. `await ctx.runService.stopAll()`
 2. Resolve + normalize `workspacePath` (same logic as createServerContext)
 3. `findConfigFile()` → `readConfig()` → extract `workspaceRoot`
@@ -99,14 +102,14 @@ Implementation sequence:
 
 Add to `packages/server/src/routes/workspace.ts` (or new file):
 
-| Method | Path | Body | Response | Notes |
-|--------|------|------|----------|-------|
-| `POST` | `/workspace/switch` | `{ path: string }` | `{ name, root, projectCount }` | Calls `ctx.switchWorkspace()` |
-| `GET` | `/workspace/known` | — | `{ workspaces: KnownWorkspace[], current: string }` | Reads global config |
-| `POST` | `/workspace/known` | `{ path: string }` | `{ name, path }` | Validates path, reads config for name, adds |
-| `DELETE` | `/workspace/known` | `{ path: string }` | `{ removed: true }` | Removes from known list |
-| `GET` | `/global-config` | — | `GlobalConfig` | Reads XDG config |
-| `PUT` | `/global-config/defaults` | `{ workspace?: string }` | `{ updated: true }` | Updates defaults section |
+| Method   | Path                      | Body                     | Response                                            | Notes                                       |
+| -------- | ------------------------- | ------------------------ | --------------------------------------------------- | ------------------------------------------- |
+| `POST`   | `/workspace/switch`       | `{ path: string }`       | `{ name, root, projectCount }`                      | Calls `ctx.switchWorkspace()`               |
+| `GET`    | `/workspace/known`        | —                        | `{ workspaces: KnownWorkspace[], current: string }` | Reads global config                         |
+| `POST`   | `/workspace/known`        | `{ path: string }`       | `{ name, path }`                                    | Validates path, reads config for name, adds |
+| `DELETE` | `/workspace/known`        | `{ path: string }`       | `{ removed: true }`                                 | Removes from known list                     |
+| `GET`    | `/global-config`          | —                        | `GlobalConfig`                                      | Reads XDG config                            |
+| `PUT`    | `/global-config/defaults` | `{ workspace?: string }` | `{ updated: true }`                                 | Updates defaults section                    |
 
 ### 6. Request-Level Mutex During Switch (Validated)
 
@@ -114,10 +117,14 @@ Add a `switching` boolean flag to `ServerContext`. During `switchWorkspace()`, s
 to `true` before any teardown and `false` after context is fully settled.
 
 Add Hono middleware in `createApp()` that checks `ctx.switching`:
+
 ```typescript
 api.use("*", async (c, next) => {
   if (ctx.switching) {
-    return c.json({ error: "Workspace switch in progress", code: "SWITCHING" }, 503);
+    return c.json(
+      { error: "Workspace switch in progress", code: "SWITCHING" },
+      503,
+    );
   }
   return next();
 });
@@ -128,6 +135,7 @@ Exempt the `/events` SSE endpoint from the mutex (SSE clients should stay connec
 ### 7. Auto-Init for New Workspaces (Validated)
 
 When `POST /workspace/known` receives a path without `dev-hub.toml`:
+
 1. Call `discoverProjects(path)` from `@dev-hub/core`
 2. Build a `DevHubConfig` with discovered projects and directory name as workspace name
 3. Call `writeConfig(join(path, "dev-hub.toml"), config)` to create the config
@@ -183,10 +191,11 @@ Web: invalidateQueries() (nuclear)
 9. Add workspace management routes (switch, known CRUD, global-config)
 10. Add auto-register on startup in `startServer()`
 11. Write tests for:
-   - `addKnownWorkspace()` / `removeKnownWorkspace()` (dedup, atomic write)
-   - XDG fallback in server context
-   - `switchWorkspace()` — services recreated, emitters re-wired, old processes stopped
-   - API routes: switch, known list/add/remove
+
+- `addKnownWorkspace()` / `removeKnownWorkspace()` (dedup, atomic write)
+- XDG fallback in server context
+- `switchWorkspace()` — services recreated, emitters re-wired, old processes stopped
+- API routes: switch, known list/add/remove
 
 ## Todo
 

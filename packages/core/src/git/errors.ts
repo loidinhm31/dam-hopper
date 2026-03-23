@@ -10,7 +10,11 @@ export class GitError extends Error {
   category: GitErrorCategory;
   projectName: string;
 
-  constructor(message: string, category: GitErrorCategory, projectName: string) {
+  constructor(
+    message: string,
+    category: GitErrorCategory,
+    projectName: string,
+  ) {
     super(message);
     this.name = "GitError";
     this.category = category;
@@ -21,13 +25,22 @@ export class GitError extends Error {
 export function classifyGitError(err: Error): GitErrorCategory {
   const msg = err.message.toLowerCase();
 
-  if (msg.includes("could not resolve host") || msg.includes("connection refused")) {
+  if (
+    msg.includes("could not resolve host") ||
+    msg.includes("connection refused")
+  ) {
     return "network";
   }
-  if (msg.includes("permission denied") || msg.includes("authentication failed")) {
+  if (
+    msg.includes("permission denied") ||
+    msg.includes("authentication failed")
+  ) {
     return "auth";
   }
-  if (msg.includes("conflict") || msg.includes("not possible because you have unmerged")) {
+  if (
+    msg.includes("conflict") ||
+    msg.includes("not possible because you have unmerged")
+  ) {
     return "conflict";
   }
   if (msg.includes("unable to create") || msg.includes(".lock")) {

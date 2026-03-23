@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import { Button, inputClass } from "@/components/atoms/Button.js";
-import type { DevHubConfig, ProjectConfig, ServiceConfig } from "@/api/client.js";
+import type {
+  DevHubConfig,
+  ProjectConfig,
+  ServiceConfig,
+} from "@/api/client.js";
 
 // ── Small helpers ──────────────────────────────────────────────────────────
 
@@ -26,7 +30,14 @@ function Field({
 
 const selectClass = inputClass;
 
-const PROJECT_TYPES = ["maven", "gradle", "npm", "pnpm", "cargo", "custom"] as const;
+const PROJECT_TYPES = [
+  "maven",
+  "gradle",
+  "npm",
+  "pnpm",
+  "cargo",
+  "custom",
+] as const;
 
 // ── ServiceForm ──────────────────────────────────────────────────────────
 
@@ -44,8 +55,15 @@ function ServiceForm({
   return (
     <div className="rounded border border-[var(--color-border)] bg-[var(--color-background)] p-3 space-y-2">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-xs font-medium text-[var(--color-text)]">Service</span>
-        <Button size="sm" variant="danger" onClick={onRemove} disabled={disabled}>
+        <span className="text-xs font-medium text-[var(--color-text)]">
+          Service
+        </span>
+        <Button
+          size="sm"
+          variant="danger"
+          onClick={onRemove}
+          disabled={disabled}
+        >
           Remove
         </Button>
       </div>
@@ -64,7 +82,10 @@ function ServiceForm({
             className={inputClass}
             value={service.buildCommand ?? ""}
             onChange={(e) =>
-              onChange({ ...service, buildCommand: e.target.value || undefined })
+              onChange({
+                ...service,
+                buildCommand: e.target.value || undefined,
+              })
             }
             placeholder="pnpm build"
             disabled={disabled}
@@ -143,7 +164,12 @@ function CommandsForm({
             placeholder="pnpm test"
             disabled={disabled}
           />
-          <Button size="sm" variant="danger" onClick={() => remove(key)} disabled={disabled}>
+          <Button
+            size="sm"
+            variant="danger"
+            onClick={() => remove(key)}
+            disabled={disabled}
+          >
             ×
           </Button>
         </div>
@@ -170,7 +196,7 @@ function ProjectForm({
   errors?: Record<string, string>;
   disabled?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(() => !project.name);
 
   function updateService(i: number, s: ServiceConfig) {
     const services = [...(project.services ?? [])];
@@ -180,7 +206,10 @@ function ProjectForm({
 
   function removeService(i: number) {
     const services = (project.services ?? []).filter((_, idx) => idx !== i);
-    onChange({ ...project, services: services.length > 0 ? services : undefined });
+    onChange({
+      ...project,
+      services: services.length > 0 ? services : undefined,
+    });
   }
 
   function addService() {
@@ -199,15 +228,26 @@ function ProjectForm({
           className="flex items-center gap-2 text-sm font-medium text-[var(--color-text)] cursor-pointer"
           onClick={() => setExpanded((x) => !x)}
         >
-          <span className="text-[var(--color-text-muted)] text-xs">{expanded ? "▾" : "▸"}</span>
+          <span className="text-[var(--color-text-muted)] text-xs">
+            {expanded ? "▾" : "▸"}
+          </span>
           <span>
             {project.name || (
-              <span className="text-[var(--color-text-muted)] italic">unnamed</span>
+              <span className="text-[var(--color-text-muted)] italic">
+                unnamed
+              </span>
             )}
           </span>
-          <span className="text-xs text-[var(--color-text-muted)]">{project.type}</span>
+          <span className="text-xs text-[var(--color-text-muted)]">
+            {project.type}
+          </span>
         </button>
-        <Button size="sm" variant="danger" onClick={onRemove} disabled={disabled}>
+        <Button
+          size="sm"
+          variant="danger"
+          onClick={onRemove}
+          disabled={disabled}
+        >
           Remove
         </Button>
       </div>
@@ -239,7 +279,10 @@ function ProjectForm({
                 className={selectClass}
                 value={project.type}
                 onChange={(e) =>
-                  onChange({ ...project, type: e.target.value as ProjectConfig["type"] })
+                  onChange({
+                    ...project,
+                    type: e.target.value as ProjectConfig["type"],
+                  })
                 }
                 disabled={disabled}
               >
@@ -273,7 +316,10 @@ function ProjectForm({
                   .split(",")
                   .map((t) => t.trim())
                   .filter(Boolean);
-                onChange({ ...project, tags: tags.length > 0 ? tags : undefined });
+                onChange({
+                  ...project,
+                  tags: tags.length > 0 ? tags : undefined,
+                });
               }}
               placeholder="backend, api"
               disabled={disabled}
@@ -282,9 +328,13 @@ function ProjectForm({
 
           {/* Services */}
           <div className="space-y-2">
-            <h4 className="text-xs font-medium text-[var(--color-text-muted)]">Services</h4>
+            <h4 className="text-xs font-medium text-[var(--color-text-muted)]">
+              Services
+            </h4>
             {errors?.services && (
-              <p className="text-xs text-[var(--color-danger)]">{errors.services}</p>
+              <p className="text-xs text-[var(--color-danger)]">
+                {errors.services}
+              </p>
             )}
             {(project.services ?? []).map((s, i) => (
               <ServiceForm
@@ -295,7 +345,12 @@ function ProjectForm({
                 disabled={disabled}
               />
             ))}
-            <Button size="sm" variant="ghost" onClick={addService} disabled={disabled}>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={addService}
+              disabled={disabled}
+            >
               + Add service
             </Button>
           </div>
@@ -332,7 +387,9 @@ interface Props {
 }
 
 export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
-  const [draft, setDraft] = useState<DevHubConfig>(() => structuredClone(config));
+  const [draft, setDraft] = useState<DevHubConfig>(() =>
+    structuredClone(config),
+  );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
   const [externalChange, setExternalChange] = useState(false);
@@ -361,8 +418,10 @@ export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
       errs["workspace.name"] = "Workspace name is required";
     }
     draft.projects.forEach((p, i) => {
-      if (!p.name.trim()) errs[`projects.${i}.name`] = "Project name is required";
-      if (!p.path.trim()) errs[`projects.${i}.path`] = "Project path is required";
+      if (!p.name.trim())
+        errs[`projects.${i}.name`] = "Project name is required";
+      if (!p.path.trim())
+        errs[`projects.${i}.path`] = "Project path is required";
       const svcNames = (p.services ?? []).map((s) => s.name);
       if (svcNames.length !== new Set(svcNames).size) {
         errs[`projects.${i}.services`] = "Service names must be unique";
@@ -409,7 +468,10 @@ export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
   }
 
   function removeProject(i: number) {
-    setDraft({ ...draft, projects: draft.projects.filter((_, idx) => idx !== i) });
+    setDraft({
+      ...draft,
+      projects: draft.projects.filter((_, idx) => idx !== i),
+    });
   }
 
   function addProject() {
@@ -438,7 +500,9 @@ export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
 
       {/* Workspace */}
       <section className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4 space-y-3">
-        <h2 className="text-sm font-medium text-[var(--color-text)]">Workspace</h2>
+        <h2 className="text-sm font-medium text-[var(--color-text)]">
+          Workspace
+        </h2>
         <Field label="Name" error={errors["workspace.name"]}>
           <input
             className={inputClass}
@@ -461,13 +525,20 @@ export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
           <h2 className="text-sm font-medium text-[var(--color-text)]">
             Projects ({draft.projects.length})
           </h2>
-          <Button size="sm" variant="secondary" onClick={addProject} disabled={isSaving}>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={addProject}
+            disabled={isSaving}
+          >
             + Add project
           </Button>
         </div>
 
         {errors["projects"] && (
-          <p className="text-xs text-[var(--color-danger)]">{errors["projects"]}</p>
+          <p className="text-xs text-[var(--color-danger)]">
+            {errors["projects"]}
+          </p>
         )}
 
         {draft.projects.length === 0 ? (
@@ -478,17 +549,15 @@ export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
           <div className="space-y-2">
             {draft.projects.map((p, i) => (
               <ProjectForm
-                key={`${p.name}-${i}`}
+                key={i}
                 project={p}
                 onChange={(p) => updateProject(i, p)}
                 onRemove={() => removeProject(i)}
-                errors={
-                  Object.fromEntries(
-                    Object.entries(errors)
-                      .filter(([k]) => k.startsWith(`projects.${i}.`))
-                      .map(([k, v]) => [k.replace(`projects.${i}.`, ""), v]),
-                  )
-                }
+                errors={Object.fromEntries(
+                  Object.entries(errors)
+                    .filter(([k]) => k.startsWith(`projects.${i}.`))
+                    .map(([k, v]) => [k.replace(`projects.${i}.`, ""), v]),
+                )}
                 disabled={isSaving}
               />
             ))}
@@ -515,10 +584,14 @@ export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
         </Button>
 
         {saved && !saveError && (
-          <span className="text-xs text-[var(--color-success)]">Saved successfully</span>
+          <span className="text-xs text-[var(--color-success)]">
+            Saved successfully
+          </span>
         )}
         {saveError && (
-          <span className="text-xs text-[var(--color-danger)]">{saveError}</span>
+          <span className="text-xs text-[var(--color-danger)]">
+            {saveError}
+          </span>
         )}
       </div>
     </div>

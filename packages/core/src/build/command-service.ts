@@ -14,7 +14,11 @@ export class CommandService {
     project: ProjectConfig,
     commandName: string,
     workspaceRoot: string,
-  ): Promise<{ command: string; cwd: string; env: Record<string, string> } | null> {
+  ): Promise<{
+    command: string;
+    cwd: string;
+    env: Record<string, string>;
+  } | null> {
     const command = project.commands?.[commandName];
     if (!command) return null;
     const env = await resolveEnv(project, workspaceRoot);

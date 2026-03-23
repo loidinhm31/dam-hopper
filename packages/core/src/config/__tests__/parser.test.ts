@@ -79,10 +79,15 @@ lint = "pnpm lint"
     const config = await readConfig(configPath);
     expect(config.projects[0].services).toHaveLength(2);
     expect(config.projects[0].services![0].name).toBe("frontend");
-    expect(config.projects[0].services![0].buildCommand).toBe("pnpm build:frontend");
+    expect(config.projects[0].services![0].buildCommand).toBe(
+      "pnpm build:frontend",
+    );
     expect(config.projects[0].services![1].name).toBe("backend");
     expect(config.projects[0].services![1].runCommand).toBe("pnpm dev:backend");
-    expect(config.projects[0].commands).toEqual({ test: "pnpm test", lint: "pnpm lint" });
+    expect(config.projects[0].commands).toEqual({
+      test: "pnpm test",
+      lint: "pnpm lint",
+    });
   });
 
   it("resolves project paths to absolute", async () => {
@@ -194,7 +199,9 @@ test = "pnpm test"
     const reread = await readConfig(configPath2);
     expect(reread.projects[0].services).toHaveLength(2);
     expect(reread.projects[0].services![0].name).toBe("frontend");
-    expect(reread.projects[0].services![0].buildCommand).toBe("pnpm build:frontend");
+    expect(reread.projects[0].services![0].buildCommand).toBe(
+      "pnpm build:frontend",
+    );
     expect(reread.projects[0].services![1].runCommand).toBe("pnpm dev:backend");
     expect(reread.projects[0].commands).toEqual({ test: "pnpm test" });
   });
@@ -203,7 +210,7 @@ test = "pnpm test"
     const config = await readConfig(
       await (async () => {
         const p = join(tmpDir, "dev-hub.toml");
-        await writeFile(p, "[workspace]\nname = \"ws\"\n");
+        await writeFile(p, '[workspace]\nname = "ws"\n');
         return p;
       })(),
     );

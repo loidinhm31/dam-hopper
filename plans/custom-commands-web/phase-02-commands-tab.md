@@ -43,6 +43,7 @@ add/edit/delete commands inline.
 ### 1. New CommandRunner Component
 
 A standalone component that:
+
 - Shows all commands from `project.commands` in a list
 - Each command row: name, shell command, "Run" button, "Edit" / "Delete" actions
 - "Run" button calls `useExecCommand` → shows result (success/fail + output)
@@ -84,9 +85,9 @@ ProjectDetailPage
 
 ## File Ownership
 
-| File | Action |
-|------|--------|
-| `packages/web/src/pages/ProjectDetailPage.tsx` | Add "Commands" tab + render CommandRunner |
+| File                                                      | Action                                       |
+| --------------------------------------------------------- | -------------------------------------------- |
+| `packages/web/src/pages/ProjectDetailPage.tsx`            | Add "Commands" tab + render CommandRunner    |
 | `packages/web/src/components/organisms/CommandRunner.tsx` | New component (command list + exec + output) |
 
 ## Implementation Steps

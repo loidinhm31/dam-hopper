@@ -17,7 +17,9 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
-async function createCloneWithRemote(name: string): Promise<{ localPath: string; remotePath: string }> {
+async function createCloneWithRemote(
+  name: string,
+): Promise<{ localPath: string; remotePath: string }> {
   const remotePath = join(tmpDir, `${name}-remote.git`);
   const sourcePath = join(tmpDir, `${name}-source`);
   const localPath = join(tmpDir, name);
@@ -92,7 +94,9 @@ describe("BulkGitService", () => {
     await service.fetchAll(projects);
 
     // Should have progress events (per-project bulk-fetch progress + completed)
-    const bulkEvents = progressEvents.filter((e) => e.operation === "bulk-fetch");
+    const bulkEvents = progressEvents.filter(
+      (e) => e.operation === "bulk-fetch",
+    );
     expect(bulkEvents.length).toBeGreaterThanOrEqual(2);
 
     const completedEvent = bulkEvents.find((e) => e.phase === "completed");

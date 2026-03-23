@@ -67,7 +67,7 @@ export async function readGlobalConfig(): Promise<GlobalConfig | null> {
     const raw = await readFile(globalConfigPath(), "utf-8");
     return parse(raw) as GlobalConfig;
   } catch {
-    return null;   // absent or unreadable — not an error
+    return null; // absent or unreadable — not an error
   }
 }
 ```

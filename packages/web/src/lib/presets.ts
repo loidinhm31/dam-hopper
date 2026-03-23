@@ -1,4 +1,8 @@
-import type { ProjectType, ProjectConfig, ServiceConfig } from "@/api/client.js";
+import type {
+  ProjectType,
+  ProjectConfig,
+  ServiceConfig,
+} from "@/api/client.js";
 
 interface BuildPreset {
   buildCommand: string;
@@ -6,7 +10,10 @@ interface BuildPreset {
 }
 
 const PRESETS: Record<ProjectType, BuildPreset> = {
-  maven: { buildCommand: "mvn clean install -DskipTests", runCommand: "mvn spring-boot:run" },
+  maven: {
+    buildCommand: "mvn clean install -DskipTests",
+    runCommand: "mvn spring-boot:run",
+  },
   gradle: { buildCommand: "./gradlew build", runCommand: "./gradlew bootRun" },
   npm: { buildCommand: "npm run build", runCommand: "npm start" },
   pnpm: { buildCommand: "pnpm build", runCommand: "pnpm start" },
@@ -24,7 +31,8 @@ export function getEffectiveCommand(
 ): { command: string; source: "service" | "preset" } {
   const preset = PRESETS[project.type];
   const service = getFirstService(project);
-  const serviceCmd = type === "build" ? service?.buildCommand : service?.runCommand;
+  const serviceCmd =
+    type === "build" ? service?.buildCommand : service?.runCommand;
   if (serviceCmd) {
     return { command: serviceCmd, source: "service" };
   }

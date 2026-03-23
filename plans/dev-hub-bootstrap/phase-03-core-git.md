@@ -78,7 +78,7 @@ interface GitOperationResult {
   projectName: string;
   operation: "fetch" | "pull" | "push";
   success: boolean;
-  summary?: string;              // e.g., "3 commits pulled"
+  summary?: string; // e.g., "3 commits pulled"
   error?: GitError;
   durationMs: number;
 }
@@ -88,15 +88,15 @@ interface Worktree {
   path: string;
   branch: string;
   commitHash: string;
-  isMain: boolean;               // is this the main worktree (not a linked one)
+  isMain: boolean; // is this the main worktree (not a linked one)
   isLocked: boolean;
 }
 
 interface WorktreeAddOptions {
   branch: string;
-  path?: string;                 // default: ../{project}-{branch}
-  createBranch?: boolean;        // -b flag
-  baseBranch?: string;           // base for new branch
+  path?: string; // default: ../{project}-{branch}
+  createBranch?: boolean; // -b flag
+  baseBranch?: string; // base for new branch
 }
 
 // --- Branch ---
@@ -113,7 +113,7 @@ interface BranchInfo {
 interface BranchUpdateResult {
   branch: string;
   success: boolean;
-  reason?: string;               // e.g., "non-fast-forward", "not-tracking"
+  reason?: string; // e.g., "non-fast-forward", "not-tracking"
 }
 
 // --- Progress Events ---
@@ -122,11 +122,17 @@ interface GitProgressEvent {
   operation: string;
   phase: "started" | "progress" | "completed" | "failed";
   message: string;
-  percent?: number;              // 0-100 for fetch/pull progress
+  percent?: number; // 0-100 for fetch/pull progress
 }
 
 // --- Errors ---
-type GitErrorCategory = "network" | "auth" | "conflict" | "lock" | "not_repo" | "unknown";
+type GitErrorCategory =
+  | "network"
+  | "auth"
+  | "conflict"
+  | "lock"
+  | "not_repo"
+  | "unknown";
 
 class GitError extends Error {
   category: GitErrorCategory;
@@ -222,6 +228,7 @@ BulkGitService
 
 8. **Implement `git/bulk.ts`**
    - `BulkGitService` class:
+
      ```typescript
      class BulkGitService {
        private concurrency: number;
@@ -232,9 +239,12 @@ BulkGitService
        async fetchAll(projects: ProjectConfig[]): Promise<GitOperationResult[]>;
        async pullAll(projects: ProjectConfig[]): Promise<GitOperationResult[]>;
        async statusAll(projects: ProjectConfig[]): Promise<GitStatus[]>;
-       async updateAllBranches(projects: ProjectConfig[]): Promise<Map<string, BranchUpdateResult[]>>;
+       async updateAllBranches(
+         projects: ProjectConfig[],
+       ): Promise<Map<string, BranchUpdateResult[]>>;
      }
      ```
+
    - Use `p-limit(this.concurrency)` to throttle parallel operations.
    - Each method maps over projects, wraps each call in the limiter.
    - Emit per-project progress events and an overall "completed X/Y" event.
@@ -283,15 +293,16 @@ BulkGitService
 
 ## Risk Assessment
 
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
-| simple-git progress handler is unreliable for some operations | Medium | Medium | Fall back to start/complete events without percent for operations that don't report progress |
-| SSH agent not forwarded, auth errors in bulk ops | Medium | Low | Classify as auth error, suggest SSH_AUTH_SOCK in error message |
-| `git fetch origin branch:branch` fails on diverged branches | Expected | Low | Catch error, report as "non-fast-forward", suggest manual resolution |
-| Worktree operations fail if worktree path has spaces | Low | Low | Always quote paths in git commands |
+| Risk                                                          | Likelihood | Impact | Mitigation                                                                                   |
+| ------------------------------------------------------------- | ---------- | ------ | -------------------------------------------------------------------------------------------- |
+| simple-git progress handler is unreliable for some operations | Medium     | Medium | Fall back to start/complete events without percent for operations that don't report progress |
+| SSH agent not forwarded, auth errors in bulk ops              | Medium     | Low    | Classify as auth error, suggest SSH_AUTH_SOCK in error message                               |
+| `git fetch origin branch:branch` fails on diverged branches   | Expected   | Low    | Catch error, report as "non-fast-forward", suggest manual resolution                         |
+| Worktree operations fail if worktree path has spaces          | Low        | Low    | Always quote paths in git commands                                                           |
 
 ## Next Steps
 
 This module is consumed by:
+
 - [Phase 05 — CLI](./phase-05-cli.md) — CLI commands wrap these services with Ink UI
 - [Phase 06 — Server API](./phase-06-server-api.md) — REST endpoints delegate to these services, progress events become SSE

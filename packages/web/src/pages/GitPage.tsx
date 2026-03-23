@@ -17,10 +17,17 @@ function ResultsSummary({ results }: SectionResults) {
     <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-3 text-sm">
       <div className="flex gap-3 mb-2">
         <span className="text-[var(--color-success)]">✓ {ok} succeeded</span>
-        {fail.length > 0 && <span className="text-[var(--color-danger)]">✗ {fail.length} failed</span>}
+        {fail.length > 0 && (
+          <span className="text-[var(--color-danger)]">
+            ✗ {fail.length} failed
+          </span>
+        )}
       </div>
       {fail.map((r) => (
-        <div key={r.projectName} className="text-[var(--color-danger)] font-mono text-xs">
+        <div
+          key={r.projectName}
+          className="text-[var(--color-danger)] font-mono text-xs"
+        >
           {r.projectName}: {r.error}
         </div>
       ))}
@@ -60,7 +67,10 @@ export function GitPage() {
         </p>
         <div className="flex flex-wrap gap-2">
           {projectNames.map((name) => (
-            <label key={name} className="flex items-center gap-1.5 text-sm cursor-pointer">
+            <label
+              key={name}
+              className="flex items-center gap-1.5 text-sm cursor-pointer"
+            >
               <input
                 type="checkbox"
                 checked={selected.has(name)}
@@ -87,14 +97,18 @@ export function GitPage() {
         {/* Fetch */}
         <section className="space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold text-[var(--color-text)]">Bulk Fetch</h2>
+            <h2 className="text-base font-semibold text-[var(--color-text)]">
+              Bulk Fetch
+            </h2>
             <Button
               variant="primary"
               size="sm"
               loading={gitFetch.isPending}
               onClick={() => {
                 setFetchResults(null);
-                gitFetch.mutate(selectedList, { onSuccess: (r) => setFetchResults(r) });
+                gitFetch.mutate(selectedList, {
+                  onSuccess: (r) => setFetchResults(r),
+                });
               }}
             >
               Start Fetch
@@ -111,14 +125,18 @@ export function GitPage() {
         {/* Pull */}
         <section className="space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold text-[var(--color-text)]">Bulk Pull</h2>
+            <h2 className="text-base font-semibold text-[var(--color-text)]">
+              Bulk Pull
+            </h2>
             <Button
               variant="primary"
               size="sm"
               loading={gitPull.isPending}
               onClick={() => {
                 setPullResults(null);
-                gitPull.mutate(selectedList, { onSuccess: (r) => setPullResults(r) });
+                gitPull.mutate(selectedList, {
+                  onSuccess: (r) => setPullResults(r),
+                });
               }}
             >
               Start Pull

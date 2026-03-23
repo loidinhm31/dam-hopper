@@ -236,14 +236,15 @@ packages/cli/src/
 
 ## Risk Assessment
 
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
-| Ink React version conflicts with web package React 19 | Medium | Medium | Ink is isolated in cli package; pnpm workspace hoisting can be configured to not hoist react |
-| @clack/prompts doesn't support all needed prompt types | Low | Low | Fall back to basic readline for missing types |
-| Terminal width/height varies, Ink layout breaks | Medium | Low | Test with common terminal sizes (80x24, 120x40). Use Ink's `<Box flexDirection="column">` for responsive layout |
-| Large number of projects makes status table unreadable | Low | Medium | Add `--filter` and `--tag` options for filtering projects |
+| Risk                                                   | Likelihood | Impact | Mitigation                                                                                                      |
+| ------------------------------------------------------ | ---------- | ------ | --------------------------------------------------------------------------------------------------------------- |
+| Ink React version conflicts with web package React 19  | Medium     | Medium | Ink is isolated in cli package; pnpm workspace hoisting can be configured to not hoist react                    |
+| @clack/prompts doesn't support all needed prompt types | Low        | Low    | Fall back to basic readline for missing types                                                                   |
+| Terminal width/height varies, Ink layout breaks        | Medium     | Low    | Test with common terminal sizes (80x24, 120x40). Use Ink's `<Box flexDirection="column">` for responsive layout |
+| Large number of projects makes status table unreadable | Low        | Medium | Add `--filter` and `--tag` options for filtering projects                                                       |
 
 ## Next Steps
 
 The CLI is the primary user interface. In parallel, build:
+
 - [Phase 06 — Server API](./phase-06-server-api.md) — the server that `dev-hub ui` spawns

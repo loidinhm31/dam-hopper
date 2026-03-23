@@ -73,6 +73,7 @@ window.devhub = {
 ### 3. Web Client Replacement
 
 Replace `packages/web/src/api/client.ts`:
+
 - Remove all `fetch()` calls and HTTP helpers (`get`, `post`, `put`, `patch`, `del`)
 - Replace with `window.devhub.*` IPC calls — Electron-only, no HTTP fallback
 - Keep same TypeScript types (they're framework-agnostic)
@@ -81,6 +82,7 @@ Replace `packages/web/src/api/client.ts`:
 ### 4. Event Bridge (Replace SSE)
 
 Current SSE events to bridge:
+
 - `build:progress` → `ipcMain` forwards from `buildService.emitter`
 - `exec:progress` → `ipcMain` forwards from `commandService.emitter`
 - `run:progress` → `ipcMain` forwards from `runService.emitter`
@@ -110,13 +112,13 @@ Event flow:
 
 ## Related Code Files
 
-| File | Role |
-|------|------|
-| `packages/web/src/api/client.ts` | Replace fetch → IPC calls |
-| `packages/web/src/api/queries.ts` | Update SSE hooks to use IPC events |
-| `packages/server/src/routes/*.ts` | Reference for handler logic |
-| `packages/server/src/services/context.ts` | Service context pattern |
-| `packages/server/src/routes/events.ts` | SSE event logic to migrate |
+| File                                      | Role                               |
+| ----------------------------------------- | ---------------------------------- |
+| `packages/web/src/api/client.ts`          | Replace fetch → IPC calls          |
+| `packages/web/src/api/queries.ts`         | Update SSE hooks to use IPC events |
+| `packages/server/src/routes/*.ts`         | Reference for handler logic        |
+| `packages/server/src/services/context.ts` | Service context pattern            |
+| `packages/server/src/routes/events.ts`    | SSE event logic to migrate         |
 
 ## Implementation Steps
 

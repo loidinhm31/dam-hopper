@@ -66,23 +66,28 @@ Note: Renderer is `@dev-hub/web` — electron-vite points to it, no duplication.
 Expose typed API via `contextBridge`:
 
 ```typescript
-contextBridge.exposeInMainWorld('devhub', {
+contextBridge.exposeInMainWorld("devhub", {
   // Phase 02 will add all API methods
   // Phase 03 will add terminal methods
   platform: process.platform,
-  versions: { electron: process.versions.electron, node: process.versions.node },
+  versions: {
+    electron: process.versions.electron,
+    node: process.versions.node,
+  },
 });
 ```
 
 ### 4. Core Service Context
 
 Reuse `ServerContext` pattern from `@dev-hub/server`:
+
 - `config`, `workspaceRoot`, `buildService`, `runService`, `commandService`, `gitService`, `bulkGitService`
 - Initialize on app startup with workspace from `electron-store` or folder picker
 
 ### 5. Dev Workflow
 
 Root `package.json` scripts:
+
 - `dev:electron` — `electron-vite dev` (starts Vite + Electron concurrently, with HMR)
 - `build:electron` — `electron-vite build` (builds main + preload + renderer)
 
@@ -121,17 +126,17 @@ packages/web/ (renderer)
 
 ## Related Code Files
 
-| File | Role |
-|------|------|
+| File                                      | Role                                         |
+| ----------------------------------------- | -------------------------------------------- |
 | `packages/server/src/services/context.ts` | Reference for service initialization pattern |
-| `packages/server/src/app.ts` | Reference for web dist path resolution |
-| `packages/web/vite.config.ts` | Needs `base: './'` addition |
-| `packages/web/src/api/client.ts` | Will be replaced in Phase 02 |
+| `packages/server/src/app.ts`              | Reference for web dist path resolution       |
+| `packages/web/vite.config.ts`             | Needs `base: './'` addition                  |
+| `packages/web/src/api/client.ts`          | Will be replaced in Phase 02                 |
 
 ## Implementation Steps
 
 1. Create `packages/electron/package.json` with electron, electron-vite, electron-store, electron-rebuild deps
-2. Add to `pnpm-workspace.yaml` if needed (packages/* glob should cover it)
+2. Add to `pnpm-workspace.yaml` if needed (packages/\* glob should cover it)
 3. Create `electron.vite.config.ts` configuring main + preload + renderer (pointing to @dev-hub/web)
 4. Implement `src/main/index.ts` — window creation, workspace resolution (electron-store + dialog), context init
 5. Implement `src/preload/index.ts` — minimal contextBridge scaffold

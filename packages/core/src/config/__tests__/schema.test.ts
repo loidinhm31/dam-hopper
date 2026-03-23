@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { DevHubConfigSchema, ProjectConfigSchema, ServiceConfigSchema } from "../schema.js";
+import {
+  DevHubConfigSchema,
+  ProjectConfigSchema,
+  ServiceConfigSchema,
+} from "../schema.js";
 
 describe("ServiceConfigSchema", () => {
   it("parses a valid service config", () => {
@@ -73,7 +77,10 @@ describe("ProjectConfigSchema", () => {
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.commands).toEqual({ test: "mvn test", lint: "mvn checkstyle:check" });
+      expect(result.data.commands).toEqual({
+        test: "mvn test",
+        lint: "mvn checkstyle:check",
+      });
     }
   });
 

@@ -1,6 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import { ChevronDown, Check, X, Plus, Loader2 } from "lucide-react";
-import { useWorkspace, useKnownWorkspaces, useSwitchWorkspace, useAddKnownWorkspace, useRemoveKnownWorkspace } from "@/api/queries.js";
+import {
+  useWorkspace,
+  useKnownWorkspaces,
+  useSwitchWorkspace,
+  useAddKnownWorkspace,
+  useRemoveKnownWorkspace,
+} from "@/api/queries.js";
 
 function abbreviatePath(p: string) {
   return p
@@ -64,7 +70,10 @@ export function WorkspaceSwitcher() {
   }
 
   const isSwitching = switchMutation.isPending;
-  const error = switchMutation.error?.message ?? addMutation.error?.message ?? removeMutation.error?.message;
+  const error =
+    switchMutation.error?.message ??
+    addMutation.error?.message ??
+    removeMutation.error?.message;
 
   return (
     <div ref={ref} className="relative">
@@ -94,9 +103,13 @@ export function WorkspaceSwitcher() {
         <div className="absolute left-0 right-0 top-full mt-1 z-50 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-lg overflow-hidden">
           {/* Known workspaces */}
           {knownLoading ? (
-            <div className="px-3 py-2 text-xs text-[var(--color-text-muted)]">Loading…</div>
+            <div className="px-3 py-2 text-xs text-[var(--color-text-muted)]">
+              Loading…
+            </div>
           ) : (known?.workspaces ?? []).length === 0 ? (
-            <div className="px-3 py-2 text-xs text-[var(--color-text-muted)]">No saved workspaces</div>
+            <div className="px-3 py-2 text-xs text-[var(--color-text-muted)]">
+              No saved workspaces
+            </div>
           ) : (
             <ul>
               {(known?.workspaces ?? []).map((ws) => {
@@ -154,12 +167,16 @@ export function WorkspaceSwitcher() {
 
           {/* Add workspace */}
           <div className="px-3 py-2 space-y-1.5">
-            <p className="text-xs text-[var(--color-text-muted)]">Add workspace</p>
+            <p className="text-xs text-[var(--color-text-muted)]">
+              Add workspace
+            </p>
             <div className="flex gap-1.5">
               <input
                 value={addPath}
                 onChange={(e) => setAddPath(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleAdd();
+                }}
                 placeholder="/path/to/workspace"
                 className="flex-1 min-w-0 rounded border border-[var(--color-border)] bg-[var(--color-background)] text-xs text-[var(--color-text)] px-2 py-1 outline-none focus:border-[var(--color-primary)] transition-colors"
               />
@@ -179,7 +196,9 @@ export function WorkspaceSwitcher() {
 
           {/* Error */}
           {error && (
-            <div className="px-3 pb-2 text-xs text-[var(--color-danger)]">{error}</div>
+            <div className="px-3 pb-2 text-xs text-[var(--color-danger)]">
+              {error}
+            </div>
           )}
         </div>
       )}

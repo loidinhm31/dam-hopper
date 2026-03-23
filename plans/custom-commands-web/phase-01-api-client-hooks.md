@@ -61,10 +61,10 @@ No cache invalidation needed — exec is read-only (doesn't change project state
 
 ## File Ownership
 
-| File | Action |
-|------|--------|
-| `packages/web/src/api/client.ts` | Add `exec` namespace to `api` object |
-| `packages/web/src/api/queries.ts` | Add `useExecCommand` hook |
+| File                              | Action                               |
+| --------------------------------- | ------------------------------------ |
+| `packages/web/src/api/client.ts`  | Add `exec` namespace to `api` object |
+| `packages/web/src/api/queries.ts` | Add `useExecCommand` hook            |
 
 ## Implementation Steps
 

@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseWorktreePorcelain } from "../worktree.js";
 
-
 describe("parseWorktreePorcelain", () => {
   it("parses main + linked worktree", () => {
     const output = `worktree /home/user/project

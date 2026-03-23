@@ -9,20 +9,24 @@ effort: 1.5h
 # Phase 01: Schema & Presets — Services + Custom Commands
 
 ## Context
+
 - Parent: [plan.md](./plan.md)
 - Dependencies: None (foundation phase)
 - Docs: [codebase-summary.md](../../docs/codebase-summary.md)
 
 ## Overview
+
 Extend `ProjectConfigSchema` to support services (sub-processes) and custom commands. Update presets to resolve commands from services.
 
 ## Key Insights
+
 - User chose to **remove** old `build_command`/`run_command` fields entirely
 - Projects with NO services should still fall back to presets
 - Services run in parallel within a project (like frontend + backend dev servers)
 - Custom commands are arbitrary key-value pairs (test, lint, migrate, etc.)
 
 ## Requirements
+
 1. Add `ServiceConfigSchema` with name, build_command, run_command fields
 2. Add `services` array to `ProjectConfigSchema`
 3. Add `commands` record to `ProjectConfigSchema` for custom named commands
@@ -34,6 +38,7 @@ Extend `ProjectConfigSchema` to support services (sub-processes) and custom comm
 ## Architecture
 
 ### New TOML Format
+
 ```toml
 [[projects]]
 name = "my-app"
@@ -57,6 +62,7 @@ migrate = "pnpm db:migrate"
 ```
 
 ### New Types
+
 ```typescript
 interface ServiceConfig {
   name: string;
@@ -68,7 +74,7 @@ interface ProjectConfig {
   name: string;
   path: string;
   type: ProjectType;
-  services?: ServiceConfig[];    // NEW
+  services?: ServiceConfig[]; // NEW
   commands?: Record<string, string>; // NEW
   envFile?: string;
   tags?: string[];
@@ -76,10 +82,12 @@ interface ProjectConfig {
 ```
 
 ### Resolution Logic
+
 - Project with services → use services array
 - Project without services → create implicit single service from preset (name = "default")
 
 ## Related Code Files
+
 - `packages/core/src/config/schema.ts` — Zod schemas (main changes)
 - `packages/core/src/config/presets.ts` — getEffectiveCommand, getPreset
 - `packages/core/src/config/parser.ts` — writeConfig serialization
@@ -112,6 +120,7 @@ interface ProjectConfig {
    - `parser.test.ts`: add round-trip tests for new fields
 
 ## Todo
+
 - [ ] Add ServiceConfigSchema to schema.ts
 - [ ] Update ProjectConfigSchema (remove old fields, add services + commands)
 - [ ] Export new types from config/index.ts
@@ -122,6 +131,7 @@ interface ProjectConfig {
 - [ ] Update parser.test.ts
 
 ## Success Criteria
+
 - `ProjectConfig` type includes `services` and `commands`
 - Old `buildCommand`/`runCommand` removed from ProjectConfig
 - `getProjectServices()` returns preset-based default service for projects without services
@@ -129,9 +139,11 @@ interface ProjectConfig {
 - All existing tests updated and passing
 
 ## Risk Assessment
+
 - **Breaking change**: Removing build_command/run_command breaks all consumers (CLI, server, build service, run service)
 - **Mitigation**: This phase is foundational — all subsequent phases update consumers
 
 ## Security Considerations
+
 - Config parsing already validates via Zod — new fields follow same pattern
 - No user input from network in this phase

@@ -24,7 +24,10 @@ export class RunService {
     return getProjectServices(project);
   }
 
-  getFirstService(project: ProjectConfig, serviceName?: string): ServiceConfig | undefined {
+  getFirstService(
+    project: ProjectConfig,
+    serviceName?: string,
+  ): ServiceConfig | undefined {
     const services = getProjectServices(project);
     if (serviceName) return services.find((s) => s.name === serviceName);
     return services[0];

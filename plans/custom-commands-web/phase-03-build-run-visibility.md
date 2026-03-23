@@ -43,12 +43,14 @@ fallback) and indicate its source.
 ### 1. Command Preview in Build Tab
 
 Show the effective build command before the "Build" button:
+
 ```
 Build command: pnpm build (from preset: pnpm)
 [Build project-name]
 ```
 
 If user has custom service buildCommand, show:
+
 ```
 Build command: npm run build:prod (custom)
 [Build project-name]
@@ -57,6 +59,7 @@ Build command: npm run build:prod (custom)
 ### 2. Command Preview in Run Tab
 
 Show the effective run command:
+
 ```
 Run command: pnpm start (from preset: pnpm)
 [Start] [Stop] [Restart]
@@ -74,10 +77,13 @@ const PRESETS: Record<ProjectType, { build: string; run: string }> = {
   // ... etc
 };
 
-function getEffectiveCommand(project: ProjectConfig, type: "build" | "run"): {
+function getEffectiveCommand(
+  project: ProjectConfig,
+  type: "build" | "run",
+): {
   command: string;
   source: "service" | "preset";
-}
+};
 ```
 
 ### 4. Editable Command Override (Optional Enhancement)
@@ -102,9 +108,9 @@ Run Tab:
 
 ## File Ownership
 
-| File | Action |
-|------|--------|
-| `packages/web/src/lib/presets.ts` | New: preset map + getEffectiveCommand utility |
+| File                                   | Action                                              |
+| -------------------------------------- | --------------------------------------------------- |
+| `packages/web/src/lib/presets.ts`      | New: preset map + getEffectiveCommand utility       |
 | `packages/web/src/pages/BuildPage.tsx` | Add command preview to Build tab (if separate page) |
 
 **Note:** Build/Run tabs are currently inline in `ProjectDetailPage.tsx`. Since Phase 02
@@ -113,13 +119,14 @@ owns that file, this phase needs coordination. **Resolution:** Phase 03 creates 
 in the Build/Run tab sections when adding the Commands tab.
 
 **Updated approach — to avoid file conflict:**
+
 - Phase 03 creates the shared utility and component
 - Phase 02 integrates CommandPreview into Build/Run tab sections of ProjectDetailPage
 
-| File | Action |
-|------|--------|
-| `packages/web/src/lib/presets.ts` | New: preset map + effective command resolver |
-| `packages/web/src/components/atoms/CommandPreview.tsx` | New: display component for command + source |
+| File                                                   | Action                                       |
+| ------------------------------------------------------ | -------------------------------------------- |
+| `packages/web/src/lib/presets.ts`                      | New: preset map + effective command resolver |
+| `packages/web/src/components/atoms/CommandPreview.tsx` | New: display component for command + source  |
 
 ## Implementation Steps
 

@@ -25,11 +25,11 @@ users can point dev-hub at a workspace from multiple convenient entry points.
 
 ## Phases
 
-| Phase | Title                        | Status   | Effort | File |
-|-------|------------------------------|----------|--------|------|
-| 01    | Layered Resolution Core      | done     | 2h     | [phase-01](./phase-01-layered-resolution-core.md) |
-| 02    | Server Workspace Parity      | done     | 1.5h   | [phase-02](./phase-02-server-workspace-parity.md) |
-| 03    | Global XDG Config            | done     | 1h     | [phase-03](./phase-03-global-xdg-config.md) |
+| Phase | Title                   | Status | Effort | File                                              |
+| ----- | ----------------------- | ------ | ------ | ------------------------------------------------- |
+| 01    | Layered Resolution Core | done   | 2h     | [phase-01](./phase-01-layered-resolution-core.md) |
+| 02    | Server Workspace Parity | done   | 1.5h   | [phase-02](./phase-02-server-workspace-parity.md) |
+| 03    | Global XDG Config       | done   | 1h     | [phase-03](./phase-03-global-xdg-config.md)       |
 
 ## Known Gaps (pre-implementation)
 

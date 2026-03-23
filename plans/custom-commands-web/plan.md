@@ -27,11 +27,11 @@ inline command management without navigating to Settings.
 
 ## Phases
 
-| Phase | Title | Status | Effort | Parallel Group | File |
-|-------|-------|--------|--------|----------------|------|
-| 01 | API Client + Hooks | pending | 0.5h | A | [phase-01](./phase-01-api-client-hooks.md) |
-| 02 | Commands Tab in ProjectDetailPage | pending | 2h | A | [phase-02](./phase-02-commands-tab.md) |
-| 03 | Build & Run Command Visibility | pending | 1.5h | A | [phase-03](./phase-03-build-run-visibility.md) |
+| Phase | Title                             | Status  | Effort | Parallel Group | File                                           |
+| ----- | --------------------------------- | ------- | ------ | -------------- | ---------------------------------------------- |
+| 01    | API Client + Hooks                | pending | 0.5h   | A              | [phase-01](./phase-01-api-client-hooks.md)     |
+| 02    | Commands Tab in ProjectDetailPage | pending | 2h     | A              | [phase-02](./phase-02-commands-tab.md)         |
+| 03    | Build & Run Command Visibility    | pending | 1.5h   | A              | [phase-03](./phase-03-build-run-visibility.md) |
 
 ## Dependency Graph
 
@@ -46,14 +46,14 @@ Execution: Phase 01 first, then Phase 02 + 03 in parallel
 
 ## File Ownership Matrix
 
-| File | Phase |
-|------|-------|
-| `packages/web/src/api/client.ts` | 01 |
-| `packages/web/src/api/queries.ts` | 01 |
-| `packages/web/src/pages/ProjectDetailPage.tsx` | 02 |
-| `packages/web/src/components/organisms/CommandRunner.tsx` (new) | 02 |
-| `packages/web/src/pages/BuildPage.tsx` | 03 |
-| `packages/web/src/components/organisms/BuildLog.tsx` | 03 |
+| File                                                            | Phase |
+| --------------------------------------------------------------- | ----- |
+| `packages/web/src/api/client.ts`                                | 01    |
+| `packages/web/src/api/queries.ts`                               | 01    |
+| `packages/web/src/pages/ProjectDetailPage.tsx`                  | 02    |
+| `packages/web/src/components/organisms/CommandRunner.tsx` (new) | 02    |
+| `packages/web/src/pages/BuildPage.tsx`                          | 03    |
+| `packages/web/src/components/organisms/BuildLog.tsx`            | 03    |
 
 ## Affected Packages
 
@@ -62,6 +62,7 @@ Execution: Phase 01 first, then Phase 02 + 03 in parallel
 ## No Server Changes Needed
 
 The server already has:
+
 - `POST /api/exec/:project` — executes custom commands
 - `PATCH /api/config/projects/:name` — updates project config
 - SSE `command:progress` events — real-time output streaming
