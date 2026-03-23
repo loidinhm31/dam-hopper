@@ -33,6 +33,7 @@ export function registerTerminalHandlers(holder: CtxHolder): void {
         env,
         cols,
         rows,
+        project: opts.project,
       });
 
       return opts.id;
@@ -64,4 +65,14 @@ export function registerTerminalHandlers(holder: CtxHolder): void {
 
   // List active session IDs
   ipcMain.handle(CH.TERMINAL_LIST, () => holder.ptyManager.getAll());
+
+  // List sessions with metadata (project, command, type, alive, exitCode)
+  ipcMain.handle(CH.TERMINAL_LIST_DETAILED, () =>
+    holder.ptyManager.getDetailed(),
+  );
+
+  // Get scrollback buffer for a session (used to replay output on reconnect)
+  ipcMain.handle(CH.TERMINAL_BUFFER, (_e, id: string) =>
+    holder.ptyManager.getBuffer(id),
+  );
 }

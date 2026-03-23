@@ -1,4 +1,5 @@
 import { FolderGit2, CheckCircle2, AlertCircle, Activity } from "lucide-react";
+import { Link } from "react-router-dom";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { OverviewCard } from "@/components/molecules/OverviewCard.js";
 import { useProjects } from "@/api/queries.js";
@@ -65,12 +66,14 @@ export function DashboardPage() {
     <AppLayout title="Dashboard">
       {/* Overview cards */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4 mb-6">
-        <OverviewCard
-          icon={FolderGit2}
-          label="Total Projects"
-          value={projects.length}
-          color="var(--color-primary)"
-        />
+        <Link to="/terminals" className="block hover:opacity-90 transition-opacity">
+          <OverviewCard
+            icon={FolderGit2}
+            label="Total Projects"
+            value={projects.length}
+            color="var(--color-primary)"
+          />
+        </Link>
         <OverviewCard
           icon={CheckCircle2}
           label="Clean Repos"
@@ -83,12 +86,14 @@ export function DashboardPage() {
           value={dirty}
           color="var(--color-warning)"
         />
-        <OverviewCard
-          icon={Activity}
-          label="Active Terminals"
-          value={activeSessions}
-          color="var(--color-danger)"
-        />
+        <Link to="/terminals" className="block hover:opacity-90 transition-opacity">
+          <OverviewCard
+            icon={Activity}
+            label="Active Terminals"
+            value={activeSessions}
+            color="var(--color-danger)"
+          />
+        </Link>
       </div>
 
       {/* Status bar */}

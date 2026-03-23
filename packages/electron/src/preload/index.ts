@@ -85,6 +85,11 @@ contextBridge.exposeInMainWorld("devhub", {
 
     list: () => ipcRenderer.invoke(CH.TERMINAL_LIST),
 
+    listDetailed: () => ipcRenderer.invoke(CH.TERMINAL_LIST_DETAILED),
+
+    getBuffer: (id: string): Promise<string> =>
+      ipcRenderer.invoke(CH.TERMINAL_BUFFER, id),
+
     onData: (id: string, cb: (data: string) => void): Unsubscribe => {
       const channel = `terminal:data:${id}`;
       const listener = (_e: IpcRendererEvent, data: string) => cb(data);
