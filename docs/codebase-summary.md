@@ -3,9 +3,11 @@
 **Phase 01-04: Core Foundation** — Complete (config, git, build/run)
 **Phase 05-08: CLI/Server/Web** — Archived (replaced by Electron)
 **Phase 09: Desktop Transition** — Complete
+**Phase 10: Terminal Tree Redesign** — Complete (unified terminals page with tree sidebar)
 
 - **Phase 01-03: Electron Shell & IPC Foundation** — Complete
 - **Phase 04: Cleanup & Packaging** — Complete (CLI/Server removed, Electron packaging added)
+- **Phase 10: Terminal Tree Redesign** — Complete (unified terminals UI, tree view, session metadata)
 
 ## Project Overview
 
@@ -348,9 +350,22 @@ All packages are functional stubs ready for feature development:
   - build/run operations (build, start, stop, getLogs)
   - custom commands (execute)
   - PTY session management via `PtySessionManager`
+  - **TERMINAL_LIST_DETAILED** (NEW Phase 10): Returns detailed session metadata including PID, start time
 - **Race guard**: `loadWorkspacePromise` + `fullIpcRegistered` flag prevent concurrent initialization and double-registration
 - **Event broadcasting**: IpcEvent emitted to all renderer processes via `webContents.send()`
   - git:progress, build:progress, process:event, workspace:changed, heartbeat
+
+#### PTY Session Manager (session-manager.ts — Phase 10 Enhancement)
+
+- **SessionMeta**: Metadata per PTY session
+  - sessionId, projectName, command, pid, startTime
+  - Used by `getDetailed()` to return rich session info to renderer
+- **PtySessionManager**: Enhanced with session tracking
+  - **meta**: Map of sessionId → SessionMeta
+  - **create()**: Now records session metadata on creation
+  - **getDetailed()**: Returns SessionMeta[] for all active sessions (for terminal list queries)
+  - **scheduleMetaCleanup()**: Cleanup dead session metadata on interval (15s) to prevent memory leak
+  - Metadata includes process info (PID) for terminal identification
 
 #### Preload Script (preload.ts)
 
@@ -365,17 +380,35 @@ All packages are functional stubs ready for feature development:
 
 - **App.tsx**: Root component gates rendering on `workspace:status`
   - Initial state: `loading` (waits for `workspace:status` response)
-  - If `ready: true` → renders AppRoutes (dashboard)
+  - If `ready: true` → renders AppRoutes (4-page dashboard, Phase 10)
   - If `ready: false` → renders WelcomePage (first-launch screen)
   - Subscribes to `workspace:changed` event to re-check status on workspace switches
 
+#### App Routing (Phase 10: Terminal Tree Redesign)
+
+Routes changed from 7 pages (Dashboard, Build, Projects, Project Detail, Processes, Git, Settings) to 4 pages:
+
+| Route | Component | Purpose |
+|-------|-----------|---------|
+| `/` | Dashboard | Workspace overview, recent activity |
+| `/terminals` | TerminalsPage | **NEW:** Unified tree view + terminal sessions (replaces Build, Projects, Processes) |
+| `/git` | GitPage | Repository operations (fetch, pull, push, branches, worktrees) |
+| `/settings` | SettingsPage | Configuration editor, workspace preferences |
+
+**Deleted Routes**:
+- `/build` — Consolidated into `/terminals` TerminalTreeView with build command nodes
+- `/projects` — Projects now visible as tree nodes in `/terminals`
+- `/projects/:id` — Project details now in ProjectInfoPanel on `/terminals`
+- `/processes` — Process management integrated into `/terminals` terminal display
+
 #### IPC Event System
 
-- **IpcEvent** type (formerly SSEEvent): Discriminated union of all event types
+- **IpcEvent** type: Discriminated union of all event types
   - git:progress, build:progress, process:event, workspace:changed, heartbeat
 - **useIpc hook** (React): Subscribe to IPC events with cleanup
-  - Replaces useSSE from web package
 - **subscribeIpc**: Subscribe to specific event channel with callback
+- **IPC Channels** (Phase 10):
+  - `TERMINAL_LIST_DETAILED`: Query all sessions with metadata (SessionMeta[])
 
 #### Electron Packaging (electron-builder.yml)
 
@@ -393,35 +426,80 @@ All packages are functional stubs ready for feature development:
 
 **@dev-hub/web** bundled within Electron app (no separate server):
 
-#### Web Components
+#### Web Pages (Phase 10: Terminal Tree Redesign)
 
+App routing now uses 4-page layout:
+- **Dashboard** (`/`): Overview of workspace and recent activity
+- **Terminals** (`/terminals`): Unified terminals page with tree sidebar + session management
+- **Git** (`/git`): Repository operations across projects
+- **Settings** (`/settings`): Configuration and preferences
+
+Deleted pages (consolidated into Terminals page):
+- `BuildPage.tsx`, `ProjectsPage.tsx`, `ProjectDetailPage.tsx`, `ProcessesPage.tsx` (replaced by TerminalsPage)
+- `UnifiedCommandPanel.tsx` (functionality moved into TerminalTreeView)
+
+#### Web Components (Terminal Tree Redesign)
+
+**New Terminal Tree Components**:
+- **TerminalsPage.tsx**: Root page combining tree sidebar + context panels
+  - Layout: 3-column (tree | info panel | terminals)
+  - Tree selection controls which project/command is displayed
+  - Context switches via project tree or tab bar
+- **TerminalTreeView.tsx**: Tree sidebar with collapsible project structure
+  - Projects displayed as tree nodes (from useTerminalTree hook)
+  - Each project shows child command nodes (build, run, dev, custom commands)
+  - Tree maintains expand/collapse state per project
+  - Selection highlights current project/command context
+- **ProjectInfoPanel.tsx**: Right-panel project details
+  - Git status (branch, ahead/behind, stash)
+  - Worktrees list (can create/delete)
+  - Available commands (build, run, dev, custom)
+  - Git operations (fetch, pull, push)
+- **TerminalTabBar.tsx**: Horizontal tab bar for open terminals
+  - Shows up to 5 MRU (most-recently-used) terminal sessions
+  - Click to switch focus, close button per tab
+- **MultiTerminalDisplay.tsx**: Terminal display area
+  - Hybrid mounting of active + background sessions (up to 5)
+  - xterm.js instances mounted on demand, unmounted when closed
+  - Receives session ID from tree/tab selection
+- **CollapsibleSection.tsx**: Atom component for tree node expansion
+  - CSS grid-rows animation for smooth collapse/expand
+  - Used by TerminalTreeView for project sections
+
+**Existing Components** (stable):
 - **WelcomePage.tsx**: First-launch workspace selection
   - Shows folder picker button (via `workspace:open-dialog` IPC)
   - Displays known workspaces list (from `workspace:known()`)
   - Allows adding new workspaces or opening existing ones
   - Routes to dashboard on successful `workspace:init()`
 - **OverviewCard.tsx**: Workspace/project summary cards (git status, last operation)
-- **BuildLog.tsx**: DELETED in Phase 04 cleanup (redundant with LogViewer)
 - **ConfigEditor.tsx**: Edit dev-hub.toml with schema validation
 - **ProgressList.tsx**: Display real-time build/git operation progress
 - **GitPage.tsx**: Project git operations (fetch, pull, push, branches, worktrees)
 
-#### Web Hooks (Refactored for IPC)
+#### Web Hooks (IPC + Terminal Tree)
 
-- **useIpc.ts**: RENAMED from useSSE
+- **useIpc.ts**: Subscribe to IPC events
   - `useIpc(channel, callback)`: Subscribe to IPC events
   - Auto-cleanup on unmount, error handling
-  - Replaces SSE subscription pattern
-  - Type: `IpcEvent` (formerly SSEEvent), `IpcStatus` (formerly SSEStatus)
-- **useIpcEvent.ts**: RENAMED from useSSEEvent
+  - Type: `IpcEvent`, `IpcStatus`
+- **useIpcEvent.ts**: Per-event-type IPC hook
   - Composable hook for specific event types
   - Returns latest event data + loading state
+- **useTerminalTree.ts**: NEW (Phase 10)
+  - Combines `useProjects` + `useTerminalSessions` into unified `TreeProject[]` structure
+  - Each TreeProject includes: name, path, children (commands as tree nodes), sessions
+  - Used by TerminalTreeView to render hierarchical project/command structure
+  - Tracks which sessions are active per project/command
 
 #### Web API Layer (queries.ts)
 
 - Refactored for IPC instead of HTTP/SSE
 - TanStack Query integration with IPC as data source
-- Fixed comment: "IPC" instead of "SSE"
+- **useTerminalSessions** hook (NEW in Phase 10):
+  - Query active terminal sessions via `TERMINAL_LIST_DETAILED` IPC channel
+  - Returns SessionMeta[] with session ID, project, command, PID, start time
+  - Used by MultiTerminalDisplay and TerminalTabBar to list open terminals
 
 ### Core Module Cleanup
 
@@ -467,27 +545,36 @@ All packages are functional stubs ready for feature development:
 | src/main.tsx                    | React entry + QueryClient setup   |
 | src/App.tsx                     | Workspace status gate + router    |
 | src/pages/WelcomePage.tsx       | First-launch workspace selection  |
+| src/pages/TerminalsPage.tsx     | NEW: Unified terminals page (tree + sessions) |
 | src/hooks/useIpc.ts             | IPC event subscription hook       |
 | src/hooks/useIpcEvent.ts        | Per-event-type IPC hook           |
+| src/hooks/useTerminalTree.ts    | NEW: Project tree + sessions hook |
 | src/api/queries.ts              | TanStack Query for IPC data       |
-| src/components/organisms/\*.tsx | Page components (Build, Git, etc) |
+| src/components/atoms/CollapsibleSection.tsx | NEW: Collapsible tree section |
+| src/components/organisms/TerminalTreeView.tsx | NEW: Tree sidebar component |
+| src/components/organisms/ProjectInfoPanel.tsx | NEW: Project info right panel |
+| src/components/organisms/TerminalTabBar.tsx | NEW: Session tab bar |
+| src/components/organisms/MultiTerminalDisplay.tsx | NEW: Terminal display area |
+| src/components/organisms/GitPage.tsx | Git operations page |
 | src/pages/\*.tsx                | Route pages (Dashboard, Settings) |
 
-## Testing Status (Phase 04 Migration)
+## Testing Status (Phase 10: Terminal Tree Redesign)
 
 CLI and Server tests DELETED during Electron migration. Core tests (config, git, build) remain valid.
 
 - **@dev-hub/core**: 100+ tests (config, git, build/run services)
-- **@dev-hub/electron**: Tests TBD (IPC handler coverage)
-- **@dev-hub/web**: Tests TBD (React component + hook coverage)
+- **@dev-hub/electron**: Tests TBD (IPC handler coverage, PTY session metadata)
+- **@dev-hub/web**: Tests TBD (React component + hook coverage, TerminalTree integration)
 
-## Next Steps (Phase 05+)
+## Next Steps (Phase 11+)
 
-- Add project discovery UI for finding and adding new projects
-- Implement advanced git workflows (rebase, squash, cherry-pick)
-- Add build preset customization and command editing in dashboard
-- Implement persistent sidebar preferences and dark/light theme toggle
-- Add real-time log filtering and search across build/process output
+- Enhance terminal tree with search/filter for large projects
+- Add terminal session persistence (save/restore active terminals on app restart)
+- Implement advanced git workflows (rebase, squash, cherry-pick) in Git page
+- Add build preset customization and command editing in Settings
+- Implement persistent tree expand/collapse state per workspace
+- Add dark/light theme toggle and sidebar width adjustment
+- Add real-time log filtering and search across terminal output
 - Implement workspace templates and project scaffolding
-- Add multi-workspace support in both CLI and dashboard
+- Add multi-window support for terminal management
 - Expand web package component testing (atoms, molecules, organisms)
