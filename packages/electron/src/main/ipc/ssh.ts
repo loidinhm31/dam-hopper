@@ -1,13 +1,16 @@
 import { ipcMain } from "electron";
-import { spawn } from "node-pty";
-import { readdir } from "node:fs/promises";
-import { homedir } from "node:os";
+import { execFile } from "node:child_process";
+import { writeFile, unlink, readdir } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { CH } from "../../ipc-channels.js";
 import type { CtxHolder } from "../index.js";
 
+const execFileAsync = promisify(execFile);
+
 const SSH_DIR = join(homedir(), ".ssh");
-const PTY_TIMEOUT_MS = 15_000;
+const ADD_KEY_TIMEOUT_MS = 15_000;
 
 const EXCLUDED_SSH_FILES = new Set([
   "known_hosts",
@@ -29,11 +32,10 @@ async function sshListKeys(): Promise<string[]> {
 }
 
 /**
- * Validate that keyPath is within ~/.ssh/ and is a known key file.
+ * Validate that keyPath is a plain filename within ~/.ssh/ and is known.
  * Returns the resolved absolute path or throws on invalid input.
  */
 async function resolveKeyPath(keyPath: string): Promise<string> {
-  // Only allow plain filenames (no path separators) — they are relative to ~/.ssh/
   const name = basename(keyPath);
   if (name !== keyPath) {
     throw new Error("keyPath must be a filename within ~/.ssh/");
@@ -50,111 +52,84 @@ async function resolveKeyPath(keyPath: string): Promise<string> {
 }
 
 async function sshCheckAgent(): Promise<{ hasKeys: boolean; keyCount: number }> {
-  return new Promise((resolve) => {
-    let output = "";
-    let settled = false;
-
-    const pty = spawn("ssh-add", ["-l"], {
-      name: "xterm",
-      cols: 80,
-      rows: 24,
+  try {
+    const { stdout } = await execFileAsync("ssh-add", ["-l"], {
       env: process.env as Record<string, string>,
+      timeout: 5_000,
     });
-
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        try { pty.kill(); } catch { /* ignore */ }
-        resolve({ hasKeys: false, keyCount: 0 });
-      }
-    }, PTY_TIMEOUT_MS);
-
-    pty.onData((data) => {
-      output += data;
-    });
-
-    pty.onExit(({ exitCode }) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      // exit 0 = keys present, exit 1 = no keys, exit 2 = agent not running
-      if (exitCode === 2 || output.includes("Could not open")) {
-        resolve({ hasKeys: false, keyCount: 0 });
-        return;
-      }
-      const lines = output
-        .split("\n")
-        .filter((l) => l.trim() && !l.includes("The agent has no identities"));
-      const keyCount = exitCode === 1 ? 0 : Math.max(0, lines.length);
-      resolve({ hasKeys: keyCount > 0, keyCount });
-    });
-  });
+    const lines = stdout
+      .split("\n")
+      .filter((l) => l.trim() && !l.includes("The agent has no identities"));
+    return { hasKeys: lines.length > 0, keyCount: lines.length };
+  } catch {
+    // exit 1 = no keys, exit 2 = no agent — both mean no loaded keys
+    return { hasKeys: false, keyCount: 0 };
+  }
 }
 
+/**
+ * Add an SSH key to the agent using the SSH_ASKPASS mechanism.
+ *
+ * Why SSH_ASKPASS instead of PTY:
+ * - PTY data arrives in arbitrary chunks; the passphrase prompt can be split
+ *   across multiple onData calls, making detection fragile.
+ * - SSH_ASKPASS is the standard programmatic way to pass a passphrase:
+ *   ssh-add calls the askpass script instead of reading from the TTY.
+ * - No race conditions between process exit and remaining PTY data.
+ */
 async function sshAddKey(
   passphrase: string,
   resolvedKeyPath?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  return new Promise((resolve) => {
+  // Write a temporary askpass script that prints the passphrase.
+  // The file is mode 700 and deleted immediately after ssh-add runs.
+  const askpassPath = join(
+    tmpdir(),
+    `.devhub-askpass-${process.pid}-${Date.now()}.sh`,
+  );
+
+  // Shell-escape the passphrase for safe embedding in a single-quoted string
+  const escaped = passphrase.replace(/'/g, "'\\''");
+
+  try {
+    await writeFile(
+      askpassPath,
+      `#!/bin/sh\nprintf '%s' '${escaped}'\n`,
+      { mode: 0o700 },
+    );
+
     const args = resolvedKeyPath ? [resolvedKeyPath] : [];
-    const pty = spawn("ssh-add", args, {
-      name: "xterm",
-      cols: 80,
-      rows: 24,
-      env: process.env as Record<string, string>,
+
+    await execFileAsync("ssh-add", args, {
+      env: {
+        ...process.env,
+        SSH_ASKPASS: askpassPath,
+        // Force ssh-add to use SSH_ASKPASS even without a display (OpenSSH >= 8.4)
+        SSH_ASKPASS_REQUIRE: "force",
+        // Fallback for older OpenSSH that requires DISPLAY to use SSH_ASKPASS
+        DISPLAY: process.env["DISPLAY"] ?? ":0",
+      },
+      timeout: ADD_KEY_TIMEOUT_MS,
     });
 
-    // Accumulate only post-prompt output to avoid capturing passphrase echo
-    let prePromptDone = false;
-    let postOutput = "";
-    let passphraseWritten = false;
-    let settled = false;
-
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        try { pty.kill(); } catch { /* ignore */ }
-        resolve({ success: false, error: "Timed out waiting for ssh-add" });
-      }
-    }, PTY_TIMEOUT_MS);
-
-    pty.onData((data) => {
-      const lower = data.toLowerCase();
-      if (
-        !passphraseWritten &&
-        (lower.includes("enter passphrase") || lower.includes("passphrase for"))
-      ) {
-        passphraseWritten = true;
-        prePromptDone = true;
-        pty.write(passphrase + "\r");
-        return; // Don't accumulate the prompt line
-      }
-      if (prePromptDone) {
-        postOutput += data;
-      }
-    });
-
-    pty.onExit(({ exitCode }) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-
-      if (exitCode === 0) {
-        resolve({ success: true });
-      } else {
-        const errMsg = postOutput
-          .replace(/\r/g, "")
-          .split("\n")
-          .filter((l) => l.trim())
-          .join(" ")
-          .trim();
-        resolve({
-          success: false,
-          error: errMsg || "Failed to add SSH key",
-        });
-      }
-    });
-  });
+    return { success: true };
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    // execFile includes stderr in the error message — extract the useful part
+    const msg = raw
+      .split("\n")
+      .filter(
+        (l) =>
+          l.trim() &&
+          !l.startsWith("Command failed") &&
+          !l.includes("ssh-add"),
+      )
+      .join(" ")
+      .trim();
+    return { success: false, error: msg || "Failed to add SSH key" };
+  } finally {
+    await unlink(askpassPath).catch(() => {});
+  }
 }
 
 export function registerSshHandlers(_holder: CtxHolder): void {

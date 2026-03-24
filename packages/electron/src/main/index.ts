@@ -18,6 +18,13 @@ import { registerPreWorkspaceHandlers } from "./ipc/workspace.js";
 import { getMainWindow } from "./window.js";
 import { CH, EV } from "../ipc-channels.js";
 
+// Prevent git/SSH from prompting for passphrase in the terminal.
+// With these set, SSH auth failures surface as proper errors that the
+// PassphraseDialog can detect, instead of blocking on TTY input.
+process.env["GIT_TERMINAL_PROMPT"] = "0";
+process.env["GIT_SSH_COMMAND"] =
+  (process.env["GIT_SSH_COMMAND"] ?? "ssh") + " -o BatchMode=yes";
+
 interface StoreSchema {
   lastWorkspacePath?: string;
 }
