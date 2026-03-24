@@ -20,11 +20,14 @@ function isAuthError(results: GitOpResult[]): boolean {
   return results.some((r) => {
     if (r.success) return false;
     const msg = errorToString(r.error).toLowerCase();
+    // Match specific SSH authentication failure patterns only.
+    // "could not read from remote" is intentionally excluded because it also
+    // appears for non-auth failures (e.g., missing submodule path, network
+    // issues) and would cause the passphrase dialog to appear incorrectly.
     return (
       msg.includes("permission denied") ||
       msg.includes("authentication failed") ||
-      msg.includes("publickey") ||
-      msg.includes("could not read from remote")
+      msg.includes("publickey")
     );
   });
 }

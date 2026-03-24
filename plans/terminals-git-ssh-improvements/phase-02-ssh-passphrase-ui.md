@@ -1,7 +1,7 @@
 ---
 phase: "02"
 title: "SSH Passphrase Input from UI for Git Operations"
-status: pending
+status: done
 effort: 4.5h
 ---
 
@@ -12,9 +12,10 @@ effort: 4.5h
 ## Overview
 
 - **Date**: 2026-03-24
+- **Completed**: 2026-03-24
 - **Priority**: P2
-- **Implementation status**: Pending
-- **Review status**: Pending
+- **Implementation status**: Done
+- **Review status**: Done
 
 When git operations fail due to SSH auth (encrypted key not in agent), users see a generic error with no way to resolve it from the app. This phase adds: passphrase dialog → `ssh-add` via IPC → retry failed operation.
 
@@ -157,21 +158,21 @@ Encapsulates: attempt git op → detect auth error → show dialog → ssh-add �
 
 ## Todo
 
-- [ ] Add SSH_ADD_KEY, SSH_CHECK_AGENT to ipc-channels.ts
-- [ ] Create ssh.ts service with sshAddKey and sshCheckAgent
-- [ ] Register SSH handlers in main/ipc/index.ts
-- [ ] Expose ssh namespace in preload bridge
-- [ ] Update DevHubBridge types in electron.d.ts
-- [ ] Create PassphraseDialog component
-- [ ] Add useSshAddKey and useSshCheckAgent hooks
-- [ ] Create useGitWithSshRetry hook
-- [ ] Integrate into GitPage.tsx
-- [ ] Integrate into ProjectInfoPanel.tsx GitSection
-- [ ] Optionally extend auth patterns in errors.ts
-- [ ] Test: SSH key with passphrase triggers dialog
-- [ ] Test: correct passphrase loads key and retries op
-- [ ] Test: cancel dismisses dialog and shows error
-- [ ] Test: subsequent ops skip dialog after successful ssh-add
+- [x] Add SSH_ADD_KEY, SSH_CHECK_AGENT to ipc-channels.ts
+- [x] Create ssh.ts service with sshAddKey and sshCheckAgent
+- [x] Register SSH handlers in main/ipc/index.ts
+- [x] Expose ssh namespace in preload bridge
+- [x] Update DevHubBridge types in electron.d.ts
+- [x] Create PassphraseDialog component
+- [x] Add useSshAddKey and useSshCheckAgent hooks
+- [x] Create useGitWithSshRetry hook
+- [x] Integrate into GitPage.tsx
+- [x] Integrate into ProjectInfoPanel.tsx GitSection
+- [x] Optionally extend auth patterns in errors.ts
+- [x] Test: SSH key with passphrase triggers dialog
+- [x] Test: correct passphrase loads key and retries op
+- [x] Test: cancel dismisses dialog and shows error
+- [x] Test: subsequent ops skip dialog after successful ssh-add
 
 ## Success Criteria
 
