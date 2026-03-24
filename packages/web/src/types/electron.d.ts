@@ -89,6 +89,13 @@ export interface DevHubBridge {
     listKeys: () => Promise<string[]>;
   };
 
+  settings: {
+    clearCache: () => Promise<{ cleared: boolean }>;
+    reset: () => Promise<{ reset: boolean }>;
+    exportConfig: () => Promise<{ exported: boolean; path?: string }>;
+    importConfig: () => Promise<{ imported: boolean }>;
+  };
+
   terminal: {
     create: (opts: TerminalCreateOpts) => Promise<string>;
     write: (id: string, data: string) => void;

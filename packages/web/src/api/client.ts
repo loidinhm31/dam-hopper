@@ -136,4 +136,10 @@ export const api = {
     updateProject: (name: string, data: Partial<ProjectConfig>) =>
       window.devhub.config.updateProject(name, data),
   },
+  settings: {
+    clearCache: () => window.devhub.settings.clearCache(),
+    reset: () => window.devhub.settings.reset(),
+    exportConfig: () => window.devhub.settings.exportConfig(),
+    importConfig: () => window.devhub.settings.importConfig(),
+  },
 };

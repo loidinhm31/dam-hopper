@@ -73,6 +73,13 @@ contextBridge.exposeInMainWorld("devhub", {
     listKeys: () => ipcRenderer.invoke(CH.SSH_LIST_KEYS),
   },
 
+  settings: {
+    clearCache: () => ipcRenderer.invoke(CH.CACHE_CLEAR),
+    reset: () => ipcRenderer.invoke(CH.WORKSPACE_RESET),
+    exportConfig: () => ipcRenderer.invoke(CH.SETTINGS_EXPORT),
+    importConfig: () => ipcRenderer.invoke(CH.SETTINGS_IMPORT),
+  },
+
   terminal: {
     create: (opts: {
       id: string;

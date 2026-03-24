@@ -189,7 +189,7 @@ app.whenReady().then(async () => {
     loadWorkspacePromise = (async () => {
       const ctx = await initContext(workspacePath);
       holder.current = ctx;
-      registerIpcHandlers(holder);
+      registerIpcHandlers(holder, store);
       fullIpcRegistered = true;
       // Notify renderer workspace is ready (drives workspace-status query invalidation)
       getMainWindow()?.webContents.send(EV.WORKSPACE_CHANGED, {

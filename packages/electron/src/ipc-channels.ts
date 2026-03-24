@@ -41,6 +41,12 @@ export const CH = {
   SSH_CHECK_AGENT: "ssh:checkAgent",
   SSH_LIST_KEYS: "ssh:listKeys",
 
+  // Settings & Maintenance
+  CACHE_CLEAR: "cache:clear",
+  WORKSPACE_RESET: "workspace:reset",
+  SETTINGS_EXPORT: "settings:export",
+  SETTINGS_IMPORT: "settings:import",
+
   // Terminal (PTY)
   TERMINAL_CREATE: "terminal:create",
   TERMINAL_WRITE: "terminal:write",
