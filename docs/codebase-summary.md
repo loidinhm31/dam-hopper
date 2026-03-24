@@ -638,6 +638,60 @@ CLI and Server tests DELETED during Electron migration. Core tests (config, git,
   - Visual indicator: vertical line that appears on hover (`group-hover:opacity-100`)
 - Page layout applies `select-none` class during drag to prevent text selection artifacts
 
+### Phase 02: SSH Passphrase Input from UI (Terminals & Git SSH Improvements)
+
+**SSH passphrase dialog + ssh-agent loading** with automatic git operation retry on auth failure:
+
+#### New IPC Channels (ipc-channels.ts)
+
+- **SSH_ADD_KEY** (`ssh:addKey`): Load SSH key passphrase into ssh-agent via `ssh-add`
+- **SSH_CHECK_AGENT** (`ssh:checkAgent`): Check if ssh-agent is running and has keys loaded
+- **SSH_LIST_KEYS** (`ssh:listKeys`): Scan `~/.ssh/` for private key files (excludes `.pub`, `known_hosts`, `config`, `authorized_keys`)
+
+#### New SSH Service (packages/electron/src/main/ipc/ssh.ts)
+
+- **sshAddKey(passphrase, keyPath?)**: Spawns `ssh-add` via `node-pty` pseudo-terminal, writes passphrase to pty stdin on prompt detection. 15s timeout. Returns `{success, error?}`.
+- **sshCheckAgent()**: Runs `ssh-add -l`, returns `{running, hasKeys, keyCount}`.
+- **sshListKeys()**: Scans `~/.ssh/` for private key files, returns string[] of absolute paths.
+- **registerSshHandlers(holder)**: Registers all three handlers on ipcMain.
+
+#### Preload Bridge Extension (preload/index.ts)
+
+- Exposes `window.devhub.ssh` namespace: `addKey`, `checkAgent`, `listKeys` methods via contextBridge.
+
+#### New PassphraseDialog Component (packages/web/src/components/organisms/PassphraseDialog.tsx)
+
+- Modal overlay with password input and SSH key file dropdown (populated from `ssh.listKeys`).
+- Auto-focuses passphrase input on open, submits on Enter.
+- Props: `open`, `onSubmit(passphrase, keyPath)`, `onCancel`, `loading`, `error?`.
+- Never stores passphrase in persistent state.
+
+#### New Hook (useGitWithSshRetry.ts)
+
+- **useGitWithSshRetry()**: Encapsulates auth-error → dialog → ssh-add → retry pattern.
+  - Detects `GitError` with `category: "auth"` from failed git operation results.
+  - Manages `PassphraseDialog` open/close state internally.
+  - Session-level cache: once `ssh-add` succeeds, skips dialog for subsequent operations.
+  - Returns `{PassphraseDialogElement, executeWithRetry(fn)}`.
+
+#### Updated Query Hooks (queries.ts)
+
+- **useSshAddKey()**: Mutation calling `window.devhub.ssh.addKey`.
+- **useSshCheckAgent()**: Query with 60s staleTime.
+- **useSshListKeys()**: Query for available SSH key paths.
+
+#### Integration Points
+
+- **GitPage.tsx**: All git mutations (fetch, pull, push) wrapped with `useGitWithSshRetry`.
+- **ProjectInfoPanel.tsx GitSection**: Per-project fetch/pull/push uses same hook.
+
+#### Security
+
+- Passphrase written to pty stdin only — never as CLI argument (not visible in `ps aux`).
+- Passphrase cleared from memory after `ssh-add` completes.
+- No passphrase logging in main process.
+- Session cache stores only boolean "keys loaded" flag, never the passphrase itself.
+
 ## Next Steps (Phase 03+)
 
 - Enhance terminal tree with search/filter for large projects

@@ -1,7 +1,7 @@
 ---
 title: "Terminals & Git SSH Improvements"
 description: "Remove default build/run commands from Terminals page and add SSH passphrase input UI for git operations"
-status: pending
+status: done
 priority: P2
 effort: 6h
 branch: master
@@ -23,7 +23,7 @@ Two independent features improving the Terminals and Git pages:
 | # | Phase | Effort | Status | File |
 |---|-------|--------|--------|------|
 | 01 | [Remove Default Commands](./phase-01-remove-default-commands.md) | 1.5h | done | `useTerminalTree.ts`, `ProjectInfoPanel.tsx` |
-| 02 | [SSH Passphrase UI](./phase-02-ssh-passphrase-ui.md) | 4.5h | pending | New SSH service, IPC, dialog component |
+| 02 | [SSH Passphrase UI](./phase-02-ssh-passphrase-ui.md) | 4.5h | done | New SSH service, IPC, dialog component |
 
 ## Architecture Impact
 
