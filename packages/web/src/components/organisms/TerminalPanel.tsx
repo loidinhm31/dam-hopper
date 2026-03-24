@@ -76,10 +76,20 @@ export function TerminalPanel({
     let unsubExit: (() => void) | null = null;
     let inputDisposable: { dispose: () => void } | null = null;
     let observer: ResizeObserver | null = null;
+    let fitTimer: ReturnType<typeof setTimeout> | null = null;
 
-    // Create PTY session
+    // Create or reconnect to existing PTY session
     window.devhub.terminal
-      .create({ id: sessionId, project, command, cols, rows })
+      .list()
+      .then((alive) => {
+        if (alive.includes(sessionId)) {
+          // Reconnect — replay scrollback so the user sees past output
+          return window.devhub.terminal.getBuffer(sessionId).then((buf) => {
+            if (buf) term.write(buf);
+          });
+        }
+        return window.devhub.terminal.create({ id: sessionId, project, command, cols, rows }).then(() => {});
+      })
       .then(() => {
         // Stream PTY output → xterm
         unsubData = window.devhub.terminal.onData(sessionId, (data) => {
@@ -92,14 +102,33 @@ export function TerminalPanel({
         });
 
         // Forward user input → PTY stdin
+        // Ctrl+Shift+C → copy selection; Ctrl+Shift+V → paste from clipboard
         inputDisposable = term.onData((data) => {
           window.devhub.terminal.write(sessionId, data);
         });
 
-        // Resize PTY on panel resize
+        term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+          if (e.ctrlKey && e.shiftKey && e.code === "KeyC" && e.type === "keydown") {
+            const sel = term.getSelection();
+            if (sel) void navigator.clipboard.writeText(sel);
+            return false; // prevent sending to PTY
+          }
+          if (e.ctrlKey && e.shiftKey && e.code === "KeyV" && e.type === "keydown") {
+            void navigator.clipboard.readText().then((text) => {
+              window.devhub.terminal.write(sessionId, text);
+            });
+            return false;
+          }
+          return true;
+        });
+
+        // Resize PTY on panel resize — debounced to avoid xterm flicker during CSS transitions
         observer = new ResizeObserver(() => {
-          fitAddon.fit();
-          window.devhub.terminal.resize(sessionId, term.cols, term.rows);
+          if (fitTimer) clearTimeout(fitTimer);
+          fitTimer = setTimeout(() => {
+            fitAddon.fit();
+            window.devhub.terminal.resize(sessionId, term.cols, term.rows);
+          }, 200);
         });
         observer.observe(container);
       })
@@ -110,12 +139,13 @@ export function TerminalPanel({
       });
 
     return () => {
-      // Always runs, regardless of whether create() resolved or not
+      // Unsubscribe listeners but do NOT kill the PTY session —
+      // it should persist across navigation so the user can return to it.
       unsubData?.();
       unsubExit?.();
       inputDisposable?.dispose();
+      if (fitTimer) clearTimeout(fitTimer);
       observer?.disconnect();
-      window.devhub.terminal.kill(sessionIdRef.current);
       term.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -27,7 +27,7 @@ Two UI enhancements: (1) collapsible main sidebar across all pages, (2) draggabl
 |---|-------|--------|--------|------|
 | 01 | [Collapsible Sidebar](./phase-01-collapsible-sidebar.md) | done (2026-03-24) | 1.5h | Sidebar.tsx, AppLayout.tsx, TerminalsPage.tsx |
 | 02 | [Resizable Terminal TreeView](./phase-02-resizable-treeview.md) | done (2026-03-24) | 1h | TerminalsPage.tsx, useResizeHandle.ts (new) |
-| 03 | [Persistence & Polish](./phase-03-persistence-polish.md) | pending | 0.5h | AppLayout.tsx, TerminalsPage.tsx |
+| 03 | [Persistence & Polish](./phase-03-persistence-polish.md) | done (2026-03-24) | 0.5h | AppLayout.tsx, TerminalsPage.tsx |
 
 ## Key Decisions
 
