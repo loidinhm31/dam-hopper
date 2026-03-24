@@ -22,24 +22,6 @@ export interface TreeProject {
   activeCount: number;
 }
 
-/** Default build commands per project type (mirrors core presets). */
-const BUILD_PRESET: Partial<Record<ProjectType, string>> = {
-  maven: "mvn clean install -DskipTests",
-  gradle: "./gradlew build",
-  npm: "npm run build",
-  pnpm: "pnpm build",
-  cargo: "cargo build",
-};
-
-/** Default run commands per project type. */
-const RUN_PRESET: Partial<Record<ProjectType, string>> = {
-  maven: "mvn spring-boot:run",
-  gradle: "./gradlew bootRun",
-  npm: "npm start",
-  pnpm: "pnpm start",
-  cargo: "cargo run",
-};
-
 export function useTerminalTree() {
   const { data: projects = [], isLoading: projectsLoading } = useProjects();
   const { data: sessions = [], isLoading: sessionsLoading } =
@@ -56,8 +38,7 @@ export function useTerminalTree() {
       const commands: TreeCommand[] = [];
 
       // Build command
-      const buildCmd =
-        p.services?.[0]?.buildCommand ?? BUILD_PRESET[p.type];
+      const buildCmd = p.services?.[0]?.buildCommand;
       if (buildCmd) {
         const sessionId = `build:${p.name}`;
         commands.push({
@@ -70,7 +51,7 @@ export function useTerminalTree() {
       }
 
       // Run command
-      const runCmd = p.services?.[0]?.runCommand ?? RUN_PRESET[p.type];
+      const runCmd = p.services?.[0]?.runCommand;
       if (runCmd) {
         const sessionId = `run:${p.name}`;
         commands.push({
