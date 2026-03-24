@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain } from "electron";
-import { join, dirname, resolve, sep } from "node:path";
+import { join, dirname, resolve, sep, basename } from "node:path";
 import { homedir } from "node:os";
 import { stat, realpath } from "node:fs/promises";
 import Store from "electron-store";
@@ -10,6 +10,8 @@ import {
   readGlobalConfig,
   addKnownWorkspace,
   BulkGitService,
+  discoverProjects,
+  writeConfig,
   type DevHubConfig,
 } from "@dev-hub/core";
 import { PtySessionManager } from "./pty/session-manager.js";
@@ -75,7 +77,27 @@ async function initContext(workspacePath: string): Promise<ElectronContext> {
     }
   }
 
-  if (!resolvedPath) throw new ConfigNotFoundError(input);
+  if (!resolvedPath) {
+    // No config found — auto-initialize the workspace by discovering projects
+    // and writing a new dev-hub.toml (mirrors WORKSPACE_ADD_KNOWN logic)
+    const discovered = await discoverProjects(input);
+    const workspaceName = basename(input);
+    const newConfig: DevHubConfig = {
+      workspace: { name: workspaceName, root: "." },
+      projects: discovered.map((p) => ({
+        name: p.name,
+        path: p.path,
+        type: p.type,
+        services: undefined,
+        commands: undefined,
+        envFile: undefined,
+        tags: undefined,
+      })),
+    };
+    const tomlPath = join(input, "dev-hub.toml");
+    await writeConfig(tomlPath, newConfig);
+    resolvedPath = tomlPath;
+  }
 
   const config = await readConfig(resolvedPath);
   const workspaceRoot = dirname(resolvedPath);
