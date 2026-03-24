@@ -36,6 +36,11 @@ export const CH = {
   CONFIG_UPDATE: "config:update",
   CONFIG_UPDATE_PROJECT: "config:updateProject",
 
+  // SSH
+  SSH_ADD_KEY: "ssh:addKey",
+  SSH_CHECK_AGENT: "ssh:checkAgent",
+  SSH_LIST_KEYS: "ssh:listKeys",
+
   // Terminal (PTY)
   TERMINAL_CREATE: "terminal:create",
   TERMINAL_WRITE: "terminal:write",

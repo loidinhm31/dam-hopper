@@ -66,6 +66,13 @@ contextBridge.exposeInMainWorld("devhub", {
       ipcRenderer.invoke(CH.CONFIG_UPDATE_PROJECT, name, data),
   },
 
+  ssh: {
+    addKey: (passphrase: string, keyPath?: string) =>
+      ipcRenderer.invoke(CH.SSH_ADD_KEY, passphrase, keyPath),
+    checkAgent: () => ipcRenderer.invoke(CH.SSH_CHECK_AGENT),
+    listKeys: () => ipcRenderer.invoke(CH.SSH_LIST_KEYS),
+  },
+
   terminal: {
     create: (opts: {
       id: string;

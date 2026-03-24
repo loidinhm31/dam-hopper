@@ -5,6 +5,7 @@ import { ProgressList } from "@/components/organisms/ProgressList.js";
 import { useProjects, useGitFetch, useGitPull } from "@/api/queries.js";
 import type { GitOpResult } from "@/api/client.js";
 import { Badge } from "@/components/atoms/Badge.js";
+import { useGitWithSshRetry } from "@/hooks/useGitWithSshRetry.js";
 
 interface SectionResults {
   results: GitOpResult[];
@@ -44,6 +45,7 @@ export function GitPage() {
 
   const gitFetch = useGitFetch();
   const gitPull = useGitPull();
+  const { PassphraseDialogElement, executeWithRetry } = useGitWithSshRetry();
 
   const allSelected = selected.size === 0; // empty = all
   const selectedList = allSelected ? undefined : [...selected];
@@ -60,6 +62,7 @@ export function GitPage() {
 
   return (
     <AppLayout title="Git Operations">
+      {PassphraseDialogElement}
       {/* Project selector */}
       <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4 mb-6">
         <p className="text-sm font-medium text-[var(--color-text)] mb-3">
@@ -106,9 +109,9 @@ export function GitPage() {
               loading={gitFetch.isPending}
               onClick={() => {
                 setFetchResults(null);
-                gitFetch.mutate(selectedList, {
-                  onSuccess: (r) => setFetchResults(r),
-                });
+                void executeWithRetry(() =>
+                  gitFetch.mutateAsync(selectedList),
+                ).then((r) => setFetchResults(r)).catch(() => {});
               }}
             >
               Start Fetch
@@ -134,9 +137,9 @@ export function GitPage() {
               loading={gitPull.isPending}
               onClick={() => {
                 setPullResults(null);
-                gitPull.mutate(selectedList, {
-                  onSuccess: (r) => setPullResults(r),
-                });
+                void executeWithRetry(() =>
+                  gitPull.mutateAsync(selectedList),
+                ).then((r) => setPullResults(r)).catch(() => {});
               }}
             >
               Start Pull

@@ -10,6 +10,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import { useGitWithSshRetry } from "@/hooks/useGitWithSshRetry.js";
 import { cn } from "@/lib/utils.js";
 import { CollapsibleSection } from "@/components/atoms/CollapsibleSection.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
@@ -58,16 +59,22 @@ function GitSection({ projectName }: { projectName: string }) {
   const gitFetch = useGitFetch();
   const gitPull = useGitPull();
   const gitPush = useGitPush();
+  const { PassphraseDialogElement, executeWithRetry } = useGitWithSshRetry();
 
   return (
     <div className="px-3 py-2 space-y-2">
+      {PassphraseDialogElement}
       {/* Actions */}
       <div className="flex gap-2 flex-wrap">
         <Button
           size="sm"
           variant="secondary"
           loading={gitFetch.isPending}
-          onClick={() => gitFetch.mutate([projectName])}
+          onClick={() =>
+            void executeWithRetry(() =>
+              gitFetch.mutateAsync([projectName]),
+            ).catch(() => {})
+          }
         >
           <RefreshCw className="h-3 w-3" />
           Fetch
@@ -76,7 +83,11 @@ function GitSection({ projectName }: { projectName: string }) {
           size="sm"
           variant="secondary"
           loading={gitPull.isPending}
-          onClick={() => gitPull.mutate([projectName])}
+          onClick={() =>
+            void executeWithRetry(() =>
+              gitPull.mutateAsync([projectName]),
+            ).catch(() => {})
+          }
         >
           <Download className="h-3 w-3" />
           Pull
@@ -85,7 +96,11 @@ function GitSection({ projectName }: { projectName: string }) {
           size="sm"
           variant="secondary"
           loading={gitPush.isPending}
-          onClick={() => gitPush.mutate(projectName)}
+          onClick={() =>
+            void executeWithRetry(() =>
+              gitPush.mutateAsync(projectName).then((r) => [r]),
+            ).catch(() => {})
+          }
         >
           <Upload className="h-3 w-3" />
           Push
