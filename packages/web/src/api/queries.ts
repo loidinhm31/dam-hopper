@@ -248,3 +248,44 @@ export function useRemoveWorktree(project: string) {
     },
   });
 }
+
+// ── Settings & Maintenance ────────────────────────────────────────────────────
+
+export function useClearCache() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.settings.clearCache(),
+    onSuccess: () => {
+      qc.clear(); // Drop all cached query data — forces fresh fetches
+    },
+  });
+}
+
+export function useResetWorkspace() {
+  // No onSuccess needed — workspace:changed(null) event (from IPC) triggers
+  // nuclear invalidation in useIpc hook, and App.tsx re-evaluates workspace
+  // status → shows WelcomePage automatically
+  return useMutation({
+    mutationFn: () => api.settings.reset(),
+  });
+}
+
+export function useExportSettings() {
+  return useMutation({
+    mutationFn: () => api.settings.exportConfig(),
+  });
+}
+
+export function useImportSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.settings.importConfig(),
+    onSuccess: (result) => {
+      if (result?.imported) {
+        void qc.invalidateQueries({ queryKey: ["config"] });
+        void qc.invalidateQueries({ queryKey: ["projects"] });
+        void qc.invalidateQueries({ queryKey: ["workspace"] });
+      }
+    },
+  });
+}
