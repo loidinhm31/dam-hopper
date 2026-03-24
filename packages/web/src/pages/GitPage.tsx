@@ -29,7 +29,7 @@ function ResultsSummary({ results }: SectionResults) {
           key={r.projectName}
           className="text-[var(--color-danger)] font-mono text-xs"
         >
-          {r.projectName}: {r.error}
+          {r.projectName}: {typeof r.error === "string" ? r.error : (r.error as unknown as { message?: string })?.message ?? String(r.error)}
         </div>
       ))}
     </div>

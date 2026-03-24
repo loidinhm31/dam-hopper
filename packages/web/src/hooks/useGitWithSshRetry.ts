@@ -5,16 +5,28 @@ import { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";
 import { useSshAddKey, useSshListKeys } from "@/api/queries.js";
 import type { GitOpResult } from "@/api/client.js";
 
+/** Extract a string from whatever IPC serializes GitError to (string or Error-like object). */
+function errorToString(error: unknown): string {
+  if (!error) return "";
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  if (typeof (error as Record<string, unknown>).message === "string") {
+    return (error as { message: string }).message;
+  }
+  return String(error);
+}
+
 function isAuthError(results: GitOpResult[]): boolean {
-  return results.some(
-    (r) =>
-      !r.success &&
-      r.error != null &&
-      (r.error.toLowerCase().includes("permission denied") ||
-        r.error.toLowerCase().includes("authentication failed") ||
-        r.error.toLowerCase().includes("publickey") ||
-        r.error.toLowerCase().includes("could not read from remote")),
-  );
+  return results.some((r) => {
+    if (r.success) return false;
+    const msg = errorToString(r.error).toLowerCase();
+    return (
+      msg.includes("permission denied") ||
+      msg.includes("authentication failed") ||
+      msg.includes("publickey") ||
+      msg.includes("could not read from remote")
+    );
+  });
 }
 
 interface SshRetryState {
