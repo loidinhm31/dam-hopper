@@ -51,6 +51,30 @@ async function resolveKeyPath(keyPath: string): Promise<string> {
   return resolved;
 }
 
+/**
+ * Start ssh-agent and inject SSH_AUTH_SOCK + SSH_AGENT_PID into process.env
+ * so all subsequent child processes (ssh-add, git) can reach it.
+ * Returns true if the agent was started successfully.
+ */
+async function ensureSshAgent(): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync("ssh-agent", [], {
+      env: process.env as Record<string, string>,
+      timeout: 5_000,
+    });
+    const sockMatch = stdout.match(/SSH_AUTH_SOCK=([^;]+)/);
+    const pidMatch = stdout.match(/SSH_AGENT_PID=(\d+)/);
+    if (sockMatch?.[1] && pidMatch?.[1]) {
+      process.env["SSH_AUTH_SOCK"] = sockMatch[1];
+      process.env["SSH_AGENT_PID"] = pidMatch[1];
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 async function sshCheckAgent(): Promise<{ hasKeys: boolean; keyCount: number }> {
   try {
     const { stdout } = await execFileAsync("ssh-add", ["-l"], {
@@ -80,6 +104,7 @@ async function sshCheckAgent(): Promise<{ hasKeys: boolean; keyCount: number }> 
 async function sshAddKey(
   passphrase: string,
   resolvedKeyPath?: string,
+  _retried = false,
 ): Promise<{ success: boolean; error?: string }> {
   // Write a temporary askpass script that prints the passphrase.
   // The file is mode 700 and deleted immediately after ssh-add runs.
@@ -115,6 +140,16 @@ async function sshAddKey(
     return { success: true };
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
+
+    // Auto-start ssh-agent if it isn't running, then retry once
+    if (!_retried && raw.toLowerCase().includes("could not open a connection")) {
+      const started = await ensureSshAgent();
+      if (started) {
+        return sshAddKey(passphrase, resolvedKeyPath, true);
+      }
+      return { success: false, error: "ssh-agent is not running and could not be started. Run: eval $(ssh-agent)" };
+    }
+
     // execFile includes stderr in the error message — extract the useful part
     const msg = raw
       .split("\n")
