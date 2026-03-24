@@ -20,12 +20,12 @@ function TabStatusDot({ session }: { session?: SessionInfo }) {
     return <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-text-muted)]/30 shrink-0" />;
   }
   if (session.alive) {
-    return <span className="h-1.5 w-1.5 rounded-full bg-green-500 shrink-0" />;
+    return <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-success)] status-glow-green shrink-0" />;
   }
   if (session.exitCode !== 0 && session.exitCode !== null && session.exitCode !== undefined) {
-    return <span className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />;
+    return <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-danger)] status-glow-red shrink-0" />;
   }
-  return <span className="h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />;
+  return <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-warning)] status-glow-orange shrink-0" />;
 }
 
 export function TerminalTabBar({ tabs, activeTab, onSelectTab, onCloseTab }: Props) {

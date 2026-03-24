@@ -1,55 +1,280 @@
-@import "tailwindcss";
+@import './fonts.css';
+@import 'tailwindcss';
 
+/* Tailwind Theme Configuration — Developer Tool Dark Theme */
 @theme {
-  --color-background: oklch(0.12 0.01 264);
-  --color-surface: oklch(0.16 0.01 264);
-  --color-surface-2: oklch(0.2 0.01 264);
-  --color-border: oklch(0.28 0.01 264);
-  --color-text: oklch(0.92 0.01 264);
-  --color-text-muted: oklch(0.6 0.01 264);
-  --color-primary: oklch(0.65 0.18 264);
-  --color-primary-hover: oklch(0.7 0.18 264);
-  --color-success: oklch(0.65 0.18 145);
-  --color-warning: oklch(0.75 0.18 70);
-  --color-danger: oklch(0.65 0.2 20);
+  /* Font — JetBrains Mono for everything (full monospace IDE aesthetic) */
+  --font-sans: "JetBrains Mono", ui-monospace, monospace;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* Border Radius */
+  --radius: 0.5rem;
+  --radius-lg: 0.5rem;
+  --radius-md: calc(0.5rem - 2px);
+  --radius-sm: calc(0.5rem - 4px);
+
+  /* ── Core Colors (full hsl() values so var() works directly in components) ── */
+  --color-background:    hsl(222, 47%, 5%);    /* #0D1117 deep slate */
+  --color-foreground:    hsl(210, 40%, 98%);   /* #F1F5F9 light text */
+  --color-surface:       hsl(217, 33%, 11%);   /* #1E293B dark panel */
+  --color-surface-2:     hsl(215, 25%, 17%);   /* #1E2A3B slightly lighter */
+  --color-border:        hsl(215, 25%, 22%);   /* #2A3A52 subtle border */
+  --color-text:          hsl(210, 40%, 98%);   /* #F1F5F9 */
+  --color-text-muted:    hsl(215, 20%, 55%);   /* muted slate */
+
+  --color-primary:       hsl(217, 91%, 60%);   /* #3B82F6 VS Code blue */
+  --color-primary-hover: hsl(217, 91%, 68%);   /* lighter blue */
+
+  --color-success:       hsl(142, 71%, 45%);   /* #22C55E green */
+  --color-warning:       hsl(48,  96%, 53%);   /* #FACC15 yellow */
+  --color-danger:        hsl(0,   84%, 60%);   /* #F87171 red */
+
+  /* Extended semantic tokens */
+  --color-accent:        hsl(25,  95%, 53%);   /* #F97316 orange */
+  --color-info:          hsl(189, 94%, 43%);   /* #06B6D4 cyan */
+  --color-muted:         hsl(217, 33%, 15%);
+  --color-muted-foreground: hsl(215, 20%, 55%);
+  --color-secondary:     hsl(215, 25%, 22%);
+  --color-card:          hsl(217, 33%, 11%);
+  --color-input:         hsl(217, 33%, 9%);
+  --color-ring:          hsl(217, 91%, 60%);
+
+  /* Syntax Highlighting Palette */
+  --color-syntax-blue:   hsl(217, 91%, 60%);   /* keywords, functions */
+  --color-syntax-cyan:   hsl(189, 94%, 43%);   /* variables, properties */
+  --color-syntax-green:  hsl(142, 71%, 45%);   /* strings, success */
+  --color-syntax-yellow: hsl(48,  96%, 53%);   /* numbers, warnings */
+  --color-syntax-orange: hsl(25,  95%, 53%);   /* constants, tags */
+  --color-syntax-purple: hsl(271, 81%, 56%);   /* classes, types */
+  --color-syntax-red:    hsl(0,   72%, 51%);   /* errors, deletion */
+  --color-syntax-pink:   hsl(330, 81%, 60%);   /* special keywords */
+
+  /* Animations */
+  --animate-pulse-slow: pulse-slow 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-glow:       glow 2s ease-in-out infinite alternate;
 }
 
-* {
-  box-sizing: border-box;
+/* ── Base ── */
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+    border-color: var(--color-border);
+  }
+
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-text);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
 }
 
-html,
-body,
-#root {
-  height: 100%;
-  margin: 0;
-  padding: 0;
+/* ── Keyframes ── */
+@keyframes scanline {
+  0%   { transform: translateY(0); }
+  100% { transform: translateY(100vh); }
+}
+@keyframes glow {
+  0%   { box-shadow: 0 0 5px rgba(59,130,246,0.2), 0 0 10px rgba(59,130,246,0.1); }
+  100% { box-shadow: 0 0 10px rgba(59,130,246,0.4), 0 0 20px rgba(59,130,246,0.2); }
+}
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
 }
 
-body {
+/* ── Glassmorphism Cards ── */
+.glass-card {
+  background-color: rgba(30, 41, 59, 0.92);
+  border: 1px solid rgba(51, 65, 85, 0.8);
+  box-shadow:
+    0 4px 24px rgba(0,0,0,0.4),
+    0 0 0 1px rgba(59,130,246,0.08);
+}
+
+.glass-card-light {
+  background-color: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  box-shadow: 0 2px 16px rgba(0,0,0,0.3);
+}
+
+.glass-card-blur {
+  background-color: rgba(30, 41, 59, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(51, 65, 85, 0.8);
+  box-shadow:
+    0 4px 24px rgba(0,0,0,0.4),
+    0 0 0 1px rgba(59,130,246,0.12);
+}
+
+.glass {
+  background-color: rgba(30, 41, 59, 0.9);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+/* ── Background Patterns ── */
+.gradient-bg {
   background-color: var(--color-background);
-  color: var(--color-text);
-  font-family: ui-sans-serif, system-ui, sans-serif;
-  font-size: 14px;
+  background-image:
+    linear-gradient(rgba(59,130,246,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59,130,246,0.025) 1px, transparent 1px);
+  background-size: 24px 24px;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+.grid-pattern {
+  background-image:
+    linear-gradient(rgba(59,130,246,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59,130,246,0.04) 1px, transparent 1px);
+  background-size: 20px 20px;
 }
-::-webkit-scrollbar-track {
-  background: transparent;
+
+.scanline-effect {
+  position: relative;
+  overflow: hidden;
 }
-::-webkit-scrollbar-thumb {
-  background: var(--color-border);
+.scanline-effect::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 2px;
+  background-color: rgba(59,130,246,0.15);
+  animation: scanline 8s linear infinite;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ── Glow Effects ── */
+.glow-blue  { box-shadow: 0 0 20px rgba(59,130,246,0.35); }
+.glow-green { box-shadow: 0 0 20px rgba(34,197,94,0.35); }
+.glow-fab {
+  box-shadow:
+    0 0 20px rgba(59,130,246,0.4),
+    0 0 40px rgba(59,130,246,0.2),
+    0 4px 12px rgba(0,0,0,0.3);
+  border: 1px solid rgba(96,165,250,0.3);
+}
+.glow-fab:hover {
+  box-shadow:
+    0 0 24px rgba(59,130,246,0.55),
+    0 0 48px rgba(59,130,246,0.3),
+    0 6px 16px rgba(0,0,0,0.4);
+  border-color: rgba(96,165,250,0.5);
+}
+
+.status-glow-green  { box-shadow: 0 0 8px rgba(34,197,94,0.7),   0 0 3px rgba(34,197,94,0.5); }
+.status-glow-blue   { box-shadow: 0 0 8px rgba(59,130,246,0.7),  0 0 3px rgba(59,130,246,0.5); }
+.status-glow-red    { box-shadow: 0 0 8px rgba(220,38,38,0.7),   0 0 3px rgba(220,38,38,0.5); }
+.status-glow-orange { box-shadow: 0 0 8px rgba(249,115,22,0.7),  0 0 3px rgba(249,115,22,0.5); }
+
+/* ── Terminal Input ── */
+.glass-input {
+  background-color: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(51, 65, 85, 0.8);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  transition: border-color 150ms, box-shadow 150ms;
+}
+.glass-input::placeholder { color: var(--color-text-muted); }
+.glass-input:focus {
+  border-color: var(--color-primary);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(59,130,246,0.2);
+}
+
+/* ── Code Block ── */
+.code-block {
+  background-color: rgba(2, 6, 23, 0.95);
+  border: 1px solid rgba(30, 41, 59, 0.8);
+  border-radius: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.75rem;
+  color: rgb(203, 213, 225);
+  overflow-x: auto;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar        { width: 6px; height: 6px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  {
+  background: rgba(51, 65, 85, 0.8);
   border-radius: 3px;
 }
+::-webkit-scrollbar-thumb:hover { background: rgba(71, 85, 105, 1); }
 
-/* Monospace code blocks */
+/* ── Log containers ── */
 .log-container {
-  font-family:
-    ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* ── Terminal section header ── */
+.term-section {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: color-mix(in srgb, var(--color-primary) 55%, transparent);
+  margin-bottom: 0.75rem;
+}
+.term-section::before { content: "// "; }
+
+/* ── Terminal prompt line ── */
+.term-prompt {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.term-prompt::before {
+  content: "$";
+  color: color-mix(in srgb, var(--color-primary) 60%, transparent);
+  font-weight: 700;
+}
+
+/* ── Bracket button style ── */
+.btn-bracket {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.3rem 0.75rem;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 150ms;
+}
+.btn-bracket::before { content: "[ "; color: color-mix(in srgb, var(--color-primary) 40%, transparent); }
+.btn-bracket::after  { content: " ]"; color: color-mix(in srgb, var(--color-primary) 40%, transparent); }
+.btn-bracket:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  box-shadow: 0 0 8px rgba(59,130,246,0.2);
+}
+
+/* ── Active glow border ── */
+.border-glow {
+  border-color: var(--color-primary) !important;
+  box-shadow: 0 0 12px rgba(59,130,246,0.15), inset 0 0 12px rgba(59,130,246,0.03);
 }

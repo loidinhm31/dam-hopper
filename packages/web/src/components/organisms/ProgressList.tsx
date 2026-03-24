@@ -33,9 +33,8 @@ export function ProgressList({ initialProjects = [] }: Props) {
     const data = e.data as {
       projectName?: string;
       message?: string;
-      progress?: number;
-      done?: boolean;
-      error?: string;
+      percent?: number;
+      phase?: string;
     };
     if (!data.projectName) return;
 
@@ -47,11 +46,22 @@ export function ProgressList({ initialProjects = [] }: Props) {
         status: "running" as const,
         progress: 0,
       };
+      // Don't overwrite terminal states (done/error) with a non-terminal phase
+      const isTerminal =
+        existing.status === "done" || existing.status === "error";
+      const newStatus =
+        data.phase === "failed"
+          ? "error"
+          : data.phase === "completed"
+            ? "done"
+            : isTerminal
+              ? existing.status
+              : "running";
       next.set(data.projectName!, {
         ...existing,
         message: data.message ?? existing.message,
-        progress: data.progress ?? existing.progress,
-        status: data.error ? "error" : data.done ? "done" : "running",
+        progress: data.percent ?? existing.progress,
+        status: newStatus,
       });
       return next;
     });

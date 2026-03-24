@@ -6,10 +6,10 @@ import { useIpc } from "@/hooks/useSSE.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 
 const nav = [
-  { to: "/", icon: LayoutDashboard, label: "Dashboard" },
-  { to: "/terminals", icon: TerminalSquare, label: "Terminals" },
-  { to: "/git", icon: GitMerge, label: "Git" },
-  { to: "/settings", icon: Settings, label: "Settings" },
+  { to: "/", icon: LayoutDashboard, label: "DASHBOARD" },
+  { to: "/terminals", icon: TerminalSquare, label: "TERMINALS" },
+  { to: "/git", icon: GitMerge, label: "GIT" },
+  { to: "/settings", icon: Settings, label: "SETTINGS" },
 ];
 
 interface SidebarProps {
@@ -23,21 +23,34 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
   return (
     <aside
       className={cn(
-        "flex h-full flex-col bg-[var(--color-surface)] border-r border-[var(--color-border)] shrink-0 transition-[width] duration-200 ease-in-out overflow-hidden",
-        collapsed ? "w-12" : "w-60",
+        "flex h-full flex-col glass-card border-r border-[var(--color-border)] shrink-0 transition-[width] duration-200 ease-in-out overflow-hidden",
+        collapsed ? "w-12" : "w-56",
       )}
     >
-      {/* Workspace switcher */}
-      <div className={cn("border-b border-[var(--color-border)]", collapsed ? "px-2 py-4 flex justify-center" : "px-4 py-4")}>
+      {/* Workspace header */}
+      <div className={cn(
+        "border-b border-[var(--color-border)]",
+        collapsed ? "px-2 py-3 flex justify-center" : "px-3 py-3",
+      )}>
         {!collapsed ? (
-          <WorkspaceSwitcher />
+          <div>
+            <p className="text-[10px] text-[var(--color-primary)] font-bold tracking-widest mb-1 opacity-70">
+              ┌─ WORKSPACE
+            </p>
+            <WorkspaceSwitcher />
+          </div>
         ) : (
-          <Folder className="h-4 w-4 text-[var(--color-text-muted)]" />
+          <Folder className="h-4 w-4 text-[var(--color-primary)]" />
         )}
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto px-2 py-3">
+      <nav className="flex-1 overflow-y-auto px-1.5 py-2">
+        {!collapsed && (
+          <p className="px-2 pb-1.5 text-[10px] text-[var(--color-text-muted)] font-semibold tracking-widest uppercase opacity-60">
+            └─ navigate
+          </p>
+        )}
         {nav.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
@@ -46,34 +59,51 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
             title={collapsed ? label : undefined}
             className={({ isActive }) =>
               cn(
-                "flex items-center rounded px-3 py-2 text-sm transition-colors mb-0.5",
-                collapsed ? "justify-center" : "gap-3",
+                "flex items-center rounded-sm px-2 py-2 text-xs font-bold transition-all mb-0.5 group",
+                collapsed ? "justify-center" : "gap-2",
                 isActive
-                  ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
-                  : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
+                  ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)] border-l-2 border-[var(--color-primary)]"
+                  : "text-[var(--color-text)] opacity-50 hover:opacity-100 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] border-l-2 border-transparent",
               )
             }
           >
-            <Icon className="h-4 w-4 shrink-0" />
-            {!collapsed && <span className="truncate">{label}</span>}
+            {({ isActive }) => (
+              <>
+                {!collapsed && (
+                  <span className={cn(
+                    "text-[11px] w-4 shrink-0 font-black",
+                    isActive ? "text-[var(--color-primary)]" : "text-[var(--color-text-muted)] opacity-50",
+                  )}>
+                    {isActive ? ">" : "·"}
+                  </span>
+                )}
+                <Icon className={cn(
+                  "h-4 w-4 shrink-0",
+                  isActive ? "text-[var(--color-primary)]" : "",
+                )} />
+                {!collapsed && (
+                  <span className="tracking-widest text-[11px]">{label}</span>
+                )}
+              </>
+            )}
           </NavLink>
         ))}
       </nav>
 
-      {/* Toggle + Connection status */}
-      <div className="border-t border-[var(--color-border)] px-2 py-2 flex flex-col gap-1">
+      {/* Footer */}
+      <div className="border-t border-[var(--color-border)] px-2 py-2 flex flex-col gap-1.5">
         <div className={cn(collapsed && "flex justify-center")}>
           <button
             onClick={onToggle}
             aria-expanded={!collapsed}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className="p-2 hover:bg-[var(--color-surface-2)] rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            className="p-1.5 hover:bg-[var(--color-surface-2)] rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
           >
-            {collapsed ? <ChevronsRight size={16} /> : <ChevronsLeft size={16} />}
+            {collapsed ? <ChevronsRight size={14} /> : <ChevronsLeft size={14} />}
           </button>
         </div>
-        <div className={cn(collapsed ? "flex justify-center px-0 py-1" : "px-2 py-1")}>
-          <ConnectionDot status={status} />
+        <div className={cn(collapsed ? "flex justify-center px-0 py-0.5" : "px-1 py-0.5")}>
+          <ConnectionDot status={status} collapsed={collapsed} />
         </div>
       </div>
     </aside>

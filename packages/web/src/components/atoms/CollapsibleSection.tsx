@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight } from "lucide-react";
+// ChevronRight removed — replaced with text characters for terminal style
 import { cn } from "@/lib/utils.js";
 import type { ComponentType, ReactNode } from "react";
 
@@ -42,22 +42,17 @@ export function CollapsibleSection({
         type="button"
         onClick={handleToggle}
         className={cn(
-          "flex w-full items-center gap-2 px-3 py-2 text-sm font-medium",
-          "text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors",
-          "cursor-pointer select-none",
+          "flex w-full items-center gap-2 px-3 py-2 text-xs font-medium",
+          "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)]/50 transition-colors",
+          "cursor-pointer select-none tracking-widest uppercase",
           headerClassName,
         )}
       >
-        <ChevronRight
-          className={cn(
-            "h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)] transition-transform duration-200",
-            isOpen && "rotate-90",
-          )}
-        />
-        {Icon && <Icon className="h-4 w-4 shrink-0 text-[var(--color-text-muted)]" />}
+        <span className="text-[var(--color-primary)]/60 font-bold">{isOpen ? "▼" : "▶"}</span>
+        {Icon && <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--color-primary)]/50" />}
         <span className="flex-1 text-left">{title}</span>
         {badge !== undefined && (
-          <span className="rounded-full bg-[var(--color-surface-2)] px-1.5 py-0.5 text-xs text-[var(--color-text-muted)]">
+          <span className="rounded-sm bg-[var(--color-primary)]/10 border border-[var(--color-primary)]/20 px-1.5 py-0.5 text-[10px] text-[var(--color-primary)]/70">
             {badge}
           </span>
         )}

@@ -16,7 +16,6 @@ export function DashboardPage() {
   const { data: projects = [] } = useProjects();
   const [activeSessions, setActiveSessions] = useState(0);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
-  // Use ref for id counter to avoid HMR-reset issues (W6 fix)
   const nextIdRef = useRef(1);
 
   const clean = projects.filter((p) => p.status?.isClean === true).length;
@@ -65,7 +64,7 @@ export function DashboardPage() {
   return (
     <AppLayout title="Dashboard">
       {/* Overview cards */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4 mb-6">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 mb-5">
         <Link to="/terminals" className="block hover:opacity-90 transition-opacity">
           <OverviewCard
             icon={FolderGit2}
@@ -98,11 +97,11 @@ export function DashboardPage() {
 
       {/* Status bar */}
       {projects.length > 0 && (
-        <div className="mb-6 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4">
-          <p className="text-sm font-medium text-[var(--color-text)] mb-2">
-            Repository Status
+        <div className="mb-5 rounded glass-card p-4">
+          <p className="text-[10px] text-[var(--color-primary)]/60 tracking-widest uppercase mb-3">
+            // REPO_STATUS
           </p>
-          <div className="flex h-3 overflow-hidden rounded-full bg-[var(--color-surface-2)]">
+          <div className="flex h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-2)]">
             {clean > 0 && (
               <div
                 className="bg-[var(--color-success)] transition-all"
@@ -118,40 +117,41 @@ export function DashboardPage() {
               />
             )}
           </div>
-          <div className="flex gap-4 mt-2 text-xs text-[var(--color-text-muted)]">
-            <span>
-              <span className="inline-block h-2 w-2 rounded-full bg-[var(--color-success)] mr-1" />
-              {clean} clean
+          <div className="flex gap-5 mt-2.5 text-[11px] text-[var(--color-text-muted)]">
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-success)] status-glow-green" />
+              <span className="text-[var(--color-success)]">{clean}</span> clean
             </span>
-            <span>
-              <span className="inline-block h-2 w-2 rounded-full bg-[var(--color-warning)] mr-1" />
-              {dirty} dirty
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-warning)] status-glow-orange" />
+              <span className="text-[var(--color-warning)]">{dirty}</span> dirty
             </span>
-            <span>
-              <span className="inline-block h-2 w-2 rounded-full bg-[var(--color-border)] mr-1" />
-              {projects.length - clean - dirty} unknown
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-border)]" />
+              <span className="text-[var(--color-text-muted)]">{projects.length - clean - dirty}</span> unknown
             </span>
           </div>
         </div>
       )}
 
       {/* Recent activity */}
-      <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4">
-        <p className="text-sm font-medium text-[var(--color-text)] mb-3">
-          Recent Activity
+      <div className="rounded glass-card p-4">
+        <p className="text-[10px] text-[var(--color-primary)]/60 tracking-widest uppercase mb-3">
+          // RECENT_ACTIVITY
         </p>
         {activity.length === 0 ? (
-          <p className="text-sm text-[var(--color-text-muted)]">
-            No recent events. Waiting for SSE…
+          <p className="text-xs text-[var(--color-text-muted)]/60 italic">
+            <span className="text-[var(--color-primary)]/40">$</span> waiting for events...
           </p>
         ) : (
-          <ul className="space-y-1.5">
+          <ul className="space-y-1">
             {activity.map((a) => (
-              <li key={a.id} className="flex items-start gap-3 text-xs">
-                <span className="shrink-0 text-[var(--color-text-muted)]">
+              <li key={a.id} className="flex items-start gap-3 text-xs group">
+                <span className="shrink-0 text-[var(--color-text-muted)]/40 tabular-nums text-[10px] mt-0.5">
                   {a.time.toLocaleTimeString()}
                 </span>
-                <span className="text-[var(--color-text)] font-mono">
+                <span className="text-[var(--color-primary)]/40 shrink-0">›</span>
+                <span className="text-[var(--color-text)]/80 group-hover:text-[var(--color-text)] transition-colors">
                   {a.message}
                 </span>
               </li>

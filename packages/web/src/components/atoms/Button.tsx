@@ -2,9 +2,7 @@ import { cn } from "@/lib/utils.js";
 import type { ButtonHTMLAttributes } from "react";
 
 export const inputClass =
-  "w-full rounded border border-[var(--color-border)] bg-[var(--color-background)] " +
-  "text-sm text-[var(--color-text)] px-2.5 py-1.5 outline-none " +
-  "focus:border-[var(--color-primary)] transition-colors " +
+  "w-full rounded glass-input px-2.5 py-1.5 outline-none " +
   "disabled:opacity-50 disabled:cursor-not-allowed";
 
 type Variant = "primary" | "secondary" | "danger" | "ghost";

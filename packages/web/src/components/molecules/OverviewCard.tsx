@@ -13,20 +13,22 @@ export function OverviewCard({
   value,
   color = "var(--color-primary)",
 }: Props) {
+  const slug = label.toLowerCase().replace(/\s+/g, "_");
   return (
-    <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4">
-      <div className="flex items-center gap-3">
+    <div className="rounded glass-card p-3 group hover:border-[var(--color-primary)]/30 transition-colors">
+      <div className="flex items-start justify-between mb-2">
         <div
-          className="flex h-10 w-10 items-center justify-center rounded-lg"
-          style={{ backgroundColor: `${color}20` }}
+          className="flex h-7 w-7 items-center justify-center rounded"
+          style={{ backgroundColor: `${color}18` }}
         >
-          <Icon className="h-5 w-5" style={{ color }} />
+          <Icon className="h-3.5 w-3.5" style={{ color }} />
         </div>
-        <div>
-          <p className="text-2xl font-bold text-[var(--color-text)]">{value}</p>
-          <p className="text-xs text-[var(--color-text-muted)]">{label}</p>
-        </div>
+        <span className="text-[10px] text-[var(--color-text-muted)]/50 tracking-widest">{"{}"}</span>
       </div>
+      <p className="text-2xl font-bold tabular-nums" style={{ color }}>{value}</p>
+      <p className="text-[10px] text-[var(--color-text-muted)] tracking-widest uppercase mt-0.5">
+        // {slug}
+      </p>
     </div>
   );
 }

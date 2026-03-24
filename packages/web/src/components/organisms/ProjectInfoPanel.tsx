@@ -45,8 +45,8 @@ function StatusBadge({ isClean }: { isClean: boolean }) {
       className={cn(
         "rounded px-1.5 py-0.5 text-xs font-medium",
         isClean
-          ? "bg-green-500/15 text-green-600"
-          : "bg-amber-500/15 text-amber-600",
+          ? "bg-[var(--color-success)]/15 text-[var(--color-success)]"
+          : "bg-[var(--color-warning)]/15 text-[var(--color-warning)]",
       )}
     >
       {isClean ? "clean" : "dirty"}
