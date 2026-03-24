@@ -78,6 +78,34 @@ pnpm package:linux  # Linux: AppImage + deb
 pnpm package:win    # Windows: nsis + portable
 ```
 
+### First-time setup (Linux)
+
+After `pnpm install`, two extra steps are required before running `pnpm dev:electron`:
+
+**1. Download the Electron binary**
+
+pnpm may skip the Electron post-install script. If you see `Error: Electron uninstall` when starting:
+
+```bash
+# Find your Electron version
+ls node_modules/.pnpm | grep "^electron@"
+# e.g. electron@34.5.8 — use that version below:
+node node_modules/.pnpm/electron@34.5.8/node_modules/electron/install.js
+```
+
+**2. Rebuild native modules for Electron**
+
+`node-pty` ships without Linux prebuilds and must be compiled against Electron's Node.js runtime. If you see `Failed to load native module: pty.node`:
+
+```bash
+# Use the same version found in step 1
+npx @electron/rebuild -f -v 34.5.8 -m packages/electron
+```
+
+Requires standard build tools: `python3`, `make`, `g++` (install via your distro's `base-devel` / `build-essential` package).
+
+> These steps only need to be repeated after `pnpm install` upgrades the Electron version.
+
 ## Monorepo Structure
 
 ```
