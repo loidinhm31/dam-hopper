@@ -5,6 +5,7 @@
 **Phase 09: Desktop Transition** — Complete
 **Phase 10: Terminal Tree Redesign** — Complete (unified terminals page with tree sidebar)
 **Phase 02: Resizable TreeView** — Complete (drag-to-resize terminal tree panel with persistence)
+**Phase 03: Persistence & Polish** — Complete (keyboard shortcut Ctrl/Cmd+B in useSidebarCollapse hook, ResizeObserver debounced 200ms in TerminalPanel)
 
 - **Phase 01-03: Electron Shell & IPC Foundation** — Complete
 - **Phase 04: Cleanup & Packaging** — Complete (CLI/Server removed, Electron packaging added)
