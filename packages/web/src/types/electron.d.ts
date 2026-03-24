@@ -83,6 +83,12 @@ export interface DevHubBridge {
     ) => Promise<ProjectConfig>;
   };
 
+  ssh: {
+    addKey: (passphrase: string, keyPath?: string) => Promise<{ success: boolean; error?: string }>;
+    checkAgent: () => Promise<{ hasKeys: boolean; keyCount: number }>;
+    listKeys: () => Promise<string[]>;
+  };
+
   terminal: {
     create: (opts: TerminalCreateOpts) => Promise<string>;
     write: (id: string, data: string) => void;

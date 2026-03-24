@@ -211,6 +211,34 @@ export function useAddWorktree(project: string) {
   });
 }
 
+export function useSshAddKey() {
+  return useMutation({
+    mutationFn: ({
+      passphrase,
+      keyPath,
+    }: {
+      passphrase: string;
+      keyPath?: string;
+    }) => window.devhub.ssh.addKey(passphrase, keyPath),
+  });
+}
+
+export function useSshCheckAgent() {
+  return useQuery({
+    queryKey: ["ssh-agent"],
+    queryFn: () => window.devhub.ssh.checkAgent(),
+    staleTime: 60_000,
+  });
+}
+
+export function useSshListKeys() {
+  return useQuery({
+    queryKey: ["ssh-keys"],
+    queryFn: () => window.devhub.ssh.listKeys(),
+    staleTime: 60_000,
+  });
+}
+
 export function useRemoveWorktree(project: string) {
   const qc = useQueryClient();
   return useMutation({
