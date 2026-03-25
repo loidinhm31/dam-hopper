@@ -240,12 +240,28 @@ export function TerminalTreeView({
   onLaunchProfile,
   onDeleteProfile,
 }: Props) {
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
-    () => new Set(projects.map((p) => p.name)),
-  );
-  const [expandedProfiles, setExpandedProfiles] = useState<Set<string>>(
-    () => new Set(),
-  );
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => {
+    const stored = localStorage.getItem("devhub:expanded-projects");
+    if (stored) {
+      try {
+        return new Set(JSON.parse(stored) as string[]);
+      } catch {
+        // ignore malformed storage
+      }
+    }
+    return new Set(projects.map((p) => p.name));
+  });
+  const [expandedProfiles, setExpandedProfiles] = useState<Set<string>>(() => {
+    const stored = localStorage.getItem("devhub:expanded-profiles");
+    if (stored) {
+      try {
+        return new Set(JSON.parse(stored) as string[]);
+      } catch {
+        // ignore malformed storage
+      }
+    }
+    return new Set();
+  });
 
   // Auto-expand projects that are newly added
   useEffect(() => {
@@ -267,6 +283,7 @@ export function TerminalTreeView({
       const next = new Set(prev);
       if (next.has(name)) next.delete(name);
       else next.add(name);
+      localStorage.setItem("devhub:expanded-projects", JSON.stringify([...next]));
       return next;
     });
   }
@@ -276,6 +293,7 @@ export function TerminalTreeView({
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
+      localStorage.setItem("devhub:expanded-profiles", JSON.stringify([...next]));
       return next;
     });
   }
