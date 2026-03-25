@@ -1,10 +1,13 @@
-import { FolderGit2, CheckCircle2, AlertCircle, Activity } from "lucide-react";
-import { Link } from "react-router-dom";
+import { FolderGit2, CheckCircle2, AlertCircle, Activity, Hammer, Play, Terminal, Wrench, Square } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { OverviewCard } from "@/components/molecules/OverviewCard.js";
-import { useProjects } from "@/api/queries.js";
+import { useProjects, useTerminalSessions } from "@/api/queries.js";
 import { useIpcEvent } from "@/hooks/useSSEEvents.js";
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState } from "react";
+import type { LucideIcon } from "lucide-react";
+import type { SessionInfo } from "@/types/electron.js";
 
 interface ActivityEntry {
   id: number;
@@ -12,32 +15,72 @@ interface ActivityEntry {
   time: Date;
 }
 
+const TYPE_ICON: Record<string, LucideIcon> = {
+  build: Hammer,
+  run: Play,
+  terminal: Terminal,
+  shell: Terminal,
+  custom: Wrench,
+};
+
+function formatUptime(startedAt: number): string {
+  const secs = Math.floor((Date.now() - startedAt) / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem > 0 ? `${hours}h ${rem}m` : `${hours}h`;
+}
+
+function SessionRow({ session, onNavigate, onKill }: {
+  session: SessionInfo;
+  onNavigate: (id: string) => void;
+  onKill: (id: string) => void;
+}) {
+  const Icon = TYPE_ICON[session.type] ?? Terminal;
+
+  return (
+    <li
+      role="button"
+      tabIndex={0}
+      className="flex items-center gap-3 px-3 py-2 rounded cursor-pointer hover:bg-[var(--color-surface-2)] transition-colors group"
+      onClick={() => onNavigate(session.id)}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onNavigate(session.id); }}
+    >
+      <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--color-primary)]/60" />
+      <span className="text-xs font-medium text-[var(--color-text)] truncate shrink-0 max-w-[25%]">
+        {session.project}
+      </span>
+      <span className="text-xs text-[var(--color-text-muted)] truncate flex-1 min-w-0">
+        {session.command}
+      </span>
+      <span className="text-[10px] text-[var(--color-text-muted)]/60 tabular-nums shrink-0">
+        {formatUptime(session.startedAt)}
+      </span>
+      <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-success)] status-glow-green shrink-0" />
+      <button
+        className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-danger)]/60 hover:text-[var(--color-danger)]"
+        onClick={(e) => { e.stopPropagation(); onKill(session.id); }}
+        title="Kill session"
+      >
+        <Square className="h-3 w-3" />
+      </button>
+    </li>
+  );
+}
+
 export function DashboardPage() {
   const { data: projects = [] } = useProjects();
-  const [activeSessions, setActiveSessions] = useState(0);
+  const { data: sessions = [] } = useTerminalSessions();
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const nextIdRef = useRef(1);
+  const navigate = useNavigate();
+  const qc = useQueryClient();
 
   const clean = projects.filter((p) => p.status?.isClean === true).length;
   const dirty = projects.filter((p) => p.status?.isClean === false).length;
-
-  useEffect(() => {
-    let cancelled = false;
-    async function refresh() {
-      try {
-        const ids = await window.devhub.terminal.list();
-        if (!cancelled) setActiveSessions(ids.length);
-      } catch {
-        /* ignore */
-      }
-    }
-    void refresh();
-    const t = setInterval(() => void refresh(), 5_000);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, []);
+  const aliveSessions = sessions.filter((s) => s.alive);
 
   useIpcEvent("*", (e) => {
     const msg =
@@ -60,6 +103,19 @@ export function DashboardPage() {
       ...prev.slice(0, 19),
     ]);
   });
+
+  function handleNavigateToSession(sessionId: string) {
+    navigate(`/terminals?session=${sessionId}`);
+  }
+
+  function handleKillSession(sessionId: string) {
+    try {
+      window.devhub.terminal.kill(sessionId);
+    } catch (err) {
+      console.error("[DashboardPage] kill session failed", err);
+    }
+    void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+  }
 
   return (
     <AppLayout title="Dashboard">
@@ -89,7 +145,7 @@ export function DashboardPage() {
           <OverviewCard
             icon={Activity}
             label="Active Terminals"
-            value={activeSessions}
+            value={aliveSessions.length}
             color="var(--color-danger)"
           />
         </Link>
@@ -133,6 +189,29 @@ export function DashboardPage() {
           </div>
         </div>
       )}
+
+      {/* Active terminals */}
+      <div className="mb-5 rounded glass-card p-4">
+        <p className="text-[10px] text-[var(--color-primary)]/60 tracking-widest uppercase mb-3">
+          // ACTIVE_TERMINALS
+        </p>
+        {aliveSessions.length === 0 ? (
+          <p className="text-xs text-[var(--color-text-muted)]/60 italic">
+            <span className="text-[var(--color-primary)]/40">$</span> no active terminals
+          </p>
+        ) : (
+          <ul className="space-y-0.5">
+            {aliveSessions.map((s) => (
+              <SessionRow
+                key={s.id}
+                session={s}
+                onNavigate={handleNavigateToSession}
+                onKill={handleKillSession}
+              />
+            ))}
+          </ul>
+        )}
+      </div>
 
       {/* Recent activity */}
       <div className="rounded glass-card p-4">

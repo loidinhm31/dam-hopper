@@ -1,5 +1,6 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { Terminal as TerminalIcon } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { TerminalTreeView } from "@/components/organisms/TerminalTreeView.js";
 import { ProjectInfoPanel } from "@/components/organisms/ProjectInfoPanel.js";
@@ -76,6 +77,7 @@ export function TerminalsPage() {
   const { tree, isLoading } = useTerminalTree();
   const { data: sessions = [] } = useTerminalSessions();
   const { data: projects = [] } = useProjects();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const { collapsed: sidebarCollapsed, toggle: handleSidebarToggle } = useSidebarCollapse();
   const { width: treeWidth, handleProps: resizeHandleProps, isDragging } = useResizeHandle({
@@ -109,6 +111,23 @@ export function TerminalsPage() {
     }
     return ids;
   }, [tree]);
+
+  // Deep-link: open a specific session tab when ?session= param is present
+  useEffect(() => {
+    const sessionParam = searchParams.get("session");
+    if (!sessionParam || sessions.length === 0) return;
+
+    const meta = findSessionMeta(sessionParam, tree, sessionMap);
+    if (meta) {
+      openTerminalTab(sessionParam, meta.project, meta.command);
+    }
+
+    setSearchParams({}, { replace: true });
+  // openTerminalTab and findSessionMeta are function declarations (hoisted) that
+  // close over sessionMap/profileSessionIds — both derived from sessions which IS
+  // in deps, so values are always fresh when this effect runs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, sessions, tree]);
 
   /** Derive a human-readable tab label from a session ID and project name. */
   function tabLabel(sessionId: string, project: string, command: string): string {
