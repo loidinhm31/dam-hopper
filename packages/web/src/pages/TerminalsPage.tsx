@@ -215,7 +215,7 @@ export function TerminalsPage() {
     const { projectName, cwd, command } = launchForm;
     const resolvedCommand =
       command.trim() || (window.devhub.platform === "win32" ? "cmd.exe" : "bash");
-    const resolvedCwd = cwd.trim() || ".";
+    const resolvedCwd = cwd.trim() || undefined;
     // "_" segment marks this as an ad-hoc (unsaved) terminal — enables Save button
     const sessionId = `terminal:${projectName}:_:${Date.now()}`;
 
@@ -307,6 +307,7 @@ export function TerminalsPage() {
       })
       .then(() => {
         void qc.invalidateQueries({ queryKey: ["projects"] });
+        void qc.invalidateQueries({ queryKey: ["config"] });
       });
   }
 
@@ -363,11 +364,20 @@ export function TerminalsPage() {
     [qc, sessionMap],
   );
 
-  // Keep tab session info up-to-date with polling data
-  const tabsWithLiveSession: TabEntry[] = openTabs.map((t) => ({
-    ...t,
-    session: sessionMap.get(t.sessionId) ?? t.session,
-  }));
+  // Keep tab session info up-to-date with polling data.
+  // Re-derive isSaveable from current profileSessionIds so the Save button
+  // disappears after the user successfully saves the profile.
+  const tabsWithLiveSession: TabEntry[] = openTabs.map((t) => {
+    const isAdHoc =
+      !profileSessionIds.has(t.sessionId) &&
+      t.sessionId.startsWith("terminal:") &&
+      t.sessionId.split(":")[2] === "_";
+    return {
+      ...t,
+      session: sessionMap.get(t.sessionId) ?? t.session,
+      isSaveable: isAdHoc,
+    };
+  });
 
   const selectedId =
     selection?.type === "project"
@@ -456,44 +466,46 @@ export function TerminalsPage() {
           </div>
         )}
 
-        {selection?.type === "project" ? (
-          <ProjectInfoPanel
-            projectName={selection.name}
-            onLaunchCommand={(cmd) => {
-              if (selection.type === "project") {
-                handleLaunchTerminal(selection.name, cmd);
-              }
-            }}
+        {/* Tab bar is always visible when there are open tabs */}
+        {openTabs.length > 0 && (
+          <TerminalTabBar
+            tabs={tabsWithLiveSession}
+            activeTab={activeTab}
+            onSelectTab={handleSelectTab}
+            onCloseTab={handleCloseTab}
+            savePrompt={savePrompt}
+            onSaveTab={(sessionId) => setSavePrompt({ sessionId, name: "" })}
+            onSavePromptChange={(name) =>
+              setSavePrompt((p) => p ? { ...p, name, error: undefined } : p)
+            }
+            onSavePromptSubmit={handleSaveProfile}
+            onSavePromptCancel={() => setSavePrompt(null)}
           />
-        ) : selection?.type === "terminal" ? (
-          <>
-            <TerminalTabBar
-              tabs={tabsWithLiveSession}
-              activeTab={activeTab}
-              onSelectTab={handleSelectTab}
-              onCloseTab={handleCloseTab}
-              savePrompt={savePrompt}
-              onSaveTab={(sessionId) => setSavePrompt({ sessionId, name: "" })}
-              onSavePromptChange={(name) =>
-                setSavePrompt((p) => p ? { ...p, name, error: undefined } : p)
-              }
-              onSavePromptSubmit={handleSaveProfile}
-              onSavePromptCancel={() => setSavePrompt(null)}
-            />
-            <div className="flex-1 min-h-0">
-              <MultiTerminalDisplay
-                activeSessionId={activeTab}
-                mountedSessions={mountedSessions}
-                onSessionExit={handleSessionExit}
-              />
-            </div>
-          </>
-        ) : (
-          <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--color-text-muted)]">
-            <TerminalIcon className="h-10 w-10 opacity-20" />
-            <p className="text-sm">Select a project or terminal from the tree</p>
-          </div>
         )}
+
+        <div className="flex-1 min-h-0">
+          {selection?.type === "project" ? (
+            <ProjectInfoPanel
+              projectName={selection.name}
+              onLaunchCommand={(cmd) => {
+                if (selection.type === "project") {
+                  handleLaunchTerminal(selection.name, cmd);
+                }
+              }}
+            />
+          ) : mountedSessions.length > 0 ? (
+            <MultiTerminalDisplay
+              activeSessionId={activeTab}
+              mountedSessions={mountedSessions}
+              onSessionExit={handleSessionExit}
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--color-text-muted)]">
+              <TerminalIcon className="h-10 w-10 opacity-20" />
+              <p className="text-sm">Select a project or terminal from the tree</p>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

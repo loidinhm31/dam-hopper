@@ -17659,7 +17659,7 @@ const createLucideIcon = (iconName, iconNode) => {
  * This source code is licensed under the ISC license.
  * See the LICENSE file in the root directory of this source tree.
  */
-const __iconNode$o = [
+const __iconNode$r = [
   [
     "path",
     {
@@ -17668,31 +17668,65 @@ const __iconNode$o = [
     }
   ]
 ];
-const Activity = createLucideIcon("activity", __iconNode$o);
+const Activity = createLucideIcon("activity", __iconNode$r);
 /**
  * @license lucide-react v0.577.0 - ISC
  *
  * This source code is licensed under the ISC license.
  * See the LICENSE file in the root directory of this source tree.
  */
-const __iconNode$n = [["path", { d: "M20 6 9 17l-5-5", key: "1gmf2c" }]];
-const Check = createLucideIcon("check", __iconNode$n);
+const __iconNode$q = [["path", { d: "M20 6 9 17l-5-5", key: "1gmf2c" }]];
+const Check = createLucideIcon("check", __iconNode$q);
 /**
  * @license lucide-react v0.577.0 - ISC
  *
  * This source code is licensed under the ISC license.
  * See the LICENSE file in the root directory of this source tree.
  */
-const __iconNode$m = [["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]];
-const ChevronDown = createLucideIcon("chevron-down", __iconNode$m);
+const __iconNode$p = [["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]];
+const ChevronDown = createLucideIcon("chevron-down", __iconNode$p);
 /**
  * @license lucide-react v0.577.0 - ISC
  *
  * This source code is licensed under the ISC license.
  * See the LICENSE file in the root directory of this source tree.
  */
-const __iconNode$l = [["path", { d: "m9 18 6-6-6-6", key: "mthhwq" }]];
-const ChevronRight = createLucideIcon("chevron-right", __iconNode$l);
+const __iconNode$o = [["path", { d: "m9 18 6-6-6-6", key: "mthhwq" }]];
+const ChevronRight = createLucideIcon("chevron-right", __iconNode$o);
+/**
+ * @license lucide-react v0.577.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
+const __iconNode$n = [
+  ["path", { d: "m11 17-5-5 5-5", key: "13zhaf" }],
+  ["path", { d: "m18 17-5-5 5-5", key: "h8a8et" }]
+];
+const ChevronsLeft = createLucideIcon("chevrons-left", __iconNode$n);
+/**
+ * @license lucide-react v0.577.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
+const __iconNode$m = [
+  ["path", { d: "m6 17 5-5-5-5", key: "xnjwq" }],
+  ["path", { d: "m13 17 5-5-5-5", key: "17xmmf" }]
+];
+const ChevronsRight = createLucideIcon("chevrons-right", __iconNode$m);
+/**
+ * @license lucide-react v0.577.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
+const __iconNode$l = [
+  ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
+  ["line", { x1: "12", x2: "12", y1: "8", y2: "12", key: "1pkeuh" }],
+  ["line", { x1: "12", x2: "12.01", y1: "16", y2: "16", key: "4dfq90" }]
+];
+const CircleAlert = createLucideIcon("circle-alert", __iconNode$l);
 /**
  * @license lucide-react v0.577.0 - ISC
  *
@@ -17701,10 +17735,9 @@ const ChevronRight = createLucideIcon("chevron-right", __iconNode$l);
  */
 const __iconNode$k = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
-  ["line", { x1: "12", x2: "12", y1: "8", y2: "12", key: "1pkeuh" }],
-  ["line", { x1: "12", x2: "12.01", y1: "16", y2: "16", key: "4dfq90" }]
+  ["path", { d: "m9 12 2 2 4-4", key: "dzmm74" }]
 ];
-const CircleAlert = createLucideIcon("circle-alert", __iconNode$k);
+const CircleCheck = createLucideIcon("circle-check", __iconNode$k);
 /**
  * @license lucide-react v0.577.0 - ISC
  *
@@ -17713,9 +17746,10 @@ const CircleAlert = createLucideIcon("circle-alert", __iconNode$k);
  */
 const __iconNode$j = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
-  ["path", { d: "m9 12 2 2 4-4", key: "dzmm74" }]
+  ["path", { d: "m15 9-6 6", key: "1uzhvr" }],
+  ["path", { d: "m9 9 6 6", key: "z0biqf" }]
 ];
-const CircleCheck = createLucideIcon("circle-check", __iconNode$j);
+const CircleX = createLucideIcon("circle-x", __iconNode$j);
 /**
  * @license lucide-react v0.577.0 - ISC
  *
@@ -17723,11 +17757,11 @@ const CircleCheck = createLucideIcon("circle-check", __iconNode$j);
  * See the LICENSE file in the root directory of this source tree.
  */
 const __iconNode$i = [
-  ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
-  ["path", { d: "m15 9-6 6", key: "1uzhvr" }],
-  ["path", { d: "m9 9 6 6", key: "z0biqf" }]
+  ["path", { d: "M12 15V3", key: "m9g1x1" }],
+  ["path", { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", key: "ih7n3h" }],
+  ["path", { d: "m7 10 5 5 5-5", key: "brsn70" }]
 ];
-const CircleX = createLucideIcon("circle-x", __iconNode$i);
+const Download = createLucideIcon("download", __iconNode$i);
 /**
  * @license lucide-react v0.577.0 - ISC
  *
@@ -17735,18 +17769,6 @@ const CircleX = createLucideIcon("circle-x", __iconNode$i);
  * See the LICENSE file in the root directory of this source tree.
  */
 const __iconNode$h = [
-  ["path", { d: "M12 15V3", key: "m9g1x1" }],
-  ["path", { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", key: "ih7n3h" }],
-  ["path", { d: "m7 10 5 5 5-5", key: "brsn70" }]
-];
-const Download = createLucideIcon("download", __iconNode$h);
-/**
- * @license lucide-react v0.577.0 - ISC
- *
- * This source code is licensed under the ISC license.
- * See the LICENSE file in the root directory of this source tree.
- */
-const __iconNode$g = [
   ["path", { d: "M18 19a5 5 0 0 1-5-5v8", key: "sz5oeg" }],
   [
     "path",
@@ -17758,7 +17780,23 @@ const __iconNode$g = [
   ["circle", { cx: "13", cy: "12", r: "2", key: "1j92g6" }],
   ["circle", { cx: "20", cy: "19", r: "2", key: "1obnsp" }]
 ];
-const FolderGit2 = createLucideIcon("folder-git-2", __iconNode$g);
+const FolderGit2 = createLucideIcon("folder-git-2", __iconNode$h);
+/**
+ * @license lucide-react v0.577.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
+const __iconNode$g = [
+  [
+    "path",
+    {
+      d: "m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2",
+      key: "usdka0"
+    }
+  ]
+];
+const FolderOpen = createLucideIcon("folder-open", __iconNode$g);
 /**
  * @license lucide-react v0.577.0 - ISC
  *
@@ -17769,12 +17807,12 @@ const __iconNode$f = [
   [
     "path",
     {
-      d: "m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2",
-      key: "usdka0"
+      d: "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z",
+      key: "1kt360"
     }
   ]
 ];
-const FolderOpen = createLucideIcon("folder-open", __iconNode$f);
+const Folder = createLucideIcon("folder", __iconNode$f);
 /**
  * @license lucide-react v0.577.0 - ISC
  *
@@ -17782,15 +17820,11 @@ const FolderOpen = createLucideIcon("folder-open", __iconNode$f);
  * See the LICENSE file in the root directory of this source tree.
  */
 const __iconNode$e = [
-  [
-    "path",
-    {
-      d: "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z",
-      key: "1kt360"
-    }
-  ]
+  ["path", { d: "M15 6a9 9 0 0 0-9 9V3", key: "1cii5b" }],
+  ["circle", { cx: "18", cy: "6", r: "3", key: "1h7g24" }],
+  ["circle", { cx: "6", cy: "18", r: "3", key: "fqmcym" }]
 ];
-const Folder = createLucideIcon("folder", __iconNode$e);
+const GitBranch = createLucideIcon("git-branch", __iconNode$e);
 /**
  * @license lucide-react v0.577.0 - ISC
  *
@@ -17798,11 +17832,11 @@ const Folder = createLucideIcon("folder", __iconNode$e);
  * See the LICENSE file in the root directory of this source tree.
  */
 const __iconNode$d = [
-  ["path", { d: "M15 6a9 9 0 0 0-9 9V3", key: "1cii5b" }],
-  ["circle", { cx: "18", cy: "6", r: "3", key: "1h7g24" }],
-  ["circle", { cx: "6", cy: "18", r: "3", key: "fqmcym" }]
+  ["circle", { cx: "18", cy: "18", r: "3", key: "1xkwt0" }],
+  ["circle", { cx: "6", cy: "6", r: "3", key: "1lh9wr" }],
+  ["path", { d: "M6 21V9a9 9 0 0 0 9 9", key: "7kw0sc" }]
 ];
-const GitBranch = createLucideIcon("git-branch", __iconNode$d);
+const GitMerge = createLucideIcon("git-merge", __iconNode$d);
 /**
  * @license lucide-react v0.577.0 - ISC
  *
@@ -17810,11 +17844,16 @@ const GitBranch = createLucideIcon("git-branch", __iconNode$d);
  * See the LICENSE file in the root directory of this source tree.
  */
 const __iconNode$c = [
-  ["circle", { cx: "18", cy: "18", r: "3", key: "1xkwt0" }],
-  ["circle", { cx: "6", cy: "6", r: "3", key: "1lh9wr" }],
-  ["path", { d: "M6 21V9a9 9 0 0 0 9 9", key: "7kw0sc" }]
+  [
+    "path",
+    {
+      d: "M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z",
+      key: "1s6t7t"
+    }
+  ],
+  ["circle", { cx: "16.5", cy: "7.5", r: ".5", fill: "currentColor", key: "w0ekpg" }]
 ];
-const GitMerge = createLucideIcon("git-merge", __iconNode$c);
+const KeyRound = createLucideIcon("key-round", __iconNode$c);
 /**
  * @license lucide-react v0.577.0 - ISC
  *
@@ -21151,18 +21190,18 @@ const twMerge = /* @__PURE__ */ createTailwindMerge(getDefaultConfig);
 function cn$1(...inputs) {
   return twMerge(clsx(inputs));
 }
-function ConnectionDot({ status }) {
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "flex items-center gap-1.5 text-xs text-[var(--color-text-muted)]", children: [
+function ConnectionDot({ status, collapsed = false }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "flex items-center gap-1.5 text-xs text-[var(--color-text-muted)] tracking-wide", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx(
       "span",
       {
         className: cn$1(
-          "inline-block h-2 w-2 rounded-full",
+          "inline-block h-1.5 w-1.5 rounded-full status-glow-green shrink-0",
           status === "connected" && "bg-[var(--color-success)]"
         )
       }
     ),
-    "Connected"
+    !collapsed && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[var(--color-success)]/70 uppercase text-[10px] tracking-widest", children: "online" })
   ] });
 }
 const listeners = /* @__PURE__ */ new Map();
@@ -21256,6 +21295,12 @@ const api = {
     get: () => window.devhub.config.get(),
     update: (config) => window.devhub.config.update(config),
     updateProject: (name, data) => window.devhub.config.updateProject(name, data)
+  },
+  settings: {
+    clearCache: () => window.devhub.settings.clearCache(),
+    reset: () => window.devhub.settings.reset(),
+    exportConfig: () => window.devhub.settings.exportConfig(),
+    importConfig: () => window.devhub.settings.importConfig()
   }
 };
 function useWorkspaceStatus() {
@@ -21412,12 +21457,59 @@ function useAddWorktree(project) {
     }
   });
 }
+function useSshAddKey() {
+  return useMutation({
+    mutationFn: ({
+      passphrase,
+      keyPath
+    }) => window.devhub.ssh.addKey(passphrase, keyPath)
+  });
+}
+function useSshListKeys() {
+  return useQuery({
+    queryKey: ["ssh-keys"],
+    queryFn: () => window.devhub.ssh.listKeys(),
+    staleTime: 6e4
+  });
+}
 function useRemoveWorktree(project) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (path) => api.git.removeWorktree(project, path),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["worktrees", project] });
+    }
+  });
+}
+function useClearCache() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.settings.clearCache(),
+    onSuccess: () => {
+      qc.clear();
+    }
+  });
+}
+function useResetWorkspace() {
+  return useMutation({
+    mutationFn: () => api.settings.reset()
+  });
+}
+function useExportSettings() {
+  return useMutation({
+    mutationFn: () => api.settings.exportConfig()
+  });
+}
+function useImportSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.settings.importConfig(),
+    onSuccess: (result) => {
+      if (result?.imported) {
+        void qc.invalidateQueries({ queryKey: ["config"] });
+        void qc.invalidateQueries({ queryKey: ["projects"] });
+        void qc.invalidateQueries({ queryKey: ["workspace"] });
+      }
     }
   });
 }
@@ -21479,21 +21571,22 @@ function WorkspaceSwitcher() {
         onClick: () => setOpen((v2) => !v2),
         className: "w-full text-left group",
         children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider", children: "Workspace" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-0.5 flex items-center gap-1.5", children: [
-            isSwitching ? /* @__PURE__ */ jsxRuntimeExports.jsx(LoaderCircle, { className: "h-3.5 w-3.5 shrink-0 animate-spin text-[var(--color-primary)]" }) : null,
-            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "flex-1 font-semibold text-[var(--color-text)] truncate", children: workspace?.name ?? "Dev Hub" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-1.5", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[var(--color-primary)] text-xs font-bold select-none shrink-0", children: "$" }),
+            isSwitching ? /* @__PURE__ */ jsxRuntimeExports.jsx(LoaderCircle, { className: "h-3 w-3 shrink-0 animate-spin text-[var(--color-primary)]" }) : null,
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "flex-1 text-xs font-semibold text-[var(--color-text)] truncate tracking-wide", children: workspace?.name ?? "dev-hub" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               ChevronDown,
               {
-                className: `h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)] transition-transform ${open ? "rotate-180" : ""}`
+                className: `h-3 w-3 shrink-0 text-[var(--color-text-muted)]/50 transition-transform ${open ? "rotate-180" : ""}`
               }
             )
-          ] })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-[10px] text-[var(--color-text-muted)]/40 truncate mt-0.5 pl-4", children: workspace?.root ? workspace.root.replace(/^\/(?:home|Users)\/[^/]+/, "~") : "~/workspace" })
         ]
       }
     ),
-    open && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "absolute left-0 right-0 top-full mt-1 z-50 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-lg overflow-hidden", children: [
+    open && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "absolute left-0 right-0 top-full mt-1 z-50 rounded-sm glass-card-blur shadow-xl overflow-hidden", children: [
       knownLoading ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-3 py-2 text-xs text-[var(--color-text-muted)]", children: "Loading…" }) : (known?.workspaces ?? []).length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-3 py-2 text-xs text-[var(--color-text-muted)]", children: "No saved workspaces" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("ul", { children: (known?.workspaces ?? []).map((ws2) => {
         const isCurrent = ws2.path === workspace?.root;
         const isRemoving = removingPath === ws2.path;
@@ -21550,7 +21643,7 @@ function WorkspaceSwitcher() {
                 if (e.key === "Enter") handleAdd();
               },
               placeholder: "/path/to/workspace",
-              className: "flex-1 min-w-0 rounded border border-[var(--color-border)] bg-[var(--color-background)] text-xs text-[var(--color-text)] px-2 py-1 outline-none focus:border-[var(--color-primary)] transition-colors"
+              className: "flex-1 min-w-0 glass-input rounded-sm text-xs px-2 py-1 outline-none"
             }
           ),
           /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -21569,41 +21662,115 @@ function WorkspaceSwitcher() {
   ] });
 }
 const nav = [
-  { to: "/", icon: LayoutDashboard, label: "Dashboard" },
-  { to: "/terminals", icon: SquareTerminal, label: "Terminals" },
-  { to: "/git", icon: GitMerge, label: "Git" },
-  { to: "/settings", icon: Settings, label: "Settings" }
+  { to: "/", icon: LayoutDashboard, label: "DASHBOARD" },
+  { to: "/terminals", icon: SquareTerminal, label: "TERMINALS" },
+  { to: "/git", icon: GitMerge, label: "GIT" },
+  { to: "/settings", icon: Settings, label: "SETTINGS" }
 ];
-function Sidebar() {
+function Sidebar({ collapsed = false, onToggle }) {
   const { status } = useIpc();
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("aside", { className: "flex h-full w-60 flex-col bg-[var(--color-surface)] border-r border-[var(--color-border)]", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-4 py-4 border-b border-[var(--color-border)]", children: /* @__PURE__ */ jsxRuntimeExports.jsx(WorkspaceSwitcher, {}) }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("nav", { className: "flex-1 overflow-y-auto px-2 py-3", children: nav.map(({ to, icon: Icon2, label }) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      NavLink,
-      {
-        to,
-        end: to === "/",
-        className: ({ isActive }) => cn$1(
-          "flex items-center gap-3 rounded px-3 py-2 text-sm transition-colors mb-0.5",
-          isActive ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)]" : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-        ),
-        children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(Icon2, { className: "h-4 w-4 shrink-0" }),
-          label
-        ]
-      },
-      to
-    )) }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-4 py-3 border-t border-[var(--color-border)]", children: /* @__PURE__ */ jsxRuntimeExports.jsx(ConnectionDot, { status }) })
-  ] });
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "aside",
+    {
+      className: cn$1(
+        "flex h-full flex-col glass-card border-r border-[var(--color-border)] shrink-0 transition-[width] duration-200 ease-in-out overflow-hidden",
+        collapsed ? "w-12" : "w-56"
+      ),
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: cn$1(
+          "border-b border-[var(--color-border)]",
+          collapsed ? "px-2 py-3 flex justify-center" : "px-3 py-3"
+        ), children: !collapsed ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-[10px] text-[var(--color-primary)] font-bold tracking-widest mb-1 opacity-70", children: "┌─ WORKSPACE" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(WorkspaceSwitcher, {})
+        ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx(Folder, { className: "h-4 w-4 text-[var(--color-primary)]" }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("nav", { className: "flex-1 overflow-y-auto px-1.5 py-2", children: [
+          !collapsed && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "px-2 pb-1.5 text-[10px] text-[var(--color-text-muted)] font-semibold tracking-widest uppercase opacity-60", children: "└─ navigate" }),
+          nav.map(({ to, icon: Icon2, label }) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+            NavLink,
+            {
+              to,
+              end: to === "/",
+              title: collapsed ? label : void 0,
+              className: ({ isActive }) => cn$1(
+                "flex items-center rounded-sm px-2 py-2 text-xs font-bold transition-all mb-0.5 group",
+                collapsed ? "justify-center" : "gap-2",
+                isActive ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)] border-l-2 border-[var(--color-primary)]" : "text-[var(--color-text)] opacity-50 hover:opacity-100 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] border-l-2 border-transparent"
+              ),
+              children: ({ isActive }) => /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                !collapsed && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: cn$1(
+                  "text-[11px] w-4 shrink-0 font-black",
+                  isActive ? "text-[var(--color-primary)]" : "text-[var(--color-text-muted)] opacity-50"
+                ), children: isActive ? ">" : "·" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(Icon2, { className: cn$1(
+                  "h-4 w-4 shrink-0",
+                  isActive ? "text-[var(--color-primary)]" : ""
+                ) }),
+                !collapsed && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tracking-widest text-[11px]", children: label })
+              ] })
+            },
+            to
+          ))
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "border-t border-[var(--color-border)] px-2 py-2 flex flex-col gap-1.5", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: cn$1(collapsed && "flex justify-center"), children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              onClick: onToggle,
+              "aria-expanded": !collapsed,
+              title: collapsed ? "Expand sidebar" : "Collapse sidebar",
+              className: "p-1.5 hover:bg-[var(--color-surface-2)] rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors",
+              children: collapsed ? /* @__PURE__ */ jsxRuntimeExports.jsx(ChevronsRight, { size: 14 }) : /* @__PURE__ */ jsxRuntimeExports.jsx(ChevronsLeft, { size: 14 })
+            }
+          ) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: cn$1(collapsed ? "flex justify-center px-0 py-0.5" : "px-1 py-0.5"), children: /* @__PURE__ */ jsxRuntimeExports.jsx(ConnectionDot, { status, collapsed }) })
+        ] })
+      ]
+    }
+  );
+}
+const STORAGE_KEY = "devhub:sidebar-collapsed";
+function isEditableTarget(el2) {
+  return ["INPUT", "TEXTAREA", "SELECT"].includes(el2.tagName) || el2.contentEditable === "true" || !!el2.closest("[contenteditable='true']") || !!el2.closest(".xterm");
+}
+function useSidebarCollapse() {
+  const [collapsed, setCollapsed] = reactExports.useState(
+    () => localStorage.getItem(STORAGE_KEY) === "true"
+  );
+  const toggle = reactExports.useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem(STORAGE_KEY, String(next));
+      return next;
+    });
+  }, []);
+  reactExports.useEffect(() => {
+    const handler = (e) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key !== "b") return;
+      if (isEditableTarget(e.target)) return;
+      e.preventDefault();
+      toggle();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [toggle]);
+  return { collapsed, toggle };
 }
 function AppLayout({ children, title }) {
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex h-screen overflow-hidden bg-[var(--color-background)]", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx(Sidebar, {}),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("main", { className: "flex-1 overflow-y-auto", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-6 py-6", children: [
-      title && /* @__PURE__ */ jsxRuntimeExports.jsx("h1", { className: "text-xl font-semibold text-[var(--color-text)] mb-6", children: title }),
-      children
-    ] }) })
+  const { collapsed, toggle } = useSidebarCollapse();
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex h-screen overflow-hidden gradient-bg", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx(Sidebar, { collapsed, onToggle: toggle }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex-1 flex flex-col overflow-hidden", children: [
+      title && /* @__PURE__ */ jsxRuntimeExports.jsxs("header", { className: "shrink-0 border-b border-[var(--color-border)] glass-card px-5 py-2.5 flex items-center gap-3", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[var(--color-primary)]/50 text-xs select-none", children: "$" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("h1", { className: "text-xs font-semibold text-[var(--color-text)] tracking-widest uppercase", children: title }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-[var(--color-text-muted)]/30 text-xs", children: [
+          "~/dev-hub/",
+          title.toLowerCase()
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("main", { className: "flex-1 overflow-y-auto", children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-5 py-5", children }) })
+    ] })
   ] });
 }
 function OverviewCard({
@@ -21612,20 +21779,25 @@ function OverviewCard({
   value,
   color = "var(--color-primary)"
 }) {
-  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-3", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx(
-      "div",
-      {
-        className: "flex h-10 w-10 items-center justify-center rounded-lg",
-        style: { backgroundColor: `${color}20` },
-        children: /* @__PURE__ */ jsxRuntimeExports.jsx(Icon2, { className: "h-5 w-5", style: { color } })
-      }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-2xl font-bold text-[var(--color-text)]", children: value }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-[var(--color-text-muted)]", children: label })
+  const slug = label.toLowerCase().replace(/\s+/g, "_");
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded glass-card p-3 group hover:border-[var(--color-primary)]/30 transition-colors", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-start justify-between mb-2", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "div",
+        {
+          className: "flex h-7 w-7 items-center justify-center rounded",
+          style: { backgroundColor: `${color}18` },
+          children: /* @__PURE__ */ jsxRuntimeExports.jsx(Icon2, { className: "h-3.5 w-3.5", style: { color } })
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[10px] text-[var(--color-text-muted)]/50 tracking-widest", children: "{}" })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-2xl font-bold tabular-nums", style: { color }, children: value }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-[10px] text-[var(--color-text-muted)] tracking-widest uppercase mt-0.5", children: [
+      "// ",
+      slug
     ] })
-  ] }) });
+  ] });
 }
 function useIpcEvent(type, handler) {
   const handlerRef = reactExports.useRef(handler);
@@ -21669,7 +21841,7 @@ function DashboardPage() {
     ]);
   });
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(AppLayout, { title: "Dashboard", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "grid grid-cols-2 gap-4 lg:grid-cols-4 mb-6", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "grid grid-cols-2 gap-3 lg:grid-cols-4 mb-5", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(Link, { to: "/terminals", className: "block hover:opacity-90 transition-opacity", children: /* @__PURE__ */ jsxRuntimeExports.jsx(
         OverviewCard,
         {
@@ -21707,9 +21879,9 @@ function DashboardPage() {
         }
       ) })
     ] }),
-    projects.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mb-6 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-medium text-[var(--color-text)] mb-2", children: "Repository Status" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex h-3 overflow-hidden rounded-full bg-[var(--color-surface-2)]", children: [
+    projects.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mb-5 rounded glass-card p-4", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-[10px] text-[var(--color-primary)]/60 tracking-widest uppercase mb-3", children: "// REPO_STATUS" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-2)]", children: [
         clean > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx(
           "div",
           {
@@ -21727,34 +21899,38 @@ function DashboardPage() {
           }
         )
       ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-4 mt-2 text-xs text-[var(--color-text-muted)]", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "inline-block h-2 w-2 rounded-full bg-[var(--color-success)] mr-1" }),
-          clean,
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-5 mt-2.5 text-[11px] text-[var(--color-text-muted)]", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "flex items-center gap-1.5", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-success)] status-glow-green" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[var(--color-success)]", children: clean }),
           " clean"
         ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "inline-block h-2 w-2 rounded-full bg-[var(--color-warning)] mr-1" }),
-          dirty,
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "flex items-center gap-1.5", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-warning)] status-glow-orange" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[var(--color-warning)]", children: dirty }),
           " dirty"
         ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "inline-block h-2 w-2 rounded-full bg-[var(--color-border)] mr-1" }),
-          projects.length - clean - dirty,
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "flex items-center gap-1.5", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-border)]" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[var(--color-text-muted)]", children: projects.length - clean - dirty }),
           " unknown"
         ] })
       ] })
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-medium text-[var(--color-text)] mb-3", children: "Recent Activity" }),
-      activity.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm text-[var(--color-text-muted)]", children: "No recent events. Waiting for SSE…" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("ul", { className: "space-y-1.5", children: activity.map((a) => /* @__PURE__ */ jsxRuntimeExports.jsxs("li", { className: "flex items-start gap-3 text-xs", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "shrink-0 text-[var(--color-text-muted)]", children: a.time.toLocaleTimeString() }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[var(--color-text)] font-mono", children: a.message })
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded glass-card p-4", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-[10px] text-[var(--color-primary)]/60 tracking-widest uppercase mb-3", children: "// RECENT_ACTIVITY" }),
+      activity.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-[var(--color-text-muted)]/60 italic", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[var(--color-primary)]/40", children: "$" }),
+        " waiting for events..."
+      ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("ul", { className: "space-y-1", children: activity.map((a) => /* @__PURE__ */ jsxRuntimeExports.jsxs("li", { className: "flex items-start gap-3 text-xs group", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "shrink-0 text-[var(--color-text-muted)]/40 tabular-nums text-[10px] mt-0.5", children: a.time.toLocaleTimeString() }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[var(--color-primary)]/40 shrink-0", children: "›" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[var(--color-text)]/80 group-hover:text-[var(--color-text)] transition-colors", children: a.message })
       ] }, a.id)) })
     ] })
   ] });
 }
-const inputClass = "w-full rounded border border-[var(--color-border)] bg-[var(--color-background)] text-sm text-[var(--color-text)] px-2.5 py-1.5 outline-none focus:border-[var(--color-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
+const inputClass = "w-full rounded glass-input px-2.5 py-1.5 outline-none disabled:opacity-50 disabled:cursor-not-allowed";
 const variantClasses$1 = {
   primary: "bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-50",
   secondary: "bg-[var(--color-surface-2)] text-[var(--color-text)] hover:bg-[var(--color-border)] border border-[var(--color-border)]",
@@ -21818,11 +21994,13 @@ function ProgressList({ initialProjects = [] }) {
         status: "running",
         progress: 0
       };
+      const isTerminal = existing.status === "done" || existing.status === "error";
+      const newStatus = data.phase === "failed" ? "error" : data.phase === "completed" ? "done" : isTerminal ? existing.status : "running";
       next.set(data.projectName, {
         ...existing,
         message: data.message ?? existing.message,
-        progress: data.progress ?? existing.progress,
-        status: data.error ? "error" : data.done ? "done" : "running"
+        progress: data.percent ?? existing.progress,
+        status: newStatus
       });
       return next;
     });
@@ -21866,24 +22044,236 @@ function ProgressList({ initialProjects = [] }) {
   )) });
 }
 const variantClasses = {
-  success: "bg-[var(--color-success)]/15 text-[var(--color-success)]",
-  danger: "bg-[var(--color-danger)]/15 text-[var(--color-danger)]",
-  warning: "bg-[var(--color-warning)]/15 text-[var(--color-warning)]",
-  neutral: "bg-[var(--color-border)] text-[var(--color-text-muted)]",
-  primary: "bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+  success: "bg-[var(--color-success)]/10 text-[var(--color-success)] border border-[var(--color-success)]/30",
+  danger: "bg-[var(--color-danger)]/10  text-[var(--color-danger)]  border border-[var(--color-danger)]/30",
+  warning: "bg-[var(--color-warning)]/10 text-[var(--color-warning)] border border-[var(--color-warning)]/30",
+  neutral: "bg-[var(--color-surface-2)] text-[var(--color-text-muted)] border border-[var(--color-border)]",
+  primary: "bg-[var(--color-primary)]/10 text-[var(--color-primary)] border border-[var(--color-primary)]/30"
 };
 function Badge({ children, variant = "neutral", className }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsx(
     "span",
     {
       className: cn$1(
-        "inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium",
+        "inline-flex items-center rounded-sm px-1.5 py-0.5 text-xs font-medium tracking-wide uppercase",
         variantClasses[variant],
         className
       ),
       children
     }
   );
+}
+function PassphraseDialog({
+  open,
+  onSubmit,
+  onCancel,
+  loading = false,
+  error,
+  availableKeys = []
+}) {
+  const [passphrase, setPassphrase] = reactExports.useState("");
+  const [selectedKey, setSelectedKey] = reactExports.useState("");
+  const inputRef = reactExports.useRef(null);
+  reactExports.useEffect(() => {
+    if (open) {
+      setPassphrase("");
+      setSelectedKey(availableKeys[0] ?? "");
+      setTimeout(() => inputRef.current?.focus(), 0);
+    }
+  }, [open, availableKeys]);
+  reactExports.useEffect(() => {
+    if (!open) return;
+    function handleKey(e) {
+      if (e.key === "Escape") onCancel();
+    }
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [open, onCancel]);
+  if (!open) return null;
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!passphrase || loading) return;
+    onSubmit(passphrase, selectedKey || void 0);
+  }
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "fixed inset-0 z-50 flex items-center justify-center", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "div",
+      {
+        className: "absolute inset-0 bg-black/50",
+        onClick: onCancel
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "relative z-10 w-full max-w-sm rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl p-5", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-2 mb-4", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(KeyRound, { className: "h-4 w-4 text-[var(--color-primary)] shrink-0" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { className: "text-sm font-semibold text-[var(--color-text)] flex-1", children: "SSH Key Passphrase" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            type: "button",
+            onClick: onCancel,
+            className: "rounded p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors",
+            children: /* @__PURE__ */ jsxRuntimeExports.jsx(X$1, { className: "h-4 w-4" })
+          }
+        )
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-[var(--color-text-muted)] mb-4", children: "Git operation failed due to SSH authentication. Enter your SSH key passphrase to load it into the agent and retry." }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("form", { onSubmit: handleSubmit, className: "space-y-3", children: [
+        availableKeys.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-1", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("label", { className: "text-xs font-medium text-[var(--color-text-muted)]", children: "SSH Key" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "select",
+            {
+              value: selectedKey,
+              onChange: (e) => setSelectedKey(e.target.value),
+              disabled: loading,
+              className: cn$1(inputClass, "pr-8"),
+              children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "Default key" }),
+                availableKeys.map((k) => /* @__PURE__ */ jsxRuntimeExports.jsxs("option", { value: k, children: [
+                  "~/.ssh/",
+                  k
+                ] }, k))
+              ]
+            }
+          )
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-1", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("label", { className: "text-xs font-medium text-[var(--color-text-muted)]", children: "Passphrase" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              ref: inputRef,
+              type: "password",
+              autoComplete: "off",
+              placeholder: "Enter passphrase...",
+              value: passphrase,
+              onChange: (e) => setPassphrase(e.target.value),
+              disabled: loading,
+              className: inputClass
+            }
+          )
+        ] }),
+        error && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-[var(--color-danger)] bg-[var(--color-danger)]/10 rounded px-2 py-1", children: error }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-2 justify-end pt-1", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            Button,
+            {
+              type: "button",
+              variant: "ghost",
+              size: "sm",
+              onClick: onCancel,
+              disabled: loading,
+              children: "Cancel"
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            Button,
+            {
+              type: "submit",
+              variant: "primary",
+              size: "sm",
+              loading,
+              disabled: !passphrase,
+              children: "Load Key & Retry"
+            }
+          )
+        ] })
+      ] })
+    ] })
+  ] });
+}
+function errorToString(error) {
+  if (!error) return "";
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  if (typeof error.message === "string") {
+    return error.message;
+  }
+  return String(error);
+}
+function isAuthError(results) {
+  return results.some((r2) => {
+    if (r2.success) return false;
+    const msg = errorToString(r2.error).toLowerCase();
+    return msg.includes("permission denied") || msg.includes("authentication failed") || msg.includes("publickey");
+  });
+}
+function useGitWithSshRetry() {
+  const [state, setState] = reactExports.useState({
+    open: false,
+    loading: false,
+    error: void 0
+  });
+  const keysLoadedRef = reactExports.useRef(false);
+  const pendingRetryRef = reactExports.useRef(null);
+  const resolveRef = reactExports.useRef(null);
+  const rejectRef = reactExports.useRef(null);
+  const sshAddKey = useSshAddKey();
+  const { data: availableKeys = [] } = useSshListKeys();
+  const executeWithRetry = reactExports.useCallback(
+    async (fn2) => {
+      const results = await fn2();
+      if (keysLoadedRef.current || !isAuthError(results)) {
+        return results;
+      }
+      return new Promise((resolve, reject) => {
+        pendingRetryRef.current = fn2;
+        resolveRef.current = resolve;
+        rejectRef.current = reject;
+        setState({ open: true, loading: false, error: void 0 });
+      });
+    },
+    []
+  );
+  const handleSubmit = reactExports.useCallback(
+    async (passphrase, keyPath) => {
+      setState((s15) => ({ ...s15, loading: true, error: void 0 }));
+      const result = await sshAddKey.mutateAsync({ passphrase, keyPath });
+      if (!result.success) {
+        setState((s15) => ({
+          ...s15,
+          loading: false,
+          error: result.error ?? "Failed to load SSH key"
+        }));
+        return;
+      }
+      keysLoadedRef.current = true;
+      setState({ open: false, loading: false, error: void 0 });
+      const retryFn = pendingRetryRef.current;
+      const resolve = resolveRef.current;
+      const reject = rejectRef.current;
+      pendingRetryRef.current = null;
+      resolveRef.current = null;
+      rejectRef.current = null;
+      if (retryFn && resolve) {
+        try {
+          const retryResults = await retryFn();
+          resolve(retryResults);
+        } catch (err) {
+          reject?.(err);
+        }
+      }
+    },
+    [sshAddKey]
+  );
+  const handleCancel = reactExports.useCallback(() => {
+    const reject = rejectRef.current;
+    pendingRetryRef.current = null;
+    resolveRef.current = null;
+    rejectRef.current = null;
+    setState({ open: false, loading: false, error: void 0 });
+    reject?.(new Error("SSH_CANCELLED"));
+  }, []);
+  const PassphraseDialogElement = reactExports.createElement(PassphraseDialog, {
+    open: state.open,
+    onSubmit: handleSubmit,
+    onCancel: handleCancel,
+    loading: state.loading,
+    error: state.error,
+    availableKeys
+  });
+  return { PassphraseDialogElement, executeWithRetry };
 }
 function ResultsSummary({ results }) {
   const ok = results.filter((r2) => r2.success).length;
@@ -21908,7 +22298,7 @@ function ResultsSummary({ results }) {
         children: [
           r2.projectName,
           ": ",
-          r2.error
+          typeof r2.error === "string" ? r2.error : r2.error?.message ?? String(r2.error)
         ]
       },
       r2.projectName
@@ -21922,6 +22312,7 @@ function GitPage() {
   const [pullResults, setPullResults] = reactExports.useState(null);
   const gitFetch = useGitFetch();
   const gitPull = useGitPull();
+  const { PassphraseDialogElement, executeWithRetry } = useGitWithSshRetry();
   const allSelected = selected.size === 0;
   const selectedList = allSelected ? void 0 : [...selected];
   const projectNames = projects.map((p) => p.name);
@@ -21934,6 +22325,7 @@ function GitPage() {
     });
   }
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(AppLayout, { title: "Git Operations", children: [
+    PassphraseDialogElement,
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4 mb-6", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-medium text-[var(--color-text)] mb-3", children: "Select projects (empty = all)" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex flex-wrap gap-2", children: projectNames.map((name) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
@@ -21981,8 +22373,9 @@ function GitPage() {
               loading: gitFetch.isPending,
               onClick: () => {
                 setFetchResults(null);
-                gitFetch.mutate(selectedList, {
-                  onSuccess: (r2) => setFetchResults(r2)
+                void executeWithRetry(
+                  () => gitFetch.mutateAsync(selectedList)
+                ).then((r2) => setFetchResults(r2)).catch(() => {
                 });
               },
               children: "Start Fetch"
@@ -22008,8 +22401,9 @@ function GitPage() {
               loading: gitPull.isPending,
               onClick: () => {
                 setPullResults(null);
-                gitPull.mutate(selectedList, {
-                  onSuccess: (r2) => setPullResults(r2)
+                void executeWithRetry(
+                  () => gitPull.mutateAsync(selectedList)
+                ).then((r2) => setPullResults(r2)).catch(() => {
                 });
               },
               children: "Start Pull"
@@ -22659,6 +23053,76 @@ function SettingsPage() {
     isPending,
     error: saveError
   } = useUpdateConfig();
+  const clearCache = useClearCache();
+  const resetWorkspace = useResetWorkspace();
+  const exportSettings = useExportSettings();
+  const importSettings = useImportSettings();
+  const [clearMsg, setClearMsg] = reactExports.useState(null);
+  const [clearErr, setClearErr] = reactExports.useState(null);
+  const [resetErr, setResetErr] = reactExports.useState(null);
+  const [exportMsg, setExportMsg] = reactExports.useState(null);
+  const [exportErr, setExportErr] = reactExports.useState(null);
+  const [importMsg, setImportMsg] = reactExports.useState(null);
+  const [importErr, setImportErr] = reactExports.useState(null);
+  async function handleClearCache() {
+    setClearMsg(null);
+    setClearErr(null);
+    try {
+      await clearCache.mutateAsync();
+      setClearMsg("Cache cleared — all queries will refetch fresh data.");
+    } catch (err) {
+      setClearErr(err instanceof Error ? err.message : String(err));
+    }
+    setTimeout(() => {
+      setClearMsg(null);
+      setClearErr(null);
+    }, 4e3);
+  }
+  async function handleNuclearReset() {
+    setResetErr(null);
+    const confirmed = window.confirm(
+      "This will kill all terminal sessions, clear all cached data, and return to the workspace selection screen. Continue?"
+    );
+    if (!confirmed) return;
+    try {
+      await resetWorkspace.mutateAsync();
+    } catch (err) {
+      setResetErr(err instanceof Error ? err.message : String(err));
+      setTimeout(() => setResetErr(null), 5e3);
+    }
+  }
+  async function handleExport() {
+    setExportMsg(null);
+    setExportErr(null);
+    try {
+      const result = await exportSettings.mutateAsync();
+      setExportMsg(result.exported ? `Exported → ${result.path ?? "saved"}` : "Export cancelled.");
+    } catch (err) {
+      setExportErr(err instanceof Error ? err.message : String(err));
+    }
+    setTimeout(() => {
+      setExportMsg(null);
+      setExportErr(null);
+    }, 5e3);
+  }
+  async function handleImport() {
+    setImportMsg(null);
+    setImportErr(null);
+    try {
+      const result = await importSettings.mutateAsync();
+      if (result.imported) {
+        setImportMsg("Settings imported and config reloaded.");
+      } else {
+        setImportMsg("Import cancelled.");
+      }
+    } catch (err) {
+      setImportErr(err instanceof Error ? err.message : String(err));
+    }
+    setTimeout(() => {
+      setImportMsg(null);
+      setImportErr(null);
+    }, 6e3);
+  }
   return /* @__PURE__ */ jsxRuntimeExports.jsx(AppLayout, { title: "Settings", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "max-w-3xl space-y-10", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { className: "text-lg font-semibold text-[var(--color-text)] mb-4", children: "Global Settings" }),
@@ -22680,6 +23144,118 @@ function SettingsPage() {
           saveError: saveError ? saveError instanceof Error ? saveError.message : String(saveError) : null
         }
       )
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { className: "text-lg font-semibold text-[var(--color-text)] mb-4", children: "Maintenance" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "glass-card rounded-lg p-5 space-y-4", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-start justify-between gap-4", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex-1 min-w-0", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-medium text-[var(--color-text)]", children: "Revalidate Cache" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-[var(--color-text-muted)] mt-0.5", children: "Clear all cached query data so every panel refetches fresh data from disk. Useful after external changes." }),
+            clearMsg && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-[var(--color-success)] mt-1", children: [
+              "✓ ",
+              clearMsg
+            ] }),
+            clearErr && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-[var(--color-danger)] mt-1", children: [
+              "✗ ",
+              clearErr
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              className: "btn-bracket shrink-0",
+              onClick: () => void handleClearCache(),
+              disabled: clearCache.isPending,
+              children: clearCache.isPending ? "Clearing…" : "Revalidate"
+            }
+          )
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "border-t border-[var(--color-border)]" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-start justify-between gap-4", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex-1 min-w-0", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-medium text-[var(--color-danger)]", children: "Nuclear Reset" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-[var(--color-text-muted)] mt-0.5", children: "Kill all terminal sessions, clear cached state, and return to workspace selection. This cannot be undone." }),
+            resetErr && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-[var(--color-danger)] mt-1", children: [
+              "✗ ",
+              resetErr
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              className: "shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide rounded-sm border border-[var(--color-danger)] text-[var(--color-danger)] bg-transparent cursor-pointer transition-all duration-150 hover:bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] disabled:opacity-40 disabled:cursor-not-allowed",
+              onClick: () => void handleNuclearReset(),
+              disabled: resetWorkspace.isPending,
+              children: resetWorkspace.isPending ? "Resetting…" : "⚠ Nuclear Reset"
+            }
+          )
+        ] })
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { className: "text-lg font-semibold text-[var(--color-text)] mb-4", children: "Import / Export Settings" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "glass-card rounded-lg p-5 space-y-4", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-start justify-between gap-4", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex-1 min-w-0", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-medium text-[var(--color-text)]", children: "Export Settings" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-[var(--color-text-muted)] mt-0.5", children: [
+              "Save a copy of the current",
+              " ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("code", { className: "text-[var(--color-primary)]", children: "dev-hub.toml" }),
+              " ",
+              "to a chosen location. Preserves all formatting and comments."
+            ] }),
+            exportMsg && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-[var(--color-success)] mt-1", children: [
+              "✓ ",
+              exportMsg
+            ] }),
+            exportErr && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-[var(--color-danger)] mt-1", children: [
+              "✗ ",
+              exportErr
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              className: "btn-bracket shrink-0",
+              onClick: () => void handleExport(),
+              disabled: exportSettings.isPending,
+              children: exportSettings.isPending ? "Exporting…" : "Export"
+            }
+          )
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "border-t border-[var(--color-border)]" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-start justify-between gap-4", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex-1 min-w-0", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-medium text-[var(--color-text)]", children: "Import Settings" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-[var(--color-text-muted)] mt-0.5", children: [
+              "Replace the current workspace config with a",
+              " ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("code", { className: "text-[var(--color-primary)]", children: ".toml" }),
+              " ",
+              "file. The file is validated before being written."
+            ] }),
+            importMsg && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-[var(--color-success)] mt-1", children: [
+              "✓ ",
+              importMsg
+            ] }),
+            importErr && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-[var(--color-danger)] mt-1", children: [
+              "✗ ",
+              importErr
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              className: "btn-bracket shrink-0",
+              onClick: () => void handleImport(),
+              disabled: importSettings.isPending,
+              children: importSettings.isPending ? "Importing…" : "Import"
+            }
+          )
+        ] })
+      ] })
     ] })
   ] }) });
 }
@@ -22880,24 +23456,16 @@ function CollapsibleSection({
         type: "button",
         onClick: handleToggle,
         className: cn$1(
-          "flex w-full items-center gap-2 px-3 py-2 text-sm font-medium",
-          "text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors",
-          "cursor-pointer select-none",
+          "flex w-full items-center gap-2 px-3 py-2 text-xs font-medium",
+          "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)]/50 transition-colors",
+          "cursor-pointer select-none tracking-widest uppercase",
           headerClassName
         ),
         children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            ChevronRight,
-            {
-              className: cn$1(
-                "h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)] transition-transform duration-200",
-                isOpen && "rotate-90"
-              )
-            }
-          ),
-          Icon2 && /* @__PURE__ */ jsxRuntimeExports.jsx(Icon2, { className: "h-4 w-4 shrink-0 text-[var(--color-text-muted)]" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[var(--color-primary)]/60 font-bold", children: isOpen ? "▼" : "▶" }),
+          Icon2 && /* @__PURE__ */ jsxRuntimeExports.jsx(Icon2, { className: "h-3.5 w-3.5 shrink-0 text-[var(--color-primary)]/50" }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "flex-1 text-left", children: title }),
-          badge !== void 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "rounded-full bg-[var(--color-surface-2)] px-1.5 py-0.5 text-xs text-[var(--color-text-muted)]", children: badge })
+          badge !== void 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "rounded-sm bg-[var(--color-primary)]/10 border border-[var(--color-primary)]/20 px-1.5 py-0.5 text-[10px] text-[var(--color-primary)]/70", children: badge })
         ]
       }
     ),
@@ -22920,7 +23488,7 @@ function StatusBadge({ isClean }) {
     {
       className: cn$1(
         "rounded px-1.5 py-0.5 text-xs font-medium",
-        isClean ? "bg-green-500/15 text-green-600" : "bg-amber-500/15 text-amber-600"
+        isClean ? "bg-[var(--color-success)]/15 text-[var(--color-success)]" : "bg-[var(--color-warning)]/15 text-[var(--color-warning)]"
       ),
       children: isClean ? "clean" : "dirty"
     }
@@ -22931,7 +23499,9 @@ function GitSection({ projectName }) {
   const gitFetch = useGitFetch();
   const gitPull = useGitPull();
   const gitPush = useGitPush();
+  const { PassphraseDialogElement, executeWithRetry } = useGitWithSshRetry();
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-3 py-2 space-y-2", children: [
+    PassphraseDialogElement,
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-2 flex-wrap", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsxs(
         Button,
@@ -22939,7 +23509,10 @@ function GitSection({ projectName }) {
           size: "sm",
           variant: "secondary",
           loading: gitFetch.isPending,
-          onClick: () => gitFetch.mutate([projectName]),
+          onClick: () => void executeWithRetry(
+            () => gitFetch.mutateAsync([projectName])
+          ).catch(() => {
+          }),
           children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(RefreshCw, { className: "h-3 w-3" }),
             "Fetch"
@@ -22952,7 +23525,10 @@ function GitSection({ projectName }) {
           size: "sm",
           variant: "secondary",
           loading: gitPull.isPending,
-          onClick: () => gitPull.mutate([projectName]),
+          onClick: () => void executeWithRetry(
+            () => gitPull.mutateAsync([projectName])
+          ).catch(() => {
+          }),
           children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(Download, { className: "h-3 w-3" }),
             "Pull"
@@ -22965,7 +23541,10 @@ function GitSection({ projectName }) {
           size: "sm",
           variant: "secondary",
           loading: gitPush.isPending,
-          onClick: () => gitPush.mutate(projectName),
+          onClick: () => void executeWithRetry(
+            () => gitPush.mutateAsync(projectName).then((r2) => [r2])
+          ).catch(() => {
+          }),
           children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(Upload, { className: "h-3 w-3" }),
             "Push"
@@ -23195,12 +23774,12 @@ function TabStatusDot({ session }) {
     return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "h-1.5 w-1.5 rounded-full bg-[var(--color-text-muted)]/30 shrink-0" });
   }
   if (session.alive) {
-    return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "h-1.5 w-1.5 rounded-full bg-green-500 shrink-0" });
+    return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "h-1.5 w-1.5 rounded-full bg-[var(--color-success)] status-glow-green shrink-0" });
   }
   if (session.exitCode !== 0 && session.exitCode !== null && session.exitCode !== void 0) {
-    return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" });
+    return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "h-1.5 w-1.5 rounded-full bg-[var(--color-danger)] status-glow-red shrink-0" });
   }
-  return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" });
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "h-1.5 w-1.5 rounded-full bg-[var(--color-warning)] status-glow-orange shrink-0" });
 }
 function TerminalTabBar({ tabs, activeTab, onSelectTab, onCloseTab }) {
   if (tabs.length === 0) {
@@ -31704,25 +32283,25 @@ var h = 2, _ = 1, o = class {
   }
 };
 const DARK_THEME = {
-  background: "#0a0a0f",
-  foreground: "#ebebf0",
-  cursor: "#ebebf0",
-  selectionBackground: "#3a3a5a",
-  black: "#1a1a2e",
-  red: "#ff6b6b",
-  green: "#6bcb77",
-  yellow: "#ffd93d",
-  blue: "#6c9ee0",
-  magenta: "#c589e8",
-  cyan: "#6bcbce",
-  white: "#ebebf0",
-  brightBlack: "#4a4a6a",
-  brightRed: "#ff8e8e",
-  brightGreen: "#88e09a",
-  brightYellow: "#ffe06a",
-  brightBlue: "#88b4ee",
-  brightMagenta: "#d4a0f0",
-  brightCyan: "#88d4d7",
+  background: "#0f172a",
+  foreground: "#f1f5f9",
+  cursor: "#3b82f6",
+  selectionBackground: "#334155",
+  black: "#0f172a",
+  red: "#dc2626",
+  green: "#10b981",
+  yellow: "#facc15",
+  blue: "#3b82f6",
+  magenta: "#a855f7",
+  cyan: "#06b6d4",
+  white: "#f1f5f9",
+  brightBlack: "#334155",
+  brightRed: "#f87171",
+  brightGreen: "#34d399",
+  brightYellow: "#fde047",
+  brightBlue: "#60a5fa",
+  brightMagenta: "#c084fc",
+  brightCyan: "#22d3ee",
   brightWhite: "#ffffff"
 };
 function TerminalPanel({
@@ -31740,7 +32319,7 @@ function TerminalPanel({
     if (!container) return;
     const term = new Dl({
       theme: DARK_THEME,
-      fontFamily: "monospace",
+      fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
       fontSize: 13,
       lineHeight: 1.4,
       scrollback: 5e3,
@@ -31755,13 +32334,15 @@ function TerminalPanel({
     let unsubExit = null;
     let inputDisposable = null;
     let observer = null;
+    let fitTimer = null;
     window.devhub.terminal.list().then((alive) => {
       if (alive.includes(sessionId)) {
         return window.devhub.terminal.getBuffer(sessionId).then((buf) => {
           if (buf) term.write(buf);
         });
       }
-      return window.devhub.terminal.create({ id: sessionId, project, command, cols, rows });
+      return window.devhub.terminal.create({ id: sessionId, project, command, cols, rows }).then(() => {
+      });
     }).then(() => {
       unsubData = window.devhub.terminal.onData(sessionId, (data) => {
         term.write(data);
@@ -31787,8 +32368,11 @@ function TerminalPanel({
         return true;
       });
       observer = new ResizeObserver(() => {
-        fitAddon.fit();
-        window.devhub.terminal.resize(sessionId, term.cols, term.rows);
+        if (fitTimer) clearTimeout(fitTimer);
+        fitTimer = setTimeout(() => {
+          fitAddon.fit();
+          window.devhub.terminal.resize(sessionId, term.cols, term.rows);
+        }, 200);
       });
       observer.observe(container);
     }).catch((err) => {
@@ -31802,6 +32386,7 @@ function TerminalPanel({
       unsubData?.();
       unsubExit?.();
       inputDisposable?.dispose();
+      if (fitTimer) clearTimeout(fitTimer);
       observer?.disconnect();
       term.dispose();
     };
@@ -31845,20 +32430,6 @@ function MultiTerminalDisplay({
     s15.sessionId
   )) });
 }
-const BUILD_PRESET = {
-  maven: "mvn clean install -DskipTests",
-  gradle: "./gradlew build",
-  npm: "npm run build",
-  pnpm: "pnpm build",
-  cargo: "cargo build"
-};
-const RUN_PRESET = {
-  maven: "mvn spring-boot:run",
-  gradle: "./gradlew bootRun",
-  npm: "npm start",
-  pnpm: "pnpm start",
-  cargo: "cargo run"
-};
 function useTerminalTree() {
   const { data: projects = [], isLoading: projectsLoading } = useProjects();
   const { data: sessions = [], isLoading: sessionsLoading } = useTerminalSessions();
@@ -31870,7 +32441,7 @@ function useTerminalTree() {
   const tree = reactExports.useMemo(() => {
     return projects.map((p) => {
       const commands = [];
-      const buildCmd = p.services?.[0]?.buildCommand ?? BUILD_PRESET[p.type];
+      const buildCmd = p.services?.[0]?.buildCommand;
       if (buildCmd) {
         const sessionId = `build:${p.name}`;
         commands.push({
@@ -31881,7 +32452,7 @@ function useTerminalTree() {
           session: sessionMap.get(sessionId)
         });
       }
-      const runCmd = p.services?.[0]?.runCommand ?? RUN_PRESET[p.type];
+      const runCmd = p.services?.[0]?.runCommand;
       if (runCmd) {
         const sessionId = `run:${p.name}`;
         commands.push({
@@ -31932,11 +32503,69 @@ function useTerminalTree() {
   }, [projects, sessionMap, sessions]);
   return { tree, isLoading: projectsLoading || sessionsLoading };
 }
+function useResizeHandle({
+  min,
+  max,
+  defaultWidth,
+  storageKey
+}) {
+  const [width, setWidth] = reactExports.useState(() => {
+    {
+      const stored = localStorage.getItem(storageKey);
+      if (stored) {
+        const parsed = parseInt(stored, 10);
+        if (!isNaN(parsed)) return Math.min(Math.max(parsed, min), max);
+      }
+    }
+    return defaultWidth;
+  });
+  const [isDragging, setIsDragging] = reactExports.useState(false);
+  const startX = reactExports.useRef(0);
+  const startWidth = reactExports.useRef(0);
+  reactExports.useEffect(() => {
+    return () => {
+      document.body.classList.remove("cursor-col-resize", "select-none");
+    };
+  }, []);
+  function onMouseDown(e) {
+    e.preventDefault();
+    startX.current = e.clientX;
+    startWidth.current = width;
+    setIsDragging(true);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    function onMouseMove(ev) {
+      const newWidth = Math.min(Math.max(startWidth.current + (ev.clientX - startX.current), min), max);
+      setWidth(newWidth);
+    }
+    function onMouseUp() {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      setIsDragging(false);
+      setWidth((w) => {
+        localStorage.setItem(storageKey, String(w));
+        return w;
+      });
+    }
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }
+  return { width, handleProps: { onMouseDown }, isDragging };
+}
 const MAX_MOUNTED = 5;
 function TerminalsPage() {
   const qc = useQueryClient();
   const { tree, isLoading } = useTerminalTree();
   const { data: sessions = [] } = useTerminalSessions();
+  const { collapsed: sidebarCollapsed, toggle: handleSidebarToggle } = useSidebarCollapse();
+  const { width: treeWidth, handleProps: resizeHandleProps, isDragging } = useResizeHandle({
+    min: 160,
+    max: 400,
+    defaultWidth: 224,
+    storageKey: "devhub:tree-width"
+  });
   const [selection, setSelection] = reactExports.useState(null);
   const [openTabs, setOpenTabs] = reactExports.useState([]);
   const [activeTab, setActiveTab] = reactExports.useState(null);
@@ -32073,9 +32702,9 @@ function TerminalsPage() {
     session: sessionMap.get(t.sessionId) ?? t.session
   }));
   const selectedId = selection?.type === "project" ? `project:${selection.name}` : selection?.type === "terminal" ? `terminal:${selection.sessionId}` : null;
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex h-screen bg-[var(--color-background)]", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx(Sidebar, {}),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "w-56 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] flex flex-col", children: [
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: `flex h-screen bg-[var(--color-background)]${isDragging ? " select-none" : ""}`, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx(Sidebar, { collapsed: sidebarCollapsed, onToggle: handleSidebarToggle }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { width: treeWidth }, className: "shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] flex flex-col overflow-hidden", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-3 py-2 border-b border-[var(--color-border)]", children: /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { className: "text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider", children: "Projects" }) }),
       isLoading ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex items-center justify-center flex-1", children: /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" }) }) : /* @__PURE__ */ jsxRuntimeExports.jsx(
         TerminalTreeView,
@@ -32090,6 +32719,14 @@ function TerminalsPage() {
         }
       )
     ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "div",
+      {
+        ...resizeHandleProps,
+        className: "w-1 shrink-0 cursor-col-resize group relative hover:bg-[var(--color-primary)]/20",
+        children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 bg-[var(--color-primary)]/50 opacity-0 group-hover:opacity-100 transition-opacity" })
+      }
+    ),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex-1 flex flex-col min-w-0", children: [
       shellPrompt && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs font-medium text-[var(--color-text)] mb-2", children: [

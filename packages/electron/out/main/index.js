@@ -28,6 +28,7 @@ const promises = require("node:fs/promises");
 const Store = require("electron-store");
 const core = require("@dev-hub/core");
 const nodePty = require("node-pty");
+const path = require("path");
 const node_child_process = require("node:child_process");
 const node_util = require("node:util");
 function getMainWindow() {
@@ -41,6 +42,7 @@ function deriveType(id) {
   if (id.startsWith("run:")) return "run";
   if (id.startsWith("custom:")) return "custom";
   if (id.startsWith("shell:")) return "shell";
+  if (id.startsWith("terminal:")) return "terminal";
   return "unknown";
 }
 class PtySessionManager {
@@ -58,6 +60,7 @@ class PtySessionManager {
       id: opts.id,
       project: opts.project ?? "",
       command: opts.command,
+      cwd: opts.cwd,
       type: deriveType(opts.id),
       alive: true,
       startedAt: Date.now()
@@ -241,9 +244,9 @@ function registerWorkspaceHandlers(holder) {
       projectCount: ctx.config.projects.length
     };
   });
-  electron.ipcMain.handle(CH.WORKSPACE_SWITCH, async (_e, path) => {
-    if (!path) throw new Error("path is required");
-    const absPath = node_path.resolve(path);
+  electron.ipcMain.handle(CH.WORKSPACE_SWITCH, async (_e, path2) => {
+    if (!path2) throw new Error("path is required");
+    const absPath = node_path.resolve(path2);
     const home = node_os.homedir();
     const realAbs = await promises.realpath(absPath).catch(() => absPath);
     if (realAbs !== home && !realAbs.startsWith(home + node_path.sep)) {
@@ -257,9 +260,9 @@ function registerWorkspaceHandlers(holder) {
       projectCount: ctx.config.projects.length
     };
   });
-  electron.ipcMain.handle(CH.WORKSPACE_ADD_KNOWN, async (_e, path) => {
-    if (!path) throw new Error("path is required");
-    const absPath = node_path.resolve(path);
+  electron.ipcMain.handle(CH.WORKSPACE_ADD_KNOWN, async (_e, path2) => {
+    if (!path2) throw new Error("path is required");
+    const absPath = node_path.resolve(path2);
     const home = node_os.homedir();
     const realAbs = await promises.realpath(absPath).catch(() => absPath);
     if (realAbs !== home && !realAbs.startsWith(home + node_path.sep)) {
@@ -281,6 +284,7 @@ function registerWorkspaceHandlers(holder) {
           type: p.type,
           services: void 0,
           commands: void 0,
+          terminals: [],
           envFile: void 0,
           tags: void 0
         }))
@@ -295,9 +299,9 @@ function registerWorkspaceHandlers(holder) {
     await core.addKnownWorkspace(workspaceName, realAbs);
     return { name: workspaceName, path: realAbs };
   });
-  electron.ipcMain.handle(CH.WORKSPACE_REMOVE_KNOWN, async (_e, path) => {
-    if (!path) throw new Error("path is required");
-    await core.removeKnownWorkspace(node_path.resolve(path));
+  electron.ipcMain.handle(CH.WORKSPACE_REMOVE_KNOWN, async (_e, path2) => {
+    if (!path2) throw new Error("path is required");
+    await core.removeKnownWorkspace(node_path.resolve(path2));
     return { removed: true };
   });
   electron.ipcMain.handle(CH.GLOBAL_CONFIG_GET, async () => {
@@ -522,21 +526,29 @@ function registerConfigHandlers(holder) {
     })
   );
 }
+const SAFE_ENV_KEYS = ["PATH", "HOME", "SHELL", "TERM", "LANG", "TMPDIR", "USER", "LOGNAME"];
 function registerTerminalHandlers(holder) {
   electron.ipcMain.handle(
     CH.TERMINAL_CREATE,
     async (_e, opts) => {
       const ctx = holder.current;
       const project = ctx.config.projects.find((p) => p.name === opts.project);
-      if (!project) throw new Error(`Project "${opts.project}" not found`);
+      if (!project && opts.project) {
+        console.warn(`[terminal] project "${opts.project}" not found — launching without project context`);
+      }
       const { resolveEnv } = await import("@dev-hub/core");
-      const env = await resolveEnv(project, ctx.workspaceRoot);
+      const env = project ? await resolveEnv(project, ctx.workspaceRoot) : Object.fromEntries(
+        SAFE_ENV_KEYS.flatMap((k) => process.env[k] ? [[k, process.env[k]]] : [])
+      );
+      const rawCwd = opts.cwd ?? project?.path ?? ctx.workspaceRoot;
+      const basePath = project?.path ?? ctx.workspaceRoot;
+      const effectiveCwd = path.isAbsolute(rawCwd) ? rawCwd : path.resolve(basePath, rawCwd);
       const cols = Math.max(1, Math.min(opts.cols, 500));
       const rows = Math.max(1, Math.min(opts.rows, 500));
       holder.ptyManager.create({
         id: opts.id,
         command: opts.command,
-        cwd: project.path,
+        cwd: effectiveCwd,
         env,
         cols,
         rows,
@@ -803,6 +815,7 @@ async function initContext(workspacePath) {
         type: p.type,
         services: void 0,
         commands: void 0,
+        terminals: [],
         envFile: void 0,
         tags: void 0
       }))
@@ -903,9 +916,9 @@ electron.app.whenReady().then(async () => {
       loadWorkspacePromise = null;
     }
   }
-  electron.ipcMain.handle(CH.WORKSPACE_INIT, async (_e, path) => {
-    if (!path || typeof path !== "string") throw new Error("path is required");
-    const absPath = node_path.resolve(path);
+  electron.ipcMain.handle(CH.WORKSPACE_INIT, async (_e, path2) => {
+    if (!path2 || typeof path2 !== "string") throw new Error("path is required");
+    const absPath = node_path.resolve(path2);
     const home = node_os.homedir();
     let realAbs;
     try {
@@ -916,7 +929,7 @@ electron.app.whenReady().then(async () => {
     if (realAbs !== home && !realAbs.startsWith(home + node_path.sep)) {
       throw new Error("Workspace path must be within home directory");
     }
-    await loadWorkspace(path);
+    await loadWorkspace(path2);
     return {
       name: holder.current.config.workspace.name,
       root: holder.current.workspaceRoot

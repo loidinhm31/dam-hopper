@@ -36,7 +36,10 @@ export function registerTerminalHandlers(holder: CtxHolder): void {
           );
 
       const rawCwd = opts.cwd ?? project?.path ?? ctx.workspaceRoot;
-      const effectiveCwd = path.resolve(rawCwd);
+      const basePath = project?.path ?? ctx.workspaceRoot;
+      const effectiveCwd = path.isAbsolute(rawCwd)
+        ? rawCwd
+        : path.resolve(basePath, rawCwd);
 
       const cols = Math.max(1, Math.min(opts.cols, 500));
       const rows = Math.max(1, Math.min(opts.rows, 500));
