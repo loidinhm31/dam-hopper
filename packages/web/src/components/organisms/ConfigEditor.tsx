@@ -4,6 +4,7 @@ import type {
   DevHubConfig,
   ProjectConfig,
   ServiceConfig,
+  TerminalProfile,
 } from "@/api/client.js";
 
 // ── Small helpers ──────────────────────────────────────────────────────────
@@ -176,6 +177,85 @@ function CommandsForm({
       ))}
       <Button size="sm" variant="ghost" onClick={add} disabled={disabled}>
         + Add command
+      </Button>
+    </div>
+  );
+}
+
+// ── TerminalProfilesForm ─────────────────────────────────────────────────
+
+function TerminalProfilesForm({
+  profiles,
+  onChange,
+  disabled,
+}: {
+  profiles: TerminalProfile[];
+  onChange: (p: TerminalProfile[]) => void;
+  disabled?: boolean;
+}) {
+  function updateField(i: number, field: keyof TerminalProfile, value: string) {
+    const next = profiles.map((p, idx) =>
+      idx === i ? { ...p, [field]: value } : p,
+    );
+    onChange(next);
+  }
+
+  function remove(i: number) {
+    onChange(profiles.filter((_, idx) => idx !== i));
+  }
+
+  function add() {
+    onChange([...profiles, { name: "", command: "bash", cwd: "." }]);
+  }
+
+  return (
+    <div className="space-y-2">
+      {profiles.map((profile, i) => (
+        <div
+          key={i}
+          className="rounded border border-[var(--color-border)] bg-[var(--color-background)] p-3 space-y-2"
+        >
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs font-medium text-[var(--color-text)]">
+              {profile.name || <span className="italic text-[var(--color-text-muted)]">unnamed</span>}
+            </span>
+            <Button size="sm" variant="danger" onClick={() => remove(i)} disabled={disabled}>
+              Remove
+            </Button>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <Field label="Name">
+              <input
+                className={inputClass}
+                value={profile.name}
+                onChange={(e) => updateField(i, "name", e.target.value)}
+                placeholder="Dev Server"
+                disabled={disabled}
+              />
+            </Field>
+            <Field label="Command">
+              <input
+                className={inputClass}
+                value={profile.command}
+                onChange={(e) => updateField(i, "command", e.target.value)}
+                placeholder="bash"
+                disabled={disabled}
+              />
+            </Field>
+            <Field label="Working directory">
+              <input
+                className={inputClass}
+                value={profile.cwd}
+                onChange={(e) => updateField(i, "cwd", e.target.value)}
+                placeholder="."
+                disabled={disabled}
+              />
+            </Field>
+          </div>
+        </div>
+      ))}
+      <Button size="sm" variant="ghost" onClick={add} disabled={disabled}>
+        + Add terminal profile
       </Button>
     </div>
   );
@@ -366,6 +446,23 @@ function ProjectForm({
                 onChange({
                   ...project,
                   commands: Object.keys(c).length > 0 ? c : undefined,
+                })
+              }
+              disabled={disabled}
+            />
+          </div>
+
+          {/* Terminal profiles */}
+          <div className="space-y-2">
+            <h4 className="text-xs font-medium text-[var(--color-text-muted)]">
+              Terminal profiles
+            </h4>
+            <TerminalProfilesForm
+              profiles={project.terminals ?? []}
+              onChange={(terminals) =>
+                onChange({
+                  ...project,
+                  terminals: terminals.length > 0 ? terminals : undefined,
                 })
               }
               disabled={disabled}
