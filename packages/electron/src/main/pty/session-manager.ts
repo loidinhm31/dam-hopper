@@ -16,7 +16,8 @@ export interface SessionMeta {
   id: string;
   project: string;
   command: string;
-  type: "build" | "run" | "custom" | "shell" | "unknown";
+  cwd: string;
+  type: "build" | "run" | "custom" | "shell" | "terminal" | "unknown";
   alive: boolean;
   exitCode?: number | null;
   startedAt: number;
@@ -31,11 +32,13 @@ const SCROLLBACK_LIMIT = 256 * 1024;
 /** Keep dead session metadata for 60 seconds before cleanup. */
 const DEAD_META_TTL_MS = 60_000;
 
+// Order matters: more-specific prefixes must come before any that could overlap.
 function deriveType(id: string): SessionMeta["type"] {
   if (id.startsWith("build:")) return "build";
   if (id.startsWith("run:")) return "run";
   if (id.startsWith("custom:")) return "custom";
   if (id.startsWith("shell:")) return "shell";
+  if (id.startsWith("terminal:")) return "terminal";
   return "unknown";
 }
 
@@ -58,6 +61,7 @@ export class PtySessionManager {
       id: opts.id,
       project: opts.project ?? "",
       command: opts.command,
+      cwd: opts.cwd,
       type: deriveType(opts.id),
       alive: true,
       startedAt: Date.now(),

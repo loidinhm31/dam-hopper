@@ -361,14 +361,15 @@ All packages are functional stubs ready for feature development:
 #### PTY Session Manager (session-manager.ts — Phase 10 Enhancement)
 
 - **SessionMeta**: Metadata per PTY session
-  - sessionId, projectName, command, pid, startTime
+  - `id`, `project`, `command`, `cwd`, `type`, `alive`, `exitCode?`, `startedAt`
+  - `type` union: `"build" | "run" | "custom" | "shell" | "terminal" | "unknown"` — derived from session ID prefix
+  - `cwd`: actual working directory used when the PTY was spawned (added in Freestyle Terminal Profiles Phase 02)
   - Used by `getDetailed()` to return rich session info to renderer
 - **PtySessionManager**: Enhanced with session tracking
   - **meta**: Map of sessionId → SessionMeta
-  - **create()**: Now records session metadata on creation
-  - **getDetailed()**: Returns SessionMeta[] for all active sessions (for terminal list queries)
-  - **scheduleMetaCleanup()**: Cleanup dead session metadata on interval (15s) to prevent memory leak
-  - Metadata includes process info (PID) for terminal identification
+  - **create()**: Records session metadata (including resolved `cwd`) on creation
+  - **getDetailed()**: Returns SessionMeta[] for all sessions (alive and recently dead)
+  - **scheduleMetaCleanup()**: Removes dead session metadata after 60s TTL to prevent memory leak
 
 #### Preload Script (preload.ts)
 

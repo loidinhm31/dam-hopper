@@ -85,6 +85,7 @@ contextBridge.exposeInMainWorld("devhub", {
       id: string;
       project: string;
       command: string;
+      cwd?: string;
       cols: number;
       rows: number;
     }) => ipcRenderer.invoke(CH.TERMINAL_CREATE, opts),
