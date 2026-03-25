@@ -206,6 +206,76 @@ test = "pnpm test"
     expect(reread.projects[0].commands).toEqual({ test: "pnpm test" });
   });
 
+  it("round-trips terminal profiles with cwd relativization", async () => {
+    const toml = `
+[workspace]
+name = "ws"
+
+[[projects]]
+name = "app"
+path = "./app"
+type = "npm"
+
+[[projects.terminals]]
+name = "Dev Server"
+command = "pnpm dev"
+cwd = "."
+
+[[projects.terminals]]
+name = "Claude Agent"
+command = "claude"
+cwd = "./src"
+`;
+    const configPath = join(tmpDir, "dev-hub.toml");
+    await writeFile(configPath, toml);
+
+    const original = await readConfig(configPath);
+    expect(original.projects[0].terminals).toHaveLength(2);
+    expect(original.projects[0].terminals[0].name).toBe("Dev Server");
+    // cwd should be resolved to absolute
+    expect(original.projects[0].terminals[0].cwd).toBe(
+      join(tmpDir, "app"),
+    );
+    expect(original.projects[0].terminals[1].cwd).toBe(
+      join(tmpDir, "app", "src"),
+    );
+
+    const configPath2 = join(tmpDir, "dev-hub2.toml");
+    await writeConfig(configPath2, original);
+
+    const content = await readFile(configPath2, "utf-8");
+    // Written back as relative paths
+    expect(content).not.toContain(tmpDir);
+    expect(content).toContain("Dev Server");
+    expect(content).toContain("pnpm dev");
+
+    const reread = await readConfig(configPath2);
+    expect(reread.projects[0].terminals).toHaveLength(2);
+    expect(reread.projects[0].terminals[0].cwd).toBe(
+      original.projects[0].terminals[0].cwd,
+    );
+    expect(reread.projects[0].terminals[1].cwd).toBe(
+      original.projects[0].terminals[1].cwd,
+    );
+  });
+
+  it("existing config without terminals defaults to empty array", async () => {
+    const toml = `
+[workspace]
+name = "ws"
+
+[[projects]]
+name = "api"
+path = "./api"
+type = "cargo"
+`;
+    const configPath = join(tmpDir, "dev-hub.toml");
+    await writeFile(configPath, toml);
+
+    const config = await readConfig(configPath);
+    expect(config.projects[0].terminals).toEqual([]);
+  });
+
   it("writeConfig fails gracefully on unwritable directory", async () => {
     const config = await readConfig(
       await (async () => {

@@ -1,5 +1,13 @@
 import { z } from "zod";
 
+export const TerminalProfileSchema = z.object({
+  name: z.string().min(1, "Terminal profile name must not be empty"),
+  command: z.string().min(1, "Command must not be empty"),
+  cwd: z.string().min(1, "Working directory must not be empty"),
+});
+
+export type TerminalProfile = z.infer<typeof TerminalProfileSchema>;
+
 export const ProjectTypeSchema = z.enum([
   "maven",
   "gradle",
@@ -34,6 +42,7 @@ export const ProjectConfigSchema = z
     commands: z.record(z.string()).optional(),
     env_file: z.string().optional(),
     tags: z.array(z.string()).optional(),
+    terminals: z.array(TerminalProfileSchema).optional(),
   })
   .refine(
     (p) => {
@@ -46,6 +55,17 @@ export const ProjectConfigSchema = z
       path: ["services"],
     },
   )
+  .refine(
+    (p) => {
+      if (!p.terminals) return true;
+      const names = p.terminals.map((t) => t.name);
+      return names.length === new Set(names).size;
+    },
+    {
+      message: "Terminal profile names must be unique within a project",
+      path: ["terminals"],
+    },
+  )
   .transform((p) => ({
     name: p.name,
     path: p.path,
@@ -54,6 +74,7 @@ export const ProjectConfigSchema = z
     commands: p.commands,
     envFile: p.env_file,
     tags: p.tags,
+    terminals: p.terminals ?? [],
   }));
 
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
@@ -79,6 +100,7 @@ export const ApiProjectSchema = z
     commands: z.record(z.string()).optional(),
     envFile: z.string().optional(),
     tags: z.array(z.string()).optional(),
+    terminals: z.array(TerminalProfileSchema).optional(),
   })
   .refine(
     (p) => {
@@ -89,6 +111,17 @@ export const ApiProjectSchema = z
     {
       message: "Service names must be unique within a project",
       path: ["services"],
+    },
+  )
+  .refine(
+    (p) => {
+      if (!p.terminals) return true;
+      const names = p.terminals.map((t) => t.name);
+      return names.length === new Set(names).size;
+    },
+    {
+      message: "Terminal profile names must be unique within a project",
+      path: ["terminals"],
     },
   );
 

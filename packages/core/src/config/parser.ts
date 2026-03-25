@@ -57,11 +57,18 @@ export async function readConfig(filePath: string): Promise<DevHubConfig> {
   const configDir = dirname(resolve(filePath));
   const config = result.value;
 
-  // Resolve project paths to absolute at runtime
-  const resolvedProjects: ProjectConfig[] = config.projects.map((p) => ({
-    ...p,
-    path: resolve(configDir, p.path),
-  }));
+  // Resolve project paths and terminal cwd to absolute at runtime
+  const resolvedProjects: ProjectConfig[] = config.projects.map((p) => {
+    const absProjectPath = resolve(configDir, p.path);
+    return {
+      ...p,
+      path: absProjectPath,
+      terminals: p.terminals.map((t) => ({
+        ...t,
+        cwd: resolve(absProjectPath, t.cwd),
+      })),
+    };
+  });
 
   return { ...config, projects: resolvedProjects };
 }
@@ -77,8 +84,8 @@ export async function writeConfig(
   const raw = {
     workspace: config.workspace,
     projects: config.projects.map((p) => {
-      const projectPath = resolve(p.path);
-      const relPath = relative(configDir, projectPath) || ".";
+      // p.path is already absolute (resolved in readConfig)
+      const relPath = relative(configDir, p.path) || ".";
       return {
         name: p.name,
         path: relPath,
@@ -95,6 +102,14 @@ export async function writeConfig(
         ...(p.commands !== undefined && { commands: p.commands }),
         ...(p.envFile !== undefined && { env_file: p.envFile }),
         ...(p.tags !== undefined && { tags: p.tags }),
+        ...(p.terminals.length > 0 && {
+          terminals: p.terminals.map((t) => ({
+            name: t.name,
+            command: t.command,
+            // t.cwd is absolute (resolved in readConfig); make it relative to project
+            cwd: relative(p.path, t.cwd) || ".",
+          })),
+        }),
       };
     }),
   };

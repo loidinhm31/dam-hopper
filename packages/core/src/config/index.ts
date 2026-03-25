@@ -1,4 +1,5 @@
 export {
+  TerminalProfileSchema,
   ProjectTypeSchema,
   ServiceConfigSchema,
   ProjectConfigSchema,
@@ -9,6 +10,7 @@ export {
   DevHubApiConfigSchema,
 } from "./schema.js";
 export type {
+  TerminalProfile,
   ProjectType,
   ServiceConfig,
   ProjectConfig,
