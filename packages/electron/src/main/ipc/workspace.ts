@@ -94,6 +94,7 @@ export function registerWorkspaceHandlers(holder: CtxHolder): void {
           type: p.type,
           services: undefined,
           commands: undefined,
+          terminals: [],
           envFile: undefined,
           tags: undefined,
         })),

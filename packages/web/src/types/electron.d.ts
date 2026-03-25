@@ -10,6 +10,7 @@ import type {
   GitOpResult,
   DevHubConfig,
   ProjectConfig,
+  TerminalProfile,
 } from "../api/client.js";
 
 type Unsubscribe = () => void;
@@ -18,6 +19,7 @@ export interface TerminalCreateOpts {
   id: string;
   project: string;
   command: string;
+  cwd?: string;
   cols: number;
   rows: number;
 }
@@ -26,11 +28,14 @@ export interface SessionInfo {
   id: string;
   project: string;
   command: string;
-  type: "build" | "run" | "custom" | "shell" | "unknown";
+  cwd: string;
+  type: "build" | "run" | "custom" | "shell" | "terminal" | "unknown";
   alive: boolean;
   exitCode?: number | null;
   startedAt: number;
 }
+
+export type { TerminalProfile };
 
 export interface DevHubBridge {
   platform: string;

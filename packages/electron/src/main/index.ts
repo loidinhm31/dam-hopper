@@ -90,6 +90,7 @@ async function initContext(workspacePath: string): Promise<ElectronContext> {
         type: p.type,
         services: undefined,
         commands: undefined,
+        terminals: [],
         envFile: undefined,
         tags: undefined,
       })),

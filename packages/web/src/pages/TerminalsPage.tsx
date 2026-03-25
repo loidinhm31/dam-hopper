@@ -8,10 +8,10 @@ import { MultiTerminalDisplay, type MountedSession } from "@/components/organism
 import { Sidebar } from "@/components/organisms/Sidebar.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import { useTerminalTree } from "@/hooks/useTerminalTree.js";
-import { useTerminalSessions } from "@/api/queries.js";
+import { useTerminalSessions, useProjects } from "@/api/queries.js";
 import { useSidebarCollapse } from "@/hooks/useSidebarCollapse.js";
 import { useResizeHandle } from "@/hooks/useResizeHandle.js";
-import type { TreeCommand } from "@/hooks/useTerminalTree.js";
+import type { TreeCommand, TreeProject } from "@/hooks/useTerminalTree.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { SessionInfo } from "@/types/electron.js";
 
@@ -26,16 +26,56 @@ type SelectionState =
   | { type: "terminal"; sessionId: string }
   | null;
 
-/** State for the inline "+ Shell" prompt form. */
-interface ShellPromptState {
+/** State for the inline "New Terminal" launch form. */
+interface LaunchFormState {
   projectName: string;
+  cwd: string;
   command: string;
+}
+
+/** State for the inline "Save as profile" prompt on a tab. */
+interface SavePromptState {
+  sessionId: string;
+  name: string;
+  error?: string;
+}
+
+/** Chars that would corrupt the session ID prefix (segment separator is `:`) */
+const INVALID_PROFILE_NAME_RE = /[:]/;
+
+/** Validate profile name and return an error string or null. */
+function validateProfileName(name: string, existing: string[]): string | null {
+  if (!name.trim()) return "Name is required";
+  if (INVALID_PROFILE_NAME_RE.test(name)) return "Name must not contain ':'";
+  if (existing.includes(name.trim())) return "A profile with this name already exists";
+  return null;
+}
+
+/** Find session metadata (project name + command) by scanning the tree. */
+function findSessionMeta(
+  sessionId: string,
+  tree: TreeProject[],
+  sessionMap: Map<string, SessionInfo>,
+): { project: string; command: string } | null {
+  for (const project of tree) {
+    for (const cmd of project.commands) {
+      if (cmd.type === "terminal") {
+        const match = cmd.sessions?.find((s) => s.id === sessionId);
+        if (match) return { project: project.name, command: cmd.command };
+      } else if (cmd.sessionId === sessionId) {
+        return { project: project.name, command: cmd.command };
+      }
+    }
+  }
+  const s = sessionMap.get(sessionId);
+  return s ? { project: s.project, command: s.command } : null;
 }
 
 export function TerminalsPage() {
   const qc = useQueryClient();
   const { tree, isLoading } = useTerminalTree();
   const { data: sessions = [] } = useTerminalSessions();
+  const { data: projects = [] } = useProjects();
 
   const { collapsed: sidebarCollapsed, toggle: handleSidebarToggle } = useSidebarCollapse();
   const { width: treeWidth, handleProps: resizeHandleProps, isDragging } = useResizeHandle({
@@ -49,24 +89,56 @@ export function TerminalsPage() {
   const [openTabs, setOpenTabs] = useState<TabEntry[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [mountedSessions, setMountedSessions] = useState<MountedSession[]>([]);
-  const [shellPrompt, setShellPrompt] = useState<ShellPromptState | null>(null);
+  const [launchForm, setLaunchForm] = useState<LaunchFormState | null>(null);
+  const [savePrompt, setSavePrompt] = useState<SavePromptState | null>(null);
 
-  // Memoize session map to avoid stale closures and unnecessary re-computation
   const sessionMap = useMemo(
     () => new Map<string, SessionInfo>(sessions.map((s) => [s.id, s])),
     [sessions],
   );
 
+  /** Set of session IDs that are already instances of a saved profile. */
+  const profileSessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const project of tree) {
+      for (const cmd of project.commands) {
+        if (cmd.type === "terminal") {
+          for (const s of cmd.sessions ?? []) ids.add(s.id);
+        }
+      }
+    }
+    return ids;
+  }, [tree]);
+
+  /** Derive a human-readable tab label from a session ID and project name. */
+  function tabLabel(sessionId: string, project: string, command: string): string {
+    const parts = sessionId.split(":");
+    const type = parts[0] ?? sessionId;
+    if (type === "terminal") {
+      const profile = parts[2];
+      if (profile && profile !== "_") return `${project}:${profile.replace(/_/g, " ")}`;
+      // ad-hoc: show command basename
+      const cmdBase = command.split(/[\s/\\]/).find(Boolean) ?? command;
+      return `${project}:${cmdBase}`;
+    }
+    return `${project}:${type}`;
+  }
+
   /** Ensure a terminal session is open in a tab and activated. */
   function openTerminalTab(sessionId: string, project: string, command: string) {
+    const isAdHoc = !profileSessionIds.has(sessionId) &&
+      sessionId.startsWith("terminal:") &&
+      sessionId.split(":")[2] === "_";
+
     setOpenTabs((prev) => {
       if (prev.some((t) => t.sessionId === sessionId)) return prev;
       return [
         ...prev,
         {
           sessionId,
-          label: `${project}:${sessionId.split(":")[0] ?? sessionId}`,
+          label: tabLabel(sessionId, project, command),
           session: sessionMap.get(sessionId),
+          isSaveable: isAdHoc,
         },
       ];
     });
@@ -85,18 +157,14 @@ export function TerminalsPage() {
   }
 
   function handleSelectProject(name: string) {
-    setShellPrompt(null);
+    setLaunchForm(null);
     setSelection({ type: "project", name });
   }
 
   function handleSelectTerminal(sessionId: string) {
-    // Allow selecting both alive and dead sessions (dead sessions stay for 60s)
-    for (const project of tree) {
-      const cmd = project.commands.find((c) => c.sessionId === sessionId);
-      if (cmd) {
-        openTerminalTab(sessionId, project.name, cmd.command);
-        return;
-      }
+    const meta = findSessionMeta(sessionId, tree, sessionMap);
+    if (meta) {
+      openTerminalTab(sessionId, meta.project, meta.command);
     }
   }
 
@@ -118,51 +186,133 @@ export function TerminalsPage() {
       });
   }
 
-  function handleKillTerminal(sessionId: string) {
-    window.devhub.terminal.kill(sessionId);
-    void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+  /** Launch a new instance from a saved terminal profile. */
+  function handleLaunchProfile(projectName: string, cmd: TreeCommand) {
+    const sanitizedName = (cmd.profileName ?? "terminal").replace(/ /g, "_");
+    const sessionId = `terminal:${projectName}:${sanitizedName}:${Date.now()}`;
+
+    window.devhub.terminal
+      .create({
+        id: sessionId,
+        project: projectName,
+        command: cmd.command,
+        cwd: cmd.cwd,
+        cols: 120,
+        rows: 30,
+      })
+      .then(() => {
+        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+        openTerminalTab(sessionId, projectName, cmd.command);
+      })
+      .catch((err: unknown) => {
+        console.error("[TerminalsPage] failed to launch profile instance", err);
+      });
   }
 
-  function handleAddShell(projectName: string) {
-    setShellPrompt({ projectName, command: "" });
-    setSelection({ type: "project", name: projectName });
-  }
-
-  function handleShellSubmit() {
-    if (!shellPrompt) return;
-    const { projectName, command } = shellPrompt;
-    // Use the user-provided command, or the platform's default shell
+  /** Launch from the inline form (project + path + command). */
+  function handleLaunchFormSubmit() {
+    if (!launchForm) return;
+    const { projectName, cwd, command } = launchForm;
     const resolvedCommand =
       command.trim() || (window.devhub.platform === "win32" ? "cmd.exe" : "bash");
-    const sessionId = `shell:${projectName}:${Date.now()}`;
+    const resolvedCwd = cwd.trim() || ".";
+    // "_" segment marks this as an ad-hoc (unsaved) terminal — enables Save button
+    const sessionId = `terminal:${projectName}:_:${Date.now()}`;
 
-    setShellPrompt(null);
+    setLaunchForm(null);
 
     window.devhub.terminal
       .create({
         id: sessionId,
         project: projectName,
         command: resolvedCommand,
+        cwd: resolvedCwd,
         cols: 120,
         rows: 30,
       })
       .then(() => {
         void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
         openTerminalTab(sessionId, projectName, resolvedCommand);
-
-        // Auto-save to config using timestamp-based key to avoid duplicates
-        const commandKey = `shell-${Date.now()}`;
-        void window.devhub.config
-          .updateProject(projectName, {
-            commands: { [commandKey]: resolvedCommand },
-          })
-          .then(() => {
-            void qc.invalidateQueries({ queryKey: ["projects"] });
-          });
       })
       .catch((err: unknown) => {
-        console.error("[TerminalsPage] failed to create shell", err);
+        console.error("[TerminalsPage] failed to launch terminal", err);
       });
+  }
+
+  /** Delete a saved terminal profile from project config and kill/close its live instances. */
+  function handleDeleteProfile(projectName: string, profileName: string) {
+    const project = projects.find((p) => p.name === projectName);
+    if (!project) return;
+
+    const sanitizedName = profileName.replace(/ /g, "_");
+    const prefix = `terminal:${projectName}:${sanitizedName}:`;
+    const instanceIds = sessions.filter((s) => s.id.startsWith(prefix)).map((s) => s.id);
+
+    // Kill live instances
+    for (const id of instanceIds) {
+      const s = sessionMap.get(id);
+      if (s?.alive) window.devhub.terminal.kill(id);
+    }
+
+    // Close tabs for all instances (alive or dead)
+    if (instanceIds.length > 0) {
+      setOpenTabs((prev) => {
+        const remaining = prev.filter((t) => !instanceIds.includes(t.sessionId));
+        if (activeTab && instanceIds.includes(activeTab)) {
+          setActiveTab(remaining.length > 0 ? remaining[remaining.length - 1].sessionId : null);
+        }
+        return remaining;
+      });
+      setMountedSessions((prev) => prev.filter((s) => !instanceIds.includes(s.sessionId)));
+    }
+
+    const updated = (project.terminals ?? []).filter((t) => t.name !== profileName);
+    void window.devhub.config
+      .updateProject(projectName, { terminals: updated })
+      .then(() => {
+        void qc.invalidateQueries({ queryKey: ["projects"] });
+        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+      });
+  }
+
+  /** Save a running terminal session as a named profile. */
+  function handleSaveProfile() {
+    if (!savePrompt) return;
+    const { sessionId, name } = savePrompt;
+
+    const session = sessionMap.get(sessionId);
+    if (!session) return;
+
+    const project = projects.find((p) => p.name === session.project);
+    if (!project) return;
+
+    const existingNames = (project.terminals ?? []).map((t) => t.name);
+    const error = validateProfileName(name, existingNames);
+    if (error) {
+      setSavePrompt((p) => p ? { ...p, error } : p);
+      return;
+    }
+
+    const newProfile = {
+      name: name.trim(),
+      command: session.command,
+      cwd: session.cwd || ".",
+    };
+
+    setSavePrompt(null);
+
+    void window.devhub.config
+      .updateProject(session.project, {
+        terminals: [...(project.terminals ?? []), newProfile],
+      })
+      .then(() => {
+        void qc.invalidateQueries({ queryKey: ["projects"] });
+      });
+  }
+
+  function handleAddShell(projectName: string) {
+    setLaunchForm({ projectName, cwd: "", command: "" });
+    setSelection({ type: "project", name: projectName });
   }
 
   function handleSelectTab(sessionId: string) {
@@ -174,12 +324,10 @@ export function TerminalsPage() {
       if (existing) {
         return [existing, ...prev.filter((s) => s.sessionId !== sessionId)];
       }
-      for (const project of tree) {
-        const cmd = project.commands.find((c) => c.sessionId === sessionId);
-        if (cmd) {
-          const next = [{ sessionId, project: project.name, command: cmd.command }, ...prev];
-          return next.length > MAX_MOUNTED ? next.slice(0, MAX_MOUNTED) : next;
-        }
+      const meta = findSessionMeta(sessionId, tree, sessionMap);
+      if (meta) {
+        const next = [{ sessionId, project: meta.project, command: meta.command }, ...prev];
+        return next.length > MAX_MOUNTED ? next.slice(0, MAX_MOUNTED) : next;
       }
       return prev;
     });
@@ -188,7 +336,6 @@ export function TerminalsPage() {
   function handleCloseTab(sessionId: string) {
     setOpenTabs((prev) => {
       const remaining = prev.filter((t) => t.sessionId !== sessionId);
-      // If closing the active tab, activate the last remaining tab
       if (activeTab === sessionId) {
         setActiveTab(remaining.length > 0 ? remaining[remaining.length - 1].sessionId : null);
       }
@@ -197,10 +344,14 @@ export function TerminalsPage() {
     setMountedSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
   }
 
+  function handleKillTerminal(sessionId: string) {
+    window.devhub.terminal.kill(sessionId);
+    void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+  }
+
   const handleSessionExit = useCallback(
     (sessionId: string) => {
       void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
-      // Refresh tab's session metadata from the latest session map
       setOpenTabs((prev) =>
         prev.map((t) =>
           t.sessionId === sessionId
@@ -249,6 +400,8 @@ export function TerminalsPage() {
             onLaunchTerminal={handleLaunchTerminal}
             onKillTerminal={handleKillTerminal}
             onAddShell={handleAddShell}
+            onLaunchProfile={handleLaunchProfile}
+            onDeleteProfile={handleDeleteProfile}
           />
         )}
       </div>
@@ -263,29 +416,40 @@ export function TerminalsPage() {
 
       {/* Right panel — context-switching */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Inline shell prompt overlay */}
-        {shellPrompt && (
+        {/* Inline launch form overlay */}
+        {launchForm && (
           <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
             <p className="text-xs font-medium text-[var(--color-text)] mb-2">
-              New shell in <span className="text-[var(--color-primary)]">{shellPrompt.projectName}</span>
+              New terminal in <span className="text-[var(--color-primary)]">{launchForm.projectName}</span>
             </p>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <input
                 type="text"
                 autoFocus
-                placeholder="Command (blank for bash)"
-                value={shellPrompt.command}
-                onChange={(e) => setShellPrompt((p) => p ? { ...p, command: e.target.value } : p)}
+                placeholder="Path (relative to project root)"
+                value={launchForm.cwd}
+                onChange={(e) => setLaunchForm((f) => f ? { ...f, cwd: e.target.value } : f)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") handleShellSubmit();
-                  if (e.key === "Escape") setShellPrompt(null);
+                  if (e.key === "Enter") handleLaunchFormSubmit();
+                  if (e.key === "Escape") setLaunchForm(null);
                 }}
-                className={inputClass + " flex-1"}
+                className={inputClass + " flex-1 min-w-32"}
               />
-              <Button size="sm" variant="primary" onClick={handleShellSubmit}>
+              <input
+                type="text"
+                placeholder="Command (blank for bash)"
+                value={launchForm.command}
+                onChange={(e) => setLaunchForm((f) => f ? { ...f, command: e.target.value } : f)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleLaunchFormSubmit();
+                  if (e.key === "Escape") setLaunchForm(null);
+                }}
+                className={inputClass + " flex-1 min-w-32"}
+              />
+              <Button size="sm" variant="primary" onClick={handleLaunchFormSubmit}>
                 Launch
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setShellPrompt(null)}>
+              <Button size="sm" variant="ghost" onClick={() => setLaunchForm(null)}>
                 Cancel
               </Button>
             </div>
@@ -308,6 +472,13 @@ export function TerminalsPage() {
               activeTab={activeTab}
               onSelectTab={handleSelectTab}
               onCloseTab={handleCloseTab}
+              savePrompt={savePrompt}
+              onSaveTab={(sessionId) => setSavePrompt({ sessionId, name: "" })}
+              onSavePromptChange={(name) =>
+                setSavePrompt((p) => p ? { ...p, name, error: undefined } : p)
+              }
+              onSavePromptSubmit={handleSaveProfile}
+              onSavePromptCancel={() => setSavePrompt(null)}
             />
             <div className="flex-1 min-h-0">
               <MultiTerminalDisplay

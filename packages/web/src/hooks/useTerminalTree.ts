@@ -6,10 +6,15 @@ import type { SessionInfo } from "@/types/electron.js";
 
 export interface TreeCommand {
   key: string;
-  type: "build" | "run" | "custom" | "shell";
+  type: "build" | "run" | "custom" | "terminal";
   command: string;
+  cwd?: string;
   sessionId: string;
   session?: SessionInfo;
+  /** Multiple running instances (terminal profiles only) */
+  sessions?: SessionInfo[];
+  /** Saved profile name (terminal profiles only) */
+  profileName?: string;
 }
 
 export interface TreeProject {
@@ -75,26 +80,25 @@ export function useTerminalTree() {
         });
       }
 
-      // Shell sessions for this project (from live sessions)
-      for (const s of sessions) {
-        if (s.type === "shell" && s.project === p.name) {
-          // Only add if not already in commands (from config)
-          const alreadyInCommands = commands.some(
-            (c) => c.sessionId === s.id,
-          );
-          if (!alreadyInCommands) {
-            commands.push({
-              key: s.id,
-              type: "shell",
-              command: s.command,
-              sessionId: s.id,
-              session: s,
-            });
-          }
-        }
+      // Saved terminal profiles
+      for (const terminal of p.terminals ?? []) {
+        const sanitizedName = terminal.name.replace(/ /g, "_");
+        const prefix = `terminal:${p.name}:${sanitizedName}:`;
+        const matchingSessions = sessions.filter((s) => s.id.startsWith(prefix));
+        commands.push({
+          key: `terminal:${terminal.name}`,
+          type: "terminal",
+          command: terminal.command,
+          cwd: terminal.cwd,
+          sessionId: prefix,
+          sessions: matchingSessions,
+          profileName: terminal.name,
+        });
       }
 
-      const activeCount = commands.filter((c) => c.session?.alive).length;
+      const activeCount = commands.filter(
+        (c) => c.session?.alive || c.sessions?.some((s) => s.alive),
+      ).length;
 
       return {
         name: p.name,

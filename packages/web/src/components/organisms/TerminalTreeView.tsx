@@ -7,9 +7,11 @@ import {
   Square,
   Plus,
   Terminal,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import type { TreeProject, TreeCommand } from "@/hooks/useTerminalTree.js";
+import type { SessionInfo } from "@/types/electron.js";
 
 interface Props {
   projects: TreeProject[];
@@ -19,9 +21,11 @@ interface Props {
   onLaunchTerminal: (projectName: string, command: TreeCommand) => void;
   onKillTerminal: (sessionId: string) => void;
   onAddShell: (projectName: string) => void;
+  onLaunchProfile: (projectName: string, command: TreeCommand) => void;
+  onDeleteProfile: (projectName: string, profileName: string) => void;
 }
 
-function StatusDot({ session }: { session: TreeCommand["session"] }) {
+function StatusDot({ session }: { session?: SessionInfo | null }) {
   if (!session) {
     return <span className="h-2 w-2 rounded-full bg-[var(--color-text-muted)]/30 shrink-0" />;
   }
@@ -92,6 +96,139 @@ function CommandRow({
   );
 }
 
+/** Instance child row under a profile node */
+function InstanceRow({
+  session,
+  index,
+  isSelected,
+  onSelect,
+  onKill,
+}: {
+  session: SessionInfo;
+  index: number;
+  isSelected: boolean;
+  onSelect: () => void;
+  onKill: () => void;
+}) {
+  return (
+    <div
+      onClick={onSelect}
+      className={cn(
+        "group flex items-center gap-1.5 pl-14 pr-2 py-1 text-xs cursor-pointer",
+        "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
+        "hover:bg-[var(--color-surface-2)] transition-colors",
+        isSelected && "bg-[var(--color-primary)]/10 text-[var(--color-primary)]",
+      )}
+    >
+      <StatusDot session={session} />
+      <span className="flex-1 truncate font-mono opacity-70">instance #{index + 1}</span>
+      {session.alive && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onKill(); }}
+          title="Kill instance"
+          className="rounded p-0.5 opacity-0 group-hover:opacity-100 hover:bg-red-500/20 hover:text-red-500 transition-colors"
+        >
+          <Square className="h-3 w-3" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Expandable profile node with instance children */
+function ProfileRow({
+  cmd,
+  projectName,
+  selectedId,
+  isExpanded,
+  onToggle,
+  onSelectInstance,
+  onLaunchInstance,
+  onKillInstance,
+  onDelete,
+}: {
+  cmd: TreeCommand;
+  projectName: string;
+  selectedId: string | null;
+  isExpanded: boolean;
+  onToggle: () => void;
+  onSelectInstance: (sessionId: string) => void;
+  onLaunchInstance: () => void;
+  onKillInstance: (sessionId: string) => void;
+  onDelete: () => void;
+}) {
+  const sessions = cmd.sessions ?? [];
+  const aliveCount = sessions.filter((s) => s.alive).length;
+
+  return (
+    <>
+      {/* Profile header row */}
+      <div
+        onClick={onToggle}
+        className={cn(
+          "group flex items-center gap-1.5 pl-6 pr-2 py-1 text-xs cursor-pointer",
+          "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
+          "hover:bg-[var(--color-surface-2)] transition-colors",
+        )}
+      >
+        <ChevronRight
+          className={cn(
+            "h-3 w-3 shrink-0 text-[var(--color-text-muted)] transition-transform duration-150",
+            isExpanded && "rotate-90",
+          )}
+        />
+        <Terminal className="h-3 w-3 shrink-0 opacity-60" />
+        <span className="flex-1 truncate font-mono">{cmd.profileName}</span>
+        {aliveCount > 0 && (
+          <span className="rounded-full bg-green-500/20 px-1 text-green-600 text-[10px] font-medium shrink-0">
+            {aliveCount}
+          </span>
+        )}
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onLaunchInstance(); }}
+            title="Launch new instance"
+            className="rounded p-0.5 hover:bg-green-500/20 hover:text-green-500 transition-colors"
+          >
+            <Play className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            title="Delete profile"
+            className="rounded p-0.5 hover:bg-red-500/20 hover:text-red-500 transition-colors"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </div>
+      </div>
+
+      {/* Instance children */}
+      {isExpanded && (
+        <>
+          {sessions.map((session, i) => (
+            <InstanceRow
+              key={session.id}
+              session={session}
+              index={i}
+              isSelected={selectedId === `terminal:${session.id}`}
+              onSelect={() => onSelectInstance(session.id)}
+              onKill={() => onKillInstance(session.id)}
+            />
+          ))}
+          {sessions.length === 0 && (
+            <div className="pl-14 pr-2 py-1 text-xs text-[var(--color-text-muted)]/50 italic">
+              no instances
+            </div>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
 export function TerminalTreeView({
   projects,
   selectedId,
@@ -100,12 +237,17 @@ export function TerminalTreeView({
   onLaunchTerminal,
   onKillTerminal,
   onAddShell,
+  onLaunchProfile,
+  onDeleteProfile,
 }: Props) {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
     () => new Set(projects.map((p) => p.name)),
   );
+  const [expandedProfiles, setExpandedProfiles] = useState<Set<string>>(
+    () => new Set(),
+  );
 
-  // Auto-expand projects that are newly added (e.g. after workspace switch)
+  // Auto-expand projects that are newly added
   useEffect(() => {
     setExpandedProjects((prev) => {
       const next = new Set(prev);
@@ -125,6 +267,15 @@ export function TerminalTreeView({
       const next = new Set(prev);
       if (next.has(name)) next.delete(name);
       else next.add(name);
+      return next;
+    });
+  }
+
+  function toggleProfile(key: string) {
+    setExpandedProfiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }
@@ -177,19 +328,38 @@ export function TerminalTreeView({
               )}
             </div>
 
-            {/* Commands */}
+            {/* Commands + profiles */}
             {isExpanded && (
               <div>
-                {project.commands.map((cmd) => (
-                  <CommandRow
-                    key={cmd.sessionId}
-                    cmd={cmd}
-                    isSelected={selectedId === `terminal:${cmd.sessionId}`}
-                    onSelect={() => onSelectTerminal(cmd.sessionId)}
-                    onLaunch={() => onLaunchTerminal(project.name, cmd)}
-                    onKill={() => onKillTerminal(cmd.sessionId)}
-                  />
-                ))}
+                {project.commands.map((cmd) => {
+                  if (cmd.type === "terminal") {
+                    const profileKey = `${project.name}:${cmd.key}`;
+                    return (
+                      <ProfileRow
+                        key={cmd.key}
+                        cmd={cmd}
+                        projectName={project.name}
+                        selectedId={selectedId}
+                        isExpanded={expandedProfiles.has(profileKey)}
+                        onToggle={() => toggleProfile(profileKey)}
+                        onSelectInstance={(sid) => onSelectTerminal(sid)}
+                        onLaunchInstance={() => onLaunchProfile(project.name, cmd)}
+                        onKillInstance={(sid) => onKillTerminal(sid)}
+                        onDelete={() => onDeleteProfile(project.name, cmd.profileName!)}
+                      />
+                    );
+                  }
+                  return (
+                    <CommandRow
+                      key={cmd.sessionId}
+                      cmd={cmd}
+                      isSelected={selectedId === `terminal:${cmd.sessionId}`}
+                      onSelect={() => onSelectTerminal(cmd.sessionId)}
+                      onLaunch={() => onLaunchTerminal(project.name, cmd)}
+                      onKill={() => onKillTerminal(cmd.sessionId)}
+                    />
+                  );
+                })}
 
                 {/* + Shell button */}
                 <button
@@ -202,7 +372,7 @@ export function TerminalTreeView({
                   )}
                 >
                   <Plus className="h-3 w-3 shrink-0" />
-                  <span>Shell</span>
+                  <span>Terminal</span>
                 </button>
               </div>
             )}

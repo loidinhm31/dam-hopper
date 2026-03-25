@@ -15,12 +15,19 @@ export interface ServiceConfig {
   runCommand?: string;
 }
 
+export interface TerminalProfile {
+  name: string;
+  command: string;
+  cwd: string;
+}
+
 export interface ProjectConfig {
   name: string;
   path: string;
   type: ProjectType;
   services?: ServiceConfig[];
   commands?: Record<string, string>;
+  terminals?: TerminalProfile[];
   envFile?: string;
   tags?: string[];
 }

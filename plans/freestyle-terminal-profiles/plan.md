@@ -1,7 +1,7 @@
 ---
 title: "Freestyle Terminal Profiles"
 description: "Add saved terminal profiles with custom cwd and command per project, supporting multiple concurrent instances"
-status: pending
+status: done
 priority: P1
 effort: 4h
 branch: main
@@ -69,7 +69,7 @@ cwd = "."
 |---|-------|--------|------|
 | 1 | Core: Schema & Config | done | [phase-01](./phase-01-core-schema.md) |
 | 2 | Electron: IPC & PTY | done | [phase-02](./phase-02-electron-ipc.md) |
-| 3 | Web: UI Components | pending | [phase-03](./phase-03-web-ui.md) |
+| 3 | Web: UI Components | done | [phase-03](./phase-03-web-ui.md) |
 
 ## Key Files to Modify
 
