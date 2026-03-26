@@ -8,6 +8,8 @@ export const FREE_TERMINAL_PREFIX = "free:" as const;
 
 export interface TreeCommand {
   key: string;
+  /** Human-readable display name (falls back to key if absent) */
+  label?: string;
   type: "build" | "run" | "custom" | "terminal";
   command: string;
   cwd?: string;
@@ -56,6 +58,7 @@ export function useTerminalTree() {
         const sessionId = `build:${p.name}`;
         commands.push({
           key: "build",
+          label: "Build",
           type: "build",
           command: buildCmd,
           sessionId,
@@ -69,6 +72,7 @@ export function useTerminalTree() {
         const sessionId = `run:${p.name}`;
         commands.push({
           key: "run",
+          label: "Run",
           type: "run",
           command: runCmd,
           sessionId,
@@ -95,6 +99,7 @@ export function useTerminalTree() {
         const matchingSessions = sessions.filter((s) => s.id.startsWith(prefix));
         commands.push({
           key: `terminal:${terminal.name}`,
+          label: terminal.name,
           type: "terminal",
           command: terminal.command,
           cwd: terminal.cwd,

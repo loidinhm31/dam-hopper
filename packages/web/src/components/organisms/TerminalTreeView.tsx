@@ -75,7 +75,7 @@ function CommandRow({
     >
       <StatusDot session={cmd.session} />
       <Terminal className="h-3 w-3 shrink-0 opacity-60" />
-      <span className="flex-1 truncate font-mono">{cmd.key}</span>
+      <span className="flex-1 truncate font-mono">{cmd.label ?? cmd.key}</span>
 
       {/* Action buttons */}
       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
