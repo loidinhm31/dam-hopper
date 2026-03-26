@@ -4,6 +4,8 @@ import { useTerminalSessions } from "@/api/queries.js";
 import type { ProjectType } from "@/api/client.js";
 import type { SessionInfo } from "@/types/electron.js";
 
+export const FREE_TERMINAL_PREFIX = "free:" as const;
+
 export interface TreeCommand {
   key: string;
   type: "build" | "run" | "custom" | "terminal";
@@ -36,6 +38,12 @@ export function useTerminalTree() {
     const map = new Map<string, SessionInfo>();
     for (const s of sessions) map.set(s.id, s);
     return map;
+  }, [sessions]);
+
+  const freeTerminals = useMemo<SessionInfo[]>(() => {
+    return sessions
+      .filter((s) => s.id.startsWith(FREE_TERMINAL_PREFIX))
+      .sort((a, b) => a.startedAt - b.startedAt);
   }, [sessions]);
 
   const tree = useMemo<TreeProject[]>(() => {
@@ -112,5 +120,5 @@ export function useTerminalTree() {
     });
   }, [projects, sessionMap, sessions]);
 
-  return { tree, isLoading: projectsLoading || sessionsLoading };
+  return { tree, freeTerminals, isLoading: projectsLoading || sessionsLoading };
 }

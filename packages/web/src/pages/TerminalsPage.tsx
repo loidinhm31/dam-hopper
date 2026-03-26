@@ -12,6 +12,7 @@ import { useTerminalTree } from "@/hooks/useTerminalTree.js";
 import { useTerminalSessions, useProjects } from "@/api/queries.js";
 import { useSidebarCollapse } from "@/hooks/useSidebarCollapse.js";
 import { useResizeHandle } from "@/hooks/useResizeHandle.js";
+import { FREE_TERMINAL_PREFIX } from "@/hooks/useTerminalTree.js";
 import type { TreeCommand, TreeProject } from "@/hooks/useTerminalTree.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { SessionInfo } from "@/types/electron.js";
@@ -74,7 +75,7 @@ function findSessionMeta(
 
 export function TerminalsPage() {
   const qc = useQueryClient();
-  const { tree, isLoading } = useTerminalTree();
+  const { tree, freeTerminals, isLoading } = useTerminalTree();
   const { data: sessions = [] } = useTerminalSessions();
   const { data: projects = [] } = useProjects();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -97,6 +98,12 @@ export function TerminalsPage() {
   const sessionMap = useMemo(
     () => new Map<string, SessionInfo>(sessions.map((s) => [s.id, s])),
     [sessions],
+  );
+
+  /** Maps free terminal session ID → 1-based display index for O(1) label lookups. */
+  const freeTerminalIndexMap = useMemo(
+    () => new Map(freeTerminals.map((s, i) => [s.id, i + 1])),
+    [freeTerminals],
   );
 
   /** Set of session IDs that are already instances of a saved profile. */
@@ -134,9 +141,8 @@ export function TerminalsPage() {
     const parts = sessionId.split(":");
     const type = parts[0] ?? sessionId;
     if (type === "free") {
-      // Show shell basename for free (project-less) terminals, e.g. "zsh", "bash"
-      const shellBase = command.split(/[\s/\\]/).filter(Boolean).pop() ?? "Terminal";
-      return shellBase;
+      const n = freeTerminalIndexMap.get(sessionId);
+      return `Terminal ${n ?? "?"}`;
     }
     if (type === "terminal") {
       const profile = parts[2];
@@ -338,6 +344,19 @@ export function TerminalsPage() {
       });
   }
 
+  function handleAddFreeTerminal() {
+    const sessionId = `${FREE_TERMINAL_PREFIX}${crypto.randomUUID()}`;
+    window.devhub.terminal
+      .create({ id: sessionId, command: "", cols: 120, rows: 30 })
+      .then(() => {
+        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+        openTerminalTab(sessionId, "", "");
+      })
+      .catch((err: unknown) => {
+        console.error("[TerminalsPage] failed to create free terminal", err);
+      });
+  }
+
   function handleAddShell(projectName: string) {
     setLaunchForm({ projectName, cwd: "", command: "" });
     setSelection({ type: "project", name: projectName });
@@ -399,8 +418,12 @@ export function TerminalsPage() {
       !profileSessionIds.has(t.sessionId) &&
       t.sessionId.startsWith("terminal:") &&
       t.sessionId.split(":")[2] === "_";
+    const label = t.sessionId.startsWith(FREE_TERMINAL_PREFIX)
+      ? tabLabel(t.sessionId, "", "")
+      : t.label;
     return {
       ...t,
+      label,
       session: sessionMap.get(t.sessionId) ?? t.session,
       isSaveable: isAdHoc,
     };
@@ -419,11 +442,6 @@ export function TerminalsPage() {
 
       {/* Tree sidebar */}
       <div style={{ width: treeWidth }} className="shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] flex flex-col overflow-hidden">
-        <div className="px-3 py-2 border-b border-[var(--color-border)]">
-          <h2 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
-            Projects
-          </h2>
-        </div>
         {isLoading ? (
           <div className="flex items-center justify-center flex-1">
             <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
@@ -431,6 +449,7 @@ export function TerminalsPage() {
         ) : (
           <TerminalTreeView
             projects={tree}
+            freeTerminals={freeTerminals}
             selectedId={selectedId}
             onSelectProject={handleSelectProject}
             onSelectTerminal={handleSelectTerminal}
@@ -439,6 +458,9 @@ export function TerminalsPage() {
             onAddShell={handleAddShell}
             onLaunchProfile={handleLaunchProfile}
             onDeleteProfile={handleDeleteProfile}
+            onAddFreeTerminal={handleAddFreeTerminal}
+            onSelectFreeTerminal={handleSelectTerminal}
+            onKillFreeTerminal={handleKillTerminal}
           />
         )}
       </div>
