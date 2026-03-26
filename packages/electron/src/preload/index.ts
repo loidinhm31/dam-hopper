@@ -83,7 +83,7 @@ contextBridge.exposeInMainWorld("devhub", {
   terminal: {
     create: (opts: {
       id: string;
-      project: string;
+      project?: string;
       command: string;
       cwd?: string;
       cols: number;

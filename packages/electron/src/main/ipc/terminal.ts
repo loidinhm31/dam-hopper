@@ -14,7 +14,7 @@ export function registerTerminalHandlers(holder: CtxHolder): void {
       _e,
       opts: {
         id: string;
-        project: string;
+        project?: string;
         command: string;
         cwd?: string;
         cols: number;
