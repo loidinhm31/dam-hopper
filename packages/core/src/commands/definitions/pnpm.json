@@ -1,0 +1,67 @@
+{
+  "language": "javascript",
+  "framework": "pnpm",
+  "projectType": "pnpm",
+  "commands": [
+    {
+      "name": "Build",
+      "command": "pnpm build",
+      "description": "Build the project",
+      "tags": ["build", "compile", "bundle"]
+    },
+    {
+      "name": "Start",
+      "command": "pnpm start",
+      "description": "Start the application",
+      "tags": ["start", "run", "server"]
+    },
+    {
+      "name": "Dev",
+      "command": "pnpm dev",
+      "description": "Start development server with hot reload",
+      "tags": ["dev", "development", "watch", "hot", "reload"]
+    },
+    {
+      "name": "Test",
+      "command": "pnpm test",
+      "description": "Run test suite",
+      "tags": ["test", "unit", "jest", "vitest"]
+    },
+    {
+      "name": "Lint",
+      "command": "pnpm lint",
+      "description": "Run linter checks",
+      "tags": ["lint", "eslint", "check", "style"]
+    },
+    {
+      "name": "Install",
+      "command": "pnpm install",
+      "description": "Install all dependencies",
+      "tags": ["install", "dependencies", "packages"]
+    },
+    {
+      "name": "Format",
+      "command": "pnpm format",
+      "description": "Format code with Prettier",
+      "tags": ["format", "prettier", "style"]
+    },
+    {
+      "name": "Audit",
+      "command": "pnpm audit",
+      "description": "Check for security vulnerabilities",
+      "tags": ["audit", "security", "vulnerabilities"]
+    },
+    {
+      "name": "Outdated",
+      "command": "pnpm outdated",
+      "description": "Check for outdated packages",
+      "tags": ["outdated", "update", "packages", "versions"]
+    },
+    {
+      "name": "DLX",
+      "command": "pnpm dlx",
+      "description": "Fetch and run a package from the registry",
+      "tags": ["dlx", "npx", "execute", "run", "temporary"]
+    }
+  ]
+}

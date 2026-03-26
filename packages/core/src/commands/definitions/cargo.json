@@ -1,0 +1,67 @@
+{
+  "language": "rust",
+  "framework": "cargo",
+  "projectType": "cargo",
+  "commands": [
+    {
+      "name": "Build",
+      "command": "cargo build",
+      "description": "Build the project in debug mode",
+      "tags": ["build", "compile", "debug"]
+    },
+    {
+      "name": "Build (release)",
+      "command": "cargo build --release",
+      "description": "Build optimized release binary",
+      "tags": ["build", "release", "optimized", "fast"]
+    },
+    {
+      "name": "Run",
+      "command": "cargo run",
+      "description": "Build and run the project",
+      "tags": ["run", "execute", "start"]
+    },
+    {
+      "name": "Test",
+      "command": "cargo test",
+      "description": "Run all tests",
+      "tags": ["test", "unit", "integration"]
+    },
+    {
+      "name": "Check",
+      "command": "cargo check",
+      "description": "Check code without producing binaries (fast)",
+      "tags": ["check", "compile", "fast", "verify"]
+    },
+    {
+      "name": "Clippy",
+      "command": "cargo clippy",
+      "description": "Run the Clippy linter",
+      "tags": ["clippy", "lint", "check", "style", "warnings"]
+    },
+    {
+      "name": "Format",
+      "command": "cargo fmt",
+      "description": "Format code with rustfmt",
+      "tags": ["format", "fmt", "rustfmt", "style"]
+    },
+    {
+      "name": "Docs",
+      "command": "cargo doc",
+      "description": "Generate documentation",
+      "tags": ["docs", "documentation", "generate"]
+    },
+    {
+      "name": "Bench",
+      "command": "cargo bench",
+      "description": "Run benchmarks",
+      "tags": ["bench", "benchmark", "performance"]
+    },
+    {
+      "name": "Clean",
+      "command": "cargo clean",
+      "description": "Remove build artifacts",
+      "tags": ["clean", "delete", "reset"]
+    }
+  ]
+}

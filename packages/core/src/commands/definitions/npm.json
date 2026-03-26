@@ -1,0 +1,67 @@
+{
+  "language": "javascript",
+  "framework": "npm",
+  "projectType": "npm",
+  "commands": [
+    {
+      "name": "Build",
+      "command": "npm run build",
+      "description": "Build the project",
+      "tags": ["build", "compile", "bundle"]
+    },
+    {
+      "name": "Start",
+      "command": "npm start",
+      "description": "Start the application",
+      "tags": ["start", "run", "server"]
+    },
+    {
+      "name": "Dev",
+      "command": "npm run dev",
+      "description": "Start development server with hot reload",
+      "tags": ["dev", "development", "watch", "hot", "reload"]
+    },
+    {
+      "name": "Test",
+      "command": "npm test",
+      "description": "Run test suite",
+      "tags": ["test", "unit", "jest", "vitest"]
+    },
+    {
+      "name": "Lint",
+      "command": "npm run lint",
+      "description": "Run linter checks",
+      "tags": ["lint", "eslint", "check", "style"]
+    },
+    {
+      "name": "Install",
+      "command": "npm install",
+      "description": "Install all dependencies",
+      "tags": ["install", "dependencies", "packages"]
+    },
+    {
+      "name": "Clean Install",
+      "command": "npm ci",
+      "description": "Clean install from lock file",
+      "tags": ["install", "ci", "clean", "lockfile"]
+    },
+    {
+      "name": "Format",
+      "command": "npm run format",
+      "description": "Format code with Prettier",
+      "tags": ["format", "prettier", "style"]
+    },
+    {
+      "name": "Audit",
+      "command": "npm audit",
+      "description": "Check for security vulnerabilities",
+      "tags": ["audit", "security", "vulnerabilities"]
+    },
+    {
+      "name": "Outdated",
+      "command": "npm outdated",
+      "description": "Check for outdated packages",
+      "tags": ["outdated", "update", "packages", "versions"]
+    }
+  ]
+}

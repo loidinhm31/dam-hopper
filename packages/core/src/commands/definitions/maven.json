@@ -1,0 +1,79 @@
+{
+  "language": "java",
+  "framework": "maven",
+  "projectType": "maven",
+  "commands": [
+    {
+      "name": "Build",
+      "command": "mvn clean install",
+      "description": "Full build with tests",
+      "tags": ["build", "compile", "install", "clean"]
+    },
+    {
+      "name": "Build (skip tests)",
+      "command": "mvn clean install -DskipTests",
+      "description": "Build without running tests",
+      "tags": ["build", "compile", "skip", "fast", "install"]
+    },
+    {
+      "name": "Test",
+      "command": "mvn test",
+      "description": "Run all tests",
+      "tags": ["test", "unit"]
+    },
+    {
+      "name": "Package",
+      "command": "mvn package",
+      "description": "Package the application into a JAR/WAR",
+      "tags": ["package", "jar", "war", "build"]
+    },
+    {
+      "name": "Package (skip tests)",
+      "command": "mvn package -DskipTests",
+      "description": "Package without running tests",
+      "tags": ["package", "jar", "war", "skip", "fast"]
+    },
+    {
+      "name": "Run (Spring Boot)",
+      "command": "mvn spring-boot:run",
+      "description": "Start Spring Boot application",
+      "tags": ["run", "start", "spring", "boot", "server"]
+    },
+    {
+      "name": "Clean",
+      "command": "mvn clean",
+      "description": "Remove build artifacts",
+      "tags": ["clean", "delete", "reset"]
+    },
+    {
+      "name": "Verify",
+      "command": "mvn verify",
+      "description": "Run integration tests and verify package",
+      "tags": ["verify", "integration", "test", "check"]
+    },
+    {
+      "name": "Compile",
+      "command": "mvn compile",
+      "description": "Compile source code only",
+      "tags": ["compile", "build"]
+    },
+    {
+      "name": "Dependency Tree",
+      "command": "mvn dependency:tree",
+      "description": "Display the dependency tree",
+      "tags": ["dependencies", "tree", "list"]
+    },
+    {
+      "name": "Deploy",
+      "command": "mvn deploy",
+      "description": "Deploy artifact to remote repository",
+      "tags": ["deploy", "publish", "release", "remote"]
+    },
+    {
+      "name": "Site",
+      "command": "mvn site",
+      "description": "Generate project site documentation",
+      "tags": ["site", "docs", "documentation", "report"]
+    }
+  ]
+}

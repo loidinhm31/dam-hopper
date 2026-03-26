@@ -1,0 +1,67 @@
+{
+  "language": "java",
+  "framework": "gradle",
+  "projectType": "gradle",
+  "commands": [
+    {
+      "name": "Build",
+      "command": "./gradlew build",
+      "description": "Build the project with tests",
+      "tags": ["build", "compile", "assemble"]
+    },
+    {
+      "name": "Build (skip tests)",
+      "command": "./gradlew build -x test",
+      "description": "Build without running tests",
+      "tags": ["build", "compile", "skip", "fast"]
+    },
+    {
+      "name": "Test",
+      "command": "./gradlew test",
+      "description": "Run all tests",
+      "tags": ["test", "unit"]
+    },
+    {
+      "name": "Clean",
+      "command": "./gradlew clean",
+      "description": "Remove build output",
+      "tags": ["clean", "delete", "reset"]
+    },
+    {
+      "name": "Run (Spring Boot)",
+      "command": "./gradlew bootRun",
+      "description": "Start Spring Boot application",
+      "tags": ["run", "start", "spring", "boot", "server"]
+    },
+    {
+      "name": "Dependencies",
+      "command": "./gradlew dependencies",
+      "description": "Display all dependencies",
+      "tags": ["dependencies", "list", "tree"]
+    },
+    {
+      "name": "Assemble",
+      "command": "./gradlew assemble",
+      "description": "Assemble outputs without running tests",
+      "tags": ["assemble", "build", "jar"]
+    },
+    {
+      "name": "Check",
+      "command": "./gradlew check",
+      "description": "Run all verification tasks",
+      "tags": ["check", "verify", "lint", "test"]
+    },
+    {
+      "name": "JAR",
+      "command": "./gradlew jar",
+      "description": "Build a JAR file",
+      "tags": ["jar", "package", "build"]
+    },
+    {
+      "name": "Run",
+      "command": "./gradlew run",
+      "description": "Run the application",
+      "tags": ["run", "start", "execute"]
+    }
+  ]
+}
