@@ -6,11 +6,13 @@
 **Phase 10: Terminal Tree Redesign** — Complete (unified terminals page with tree sidebar)
 **Phase 02: Resizable TreeView** — Complete (drag-to-resize terminal tree panel with persistence)
 **Phase 03: Persistence & Polish** — Complete (keyboard shortcut Ctrl/Cmd+B in useSidebarCollapse hook, ResizeObserver debounced 200ms in TerminalPanel)
+**Phase 02: Predefined Commands** — Complete (BM25 search, autocomplete UI, IPC integration)
 
 - **Phase 01-03: Electron Shell & IPC Foundation** — Complete
 - **Phase 04: Cleanup & Packaging** — Complete (CLI/Server removed, Electron packaging added)
 - **Phase 10: Terminal Tree Redesign** — Complete (unified terminals UI, tree view, session metadata)
 - **Phase 02: Sidebar Collapse & Resize** — Complete (collapsible sidebar + resizable tree panel)
+- **Phase 02: Predefined Commands** — Complete (BM25 search via CommandRegistry, autocomplete input component, 150ms debounce)
 
 ## Project Overview
 
@@ -551,6 +553,7 @@ Deleted pages (consolidated into Terminals page):
 | -------------------- | --------------------------------- |
 | main.ts              | Electron main process + IPC setup |
 | preload.ts           | Security-scoped IPC interface     |
+| main/ipc/commands.ts | **NEW:** Command search IPC handlers (COMMAND_SEARCH, COMMAND_LIST) |
 | electron-builder.yml | Cross-platform packaging config   |
 
 ### @dev-hub/web
@@ -564,8 +567,11 @@ Deleted pages (consolidated into Terminals page):
 | src/hooks/useIpc.ts             | IPC event subscription hook       |
 | src/hooks/useIpcEvent.ts        | Per-event-type IPC hook           |
 | src/hooks/useTerminalTree.ts    | NEW: Project tree + sessions hook |
+| src/hooks/useCommandSearch.ts   | **NEW:** Debounced command search hook (150ms debounce) |
 | src/api/queries.ts              | TanStack Query for IPC data       |
+| src/api/client.ts               | **UPDATED:** Added SearchResult, CommandDefinition types |
 | src/components/atoms/CollapsibleSection.tsx | NEW: Collapsible tree section |
+| src/components/atoms/CommandSuggestionInput.tsx | **NEW:** Autocomplete command input with dropdown |
 | src/components/organisms/TerminalTreeView.tsx | NEW: Tree sidebar component |
 | src/components/organisms/ProjectInfoPanel.tsx | NEW: Project info right panel |
 | src/components/organisms/TerminalTabBar.tsx | NEW: Session tab bar |
@@ -692,6 +698,84 @@ CLI and Server tests DELETED during Electron migration. Core tests (config, git,
 - Passphrase cleared from memory after `ssh-add` completes.
 - No passphrase logging in main process.
 - Session cache stores only boolean "keys loaded" flag, never the passphrase itself.
+
+### Phase 02: Predefined Commands — BM25 Search & Autocomplete UI
+
+**Wire predefined command search from core through Electron IPC to reusable autocomplete input component:**
+
+#### New IPC Channels (ipc-channels.ts)
+
+- **COMMAND_SEARCH** (`commands:search`): Search predefined commands by query (BM25), optional project type filter, limit (max 50)
+- **COMMAND_LIST** (`commands:list`): Get all commands for a specific project type
+
+#### New Command IPC Handler (packages/electron/src/main/ipc/commands.ts)
+
+- **registerCommandHandlers()**: Register COMMAND_SEARCH and COMMAND_LIST handlers
+  - Creates CommandRegistry singleton (from @dev-hub/core)
+  - COMMAND_SEARCH handler: validates query (string), projectType (optional, from VALID_PROJECT_TYPES set), limit (clamped to 0–50, default 8)
+    - Calls `registry.searchByType(query, projectType, limit)` if type provided
+    - Calls `registry.search(query, limit)` for cross-project search
+    - Returns SearchResult[] (command definition + relevance score + project type)
+  - COMMAND_LIST handler: validates projectType, returns CommandDefinition[] from registry
+
+#### Preload Bridge Extension (preload/index.ts)
+
+- **window.devhub.commands**: New namespace exposing:
+  - `search(query: string, projectType?: string, limit?: number): Promise<SearchResult[]>`
+  - `list(projectType: string): Promise<CommandDefinition[]>`
+
+#### New Hook (packages/web/src/hooks/useCommandSearch.ts)
+
+- **useCommandSearch(projectType?)**: Encapsulates debounced IPC search
+  - Manages query and results state
+  - 150ms debounce on query changes (via setTimeout)
+  - Auto-clears results on empty query
+  - Error handling: clears results on failed search
+  - Returns `{query, setQuery, results}`
+
+#### New Component (packages/web/src/components/atoms/CommandSuggestionInput.tsx)
+
+- **CommandSuggestionInput**: Reusable autocomplete input with dropdown
+  - Props: projectType, onSelect, onSubmitCustom, placeholder, autoFocus, className
+  - Uses useCommandSearch hook for BM25 results
+  - Renders input + icon (Search from lucide-react)
+  - Dropdown with scrollable suggestion list (max-height 224px, z-index 50)
+  - Keyboard navigation: Arrow Up/Down (navigate results), Enter (select/submit), Escape (close)
+  - Mouse support: click to select, mouse enter to highlight
+  - Custom command fallback: if no result selected on Enter, submits typed text via onSubmitCustom
+  - Displays result.command (text), description (if present), and projectType tag
+  - Highlight styles: primary color background on selected item
+  - Auto-scrolls highlighted item into view with block: "nearest"
+  - Blur delay (150ms) to allow click-to-select before dropdown closes
+
+#### Integration Points
+
+- **TerminalTreeView.tsx**: Added inline CommandSuggestionInput for project "+" button
+  - Shows suggestion input when adding new command to a project
+  - onSelect callback launches terminal with selected command
+  - Session ID format: `custom:{projectName}:{sanitizedCommandName}`
+  - Fallback: onSubmitCustom handles user-typed custom commands
+  - Free terminal creation also shows CommandSuggestionInput (searches all project types)
+
+- **TerminalsPage.tsx**: New handlers for suggested command flow
+  - `handleLaunchSuggestedCommand(command, projectName)`: Terminal creation via COMMAND_SEARCH selection
+  - `handleLaunchFreeWithCommand(command)`: Free terminal launch with predefined command
+  - Both handlers route through existing terminal creation IPC
+
+#### Updated Web Types (api/client.ts)
+
+- **CommandDefinition**: Command metadata (name, command text, description, projectType)
+- **SearchResult**: Wrapper with SearchResult and projectType (for BM25 ranking context)
+
+#### Behavior
+
+- Typing in suggestion input triggers 150ms debounce, then IPC search query
+- Search executes in main process (CommandRegistry via @dev-hub/core, Node.js context required)
+- Results include BM25 relevance scores (ranked by relevance, then recency)
+- Selection launches terminal with command (via existing TERMINAL_CREATE flow)
+- Custom (user-typed) commands allowed if no database match — submitted as-is to TERMINAL_CREATE
+- Cross-project search: when projectType not specified, shows top 8 results across all project types
+- Works in both project-scoped context (tree +) and global context (free terminal)
 
 ## Next Steps (Phase 03+)
 
