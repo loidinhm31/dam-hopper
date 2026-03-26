@@ -15,6 +15,7 @@ import type { SessionInfo } from "@/types/electron.js";
 
 interface Props {
   projects: TreeProject[];
+  freeTerminals: SessionInfo[];
   selectedId: string | null;
   onSelectProject: (name: string) => void;
   onSelectTerminal: (sessionId: string) => void;
@@ -23,6 +24,9 @@ interface Props {
   onAddShell: (projectName: string) => void;
   onLaunchProfile: (projectName: string, command: TreeCommand) => void;
   onDeleteProfile: (projectName: string, profileName: string) => void;
+  onAddFreeTerminal: () => void;
+  onSelectFreeTerminal: (sessionId: string) => void;
+  onKillFreeTerminal: (sessionId: string) => void;
 }
 
 function StatusDot({ session }: { session?: SessionInfo | null }) {
@@ -136,6 +140,47 @@ function InstanceRow({
   );
 }
 
+/** Single free terminal row in the Terminals section */
+function FreeTerminalRow({
+  session,
+  label,
+  isSelected,
+  onSelect,
+  onKill,
+}: {
+  session: SessionInfo;
+  label: string;
+  isSelected: boolean;
+  onSelect: () => void;
+  onKill: () => void;
+}) {
+  return (
+    <div
+      onClick={onSelect}
+      className={cn(
+        "group flex items-center gap-1.5 pl-8 pr-2 py-1 text-xs cursor-pointer",
+        "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
+        "hover:bg-[var(--color-surface-2)] transition-colors",
+        isSelected && "bg-[var(--color-primary)]/10 text-[var(--color-primary)]",
+      )}
+    >
+      <StatusDot session={session} />
+      <Terminal className="h-3 w-3 shrink-0 opacity-60" />
+      <span className="flex-1 truncate font-mono">{label}</span>
+      {session.alive && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onKill(); }}
+          title="Kill terminal"
+          className="rounded p-0.5 opacity-0 group-hover:opacity-100 hover:bg-red-500/20 hover:text-red-500 transition-colors"
+        >
+          <Square className="h-3 w-3" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** Expandable profile node with instance children */
 function ProfileRow({
   cmd,
@@ -231,6 +276,7 @@ function ProfileRow({
 
 export function TerminalTreeView({
   projects,
+  freeTerminals,
   selectedId,
   onSelectProject,
   onSelectTerminal,
@@ -239,7 +285,14 @@ export function TerminalTreeView({
   onAddShell,
   onLaunchProfile,
   onDeleteProfile,
+  onAddFreeTerminal,
+  onSelectFreeTerminal,
+  onKillFreeTerminal,
 }: Props) {
+  const [terminalsExpanded, setTerminalsExpanded] = useState<boolean>(() => {
+    const stored = localStorage.getItem("devhub:expanded-free-terminals");
+    return stored === null ? true : stored === "true";
+  });
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => {
     const stored = localStorage.getItem("devhub:expanded-projects");
     if (stored) {
@@ -278,6 +331,13 @@ export function TerminalTreeView({
     });
   }, [projects]);
 
+  function toggleTerminals() {
+    setTerminalsExpanded((prev) => {
+      localStorage.setItem("devhub:expanded-free-terminals", String(!prev));
+      return !prev;
+    });
+  }
+
   function toggleProject(name: string) {
     setExpandedProjects((prev) => {
       const next = new Set(prev);
@@ -298,7 +358,7 @@ export function TerminalTreeView({
     });
   }
 
-  if (projects.length === 0) {
+  if (projects.length === 0 && freeTerminals.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-2 text-[var(--color-text-muted)] text-sm p-4">
         <FolderOpen className="h-8 w-8 opacity-40" />
@@ -309,6 +369,65 @@ export function TerminalTreeView({
 
   return (
     <div className="flex flex-col overflow-y-auto h-full py-1">
+      {/* Terminals section */}
+      <div>
+        <div
+          onClick={toggleTerminals}
+          className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium cursor-pointer text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+        >
+          <ChevronRight
+            className={cn(
+              "h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)] transition-transform duration-150",
+              terminalsExpanded && "rotate-90",
+            )}
+          />
+          <Terminal className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)]" />
+          <span className="flex-1">Terminals</span>
+          {(() => {
+            const aliveCount = freeTerminals.filter((s) => s.alive).length;
+            return aliveCount > 0 ? (
+              <span className="rounded-full bg-green-500/20 px-1.5 text-green-600 text-[10px] font-medium">
+                {aliveCount}
+              </span>
+            ) : null;
+          })()}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onAddFreeTerminal(); }}
+            title="New terminal"
+            className="rounded p-0.5 hover:bg-[var(--color-primary)]/20 hover:text-[var(--color-primary)] transition-colors"
+          >
+            <Plus className="h-3 w-3" />
+          </button>
+        </div>
+        {terminalsExpanded && (
+          <div>
+            {freeTerminals.map((session, i) => (
+              <FreeTerminalRow
+                key={session.id}
+                session={session}
+                label={`Terminal ${i + 1}`}
+                isSelected={selectedId === `terminal:${session.id}`}
+                onSelect={() => onSelectFreeTerminal(session.id)}
+                onKill={() => onKillFreeTerminal(session.id)}
+              />
+            ))}
+            {freeTerminals.length === 0 && (
+              <div className="pl-8 pr-2 py-1 text-xs text-[var(--color-text-muted)]/50 italic">
+                No terminals — press + to create one
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Projects section header */}
+      {projects.length > 0 && (
+        <div className="px-2 py-1.5 mt-1 border-t border-[var(--color-border)]">
+          <span className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Projects</span>
+        </div>
+      )}
+
       {projects.map((project) => {
         const isExpanded = expandedProjects.has(project.name);
         const isProjectSelected = selectedId === `project:${project.name}`;
