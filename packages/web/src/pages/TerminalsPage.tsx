@@ -119,6 +119,15 @@ export function TerminalsPage() {
     return ids;
   }, [tree]);
 
+  // Action: create a new free terminal when ?action=new-terminal is in URL
+  useEffect(() => {
+    if (searchParams.get("action") !== "new-terminal") return;
+    setSearchParams({}, { replace: true });
+    handleAddFreeTerminal();
+  // handleAddFreeTerminal closes over stable refs; qc and searchParams are in deps via the outer scope
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   // Deep-link: open a specific session tab when ?session= param is present
   useEffect(() => {
     const sessionParam = searchParams.get("session");
@@ -548,6 +557,20 @@ export function TerminalsPage() {
               mountedSessions={mountedSessions}
               onSessionExit={handleSessionExit}
             />
+          ) : projects.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full gap-4 text-[var(--color-text-muted)]">
+              <TerminalIcon className="h-12 w-12 opacity-20" />
+              <div className="text-center">
+                <p className="text-sm mb-1">No projects configured</p>
+                <p className="text-xs opacity-60">Open a free terminal to get started</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button variant="primary" size="sm" onClick={handleAddFreeTerminal}>
+                  Open Terminal
+                </Button>
+                <kbd className="text-[10px] text-[var(--color-text-muted)]/50 font-mono">Ctrl+`</kbd>
+              </div>
+            </div>
           ) : (
             <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--color-text-muted)]">
               <TerminalIcon className="h-10 w-10 opacity-20" />

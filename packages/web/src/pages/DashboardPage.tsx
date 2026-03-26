@@ -1,5 +1,6 @@
 import { FolderGit2, CheckCircle2, AlertCircle, Activity, Hammer, Play, Terminal, Wrench, Square } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
+import { Button } from "@/components/atoms/Button.js";
 import { useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { OverviewCard } from "@/components/molecules/OverviewCard.js";
@@ -211,6 +212,24 @@ export function DashboardPage() {
             ))}
           </ul>
         )}
+      </div>
+
+      {/* Quick actions */}
+      <div className="mb-5 rounded glass-card p-4">
+        <p className="text-[10px] text-[var(--color-primary)]/60 tracking-widest uppercase mb-3">
+          // QUICK_ACTIONS
+        </p>
+        <div className="flex gap-2 flex-wrap items-center">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => navigate("/terminals?action=new-terminal")}
+          >
+            <Terminal className="h-3.5 w-3.5" />
+            New Terminal
+          </Button>
+          <kbd className="text-[10px] text-[var(--color-text-muted)]/50 font-mono">Ctrl+`</kbd>
+        </div>
       </div>
 
       {/* Recent activity */}

@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { DashboardPage } from "@/pages/DashboardPage.js";
 import { GitPage } from "@/pages/GitPage.js";
@@ -8,9 +8,28 @@ import { TerminalsPage } from "@/pages/TerminalsPage.js";
 import { WelcomePage } from "@/pages/WelcomePage.js";
 import { useWorkspaceStatus } from "@/api/queries.js";
 
+/** Registers Ctrl+` as a global shortcut to open a new free terminal. */
+function GlobalShortcuts() {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.ctrlKey && e.code === "Backquote") {
+        e.preventDefault();
+        navigate("/terminals?action=new-terminal");
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [navigate]);
+
+  return null;
+}
+
 function AppRoutes() {
   return (
     <BrowserRouter>
+      <GlobalShortcuts />
       <Routes>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/terminals" element={<TerminalsPage />} />
