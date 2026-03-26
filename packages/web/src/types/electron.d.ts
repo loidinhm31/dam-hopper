@@ -11,6 +11,8 @@ import type {
   DevHubConfig,
   ProjectConfig,
   TerminalProfile,
+  SearchResult,
+  CommandDefinition,
 } from "../api/client.js";
 
 type Unsubscribe = () => void;
@@ -94,6 +96,11 @@ export interface DevHubBridge {
     addKey: (passphrase: string, keyPath?: string) => Promise<{ success: boolean; error?: string }>;
     checkAgent: () => Promise<{ hasKeys: boolean; keyCount: number }>;
     listKeys: () => Promise<string[]>;
+  };
+
+  commands: {
+    search: (query: string, projectType?: string, limit?: number) => Promise<SearchResult[]>;
+    list: (projectType: string) => Promise<CommandDefinition[]>;
   };
 
   settings: {

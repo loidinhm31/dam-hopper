@@ -7,6 +7,7 @@ import { registerTerminalHandlers } from "./terminal.js";
 import { registerSshHandlers } from "./ssh.js";
 import { wireEventEmitters } from "./events.js";
 import { registerSettingsHandlers } from "./settings.js";
+import { registerCommandHandlers } from "./commands.js";
 
 interface StoreSchema {
   lastWorkspacePath?: string;
@@ -22,5 +23,6 @@ export function registerIpcHandlers(
   registerTerminalHandlers(holder);
   registerSshHandlers(holder);
   registerSettingsHandlers(holder, store);
+  registerCommandHandlers();
   wireEventEmitters(holder);
 }

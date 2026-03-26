@@ -102,6 +102,19 @@ export interface GitOpResult {
   error?: string;
 }
 
+export interface CommandDefinition {
+  name: string;
+  command: string;
+  description: string;
+  tags: string[];
+}
+
+export interface SearchResult {
+  command: CommandDefinition;
+  score: number;
+  projectType: string;
+}
+
 export const api = {
   workspace: {
     get: () => window.devhub.workspace.get(),

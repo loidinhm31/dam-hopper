@@ -366,6 +366,32 @@ export function TerminalsPage() {
       });
   }
 
+  function handleLaunchFreeWithCommand(command: string) {
+    const sessionId = `${FREE_TERMINAL_PREFIX}${crypto.randomUUID()}`;
+    window.devhub.terminal
+      .create({ id: sessionId, command, cols: 120, rows: 30 })
+      .then(() => {
+        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+        openTerminalTab(sessionId, "", command);
+      })
+      .catch((err: unknown) => {
+        console.error("[TerminalsPage] failed to create free terminal", err);
+      });
+  }
+
+  function handleLaunchSuggestedCommand(projectName: string, command: string) {
+    const sessionId = `terminal:${projectName}:_:${Date.now()}`;
+    window.devhub.terminal
+      .create({ id: sessionId, project: projectName, command, cols: 120, rows: 30 })
+      .then(() => {
+        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+        openTerminalTab(sessionId, projectName, command);
+      })
+      .catch((err: unknown) => {
+        console.error("[TerminalsPage] failed to create suggested terminal", err);
+      });
+  }
+
   function handleAddShell(projectName: string) {
     setLaunchForm({ projectName, cwd: "", command: "" });
     setSelection({ type: "project", name: projectName });
@@ -467,7 +493,9 @@ export function TerminalsPage() {
             onAddShell={handleAddShell}
             onLaunchProfile={handleLaunchProfile}
             onDeleteProfile={handleDeleteProfile}
+            onLaunchSuggestedCommand={handleLaunchSuggestedCommand}
             onAddFreeTerminal={handleAddFreeTerminal}
+            onLaunchFreeWithCommand={handleLaunchFreeWithCommand}
             onSelectFreeTerminal={handleSelectTerminal}
             onKillFreeTerminal={handleKillTerminal}
           />

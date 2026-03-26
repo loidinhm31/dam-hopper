@@ -47,6 +47,10 @@ export const CH = {
   SETTINGS_EXPORT: "settings:export",
   SETTINGS_IMPORT: "settings:import",
 
+  // Commands (predefined command database)
+  COMMAND_SEARCH: "commands:search",
+  COMMAND_LIST: "commands:list",
+
   // Terminal (PTY)
   TERMINAL_CREATE: "terminal:create",
   TERMINAL_WRITE: "terminal:write",

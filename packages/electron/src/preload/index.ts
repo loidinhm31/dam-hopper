@@ -73,6 +73,13 @@ contextBridge.exposeInMainWorld("devhub", {
     listKeys: () => ipcRenderer.invoke(CH.SSH_LIST_KEYS),
   },
 
+  commands: {
+    search: (query: string, projectType?: string, limit?: number) =>
+      ipcRenderer.invoke(CH.COMMAND_SEARCH, { query, projectType, limit }),
+    list: (projectType: string) =>
+      ipcRenderer.invoke(CH.COMMAND_LIST, { projectType }),
+  },
+
   settings: {
     clearCache: () => ipcRenderer.invoke(CH.CACHE_CLEAR),
     reset: () => ipcRenderer.invoke(CH.WORKSPACE_RESET),

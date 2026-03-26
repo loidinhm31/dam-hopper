@@ -10,8 +10,10 @@ import {
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
+import { CommandSuggestionInput } from "@/components/atoms/CommandSuggestionInput.js";
 import type { TreeProject, TreeCommand } from "@/hooks/useTerminalTree.js";
 import type { SessionInfo } from "@/types/electron.js";
+import type { ProjectType } from "@/api/client.js";
 
 interface Props {
   projects: TreeProject[];
@@ -24,7 +26,9 @@ interface Props {
   onAddShell: (projectName: string) => void;
   onLaunchProfile: (projectName: string, command: TreeCommand) => void;
   onDeleteProfile: (projectName: string, profileName: string) => void;
+  onLaunchSuggestedCommand: (projectName: string, command: string) => void;
   onAddFreeTerminal: () => void;
+  onLaunchFreeWithCommand: (command: string) => void;
   onSelectFreeTerminal: (sessionId: string) => void;
   onKillFreeTerminal: (sessionId: string) => void;
 }
@@ -285,10 +289,14 @@ export function TerminalTreeView({
   onAddShell,
   onLaunchProfile,
   onDeleteProfile,
+  onLaunchSuggestedCommand,
   onAddFreeTerminal,
+  onLaunchFreeWithCommand,
   onSelectFreeTerminal,
   onKillFreeTerminal,
 }: Props) {
+  const [activeSuggestionProject, setActiveSuggestionProject] = useState<string | null>(null);
+  const [showFreeSuggestion, setShowFreeSuggestion] = useState(false);
   const [terminalsExpanded, setTerminalsExpanded] = useState<boolean>(() => {
     const stored = localStorage.getItem("devhub:expanded-free-terminals");
     return stored === null ? true : stored === "true";
@@ -393,7 +401,7 @@ export function TerminalTreeView({
           })()}
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); onAddFreeTerminal(); }}
+            onClick={(e) => { e.stopPropagation(); setShowFreeSuggestion((v) => !v); }}
             title="New terminal"
             className="rounded p-0.5 hover:bg-[var(--color-primary)]/20 hover:text-[var(--color-primary)] transition-colors"
           >
@@ -402,6 +410,26 @@ export function TerminalTreeView({
         </div>
         {terminalsExpanded && (
           <div>
+            {showFreeSuggestion && (
+              <div className="px-2 pb-1 pt-0.5">
+                <CommandSuggestionInput
+                  autoFocus
+                  placeholder="Command or press Enter for shell..."
+                  onSelect={(cmd) => {
+                    onLaunchFreeWithCommand(cmd.command);
+                    setShowFreeSuggestion(false);
+                  }}
+                  onSubmitCustom={(cmd) => {
+                    if (cmd.trim()) {
+                      onLaunchFreeWithCommand(cmd);
+                    } else {
+                      onAddFreeTerminal();
+                    }
+                    setShowFreeSuggestion(false);
+                  }}
+                />
+              </div>
+            )}
             {freeTerminals.map((session, i) => (
               <FreeTerminalRow
                 key={session.id}
@@ -412,7 +440,7 @@ export function TerminalTreeView({
                 onKill={() => onKillFreeTerminal(session.id)}
               />
             ))}
-            {freeTerminals.length === 0 && (
+            {freeTerminals.length === 0 && !showFreeSuggestion && (
               <div className="pl-8 pr-2 py-1 text-xs text-[var(--color-text-muted)]/50 italic">
                 No terminals — press + to create one
               </div>
@@ -498,19 +526,41 @@ export function TerminalTreeView({
                   );
                 })}
 
-                {/* + Shell button */}
-                <button
-                  type="button"
-                  onClick={() => onAddShell(project.name)}
-                  className={cn(
-                    "flex items-center gap-1.5 pl-8 pr-2 py-1 w-full text-xs",
-                    "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
-                    "hover:bg-[var(--color-surface-2)] transition-colors",
-                  )}
-                >
-                  <Plus className="h-3 w-3 shrink-0" />
-                  <span>Terminal</span>
-                </button>
+                {/* + Shell button / inline suggestion input */}
+                {activeSuggestionProject === project.name ? (
+                  <div className="px-2 py-1">
+                    <CommandSuggestionInput
+                      projectType={project.type as ProjectType}
+                      autoFocus
+                      placeholder="Search commands..."
+                      onSelect={(cmd) => {
+                        onLaunchSuggestedCommand(project.name, cmd.command);
+                        setActiveSuggestionProject(null);
+                      }}
+                      onSubmitCustom={(cmd) => {
+                        if (cmd.trim()) {
+                          onLaunchSuggestedCommand(project.name, cmd);
+                        } else {
+                          onAddShell(project.name);
+                        }
+                        setActiveSuggestionProject(null);
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setActiveSuggestionProject(project.name)}
+                    className={cn(
+                      "flex items-center gap-1.5 pl-8 pr-2 py-1 w-full text-xs",
+                      "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
+                      "hover:bg-[var(--color-surface-2)] transition-colors",
+                    )}
+                  >
+                    <Plus className="h-3 w-3 shrink-0" />
+                    <span>Terminal</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
