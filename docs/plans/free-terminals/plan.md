@@ -1,12 +1,13 @@
 ---
 title: "Free Terminals"
 description: "Add standalone terminals not tied to any project, like VS Code's integrated terminal"
-status: in_progress
+status: done
 priority: P2
 effort: 3h
 branch: main
 tags: [terminal, ux, electron, react]
 created: 2026-03-26
+completed: 2026-03-26
 ---
 
 # Free Terminals
@@ -32,7 +33,7 @@ Currently all terminals are project-scoped. Users who just want a quick shell at
 |---|-------|--------|--------|------|
 | 1 | Backend: Types + IPC + PTY | done | 45min | [phase-01-backend.md](./phase-01-backend.md) |
 | 2 | Frontend: Tree + UI + Handlers | done | 1.5h | [phase-02-frontend.md](./phase-02-frontend.md) |
-| 3 | Polish: Keyboard shortcut + UX | pending | 45min | [phase-03-polish.md](./phase-03-polish.md) |
+| 3 | Polish: Keyboard shortcut + UX | done | 45min | [phase-03-polish.md](./phase-03-polish.md) |
 
 ## Research
 

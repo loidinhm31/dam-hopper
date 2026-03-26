@@ -66,8 +66,11 @@ export function TerminalPanel({
     term.loadAddon(fitAddon);
     term.open(container);
 
-    // Fit after open (layout must be visible)
-    requestAnimationFrame(() => fitAddon.fit());
+    // Fit after open and focus so newly-created terminals are immediately interactive
+    const mountRafId = requestAnimationFrame(() => {
+      fitAddon.fit();
+      term.focus();
+    });
 
     const { cols, rows } = term;
 
@@ -119,6 +122,8 @@ export function TerminalPanel({
             });
             return false;
           }
+          // Ctrl+` is a global shortcut — don't forward to PTY
+          if (e.ctrlKey && e.code === "Backquote") return false;
           return true;
         });
 
@@ -141,6 +146,7 @@ export function TerminalPanel({
     return () => {
       // Unsubscribe listeners but do NOT kill the PTY session —
       // it should persist across navigation so the user can return to it.
+      cancelAnimationFrame(mountRafId);
       unsubData?.();
       unsubExit?.();
       inputDisposable?.dispose();
