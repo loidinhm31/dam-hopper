@@ -69,7 +69,7 @@ function findSessionMeta(
     }
   }
   const s = sessionMap.get(sessionId);
-  return s ? { project: s.project, command: s.command } : null;
+  return s ? { project: s.project ?? "", command: s.command } : null;
 }
 
 export function TerminalsPage() {
@@ -133,6 +133,11 @@ export function TerminalsPage() {
   function tabLabel(sessionId: string, project: string, command: string): string {
     const parts = sessionId.split(":");
     const type = parts[0] ?? sessionId;
+    if (type === "free") {
+      // Show shell basename for free (project-less) terminals, e.g. "zsh", "bash"
+      const shellBase = command.split(/[\s/\\]/).filter(Boolean).pop() ?? "Terminal";
+      return shellBase;
+    }
     if (type === "terminal") {
       const profile = parts[2];
       if (profile && profile !== "_") return `${project}:${profile.replace(/_/g, " ")}`;
@@ -302,6 +307,9 @@ export function TerminalsPage() {
     const session = sessionMap.get(sessionId);
     if (!session) return;
 
+    // Free terminals have no project — cannot be saved as profiles.
+    if (!session.project) return;
+
     const project = projects.find((p) => p.name === session.project);
     if (!project) return;
 
@@ -321,7 +329,7 @@ export function TerminalsPage() {
     setSavePrompt(null);
 
     void window.devhub.config
-      .updateProject(session.project, {
+      .updateProject(session.project ?? "", {
         terminals: [...(project.terminals ?? []), newProfile],
       })
       .then(() => {

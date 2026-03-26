@@ -14,10 +14,10 @@ export interface PtyCreateOpts {
 
 export interface SessionMeta {
   id: string;
-  project: string;
+  project?: string;
   command: string;
   cwd: string;
-  type: "build" | "run" | "custom" | "shell" | "terminal" | "unknown";
+  type: "build" | "run" | "custom" | "shell" | "terminal" | "free" | "unknown";
   alive: boolean;
   exitCode?: number | null;
   startedAt: number;
@@ -39,6 +39,7 @@ function deriveType(id: string): SessionMeta["type"] {
   if (id.startsWith("custom:")) return "custom";
   if (id.startsWith("shell:")) return "shell";
   if (id.startsWith("terminal:")) return "terminal";
+  if (id.startsWith("free:")) return "free";
   return "unknown";
 }
 
@@ -59,7 +60,7 @@ export class PtySessionManager {
 
     const sessionMeta: SessionMeta = {
       id: opts.id,
-      project: opts.project ?? "",
+      project: opts.project,
       command: opts.command,
       cwd: opts.cwd,
       type: deriveType(opts.id),
@@ -70,20 +71,43 @@ export class PtySessionManager {
 
     console.log(`[pty] create id=${opts.id} cmd="${opts.command}"`);
 
-    const pty = spawn(
-      process.platform === "win32" ? "cmd.exe" : "/bin/sh",
-      process.platform === "win32" ? [] : ["-c", opts.command],
-      {
-        name: "xterm-256color",
-        cols: opts.cols,
-        rows: opts.rows,
-        cwd: opts.cwd,
-        env: { ...opts.env },
-      },
-    );
+    // Empty command = interactive login shell (e.g. free terminals).
+    // Spawn the user's preferred shell directly instead of wrapping in /bin/sh -c.
+    const isInteractive = !opts.command;
+    // Validate $SHELL is an absolute path before trusting it as an executable.
+    // Fall back to /bin/bash if unset or looks like an injection attempt.
+    const rawShell = opts.env["SHELL"] ?? "";
+    const safeShell =
+      process.platform === "win32"
+        ? "cmd.exe"
+        : rawShell.startsWith("/")
+          ? rawShell
+          : "/bin/bash";
+    const exe = isInteractive
+      ? safeShell
+      : process.platform === "win32"
+        ? "cmd.exe"
+        : "/bin/sh";
+    const args = isInteractive
+      ? []
+      : process.platform === "win32"
+        ? []
+        : ["-c", opts.command];
+
+    if (isInteractive) {
+      console.log(`[pty] interactive shell: ${exe}`);
+    }
+
+    const pty = spawn(exe, args, {
+      name: "xterm-256color",
+      cols: opts.cols,
+      rows: opts.rows,
+      cwd: opts.cwd,
+      env: { ...opts.env },
+    });
 
     // On Windows, send the command as stdin since cmd.exe doesn't support -c
-    if (process.platform === "win32") {
+    if (process.platform === "win32" && opts.command) {
       pty.write(`${opts.command}\r`);
     }
 

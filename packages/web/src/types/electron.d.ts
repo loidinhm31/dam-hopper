@@ -17,7 +17,9 @@ type Unsubscribe = () => void;
 
 export interface TerminalCreateOpts {
   id: string;
-  project: string;
+  /** Omit for free (project-less) terminals. */
+  project?: string;
+  /** Shell command to run. Empty string spawns an interactive login shell. */
   command: string;
   cwd?: string;
   cols: number;
@@ -26,10 +28,10 @@ export interface TerminalCreateOpts {
 
 export interface SessionInfo {
   id: string;
-  project: string;
+  project?: string;
   command: string;
   cwd: string;
-  type: "build" | "run" | "custom" | "shell" | "terminal" | "unknown";
+  type: "build" | "run" | "custom" | "shell" | "terminal" | "free" | "unknown";
   alive: boolean;
   exitCode?: number | null;
   startedAt: number;
