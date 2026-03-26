@@ -1,7 +1,8 @@
 ---
 parent: plan.md
 phase: "03"
-status: pending
+status: done
+completed: 2026-03-27
 effort: 1h
 dependencies: [phase-01-core.md, phase-02-ui.md]
 ---
@@ -74,12 +75,12 @@ In the tree, show a subtle indicator for preset commands vs user-defined:
 
 ## Todo
 
-- [ ] Verify env loading for suggested command terminals
-- [ ] Add `label` field to TreeCommand for display names
-- [ ] Update CommandRow to show label instead of key
-- [ ] Update TerminalTabBar to show command label
-- [ ] Add source indicator (preset vs custom)
-- [ ] End-to-end manual test: suggest → select → launch → verify env loaded
+- [x] Verify env loading for suggested command terminals
+- [x] Add `label` field to TreeCommand for display names
+- [x] Update CommandRow to show label instead of key
+- [x] Update TerminalTabBar to show command label
+- [x] Add source indicator (preset vs custom)
+- [x] End-to-end manual test: suggest → select → launch → verify env loaded
 
 ## Success Criteria
 

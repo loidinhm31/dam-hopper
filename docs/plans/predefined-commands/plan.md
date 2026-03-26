@@ -96,7 +96,7 @@ User selects → command fills input → launch → env auto-loaded from project
 |-------|------|--------|--------|------|
 | 01 | Core: Command Database & BM25 Search | DONE (2026-03-27) | 3h | [phase-01-core.md](phase-01-core.md) |
 | 02 | Electron + Web: Autocomplete UI | pending | 3h | [phase-02-ui.md](phase-02-ui.md) |
-| 03 | Integration & Env Loading | pending | 1h | [phase-03-integration.md](phase-03-integration.md) |
+| 03 | Integration & Env Loading | DONE (2026-03-27) | 1h | [phase-03-integration.md](phase-03-integration.md) |
 
 ## Design Decisions
 
