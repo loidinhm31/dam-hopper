@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { writeFile, mkdir, rm, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { importFromRepo, cleanupImport } from "../importer.js";
+import { importFromRepo, cleanupImport, scanLocalDir } from "../importer.js";
 // Note: scanRepo (git clone) is not tested here — requires network/git binary.
 // findSkills and findCommands are internal — tested indirectly via a fixture dir.
 
@@ -104,6 +104,67 @@ describe("importFromRepo()", () => {
   it("returns empty array when selectedItems is empty", async () => {
     const results = await importFromRepo(tmpDir, [], storePath);
     expect(results).toEqual([]);
+  });
+});
+
+describe("scanLocalDir()", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = join(tmpdir(), `dev-hub-scanlocal-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(tmpDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("rejects relative paths", async () => {
+    await expect(scanLocalDir("relative/path")).rejects.toThrow();
+  });
+
+  it("rejects nonexistent paths", async () => {
+    await expect(scanLocalDir("/tmp/devhub-does-not-exist-xyz")).rejects.toThrow(/does not exist/i);
+  });
+
+  it("rejects file paths (not a directory)", async () => {
+    const filePath = join(tmpDir, "file.txt");
+    await writeFile(filePath, "content");
+    await expect(scanLocalDir(filePath)).rejects.toThrow(/not a directory/i);
+  });
+
+  it("returns empty items for dir with no skills or commands", async () => {
+    const result = await scanLocalDir(tmpDir);
+    expect(result.items).toEqual([]);
+    expect(result.dirPath).toBe(tmpDir);
+  });
+
+  it("returns resolved dirPath", async () => {
+    const result = await scanLocalDir(tmpDir);
+    expect(result.dirPath).toBe(tmpDir);
+  });
+
+  it("finds skills (dirs with SKILL.md)", async () => {
+    await makeSkillDir(tmpDir, "my-skill");
+    const result = await scanLocalDir(tmpDir);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({ name: "my-skill", category: "skill" });
+  });
+
+  it("finds commands (.md files with description frontmatter)", async () => {
+    await makeCommandFile(tmpDir, "my-cmd");
+    const result = await scanLocalDir(tmpDir);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({ name: "my-cmd", category: "command" });
+  });
+
+  it("finds both skills and commands in the same dir", async () => {
+    await makeSkillDir(tmpDir, "alpha");
+    await makeCommandFile(tmpDir, "beta");
+    const result = await scanLocalDir(tmpDir);
+    expect(result.items).toHaveLength(2);
+    const categories = result.items.map((i) => i.category).sort();
+    expect(categories).toEqual(["command", "skill"]);
   });
 });
 

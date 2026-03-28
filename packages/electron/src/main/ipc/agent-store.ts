@@ -13,6 +13,7 @@ import {
   updateMemoryFile,
   applyTemplate,
   scanRepo,
+  scanLocalDir,
   importFromRepo,
   cleanupImport,
   type TemplateContext,
@@ -333,10 +334,14 @@ export function registerAgentStoreHandlers(holder: CtxHolder): void {
     },
   );
 
-  // ── Import from repo ──────────────────────────────────────────────────────────
+  // ── Import from repo / local dir ─────────────────────────────────────────────
 
   ipcMain.handle(CH.AGENT_STORE_IMPORT_SCAN, async (_e, opts: { repoUrl: string }) => {
     return scanRepo(opts.repoUrl);
+  });
+
+  ipcMain.handle(CH.AGENT_STORE_IMPORT_SCAN_LOCAL, async (_e, opts: { dirPath: string }) => {
+    return scanLocalDir(opts.dirPath);
   });
 
   ipcMain.handle(
@@ -346,6 +351,7 @@ export function registerAgentStoreHandlers(holder: CtxHolder): void {
       opts: {
         tmpDir: string;
         selectedItems: Array<{ name: string; category: AgentItemCategory; relativePath: string }>;
+        skipCleanup?: boolean;
       },
     ) => {
       opts.selectedItems.forEach((i) => assertCategory(i.category));
@@ -353,8 +359,9 @@ export function registerAgentStoreHandlers(holder: CtxHolder): void {
       try {
         return await importFromRepo(opts.tmpDir, opts.selectedItems, ctx.agentStore.storePath);
       } finally {
-        // Always clean up temp dir, even if import throws
-        await cleanupImport(opts.tmpDir);
+        if (!opts.skipCleanup) {
+          await cleanupImport(opts.tmpDir);
+        }
       }
     },
   );

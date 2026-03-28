@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { readdir, cp, rm, mkdtemp } from "node:fs/promises";
-import { join, relative, resolve, sep } from "node:path";
+import { readdir, cp, rm, mkdtemp, lstat } from "node:fs/promises";
+import { join, relative, resolve, sep, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import type { Dirent } from "node:fs";
 import { fileExists } from "../utils/fs.js";
@@ -22,6 +22,11 @@ export interface RepoScanResult {
   items: RepoScanItem[];
 }
 
+export interface LocalScanResult {
+  dirPath: string;
+  items: RepoScanItem[];
+}
+
 export interface ImportResult {
   name: string;
   success: boolean;
@@ -40,6 +45,31 @@ export async function scanRepo(repoUrl: string): Promise<RepoScanResult> {
     findCommands(tmpDir),
   ]);
   return { repoUrl, tmpDir, items: [...skills, ...commands] };
+}
+
+/**
+ * Scan a local directory for importable items. No git clone, no temp dir, no cleanup needed.
+ * Caller must NOT call cleanupImport() on the returned dirPath.
+ */
+export async function scanLocalDir(dirPath: string): Promise<LocalScanResult> {
+  const resolved = resolve(dirPath);
+  if (!isAbsolute(resolved)) {
+    throw new Error("Path must be absolute");
+  }
+  let stat;
+  try {
+    stat = await lstat(resolved);
+  } catch {
+    throw new Error(`Path does not exist: ${resolved}`);
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`Not a directory: ${resolved}`);
+  }
+  const [skills, commands] = await Promise.all([
+    findSkills(resolved),
+    findCommands(resolved),
+  ]);
+  return { dirPath: resolved, items: [...skills, ...commands] };
 }
 
 /**

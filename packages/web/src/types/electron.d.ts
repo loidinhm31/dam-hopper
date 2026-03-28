@@ -23,6 +23,7 @@ import type {
   DistributionMatrix,
   MemoryTemplateInfo,
   RepoScanResult,
+  LocalScanResult,
   ImportResult,
 } from "../api/client.js";
 
@@ -178,9 +179,11 @@ export interface DevHubBridge {
 
   agentImport: {
     scan: (opts: { repoUrl: string }) => Promise<RepoScanResult>;
+    scanLocal: (opts: { dirPath: string }) => Promise<LocalScanResult>;
     confirm: (opts: {
       tmpDir: string;
       selectedItems: Array<{ name: string; category: AgentItemCategory; relativePath: string }>;
+      skipCleanup?: boolean;
     }) => Promise<ImportResult[]>;
   };
 

@@ -7,7 +7,7 @@ import { DistributionMatrix } from "@/components/agent-store/DistributionMatrix.
 import { ShipDialog } from "@/components/agent-store/ShipDialog.js";
 import { HealthStatus } from "@/components/agent-store/HealthStatus.js";
 import { MemoryEditor } from "@/components/agent-store/MemoryEditor.js";
-import { ImportFromRepoDialog } from "@/components/agent-store/ImportFromRepoDialog.js";
+import { ImportDialog } from "@/components/agent-store/ImportDialog.js";
 import {
   useAgentStoreItems,
   useAgentStoreMatrix,
@@ -170,7 +170,7 @@ export function AgentStorePage() {
       )}
 
       {showImportDialog && (
-        <ImportFromRepoDialog onClose={() => setShowImportDialog(false)} />
+        <ImportDialog onClose={() => setShowImportDialog(false)} />
       )}
     </AppLayout>
   );

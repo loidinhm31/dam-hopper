@@ -86,8 +86,9 @@ export const CH = {
   AGENT_MEMORY_TEMPLATES: "agent-memory:templates",
   AGENT_MEMORY_APPLY: "agent-memory:apply",
 
-  // Agent Store — Import from repo
+  // Agent Store — Import from repo / local dir
   AGENT_STORE_IMPORT_SCAN: "agent-store:importScan",
+  AGENT_STORE_IMPORT_SCAN_LOCAL: "agent-store:importScanLocal",
   AGENT_STORE_IMPORT_CONFIRM: "agent-store:importConfirm",
 } as const;
 

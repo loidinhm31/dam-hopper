@@ -81,6 +81,11 @@ export interface RepoScanResult {
   items: RepoScanItem[];
 }
 
+export interface LocalScanResult {
+  dirPath: string;
+  items: RepoScanItem[];
+}
+
 export interface ImportResult {
   name: string;
   success: boolean;
@@ -293,9 +298,11 @@ export const api = {
   },
   agentImport: {
     scan: (repoUrl: string) => window.devhub.agentImport.scan({ repoUrl }),
+    scanLocal: (dirPath: string) => window.devhub.agentImport.scanLocal({ dirPath }),
     confirm: (
       tmpDir: string,
       selectedItems: Array<{ name: string; category: AgentItemCategory; relativePath: string }>,
-    ) => window.devhub.agentImport.confirm({ tmpDir, selectedItems }),
+      skipCleanup?: boolean,
+    ) => window.devhub.agentImport.confirm({ tmpDir, selectedItems, skipCleanup }),
   },
 };

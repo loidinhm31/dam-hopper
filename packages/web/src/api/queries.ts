@@ -480,13 +480,20 @@ export function useScanRepo() {
   });
 }
 
+export function useScanLocalDir() {
+  return useMutation({
+    mutationFn: (dirPath: string) => api.agentImport.scanLocal(dirPath),
+  });
+}
+
 export function useImportConfirm() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (opts: {
       tmpDir: string;
       selectedItems: Array<{ name: string; category: AgentItemCategory; relativePath: string }>;
-    }) => api.agentImport.confirm(opts.tmpDir, opts.selectedItems),
+      skipCleanup?: boolean;
+    }) => api.agentImport.confirm(opts.tmpDir, opts.selectedItems, opts.skipCleanup),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["agent-store"] });
     },

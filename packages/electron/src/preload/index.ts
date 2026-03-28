@@ -188,9 +188,12 @@ contextBridge.exposeInMainWorld("devhub", {
   agentImport: {
     scan: (opts: { repoUrl: string }) =>
       ipcRenderer.invoke(CH.AGENT_STORE_IMPORT_SCAN, opts),
+    scanLocal: (opts: { dirPath: string }) =>
+      ipcRenderer.invoke(CH.AGENT_STORE_IMPORT_SCAN_LOCAL, opts),
     confirm: (opts: {
       tmpDir: string;
       selectedItems: Array<{ name: string; category: string; relativePath: string }>;
+      skipCleanup?: boolean;
     }) => ipcRenderer.invoke(CH.AGENT_STORE_IMPORT_CONFIRM, opts),
   },
 
