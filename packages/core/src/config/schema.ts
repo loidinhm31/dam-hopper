@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  AgentStoreConfigSchema,
+  ProjectAgentsSchema,
+} from "../agent-store/schema.js";
 
 export const TerminalProfileSchema = z.object({
   name: z.string().min(1, "Terminal profile name must not be empty"),
@@ -43,6 +47,7 @@ export const ProjectConfigSchema = z
     env_file: z.string().optional(),
     tags: z.array(z.string()).optional(),
     terminals: z.array(TerminalProfileSchema).optional(),
+    agents: ProjectAgentsSchema,
   })
   .refine(
     (p) => {
@@ -75,6 +80,7 @@ export const ProjectConfigSchema = z
     envFile: p.env_file,
     tags: p.tags,
     terminals: p.terminals ?? [],
+    agents: p.agents,
   }));
 
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
@@ -143,6 +149,7 @@ export type WorkspaceInfo = z.infer<typeof WorkspaceSchema>;
 export const DevHubConfigSchema = z
   .object({
     workspace: WorkspaceSchema,
+    agent_store: AgentStoreConfigSchema.optional(),
     projects: z.array(ProjectConfigSchema).default([]),
   })
   .refine(
