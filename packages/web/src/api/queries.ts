@@ -6,6 +6,7 @@ import type {
   AgentItemCategory,
   AgentType,
   DistributionMethod,
+  RepoScanItem,
 } from "./client.js";
 import type { SessionInfo } from "@/types/electron.js";
 
@@ -426,6 +427,66 @@ export function useBulkShip() {
       targets: Array<{ projectName: string; agent: AgentType }>;
       method?: DistributionMethod;
     }) => api.agentStore.bulkShip(opts.items, opts.targets, opts.method),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["agent-store"] });
+    },
+  });
+}
+
+// ── Memory ────────────────────────────────────────────────────────────────────
+
+export function useMemoryTemplates() {
+  return useQuery({
+    queryKey: ["agent-memory", "templates"],
+    queryFn: () => api.agentMemory.templates(),
+    staleTime: 30_000,
+  });
+}
+
+export function useMemoryFile(projectName: string, agent: AgentType) {
+  return useQuery({
+    queryKey: ["agent-memory", "file", projectName, agent],
+    queryFn: () => api.agentMemory.get(projectName, agent),
+    enabled: !!projectName,
+    staleTime: 30_000,
+  });
+}
+
+export function useUpdateMemoryFile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (opts: { projectName: string; agent: AgentType; content: string }) =>
+      api.agentMemory.update(opts.projectName, opts.agent, opts.content),
+    onSuccess: (_data, vars) => {
+      void qc.invalidateQueries({
+        queryKey: ["agent-memory", "file", vars.projectName, vars.agent],
+      });
+    },
+  });
+}
+
+export function useApplyMemoryTemplate() {
+  return useMutation({
+    mutationFn: (opts: { templateName: string; projectName: string; agent: AgentType }) =>
+      api.agentMemory.apply(opts.templateName, opts.projectName, opts.agent),
+  });
+}
+
+// ── Import from repo ──────────────────────────────────────────────────────────
+
+export function useScanRepo() {
+  return useMutation({
+    mutationFn: (repoUrl: string) => api.agentImport.scan(repoUrl),
+  });
+}
+
+export function useImportConfirm() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (opts: {
+      tmpDir: string;
+      selectedItems: Array<{ name: string; category: AgentItemCategory; relativePath: string }>;
+    }) => api.agentImport.confirm(opts.tmpDir, opts.selectedItems),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["agent-store"] });
     },

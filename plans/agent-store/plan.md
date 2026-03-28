@@ -1,7 +1,7 @@
 ---
 title: "Agent Store — Central AI Agent Config Management"
 description: "Add a central store in Dev-Hub to manage AI agent skills, commands, hooks, MCP servers, subagents, and project memory files (CLAUDE.md, GEMINI.md), then distribute them to individual projects via symlinks or copy"
-status: pending
+status: done
 priority: P1
 effort: ~20h
 branch: feat/agent-store
@@ -45,7 +45,7 @@ Dev-Hub Workspace Root
 | 02 | Scanner & Distributor (Ship/Unship) | done | ~4h | [phase-02](./phase-02-scanner-distributor.md) |
 | 03 | IPC Channels & Electron Handlers | done | ~4h | [phase-03](./phase-03-ipc-electron-handlers.md) |
 | 04 | Web API, Queries & Agent Store Page | done | ~5h | [phase-04](./phase-04-web-ui-agent-store-page.md) |
-| 05 | Memory Templates & Import from Repo | pending | ~3h | [phase-05](./phase-05-memory-templates-import.md) |
+| 05 | Memory Templates & Import from Repo | done | ~3h | [phase-05](./phase-05-memory-templates-import.md) |
 
 ## Key Design Decisions
 

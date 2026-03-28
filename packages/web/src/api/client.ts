@@ -59,6 +59,34 @@ export type DistributionMatrix = Record<
   Record<string, { shipped: boolean; method: DistributionMethod | null }>
 >;
 
+// ── Memory + Import Types ─────────────────────────────────────────────────────
+// NOTE: These mirror types from @dev-hub/core. Duplication is intentional —
+// the web renderer runs in Chromium and cannot import Node.js core packages.
+
+export interface MemoryTemplateInfo {
+  name: string;
+  content: string;
+}
+
+export interface RepoScanItem {
+  name: string;
+  category: AgentItemCategory;
+  description?: string;
+  relativePath: string;
+}
+
+export interface RepoScanResult {
+  repoUrl: string;
+  tmpDir: string;
+  items: RepoScanItem[];
+}
+
+export interface ImportResult {
+  name: string;
+  success: boolean;
+  error?: string;
+}
+
 export type ProjectType =
   | "maven"
   | "gradle"
@@ -252,5 +280,22 @@ export const api = {
     matrix: () => window.devhub.agentStore.matrix(),
     scan: () => window.devhub.agentStore.scan(),
     health: () => window.devhub.agentStore.health(),
+  },
+  agentMemory: {
+    list: (projectName: string) => window.devhub.agentMemory.list({ projectName }),
+    get: (projectName: string, agent: AgentType) =>
+      window.devhub.agentMemory.get({ projectName, agent }),
+    update: (projectName: string, agent: AgentType, content: string) =>
+      window.devhub.agentMemory.update({ projectName, agent, content }),
+    templates: () => window.devhub.agentMemory.templates(),
+    apply: (templateName: string, projectName: string, agent: AgentType) =>
+      window.devhub.agentMemory.apply({ templateName, projectName, agent }),
+  },
+  agentImport: {
+    scan: (repoUrl: string) => window.devhub.agentImport.scan({ repoUrl }),
+    confirm: (
+      tmpDir: string,
+      selectedItems: Array<{ name: string; category: AgentItemCategory; relativePath: string }>,
+    ) => window.devhub.agentImport.confirm({ tmpDir, selectedItems }),
   },
 };

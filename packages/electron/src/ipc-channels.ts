@@ -78,6 +78,17 @@ export const CH = {
   // Agent Store — Scanner / Health
   AGENT_STORE_SCAN: "agent-store:scan",
   AGENT_STORE_HEALTH: "agent-store:health",
+
+  // Agent Store — Memory files
+  AGENT_MEMORY_LIST: "agent-memory:list",
+  AGENT_MEMORY_GET: "agent-memory:get",
+  AGENT_MEMORY_UPDATE: "agent-memory:update",
+  AGENT_MEMORY_TEMPLATES: "agent-memory:templates",
+  AGENT_MEMORY_APPLY: "agent-memory:apply",
+
+  // Agent Store — Import from repo
+  AGENT_STORE_IMPORT_SCAN: "agent-store:importScan",
+  AGENT_STORE_IMPORT_CONFIRM: "agent-store:importConfirm",
 } as const;
 
 // ── Push event channels (main → renderer) ─────────────────────────────────────
