@@ -15,6 +15,68 @@ import type {
   CommandDefinition,
 } from "../api/client.js";
 
+// Agent store types (mirrored from @dev-hub/core to avoid cross-package import in .d.ts)
+type AgentItemCategory =
+  | "skill"
+  | "command"
+  | "hook"
+  | "mcp-server"
+  | "subagent"
+  | "memory-template";
+
+type AgentType = "claude" | "gemini";
+
+type DistributionMethod = "symlink" | "copy";
+
+export interface AgentStoreItem {
+  name: string;
+  category: AgentItemCategory;
+  relativePath: string;
+  description?: string;
+  compatibleAgents: AgentType[];
+  sizeBytes?: number;
+}
+
+export interface ShipResult {
+  item: string;
+  category: AgentItemCategory;
+  project: string;
+  agent: AgentType;
+  method: DistributionMethod;
+  success: boolean;
+  error?: string;
+  targetPath?: string;
+}
+
+export interface ProjectAgentScanResult {
+  projectName: string;
+  projectPath: string;
+  agents: Partial<
+    Record<
+      AgentType,
+      {
+        hasConfig: boolean;
+        skills: string[];
+        commands: string[];
+        hooks: string[];
+        hasMemoryFile: boolean;
+        hasMcpConfig: boolean;
+      }
+    >
+  >;
+}
+
+export interface HealthCheckResult {
+  brokenSymlinks: Array<{ project: string; path: string; target: string }>;
+  orphanedItems: Array<{ project: string; path: string; reason: string }>;
+}
+
+/** itemKey = "category:name", projectKey = "projectName:agent" */
+export type DistributionMatrix = Record<
+  string,
+  Record<string, { shipped: boolean; method: DistributionMethod | null }>
+>;
+
 type Unsubscribe = () => void;
 
 export interface TerminalCreateOpts {
@@ -120,6 +182,41 @@ export interface DevHubBridge {
     getBuffer: (id: string) => Promise<string>;
     onData: (id: string, cb: (data: string) => void) => Unsubscribe;
     onExit: (id: string, cb: (exitCode: number | null) => void) => Unsubscribe;
+  };
+
+  agentStore: {
+    list: (opts?: { category?: AgentItemCategory }) => Promise<AgentStoreItem[]>;
+    get: (opts: { name: string; category: AgentItemCategory }) => Promise<AgentStoreItem | null>;
+    getContent: (opts: { name: string; category: AgentItemCategory; fileName?: string }) => Promise<string>;
+    add: (opts: { category: AgentItemCategory; name?: string }) => Promise<AgentStoreItem | null>;
+    remove: (opts: { name: string; category: AgentItemCategory }) => Promise<{ removed: boolean }>;
+    ship: (opts: {
+      itemName: string;
+      category: AgentItemCategory;
+      projectName: string;
+      agent: AgentType;
+      method?: DistributionMethod;
+    }) => Promise<ShipResult>;
+    unship: (opts: {
+      itemName: string;
+      category: AgentItemCategory;
+      projectName: string;
+      agent: AgentType;
+    }) => Promise<ShipResult>;
+    absorb: (opts: {
+      itemName: string;
+      category: AgentItemCategory;
+      projectName: string;
+      agent: AgentType;
+    }) => Promise<ShipResult>;
+    bulkShip: (opts: {
+      items: Array<{ name: string; category: AgentItemCategory }>;
+      targets: Array<{ projectName: string; agent: AgentType }>;
+      method?: DistributionMethod;
+    }) => Promise<ShipResult[]>;
+    matrix: () => Promise<DistributionMatrix>;
+    scan: () => Promise<ProjectAgentScanResult[]>;
+    health: () => Promise<HealthCheckResult>;
   };
 
   on: (channel: string, callback: (data: unknown) => void) => Unsubscribe;

@@ -46,12 +46,16 @@ const CATEGORY_DIRS: Record<AgentItemCategory, string> = {
 };
 
 export class AgentStoreService {
-  constructor(private readonly storePath: string) {}
+  constructor(private readonly _storePath: string) {}
+
+  get storePath(): string {
+    return this._storePath;
+  }
 
   /** Ensure the store directory structure exists */
   async init(): Promise<void> {
     for (const dir of Object.values(CATEGORY_DIRS)) {
-      await mkdir(join(this.storePath, dir), { recursive: true });
+      await mkdir(join(this._storePath, dir), { recursive: true });
     }
   }
 
@@ -62,7 +66,7 @@ export class AgentStoreService {
       : (Object.keys(CATEGORY_DIRS) as AgentItemCategory[]);
     const items: AgentStoreItem[] = [];
     for (const cat of categories) {
-      const dir = join(this.storePath, CATEGORY_DIRS[cat]);
+      const dir = join(this._storePath, CATEGORY_DIRS[cat]);
       const catItems = await this.listCategory(dir, cat);
       items.push(...catItems);
     }
@@ -77,7 +81,7 @@ export class AgentStoreService {
   ): Promise<AgentStoreItem> {
     const itemName = name ?? basename(sourcePath, ".md");
     assertSafeName(itemName);
-    const categoryDir = join(this.storePath, CATEGORY_DIRS[category]);
+    const categoryDir = join(this._storePath, CATEGORY_DIRS[category]);
     // Commands are stored as <name>.md files; everything else uses the name directly
     const destPath =
       category === "command"
@@ -96,7 +100,7 @@ export class AgentStoreService {
   /** Remove an item from the store */
   async remove(name: string, category: AgentItemCategory): Promise<void> {
     assertSafeName(name);
-    const targetPath = join(this.storePath, CATEGORY_DIRS[category], name);
+    const targetPath = join(this._storePath, CATEGORY_DIRS[category], name);
     // For commands, also try with .md extension
     if (category === "command") {
       await rm(`${targetPath}.md`, { force: true });
@@ -110,8 +114,8 @@ export class AgentStoreService {
     category: AgentItemCategory,
   ): Promise<AgentStoreItem | null> {
     assertSafeName(name);
-    const itemPath = join(this.storePath, CATEGORY_DIRS[category], name);
-    const relPath = relative(this.storePath, itemPath);
+    const itemPath = join(this._storePath, CATEGORY_DIRS[category], name);
+    const relPath = relative(this._storePath, itemPath);
     try {
       if (category === "skill") {
         const meta = await parseSkillMd(itemPath);
@@ -169,7 +173,7 @@ export class AgentStoreService {
     fileName?: string,
   ): Promise<string> {
     assertSafeName(name);
-    const itemPath = join(this.storePath, CATEGORY_DIRS[category], name);
+    const itemPath = join(this._storePath, CATEGORY_DIRS[category], name);
     if (fileName) {
       assertSafeFileName(fileName);
       return readFile(join(itemPath, fileName), "utf-8");

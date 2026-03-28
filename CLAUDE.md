@@ -53,7 +53,7 @@ Data flow:
 Electron Main Process (Node.js)
 ├── @dev-hub/core (direct import — config, git, build context)
 ├── node-pty session manager (Map<id, IPty> — all process execution)
-├── IPC handlers (terminal, config, git, workspace)
+├── IPC handlers (terminal, config, git, workspace, agent-store)
 └── Window management (electron-store persists last workspace)
 
 Electron Renderer (Chromium)
@@ -93,7 +93,7 @@ Once determined, `findConfigFile()` walks up from that directory, stopping at th
 
 **Global config**: Stored at `~/.config/dev-hub/config.toml` (respects XDG_CONFIG_HOME). Contains known workspaces list and default workspace path. Core module provides `readGlobalConfig()`, `writeGlobalConfig()`, and workspace helpers.
 
-**Agent store**: Centralized distribution system for agent configurations (skills, commands, hooks, MCP servers, subagents) across projects. Exports scanner (`scanProject()`, `scanAllProjects()`) to discover `.claude/` and `.gemini/` directories, and distributor functions (`ship()`, `unship()`, `absorb()`, `bulkShip()`) to distribute items via symlink or copy. Includes `healthCheck()` to detect broken symlinks and `getDistributionMatrix()` to track which projects have which items shipped.
+**Agent store**: Centralized distribution system for agent configurations (skills, commands, hooks, MCP servers, subagents) across projects. Exports scanner (`scanProject()`, `scanAllProjects()`) to discover `.claude/` and `.gemini/` directories, and distributor functions (`ship()`, `unship()`, `absorb()`, `bulkShip()`) to distribute items via symlink or copy. Includes `healthCheck()` to detect broken symlinks and `getDistributionMatrix()` to track which projects have which items shipped. Fully exposed to the renderer via 12 IPC handlers (`AGENT_STORE_*` channels) under `window.devhub.agentStore.*`.
 
 ## Workspace Config (`dev-hub.toml`)
 

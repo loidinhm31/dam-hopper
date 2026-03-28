@@ -97,6 +97,7 @@ export function registerWorkspaceHandlers(holder: CtxHolder): void {
           terminals: [],
           envFile: undefined,
           tags: undefined,
+          agents: undefined,
         })),
       };
       const tomlPath = join(realAbs, "dev-hub.toml");

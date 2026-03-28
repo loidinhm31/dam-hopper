@@ -12,6 +12,7 @@ import {
   BulkGitService,
   discoverProjects,
   writeConfig,
+  AgentStoreService,
   type DevHubConfig,
 } from "@dev-hub/core";
 import { PtySessionManager } from "./pty/session-manager.js";
@@ -38,6 +39,7 @@ export interface ElectronContext {
   configPath: string;
   workspaceRoot: string;
   bulkGitService: BulkGitService;
+  agentStore: AgentStoreService;
 }
 
 /** Mutable container passed to all IPC handlers so they always read the latest ctx. */
@@ -50,6 +52,11 @@ export interface CtxHolder {
   switchWorkspace: (workspacePath: string) => Promise<void>;
   /** Called by wireEventEmitters — invoked after each switchWorkspace */
   onSwitch: (() => void) | null;
+}
+
+function resolveAgentStorePath(config: DevHubConfig, workspaceRoot: string): string {
+  const cfgPath = (config as DevHubConfig & { agentStore?: { path?: string } }).agentStore?.path;
+  return resolve(workspaceRoot, cfgPath ?? ".dev-hub/agent-store");
 }
 
 /** Resolve path and normalise file → parent directory. */
@@ -93,6 +100,7 @@ async function initContext(workspacePath: string): Promise<ElectronContext> {
         terminals: [],
         envFile: undefined,
         tags: undefined,
+        agents: undefined,
       })),
     };
     const tomlPath = join(input, "dev-hub.toml");
@@ -103,6 +111,10 @@ async function initContext(workspacePath: string): Promise<ElectronContext> {
   const config = await readConfig(resolvedPath);
   const workspaceRoot = dirname(resolvedPath);
 
+  const agentStorePath = resolveAgentStorePath(config, workspaceRoot);
+  const agentStore = new AgentStoreService(agentStorePath);
+  await agentStore.init();
+
   store.set("lastWorkspacePath", workspaceRoot);
   await addKnownWorkspace(config.workspace.name, workspaceRoot);
 
@@ -111,6 +123,7 @@ async function initContext(workspacePath: string): Promise<ElectronContext> {
     configPath: resolvedPath,
     workspaceRoot,
     bulkGitService: new BulkGitService(),
+    agentStore,
   };
 }
 
@@ -164,12 +177,17 @@ app.whenReady().then(async () => {
       // Remove all listeners from old git service emitter (guard if no current context)
       holder.current?.bulkGitService.emitter.removeAllListeners();
 
+      const newAgentStorePath = resolveAgentStorePath(newConfig, newWorkspaceRoot);
+      const newAgentStore = new AgentStoreService(newAgentStorePath);
+      await newAgentStore.init();
+
       // Swap in new context
       holder.current = {
         config: newConfig,
         configPath: newConfigPath,
         workspaceRoot: newWorkspaceRoot,
         bulkGitService: new BulkGitService(),
+        agentStore: newAgentStore,
       };
 
       // Re-wire event emitters for new services

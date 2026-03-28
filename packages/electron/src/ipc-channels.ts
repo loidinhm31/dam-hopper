@@ -59,6 +59,25 @@ export const CH = {
   TERMINAL_LIST: "terminal:list",
   TERMINAL_LIST_DETAILED: "terminal:listDetailed",
   TERMINAL_BUFFER: "terminal:buffer",
+
+  // Agent Store — CRUD
+  AGENT_STORE_INIT: "agent-store:init",
+  AGENT_STORE_LIST: "agent-store:list",
+  AGENT_STORE_GET: "agent-store:get",
+  AGENT_STORE_GET_CONTENT: "agent-store:getContent",
+  AGENT_STORE_ADD: "agent-store:add",
+  AGENT_STORE_REMOVE: "agent-store:remove",
+
+  // Agent Store — Distribution
+  AGENT_STORE_SHIP: "agent-store:ship",
+  AGENT_STORE_UNSHIP: "agent-store:unship",
+  AGENT_STORE_BULK_SHIP: "agent-store:bulkShip",
+  AGENT_STORE_ABSORB: "agent-store:absorb",
+  AGENT_STORE_MATRIX: "agent-store:matrix",
+
+  // Agent Store — Scanner / Health
+  AGENT_STORE_SCAN: "agent-store:scan",
+  AGENT_STORE_HEALTH: "agent-store:health",
 } as const;
 
 // ── Push event channels (main → renderer) ─────────────────────────────────────

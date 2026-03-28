@@ -133,6 +133,46 @@ contextBridge.exposeInMainWorld("devhub", {
     },
   },
 
+  agentStore: {
+    list: (opts?: { category?: string }) =>
+      ipcRenderer.invoke(CH.AGENT_STORE_LIST, opts),
+    get: (opts: { name: string; category: string }) =>
+      ipcRenderer.invoke(CH.AGENT_STORE_GET, opts),
+    getContent: (opts: { name: string; category: string; fileName?: string }) =>
+      ipcRenderer.invoke(CH.AGENT_STORE_GET_CONTENT, opts),
+    add: (opts: { category: string; name?: string }) =>
+      ipcRenderer.invoke(CH.AGENT_STORE_ADD, opts),
+    remove: (opts: { name: string; category: string }) =>
+      ipcRenderer.invoke(CH.AGENT_STORE_REMOVE, opts),
+    ship: (opts: {
+      itemName: string;
+      category: string;
+      projectName: string;
+      agent: string;
+      method?: string;
+    }) => ipcRenderer.invoke(CH.AGENT_STORE_SHIP, opts),
+    unship: (opts: {
+      itemName: string;
+      category: string;
+      projectName: string;
+      agent: string;
+    }) => ipcRenderer.invoke(CH.AGENT_STORE_UNSHIP, opts),
+    absorb: (opts: {
+      itemName: string;
+      category: string;
+      projectName: string;
+      agent: string;
+    }) => ipcRenderer.invoke(CH.AGENT_STORE_ABSORB, opts),
+    bulkShip: (opts: {
+      items: Array<{ name: string; category: string }>;
+      targets: Array<{ projectName: string; agent: string }>;
+      method?: string;
+    }) => ipcRenderer.invoke(CH.AGENT_STORE_BULK_SHIP, opts),
+    matrix: () => ipcRenderer.invoke(CH.AGENT_STORE_MATRIX),
+    scan: () => ipcRenderer.invoke(CH.AGENT_STORE_SCAN),
+    health: () => ipcRenderer.invoke(CH.AGENT_STORE_HEALTH),
+  },
+
   on(channel: string, callback: (data: unknown) => void): Unsubscribe {
     const listener = (_event: IpcRendererEvent, data: unknown) =>
       callback(data);
