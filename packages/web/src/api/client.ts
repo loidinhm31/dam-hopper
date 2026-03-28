@@ -1,6 +1,64 @@
 // IPC-only API client — all calls route through window.devhub (Electron contextBridge).
 // No HTTP fetch or SSE code.
 
+// ── Agent Store Types ─────────────────────────────────────────────────────────
+
+export type AgentType = "claude" | "gemini";
+
+export type AgentItemCategory =
+  | "skill"
+  | "command"
+  | "hook"
+  | "mcp-server"
+  | "subagent"
+  | "memory-template";
+
+export type DistributionMethod = "symlink" | "copy";
+
+export interface AgentStoreItem {
+  name: string;
+  category: AgentItemCategory;
+  relativePath: string;
+  description?: string;
+  compatibleAgents: AgentType[];
+  sizeBytes?: number;
+}
+
+export interface ShipResult {
+  item: string;
+  category: AgentItemCategory;
+  project: string;
+  agent: AgentType;
+  method: DistributionMethod;
+  success: boolean;
+  error?: string;
+  targetPath?: string;
+}
+
+export interface ProjectAgentScanResult {
+  projectName: string;
+  projectPath: string;
+  agents: Partial<Record<AgentType, {
+    hasConfig: boolean;
+    skills: string[];
+    commands: string[];
+    hooks: string[];
+    hasMemoryFile: boolean;
+    hasMcpConfig: boolean;
+  }>>;
+}
+
+export interface HealthCheckResult {
+  brokenSymlinks: Array<{ project: string; path: string; target: string }>;
+  orphanedItems: Array<{ project: string; path: string; reason: string }>;
+}
+
+/** itemKey = "category:name", projectKey = "projectName:agent" */
+export type DistributionMatrix = Record<
+  string,
+  Record<string, { shipped: boolean; method: DistributionMethod | null }>
+>;
+
 export type ProjectType =
   | "maven"
   | "gradle"
@@ -161,5 +219,38 @@ export const api = {
     reset: () => window.devhub.settings.reset(),
     exportConfig: () => window.devhub.settings.exportConfig(),
     importConfig: () => window.devhub.settings.importConfig(),
+  },
+  agentStore: {
+    list: (category?: AgentItemCategory) =>
+      window.devhub.agentStore.list(category ? { category } : undefined),
+    get: (name: string, category: AgentItemCategory) =>
+      window.devhub.agentStore.get({ name, category }),
+    getContent: (name: string, category: AgentItemCategory, fileName?: string) =>
+      window.devhub.agentStore.getContent({ name, category, fileName }),
+    add: (category: AgentItemCategory, name?: string) =>
+      window.devhub.agentStore.add({ category, name }),
+    remove: (name: string, category: AgentItemCategory) =>
+      window.devhub.agentStore.remove({ name, category }),
+    ship: (
+      itemName: string, category: AgentItemCategory,
+      projectName: string, agent: AgentType,
+      method?: DistributionMethod,
+    ) => window.devhub.agentStore.ship({ itemName, category, projectName, agent, method }),
+    unship: (
+      itemName: string, category: AgentItemCategory,
+      projectName: string, agent: AgentType,
+    ) => window.devhub.agentStore.unship({ itemName, category, projectName, agent }),
+    absorb: (
+      itemName: string, category: AgentItemCategory,
+      projectName: string, agent: AgentType,
+    ) => window.devhub.agentStore.absorb({ itemName, category, projectName, agent }),
+    bulkShip: (
+      items: Array<{ name: string; category: AgentItemCategory }>,
+      targets: Array<{ projectName: string; agent: AgentType }>,
+      method?: DistributionMethod,
+    ) => window.devhub.agentStore.bulkShip({ items, targets, method }),
+    matrix: () => window.devhub.agentStore.matrix(),
+    scan: () => window.devhub.agentStore.scan(),
+    health: () => window.devhub.agentStore.health(),
   },
 };

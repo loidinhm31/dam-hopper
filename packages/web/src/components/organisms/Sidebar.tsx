@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, TerminalSquare, GitMerge, Settings, Folder, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { LayoutDashboard, TerminalSquare, GitMerge, Settings, Folder, ChevronsLeft, ChevronsRight, Package } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { ConnectionDot } from "@/components/atoms/ConnectionDot.js";
 import { useIpc } from "@/hooks/useSSE.js";
@@ -9,6 +9,7 @@ const nav = [
   { to: "/", icon: LayoutDashboard, label: "DASHBOARD" },
   { to: "/terminals", icon: TerminalSquare, label: "TERMINALS" },
   { to: "/git", icon: GitMerge, label: "GIT" },
+  { to: "/agent-store", icon: Package, label: "AGENT STORE" },
   { to: "/settings", icon: Settings, label: "SETTINGS" },
 ];
 

@@ -13,69 +13,15 @@ import type {
   TerminalProfile,
   SearchResult,
   CommandDefinition,
+  AgentType,
+  AgentItemCategory,
+  DistributionMethod,
+  AgentStoreItem,
+  ShipResult,
+  ProjectAgentScanResult,
+  HealthCheckResult,
+  DistributionMatrix,
 } from "../api/client.js";
-
-// Agent store types (mirrored from @dev-hub/core to avoid cross-package import in .d.ts)
-type AgentItemCategory =
-  | "skill"
-  | "command"
-  | "hook"
-  | "mcp-server"
-  | "subagent"
-  | "memory-template";
-
-type AgentType = "claude" | "gemini";
-
-type DistributionMethod = "symlink" | "copy";
-
-export interface AgentStoreItem {
-  name: string;
-  category: AgentItemCategory;
-  relativePath: string;
-  description?: string;
-  compatibleAgents: AgentType[];
-  sizeBytes?: number;
-}
-
-export interface ShipResult {
-  item: string;
-  category: AgentItemCategory;
-  project: string;
-  agent: AgentType;
-  method: DistributionMethod;
-  success: boolean;
-  error?: string;
-  targetPath?: string;
-}
-
-export interface ProjectAgentScanResult {
-  projectName: string;
-  projectPath: string;
-  agents: Partial<
-    Record<
-      AgentType,
-      {
-        hasConfig: boolean;
-        skills: string[];
-        commands: string[];
-        hooks: string[];
-        hasMemoryFile: boolean;
-        hasMcpConfig: boolean;
-      }
-    >
-  >;
-}
-
-export interface HealthCheckResult {
-  brokenSymlinks: Array<{ project: string; path: string; target: string }>;
-  orphanedItems: Array<{ project: string; path: string; reason: string }>;
-}
-
-/** itemKey = "category:name", projectKey = "projectName:agent" */
-export type DistributionMatrix = Record<
-  string,
-  Record<string, { shipped: boolean; method: DistributionMethod | null }>
->;
 
 type Unsubscribe = () => void;
 

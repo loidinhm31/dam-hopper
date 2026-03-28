@@ -44,7 +44,7 @@ Dev-Hub Workspace Root
 | 01 | Core Types, Schema & Store Service | done | ~4h | [phase-01](./phase-01-core-types-schema-store.md) |
 | 02 | Scanner & Distributor (Ship/Unship) | done | ~4h | [phase-02](./phase-02-scanner-distributor.md) |
 | 03 | IPC Channels & Electron Handlers | done | ~4h | [phase-03](./phase-03-ipc-electron-handlers.md) |
-| 04 | Web API, Queries & Agent Store Page | pending | ~5h | [phase-04](./phase-04-web-ui-agent-store-page.md) |
+| 04 | Web API, Queries & Agent Store Page | done | ~5h | [phase-04](./phase-04-web-ui-agent-store-page.md) |
 | 05 | Memory Templates & Import from Repo | pending | ~3h | [phase-05](./phase-05-memory-templates-import.md) |
 
 ## Key Design Decisions

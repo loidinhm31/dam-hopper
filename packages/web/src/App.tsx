@@ -6,6 +6,7 @@ import { GitPage } from "@/pages/GitPage.js";
 import { SettingsPage } from "@/pages/SettingsPage.js";
 import { TerminalsPage } from "@/pages/TerminalsPage.js";
 import { WelcomePage } from "@/pages/WelcomePage.js";
+import { AgentStorePage } from "@/pages/AgentStorePage.js";
 import { useWorkspaceStatus } from "@/api/queries.js";
 
 /** Registers Ctrl+` as a global shortcut to open a new free terminal. */
@@ -35,6 +36,7 @@ function AppRoutes() {
         <Route path="/terminals" element={<TerminalsPage />} />
         <Route path="/git" element={<GitPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/agent-store" element={<AgentStorePage />} />
       </Routes>
     </BrowserRouter>
   );

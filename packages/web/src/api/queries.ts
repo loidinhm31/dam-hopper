@@ -1,6 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client.js";
-import type { DevHubConfig, ProjectConfig } from "./client.js";
+import type {
+  DevHubConfig,
+  ProjectConfig,
+  AgentItemCategory,
+  AgentType,
+  DistributionMethod,
+} from "./client.js";
 import type { SessionInfo } from "@/types/electron.js";
 
 export function useWorkspaceStatus() {
@@ -286,6 +292,142 @@ export function useImportSettings() {
         void qc.invalidateQueries({ queryKey: ["projects"] });
         void qc.invalidateQueries({ queryKey: ["workspace"] });
       }
+    },
+  });
+}
+
+// ── Agent Store ────────────────────────────────────────────────────────────────
+
+export function useAgentStoreItems(category?: AgentItemCategory) {
+  return useQuery({
+    queryKey: ["agent-store", "items", category ?? "all"],
+    queryFn: () => api.agentStore.list(category),
+    staleTime: 30_000,
+  });
+}
+
+export function useAgentStoreItem(name: string, category: AgentItemCategory) {
+  return useQuery({
+    queryKey: ["agent-store", "item", name, category],
+    queryFn: () => api.agentStore.get(name, category),
+    enabled: !!name,
+    staleTime: 30_000,
+  });
+}
+
+export function useAgentStoreContent(name: string, category: AgentItemCategory) {
+  return useQuery({
+    queryKey: ["agent-store", "content", name, category],
+    queryFn: () => api.agentStore.getContent(name, category),
+    enabled: !!name,
+    staleTime: Infinity, // file content is immutable until the item is replaced
+  });
+}
+
+export function useAgentStoreScan() {
+  return useQuery({
+    queryKey: ["agent-store", "scan"],
+    queryFn: () => api.agentStore.scan(),
+    staleTime: 30_000,
+  });
+}
+
+export function useAgentStoreMatrix() {
+  return useQuery({
+    queryKey: ["agent-store", "matrix"],
+    queryFn: () => api.agentStore.matrix(),
+    staleTime: 30_000,
+  });
+}
+
+export function useAgentStoreHealth() {
+  return useQuery({
+    queryKey: ["agent-store", "health"],
+    queryFn: () => api.agentStore.health(),
+    staleTime: 30_000,
+  });
+}
+
+export function useAddToStore() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (opts: { category: AgentItemCategory; name?: string }) =>
+      api.agentStore.add(opts.category, opts.name),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["agent-store"] });
+    },
+  });
+}
+
+export function useRemoveFromStore() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (opts: { name: string; category: AgentItemCategory }) =>
+      api.agentStore.remove(opts.name, opts.category),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["agent-store"] });
+    },
+  });
+}
+
+export function useShipItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (opts: {
+      itemName: string;
+      category: AgentItemCategory;
+      projectName: string;
+      agent: AgentType;
+      method?: DistributionMethod;
+    }) => api.agentStore.ship(opts.itemName, opts.category, opts.projectName, opts.agent, opts.method),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["agent-store", "matrix"] });
+      void qc.invalidateQueries({ queryKey: ["agent-store", "scan"] });
+    },
+  });
+}
+
+export function useUnshipItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (opts: {
+      itemName: string;
+      category: AgentItemCategory;
+      projectName: string;
+      agent: AgentType;
+    }) => api.agentStore.unship(opts.itemName, opts.category, opts.projectName, opts.agent),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["agent-store", "matrix"] });
+      void qc.invalidateQueries({ queryKey: ["agent-store", "scan"] });
+    },
+  });
+}
+
+export function useAbsorbItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (opts: {
+      itemName: string;
+      category: AgentItemCategory;
+      projectName: string;
+      agent: AgentType;
+    }) => api.agentStore.absorb(opts.itemName, opts.category, opts.projectName, opts.agent),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["agent-store"] });
+    },
+  });
+}
+
+export function useBulkShip() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (opts: {
+      items: Array<{ name: string; category: AgentItemCategory }>;
+      targets: Array<{ projectName: string; agent: AgentType }>;
+      method?: DistributionMethod;
+    }) => api.agentStore.bulkShip(opts.items, opts.targets, opts.method),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["agent-store"] });
     },
   });
 }
