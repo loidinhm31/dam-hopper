@@ -18,7 +18,12 @@ export function parseFrontmatter(content: string): {
   if (!match) return { data: {}, body: normalized };
   const yamlStr = match[1] ?? "";
   const body = normalized.slice(match[0].length);
-  const data = (parseYaml(yamlStr) as Record<string, unknown>) ?? {};
+  let data: Record<string, unknown> = {};
+  try {
+    data = (parseYaml(yamlStr) as Record<string, unknown>) ?? {};
+  } catch {
+    // Malformed YAML frontmatter — treat as no frontmatter
+  }
   return { data, body };
 }
 
