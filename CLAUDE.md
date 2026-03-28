@@ -93,6 +93,8 @@ Once determined, `findConfigFile()` walks up from that directory, stopping at th
 
 **Global config**: Stored at `~/.config/dev-hub/config.toml` (respects XDG_CONFIG_HOME). Contains known workspaces list and default workspace path. Core module provides `readGlobalConfig()`, `writeGlobalConfig()`, and workspace helpers.
 
+**Agent store**: Centralized distribution system for agent configurations (skills, commands, hooks, MCP servers, subagents) across projects. Exports scanner (`scanProject()`, `scanAllProjects()`) to discover `.claude/` and `.gemini/` directories, and distributor functions (`ship()`, `unship()`, `absorb()`, `bulkShip()`) to distribute items via symlink or copy. Includes `healthCheck()` to detect broken symlinks and `getDistributionMatrix()` to track which projects have which items shipped.
+
 ## Workspace Config (`dev-hub.toml`)
 
 ```toml
