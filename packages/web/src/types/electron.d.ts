@@ -21,6 +21,9 @@ import type {
   ProjectAgentScanResult,
   HealthCheckResult,
   DistributionMatrix,
+  MemoryTemplateInfo,
+  RepoScanResult,
+  ImportResult,
 } from "../api/client.js";
 
 type Unsubscribe = () => void;
@@ -163,6 +166,22 @@ export interface DevHubBridge {
     matrix: () => Promise<DistributionMatrix>;
     scan: () => Promise<ProjectAgentScanResult[]>;
     health: () => Promise<HealthCheckResult>;
+  };
+
+  agentMemory: {
+    list: (opts: { projectName: string }) => Promise<Record<AgentType, string | null>>;
+    get: (opts: { projectName: string; agent: AgentType }) => Promise<string | null>;
+    update: (opts: { projectName: string; agent: AgentType; content: string }) => Promise<{ updated: boolean }>;
+    templates: () => Promise<MemoryTemplateInfo[]>;
+    apply: (opts: { templateName: string; projectName: string; agent: AgentType }) => Promise<{ content: string }>;
+  };
+
+  agentImport: {
+    scan: (opts: { repoUrl: string }) => Promise<RepoScanResult>;
+    confirm: (opts: {
+      tmpDir: string;
+      selectedItems: Array<{ name: string; category: AgentItemCategory; relativePath: string }>;
+    }) => Promise<ImportResult[]>;
   };
 
   on: (channel: string, callback: (data: unknown) => void) => Unsubscribe;

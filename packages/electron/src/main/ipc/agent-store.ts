@@ -8,6 +8,14 @@ import {
   absorb,
   getDistributionMatrix,
   healthCheck,
+  listMemoryTemplates,
+  getMemoryFile,
+  updateMemoryFile,
+  applyTemplate,
+  scanRepo,
+  importFromRepo,
+  cleanupImport,
+  type TemplateContext,
   type AgentItemCategory,
   type AgentType,
   type DistributionMethod,
@@ -257,4 +265,97 @@ export function registerAgentStoreHandlers(holder: CtxHolder): void {
     }));
     return healthCheck(ctx.agentStore.storePath, projects, ["claude", "gemini"]);
   });
+
+  // ── Memory ────────────────────────────────────────────────────────────────────
+
+  ipcMain.handle(CH.AGENT_MEMORY_LIST, async (_e, opts: { projectName: string }) => {
+    const ctx = getCtx();
+    const project = ctx.config.projects.find((p) => p.name === opts.projectName);
+    if (!project) throw new Error(`Project not found: ${opts.projectName}`);
+    const projectPath = join(ctx.workspaceRoot, project.path);
+    return {
+      claude: await getMemoryFile(projectPath, "claude"),
+      gemini: await getMemoryFile(projectPath, "gemini"),
+    };
+  });
+
+  ipcMain.handle(
+    CH.AGENT_MEMORY_GET,
+    async (_e, opts: { projectName: string; agent: AgentType }) => {
+      assertAgent(opts.agent);
+      const ctx = getCtx();
+      const project = ctx.config.projects.find((p) => p.name === opts.projectName);
+      if (!project) throw new Error(`Project not found: ${opts.projectName}`);
+      return getMemoryFile(join(ctx.workspaceRoot, project.path), opts.agent);
+    },
+  );
+
+  ipcMain.handle(
+    CH.AGENT_MEMORY_UPDATE,
+    async (_e, opts: { projectName: string; agent: AgentType; content: string }) => {
+      assertAgent(opts.agent);
+      const ctx = getCtx();
+      const project = ctx.config.projects.find((p) => p.name === opts.projectName);
+      if (!project) throw new Error(`Project not found: ${opts.projectName}`);
+      await updateMemoryFile(join(ctx.workspaceRoot, project.path), opts.agent, opts.content);
+      return { updated: true };
+    },
+  );
+
+  ipcMain.handle(CH.AGENT_MEMORY_TEMPLATES, async () => {
+    const ctx = getCtx();
+    return listMemoryTemplates(ctx.agentStore.storePath);
+  });
+
+  ipcMain.handle(
+    CH.AGENT_MEMORY_APPLY,
+    async (_e, opts: { templateName: string; projectName: string; agent: AgentType }) => {
+      assertAgent(opts.agent);
+      // Allowlist: only alphanumeric, hyphens, underscores — prevents path traversal
+      if (!/^[a-zA-Z0-9_-]+$/.test(opts.templateName)) {
+        throw new Error(`Invalid template name: "${opts.templateName}"`);
+      }
+      const ctx = getCtx();
+      const project = ctx.config.projects.find((p) => p.name === opts.projectName);
+      if (!project) throw new Error(`Project not found: ${opts.projectName}`);
+      const context: TemplateContext = {
+        project: {
+          name: project.name,
+          path: project.path,
+          type: project.type,
+          tags: project.tags,
+        },
+        workspace: { name: ctx.config.workspace.name, root: ctx.workspaceRoot },
+        agent: opts.agent,
+      };
+      const content = await applyTemplate(ctx.agentStore.storePath, opts.templateName, context);
+      return { content };
+    },
+  );
+
+  // ── Import from repo ──────────────────────────────────────────────────────────
+
+  ipcMain.handle(CH.AGENT_STORE_IMPORT_SCAN, async (_e, opts: { repoUrl: string }) => {
+    return scanRepo(opts.repoUrl);
+  });
+
+  ipcMain.handle(
+    CH.AGENT_STORE_IMPORT_CONFIRM,
+    async (
+      _e,
+      opts: {
+        tmpDir: string;
+        selectedItems: Array<{ name: string; category: AgentItemCategory; relativePath: string }>;
+      },
+    ) => {
+      opts.selectedItems.forEach((i) => assertCategory(i.category));
+      const ctx = getCtx();
+      try {
+        return await importFromRepo(opts.tmpDir, opts.selectedItems, ctx.agentStore.storePath);
+      } finally {
+        // Always clean up temp dir, even if import throws
+        await cleanupImport(opts.tmpDir);
+      }
+    },
+  );
 }

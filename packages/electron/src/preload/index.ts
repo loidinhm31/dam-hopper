@@ -173,6 +173,27 @@ contextBridge.exposeInMainWorld("devhub", {
     health: () => ipcRenderer.invoke(CH.AGENT_STORE_HEALTH),
   },
 
+  agentMemory: {
+    list: (opts: { projectName: string }) =>
+      ipcRenderer.invoke(CH.AGENT_MEMORY_LIST, opts),
+    get: (opts: { projectName: string; agent: string }) =>
+      ipcRenderer.invoke(CH.AGENT_MEMORY_GET, opts),
+    update: (opts: { projectName: string; agent: string; content: string }) =>
+      ipcRenderer.invoke(CH.AGENT_MEMORY_UPDATE, opts),
+    templates: () => ipcRenderer.invoke(CH.AGENT_MEMORY_TEMPLATES),
+    apply: (opts: { templateName: string; projectName: string; agent: string }) =>
+      ipcRenderer.invoke(CH.AGENT_MEMORY_APPLY, opts),
+  },
+
+  agentImport: {
+    scan: (opts: { repoUrl: string }) =>
+      ipcRenderer.invoke(CH.AGENT_STORE_IMPORT_SCAN, opts),
+    confirm: (opts: {
+      tmpDir: string;
+      selectedItems: Array<{ name: string; category: string; relativePath: string }>;
+    }) => ipcRenderer.invoke(CH.AGENT_STORE_IMPORT_CONFIRM, opts),
+  },
+
   on(channel: string, callback: (data: unknown) => void): Unsubscribe {
     const listener = (_event: IpcRendererEvent, data: unknown) =>
       callback(data);
