@@ -40,11 +40,13 @@ export interface ImportResult {
 export async function scanRepo(repoUrl: string): Promise<RepoScanResult> {
   const tmpDir = await mkdtemp(join(tmpdir(), "devhub-import-"));
   await gitClone(repoUrl, tmpDir);
-  const [skills, commands] = await Promise.all([
+  const [skills, commands, hooks, subagents] = await Promise.all([
     findSkills(tmpDir),
     findCommands(tmpDir),
+    findHooks(tmpDir),
+    findSubagents(tmpDir),
   ]);
-  return { repoUrl, tmpDir, items: [...skills, ...commands] };
+  return { repoUrl, tmpDir, items: [...skills, ...commands, ...hooks, ...subagents] };
 }
 
 /**
@@ -65,11 +67,13 @@ export async function scanLocalDir(dirPath: string): Promise<LocalScanResult> {
   if (!stat.isDirectory()) {
     throw new Error(`Not a directory: ${resolved}`);
   }
-  const [skills, commands] = await Promise.all([
+  const [skills, commands, hooks, subagents] = await Promise.all([
     findSkills(resolved),
     findCommands(resolved),
+    findHooks(resolved),
+    findSubagents(resolved),
   ]);
-  return { dirPath: resolved, items: [...skills, ...commands] };
+  return { dirPath: resolved, items: [...skills, ...commands, ...hooks, ...subagents] };
 }
 
 /**
@@ -90,10 +94,11 @@ export async function importFromRepo(
       results.push({ name: item.name, success: false, error: "Invalid path: traversal detected" });
       continue;
     }
-    const categoryDir = item.category === "skill" ? "skills" : "commands";
-    const isCommand = item.category === "command";
-    // Commands are stored as <name>.md; skills as directories
-    const targetName = isCommand ? `${item.name}.md` : item.name;
+    const categoryDir = CATEGORY_STORE_DIRS[item.category];
+    const targetName =
+      item.category === "command" || item.category === "subagent"
+        ? `${item.name}.md`
+        : item.name;
     const target = join(storePath, categoryDir, targetName);
 
     if (await fileExists(target)) {
@@ -118,6 +123,15 @@ export async function importFromRepo(
 export async function cleanupImport(tmpDir: string): Promise<void> {
   await rm(tmpDir, { recursive: true, force: true });
 }
+
+const CATEGORY_STORE_DIRS: Record<AgentItemCategory, string> = {
+  skill: "skills",
+  command: "commands",
+  hook: "hooks",
+  "mcp-server": "mcp-servers",
+  subagent: "subagents",
+  "memory-template": "memory-templates",
+};
 
 // ── Internals ─────────────────────────────────────────────────────────────────
 
@@ -169,6 +183,9 @@ async function findCommands(rootDir: string): Promise<RepoScanItem[]> {
     const name = entry.name;
     if (!entry.isFile() || !name.endsWith(".md")) return;
     if (name === "SKILL.md" || name === "README.md") return;
+    // Skip subagent files — .claude/agents/ and .gemini/agents/ are handled by findSubagents
+    const rel = relative(rootDir, entryPath);
+    if (/^\.(?:claude|gemini)[/\\]agents[/\\]/.test(rel)) return;
     const content = await readFile(entryPath, "utf-8");
     const { data } = parseFrontmatter(content);
     if (!data["description"]) return; // skip non-command markdown
@@ -179,6 +196,56 @@ async function findCommands(rootDir: string): Promise<RepoScanItem[]> {
       relativePath: relative(rootDir, entryPath),
     });
   });
+  return results;
+}
+
+/** Find hook files in .claude/hooks/ and .gemini/hooks/ directories. */
+async function findHooks(rootDir: string): Promise<RepoScanItem[]> {
+  const results: RepoScanItem[] = [];
+  for (const agentRoot of [".claude", ".gemini"]) {
+    const hooksDir = join(rootDir, agentRoot, "hooks");
+    let entries;
+    try {
+      entries = await readdir(hooksDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      results.push({
+        name: entry.name,
+        category: "hook",
+        relativePath: relative(rootDir, join(hooksDir, entry.name)),
+      });
+    }
+  }
+  return results;
+}
+
+/** Find subagent .md files in .claude/agents/ and .gemini/agents/ directories. */
+async function findSubagents(rootDir: string): Promise<RepoScanItem[]> {
+  const results: RepoScanItem[] = [];
+  for (const agentRoot of [".claude", ".gemini"]) {
+    const agentsDir = join(rootDir, agentRoot, "agents");
+    let entries;
+    try {
+      entries = await readdir(agentsDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      const entryPath = join(agentsDir, entry.name);
+      const content = await readFile(entryPath, "utf-8");
+      const { data } = parseFrontmatter(content);
+      results.push({
+        name: (data["name"] as string | undefined) ?? entry.name.replace(/\.md$/, ""),
+        category: "subagent",
+        description: data["description"] as string | undefined,
+        relativePath: relative(rootDir, entryPath),
+      });
+    }
+  }
   return results;
 }
 
