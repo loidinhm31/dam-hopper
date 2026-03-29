@@ -144,13 +144,33 @@ export class AgentStoreService {
           sizeBytes: s.size,
         };
       } else {
-        // For hooks, mcp-server, subagent, memory-template: basic stat
-        const s = await lstat(itemPath);
-        const size = s.isDirectory() ? await dirSize(itemPath) : s.size;
+        // For hooks, mcp-server, subagent, memory-template: basic stat.
+        // Subagents are imported as <name>.md — try with extension when bare path not found.
+        let resolvedPath = itemPath;
+        if (category === "subagent" && !itemPath.endsWith(".md")) {
+          try {
+            await lstat(`${itemPath}.md`);
+            resolvedPath = `${itemPath}.md`;
+          } catch {
+            // fall through to bare path
+          }
+        }
+        const s = await lstat(resolvedPath);
+        const size = s.isDirectory() ? await dirSize(resolvedPath) : s.size;
+        let description: string | undefined;
+        if (category === "subagent" && resolvedPath.endsWith(".md")) {
+          try {
+            const meta = await parseCommandMd(resolvedPath);
+            description = meta.description;
+          } catch {
+            // description stays undefined
+          }
+        }
         return {
           name,
           category,
-          relativePath: relPath,
+          relativePath: relative(this._storePath, resolvedPath),
+          description,
           compatibleAgents: ["claude", "gemini"],
           sizeBytes: size,
         };
@@ -181,9 +201,12 @@ export class AgentStoreService {
     if (category === "skill") {
       return readFile(join(itemPath, "SKILL.md"), "utf-8");
     }
-    // For commands: <name>.md
-    const cmdPath = itemPath.endsWith(".md") ? itemPath : `${itemPath}.md`;
-    return readFile(cmdPath, "utf-8");
+    // For commands and subagents: <name>.md
+    if (category === "command" || category === "subagent") {
+      const mdPath = itemPath.endsWith(".md") ? itemPath : `${itemPath}.md`;
+      return readFile(mdPath, "utf-8");
+    }
+    return readFile(itemPath, "utf-8");
   }
 
   private async listCategory(
