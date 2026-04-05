@@ -9,6 +9,7 @@ import { useIpcEvent } from "@/hooks/useSSEEvents.js";
 import { useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import type { SessionInfo } from "@/types/electron.js";
+import { api } from "@/api/client.js";
 
 interface ActivityEntry {
   id: number;
@@ -110,11 +111,9 @@ export function DashboardPage() {
   }
 
   function handleKillSession(sessionId: string) {
-    try {
-      window.devhub.terminal.kill(sessionId);
-    } catch (err) {
+    api.terminal.kill(sessionId).catch((err: unknown) => {
       console.error("[DashboardPage] kill session failed", err);
-    }
+    });
     void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
   }
 

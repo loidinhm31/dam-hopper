@@ -56,6 +56,7 @@ export const CH = {
   TERMINAL_WRITE: "terminal:write",
   TERMINAL_RESIZE: "terminal:resize",
   TERMINAL_KILL: "terminal:kill",
+  TERMINAL_REMOVE: "terminal:remove",
   TERMINAL_LIST: "terminal:list",
   TERMINAL_LIST_DETAILED: "terminal:listDetailed",
   TERMINAL_BUFFER: "terminal:buffer",

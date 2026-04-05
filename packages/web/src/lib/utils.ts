@@ -25,3 +25,21 @@ export function timeAgo(dateStr: string): string {
   if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ago`;
   return `${Math.floor(ms / 86_400_000)}d ago`;
 }
+
+/**
+ * Generate a UUID v4 that works in both secure (HTTPS) and insecure (HTTP/LAN)
+ * contexts. `crypto.randomUUID()` is only available in secure contexts, but
+ * `crypto.getRandomValues()` works everywhere — use it as a fallback.
+ */
+export function generateUUID(): string {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  // Fallback: build UUID v4 from random bytes (works on HTTP/LAN)
+  const buf = new Uint8Array(16);
+  crypto.getRandomValues(buf);
+  buf[6] = (buf[6] & 0x0f) | 0x40; // version 4
+  buf[8] = (buf[8] & 0x3f) | 0x80; // variant bits
+  const hex = Array.from(buf).map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import type { SearchResult } from "@/api/client.js";
+import { api } from "@/api/client.js";
 
 export function useCommandSearch(projectType?: string) {
   const [query, setQuery] = useState("");
@@ -13,7 +14,7 @@ export function useCommandSearch(projectType?: string) {
     if (!query.trim()) return;
 
     timerRef.current = setTimeout(() => {
-      window.devhub.commands
+      api.commands
         .search(query, projectType, 8)
         .then(setResults)
         .catch(() => setResults([]));

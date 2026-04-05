@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { cn } from "@/lib/utils.js";
+import { getTransport } from "@/api/transport.js";
+import { api } from "@/api/client.js";
 
 interface TerminalPanelProps {
   /** Unique session ID (e.g. "build:api-server", "run:api-server") */
@@ -12,6 +14,8 @@ interface TerminalPanelProps {
   command: string;
   /** Called when the PTY process exits */
   onExit?: (exitCode: number | null) => void;
+  /** Called when Shift+Enter is pressed — used to open a new terminal */
+  onNewTerminal?: () => void;
   className?: string;
 }
 
@@ -43,6 +47,7 @@ export function TerminalPanel({
   project,
   command,
   onExit,
+  onNewTerminal,
   className,
 }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -81,33 +86,39 @@ export function TerminalPanel({
     let observer: ResizeObserver | null = null;
     let fitTimer: ReturnType<typeof setTimeout> | null = null;
 
+    const transport = getTransport();
+
     // Create or reconnect to existing PTY session
-    window.devhub.terminal
-      .list()
-      .then((alive) => {
+    api.workspace.status()
+      .then(() => transport.invoke<string[]>("terminal:list"))
+      .then((alive: string[]) => {
         if (alive.includes(sessionId)) {
           // Reconnect — replay scrollback so the user sees past output
-          return window.devhub.terminal.getBuffer(sessionId).then((buf) => {
-            if (buf) term.write(buf);
-          });
+          return transport
+            .invoke<{ buffer: string }>("terminal:buffer", sessionId)
+            .then(({ buffer }) => {
+              if (buffer) term.write(buffer);
+            });
         }
-        return window.devhub.terminal.create({ id: sessionId, project, command, cols, rows }).then(() => {});
+        return transport
+          .invoke<string>("terminal:create", { id: sessionId, project, command, cols, rows })
+          .then(() => {});
       })
       .then(() => {
         // Stream PTY output → xterm
-        unsubData = window.devhub.terminal.onData(sessionId, (data) => {
+        unsubData = transport.onTerminalData(sessionId, (data) => {
           term.write(data);
         });
 
         // Handle PTY exit
-        unsubExit = window.devhub.terminal.onExit(sessionId, (exitCode) => {
+        unsubExit = transport.onTerminalExit(sessionId, (exitCode) => {
           onExit?.(exitCode);
         });
 
         // Forward user input → PTY stdin
         // Ctrl+Shift+C → copy selection; Ctrl+Shift+V → paste from clipboard
         inputDisposable = term.onData((data) => {
-          window.devhub.terminal.write(sessionId, data);
+          transport.terminalWrite(sessionId, data);
         });
 
         term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
@@ -118,12 +129,17 @@ export function TerminalPanel({
           }
           if (e.ctrlKey && e.shiftKey && e.code === "KeyV" && e.type === "keydown") {
             void navigator.clipboard.readText().then((text) => {
-              window.devhub.terminal.write(sessionId, text);
+              transport.terminalWrite(sessionId, text);
             });
             return false;
           }
           // Ctrl+` is a global shortcut — don't forward to PTY
           if (e.ctrlKey && e.code === "Backquote") return false;
+          // Shift+Enter — open a new empty terminal
+          if (e.shiftKey && !e.ctrlKey && !e.altKey && e.code === "Enter" && e.type === "keydown") {
+            onNewTerminal?.();
+            return false;
+          }
           return true;
         });
 
@@ -132,7 +148,7 @@ export function TerminalPanel({
           if (fitTimer) clearTimeout(fitTimer);
           fitTimer = setTimeout(() => {
             fitAddon.fit();
-            window.devhub.terminal.resize(sessionId, term.cols, term.rows);
+            transport.terminalResize(sessionId, term.cols, term.rows);
           }, 200);
         });
         observer.observe(container);

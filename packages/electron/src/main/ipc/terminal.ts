@@ -76,9 +76,14 @@ export function registerTerminalHandlers(holder: CtxHolder): void {
     },
   );
 
-  // Kill PTY session
+  // Kill PTY session (keeps dead record for 60s)
   ipcMain.on(CH.TERMINAL_KILL, (_e, { id }: { id: string }) => {
     holder.ptyManager.kill(id);
+  });
+
+  // Remove PTY session — kill + immediate metadata cleanup
+  ipcMain.on(CH.TERMINAL_REMOVE, (_e, { id }: { id: string }) => {
+    holder.ptyManager.remove(id);
   });
 
   // List active session IDs

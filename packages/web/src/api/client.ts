@@ -1,5 +1,7 @@
-// IPC-only API client — all calls route through window.devhub (Electron contextBridge).
-// No HTTP fetch or SSE code.
+// Transport-agnostic API client — delegates through the active Transport singleton.
+// In Electron: IpcTransport (window.devhub). In web mode: WsTransport (fetch + WebSocket).
+import { getTransport } from "./transport.js";
+import type { SessionInfo } from "../types/electron.js";
 
 // ── Agent Store Types ─────────────────────────────────────────────────────────
 
@@ -208,101 +210,124 @@ export interface SearchResult {
 
 export const api = {
   workspace: {
-    get: () => window.devhub.workspace.get(),
-    switch: (path: string) => window.devhub.workspace.switch(path),
-    known: () => window.devhub.workspace.known(),
-    addKnown: (path: string) => window.devhub.workspace.addKnown(path),
-    removeKnown: (path: string) => window.devhub.workspace.removeKnown(path),
-    status: () => window.devhub.workspace.status(),
-    init: (path: string) => window.devhub.workspace.init(path),
+    get: () => getTransport().invoke<WorkspaceInfo>("workspace:get"),
+    switch: (path: string) => getTransport().invoke<WorkspaceInfo>("workspace:switch", path),
+    known: () => getTransport().invoke<KnownWorkspacesResponse>("workspace:known"),
+    addKnown: (path: string) => getTransport().invoke<KnownWorkspace>("workspace:addKnown", path),
+    removeKnown: (path: string) => getTransport().invoke<{ removed: boolean }>("workspace:removeKnown", path),
+    status: () => getTransport().invoke<WorkspaceStatus>("workspace:status"),
+    init: (path: string) => getTransport().invoke<{ name: string; root: string }>("workspace:init", path),
+    // openDialog is Electron-only; web mode handles this in WelcomePage
+    openDialog: () => getTransport().invoke<string | null>("workspace:open-dialog"),
   },
   globalConfig: {
-    get: () => window.devhub.globalConfig.get(),
+    get: () => getTransport().invoke<GlobalConfig>("globalConfig:get"),
     updateDefaults: (defaults: { workspace?: string }) =>
-      window.devhub.globalConfig.updateDefaults(defaults),
+      getTransport().invoke<{ updated: true }>("globalConfig:updateDefaults", defaults),
   },
   projects: {
-    list: () => window.devhub.projects.list(),
-    get: (name: string) => window.devhub.projects.get(name),
-    status: (name: string) => window.devhub.projects.status(name),
+    list: () => getTransport().invoke<ProjectWithStatus[]>("projects:list"),
+    get: (name: string) => getTransport().invoke<ProjectWithStatus>("projects:get", name),
+    status: (name: string) => getTransport().invoke<GitStatus | null>("projects:status", name),
   },
   git: {
-    fetch: (projects?: string[]) => window.devhub.git.fetch(projects),
-    pull: (projects?: string[]) => window.devhub.git.pull(projects),
-    push: (project: string) => window.devhub.git.push(project),
-    worktrees: (project: string) => window.devhub.git.worktrees(project),
+    fetch: (projects?: string[]) => getTransport().invoke<GitOpResult[]>("git:fetch", projects),
+    pull: (projects?: string[]) => getTransport().invoke<GitOpResult[]>("git:pull", projects),
+    push: (project: string) => getTransport().invoke<GitOpResult>("git:push", project),
+    worktrees: (project: string) => getTransport().invoke<Worktree[]>("git:worktrees", project),
     addWorktree: (
       project: string,
       options: { path: string; branch: string; createBranch?: boolean },
-    ) => window.devhub.git.addWorktree(project, options),
+    ) => getTransport().invoke<Worktree>("git:addWorktree", { project, options }),
     removeWorktree: (project: string, path: string) =>
-      window.devhub.git.removeWorktree(project, path),
-    branches: (project: string) => window.devhub.git.branches(project),
+      getTransport().invoke<void>("git:removeWorktree", { project, path }),
+    branches: (project: string) => getTransport().invoke<Branch[]>("git:branches", project),
     updateBranch: (project: string, branch?: string) =>
-      window.devhub.git.updateBranch(project, branch),
+      getTransport().invoke<GitOpResult[]>("git:updateBranch", { project, branch }),
   },
   config: {
-    get: () => window.devhub.config.get(),
-    update: (config: DevHubConfig) => window.devhub.config.update(config),
+    get: () => getTransport().invoke<DevHubConfig>("config:get"),
+    update: (config: DevHubConfig) => getTransport().invoke<DevHubConfig>("config:update", config),
     updateProject: (name: string, data: Partial<ProjectConfig>) =>
-      window.devhub.config.updateProject(name, data),
+      getTransport().invoke<ProjectConfig>("config:updateProject", { name, patch: data }),
   },
   settings: {
-    clearCache: () => window.devhub.settings.clearCache(),
-    reset: () => window.devhub.settings.reset(),
-    exportConfig: () => window.devhub.settings.exportConfig(),
-    importConfig: () => window.devhub.settings.importConfig(),
+    clearCache: () => getTransport().invoke<{ cleared: boolean }>("cache:clear"),
+    reset: () => getTransport().invoke<{ reset: boolean }>("workspace:reset"),
+    exportConfig: () => getTransport().invoke<{ exported: boolean; path?: string }>("settings:export"),
+    importConfig: () => getTransport().invoke<{ imported: boolean }>("settings:import"),
+  },
+  commands: {
+    search: (query: string, projectType?: string, limit?: number) =>
+      getTransport().invoke<SearchResult[]>("commands:search", { query, projectType, limit }),
+    list: (projectType: string) =>
+      getTransport().invoke<SearchResult[]>("commands:list", { projectType }),
   },
   agentStore: {
     list: (category?: AgentItemCategory) =>
-      window.devhub.agentStore.list(category ? { category } : undefined),
+      getTransport().invoke<AgentStoreItem[]>("agent-store:list", category ? { category } : undefined),
     get: (name: string, category: AgentItemCategory) =>
-      window.devhub.agentStore.get({ name, category }),
+      getTransport().invoke<AgentStoreItem | null>("agent-store:get", { name, category }),
     getContent: (name: string, category: AgentItemCategory, fileName?: string) =>
-      window.devhub.agentStore.getContent({ name, category, fileName }),
+      getTransport().invoke<string>("agent-store:getContent", { name, category, fileName }),
     add: (category: AgentItemCategory, name?: string) =>
-      window.devhub.agentStore.add({ category, name }),
+      getTransport().invoke<AgentStoreItem | null>("agent-store:add", { category, name }),
     remove: (name: string, category: AgentItemCategory) =>
-      window.devhub.agentStore.remove({ name, category }),
+      getTransport().invoke<{ removed: boolean }>("agent-store:remove", { name, category }),
     ship: (
       itemName: string, category: AgentItemCategory,
       projectName: string, agent: AgentType,
       method?: DistributionMethod,
-    ) => window.devhub.agentStore.ship({ itemName, category, projectName, agent, method }),
+    ) => getTransport().invoke<ShipResult>("agent-store:ship", { itemName, category, projectName, agent, method }),
     unship: (
       itemName: string, category: AgentItemCategory,
       projectName: string, agent: AgentType,
-    ) => window.devhub.agentStore.unship({ itemName, category, projectName, agent }),
+    ) => getTransport().invoke<ShipResult>("agent-store:unship", { itemName, category, projectName, agent }),
     absorb: (
       itemName: string, category: AgentItemCategory,
       projectName: string, agent: AgentType,
-    ) => window.devhub.agentStore.absorb({ itemName, category, projectName, agent }),
+    ) => getTransport().invoke<ShipResult>("agent-store:absorb", { itemName, category, projectName, agent }),
     bulkShip: (
       items: Array<{ name: string; category: AgentItemCategory }>,
       targets: Array<{ projectName: string; agent: AgentType }>,
       method?: DistributionMethod,
-    ) => window.devhub.agentStore.bulkShip({ items, targets, method }),
-    matrix: () => window.devhub.agentStore.matrix(),
-    scan: () => window.devhub.agentStore.scan(),
-    health: () => window.devhub.agentStore.health(),
+    ) => getTransport().invoke<ShipResult[]>("agent-store:bulkShip", { items, targets, method }),
+    matrix: () => getTransport().invoke<DistributionMatrix>("agent-store:matrix"),
+    scan: () => getTransport().invoke<ProjectAgentScanResult[]>("agent-store:scan"),
+    health: () => getTransport().invoke<HealthCheckResult>("agent-store:health"),
   },
   agentMemory: {
-    list: (projectName: string) => window.devhub.agentMemory.list({ projectName }),
+    list: (projectName: string) => getTransport().invoke<Record<AgentType, string | null>>("agent-memory:list", { projectName }),
     get: (projectName: string, agent: AgentType) =>
-      window.devhub.agentMemory.get({ projectName, agent }),
+      getTransport().invoke<string | null>("agent-memory:get", { projectName, agent }),
     update: (projectName: string, agent: AgentType, content: string) =>
-      window.devhub.agentMemory.update({ projectName, agent, content }),
-    templates: () => window.devhub.agentMemory.templates(),
+      getTransport().invoke<{ updated: boolean }>("agent-memory:update", { projectName, agent, content }),
+    templates: () => getTransport().invoke<MemoryTemplateInfo[]>("agent-memory:templates"),
     apply: (templateName: string, projectName: string, agent: AgentType) =>
-      window.devhub.agentMemory.apply({ templateName, projectName, agent }),
+      getTransport().invoke<{ content: string }>("agent-memory:apply", { templateName, projectName, agent }),
   },
   agentImport: {
-    scan: (repoUrl: string) => window.devhub.agentImport.scan({ repoUrl }),
-    scanLocal: (dirPath: string) => window.devhub.agentImport.scanLocal({ dirPath }),
+    scan: (repoUrl: string) => getTransport().invoke<RepoScanResult>("agent-store:importScan", { repoUrl }),
+    scanLocal: (dirPath: string) => getTransport().invoke<LocalScanResult>("agent-store:importScanLocal", { dirPath }),
     confirm: (
       tmpDir: string,
       selectedItems: Array<{ name: string; category: AgentItemCategory; relativePath: string }>,
       skipCleanup?: boolean,
-    ) => window.devhub.agentImport.confirm({ tmpDir, selectedItems, skipCleanup }),
+    ) => getTransport().invoke<ImportResult[]>("agent-store:importConfirm", { tmpDir, selectedItems, skipCleanup }),
+  },
+  terminal: {
+    create: (opts: {
+      id: string;
+      project?: string;
+      command: string;
+      cwd?: string;
+      cols: number;
+      rows: number;
+    }) => getTransport().invoke<void>("terminal:create", opts),
+    kill: (id: string) => getTransport().invoke<void>("terminal:kill", id),
+    remove: (id: string) => getTransport().invoke<void>("terminal:remove", id),
+    list: () => getTransport().invoke<SessionInfo[]>("terminal:list"),
+    listDetailed: () => getTransport().invoke<SessionInfo[]>("terminal:listDetailed"),
+    getBuffer: (id: string) => getTransport().invoke<string>("terminal:buffer", id),
   },
 };

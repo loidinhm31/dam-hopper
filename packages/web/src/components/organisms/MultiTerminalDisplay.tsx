@@ -11,12 +11,14 @@ interface Props {
   activeSessionId: string | null;
   mountedSessions: MountedSession[];
   onSessionExit?: (sessionId: string) => void;
+  onNewTerminal?: () => void;
 }
 
 export function MultiTerminalDisplay({
   activeSessionId,
   mountedSessions,
   onSessionExit,
+  onNewTerminal,
 }: Props) {
   if (mountedSessions.length === 0 || !activeSessionId) {
     return (
@@ -40,6 +42,7 @@ export function MultiTerminalDisplay({
             project={s.project}
             command={s.command}
             onExit={() => onSessionExit?.(s.sessionId)}
+            onNewTerminal={onNewTerminal}
             className="flex-1"
           />
         </div>

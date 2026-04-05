@@ -1,9 +1,10 @@
-// IPC event bridge — replaces the former SSE/EventSource implementation.
-// Events are pushed from Electron main process via webContents.send() and
-// received here via window.devhub.on(). No HTTP, no EventSource.
+// Event bridge — routes main-process push events into the in-memory listener bus.
+// In Electron: forwards window.devhub.on() IPC events
+// In web mode: forwards WebSocket push events via WsTransport
 
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { getTransport, isWebMode } from "../api/transport.js";
 
 export type IpcStatus = "connected";
 
@@ -29,31 +30,26 @@ function dispatch(type: string, data: unknown) {
   listeners.get("*")?.forEach((cb) => cb(event));
 }
 
-// Channel list is authoritative in the electron package (ipc-channels.ts).
-// At runtime, the preload exposes it as window.devhub.eventChannels.
-// Falls back to a local copy for non-Electron environments (tests/storybook).
-const FALLBACK_EVENT_CHANNELS = [
+// Push event channel names (same for both transports)
+const PUSH_EVENT_CHANNELS = [
   "git:progress",
   "status:changed",
   "config:changed",
   "workspace:changed",
+  "terminal:changed",
 ] as const;
 
-function getEventChannels(): readonly string[] {
-  return (
-    (window.devhub as { eventChannels?: readonly string[] }).eventChannels ??
-    FALLBACK_EVENT_CHANNELS
-  );
-}
-
-// Register IPC listeners once at module level (not per-component).
-// These forward main-process pushes into the in-memory listener bus.
+// Register transport listeners once at module level (not per-component)
+let initialized = false;
 const unsubscribers: Array<() => void> = [];
 
-function initIpcListeners() {
-  if (unsubscribers.length > 0) return; // already initialized
-  for (const channel of getEventChannels()) {
-    const unsub = window.devhub.on(channel, (data) => dispatch(channel, data));
+function initTransportListeners(): void {
+  if (initialized) return;
+  initialized = true;
+
+  const transport = getTransport();
+  for (const channel of PUSH_EVENT_CHANNELS) {
+    const unsub = transport.onEvent(channel, (data) => dispatch(channel, data));
     unsubscribers.push(unsub);
   }
 }
@@ -62,15 +58,13 @@ export function useIpc(): { status: IpcStatus } {
   const qc = useQueryClient();
 
   useEffect(() => {
-    initIpcListeners();
+    initTransportListeners();
 
     const unsubs = [
       subscribeIpc("status:changed", (e) => {
         try {
           const { projectName } = e.data as { projectName: string };
-          void qc.invalidateQueries({
-            queryKey: ["project-status", projectName],
-          });
+          void qc.invalidateQueries({ queryKey: ["project-status", projectName] });
           void qc.invalidateQueries({ queryKey: ["projects"] });
         } catch {
           void qc.invalidateQueries({ queryKey: ["projects"] });
@@ -87,11 +81,14 @@ export function useIpc(): { status: IpcStatus } {
         void qc.invalidateQueries(); // Nuclear — full workspace change
         void qc.invalidateQueries({ queryKey: ["known-workspaces"] });
       }),
+
+      subscribeIpc("terminal:changed", () => {
+        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+      }),
     ];
 
     return () => unsubs.forEach((fn) => fn());
   }, [qc]);
 
-  // IPC is always connected — no reconnect logic needed
   return { status: "connected" };
 }

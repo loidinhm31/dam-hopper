@@ -1,6 +1,12 @@
+/**
+ * PtySessionManager — pure Node.js implementation (no Electron dependency).
+ * Identical logic to packages/electron/src/main/pty/session-manager.ts,
+ * but EventSink is injected via constructor instead of importing Electron APIs.
+ */
+
 import { spawn } from "node-pty";
 import type { IPty } from "node-pty";
-import type { EventSink } from "./event-sink.js";
+import type { EventSink } from "../ws/event-sink.js";
 
 export interface PtyCreateOpts {
   id: string;
@@ -23,16 +29,10 @@ export interface SessionMeta {
   startedAt: number;
 }
 
-/** Session IDs must be alphanumeric + colon/dash/underscore only. */
 const SESSION_ID_RE = /^[\w:.-]+$/;
-
-/** Max bytes to keep per session for reconnect replay (256 KB). */
 const SCROLLBACK_LIMIT = 256 * 1024;
-
-/** Keep dead session metadata for 60 seconds before cleanup. */
 const DEAD_META_TTL_MS = 60_000;
 
-// Order matters: more-specific prefixes must come before any that could overlap.
 function deriveType(id: string): SessionMeta["type"] {
   if (id.startsWith("build:")) return "build";
   if (id.startsWith("run:")) return "run";
@@ -56,7 +56,6 @@ export class PtySessionManager {
       throw new Error(`Invalid session id: "${opts.id}"`);
     }
 
-    // Kill existing session with same id before creating a new one
     this.kill(opts.id);
     this.scrollback.set(opts.id, "");
 
@@ -73,18 +72,10 @@ export class PtySessionManager {
 
     console.log(`[pty] create id=${opts.id} cmd="${opts.command}"`);
 
-    // Empty command = interactive login shell (e.g. free terminals).
-    // Spawn the user's preferred shell directly instead of wrapping in /bin/sh -c.
     const isInteractive = !opts.command;
-    // Validate $SHELL is an absolute path before trusting it as an executable.
-    // Fall back to /bin/bash if unset or looks like an injection attempt.
     const rawShell = opts.env["SHELL"] ?? "";
     const safeShell =
-      process.platform === "win32"
-        ? "cmd.exe"
-        : rawShell.startsWith("/")
-          ? rawShell
-          : "/bin/bash";
+      process.platform === "win32" ? "cmd.exe" : rawShell.startsWith("/") ? rawShell : "/bin/bash";
     const exe = isInteractive
       ? safeShell
       : process.platform === "win32"
@@ -96,9 +87,7 @@ export class PtySessionManager {
         ? []
         : ["-c", opts.command];
 
-    if (isInteractive) {
-      console.log(`[pty] interactive shell: ${exe}`);
-    }
+    if (isInteractive) console.log(`[pty] interactive shell: ${exe}`);
 
     const pty = spawn(exe, args, {
       name: "xterm-256color",
@@ -108,7 +97,6 @@ export class PtySessionManager {
       env: { ...opts.env },
     });
 
-    // On Windows, send the command as stdin since cmd.exe doesn't support -c
     if (process.platform === "win32" && opts.command) {
       pty.write(`${opts.command}\r`);
     }
@@ -117,7 +105,6 @@ export class PtySessionManager {
     this.eventSink.sendTerminalChanged();
 
     pty.onData((data) => {
-      // Append to scrollback buffer, trimming oldest bytes when over limit
       const current = this.scrollback.get(opts.id) ?? "";
       const next = current + data;
       this.scrollback.set(
@@ -130,16 +117,9 @@ export class PtySessionManager {
     pty.onExit(({ exitCode }) => {
       console.log(`[pty] exit id=${opts.id} code=${exitCode}`);
       this.sessions.delete(opts.id);
-
       const m = this.meta.get(opts.id);
-      if (m) {
-        m.alive = false;
-        m.exitCode = exitCode;
-      }
-
-      // Schedule metadata cleanup after TTL
+      if (m) { m.alive = false; m.exitCode = exitCode; }
       this.scheduleMetaCleanup(opts.id);
-
       this.eventSink.sendTerminalExit(opts.id, exitCode);
       this.eventSink.sendTerminalChanged();
     });
@@ -161,21 +141,11 @@ export class PtySessionManager {
     const pty = this.sessions.get(id);
     if (pty) {
       console.log(`[pty] kill id=${id}`);
-      try {
-        pty.kill(signal);
-      } catch {
-        // Already dead — ignore
-      }
+      try { pty.kill(signal); } catch { /* already dead */ }
       this.sessions.delete(id);
     }
-
     const m = this.meta.get(id);
-    if (m && m.alive) {
-      m.alive = false;
-      m.exitCode = null;
-      this.scheduleMetaCleanup(id);
-    }
-
+    if (m && m.alive) { m.alive = false; m.exitCode = null; this.scheduleMetaCleanup(id); }
     this.scrollback.delete(id);
   }
 
@@ -208,22 +178,15 @@ export class PtySessionManager {
 
   dispose(): void {
     console.log(`[pty] dispose all (${this.sessions.size} sessions)`);
-    for (const id of [...this.sessions.keys()]) {
-      this.kill(id);
-    }
-    // Clear all pending cleanup timers to prevent post-dispose callbacks
-    for (const timer of this.cleanupTimers.values()) {
-      clearTimeout(timer);
-    }
+    for (const id of [...this.sessions.keys()]) this.kill(id);
+    for (const timer of this.cleanupTimers.values()) clearTimeout(timer);
     this.cleanupTimers.clear();
     this.meta.clear();
   }
 
   private scheduleMetaCleanup(id: string): void {
-    // Cancel any existing timer for this id (e.g., session restarted)
     const existing = this.cleanupTimers.get(id);
     if (existing) clearTimeout(existing);
-
     const handle = setTimeout(() => {
       this.meta.delete(id);
       this.cleanupTimers.delete(id);

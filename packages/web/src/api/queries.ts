@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client.js";
+import { getTransport } from "./transport.js";
 import type {
   DevHubConfig,
   ProjectConfig,
@@ -103,9 +104,8 @@ export function useGlobalConfig() {
 export function useTerminalSessions() {
   return useQuery<SessionInfo[]>({
     queryKey: ["terminal-sessions"],
-    queryFn: () => window.devhub.terminal.listDetailed(),
-    refetchInterval: 3_000,
-    refetchIntervalInBackground: false,
+    queryFn: () => getTransport().invoke<SessionInfo[]>("terminal:listDetailed"),
+    staleTime: Infinity, // driven by terminal:changed push event invalidation
   });
 }
 
@@ -226,14 +226,14 @@ export function useSshAddKey() {
     }: {
       passphrase: string;
       keyPath?: string;
-    }) => window.devhub.ssh.addKey(passphrase, keyPath),
+    }) => getTransport().invoke<{ success: boolean; error?: string }>("ssh:addKey", { passphrase, keyPath }),
   });
 }
 
 export function useSshCheckAgent() {
   return useQuery({
     queryKey: ["ssh-agent"],
-    queryFn: () => window.devhub.ssh.checkAgent(),
+    queryFn: () => getTransport().invoke<{ hasKeys: boolean; keyCount: number }>("ssh:checkAgent"),
     staleTime: 60_000,
   });
 }
@@ -241,7 +241,7 @@ export function useSshCheckAgent() {
 export function useSshListKeys() {
   return useQuery({
     queryKey: ["ssh-keys"],
-    queryFn: () => window.devhub.ssh.listKeys(),
+    queryFn: () => getTransport().invoke<string[]>("ssh:listKeys"),
     staleTime: 60_000,
   });
 }

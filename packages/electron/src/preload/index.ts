@@ -104,6 +104,7 @@ contextBridge.exposeInMainWorld("devhub", {
       ipcRenderer.send(CH.TERMINAL_RESIZE, { id, cols, rows }),
 
     kill: (id: string) => ipcRenderer.send(CH.TERMINAL_KILL, { id }),
+    remove: (id: string) => ipcRenderer.send(CH.TERMINAL_REMOVE, { id }),
 
     list: () => ipcRenderer.invoke(CH.TERMINAL_LIST),
 

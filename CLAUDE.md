@@ -17,6 +17,31 @@ pnpm dev
 # Electron only (dev mode)
 pnpm dev:electron
 
+# Web server mode — builds all packages then starts the server
+# Token is printed to the terminal on startup; open http://localhost:4800
+DEV_HUB_WORKSPACE=/path/to/workspace pnpm dev:server
+
+# Or pass workspace as a flag (after -- to forward args to node):
+pnpm build:server && node packages/server/dist/index.js --workspace /path/to/workspace --port 4800
+
+# Watch mode (auto-restarts server on server source changes):
+DEV_HUB_WORKSPACE=/path/to/workspace pnpm dev:server:watch
+
+# Build server package (core + web + server)
+pnpm build:server
+
+# Start production server (after build)
+pnpm serve
+# Or directly:
+DEV_HUB_WORKSPACE=/path/to/workspace pnpm serve
+node packages/server/dist/index.js --workspace /path/to/workspace
+
+# Get the auth token after server has started at least once:
+cat ~/.config/dev-hub/server-token
+
+# Regenerate a new token:
+node packages/server/dist/index.js --new-token --workspace /path/to/workspace
+
 # Lint (packages/ directory only)
 pnpm lint
 
@@ -39,15 +64,17 @@ pnpm package:linux     # Linux: AppImage + deb
 pnpm package:win       # Windows: nsis + portable
 ```
 
+
 ## Architecture
 
-Dev-Hub is a monorepo managed with pnpm workspaces. Three packages:
+Dev-Hub is a monorepo managed with pnpm workspaces. Four packages:
 
-- **`@dev-hub/core`** — All business logic: config parsing, project discovery, git ops, build context resolution. No UI concerns. Imported directly in the Electron main process.
+- **`@dev-hub/core`** — All business logic: config parsing, project discovery, git ops, build context resolution. No UI concerns. Imported directly in the Electron main process and the standalone server.
 - **`@dev-hub/electron`** — Electron main process + preload + PTY session manager. Imports `@dev-hub/core` directly. Exposes all functionality to the renderer via IPC (`contextBridge`). Built with `electron-vite`.
-- **`@dev-hub/web`** — React 19 renderer (Vite + Tailwind v4). Bundled as Electron renderer. Communicates exclusively via `window.devhub` IPC bridge (no HTTP, no SSE). Uses xterm.js for interactive terminal panels.
+- **`@dev-hub/server`** — Standalone Fastify HTTP server. Mirrors Electron IPC handlers as REST endpoints + WebSocket. Hosts the same `@dev-hub/web` React UI over HTTP. Uses auth token for security (httpOnly cookie). Supports workspace loading via `--workspace` CLI arg or `DEV_HUB_WORKSPACE` env var.
+- **`@dev-hub/web`** — React 19 renderer (Vite + Tailwind v4). Works in both Electron (IPC bridge) and browser (REST + WebSocket). Transport is runtime-detected: `IpcTransport` when `window.devhub` exists, `WsTransport` otherwise.
 
-Data flow:
+Desktop mode data flow:
 
 ```
 Electron Main Process (Node.js)
@@ -58,10 +85,28 @@ Electron Main Process (Node.js)
 
 Electron Renderer (Chromium)
 ├── React 19 + Vite + Tailwind v4 (@dev-hub/web)
+├── IpcTransport → window.devhub (contextBridge in preload)
 ├── xterm.js terminal panels (per PTY session)
-├── TanStack Query (queries via IPC invoke)
-└── IPC bridge: window.devhub (contextBridge in preload)
+└── TanStack Query (queries via IpcTransport.invoke)
 ```
+
+Web server mode data flow:
+
+```
+@dev-hub/server (Node.js, port 3001)
+├── @dev-hub/core (direct import)
+├── node-pty session manager (same PtySessionManager)
+├── Fastify REST routes (/api/*) → mirrors all IPC handlers
+├── WebSocket (/ws) → terminal stdio + push events
+└── @fastify/static serves @dev-hub/web dist/
+
+Browser
+├── React 19 (@dev-hub/web, same build)
+├── WsTransport → fetch(/api/*) + WebSocket(/ws)
+├── xterm.js terminal panels
+└── TanStack Query (queries via WsTransport.invoke)
+```
+
 
 ## Key Design Decisions
 

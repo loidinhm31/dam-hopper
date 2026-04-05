@@ -16,6 +16,8 @@ import { FREE_TERMINAL_PREFIX } from "@/hooks/useTerminalTree.js";
 import type { TreeCommand, TreeProject } from "@/hooks/useTerminalTree.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { SessionInfo } from "@/types/electron.js";
+import { api } from "@/api/client.js";
+import { generateUUID } from "@/lib/utils.js";
 
 /**
  * Maximum terminals kept mounted in DOM simultaneously.
@@ -38,6 +40,14 @@ interface LaunchFormState {
 /** State for the inline "Save as profile" prompt on a tab. */
 interface SavePromptState {
   sessionId: string;
+  name: string;
+  error?: string;
+}
+
+/** State for the inline "Save free terminal to project" prompt. */
+interface FreeTerminalSavePromptState {
+  sessionId: string;
+  projectName: string;
   name: string;
   error?: string;
 }
@@ -94,6 +104,7 @@ export function TerminalsPage() {
   const [mountedSessions, setMountedSessions] = useState<MountedSession[]>([]);
   const [launchForm, setLaunchForm] = useState<LaunchFormState | null>(null);
   const [savePrompt, setSavePrompt] = useState<SavePromptState | null>(null);
+  const [freeTerminalSavePrompt, setFreeTerminalSavePrompt] = useState<FreeTerminalSavePromptState | null>(null);
 
   const sessionMap = useMemo(
     () => new Map<string, SessionInfo>(sessions.map((s) => [s.id, s])),
@@ -208,7 +219,7 @@ export function TerminalsPage() {
   }
 
   function handleLaunchTerminal(projectName: string, cmd: TreeCommand) {
-    window.devhub.terminal
+    api.terminal
       .create({
         id: cmd.sessionId,
         project: projectName,
@@ -230,7 +241,7 @@ export function TerminalsPage() {
     const sanitizedName = (cmd.profileName ?? "terminal").replace(/ /g, "_");
     const sessionId = `terminal:${projectName}:${sanitizedName}:${Date.now()}`;
 
-    window.devhub.terminal
+    api.terminal
       .create({
         id: sessionId,
         project: projectName,
@@ -252,15 +263,16 @@ export function TerminalsPage() {
   function handleLaunchFormSubmit() {
     if (!launchForm) return;
     const { projectName, cwd, command } = launchForm;
+    const platform = (window as { devhub?: { platform?: string } }).devhub?.platform;
     const resolvedCommand =
-      command.trim() || (window.devhub.platform === "win32" ? "cmd.exe" : "bash");
+      command.trim() || (platform === "win32" ? "cmd.exe" : "bash");
     const resolvedCwd = cwd.trim() || undefined;
     // "_" segment marks this as an ad-hoc (unsaved) terminal — enables Save button
     const sessionId = `terminal:${projectName}:_:${Date.now()}`;
 
     setLaunchForm(null);
 
-    window.devhub.terminal
+    api.terminal
       .create({
         id: sessionId,
         project: projectName,
@@ -290,7 +302,7 @@ export function TerminalsPage() {
     // Kill live instances
     for (const id of instanceIds) {
       const s = sessionMap.get(id);
-      if (s?.alive) window.devhub.terminal.kill(id);
+      if (s?.alive) void api.terminal.kill(id);
     }
 
     // Close tabs for all instances (alive or dead)
@@ -306,7 +318,7 @@ export function TerminalsPage() {
     }
 
     const updated = (project.terminals ?? []).filter((t) => t.name !== profileName);
-    void window.devhub.config
+    void api.config
       .updateProject(projectName, { terminals: updated })
       .then(() => {
         void qc.invalidateQueries({ queryKey: ["projects"] });
@@ -343,7 +355,7 @@ export function TerminalsPage() {
 
     setSavePrompt(null);
 
-    void window.devhub.config
+    void api.config
       .updateProject(session.project ?? "", {
         terminals: [...(project.terminals ?? []), newProfile],
       })
@@ -354,8 +366,8 @@ export function TerminalsPage() {
   }
 
   function handleAddFreeTerminal() {
-    const sessionId = `${FREE_TERMINAL_PREFIX}${crypto.randomUUID()}`;
-    window.devhub.terminal
+    const sessionId = `${FREE_TERMINAL_PREFIX}${generateUUID()}`;
+    api.terminal
       .create({ id: sessionId, command: "", cols: 120, rows: 30 })
       .then(() => {
         void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
@@ -367,8 +379,8 @@ export function TerminalsPage() {
   }
 
   function handleLaunchFreeWithCommand(command: string) {
-    const sessionId = `${FREE_TERMINAL_PREFIX}${crypto.randomUUID()}`;
-    window.devhub.terminal
+    const sessionId = `${FREE_TERMINAL_PREFIX}${generateUUID()}`;
+    api.terminal
       .create({ id: sessionId, command, cols: 120, rows: 30 })
       .then(() => {
         void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
@@ -381,7 +393,7 @@ export function TerminalsPage() {
 
   function handleLaunchSuggestedCommand(projectName: string, command: string) {
     const sessionId = `terminal:${projectName}:_:${Date.now()}`;
-    window.devhub.terminal
+    api.terminal
       .create({ id: sessionId, project: projectName, command, cols: 120, rows: 30 })
       .then(() => {
         void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
@@ -427,8 +439,60 @@ export function TerminalsPage() {
   }
 
   function handleKillTerminal(sessionId: string) {
-    window.devhub.terminal.kill(sessionId);
+    void api.terminal.kill(sessionId);
     void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+  }
+
+  function handleRemoveFreeTerminal(sessionId: string) {
+    void api.terminal.remove(sessionId).then(() => {
+      void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+    });
+    // Close tab immediately (optimistic)
+    handleCloseTab(sessionId);
+  }
+
+  function handleOpenFreeTerminalSavePrompt(sessionId: string) {
+    if (projects.length === 0) return;
+    setFreeTerminalSavePrompt({
+      sessionId,
+      projectName: projects[0].name,
+      name: "",
+    });
+  }
+
+  function handleSaveFreeTerminalToProject() {
+    if (!freeTerminalSavePrompt) return;
+    const { sessionId, projectName, name } = freeTerminalSavePrompt;
+
+    const session = sessionMap.get(sessionId);
+    if (!session?.command) return;
+
+    const project = projects.find((p) => p.name === projectName);
+    if (!project) return;
+
+    const existingNames = (project.terminals ?? []).map((t) => t.name);
+    const error = validateProfileName(name, existingNames);
+    if (error) {
+      setFreeTerminalSavePrompt((p) => p ? { ...p, error } : p);
+      return;
+    }
+
+    const newProfile = {
+      name: name.trim(),
+      command: session.command,
+      cwd: session.cwd || ".",
+    };
+
+    setFreeTerminalSavePrompt(null);
+
+    void api.config
+      .updateProject(projectName, {
+        terminals: [...(project.terminals ?? []), newProfile],
+      })
+      .then(() => {
+        void qc.invalidateQueries({ queryKey: ["projects"] });
+        void qc.invalidateQueries({ queryKey: ["config"] });
+      });
   }
 
   const handleSessionExit = useCallback(
@@ -498,6 +562,8 @@ export function TerminalsPage() {
             onLaunchFreeWithCommand={handleLaunchFreeWithCommand}
             onSelectFreeTerminal={handleSelectTerminal}
             onKillFreeTerminal={handleKillTerminal}
+            onRemoveFreeTerminal={handleRemoveFreeTerminal}
+            onSaveFreeTerminal={handleOpenFreeTerminalSavePrompt}
           />
         )}
       </div>
@@ -512,6 +578,53 @@ export function TerminalsPage() {
 
       {/* Right panel — context-switching */}
       <div className="flex-1 flex flex-col min-w-0">
+        {/* Inline save free terminal to project prompt */}
+        {freeTerminalSavePrompt && projects.length > 0 && (
+          <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
+            <p className="text-xs font-medium text-[var(--color-text)] mb-2">
+              Save terminal as profile in project
+            </p>
+            <div className="flex gap-2 flex-wrap">
+              <select
+                value={freeTerminalSavePrompt.projectName}
+                onChange={(e) =>
+                  setFreeTerminalSavePrompt((p) => p ? { ...p, projectName: e.target.value, error: undefined } : p)
+                }
+                className={inputClass + " flex-1 min-w-32"}
+              >
+                {projects.map((p) => (
+                  <option key={p.name} value={p.name}>{p.name}</option>
+                ))}
+              </select>
+              <div className="flex-1 min-w-32">
+                <input
+                  type="text"
+                  autoFocus
+                  placeholder="Profile name"
+                  value={freeTerminalSavePrompt.name}
+                  onChange={(e) =>
+                    setFreeTerminalSavePrompt((p) => p ? { ...p, name: e.target.value, error: undefined } : p)
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleSaveFreeTerminalToProject();
+                    if (e.key === "Escape") setFreeTerminalSavePrompt(null);
+                  }}
+                  className={inputClass + " w-full" + (freeTerminalSavePrompt.error ? " border-[var(--color-danger)]" : "")}
+                />
+                {freeTerminalSavePrompt.error && (
+                  <p className="text-[10px] text-[var(--color-danger)] mt-0.5">{freeTerminalSavePrompt.error}</p>
+                )}
+              </div>
+              <Button size="sm" variant="primary" onClick={handleSaveFreeTerminalToProject}>
+                Save
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setFreeTerminalSavePrompt(null)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Inline launch form overlay */}
         {launchForm && (
           <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
@@ -584,6 +697,7 @@ export function TerminalsPage() {
               activeSessionId={activeTab}
               mountedSessions={mountedSessions}
               onSessionExit={handleSessionExit}
+              onNewTerminal={handleAddFreeTerminal}
             />
           ) : projects.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full gap-4 text-[var(--color-text-muted)]">

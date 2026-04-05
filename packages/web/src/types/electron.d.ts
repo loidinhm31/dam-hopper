@@ -127,6 +127,7 @@ export interface DevHubBridge {
     write: (id: string, data: string) => void;
     resize: (id: string, cols: number, rows: number) => void;
     kill: (id: string) => void;
+    remove: (id: string) => void;
     list: () => Promise<string[]>;
     listDetailed: () => Promise<SessionInfo[]>;
     getBuffer: (id: string) => Promise<string>;

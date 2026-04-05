@@ -44,12 +44,14 @@ export function CommandSuggestionInput({
       setHighlightedIndex((i) => Math.max(i - 1, -1));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if (highlightedIndex >= 0 && results[highlightedIndex]) {
+      if (!e.shiftKey && highlightedIndex >= 0 && results[highlightedIndex]) {
         onSelect(results[highlightedIndex].command);
         setQuery("");
         setOpen(false);
-      } else if (query.trim()) {
-        onSubmitCustom(query.trim());
+      } else {
+        // Shift+Enter → always open empty shell immediately, ignoring any typed command
+        // Plain Enter with no selection → submit whatever is in the input (empty = shell)
+        onSubmitCustom(e.shiftKey ? "" : query.trim());
         setQuery("");
         setOpen(false);
       }

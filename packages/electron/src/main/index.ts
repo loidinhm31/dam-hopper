@@ -16,6 +16,7 @@ import {
   type DevHubConfig,
 } from "@dev-hub/core";
 import { PtySessionManager } from "./pty/session-manager.js";
+import { ElectronEventSink } from "./pty/electron-event-sink.js";
 import { registerIpcHandlers } from "./ipc/index.js";
 import { registerPreWorkspaceHandlers } from "./ipc/workspace.js";
 import { getMainWindow } from "./window.js";
@@ -152,7 +153,7 @@ let fullIpcRegistered = false;
 let loadWorkspacePromise: Promise<void> | null = null;
 
 app.whenReady().then(async () => {
-  const ptyManager = new PtySessionManager();
+  const ptyManager = new PtySessionManager(new ElectronEventSink());
 
   const holder: CtxHolder = {
     current: null,

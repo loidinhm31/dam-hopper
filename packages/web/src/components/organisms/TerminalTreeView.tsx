@@ -8,6 +8,8 @@ import {
   Plus,
   Terminal,
   Trash2,
+  Save,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { CommandSuggestionInput } from "@/components/atoms/CommandSuggestionInput.js";
@@ -31,6 +33,8 @@ interface Props {
   onLaunchFreeWithCommand: (command: string) => void;
   onSelectFreeTerminal: (sessionId: string) => void;
   onKillFreeTerminal: (sessionId: string) => void;
+  onRemoveFreeTerminal: (sessionId: string) => void;
+  onSaveFreeTerminal: (sessionId: string) => void;
 }
 
 function StatusDot({ session }: { session?: SessionInfo | null }) {
@@ -151,12 +155,16 @@ function FreeTerminalRow({
   isSelected,
   onSelect,
   onKill,
+  onRemove,
+  onSave,
 }: {
   session: SessionInfo;
   label: string;
   isSelected: boolean;
   onSelect: () => void;
   onKill: () => void;
+  onRemove: () => void;
+  onSave: () => void;
 }) {
   return (
     <div
@@ -171,16 +179,36 @@ function FreeTerminalRow({
       <StatusDot session={session} />
       <Terminal className="h-3 w-3 shrink-0 opacity-60" />
       <span className="flex-1 truncate font-mono">{label}</span>
-      {session.alive && (
+      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+        {session.command && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onSave(); }}
+            title="Save to project profile"
+            className="rounded p-0.5 hover:bg-[var(--color-primary)]/20 hover:text-[var(--color-primary)] transition-colors"
+          >
+            <Save className="h-3 w-3" />
+          </button>
+        )}
+        {session.alive && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onKill(); }}
+            title="Kill terminal"
+            className="rounded p-0.5 hover:bg-amber-500/20 hover:text-amber-500 transition-colors"
+          >
+            <Square className="h-3 w-3" />
+          </button>
+        )}
         <button
           type="button"
-          onClick={(e) => { e.stopPropagation(); onKill(); }}
-          title="Kill terminal"
-          className="rounded p-0.5 opacity-0 group-hover:opacity-100 hover:bg-red-500/20 hover:text-red-500 transition-colors"
+          onClick={(e) => { e.stopPropagation(); onRemove(); }}
+          title="Remove terminal"
+          className="rounded p-0.5 hover:bg-red-500/20 hover:text-red-500 transition-colors"
         >
-          <Square className="h-3 w-3" />
+          <X className="h-3 w-3" />
         </button>
-      )}
+      </div>
     </div>
   );
 }
@@ -294,6 +322,8 @@ export function TerminalTreeView({
   onLaunchFreeWithCommand,
   onSelectFreeTerminal,
   onKillFreeTerminal,
+  onRemoveFreeTerminal,
+  onSaveFreeTerminal,
 }: Props) {
   const [activeSuggestionProject, setActiveSuggestionProject] = useState<string | null>(null);
   const [showFreeSuggestion, setShowFreeSuggestion] = useState(false);
@@ -438,6 +468,8 @@ export function TerminalTreeView({
                 isSelected={selectedId === `terminal:${session.id}`}
                 onSelect={() => onSelectFreeTerminal(session.id)}
                 onKill={() => onKillFreeTerminal(session.id)}
+                onRemove={() => onRemoveFreeTerminal(session.id)}
+                onSave={() => onSaveFreeTerminal(session.id)}
               />
             ))}
             {freeTerminals.length === 0 && !showFreeSuggestion && (
