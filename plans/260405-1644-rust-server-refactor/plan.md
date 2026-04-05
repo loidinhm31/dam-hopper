@@ -35,7 +35,7 @@ Replace `@dev-hub/core` + `@dev-hub/server` + `@dev-hub/electron` with a single 
 
 | # | Phase | Status | Effort | Link |
 |---|-------|--------|--------|------|
-| 1 | Rust project scaffold + config parsing | Pending | 8h | [phase-01](./phase-01-rust-scaffold-config.md) |
+| 1 | Rust project scaffold + config parsing | Done ✓ | 8h | [phase-01](./phase-01-rust-scaffold-config.md) |
 | 2 | PTY session management | Pending | 12h | [phase-02-pty-session-management.md](./phase-02-pty-session-management.md) |
 | 3 | Git operations | Pending | 12h | [phase-03-git-operations.md](./phase-03-git-operations.md) |
 | 4 | Agent store + commands | Pending | 10h | [phase-04-agent-store-commands.md](./phase-04-agent-store-commands.md) |

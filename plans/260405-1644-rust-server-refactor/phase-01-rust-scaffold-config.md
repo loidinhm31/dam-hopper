@@ -6,7 +6,7 @@
 
 ## Overview
 - **Priority**: P1 — foundation for all subsequent phases
-- **Status**: Pending
+- **Status**: DONE ✓ (2026-04-05)
 - **Effort**: 8h
 
 Initialize Rust project, establish module structure, implement TOML config parsing that's compatible with existing `dev-hub.toml` format.
@@ -73,15 +73,15 @@ server/
 
 ## Todo
 
-- [ ] Cargo project initialized with workspace structure
-- [ ] Config structs defined with serde derives
-- [ ] TOML parser reads existing dev-hub.toml correctly
-- [ ] Global config read/write works
-- [ ] Known workspaces CRUD
-- [ ] Env file loading + merge
-- [ ] Build/run preset system
-- [ ] Config discovery (walk-up)
-- [ ] Unit tests passing
+- [x] Cargo project initialized with workspace structure
+- [x] Config structs defined with serde derives
+- [x] TOML parser reads existing dev-hub.toml correctly
+- [x] Global config read/write works
+- [x] Known workspaces CRUD
+- [x] Env file loading + merge
+- [x] Build/run preset system
+- [x] Config discovery (walk-up)
+- [x] Unit tests passing (22/22)
 
 ## Success Criteria
 
