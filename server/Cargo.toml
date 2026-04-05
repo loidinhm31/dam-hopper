@@ -39,7 +39,11 @@ uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Async utilities — tokio-stream added in Phase 05 (PTY/event streaming)
+# PTY session management
+portable-pty = "0.8"
+
+# Async broadcast channel for PTY event fan-out
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 # Path utilities
 pathdiff = "0.2"

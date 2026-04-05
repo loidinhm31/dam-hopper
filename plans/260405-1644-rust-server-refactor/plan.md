@@ -1,7 +1,7 @@
 ---
 title: "Drop Electron, Rust Server, Separate Web App"
 description: "Replace Node.js core+server with Rust backend; keep React web as standalone SPA with configurable backend URL"
-status: pending
+status: in_progress
 priority: P1
 effort: 80h
 branch: main
@@ -36,7 +36,7 @@ Replace `@dev-hub/core` + `@dev-hub/server` + `@dev-hub/electron` with a single 
 | # | Phase | Status | Effort | Link |
 |---|-------|--------|--------|------|
 | 1 | Rust project scaffold + config parsing | Done ✓ | 8h | [phase-01](./phase-01-rust-scaffold-config.md) |
-| 2 | PTY session management | Pending | 12h | [phase-02-pty-session-management.md](./phase-02-pty-session-management.md) |
+| 2 | PTY session management | Done ✓ | 12h | [phase-02-pty-session-management.md](./phase-02-pty-session-management.md) |
 | 3 | Git operations | Pending | 12h | [phase-03-git-operations.md](./phase-03-git-operations.md) |
 | 4 | Agent store + commands | Pending | 10h | [phase-04-agent-store-commands.md](./phase-04-agent-store-commands.md) |
 | 5 | REST API + WebSocket layer | Pending | 12h | [phase-05-rest-ws-api.md](./phase-05-rest-ws-api.md) |

@@ -16,13 +16,22 @@ pub enum AppError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    #[error("PTY error: {0}")]
+    PtyError(String),
+
+    #[error("Session not found: {0}")]
+    SessionNotFound(String),
+
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 }
 
 impl AppError {
     pub fn status_code(&self) -> u16 {
         match self {
-            AppError::ConfigNotFound(_) | AppError::NotFound(_) => 404,
-            AppError::Config(_) => 400,
+            AppError::ConfigNotFound(_) | AppError::NotFound(_) | AppError::SessionNotFound(_) => 404,
+            AppError::Config(_) | AppError::InvalidInput(_) => 400,
             _ => 500,
         }
     }
