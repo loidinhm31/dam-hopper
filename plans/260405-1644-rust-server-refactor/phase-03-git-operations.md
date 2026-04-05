@@ -74,16 +74,16 @@ src/git/
 
 ## Todo
 
-- [ ] Git type definitions
-- [ ] Single repo: status
-- [ ] Single repo: fetch with progress
-- [ ] Single repo: pull (ff + fallback)
-- [ ] Single repo: push (git2 + CLI fallback)
-- [ ] Branch operations
-- [ ] Worktree operations
-- [ ] BulkGitService with Semaphore
-- [ ] Progress event broadcasting
-- [ ] Tests
+- [x] Git type definitions
+- [x] Single repo: status
+- [x] Single repo: fetch with progress
+- [x] Single repo: pull (ff + fallback)
+- [x] Single repo: push (CLI — credential reliability)
+- [x] Branch operations
+- [x] Worktree operations
+- [x] BulkGitService with Semaphore
+- [x] Progress event broadcasting
+- [x] Tests
 
 ## Success Criteria
 

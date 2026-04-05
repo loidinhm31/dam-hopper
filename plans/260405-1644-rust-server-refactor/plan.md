@@ -37,7 +37,7 @@ Replace `@dev-hub/core` + `@dev-hub/server` + `@dev-hub/electron` with a single 
 |---|-------|--------|--------|------|
 | 1 | Rust project scaffold + config parsing | Done ✓ | 8h | [phase-01](./phase-01-rust-scaffold-config.md) |
 | 2 | PTY session management | Done ✓ | 12h | [phase-02-pty-session-management.md](./phase-02-pty-session-management.md) |
-| 3 | Git operations | Pending | 12h | [phase-03-git-operations.md](./phase-03-git-operations.md) |
+| 3 | Git operations | Done ✓ | 12h | [phase-03-git-operations.md](./phase-03-git-operations.md) |
 | 4 | Agent store + commands | Pending | 10h | [phase-04-agent-store-commands.md](./phase-04-agent-store-commands.md) |
 | 5 | REST API + WebSocket layer | Pending | 12h | [phase-05-rest-ws-api.md](./phase-05-rest-ws-api.md) |
 | 6 | Web app: configurable backend | Pending | 6h | [phase-06-web-configurable-backend.md](./phase-06-web-configurable-backend.md) |

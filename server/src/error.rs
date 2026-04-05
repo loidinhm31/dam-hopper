@@ -25,12 +25,21 @@ pub enum AppError {
 
     #[error("Invalid input: {0}")]
     InvalidInput(String),
+
+    #[error("Git error: {0}")]
+    Git(String),
+
+    #[error("Git repository not found: {0}")]
+    GitNotFound(String),
 }
 
 impl AppError {
     pub fn status_code(&self) -> u16 {
         match self {
-            AppError::ConfigNotFound(_) | AppError::NotFound(_) | AppError::SessionNotFound(_) => 404,
+            AppError::ConfigNotFound(_)
+            | AppError::NotFound(_)
+            | AppError::SessionNotFound(_)
+            | AppError::GitNotFound(_) => 404,
             AppError::Config(_) | AppError::InvalidInput(_) => 400,
             _ => 500,
         }
