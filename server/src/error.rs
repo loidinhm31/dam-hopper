@@ -33,6 +33,14 @@ pub enum AppError {
     GitNotFound(String),
 }
 
+pub type Result<T> = std::result::Result<T, AppError>;
+
+impl From<serde_json::Error> for AppError {
+    fn from(e: serde_json::Error) -> Self {
+        AppError::Internal(e.to_string())
+    }
+}
+
 impl AppError {
     pub fn status_code(&self) -> u16 {
         match self {

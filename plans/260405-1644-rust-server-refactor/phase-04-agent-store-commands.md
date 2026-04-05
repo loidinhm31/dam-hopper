@@ -6,7 +6,7 @@
 
 ## Overview
 - **Priority**: P2
-- **Status**: Pending
+- **Status**: Done ✓
 - **Effort**: 10h
 
 Port agent store (scan, ship/unship/absorb, memory templates, import) and command registry.

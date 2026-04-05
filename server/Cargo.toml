@@ -54,6 +54,15 @@ git2 = "0.19"
 # Date/time formatting for git commit timestamps
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 
+# Handlebars templating for memory templates
+handlebars = "6"
+
+# Regex for URL validation in importer
+regex = "1"
+
+# YAML frontmatter parsing for agent store items
+serde_yaml_ng = "0.9"
+
 [dev-dependencies]
 tempfile = "3"
 
