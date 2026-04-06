@@ -6,7 +6,7 @@
 
 ## Overview
 - **Priority**: P2
-- **Status**: Pending
+- **Status**: Done ✓ (2026-04-06)
 - **Effort**: 4h
 
 Remove `@dev-hub/core`, `@dev-hub/electron`, `@dev-hub/server` once Rust server is validated.

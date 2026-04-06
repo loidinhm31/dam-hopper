@@ -1,36 +1,39 @@
 # dev-hub
 
-A desktop app for managing multi-project development environments. Manage git operations, builds, and running services across all your projects from a single Electron application with interactive PTY terminals.
+A web-based app for managing multi-project development environments. Manage git operations, builds, and running services across all your projects from a single React UI backed by a Rust server with interactive PTY terminals.
 
 ## Features
 
 - **Workspace config** — Define projects once in `dev-hub.toml`, then operate on all of them
 - **Bulk git operations** — Fetch, pull, push across all projects with concurrent progress
 - **Build management** — Build/run projects using per-type presets (Maven, Gradle, npm, pnpm, Cargo) or custom commands
-- **Interactive terminals** — Full PTY terminals (xterm.js + node-pty) per command — color, interactivity, scrollback
+- **Interactive terminals** — Full PTY terminals (xterm.js + portable-pty) per command — color, interactivity, scrollback
 - **Git worktrees** — Create, list, and remove worktrees interactively
 - **Workspace switching** — Switch between multiple workspace configs without restarting
+- **Agent store** — Distribute Claude/Gemini agent configs (skills, commands, hooks) across projects via symlinks
 
 ## Requirements
 
-- Node.js 20+
-- pnpm 9+
+- Rust 1.80+ (for server)
+- Node.js 20+ + pnpm 9+ (for web app development only)
 
 ## Installation
-
-Download the latest release for your platform from the releases page:
-
-- **Linux**: `Dev-Hub-*.AppImage` or `dev-hub_*_amd64.deb`
-- **Windows**: `Dev-Hub-Setup-*.exe` (installer) or `Dev-Hub-*.exe` (portable)
 
 ### Build from source
 
 ```bash
 git clone <repo>
 cd dev-hub
-pnpm install
-pnpm build
-pnpm package          # produces installers in packages/electron/release/
+
+# Build Rust server
+cd server && cargo build --release
+
+# Build web app
+cd .. && pnpm install && pnpm build
+
+# Run (web dist is served by the Rust server)
+DEV_HUB_WORKSPACE=/path/to/workspace ./server/target/release/dev-hub-server
+# Open http://localhost:4800 — token printed to terminal on startup
 ```
 
 ## Configuration
@@ -57,60 +60,45 @@ type = "pnpm"
 
 Supported project types: `maven`, `gradle`, `npm`, `pnpm`, `cargo`, `custom`.
 
-Each type has built-in default build/run commands. Override them with `build_command` / `run_command`.
-
-On first launch, Dev Hub will prompt you to select your workspace directory. The last-used workspace is remembered across sessions.
+Each type has built-in default build/run commands. Override with `build_command` / `run_command`.
 
 ## Development
 
 ```bash
-pnpm install        # install all dependencies
-pnpm dev            # core watch + Electron dev mode
-pnpm build          # build all packages
-pnpm lint           # lint packages/
-pnpm format         # format with Prettier
+# Install web dependencies
+pnpm install
 
-# Run tests
-cd packages/core && pnpm test
+# Web dev mode (Vite HMR on http://localhost:5173)
+pnpm dev
 
-# Package for distribution
-pnpm package:linux  # Linux: AppImage + deb
-pnpm package:win    # Windows: nsis + portable
+# Rust server (requires running Rust server separately)
+cd server && cargo run -- --workspace /path/to/workspace
+
+# Build everything
+pnpm build        # web app
+pnpm build:server # Rust release binary
+
+# Run Rust tests (121 tests)
+pnpm test
+# or: cd server && cargo test
+
+# Lint web
+pnpm lint
+
+# Format
+pnpm format
 ```
 
-### First-time setup (Linux)
-
-After `pnpm install`, two extra steps are required before running `pnpm dev:electron`:
-
-**1. Download the Electron binary**
-
-pnpm may skip the Electron post-install script. If you see `Error: Electron uninstall` when starting:
-
-```bash
-# Find your Electron version
-ls node_modules/.pnpm | grep "^electron@"
-# e.g. electron@34.5.8 — use that version below:
-node node_modules/.pnpm/electron@34.5.8/node_modules/electron/install.js
-```
-
-**2. Rebuild native modules for Electron**
-
-`node-pty` ships without Linux prebuilds and must be compiled against Electron's Node.js runtime. If you see `Failed to load native module: pty.node`:
-
-```bash
-# Use the same version found in step 1
-npx @electron/rebuild -f -v 34.5.8 -m packages/electron
-```
-
-Requires standard build tools: `python3`, `make`, `g++` (install via your distro's `base-devel` / `build-essential` package).
-
-> These steps only need to be repeated after `pnpm install` upgrades the Electron version.
-
-## Monorepo Structure
+## Repository Structure
 
 ```
+server/        # Rust binary (Axum + Tokio) — all backend logic
+  src/
+    config/    # TOML parsing, workspace/project discovery
+    pty/       # portable-pty session manager
+    git/       # git2-based git operations
+    agent_store/ # symlink-based agent config distribution
+    api/       # Axum REST routes + WebSocket handler
 packages/
-  core/      # @dev-hub/core — shared logic (config, git, build context)
-  electron/  # @dev-hub/electron — Electron main process + PTY + IPC
-  web/       # @dev-hub/web — React renderer + xterm.js terminals
+  web/         # @dev-hub/web — React 19 SPA (Vite + Tailwind v4)
 ```
