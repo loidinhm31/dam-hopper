@@ -8,7 +8,7 @@ import { useProjects, useTerminalSessions } from "@/api/queries.js";
 import { useIpcEvent } from "@/hooks/useSSEEvents.js";
 import { useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
-import type { SessionInfo } from "@/types/electron.js";
+import type { SessionInfo } from "@/api/client.js";
 import { api } from "@/api/client.js";
 
 interface ActivityEntry {

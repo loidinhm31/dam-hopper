@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useProjects } from "@/api/queries.js";
 import { useTerminalSessions } from "@/api/queries.js";
 import type { ProjectType } from "@/api/client.js";
-import type { SessionInfo } from "@/types/electron.js";
+import type { SessionInfo } from "@/api/client.js";
 
 export const FREE_TERMINAL_PREFIX = "free:" as const;
 

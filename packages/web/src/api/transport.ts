@@ -1,14 +1,12 @@
 /**
- * Transport interface — abstracts IPC (Electron) and WebSocket + REST (web mode).
- *
- * Detection: window.devhub present → IpcTransport (Electron), absent → WsTransport (browser).
+ * Transport interface — abstracts WebSocket + REST communication with the backend.
  *
  * initTransport() is called once in main.tsx before React renders.
  * All other modules use getTransport() to get the singleton.
  */
 
 export interface Transport {
-  /** Request/response — maps to ipcMain.handle (IPC) or fetch (REST) */
+  /** Request/response — maps to fetch (REST) */
   invoke<T>(channel: string, data?: unknown): Promise<T>;
 
   /** Terminal data stream subscription. Returns unsubscribe fn. */
@@ -29,15 +27,10 @@ export interface Transport {
 
 let _transport: Transport | null = null;
 
-/**
- * Initialize transport. Called once at app boot (main.tsx).
- * May be called again to reconfigure (see reconfigureTransport).
- */
 export function initTransport(transport: Transport): void {
   _transport = transport;
 }
 
-/** Get the initialized transport singleton. */
 export function getTransport(): Transport {
   if (!_transport) throw new Error("Transport not initialized. Call initTransport() first.");
   return _transport;
@@ -55,9 +48,4 @@ export function reconfigureTransport(transport: Transport): void {
 /** Reset for testing. */
 export function resetTransport(): void {
   _transport = null;
-}
-
-/** Detect which transport to use. */
-export function isWebMode(): boolean {
-  return typeof window === "undefined" || !(window as { devhub?: unknown }).devhub;
 }

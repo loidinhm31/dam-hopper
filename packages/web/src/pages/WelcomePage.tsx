@@ -1,10 +1,7 @@
 import { useState } from "react";
 import { FolderOpen, Loader2, ChevronRight } from "lucide-react";
 import { Button } from "@/components/atoms/Button.js";
-import { useKnownWorkspaces } from "@/api/queries.js";
-import { useInitWorkspace } from "@/api/queries.js";
-import { api } from "@/api/client.js";
-import { isWebMode } from "@/api/transport.js";
+import { useKnownWorkspaces, useInitWorkspace } from "@/api/queries.js";
 
 function abbreviatePath(p: string) {
   return p
@@ -25,18 +22,6 @@ export function WelcomePage({ onReady }: Props) {
   const isLoading = initMutation.isPending;
 
   const [webPath, setWebPath] = useState("");
-
-  async function openDialog() {
-    setError(null);
-    try {
-      const path = await api.workspace.openDialog();
-      if (!path) return;
-      await initMutation.mutateAsync(path);
-      onReady();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
 
   async function openWebPath() {
     if (!webPath.trim()) return;
@@ -85,47 +70,32 @@ export function WelcomePage({ onReady }: Props) {
           </p>
         </div>
 
-        {/* Open workspace: native dialog (Electron) or text path (web) */}
+        {/* Open workspace by path */}
         <div className="flex flex-col gap-3">
-          {isWebMode() ? (
-            <>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={webPath}
-                  onChange={(e) => setWebPath(e.target.value)}
-                  placeholder="/home/user/my-project"
-                  className="flex-1 rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2"
-                  style={{
-                    background: "var(--color-background)",
-                    borderColor: "var(--color-border)",
-                    color: "var(--color-text)",
-                  }}
-                  onKeyDown={(e) => e.key === "Enter" && void openWebPath()}
-                  disabled={isLoading}
-                />
-                <Button
-                  variant="primary"
-                  size="md"
-                  onClick={() => void openWebPath()}
-                  disabled={isLoading || !webPath.trim()}
-                >
-                  Open
-                </Button>
-              </div>
-            </>
-          ) : (
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={webPath}
+              onChange={(e) => setWebPath(e.target.value)}
+              placeholder="/home/user/my-project"
+              className="flex-1 rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2"
+              style={{
+                background: "var(--color-background)",
+                borderColor: "var(--color-border)",
+                color: "var(--color-text)",
+              }}
+              onKeyDown={(e) => e.key === "Enter" && void openWebPath()}
+              disabled={isLoading}
+            />
             <Button
               variant="primary"
               size="md"
-              onClick={() => void openDialog()}
-              disabled={isLoading}
-              className="w-full justify-center py-2.5 text-base"
+              onClick={() => void openWebPath()}
+              disabled={isLoading || !webPath.trim()}
             >
-              <FolderOpen className="h-4 w-4" />
-              Open Workspace…
+              Open
             </Button>
-          )}
+          </div>
         </div>
 
         {/* Recent workspaces */}

@@ -15,7 +15,7 @@ import { useResizeHandle } from "@/hooks/useResizeHandle.js";
 import { FREE_TERMINAL_PREFIX } from "@/hooks/useTerminalTree.js";
 import type { TreeCommand, TreeProject } from "@/hooks/useTerminalTree.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
-import type { SessionInfo } from "@/types/electron.js";
+import type { SessionInfo } from "@/api/client.js";
 import { api } from "@/api/client.js";
 import { generateUUID } from "@/lib/utils.js";
 

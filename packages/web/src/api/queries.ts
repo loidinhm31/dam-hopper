@@ -9,7 +9,7 @@ import type {
   DistributionMethod,
   RepoScanItem,
 } from "./client.js";
-import type { SessionInfo } from "@/types/electron.js";
+import type { SessionInfo } from "@/api/client.js";
 
 export function useWorkspaceStatus() {
   return useQuery({
