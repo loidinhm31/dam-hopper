@@ -349,17 +349,6 @@ export function useAgentStoreHealth() {
   });
 }
 
-export function useAddToStore() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (opts: { category: AgentItemCategory; name?: string }) =>
-      api.agentStore.add(opts.category, opts.name),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["agent-store"] });
-    },
-  });
-}
-
 export function useRemoveFromStore() {
   const qc = useQueryClient();
   return useMutation({

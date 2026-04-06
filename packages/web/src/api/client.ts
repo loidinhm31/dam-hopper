@@ -277,8 +277,6 @@ export const api = {
       getTransport().invoke<AgentStoreItem | null>("agent-store:get", { name, category }),
     getContent: (name: string, category: AgentItemCategory, fileName?: string) =>
       getTransport().invoke<string>("agent-store:getContent", { name, category, fileName }),
-    add: (category: AgentItemCategory, name?: string) =>
-      getTransport().invoke<AgentStoreItem | null>("agent-store:add", { category, name }),
     remove: (name: string, category: AgentItemCategory) =>
       getTransport().invoke<{ removed: boolean }>("agent-store:remove", { name, category }),
     ship: (

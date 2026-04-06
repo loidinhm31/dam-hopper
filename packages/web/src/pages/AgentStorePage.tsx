@@ -11,7 +11,6 @@ import { ImportDialog } from "@/components/agent-store/ImportDialog.js";
 import {
   useAgentStoreItems,
   useAgentStoreMatrix,
-  useAddToStore,
   useProjects,
 } from "@/api/queries.js";
 import type { AgentStoreItem } from "@/api/client.js";
@@ -22,8 +21,6 @@ export function AgentStorePage() {
   const { data: items = [], isLoading, isError: itemsError } = useAgentStoreItems();
   const { data: matrix = {}, isError: matrixError } = useAgentStoreMatrix();
   const { data: projects = [], isError: projectsError } = useProjects();
-  const addToStore = useAddToStore();
-
   const [activeTab, setActiveTab] = useState<Tab>("store");
   const [selectedItem, setSelectedItem] = useState<AgentStoreItem | null>(null);
   const [showShipDialog, setShowShipDialog] = useState(false);
@@ -65,16 +62,6 @@ export function AgentStorePage() {
             {activeTab === "store" && <HealthStatus />}
           </div>
 
-          {activeTab === "store" && (
-            <Button
-              variant="primary"
-              size="sm"
-              loading={addToStore.isPending}
-              onClick={() => addToStore.mutate({ category: "skill" })}
-            >
-              + Add
-            </Button>
-          )}
           {activeTab === "import" && (
             <Button
               variant="primary"

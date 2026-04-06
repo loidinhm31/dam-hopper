@@ -104,8 +104,6 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
       const qs = d.fileName ? `?fileName=${encodeURIComponent(d.fileName)}` : "";
       return { method: "GET", url: `/api/agent-store/${d.category}/${encodeURIComponent(d.name)}/content${qs}` };
     }
-    case "agent-store:add":
-      return { method: "GET", url: "/api/agent-store/_no_add" };
     case "agent-store:remove": {
       const d = data as { name: string; category: string };
       return { method: "DELETE", url: `/api/agent-store/${d.category}/${encodeURIComponent(d.name)}` };
