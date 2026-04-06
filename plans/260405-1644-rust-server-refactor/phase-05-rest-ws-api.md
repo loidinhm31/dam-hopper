@@ -6,7 +6,7 @@
 
 ## Overview
 - **Priority**: P1
-- **Status**: Pending
+- **Status**: Done ✓
 - **Effort**: 12h
 
 Wire all services into Axum HTTP routes + WebSocket handler. Must be API-compatible with current Node server so `WsTransport` works unchanged.

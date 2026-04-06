@@ -39,7 +39,7 @@ Replace `@dev-hub/core` + `@dev-hub/server` + `@dev-hub/electron` with a single 
 | 2 | PTY session management | Done ✓ | 12h | [phase-02-pty-session-management.md](./phase-02-pty-session-management.md) |
 | 3 | Git operations | Done ✓ | 12h | [phase-03-git-operations.md](./phase-03-git-operations.md) |
 | 4 | Agent store + commands | Done ✓ | 10h | [phase-04-agent-store-commands.md](./phase-04-agent-store-commands.md) |
-| 5 | REST API + WebSocket layer | Pending | 12h | [phase-05-rest-ws-api.md](./phase-05-rest-ws-api.md) |
+| 5 | REST API + WebSocket layer | Done ✓ | 12h | [phase-05-rest-ws-api.md](./phase-05-rest-ws-api.md) |
 | 6 | Web app: configurable backend | Pending | 6h | [phase-06-web-configurable-backend.md](./phase-06-web-configurable-backend.md) |
 | 7 | Web app: remove Electron deps | Pending | 4h | [phase-07-web-remove-electron.md](./phase-07-web-remove-electron.md) |
 | 8 | Integration testing + migration | Pending | 8h | [phase-08-integration-testing.md](./phase-08-integration-testing.md) |
