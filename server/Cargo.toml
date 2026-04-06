@@ -7,6 +7,10 @@ edition = "2021"
 name = "dev-hub-server"
 path = "src/main.rs"
 
+[features]
+# Bundle libgit2 + openssl statically — used for portable release binaries in CI
+vendored = ["git2/vendored-libgit2", "git2/vendored-openssl"]
+
 [dependencies]
 # Web framework
 axum = { version = "0.8", features = ["ws", "json", "macros"] }
@@ -74,3 +78,4 @@ tempfile = "3"
 opt-level = 3
 lto = true
 codegen-units = 1
+strip = true
