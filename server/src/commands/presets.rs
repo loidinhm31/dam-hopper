@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CommandDatabase {
@@ -9,7 +9,7 @@ pub struct CommandDatabase {
     pub commands: Vec<CommandDefinition>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandDefinition {
     pub name: String,
     pub command: String,

@@ -9,7 +9,8 @@ path = "src/main.rs"
 
 [dependencies]
 # Web framework
-axum = { version = "0.8", features = ["ws", "json"] }
+axum = { version = "0.8", features = ["ws", "json", "macros"] }
+axum-extra = { version = "0.10", features = ["cookie", "typed-header"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "fs"] }
@@ -34,6 +35,9 @@ dotenvy = "0.15"
 
 # ID generation
 uuid = { version = "1", features = ["v4"] }
+
+# Constant-time comparison for auth tokens
+subtle = "2"
 
 # Logging / tracing
 tracing = "0.1"

@@ -30,6 +30,7 @@ pub struct PtyCreateOpts {
     pub project: Option<String>,
 }
 
+#[derive(serde::Serialize)]
 pub struct SessionDetail {
     pub meta: SessionMeta,
     pub buffer_bytes: usize,
