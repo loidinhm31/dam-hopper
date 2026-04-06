@@ -1,7 +1,7 @@
 import { useRef, useEffect } from "react";
 import { X, Save } from "lucide-react";
 import { cn } from "@/lib/utils.js";
-import type { SessionInfo } from "@/types/electron.js";
+import type { SessionInfo } from "@/api/client.js";
 
 export interface TabEntry {
   sessionId: string;

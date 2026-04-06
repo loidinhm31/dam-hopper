@@ -26,9 +26,6 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
     case "workspace:known":    return { method: "GET", url: "/api/workspace/known" };
     case "workspace:addKnown": return { method: "POST", url: "/api/workspace/known", body: { path: data } };
     case "workspace:removeKnown": return { method: "DELETE", url: "/api/workspace/known", body: { path: data } };
-    case "workspace:open-dialog":
-      return { method: "GET", url: "/api/workspace/_no_dialog" };
-
     // Global config
     case "globalConfig:get": return { method: "GET", url: "/api/global-config" };
     case "globalConfig:updateDefaults": return { method: "POST", url: "/api/global-config/defaults", body: { defaults: data } };

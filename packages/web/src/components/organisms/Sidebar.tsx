@@ -6,7 +6,6 @@ import { ConnectionDot } from "@/components/atoms/ConnectionDot.js";
 import { useIpc } from "@/hooks/useSSE.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 import { ServerSettingsDialog } from "@/components/server-connection/server-settings-dialog.js";
-import { isWebMode } from "@/api/transport.js";
 
 const nav = [
   { to: "/", icon: LayoutDashboard, label: "DASHBOARD" },
@@ -106,7 +105,7 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
           >
             {collapsed ? <ChevronsRight size={14} /> : <ChevronsLeft size={14} />}
           </button>
-          {!collapsed && isWebMode() && (
+          {!collapsed && (
             <button
               onClick={() => setServerSettingsOpen(true)}
               title="Server connection settings"
@@ -119,7 +118,7 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
         <div className={cn(collapsed ? "flex justify-center px-0 py-0.5" : "px-1 py-0.5")}>
           <ConnectionDot status={status} collapsed={collapsed} />
         </div>
-        {collapsed && isWebMode() && (
+        {collapsed && (
           <button
             onClick={() => setServerSettingsOpen(true)}
             title="Server connection settings"

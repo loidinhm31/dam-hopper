@@ -9,7 +9,7 @@ import { WelcomePage } from "@/pages/WelcomePage.js";
 import { AgentStorePage } from "@/pages/AgentStorePage.js";
 import { LoginPage } from "@/pages/LoginPage.js";
 import { useWorkspaceStatus } from "@/api/queries.js";
-import { getTransport, isWebMode } from "@/api/transport.js";
+import { getTransport } from "@/api/transport.js";
 import { buildAuthHeaders, getServerUrl } from "@/api/server-config.js";
 
 /** Registers Ctrl+` as a global shortcut to open a new free terminal. */
@@ -76,15 +76,10 @@ function AuthenticatedApp() {
 }
 
 export function App() {
-  const qc = useQueryClient();
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
 
-  // Auth state for web mode
-  const [authChecked, setAuthChecked] = useState(!isWebMode());
-  const [authenticated, setAuthenticated] = useState(!isWebMode());
-
-  // In web mode: check auth status on mount
   useEffect(() => {
-    if (!isWebMode()) return;
     const serverUrl = getServerUrl();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
@@ -108,15 +103,6 @@ export function App() {
     return () => controller.abort();
   }, []);
 
-  // Electron mode: subscribe to workspace events at top level
-  useEffect(() => {
-    if (isWebMode()) return;
-    const transport = getTransport();
-    return transport.onEvent("workspace:changed", () => {
-      void qc.invalidateQueries({ queryKey: ["workspace-status"] });
-    });
-  }, [qc]);
-
   if (!authChecked) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[var(--color-background)]">
@@ -125,7 +111,7 @@ export function App() {
     );
   }
 
-  if (isWebMode() && !authenticated) {
+  if (!authenticated) {
     return (
       <LoginPage
         onLogin={() => setAuthenticated(true)}

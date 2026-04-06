@@ -14,7 +14,7 @@ import {
 import { cn } from "@/lib/utils.js";
 import { CommandSuggestionInput } from "@/components/atoms/CommandSuggestionInput.js";
 import type { TreeProject, TreeCommand } from "@/hooks/useTerminalTree.js";
-import type { SessionInfo } from "@/types/electron.js";
+import type { SessionInfo } from "@/api/client.js";
 import type { ProjectType } from "@/api/client.js";
 
 interface Props {

@@ -1,7 +1,16 @@
 // Transport-agnostic API client — delegates through the active Transport singleton.
-// In Electron: IpcTransport (window.devhub). In web mode: WsTransport (fetch + WebSocket).
 import { getTransport } from "./transport.js";
-import type { SessionInfo } from "../types/electron.js";
+
+export interface SessionInfo {
+  id: string;
+  project?: string;
+  command: string;
+  cwd: string;
+  type: "build" | "run" | "custom" | "shell" | "terminal" | "free" | "unknown";
+  alive: boolean;
+  exitCode?: number | null;
+  startedAt: number;
+}
 
 // ── Agent Store Types ─────────────────────────────────────────────────────────
 
@@ -217,8 +226,6 @@ export const api = {
     removeKnown: (path: string) => getTransport().invoke<{ removed: boolean }>("workspace:removeKnown", path),
     status: () => getTransport().invoke<WorkspaceStatus>("workspace:status"),
     init: (path: string) => getTransport().invoke<{ name: string; root: string }>("workspace:init", path),
-    // openDialog is Electron-only; web mode handles this in WelcomePage
-    openDialog: () => getTransport().invoke<string | null>("workspace:open-dialog"),
   },
   globalConfig: {
     get: () => getTransport().invoke<GlobalConfig>("globalConfig:get"),

@@ -1,10 +1,9 @@
-// Event bridge — routes main-process push events into the in-memory listener bus.
-// In Electron: forwards window.devhub.on() IPC events
-// In web mode: forwards WebSocket push events via WsTransport
+// Event bridge — routes backend push events into the in-memory listener bus.
+// Forwards WebSocket push events via WsTransport.
 
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { getTransport, isWebMode } from "../api/transport.js";
+import { getTransport } from "../api/transport.js";
 import type { ConnectionStatus } from "../components/atoms/ConnectionDot.js";
 
 export type IpcStatus = ConnectionStatus;
@@ -77,16 +76,14 @@ export function useIpc(): { status: IpcStatus } {
   const qc = useQueryClient();
 
   const [wsStatus, setWsStatus] = useState<IpcStatus>(() => {
-    if (!isWebMode()) return "connected";
     try {
       const t = getTransport();
-      return hasWsStatus(t) ? t.getStatus() : "connected";
+      return hasWsStatus(t) ? t.getStatus() : "connecting";
     } catch {
       return "connecting";
     }
   });
 
-  // Query invalidation — push events from transport
   useEffect(() => {
     initTransportListeners();
 
@@ -120,9 +117,7 @@ export function useIpc(): { status: IpcStatus } {
     return () => unsubs.forEach((fn) => fn());
   }, [qc]);
 
-  // WS connection status — web mode only
   useEffect(() => {
-    if (!isWebMode()) return;
     try {
       const t = getTransport();
       if (!hasWsStatus(t)) return;
