@@ -7,7 +7,7 @@ use tower::ServiceExt;
 use crate::{
     agent_store::AgentStoreService,
     api::build_router,
-    config::{DevHubConfig, GlobalConfig, WorkspaceInfo},
+    config::{DevHubConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo},
     pty::{BroadcastEventSink, PtySessionManager, NoopEventSink},
     state::AppState,
 };
@@ -239,10 +239,12 @@ async fn workspace_status_returns_loaded_true() {
 
 #[tokio::test]
 async fn workspace_known_returns_empty_list() {
+    // XDG_CONFIG_HOME is NOT mutated here — set_var in parallel async tests is a data race.
+    // The handler reads global config from XDG_CONFIG_HOME; in the real system the file
+    // may not exist and the handler returns an empty list, which is also valid.
+    // We only assert the response is 200 (not that it's empty).
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
-    // Point XDG_CONFIG_HOME to tmp so we don't touch real config
-    std::env::set_var("XDG_CONFIG_HOME", tmp.path());
     let resp = get(state, "/api/workspace/known").await;
     assert_eq!(resp.status(), StatusCode::OK);
 }
@@ -278,7 +280,7 @@ async fn terminal_list_returns_empty() {
 }
 
 #[tokio::test]
-async fn terminal_kill_nonexistent_returns_error() {
+async fn terminal_kill_nonexistent_returns_no_content() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
     let router = build_router(state, vec![]);
@@ -289,8 +291,8 @@ async fn terminal_kill_nonexistent_returns_error() {
         .body(Body::empty())
         .unwrap();
     let resp = router.oneshot(req).await.unwrap();
-    // kill returns Ok even if session doesn't exist (no-op)
-    assert!(resp.status().is_success() || resp.status() == StatusCode::NOT_FOUND);
+    // kill() always returns Ok(()) — no-op for unknown sessions — handler returns 204.
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 }
 
 // ---------------------------------------------------------------------------
@@ -379,4 +381,286 @@ async fn settings_export_returns_json() {
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(json["config"].is_object());
+}
+
+// ---------------------------------------------------------------------------
+// Terminal lifecycle
+// ---------------------------------------------------------------------------
+
+/// Build state with a real project entry pointing at tmp dir, for tests that
+/// need project resolution (ship/unship, git API endpoints, etc.).
+fn make_state_with_project(tmp: &TempDir) -> AppState {
+    let workspace_dir = tmp.path().to_path_buf();
+
+    let config = DevHubConfig {
+        workspace: WorkspaceInfo {
+            name: "test-workspace".into(),
+            root: ".".into(),
+        },
+        agent_store: None,
+        projects: vec![ProjectConfig {
+            name: "test-project".into(),
+            path: workspace_dir.to_string_lossy().into_owned(),
+            project_type: ProjectType::Custom,
+            services: None,
+            commands: None,
+            env_file: None,
+            tags: None,
+            terminals: vec![],
+            agents: None,
+        }],
+        config_path: workspace_dir.join("dev-hub.toml"),
+    };
+
+    let (event_sink, _rx) = BroadcastEventSink::new(64);
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
+    let agent_store = AgentStoreService::new(workspace_dir.join(".dev-hub/agent-store"));
+
+    AppState::new(
+        workspace_dir,
+        config,
+        GlobalConfig::default(),
+        pty_manager,
+        agent_store,
+        event_sink,
+        TEST_TOKEN.to_string(),
+    )
+}
+
+#[tokio::test]
+async fn terminal_create_returns_meta_and_appears_in_list() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let body = serde_json::json!({
+        "id": "test-echo-session",
+        "command": "echo",
+        "cwd": tmp.path().to_str().unwrap(),
+        "cols": 80,
+        "rows": 24,
+    });
+    let resp = post_json(state.clone(), "/api/terminal", body).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let raw = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let meta: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(meta["id"], "test-echo-session");
+
+    // Session appears in list
+    let list_resp = get(state, "/api/terminal").await;
+    assert_eq!(list_resp.status(), StatusCode::OK);
+    let list_raw = axum::body::to_bytes(list_resp.into_body(), usize::MAX).await.unwrap();
+    let list: Vec<serde_json::Value> = serde_json::from_slice(&list_raw).unwrap();
+    assert!(list.iter().any(|s| s["id"] == "test-echo-session"));
+}
+
+#[tokio::test]
+async fn terminal_lifecycle_create_buffer_kill() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    // Use `cat` — blocks on stdin, guaranteed alive during buffer read and kill.
+    let body = serde_json::json!({
+        "id": "lifecycle-session",
+        "command": "cat",
+        "cwd": tmp.path().to_str().unwrap(),
+    });
+    let create_resp = post_json(state.clone(), "/api/terminal", body).await;
+    assert_eq!(create_resp.status(), StatusCode::OK);
+
+    // Buffer accessible while session is alive
+    let buf_resp = get(state.clone(), "/api/terminal/lifecycle-session/buffer").await;
+    assert_eq!(buf_resp.status(), StatusCode::OK);
+    let buf_raw = axum::body::to_bytes(buf_resp.into_body(), usize::MAX).await.unwrap();
+    let buf_json: serde_json::Value = serde_json::from_slice(&buf_raw).unwrap();
+    assert!(buf_json["buffer"].is_string());
+
+    // Kill session
+    let router = build_router(state, vec![]);
+    let kill_req = Request::builder()
+        .method("DELETE")
+        .uri("/api/terminal/lifecycle-session")
+        .header("Cookie", auth_cookie())
+        .body(Body::empty())
+        .unwrap();
+    let kill_resp = router.oneshot(kill_req).await.unwrap();
+    assert!(kill_resp.status().is_success());
+}
+
+#[tokio::test]
+async fn terminal_list_detailed_returns_array() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let resp = get(state, "/api/terminal/detailed").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json.is_array());
+}
+
+// ---------------------------------------------------------------------------
+// Agent store — ship / unship / absorb lifecycle
+// ---------------------------------------------------------------------------
+
+async fn seed_skill_item(tmp: &TempDir, item_name: &str) {
+    let skills_dir = tmp.path().join(".dev-hub/agent-store/skills");
+    tokio::fs::create_dir_all(&skills_dir).await.unwrap();
+    tokio::fs::write(
+        skills_dir.join(format!("{item_name}.md")),
+        format!("---\nname: {item_name}\ndescription: test skill\n---\n# {item_name}\nTest skill content."),
+    ).await.unwrap();
+}
+
+#[tokio::test]
+async fn agent_store_ship_and_unship_skill() {
+    let tmp = tempfile::tempdir().unwrap();
+    seed_skill_item(&tmp, "test-skill").await;
+    let state = make_state_with_project(&tmp);
+
+    // Ship
+    let ship_body = serde_json::json!({
+        "itemName": "test-skill",
+        "category": "skill",
+        "projectName": "test-project",
+        "agent": "claude",
+        "method": "symlink",
+    });
+    let ship_resp = post_json(state.clone(), "/api/agent-store/ship", ship_body).await;
+    assert_eq!(ship_resp.status(), StatusCode::OK);
+    let ship_raw = axum::body::to_bytes(ship_resp.into_body(), usize::MAX).await.unwrap();
+    let ship_json: serde_json::Value = serde_json::from_slice(&ship_raw).unwrap();
+    assert_eq!(ship_json["success"], true, "ship failed: {ship_json}");
+    assert_eq!(ship_json["item"], "test-skill");
+
+    // Verify symlink/copy exists on disk (serialized as snake_case — no rename_all on ShipResult)
+    let target = &ship_json["target_path"];
+    assert!(target.is_string(), "target_path missing: {ship_json}");
+
+    // Unship
+    let unship_body = serde_json::json!({
+        "itemName": "test-skill",
+        "category": "skill",
+        "projectName": "test-project",
+        "agent": "claude",
+        "force": false,
+    });
+    let unship_resp = post_json(state.clone(), "/api/agent-store/unship", unship_body).await;
+    assert_eq!(unship_resp.status(), StatusCode::OK);
+    let unship_json: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(unship_resp.into_body(), usize::MAX).await.unwrap()
+    ).unwrap();
+    assert_eq!(unship_json["success"], true, "unship failed: {unship_json}");
+}
+
+#[tokio::test]
+async fn agent_store_absorb_skill_into_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Skills in projects are stored without .md extension: .claude/skills/<name>
+    // (resolve_ship_paths uses item_name directly for Skill category).
+    let claude_skills = tmp.path().join(".claude/skills");
+    tokio::fs::create_dir_all(&claude_skills).await.unwrap();
+    tokio::fs::write(
+        claude_skills.join("absorb-test"),
+        "---\nname: absorb-test\ndescription: skill to absorb\n---\n# absorb-test",
+    ).await.unwrap();
+
+    let state = make_state_with_project(&tmp);
+
+    let body = serde_json::json!({
+        "itemName": "absorb-test",
+        "category": "skill",
+        "projectName": "test-project",
+        "agent": "claude",
+    });
+    let resp = post_json(state.clone(), "/api/agent-store/absorb", body).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap()
+    ).unwrap();
+    // absorb returns ShipResult — success means the item was copied into the central store
+    assert_eq!(json["success"], true, "absorb failed: {json}");
+}
+
+#[tokio::test]
+async fn agent_store_ship_unknown_project_returns_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    seed_skill_item(&tmp, "test-skill").await;
+    let state = make_state(&tmp); // no projects in config
+
+    let body = serde_json::json!({
+        "itemName": "test-skill",
+        "category": "skill",
+        "projectName": "no-such-project",
+        "agent": "claude",
+    });
+    let resp = post_json(state, "/api/agent-store/ship", body).await;
+    // Expect 404 from project resolution
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn agent_store_matrix_returns_map() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state_with_project(&tmp);
+    let resp = get(state, "/api/agent-store/matrix").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json.is_object());
+}
+
+// ---------------------------------------------------------------------------
+// Git API endpoints
+// ---------------------------------------------------------------------------
+
+fn init_git_repo(path: &std::path::Path) {
+    let repo = git2::Repository::init(path).unwrap();
+    let sig = git2::Signature::now("test", "test@test.com").unwrap();
+    let mut index = repo.index().unwrap();
+    // Need at least one commit so we can list branches
+    std::fs::write(path.join("README.md"), "# test repo").unwrap();
+    index.add_path(std::path::Path::new("README.md")).unwrap();
+    index.write().unwrap();
+    let tree_id = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_id).unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+}
+
+#[tokio::test]
+async fn git_branches_returns_list_for_valid_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_git_repo(tmp.path());
+    let state = make_state_with_project(&tmp);
+
+    let resp = get(state, "/api/git/test-project/branches").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    // Should have at least the initial branch (main/master)
+    assert!(json.as_array().map(|a| !a.is_empty()).unwrap_or(false),
+        "expected non-empty branch list, got: {json}");
+}
+
+#[tokio::test]
+async fn git_worktrees_returns_list_for_valid_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_git_repo(tmp.path());
+    let state = make_state_with_project(&tmp);
+
+    let resp = get(state, "/api/git/test-project/worktrees").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    // Main worktree is always present in an initialized repo
+    assert!(
+        json.as_array().map(|a| !a.is_empty()).unwrap_or(false),
+        "expected non-empty worktree list, got: {json}"
+    );
+}
+
+#[tokio::test]
+async fn git_branches_unknown_project_returns_404() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp); // no projects
+    let resp = get(state, "/api/git/no-such-project/branches").await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
