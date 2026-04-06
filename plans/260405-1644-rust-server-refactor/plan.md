@@ -44,7 +44,7 @@ Replace `@dev-hub/core` + `@dev-hub/server` + `@dev-hub/electron` with a single 
 | 7 | Web app: remove Electron deps | Done ✓ | 4h | [phase-07-web-remove-electron.md](./phase-07-web-remove-electron.md) |
 | 8 | Integration testing + migration | Done ✓ | 8h | [phase-08-integration-testing.md](./phase-08-integration-testing.md) |
 | 9 | Cleanup: remove Node packages | Done ✓ | 4h | [phase-09-cleanup.md](./phase-09-cleanup.md) |
-| 10 | CI/CD + distribution | Pending | 4h | [phase-10-ci-cd.md](./phase-10-ci-cd.md) |
+| 10 | CI/CD + distribution | Done ✓ | 4h | [phase-10-ci-cd.md](./phase-10-ci-cd.md) |
 
 ## Dependencies
 

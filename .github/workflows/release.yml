@@ -1,0 +1,126 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build (linux-x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+
+      - name: Build release binary
+        run: cd server && cargo build --release --features vendored
+
+      - name: Package binary
+        run: |
+          cd server/target/release
+          tar czf dev-hub-server-linux-x86_64.tar.gz dev-hub-server
+          sha256sum dev-hub-server-linux-x86_64.tar.gz > dev-hub-server-linux-x86_64.tar.gz.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-binary
+          path: |
+            server/target/release/dev-hub-server-linux-x86_64.tar.gz
+            server/target/release/dev-hub-server-linux-x86_64.tar.gz.sha256
+          retention-days: 7
+
+  build-windows:
+    name: Build (windows-x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+
+      - name: Build release binary
+        run: cd server && cargo build --release --features vendored
+
+      - name: Package binary
+        run: |
+          Compress-Archive -Path server/target/release/dev-hub-server.exe -DestinationPath dev-hub-server-windows-x86_64.zip
+          $hash = (Get-FileHash dev-hub-server-windows-x86_64.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  dev-hub-server-windows-x86_64.zip" | Out-File -Encoding ascii dev-hub-server-windows-x86_64.zip.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-binary
+          path: |
+            dev-hub-server-windows-x86_64.zip
+            dev-hub-server-windows-x86_64.zip.sha256
+          retention-days: 7
+
+  build-web:
+    name: Build web dist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - run: pnpm install
+      - run: pnpm build
+
+      - name: Package web dist
+        run: |
+          tar czf web-dist.tar.gz -C packages/web dist
+          sha256sum web-dist.tar.gz > web-dist.tar.gz.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: |
+            web-dist.tar.gz
+            web-dist.tar.gz.sha256
+          retention-days: 7
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-windows, build-web]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          generate_release_notes: true
+          files: |
+            artifacts/linux-binary/dev-hub-server-linux-x86_64.tar.gz
+            artifacts/linux-binary/dev-hub-server-linux-x86_64.tar.gz.sha256
+            artifacts/windows-binary/dev-hub-server-windows-x86_64.zip
+            artifacts/windows-binary/dev-hub-server-windows-x86_64.zip.sha256
+            artifacts/web-dist/web-dist.tar.gz
+            artifacts/web-dist/web-dist.tar.gz.sha256

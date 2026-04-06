@@ -1,0 +1,41 @@
+[Unit]
+Description=Dev Hub Server
+After=network.target
+Documentation=https://github.com/loidinhm31/dev-hub
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=%h
+
+# Binary location — adjust if installed elsewhere
+ExecStart=/usr/local/bin/dev-hub-server --workspace %h/workspace --port 4800
+
+# Generate auth token on first run; failure blocks startup
+ExecStartPre=/bin/sh -c \
+  'test -f %h/.config/dev-hub/server-token || \
+   /usr/local/bin/dev-hub-server --new-token --workspace %h/workspace || \
+   { echo "dev-hub: failed to generate auth token" >&2; exit 1; }'
+
+Restart=on-failure
+RestartSec=5s
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectClock=true
+ProtectHostname=true
+LockPersonality=true
+
+# Home is hidden except for explicitly listed paths
+ProtectHome=yes
+BindPaths=%h/.config/dev-hub
+BindPaths=%h/workspace
+
+# Network: allow TCP/Unix sockets only (no raw sockets, netlink etc.)
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
