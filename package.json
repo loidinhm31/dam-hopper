@@ -3,36 +3,26 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "pnpm -r build",
-    "dev": "pnpm --filter @dev-hub/core dev & pnpm --filter @dev-hub/electron dev",
-    "dev:electron": "pnpm --filter @dev-hub/electron dev",
-    "dev:server": "pnpm build:server && node packages/server/dist/index.js",
-    "dev:server:watch": "pnpm --filter @dev-hub/core build && pnpm --filter @dev-hub/web build && pnpm --filter @dev-hub/server dev",
-    "build:electron": "pnpm --filter @dev-hub/electron build",
-    "build:server": "pnpm --filter @dev-hub/core build && pnpm --filter @dev-hub/web build && pnpm --filter @dev-hub/server build",
-    "serve": "node packages/server/dist/index.js",
-    "package": "pnpm --filter @dev-hub/electron package",
-    "package:linux": "pnpm --filter @dev-hub/electron package:linux",
-    "package:win": "pnpm --filter @dev-hub/electron package:win",
+    "build": "pnpm --filter @dev-hub/web build",
+    "dev": "pnpm --filter @dev-hub/web dev",
+    "dev:server": "cd server && cargo run",
+    "dev:server:watch": "cd server && cargo watch -x run",
+    "build:server": "cd server && cargo build --release",
+    "serve": "cd server && cargo run --release",
     "lint": "eslint packages/",
     "format": "prettier --write .",
-    "test": "vitest",
-    "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "check": "pnpm build && pnpm lint && pnpm test:run"
+    "test": "cd server && cargo test",
+    "test:run": "cd server && cargo test",
+    "check": "pnpm build && pnpm lint && cd server && cargo test"
   },
   "engines": {
     "node": ">=20",
     "pnpm": ">=9"
   },
   "devDependencies": {
-    "@dev-hub/core": "workspace:*",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0",
-    "prettier": "^3.0.0",
-    "tsx": "^4.21.0",
-    "typescript": "^5.7.0",
-    "vitest": "^4.1.0"
+    "prettier": "^3.0.0"
   }
 }

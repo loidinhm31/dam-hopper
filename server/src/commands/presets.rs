@@ -17,11 +17,11 @@ pub struct CommandDefinition {
     pub tags: Vec<String>,
 }
 
-static MAVEN_JSON: &str = include_str!("../../../packages/core/src/commands/definitions/maven.json");
-static GRADLE_JSON: &str = include_str!("../../../packages/core/src/commands/definitions/gradle.json");
-static NPM_JSON: &str = include_str!("../../../packages/core/src/commands/definitions/npm.json");
-static PNPM_JSON: &str = include_str!("../../../packages/core/src/commands/definitions/pnpm.json");
-static CARGO_JSON: &str = include_str!("../../../packages/core/src/commands/definitions/cargo.json");
+static MAVEN_JSON: &str = include_str!("definitions/maven.json");
+static GRADLE_JSON: &str = include_str!("definitions/gradle.json");
+static NPM_JSON: &str = include_str!("definitions/npm.json");
+static PNPM_JSON: &str = include_str!("definitions/pnpm.json");
+static CARGO_JSON: &str = include_str!("definitions/cargo.json");
 
 pub fn load_all_databases() -> Vec<CommandDatabase> {
     [MAVEN_JSON, GRADLE_JSON, NPM_JSON, PNPM_JSON, CARGO_JSON]

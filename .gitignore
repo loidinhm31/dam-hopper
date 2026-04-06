@@ -3,4 +3,4 @@ dist/
 .env
 *.local
 .idea
-packages/electron/out/
+server/target/
