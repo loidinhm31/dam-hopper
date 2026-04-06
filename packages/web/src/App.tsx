@@ -10,6 +10,7 @@ import { AgentStorePage } from "@/pages/AgentStorePage.js";
 import { LoginPage } from "@/pages/LoginPage.js";
 import { useWorkspaceStatus } from "@/api/queries.js";
 import { getTransport, isWebMode } from "@/api/transport.js";
+import { buildAuthHeaders, getServerUrl } from "@/api/server-config.js";
 
 /** Registers Ctrl+` as a global shortcut to open a new free terminal. */
 function GlobalShortcuts() {
@@ -84,7 +85,15 @@ export function App() {
   // In web mode: check auth status on mount
   useEffect(() => {
     if (!isWebMode()) return;
-    fetch("/api/auth/status")
+    const serverUrl = getServerUrl();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    fetch(`${serverUrl}/api/auth/status`, {
+      headers: buildAuthHeaders(),
+      credentials: "include",
+      signal: controller.signal,
+    })
       .then((r) => r.json() as Promise<{ authenticated: boolean }>)
       .then(({ authenticated: ok }) => {
         setAuthenticated(ok);
@@ -93,7 +102,10 @@ export function App() {
       .catch(() => {
         setAuthenticated(false);
         setAuthChecked(true);
-      });
+      })
+      .finally(() => clearTimeout(timeout));
+
+    return () => controller.abort();
   }, []);
 
   // Electron mode: subscribe to workspace events at top level

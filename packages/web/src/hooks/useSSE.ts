@@ -2,11 +2,12 @@
 // In Electron: forwards window.devhub.on() IPC events
 // In web mode: forwards WebSocket push events via WsTransport
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getTransport, isWebMode } from "../api/transport.js";
+import type { ConnectionStatus } from "../components/atoms/ConnectionDot.js";
 
-export type IpcStatus = "connected";
+export type IpcStatus = ConnectionStatus;
 
 export interface IpcEvent {
   type: string;
@@ -30,7 +31,6 @@ function dispatch(type: string, data: unknown) {
   listeners.get("*")?.forEach((cb) => cb(event));
 }
 
-// Push event channel names (same for both transports)
 const PUSH_EVENT_CHANNELS = [
   "git:progress",
   "status:changed",
@@ -39,7 +39,6 @@ const PUSH_EVENT_CHANNELS = [
   "terminal:changed",
 ] as const;
 
-// Register transport listeners once at module level (not per-component)
 let initialized = false;
 const unsubscribers: Array<() => void> = [];
 
@@ -54,9 +53,40 @@ function initTransportListeners(): void {
   }
 }
 
+/**
+ * Reset transport listeners — call before reconfigureTransport() so the new
+ * transport gets fresh subscriptions when useIpc() re-runs.
+ */
+export function resetTransportListeners(): void {
+  unsubscribers.forEach((fn) => fn());
+  unsubscribers.length = 0;
+  initialized = false;
+}
+
+/** Duck-type interface for WsTransport status methods. Avoids a hard import cycle. */
+interface HasWsStatus {
+  getStatus(): IpcStatus;
+  onStatusChange(cb: (status: IpcStatus) => void): () => void;
+}
+
+function hasWsStatus(t: unknown): t is HasWsStatus {
+  return typeof t === "object" && t !== null && "getStatus" in t && "onStatusChange" in t;
+}
+
 export function useIpc(): { status: IpcStatus } {
   const qc = useQueryClient();
 
+  const [wsStatus, setWsStatus] = useState<IpcStatus>(() => {
+    if (!isWebMode()) return "connected";
+    try {
+      const t = getTransport();
+      return hasWsStatus(t) ? t.getStatus() : "connected";
+    } catch {
+      return "connecting";
+    }
+  });
+
+  // Query invalidation — push events from transport
   useEffect(() => {
     initTransportListeners();
 
@@ -78,7 +108,7 @@ export function useIpc(): { status: IpcStatus } {
       }),
 
       subscribeIpc("workspace:changed", () => {
-        void qc.invalidateQueries(); // Nuclear — full workspace change
+        void qc.invalidateQueries();
         void qc.invalidateQueries({ queryKey: ["known-workspaces"] });
       }),
 
@@ -90,5 +120,17 @@ export function useIpc(): { status: IpcStatus } {
     return () => unsubs.forEach((fn) => fn());
   }, [qc]);
 
-  return { status: "connected" };
+  // WS connection status — web mode only
+  useEffect(() => {
+    if (!isWebMode()) return;
+    try {
+      const t = getTransport();
+      if (!hasWsStatus(t)) return;
+      return t.onStatusChange(setWsStatus);
+    } catch {
+      return;
+    }
+  }, []);
+
+  return { status: wsStatus };
 }

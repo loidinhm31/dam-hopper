@@ -32,10 +32,34 @@ fn unauthorized() -> Response {
 }
 
 // ---------------------------------------------------------------------------
+// Token extraction helpers
+// ---------------------------------------------------------------------------
+
+/// Extract token from `Authorization: Bearer <token>` header, falling back to cookie.
+/// Accepts both to allow same-origin cookie auth and cross-origin Bearer auth.
+fn extract_token<'a>(request: &'a Request, jar: &'a CookieJar) -> Option<&'a str> {
+    // Prefer Authorization header (cross-origin Bearer)
+    if let Some(val) = request.headers().get(header::AUTHORIZATION) {
+        if let Ok(s) = val.to_str() {
+            if let Some(token) = s.strip_prefix("Bearer ") {
+                return Some(token);
+            }
+        }
+    }
+    // Fall back to httpOnly cookie (same-origin)
+    jar.get(AUTH_COOKIE).map(|c| c.value())
+}
+
+fn token_matches(provided: &str, expected: &[u8]) -> bool {
+    provided.as_bytes().ct_eq(expected).into()
+}
+
+// ---------------------------------------------------------------------------
 // Auth middleware
 // ---------------------------------------------------------------------------
 
-/// Validates `devhub-auth` cookie on every protected request.
+/// Validates auth on every protected request.
+/// Accepts `Authorization: Bearer <token>` header (cross-origin) or `devhub-auth` cookie (same-origin).
 /// Constant-time comparison prevents timing side-channels.
 pub async fn require_auth(
     State(state): State<AppState>,
@@ -45,12 +69,11 @@ pub async fn require_auth(
 ) -> Response {
     let token_bytes = state.auth_token.as_bytes();
 
-    let provided = jar
-        .get(AUTH_COOKIE)
-        .map(|c| c.value().as_bytes().ct_eq(token_bytes).into())
+    let ok = extract_token(&request, &jar)
+        .map(|t| token_matches(t, token_bytes))
         .unwrap_or(false);
 
-    if !provided {
+    if !ok {
         return unauthorized();
     }
 
@@ -105,17 +128,17 @@ pub async fn logout() -> Response {
         .into_response()
 }
 
-/// GET /api/auth/status — returns 200 if cookie is valid, 401 otherwise.
-/// Used by web app to check auth state on load (this endpoint is unprotected;
-/// the middleware handles the actual check inside protected routes).
+/// GET /api/auth/status — returns 200 if authenticated, 401 otherwise.
+/// Accepts Bearer header (cross-origin) or cookie (same-origin).
+/// Unprotected endpoint — auth middleware not applied here.
 pub async fn status(
     State(state): State<AppState>,
     jar: CookieJar,
+    request: Request,
 ) -> Response {
     let token_bytes = state.auth_token.as_bytes();
-    let ok: bool = jar
-        .get(AUTH_COOKIE)
-        .map(|c| c.value().as_bytes().ct_eq(token_bytes).into())
+    let ok = extract_token(&request, &jar)
+        .map(|t| token_matches(t, token_bytes))
         .unwrap_or(false);
 
     if ok {

@@ -1,22 +1,41 @@
 import { cn } from "@/lib/utils.js";
 
-// IPC is always connected — status is always "connected"
+export type ConnectionStatus = "connected" | "connecting" | "disconnected" | "error";
+
 interface Props {
-  status: "connected";
+  status: ConnectionStatus;
   collapsed?: boolean;
 }
 
+const DOT_CLASS: Record<ConnectionStatus, string> = {
+  connected:    "bg-[var(--color-success)] status-glow-green",
+  connecting:   "bg-yellow-400 animate-pulse",
+  disconnected: "bg-[var(--color-text-muted)]",
+  error:        "bg-red-500",
+};
+
+const LABEL_CLASS: Record<ConnectionStatus, string> = {
+  connected:    "text-[var(--color-success)]/70",
+  connecting:   "text-yellow-400/70",
+  disconnected: "text-[var(--color-text-muted)]/70",
+  error:        "text-red-400/70",
+};
+
+const LABELS: Record<ConnectionStatus, string> = {
+  connected:    "online",
+  connecting:   "connecting",
+  disconnected: "offline",
+  error:        "error",
+};
+
 export function ConnectionDot({ status, collapsed = false }: Props) {
   return (
-    <span className="flex items-center gap-1.5 text-xs text-[var(--color-text-muted)] tracking-wide">
-      <span
-        className={cn(
-          "inline-block h-1.5 w-1.5 rounded-full status-glow-green shrink-0",
-          status === "connected" && "bg-[var(--color-success)]",
-        )}
-      />
+    <span className="flex items-center gap-1.5 text-xs tracking-wide">
+      <span className={cn("inline-block h-1.5 w-1.5 rounded-full shrink-0", DOT_CLASS[status])} />
       {!collapsed && (
-        <span className="text-[var(--color-success)]/70 uppercase text-[10px] tracking-widest">online</span>
+        <span className={cn("uppercase text-[10px] tracking-widest", LABEL_CLASS[status])}>
+          {LABELS[status]}
+        </span>
       )}
     </span>
   );

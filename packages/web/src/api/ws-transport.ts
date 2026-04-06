@@ -1,15 +1,19 @@
 /**
  * WsTransport — WebSocket + REST transport for browser/web mode.
  *
- * - Request/response: fetch() to /api/* endpoints
+ * - Request/response: fetch() to /api/* endpoints (absolute URL via baseUrl)
  * - Terminal I/O + push events: single persistent WebSocket to /ws
+ * - Auth: Authorization: Bearer header on all fetch calls; ?token= on WS URL
  * - Auto-reconnect with exponential backoff (1s → 2s → 4s → max 30s)
- * - Reconnect queries /api/terminal for active sessions
+ * - Exposes WsStatus for connection state UI
  */
 
 import type { Transport } from "./transport.js";
+import { buildAuthHeaders, getAuthToken, getServerUrl } from "./server-config.js";
 
 type Callback = (...args: unknown[]) => void;
+
+export type WsStatus = "connecting" | "connected" | "disconnected" | "error";
 
 /** IPC channel → REST endpoint mapping. */
 function channelToEndpoint(channel: string, data: unknown): { method: string; url: string; body?: unknown } {
@@ -23,7 +27,6 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
     case "workspace:addKnown": return { method: "POST", url: "/api/workspace/known", body: { path: data } };
     case "workspace:removeKnown": return { method: "DELETE", url: "/api/workspace/known", body: { path: data } };
     case "workspace:open-dialog":
-      // Not supported in web mode — return null (caller handles this)
       return { method: "GET", url: "/api/workspace/_no_dialog" };
 
     // Global config
@@ -105,7 +108,6 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
       return { method: "GET", url: `/api/agent-store/${d.category}/${encodeURIComponent(d.name)}/content${qs}` };
     }
     case "agent-store:add":
-      // File picker not supported in web mode
       return { method: "GET", url: "/api/agent-store/_no_add" };
     case "agent-store:remove": {
       const d = data as { name: string; category: string };
@@ -154,6 +156,9 @@ export class WsTransport implements Transport {
   private backoffMs = INITIAL_BACKOFF_MS;
   private closed = false;
 
+  private wsStatus: WsStatus = "connecting";
+  private statusListeners = new Set<(status: WsStatus) => void>();
+
   /** channel → callbacks */
   private eventListeners = new Map<string, Set<Callback>>();
   /** sessionId → data callbacks */
@@ -161,20 +166,67 @@ export class WsTransport implements Transport {
   /** sessionId → exit callbacks */
   private exitListeners = new Map<string, Set<(exitCode: number | null) => void>>();
 
-  constructor() {
+  constructor(private readonly baseUrl: string = getServerUrl()) {
     this.connect();
+  }
+
+  private setStatus(status: WsStatus): void {
+    this.wsStatus = status;
+    this.statusListeners.forEach((cb) => cb(status));
+  }
+
+  getStatus(): WsStatus {
+    return this.wsStatus;
+  }
+
+  onStatusChange(cb: (status: WsStatus) => void): () => void {
+    this.statusListeners.add(cb);
+    return () => this.statusListeners.delete(cb);
+  }
+
+  /** Teardown: close WS, cancel reconnect timer, clear all listeners. */
+  destroy(): void {
+    this.closed = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.ws?.close();
+    this.ws = null;
+    this.statusListeners.clear();
+    this.eventListeners.clear();
+    this.dataListeners.clear();
+    this.exitListeners.clear();
   }
 
   private connect(): void {
     if (this.closed) return;
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${proto}//${location.host}/ws`;
-    const ws = new WebSocket(url);
+    this.setStatus("connecting");
+
+    let wsProto: string;
+    let host: string;
+    try {
+      const parsed = new URL(this.baseUrl);
+      wsProto = parsed.protocol === "https:" ? "wss:" : "ws:";
+      host = parsed.host;
+    } catch {
+      // baseUrl may be a relative path on same origin
+      wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+      host = location.host;
+    }
+
+    const token = getAuthToken();
+    const wsUrl = token
+      ? `${wsProto}//${host}/ws?token=${encodeURIComponent(token)}`
+      : `${wsProto}//${host}/ws`;
+
+    const ws = new WebSocket(wsUrl);
     this.ws = ws;
 
     ws.onopen = () => {
-      console.log("[WsTransport] Connected");
+      console.log("[WsTransport] Connected to", this.baseUrl);
       this.backoffMs = INITIAL_BACKOFF_MS;
+      this.setStatus("connected");
     };
 
     ws.onmessage = (event) => {
@@ -193,7 +245,6 @@ export class WsTransport implements Transport {
           const code = msg.exitCode !== undefined ? msg.exitCode : null;
           this.exitListeners.get(msg.id)?.forEach((cb) => cb(code));
         } else {
-          // Push event (git:progress, workspace:changed, etc.)
           const payload = msg.payload ?? msg;
           this.eventListeners.get(msg.type)?.forEach((cb) => cb(payload));
         }
@@ -205,10 +256,12 @@ export class WsTransport implements Transport {
     ws.onclose = () => {
       if (this.closed) return;
       console.log(`[WsTransport] Disconnected — reconnecting in ${this.backoffMs}ms`);
+      this.setStatus("disconnected");
       this.scheduleReconnect();
     };
 
     ws.onerror = () => {
+      this.setStatus("error");
       ws.close();
     };
   }
@@ -217,26 +270,40 @@ export class WsTransport implements Transport {
     if (this.reconnectTimer) return;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      this.connect();
       this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS);
+      this.connect();
     }, this.backoffMs);
   }
 
   async invoke<T>(channel: string, data?: unknown): Promise<T> {
-    const { method, url, body } = channelToEndpoint(channel, data);
+    const { method, url: relativeUrl, body } = channelToEndpoint(channel, data);
 
-    const init: RequestInit = { method };
+    // Build absolute URL — baseUrl may be cross-origin
+    const fullUrl = relativeUrl.startsWith("/")
+      ? `${this.baseUrl}${relativeUrl}`
+      : relativeUrl;
+
+    const headers: Record<string, string> = {
+      ...buildAuthHeaders(),
+    };
     if (body !== undefined) {
-      init.headers = { "Content-Type": "application/json" };
+      headers["Content-Type"] = "application/json";
+    }
+
+    const init: RequestInit = {
+      method,
+      headers,
+      credentials: "include", // send cookies for same-origin; ignored cross-origin without CORS allow-credentials
+    };
+    if (body !== undefined) {
       init.body = JSON.stringify(body);
     }
 
-    const response = await fetch(url, init);
+    const response = await fetch(fullUrl, init);
     if (!response.ok) {
       const err = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
       throw new Error(err.error ?? `HTTP ${response.status}`);
     }
-    // Some responses may be empty (204) or plain text (export)
     const ct = response.headers.get("content-type") ?? "";
     if (ct.includes("application/json")) {
       return response.json() as Promise<T>;

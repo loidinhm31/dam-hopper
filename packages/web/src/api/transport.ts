@@ -31,7 +31,7 @@ let _transport: Transport | null = null;
 
 /**
  * Initialize transport. Called once at app boot (main.tsx).
- * Must be called before getTransport().
+ * May be called again to reconfigure (see reconfigureTransport).
  */
 export function initTransport(transport: Transport): void {
   _transport = transport;
@@ -41,6 +41,15 @@ export function initTransport(transport: Transport): void {
 export function getTransport(): Transport {
   if (!_transport) throw new Error("Transport not initialized. Call initTransport() first.");
   return _transport;
+}
+
+/**
+ * Replace the active transport with a new instance.
+ * Caller is responsible for destroying the old transport to avoid WS leaks.
+ * Use with resetTransportListeners() from useSSE.ts to re-register push event handlers.
+ */
+export function reconfigureTransport(transport: Transport): void {
+  _transport = transport;
 }
 
 /** Reset for testing. */

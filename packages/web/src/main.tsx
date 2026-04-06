@@ -9,10 +9,11 @@ import "@xterm/xterm/css/xterm.css";
 import { initTransport } from "./api/transport.js";
 import { IpcTransport } from "./api/ipc-transport.js";
 import { WsTransport } from "./api/ws-transport.js";
+import { getServerUrl } from "./api/server-config.js";
 
 const isElectron =
   typeof window !== "undefined" && !!(window as { devhub?: unknown }).devhub;
-initTransport(isElectron ? new IpcTransport() : new WsTransport());
+initTransport(isElectron ? new IpcTransport() : new WsTransport(getServerUrl()));
 
 // ── React app ─────────────────────────────────────────────────────────────────
 

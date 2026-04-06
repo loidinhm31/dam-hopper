@@ -1,9 +1,12 @@
+import { useState } from "react";
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, TerminalSquare, GitMerge, Settings, Folder, ChevronsLeft, ChevronsRight, Package } from "lucide-react";
+import { LayoutDashboard, TerminalSquare, GitMerge, Settings, Folder, ChevronsLeft, ChevronsRight, Package, ServerCog } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { ConnectionDot } from "@/components/atoms/ConnectionDot.js";
 import { useIpc } from "@/hooks/useSSE.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
+import { ServerSettingsDialog } from "@/components/server-connection/server-settings-dialog.js";
+import { isWebMode } from "@/api/transport.js";
 
 const nav = [
   { to: "/", icon: LayoutDashboard, label: "DASHBOARD" },
@@ -20,6 +23,7 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
   const { status } = useIpc();
+  const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
 
   return (
     <aside
@@ -93,7 +97,7 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
 
       {/* Footer */}
       <div className="border-t border-[var(--color-border)] px-2 py-2 flex flex-col gap-1.5">
-        <div className={cn(collapsed && "flex justify-center")}>
+        <div className={cn("flex", collapsed ? "justify-center" : "justify-between items-center")}>
           <button
             onClick={onToggle}
             aria-expanded={!collapsed}
@@ -102,11 +106,31 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
           >
             {collapsed ? <ChevronsRight size={14} /> : <ChevronsLeft size={14} />}
           </button>
+          {!collapsed && isWebMode() && (
+            <button
+              onClick={() => setServerSettingsOpen(true)}
+              title="Server connection settings"
+              className="p-1.5 hover:bg-[var(--color-surface-2)] rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            >
+              <ServerCog size={14} />
+            </button>
+          )}
         </div>
         <div className={cn(collapsed ? "flex justify-center px-0 py-0.5" : "px-1 py-0.5")}>
           <ConnectionDot status={status} collapsed={collapsed} />
         </div>
+        {collapsed && isWebMode() && (
+          <button
+            onClick={() => setServerSettingsOpen(true)}
+            title="Server connection settings"
+            className="flex justify-center p-1.5 hover:bg-[var(--color-surface-2)] rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+          >
+            <ServerCog size={14} />
+          </button>
+        )}
       </div>
+
+      <ServerSettingsDialog open={serverSettingsOpen} onClose={() => setServerSettingsOpen(false)} />
     </aside>
   );
 }

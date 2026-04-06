@@ -172,6 +172,55 @@ async fn auth_status_returns_401_without_cookie() {
 }
 
 // ---------------------------------------------------------------------------
+// Bearer token auth (cross-origin support)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn protected_route_with_bearer_token_returns_200() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let router = build_router(state, vec![]);
+    let req = Request::builder()
+        .uri("/api/workspace/status")
+        .header("Authorization", format!("Bearer {TEST_TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn protected_route_with_wrong_bearer_returns_401() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let router = build_router(state, vec![]);
+    let req = Request::builder()
+        .uri("/api/workspace/status")
+        .header("Authorization", "Bearer wrong-token")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn auth_status_returns_200_with_bearer_token() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let router = build_router(state, vec![]);
+    let req = Request::builder()
+        .uri("/api/auth/status")
+        .header("Authorization", format!("Bearer {TEST_TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["authenticated"], true);
+}
+
+// ---------------------------------------------------------------------------
 // Workspace
 // ---------------------------------------------------------------------------
 

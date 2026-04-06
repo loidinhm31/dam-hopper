@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { getServerUrl, setAuthToken, isCrossOriginServer } from "@/api/server-config.js";
 
 interface LoginPageProps {
   onLogin: () => void;
@@ -11,22 +12,41 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!token.trim()) return;
+    const trimmed = token.trim();
+    if (!trimmed) return;
 
     setLoading(true);
     setError(null);
 
+    const serverUrl = getServerUrl();
+    const crossOrigin = isCrossOriginServer(serverUrl);
+
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: token.trim() }),
-      });
-      if (res.ok) {
-        onLogin();
+      if (crossOrigin) {
+        // Cross-origin: verify token via Bearer header, store in sessionStorage
+        const res = await fetch(`${serverUrl}/api/auth/status`, {
+          headers: { Authorization: `Bearer ${trimmed}` },
+        });
+        if (res.ok) {
+          setAuthToken(trimmed);
+          onLogin();
+        } else {
+          setError("Invalid token. Check the server console for your token.");
+        }
       } else {
-        const body = await res.json() as { error?: string };
-        setError(body.error ?? "Invalid token. Check the server console for your token.");
+        // Same-origin: login sets httpOnly cookie
+        const res = await fetch(`${serverUrl}/api/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ token: trimmed }),
+        });
+        if (res.ok) {
+          onLogin();
+        } else {
+          const body = await res.json() as { error?: string };
+          setError(body.error ?? "Invalid token. Check the server console for your token.");
+        }
       }
     } catch {
       setError("Failed to connect to the server. Check your network connection.");
