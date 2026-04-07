@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button } from "@/components/atoms/Button.js";
-import { StoreInventory } from "@/components/agent-store/StoreInventory.js";
-import { ItemDetail } from "@/components/agent-store/ItemDetail.js";
-import { DistributionMatrix } from "@/components/agent-store/DistributionMatrix.js";
-import { ShipDialog } from "@/components/agent-store/ShipDialog.js";
-import { HealthStatus } from "@/components/agent-store/HealthStatus.js";
-import { MemoryEditor } from "@/components/agent-store/MemoryEditor.js";
-import { ImportDialog } from "@/components/agent-store/ImportDialog.js";
+import { StoreInventory } from "@/components/organisms/StoreInventory.js";
+import { ItemDetail } from "@/components/organisms/ItemDetail.js";
+import { DistributionMatrix } from "@/components/organisms/DistributionMatrix.js";
+import { ShipDialog } from "@/components/organisms/ShipDialog.js";
+import { HealthStatus } from "@/components/organisms/HealthStatus.js";
+import { MemoryEditor } from "@/components/organisms/MemoryEditor.js";
+import { ImportDialog } from "@/components/organisms/ImportDialog.js";
 import {
   useAgentStoreItems,
   useAgentStoreMatrix,

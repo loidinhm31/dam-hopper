@@ -1,11 +1,11 @@
 import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { DashboardPage } from "@/pages/DashboardPage.js";
-import { GitPage } from "@/pages/GitPage.js";
-import { SettingsPage } from "@/pages/SettingsPage.js";
-import { TerminalsPage } from "@/pages/TerminalsPage.js";
-import { AgentStorePage } from "@/pages/AgentStorePage.js";
+import { DashboardPage } from "@/components/pages/DashboardPage.js";
+import { GitPage } from "@/components/pages/GitPage.js";
+import { SettingsPage } from "@/components/pages/SettingsPage.js";
+import { TerminalsPage } from "@/components/pages/TerminalsPage.js";
+import { AgentStorePage } from "@/components/pages/AgentStorePage.js";
 import { getTransport } from "@/api/transport.js";
 
 /** Registers Ctrl+` as a global shortcut to open a new free terminal. */
