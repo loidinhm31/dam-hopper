@@ -52,7 +52,7 @@ impl BroadcastEventSink {
 impl EventSink for BroadcastEventSink {
     fn send_terminal_data(&self, session_id: &str, data: &str) {
         self.send_json(json!({
-            "type": "terminal:data",
+            "kind": "terminal:output",
             "id": session_id,
             "data": data,
         }));
@@ -60,17 +60,17 @@ impl EventSink for BroadcastEventSink {
 
     fn send_terminal_exit(&self, session_id: &str, exit_code: Option<i32>) {
         self.send_json(json!({
-            "type": "terminal:exit",
+            "kind": "terminal:exit",
             "id": session_id,
             "exitCode": exit_code,
         }));
     }
 
     fn send_terminal_changed(&self) {
-        self.send_json(json!({ "type": "terminal:changed", "payload": {} }));
+        self.send_json(json!({ "kind": "terminal:changed", "payload": {} }));
     }
 
     fn broadcast(&self, event_type: &str, payload: serde_json::Value) {
-        self.send_json(json!({ "type": event_type, "payload": payload }));
+        self.send_json(json!({ "kind": event_type, "payload": payload }));
     }
 }

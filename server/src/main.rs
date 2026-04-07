@@ -8,6 +8,7 @@ use dev_hub_server::{
     api::build_router,
     config::{global_config_path, load_workspace_config, read_global_config_at},
     fs::FsSubsystem,
+    probe_inotify_limit,
     pty::{BroadcastEventSink, PtySessionManager},
     state::AppState,
 };
@@ -112,6 +113,8 @@ async fn main() -> anyhow::Result<()> {
     if let Err(e) = agent_store.init().await {
         tracing::warn!(error = %e, "Agent store init failed — will retry on first use");
     }
+
+    probe_inotify_limit();
 
     // ── Build state + router ──────────────────────────────────────────────────
 
