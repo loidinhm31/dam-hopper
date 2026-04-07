@@ -5,6 +5,7 @@ pub mod auth;
 pub mod commands;
 pub mod config;
 pub mod error;
+pub mod fs;
 pub mod git;
 pub mod router;
 pub mod settings;

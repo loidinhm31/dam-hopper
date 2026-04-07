@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::fs::FsError;
+
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("Config error: {0}")]
@@ -31,6 +33,9 @@ pub enum AppError {
 
     #[error("Git repository not found: {0}")]
     GitNotFound(String),
+
+    #[error("FS error: {0}")]
+    Fs(FsError),
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
@@ -49,6 +54,7 @@ impl AppError {
             | AppError::SessionNotFound(_)
             | AppError::GitNotFound(_) => 404,
             AppError::Config(_) | AppError::InvalidInput(_) => 400,
+            AppError::Fs(e) => e.status_code(),
             _ => 500,
         }
     }

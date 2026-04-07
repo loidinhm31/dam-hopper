@@ -7,7 +7,8 @@ use tower::ServiceExt;
 use crate::{
     agent_store::AgentStoreService,
     api::build_router,
-    config::{DevHubConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo},
+    config::{DevHubConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo},
+    fs::FsSubsystem,
     pty::{BroadcastEventSink, PtySessionManager, NoopEventSink},
     state::AppState,
 };
@@ -24,6 +25,15 @@ const TEST_TOKEN: &str = "test-token-12345";
 fn make_state(tmp: &TempDir) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
 
+    // Create a minimal config file so config_path.exists() returns true (required by
+    // /api/workspace/status `ready` field).
+    let config_file = workspace_dir.join("dev-hub.toml");
+    std::fs::write(
+        &config_file,
+        "[workspace]\nname = \"test-workspace\"\n",
+    )
+    .ok();
+
     let config = DevHubConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
@@ -31,12 +41,14 @@ fn make_state(tmp: &TempDir) -> AppState {
         },
         agent_store: None,
         projects: vec![],
+        features: FeaturesConfig::default(),
         config_path: workspace_dir.join("dev-hub.toml"),
     };
 
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dev-hub/agent-store"));
+    let fs = FsSubsystem::new(workspace_dir.clone());
 
     AppState::new(
         workspace_dir,
@@ -46,6 +58,7 @@ fn make_state(tmp: &TempDir) -> AppState {
         agent_store,
         event_sink,
         TEST_TOKEN.to_string(),
+        fs,
     )
 }
 
@@ -232,7 +245,7 @@ async fn workspace_status_returns_loaded_true() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["loaded"], true);
+    assert_eq!(json["ready"], true);
     assert_eq!(json["name"], "test-workspace");
     assert_eq!(json["projectCount"], 0);
 }
@@ -409,12 +422,14 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
             terminals: vec![],
             agents: None,
         }],
+        features: FeaturesConfig::default(),
         config_path: workspace_dir.join("dev-hub.toml"),
     };
 
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dev-hub/agent-store"));
+    let fs = FsSubsystem::new(workspace_dir.clone());
 
     AppState::new(
         workspace_dir,
@@ -424,6 +439,7 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         agent_store,
         event_sink,
         TEST_TOKEN.to_string(),
+        fs,
     )
 }
 

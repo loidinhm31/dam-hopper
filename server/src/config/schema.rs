@@ -201,6 +201,18 @@ fn default_root() -> String {
 }
 
 // ──────────────────────────────────────────────
+// Feature flags
+// ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FeaturesConfig {
+    /// Enable IDE-style file explorer + Monaco editor.
+    /// Also toggled via `DEV_HUB_IDE=1` env var.
+    #[serde(default)]
+    pub ide_explorer: bool,
+}
+
+// ──────────────────────────────────────────────
 // Top-level workspace config (on-disk)
 // ──────────────────────────────────────────────
 
@@ -210,6 +222,8 @@ pub struct DevHubConfigRaw {
     pub agent_store: Option<AgentStoreConfig>,
     #[serde(default)]
     pub projects: Vec<ProjectConfigRaw>,
+    #[serde(default)]
+    pub features: FeaturesConfig,
 }
 
 // ──────────────────────────────────────────────
@@ -222,6 +236,7 @@ pub struct DevHubConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_store: Option<AgentStoreConfig>,
     pub projects: Vec<ProjectConfig>,
+    pub features: FeaturesConfig,
     /// Absolute path of the config file that was loaded (internal use only).
     #[serde(skip)]
     pub config_path: PathBuf,

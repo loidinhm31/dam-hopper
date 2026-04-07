@@ -29,8 +29,11 @@ struct ErrorBody {
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
         let status = match self.0.status_code() {
-            404 => StatusCode::NOT_FOUND,
             400 => StatusCode::BAD_REQUEST,
+            403 => StatusCode::FORBIDDEN,
+            404 => StatusCode::NOT_FOUND,
+            413 => StatusCode::PAYLOAD_TOO_LARGE,
+            503 => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (status, Json(ErrorBody { error: self.0.to_string() })).into_response()

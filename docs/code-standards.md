@@ -1,0 +1,259 @@
+# Code Standards
+
+## Rust Backend (server/)
+
+### Project Structure
+
+```
+server/src/
+├── main.rs           # Bootstrap, router setup
+├── lib.rs            # Crate root
+├── state.rs          # AppState definition
+├── error.rs          # Top-level AppError
+├── api/              # HTTP handlers + WebSocket
+│   ├── mod.rs
+│   ├── router.rs     # Route registration
+│   ├── error.rs      # ApiError mapping
+│   ├── fs.rs         # File explorer (list, read, stat)
+│   └── ...
+├── config/           # TOML parsing
+│   ├── mod.rs
+│   └── schema.rs     # Type definitions
+├── fs/               # Filesystem sandbox + operations
+│   ├── mod.rs        # FsSubsystem
+│   ├── error.rs
+│   ├── sandbox.rs    # Path validation
+│   └── ops.rs        # Directory/file operations
+├── pty/              # Terminal sessions
+├── git/              # Git operations
+├── agent_store/      # Item distribution
+└── commands/         # Command registry
+```
+
+### Error Handling Pattern
+
+Each module defines `thiserror` enum:
+
+```rust
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum FsError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Path outside workspace")]
+    OutOfBounds,
+    #[error("Feature unavailable")]
+    Unavailable,
+}
+```
+
+Top-level `AppError` wraps module errors:
+
+```rust
+pub enum AppError {
+    Fs(FsError),
+    Git(GitError),
+    NotFound(String),
+}
+```
+
+API handlers map to HTTP status via `ApiError::from(AppError)`.
+
+### Async Patterns
+
+**Never hold locks across `.await`:**
+
+❌ Bad:
+```rust
+let fs = state.fs.sandbox()?;  // holds lock
+let result = async_op(&fs).await;  // lock held!
+```
+
+✅ Good:
+```rust
+let fs = state.fs.sandbox()?;  // clone fields out
+let sandbox_root = fs.root().to_path_buf();  // release lock
+let result = async_op(&sandbox_root).await;  // safe
+```
+
+**Clone-cheap types:**
+- Arc<T> (includes PtySessionManager, FsSubsystem, AgentStoreService)
+- Pass clones into async tasks
+
+### Testing
+
+Integration tests use real filesystems via `tempfile` crate:
+
+```rust
+#[tokio::test]
+async fn test_list_dir() {
+    let temp = TempDir::new().unwrap();
+    let result = ops::list_dir(temp.path()).await;
+    assert!(result.is_ok());
+}
+```
+
+No mocking of filesystem or git.
+
+## TypeScript Frontend (packages/web/)
+
+### Build & Type Checking
+
+```bash
+pnpm build       # Vite build
+pnpm dev         # Watch + HMR
+pnpm lint        # ESLint
+pnpm format      # Prettier
+```
+
+**TypeScript:** `strict: true`, `target: ES2022`, `moduleResolution: bundler`.
+
+### Component Structure
+
+```
+src/
+├── api/
+│   ├── client.ts          # Type definitions (mirrors Rust API)
+│   ├── transport.ts       # Fetch transport
+│   ├── ws-transport.ts    # WebSocket client
+│   └── queries.ts         # TanStack Query hooks
+├── components/
+│   ├── atoms/             # Small reusable (Button, Badge)
+│   ├── organisms/         # Complex (TerminalTreeView, ProjectList)
+│   ├── pages/             # Full-screen pages
+│   └── layout/            # Layout wrappers
+└── styles/
+    ├── globals.css        # Tailwind imports
+    └── ...
+```
+
+### Client Types
+
+Types in `src/api/client.ts` **intentionally duplicate** Rust API shapes. This keeps the web package independent — no shared TypeScript lib.
+
+Update client types when API changes:
+
+```typescript
+// Match Rust struct names + field names
+export interface DirEntry {
+  name: string;
+  kind: 'file' | 'dir';
+  size: number;
+  mtime: number;
+  isSymlink: boolean;
+}
+```
+
+### API Client Pattern
+
+```typescript
+// WsTransport wraps both REST and WebSocket
+const response = await transport.invoke('GET /api/fs/list', {
+  project: 'web',
+  path: 'src'
+});
+```
+
+## Configuration (dev-hub.toml)
+
+```toml
+[workspace]
+name = "my-workspace"
+
+[[projects]]
+name = "project-name"
+path = "./relative/path"
+type = "npm"  # npm | pnpm | cargo | maven | gradle | custom
+build_command = "npm run build"
+run_command = "npm start"
+tags = ["backend", "critical"]
+
+[features]
+ide_explorer = true
+```
+
+On-disk uses snake_case; serde `#[serde(rename = "...")]` handles mapping.
+
+## Code Style Guidelines
+
+### Rust
+
+- Module-level error types (no top-level catch-all)
+- Arc<Mutex<T>> for shared mutable state, RwLock<T> for mostly-read
+- `Result<T, E>` everywhere; no unwrap in library code
+- Explicit `await` — don't hide async with wrapper functions
+- Single-line docs for public items
+
+### TypeScript
+
+- Functional components with hooks
+- Explicit prop typing (no `any`)
+- Handle loading/error states in components
+- One component per file (unless very small atoms)
+- CSS class names via Tailwind utilities
+
+### Commit Messages
+
+Format: `type(scope): description`
+
+```
+feat(fs): add read endpoint with range support
+fix(pty): handle SIGTERM gracefully
+refactor(api): extract fs handlers to module
+test(fs): add sandbox validation tests
+docs: update architecture diagram
+```
+
+Types: feat, fix, refactor, test, docs, perf, ci, chore.
+
+## Build Artifacts
+
+**Rust:**
+- Release: `server/target/release/dev-hub-server`
+- Binary includes all dependencies (musl-libc for portability)
+
+**Web:**
+- Vite output: `packages/web/dist/`
+- Served by Rust binary via `tower-http::ServeDir`
+
+## Dependency Policy
+
+**Rust:**
+- Core: axum, tokio, serde
+- Optional: git2 (git ops), portable-pty (terminals), notify (file watching)
+- Security: subtle (constant-time comparison), walkdir (path safety)
+
+**Web:**
+- Core: react, vite, tailwind, typescript
+- API: TanStack Query (data fetching)
+- Terminal: xterm.js for PTY rendering
+
+No additional heavy dependencies without discussion.
+
+## Feature Flags
+
+Conditional compilation gates feature-specific code.
+
+```rust
+#[cfg(feature = "ide_explorer")]
+fn my_handler() { ... }
+```
+
+Routes registered conditionally at router construction time.
+
+## Documentation
+
+- Public items must have doc comments (`/// ...`)
+- Complex algorithms explain the "why"
+- Link to related modules/types
+- Examples in docs for non-obvious APIs
+
+## Security Checklist
+
+- [ ] Path validation (workspace sandbox)
+- [ ] Bearer token authentication
+- [ ] No shell injection (avoid shlex parsing for commands)
+- [ ] No symlink traversal (validate all path operations)
+- [ ] CORS configured (default: localhost:5173)
+- [ ] Error messages don't leak paths/credentials

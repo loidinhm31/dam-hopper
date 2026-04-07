@@ -9,6 +9,7 @@ use crate::agent_store::AgentStoreService;
 use crate::commands::CommandRegistry;
 use crate::config::{DevHubConfig, GlobalConfig};
 use crate::error::AppError;
+use crate::fs::FsSubsystem;
 use crate::pty::{BroadcastEventSink, PtySessionManager};
 use crate::ssh::SshCredStore;
 
@@ -40,6 +41,12 @@ pub struct AppState {
     /// SSH credentials stored for the current session (set via /api/ssh/keys/load).
     /// Wrapped in Arc so cloning into git tasks is cheap (ref-count bump only).
     pub ssh_creds: Arc<RwLock<Option<Arc<SshCredStore>>>>,
+    /// Workspace-scoped filesystem subsystem (sandbox + watcher in Phase 02).
+    /// Clone is cheap — Arc-backed.
+    pub fs: FsSubsystem,
+    /// Captured from `config.features.ide_explorer` at startup — never changes
+    /// at runtime. Used for hard-gating route registration.
+    pub ide_explorer: bool,
 }
 
 impl AppState {
@@ -62,7 +69,9 @@ impl AppState {
         agent_store: AgentStoreService,
         event_sink: BroadcastEventSink,
         auth_token: String,
+        fs: FsSubsystem,
     ) -> Self {
+        let ide_explorer = config.features.ide_explorer;
         Self {
             workspace_dir: Arc::new(RwLock::new(workspace_dir)),
             config: Arc::new(RwLock::new(config)),
@@ -73,6 +82,8 @@ impl AppState {
             event_sink,
             auth_token: Arc::new(auth_token),
             ssh_creds: Arc::new(RwLock::new(None)),
+            fs,
+            ide_explorer,
         }
     }
 }

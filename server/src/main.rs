@@ -7,6 +7,7 @@ use dev_hub_server::{
     agent_store::AgentStoreService,
     api::build_router,
     config::{global_config_path, load_workspace_config, read_global_config_at},
+    fs::FsSubsystem,
     pty::{BroadcastEventSink, PtySessionManager},
     state::AppState,
 };
@@ -59,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     });
 
-    let config = match load_workspace_config(&workspace_dir) {
+    let mut config = match load_workspace_config(&workspace_dir) {
         Ok(cfg) => {
             tracing::info!(
                 workspace = cfg.workspace.name,
@@ -77,10 +78,16 @@ async fn main() -> anyhow::Result<()> {
                 },
                 agent_store: None,
                 projects: vec![],
+                features: dev_hub_server::config::FeaturesConfig::default(),
                 config_path: workspace_dir.join("dev-hub.toml"),
             }
         }
     };
+
+    // Env override: DEV_HUB_IDE=1 enables IDE explorer regardless of TOML flag
+    if std::env::var("DEV_HUB_IDE").unwrap_or_default() == "1" {
+        config.features.ide_explorer = true;
+    }
 
     let gc_path = global_config_path();
     let global_config = read_global_config_at(&gc_path)
@@ -114,6 +121,8 @@ async fn main() -> anyhow::Result<()> {
         .map(|s| s.split(',').map(|o| o.trim().to_string()).collect())
         .unwrap_or_default();
 
+    let fs = FsSubsystem::new(workspace_dir.clone());
+
     let state = AppState::new(
         workspace_dir.clone(),
         config,
@@ -122,6 +131,7 @@ async fn main() -> anyhow::Result<()> {
         agent_store,
         event_sink,
         token,
+        fs,
     );
 
     let router = build_router(state, allowed_origins);

@@ -16,8 +16,8 @@ const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 use crate::state::AppState;
 
 use super::{
-    agent_import, agent_memory, agent_store, auth, commands, config, git, settings, ssh, terminal,
-    workspace, ws,
+    agent_import, agent_memory, agent_store, auth, commands, config, fs as fs_api, git, settings,
+    ssh, terminal, workspace, ws,
 };
 
 /// Build the full Axum router with auth middleware, CORS, and all routes.
@@ -105,9 +105,22 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/settings/import", post(settings::import_settings))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
 
+    // IDE file explorer routes — only registered when feature flag is on.
+    // When off, any /api/fs/* request falls through to the SPA catch-all → 404.
+    let ide_routes = if state.ide_explorer {
+        Router::new()
+            .route("/api/fs/list", get(fs_api::list))
+            .route("/api/fs/read", get(fs_api::read))
+            .route("/api/fs/stat", get(fs_api::stat))
+            .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth))
+    } else {
+        Router::new()
+    };
+
     Router::new()
         .merge(public)
         .merge(protected)
+        .merge(ide_routes)
         .layer(cors)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)

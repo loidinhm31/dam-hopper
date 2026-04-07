@@ -46,6 +46,7 @@ pub fn read_config(file_path: &Path) -> Result<DevHubConfig, AppError> {
         workspace: raw.workspace,
         agent_store: raw.agent_store,
         projects,
+        features: raw.features,
         config_path: canonical,
     })
 }

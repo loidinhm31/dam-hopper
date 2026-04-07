@@ -56,6 +56,11 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 # Path utilities
 pathdiff = "0.2"
 
+# FS module — binary detection, MIME guessing, Windows path normalization
+infer = "0.15"
+mime_guess = "2"
+dunce = "1"
+
 # Git operations via libgit2
 git2 = "0.19"
 
