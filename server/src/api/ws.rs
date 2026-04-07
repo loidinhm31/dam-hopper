@@ -5,10 +5,12 @@ use axum::{
     },
     response::Response,
 };
+use axum_extra::extract::CookieJar;
 use serde::Deserialize;
 use subtle::ConstantTimeEq;
 use tracing::{debug, warn};
 
+use crate::api::auth::AUTH_COOKIE;
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -17,18 +19,25 @@ use crate::state::AppState;
 
 /// GET /ws — upgrades to WebSocket.
 ///
-/// Auth: `?token=<auth-token>` query param (cookies can't be set on WS upgrade
-/// cross-origin, so we fall back to query param).
+/// Auth priority:
+/// 1. `?token=` query param (cross-origin, sessionStorage)
+/// 2. `devhub-auth` cookie (same-origin, e.g. Vite dev proxy)
 pub async fn ws_handler(
     upgrade: WebSocketUpgrade,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    jar: CookieJar,
     State(state): State<AppState>,
 ) -> Response {
-    let provided_token = params.get("token").cloned().unwrap_or_default();
-    let auth_ok: bool = provided_token
-        .as_bytes()
-        .ct_eq(state.auth_token.as_bytes())
-        .into();
+    let expected = state.auth_token.as_bytes();
+
+    let auth_ok = params
+        .get("token")
+        .map(|t| t.as_bytes().ct_eq(expected).into())
+        .unwrap_or(false)
+        || jar
+            .get(AUTH_COOKIE)
+            .map(|c| c.value().as_bytes().ct_eq(expected).into())
+            .unwrap_or(false);
 
     if !auth_ok {
         return axum::response::IntoResponse::into_response((

@@ -176,8 +176,9 @@ export interface KnownWorkspacesResponse {
 
 export interface WorkspaceStatus {
   ready: boolean;
+  path?: string;
   name?: string;
-  root?: string;
+  projectCount?: number;
 }
 
 export interface GlobalConfig {

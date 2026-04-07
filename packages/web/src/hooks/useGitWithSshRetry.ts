@@ -27,7 +27,8 @@ function isAuthError(results: GitOpResult[]): boolean {
     return (
       msg.includes("permission denied") ||
       msg.includes("authentication failed") ||
-      msg.includes("publickey")
+      msg.includes("publickey") ||
+      msg.includes("no suitable credentials")
     );
   });
 }
@@ -116,6 +117,11 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
       if (retryFn && resolve) {
         try {
           const retryResults = await retryFn();
+          // If the retry still fails with an auth error the passphrase was wrong —
+          // reset the session cache so the dialog can appear again next time.
+          if (isAuthError(retryResults)) {
+            keysLoadedRef.current = false;
+          }
           resolve(retryResults);
         } catch (err) {
           reject?.(err);

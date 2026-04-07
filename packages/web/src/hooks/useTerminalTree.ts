@@ -44,7 +44,7 @@ export function useTerminalTree() {
 
   const freeTerminals = useMemo<SessionInfo[]>(() => {
     return sessions
-      .filter((s) => s.id.startsWith(FREE_TERMINAL_PREFIX))
+      .filter((s) => s.id?.startsWith(FREE_TERMINAL_PREFIX))
       .sort((a, b) => a.startedAt - b.startedAt);
   }, [sessions]);
 

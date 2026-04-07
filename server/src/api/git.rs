@@ -31,11 +31,12 @@ pub async fn fetch_projects(
     Json(body): Json<ProjectsBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let project_list = collect_project_list(&state, body.projects.as_deref()).await;
+    let ssh_cred = state.ssh_creds.read().await.clone();
 
     // BulkGitService is intentionally per-request: each request manages its own
     // concurrency (Semaphore(4)). Two concurrent fetch requests each run 4 ops = 8 total,
     // which is acceptable for a local dev tool targeting a few dozen projects.
-    let bulk = BulkGitService::new(4);
+    let bulk = BulkGitService::new(4).with_creds(ssh_cred);
     forward_progress_events(bulk.subscribe(), state.event_sink.clone());
 
     let refs: Vec<ProjectRef<'_>> = project_list.iter()
@@ -54,9 +55,10 @@ pub async fn pull_projects(
     Json(body): Json<ProjectsBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let project_list = collect_project_list(&state, body.projects.as_deref()).await;
+    let ssh_cred = state.ssh_creds.read().await.clone();
 
     // Intentionally per-request — see fetch_projects for rationale.
-    let bulk = BulkGitService::new(4);
+    let bulk = BulkGitService::new(4).with_creds(ssh_cred);
     forward_progress_events(bulk.subscribe(), state.event_sink.clone());
 
     let refs: Vec<ProjectRef<'_>> = project_list.iter()

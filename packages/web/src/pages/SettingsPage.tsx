@@ -47,12 +47,11 @@ export function SettingsPage() {
   async function handleNuclearReset() {
     setResetErr(null);
     const confirmed = window.confirm(
-      "This will kill all terminal sessions, clear all cached data, and return to the workspace selection screen. Continue?",
+      "This will kill all terminal sessions and clear all workspace state. Use the sidebar workspace switcher to open a new workspace. Continue?",
     );
     if (!confirmed) return;
     try {
       await resetWorkspace.mutateAsync();
-      // Renderer navigates to WelcomePage automatically via workspace:changed(null)
     } catch (err) {
       setResetErr(err instanceof Error ? err.message : String(err));
       setTimeout(() => setResetErr(null), 5000);

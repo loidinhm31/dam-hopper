@@ -11,6 +11,7 @@ use tokio::sync::Semaphore;
 use crate::git::progress::{create_progress_channel, emit_completed, emit_progress, ProgressSender};
 use crate::git::repository::{self, update_branch};
 use crate::git::types::{BranchUpdateResult, GitOperationResult, GitStatus};
+use crate::ssh::SshCredStore;
 
 /// Sentinel project_name for bulk-level progress events (no specific project).
 const BULK: &str = "BULK";
@@ -23,6 +24,7 @@ pub struct ProjectRef<'a> {
 pub struct BulkGitService {
     pub concurrency: usize,
     pub progress: Option<ProgressSender>,
+    pub ssh_cred: Option<Arc<SshCredStore>>,
 }
 
 impl Default for BulkGitService {
@@ -34,7 +36,12 @@ impl Default for BulkGitService {
 impl BulkGitService {
     pub fn new(concurrency: usize) -> Self {
         let progress = Some(create_progress_channel());
-        Self { concurrency, progress }
+        Self { concurrency, progress, ssh_cred: None }
+    }
+
+    pub fn with_creds(mut self, cred: Option<Arc<SshCredStore>>) -> Self {
+        self.ssh_cred = cred;
+        self
     }
 
     pub fn subscribe(&self) -> Option<crate::git::progress::ProgressReceiver> {
@@ -55,10 +62,11 @@ impl BulkGitService {
             let sem = Arc::clone(&sem);
             let completed = Arc::clone(&completed);
             let progress = progress.clone();
+            let cred = self.ssh_cred.clone();
 
             handles.push(tokio::spawn(async move {
                 let _permit = sem.acquire().await.expect("semaphore closed");
-                let result = repository::fetch(&path, &name, &progress).await;
+                let result = repository::fetch(&path, &name, &progress, cred).await;
                 let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 let pct = (done * 100 / total).min(100) as u8;
                 emit_progress(
@@ -97,10 +105,11 @@ impl BulkGitService {
             let sem = Arc::clone(&sem);
             let completed = Arc::clone(&completed);
             let progress = progress.clone();
+            let cred = self.ssh_cred.clone();
 
             handles.push(tokio::spawn(async move {
                 let _permit = sem.acquire().await.expect("semaphore closed");
-                let result = repository::pull(&path, &name, &progress).await;
+                let result = repository::pull(&path, &name, &progress, cred).await;
                 let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 let pct = (done * 100 / total).min(100) as u8;
                 emit_progress(
