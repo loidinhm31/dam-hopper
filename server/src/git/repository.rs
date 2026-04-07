@@ -18,6 +18,7 @@ use crate::git::progress::{emit_completed, emit_failed, emit_progress, emit_star
 use crate::git::types::{
     BranchInfo, BranchUpdateResult, GitOperation, GitOperationResult, GitStatus, LastCommit,
 };
+use crate::ssh::SshCredStore;
 
 fn open_repo(path: &Path) -> Result<Repository, AppError> {
     Repository::open(path).map_err(|e| {
@@ -198,18 +199,39 @@ pub fn get_status(project_path: &Path, project_name: &str) -> Result<GitStatus, 
 }
 
 /// Build credential callbacks with attempt tracking to prevent infinite loops.
-fn make_fetch_opts<F>(progress_fn: F) -> git2::FetchOptions<'static>
+///
+/// Credential priority:
+/// 1. Explicit key + passphrase from `SshCredStore` (set via /api/ssh/keys/load)
+/// 2. SSH agent (if running and has keys)
+/// 3. Git credential helper
+/// 4. Default (e.g. Kerberos/NTLM)
+fn make_fetch_opts<F>(progress_fn: F, ssh_cred: Option<Arc<SshCredStore>>) -> git2::FetchOptions<'static>
 where
     F: Fn(usize, usize) + Send + 'static,
 {
     let mut callbacks = git2::RemoteCallbacks::new();
 
-    let mut ssh_tried = false;
+    let mut explicit_tried = false;
+    let mut agent_tried = false;
     let mut cred_helper_tried = false;
 
     callbacks.credentials(move |url, username, allowed_types| {
-        if allowed_types.contains(git2::CredentialType::SSH_KEY) && !ssh_tried {
-            ssh_tried = true;
+        // Try the user-supplied key+passphrase first.
+        if let Some(ref cred) = ssh_cred {
+            if allowed_types.contains(git2::CredentialType::SSH_KEY) && !explicit_tried {
+                explicit_tried = true;
+                let user = username.unwrap_or("git");
+                let pub_path = cred.public_key_path();
+                let pub_opt = pub_path.as_deref();
+                // Treat empty passphrase as None — libssh2 requires None (not "") for unencrypted keys
+                let p = cred.passphrase();
+                let passphrase_opt = if p.is_empty() { None } else { Some(p) };
+                return git2::Cred::ssh_key(user, pub_opt, &cred.key_path, passphrase_opt);
+            }
+        }
+
+        if allowed_types.contains(git2::CredentialType::SSH_KEY) && !agent_tried {
+            agent_tried = true;
             let user = username.unwrap_or("git");
             return git2::Cred::ssh_key_from_agent(user);
         }
@@ -245,6 +267,7 @@ pub async fn fetch(
     project_path: &Path,
     project_name: &str,
     progress: &Option<ProgressSender>,
+    ssh_cred: Option<Arc<SshCredStore>>,
 ) -> GitOperationResult {
     let start = Instant::now();
     emit_started(progress, project_name, "fetch", "Fetching...");
@@ -274,11 +297,12 @@ pub async fn fetch(
 
             let pn = project_name.clone();
             let pc = progress_clone.clone();
+            let cred = ssh_cred.clone();
 
             let mut fetch_opts = make_fetch_opts(move |received, total| {
                 let pct = (received * 100 / total).min(100) as u8;
                 emit_progress(&pc, &pn, "fetch", &format!("Receiving objects: {received}/{total}"), Some(pct));
-            });
+            }, cred);
 
             remote
                 .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
@@ -336,10 +360,11 @@ pub async fn pull(
     project_path: &Path,
     project_name: &str,
     progress: &Option<ProgressSender>,
+    ssh_cred: Option<Arc<SshCredStore>>,
 ) -> GitOperationResult {
     // Fetch first via git2 (with progress), then attempt fast-forward merge.
     // Fall back to CLI pull --ff-only on merge failure.
-    let fetch_result = fetch(project_path, project_name, progress).await;
+    let fetch_result = fetch(project_path, project_name, progress, ssh_cred).await;
     if !fetch_result.success {
         // Fetch failed — reuse its error as pull error
         return GitOperationResult {

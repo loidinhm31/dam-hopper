@@ -4,7 +4,11 @@ use axum::{
     middleware,
     routing::{delete, get, patch, post, put},
 };
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
+use axum::http::{
+    header::{AUTHORIZATION, CONTENT_TYPE, ACCEPT, COOKIE},
+    Method,
+};
 
 /// 10 MB — generous for config/settings payloads, blocks accidental multi-GB uploads.
 const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
@@ -12,7 +16,7 @@ const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 use crate::state::AppState;
 
 use super::{
-    agent_import, agent_memory, agent_store, auth, commands, config, git, settings, terminal,
+    agent_import, agent_memory, agent_store, auth, commands, config, git, settings, ssh, terminal,
     workspace, ws,
 };
 
@@ -87,6 +91,10 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/agent-import/scan", post(agent_import::scan_repo_handler))
         .route("/api/agent-import/scan-local", post(agent_import::scan_local_handler))
         .route("/api/agent-import/confirm", post(agent_import::import_confirm_handler))
+        // SSH credentials
+        .route("/api/ssh/keys", get(ssh::list_keys))
+        .route("/api/ssh/agent", get(ssh::check_agent))
+        .route("/api/ssh/keys/load", post(ssh::load_key))
         // Commands
         .route("/api/commands/search", get(commands::search_commands))
         .route("/api/commands", get(commands::list_commands))
@@ -106,11 +114,20 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
 }
 
 fn build_cors(allowed_origins: &[String]) -> CorsLayer {
+    // tower-http 0.6 panics if allow_credentials(true) is combined with Any methods or headers.
+    let methods = [
+        Method::GET, Method::POST, Method::PUT, Method::PATCH,
+        Method::DELETE, Method::OPTIONS, Method::HEAD,
+    ];
+    let headers = [AUTHORIZATION, CONTENT_TYPE, ACCEPT, COOKIE];
+
     if allowed_origins.is_empty() || allowed_origins.iter().any(|o| o == "*") {
+        // Mirror the request Origin back — `*` is rejected by browsers when credentials are sent.
         CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any)
+            .allow_origin(AllowOrigin::mirror_request())
+            .allow_methods(methods)
+            .allow_headers(headers)
+            .allow_credentials(true)
     } else {
         let origins: Vec<axum::http::HeaderValue> = allowed_origins
             .iter()
@@ -118,8 +135,8 @@ fn build_cors(allowed_origins: &[String]) -> CorsLayer {
             .collect();
         CorsLayer::new()
             .allow_origin(origins)
-            .allow_methods(Any)
-            .allow_headers(Any)
+            .allow_methods(methods)
+            .allow_headers(headers)
             .allow_credentials(true)
     }
 }

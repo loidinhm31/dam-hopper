@@ -10,6 +10,7 @@ use crate::commands::CommandRegistry;
 use crate::config::{DevHubConfig, GlobalConfig};
 use crate::error::AppError;
 use crate::pty::{BroadcastEventSink, PtySessionManager};
+use crate::ssh::SshCredStore;
 
 /// Shared application state across all Axum handlers.
 ///
@@ -36,6 +37,9 @@ pub struct AppState {
     pub event_sink: BroadcastEventSink,
     /// Auth token (hex UUID stored at ~/.config/dev-hub/server-token).
     pub auth_token: Arc<String>,
+    /// SSH credentials stored for the current session (set via /api/ssh/keys/load).
+    /// Wrapped in Arc so cloning into git tasks is cheap (ref-count bump only).
+    pub ssh_creds: Arc<RwLock<Option<Arc<SshCredStore>>>>,
 }
 
 impl AppState {
@@ -68,6 +72,7 @@ impl AppState {
             command_registry: Arc::new(CommandRegistry::new()),
             event_sink,
             auth_token: Arc::new(auth_token),
+            ssh_creds: Arc::new(RwLock::new(None)),
         }
     }
 }

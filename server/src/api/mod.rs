@@ -8,6 +8,7 @@ pub mod error;
 pub mod git;
 pub mod router;
 pub mod settings;
+pub mod ssh;
 pub mod terminal;
 pub mod workspace;
 pub mod ws;

@@ -5,5 +5,6 @@ pub mod config;
 pub mod error;
 pub mod git;
 pub mod pty;
+pub mod ssh;
 pub mod state;
 pub mod utils;

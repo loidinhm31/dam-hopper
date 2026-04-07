@@ -137,6 +137,11 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
     case "agent-store:importScanLocal": return { method: "POST", url: "/api/agent-import/scan-local", body: data };
     case "agent-store:importConfirm":   return { method: "POST", url: "/api/agent-import/confirm", body: data };
 
+    // SSH credentials
+    case "ssh:listKeys":  return { method: "GET", url: "/api/ssh/keys" };
+    case "ssh:checkAgent": return { method: "GET", url: "/api/ssh/agent" };
+    case "ssh:addKey":    return { method: "POST", url: "/api/ssh/keys/load", body: data };
+
     default:
       throw new Error(`Unknown channel for WsTransport: ${channel}`);
   }

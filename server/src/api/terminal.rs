@@ -21,7 +21,7 @@ use super::error::ApiError;
 pub struct CreateSessionBody {
     pub id: String,
     pub command: String,
-    pub cwd: String,
+    pub cwd: Option<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
     #[serde(default = "default_cols")]
@@ -38,10 +38,13 @@ pub async fn create_session(
     State(state): State<AppState>,
     Json(body): Json<CreateSessionBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let cwd = body.cwd.unwrap_or_else(|| {
+        std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
+    });
     let meta = state.pty_manager.create(PtyCreateOpts {
         id: body.id,
         command: body.command,
-        cwd: body.cwd,
+        cwd,
         env: body.env,
         cols: body.cols,
         rows: body.rows,

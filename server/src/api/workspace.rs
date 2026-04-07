@@ -17,7 +17,7 @@ use super::error::{ApiError, AppJson};
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceStatus {
-    pub loaded: bool,
+    pub ready: bool,
     pub path: Option<String>,
     pub name: Option<String>,
     pub project_count: usize,
@@ -25,8 +25,9 @@ pub struct WorkspaceStatus {
 
 pub async fn get_status(State(state): State<AppState>) -> AppJson<WorkspaceStatus> {
     let cfg = state.config.read().await;
+    let ready = cfg.config_path.exists();
     AppJson(WorkspaceStatus {
-        loaded: true,
+        ready,
         path: Some(
             cfg.config_path
                 .parent()
@@ -42,9 +43,23 @@ pub async fn get_status(State(state): State<AppState>) -> AppJson<WorkspaceStatu
 // GET /api/workspace
 // ---------------------------------------------------------------------------
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceInfo {
+    pub name: String,
+    pub root: String,
+    pub project_count: usize,
+}
+
 pub async fn get_workspace(State(state): State<AppState>) -> impl IntoResponse {
     let cfg = state.config.read().await;
-    Json(cfg.clone()).into_response()
+    let workspace_dir = state.workspace_dir.read().await;
+    Json(WorkspaceInfo {
+        name: cfg.workspace.name.clone(),
+        root: workspace_dir.to_string_lossy().into_owned(),
+        project_count: cfg.projects.len(),
+    })
+    .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -95,10 +110,14 @@ pub async fn switch_workspace(
 // GET /api/workspace/known
 // ---------------------------------------------------------------------------
 
-pub async fn list_known(State(_state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+pub async fn list_known(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     let gc_path = global_config_path();
     let workspaces = list_known_workspaces_at(&gc_path).map_err(ApiError::from_app)?;
-    Ok(Json(workspaces))
+    let current = {
+        let dir = state.workspace_dir.read().await;
+        dir.to_str().map(String::from)
+    };
+    Ok(Json(serde_json::json!({ "workspaces": workspaces, "current": current })))
 }
 
 // ---------------------------------------------------------------------------

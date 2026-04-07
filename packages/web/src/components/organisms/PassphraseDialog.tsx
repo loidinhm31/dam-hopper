@@ -47,7 +47,7 @@ export function PassphraseDialog({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!passphrase || loading) return;
+    if (loading) return;
     onSubmit(passphrase, selectedKey || undefined);
   }
 
@@ -77,7 +77,7 @@ export function PassphraseDialog({
         </div>
 
         <p className="text-xs text-[var(--color-text-muted)] mb-4">
-          Git operation failed due to SSH authentication. Enter your SSH key passphrase to load it into the agent and retry.
+          Git operation failed due to SSH authentication. Enter your SSH key passphrase and retry. Leave blank if the key has no passphrase.
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-3">
@@ -143,7 +143,6 @@ export function PassphraseDialog({
               variant="primary"
               size="sm"
               loading={loading}
-              disabled={!passphrase}
             >
               Load Key & Retry
             </Button>

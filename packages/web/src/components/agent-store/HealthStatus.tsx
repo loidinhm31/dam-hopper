@@ -6,8 +6,8 @@ export function HealthStatus() {
   const { data: health, isLoading, refetch } = useAgentStoreHealth();
   const [expanded, setExpanded] = useState(false);
 
-  const brokenCount = health?.brokenSymlinks.length ?? 0;
-  const orphanCount = health?.orphanedItems.length ?? 0;
+  const brokenCount = health?.brokenSymlinks?.length ?? 0;
+  const orphanCount = health?.orphanedItems?.length ?? 0;
   const totalIssues = brokenCount + orphanCount;
 
   return (
@@ -46,12 +46,12 @@ export function HealthStatus() {
 
       {expanded && totalIssues > 0 && (
         <div className="mt-2 space-y-1">
-          {health?.brokenSymlinks.map((b) => (
+          {health?.brokenSymlinks?.map((b) => (
             <div key={b.path} className="text-xs font-mono text-[var(--color-danger)]">
               ⚠ {b.project}: {b.path} → {b.target}
             </div>
           ))}
-          {health?.orphanedItems.map((o) => (
+          {health?.orphanedItems?.map((o) => (
             <div key={o.path} className="text-xs font-mono text-[var(--color-warning)]">
               ○ {o.project}: {o.path} ({o.reason})
             </div>

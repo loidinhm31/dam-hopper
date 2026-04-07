@@ -269,9 +269,8 @@ export function useClearCache() {
 }
 
 export function useResetWorkspace() {
-  // No onSuccess needed — workspace:changed(null) event (from IPC) triggers
-  // nuclear invalidation in useIpc hook, and App.tsx re-evaluates workspace
-  // status → shows WelcomePage automatically
+  // No onSuccess needed — workspace:changed(null) SSE event triggers
+  // nuclear cache invalidation in useIpc hook
   return useMutation({
     mutationFn: () => api.settings.reset(),
   });
