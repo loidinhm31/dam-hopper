@@ -16,6 +16,7 @@ vendored = ["git2/vendored-libgit2", "git2/vendored-openssl"]
 axum = { version = "0.8", features = ["ws", "json", "macros"] }
 axum-extra = { version = "0.10", features = ["cookie", "typed-header"] }
 tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 
@@ -61,6 +62,10 @@ infer = "0.15"
 mime_guess = "2"
 dunce = "1"
 
+# File system watching with debounce
+notify = "7"
+notify-debouncer-full = "0.4"
+
 # Git operations via libgit2
 git2 = "0.19"
 
@@ -78,6 +83,7 @@ serde_yaml_ng = "0.9"
 
 [dev-dependencies]
 tempfile = "3"
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 
 [profile.release]
 opt-level = 3

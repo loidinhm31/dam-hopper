@@ -1,7 +1,7 @@
 ---
 title: "IDE-style file explorer + Monaco editor"
 description: "Server-driven file tree, watch, edit, CRUD via WS subscription protocol with three-pane IDE shell"
-status: pending
+status: in_progress
 priority: P2
 effort: 20.5d
 branch: main
@@ -43,7 +43,7 @@ sequenceDiagram
 | # | File | Status | Effort | Summary |
 |---|------|--------|--------|---------|
 | 01 | phase-01-server-fs-foundation.md | done (2026-04-08) | 3d | sandbox + ops + read-only REST |
-| 02 | phase-02-watcher-ws-protocol.md | pending | 4d | watcher + WS sub protocol + ws.rs refactor |
+| 02 | phase-02-watcher-ws-protocol.md | done (2026-04-08) | 4d | watcher + WS sub protocol + ws.rs refactor |
 | 03 | phase-03-web-ide-shell-readonly.md | pending | 3d | three-pane shell + react-arborist tree |
 | 04 | phase-04-monaco-edit-save.md | pending | 4d | Monaco + tabs + save + tiering |
 | 05 | phase-05-crud-upload-download.md | pending | 4d | mutating ops + chunked transfer |

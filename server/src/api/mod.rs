@@ -13,6 +13,7 @@ pub mod ssh;
 pub mod terminal;
 pub mod workspace;
 pub mod ws;
+pub mod ws_protocol;
 
 #[cfg(test)]
 mod tests;
