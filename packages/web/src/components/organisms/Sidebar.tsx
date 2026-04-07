@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils.js";
 import { ConnectionDot } from "@/components/atoms/ConnectionDot.js";
 import { useIpc } from "@/hooks/useSSE.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
-import { ServerSettingsDialog } from "@/components/server-connection/server-settings-dialog.js";
+import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 
 const nav = [
   { to: "/", icon: LayoutDashboard, label: "DASHBOARD" },
