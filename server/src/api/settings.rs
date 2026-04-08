@@ -75,6 +75,12 @@ pub async fn import_settings(
 // GET /api/health
 // ---------------------------------------------------------------------------
 
-pub async fn health() -> impl IntoResponse {
-    Json(serde_json::json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
+pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "features": {
+            "ide_explorer": state.ide_explorer,
+        }
+    }))
 }

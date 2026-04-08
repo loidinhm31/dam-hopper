@@ -78,7 +78,9 @@ dev-hub-server (Rust, Axum, port 4800)
 Browser
 ├── React 19 (packages/web/dist/, same build)
 ├── WsTransport → fetch(/api/*) + WebSocket(/ws)
+│  └── WS envelope: {kind: "...", ...payload} (Phase 02+, no legacy {type:} support)
 ├── xterm.js terminal panels (per PTY session)
+├── react-arborist file tree (Phase 03+, gated on features.ide_explorer)
 └── TanStack Query (queries via WsTransport.invoke)
 ```
 
@@ -105,6 +107,12 @@ Browser
 **Error handling**: `thiserror` error types per module. API layer maps errors to HTTP status codes. Structured JSON error responses.
 
 **Concurrency**: Tokio async throughout. PTY sessions use `Arc<RwLock<...>>`. Broadcast channels for fan-out to multiple WebSocket consumers.
+
+**Feature gating:** IDE explorer (`ide_explorer` flag) gates both server routes (`/api/fs/*`) and web UI (sidebar link, /ide route). Enabled via:
+- `[features] ide_explorer = true` in `dev-hub.toml`, OR
+- `DEV_HUB_IDE=1` environment variable at server startup.
+
+Web checks `/api/health` (public, no auth) to read `features.ide_explorer` and conditionally render IDE components.
 
 
 ## Workspace Config (`dev-hub.toml`)

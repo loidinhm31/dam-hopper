@@ -1,5 +1,6 @@
 // Transport-agnostic API client — delegates through the active Transport singleton.
 import { getTransport } from "./transport.js";
+import type { FsListResponse, HealthResponse } from "./fs-types.js";
 
 export interface SessionInfo {
   id: string;
@@ -335,5 +336,12 @@ export const api = {
     list: () => getTransport().invoke<SessionInfo[]>("terminal:list"),
     listDetailed: () => getTransport().invoke<SessionInfo[]>("terminal:listDetailed"),
     getBuffer: (id: string) => getTransport().invoke<string>("terminal:buffer", id),
+  },
+  health: {
+    get: () => getTransport().invoke<HealthResponse>("health:get"),
+  },
+  fs: {
+    list: (project: string, path: string) =>
+      getTransport().invoke<FsListResponse>("fs:list", { project, path }),
   },
 };

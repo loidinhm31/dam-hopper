@@ -125,15 +125,48 @@ Body: `{ path: string }`
 **GET /api/workspace/config**
 Current workspace configuration.
 
+### Settings & Health
+
+**GET /api/health** (public, no auth required)
+Server health + feature flags.
+
+Response:
+```json
+{
+  "status": "ok",
+  "version": "0.2.0",
+  "features": {
+    "ide_explorer": true
+  }
+}
+```
+
 ## WebSocket Endpoint
 
 **WebSocket /ws**
 
-Protocol: JSON frames. Client sends commands, server broadcasts PTY events + git progress.
+Auth: append `?token={bearer_token}` to URL.
 
-Messages:
-- `{ type: "pty:spawn", project, profile, env_overrides? }`
-- `{ type: "pty:send", sessionId, input }`
-- `{ type: "pty:kill", sessionId }`
-- `{ type: "subscribe:pty", sessionId }` — listen to output
-- `{ type: "subscribe:git", project }` — listen to git progress
+Protocol: JSON frames. Client sends commands via `{kind:}` envelope, server broadcasts events.
+
+**Message Format (all client→server or server→client):**
+```json
+{ "kind": "terminal:write", "id": "uuid", "data": "..." }
+```
+
+**Terminal Messages:**
+- `{ kind: "terminal:spawn", project, profile, env_overrides? }` → server responds with `{ kind: "terminal:spawned", id, ... }`
+- `{ kind: "terminal:write", id, data }` — send input
+- `{ kind: "terminal:kill", id }` — terminate session
+- `{ kind: "terminal:output", id, chunk }` — server pushes PTY output
+- `{ kind: "terminal:exited", id, code }` — session ended
+
+**File Tree Subscription (Phase 03):**
+- `{ kind: "fs:subscribe_tree", req_id, project, path }` — start watching directory tree; server responds with `{ kind: "fs:tree_snapshot", sub_id, nodes: [...] }`
+- `{ kind: "fs:unsubscribe_tree", sub_id }` — stop watching
+- `{ kind: "fs:event", path, kind: "created|modified|deleted|renamed", from? }` — server pushes FS changes
+
+**Git Events:**
+- Server broadcasts `{ kind: "git:progress", project, step, percent }` during clone/push/pull
+
+All responses include context fields matching the request (e.g., `req_id` echoed back for fs:subscribe_tree).

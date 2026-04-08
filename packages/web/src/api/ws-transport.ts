@@ -6,14 +6,20 @@
  * - Auth: Authorization: Bearer header on all fetch calls; ?token= on WS URL
  * - Auto-reconnect with exponential backoff (1s → 2s → 4s → max 30s)
  * - Exposes WsStatus for connection state UI
+ *
+ * WS envelope: hard cut to {kind: "..."} format (server phase-02).
+ * No legacy {type: "..."} support.
  */
 
 import type { Transport } from "./transport.js";
 import { buildAuthHeaders, getAuthToken, getServerUrl } from "./server-config.js";
+import type { ServerTreeNode, FsEventDto } from "./fs-types.js";
 
 type Callback = (...args: unknown[]) => void;
 
 export type WsStatus = "connecting" | "connected" | "disconnected" | "error";
+
+const FS_REQ_TIMEOUT_MS = 15_000;
 
 /** IPC channel → REST endpoint mapping. */
 function channelToEndpoint(channel: string, data: unknown): { method: string; url: string; body?: unknown } {
@@ -88,6 +94,16 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
     case "terminal:buffer": return { method: "GET", url: `/api/terminal/${encodeURIComponent(data as string)}/buffer` };
     case "terminal:kill": return { method: "DELETE", url: `/api/terminal/${encodeURIComponent(data as string)}` };
     case "terminal:remove": return { method: "DELETE", url: `/api/terminal/${encodeURIComponent(data as string)}/remove` };
+
+    // Health
+    case "health:get": return { method: "GET", url: "/api/health" };
+
+    // FS (REST for list/stat; subscribe/unsubscribe go over WS)
+    case "fs:list": {
+      const d = data as { project: string; path: string };
+      const params = new URLSearchParams({ project: d.project, path: d.path });
+      return { method: "GET", url: `/api/fs/list?${params}` };
+    }
 
     // Agent Store
     case "agent-store:list": {
@@ -166,6 +182,16 @@ export class WsTransport implements Transport {
   /** sessionId → exit callbacks */
   private exitListeners = new Map<string, Set<(exitCode: number | null) => void>>();
 
+  // ── FS subscription state ─────────────────────────────────────────────────
+  private nextReqId = 1;
+  private pendingFsReqs = new Map<number, {
+    resolve: (v: { sub_id: number; nodes: ServerTreeNode[] }) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  /** sub_id → set of event callbacks */
+  private fsEventListeners = new Map<number, Set<(ev: FsEventDto) => void>>();
+
   constructor(private readonly baseUrl: string = getServerUrl()) {
     this.connect();
   }
@@ -197,6 +223,12 @@ export class WsTransport implements Transport {
     this.eventListeners.clear();
     this.dataListeners.clear();
     this.exitListeners.clear();
+    for (const p of this.pendingFsReqs.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingFsReqs.clear();
+    this.fsEventListeners.clear();
   }
 
   private connect(): void {
@@ -232,21 +264,56 @@ export class WsTransport implements Transport {
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data as string) as {
-          type: string;
+          kind: string;
           id?: string;
           data?: string;
           exitCode?: number | null;
           payload?: unknown;
+          req_id?: number;
+          sub_id?: number;
+          nodes?: ServerTreeNode[];
+          event?: FsEventDto;
+          code?: string;
+          message?: string;
         };
 
-        if (msg.type === "terminal:data" && msg.id) {
-          this.dataListeners.get(msg.id)?.forEach((cb) => cb(msg.data ?? ""));
-        } else if (msg.type === "terminal:exit" && msg.id) {
-          const code = msg.exitCode !== undefined ? msg.exitCode : null;
-          this.exitListeners.get(msg.id)?.forEach((cb) => cb(code));
-        } else {
-          const payload = msg.payload ?? msg;
-          this.eventListeners.get(msg.type)?.forEach((cb) => cb(payload));
+        switch (msg.kind) {
+          case "terminal:output":
+            if (msg.id) this.dataListeners.get(msg.id)?.forEach((cb) => cb(msg.data ?? ""));
+            break;
+          case "terminal:exit":
+            if (msg.id) {
+              const code = msg.exitCode !== undefined ? msg.exitCode : null;
+              this.exitListeners.get(msg.id)?.forEach((cb) => cb(code));
+            }
+            break;
+          case "fs:tree_snapshot": {
+            const p = msg.req_id !== undefined ? this.pendingFsReqs.get(msg.req_id) : undefined;
+            if (p) {
+              clearTimeout(p.timer);
+              this.pendingFsReqs.delete(msg.req_id!);
+              p.resolve({ sub_id: msg.sub_id!, nodes: (msg.nodes ?? []) as ServerTreeNode[] });
+            }
+            break;
+          }
+          case "fs:error": {
+            const p = msg.req_id !== undefined ? this.pendingFsReqs.get(msg.req_id) : undefined;
+            if (p) {
+              clearTimeout(p.timer);
+              this.pendingFsReqs.delete(msg.req_id!);
+              p.reject(new Error(`${msg.code ?? "FS_ERROR"}: ${msg.message ?? "unknown"}`));
+            }
+            break;
+          }
+          case "fs:event":
+            if (msg.sub_id !== undefined && msg.event) {
+              this.fsEventListeners.get(msg.sub_id)?.forEach((cb) => cb(msg.event!));
+            }
+            break;
+          default: {
+            const payload = msg.payload ?? msg;
+            this.eventListeners.get(msg.kind)?.forEach((cb) => cb(payload));
+          }
         }
       } catch {
         // ignore malformed messages
@@ -331,13 +398,46 @@ export class WsTransport implements Transport {
 
   terminalWrite(id: string, data: string): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "terminal:write", id, data }));
+      this.ws.send(JSON.stringify({ kind: "terminal:write", id, data }));
     }
   }
 
   terminalResize(id: string, cols: number, rows: number): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "terminal:resize", id, cols, rows }));
+      this.ws.send(JSON.stringify({ kind: "terminal:resize", id, cols, rows }));
     }
+  }
+
+  // ── FS subscription methods ───────────────────────────────────────────────
+
+  fsSubscribeTree(project: string, path: string): Promise<{ sub_id: number; nodes: ServerTreeNode[] }> {
+    return new Promise((resolve, reject) => {
+      const req_id = this.nextReqId++;
+      const timer = setTimeout(() => {
+        this.pendingFsReqs.delete(req_id);
+        reject(new Error(`fs:subscribe_tree timeout (req_id=${req_id})`));
+      }, FS_REQ_TIMEOUT_MS);
+      this.pendingFsReqs.set(req_id, { resolve, reject, timer });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ kind: "fs:subscribe_tree", req_id, project, path }));
+      } else {
+        clearTimeout(timer);
+        this.pendingFsReqs.delete(req_id);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  fsUnsubscribeTree(sub_id: number): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ kind: "fs:unsubscribe_tree", sub_id }));
+    }
+    this.fsEventListeners.delete(sub_id);
+  }
+
+  onFsEvent(sub_id: number, cb: (ev: FsEventDto) => void): () => void {
+    if (!this.fsEventListeners.has(sub_id)) this.fsEventListeners.set(sub_id, new Set());
+    this.fsEventListeners.get(sub_id)!.add(cb);
+    return () => this.fsEventListeners.get(sub_id)?.delete(cb);
   }
 }

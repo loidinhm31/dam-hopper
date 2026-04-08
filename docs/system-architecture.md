@@ -195,8 +195,12 @@ API layer (handlers) catch AppError → HTTP status:
 - 404 Not Found
 - 503 Service Unavailable (feature disabled)
 
-## Future Phases
+## Phase Progression
 
-**Phase 02:** File watcher (inotify/notify crate) in FsSubsystem.
+**Phase 01 (Complete):** File explorer foundation—sandbox, list/read/stat REST endpoints.
 
-**Phase 03+:** Write operations (create, delete, move), merge conflict UI, advanced terminal features.
+**Phase 02 (Complete):** Watcher subsystem via inotify/notify; WebSocket subscription protocol `{kind:}` envelope (hard cut from legacy `{type:}`); fs:subscribe_tree/fs:unsubscribe_tree/fs:event channels; health endpoint with feature flags.
+
+**Phase 03 (Complete):** Web IDE shell—react-resizable-panels layout (file tree | editor | terminal); react-arborist tree component; TanStack Query + useFsSubscription hook for live tree sync; applyFsDelta merges server events into client cache; feature flag `ide_explorer` gates routes and sidebar link; /ide lazy route with fallback placeholder.
+
+**Future (Phase 04+):** Monaco editor integration, write operations (create, delete, move), advanced terminal features.

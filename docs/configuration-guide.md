@@ -107,7 +107,7 @@ ide_explorer = true
 
 | Flag | Default | Env Override | Purpose |
 |------|---------|---|---------|
-| ide_explorer | false | `DEV_HUB_IDE=1` | File explorer + list/read/stat endpoints |
+| ide_explorer | false | `DEV_HUB_IDE=1` | File tree explorer—enables `/api/fs/*` REST endpoints, WS tree subscription, web IDE shell (/ide route), sidebar IDE link |
 
 Features set in config can be overridden at runtime via environment variables.
 
