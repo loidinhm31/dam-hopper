@@ -71,3 +71,14 @@ export interface HealthResponse {
     ide_explorer: boolean;
   };
 }
+
+export interface FsOpResult {
+  ok: boolean;
+  error?: string;
+}
+
+export interface FsUploadResult {
+  ok: boolean;
+  newMtime?: number;
+  error?: string;
+}

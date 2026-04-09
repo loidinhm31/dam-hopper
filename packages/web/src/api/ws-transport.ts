@@ -13,7 +13,7 @@
 
 import type { Transport } from "./transport.js";
 import { buildAuthHeaders, getAuthToken, getServerUrl } from "./server-config.js";
-import type { ServerTreeNode, FsEventDto } from "./fs-types.js";
+import type { FsOpResult, FsUploadResult, ServerTreeNode, FsEventDto } from "./fs-types.js";
 
 type Callback = (...args: unknown[]) => void;
 
@@ -260,6 +260,29 @@ export class WsTransport implements Transport {
     timer: ReturnType<typeof setTimeout>;
   }>();
 
+  // ── FS op state ───────────────────────────────────────────────────────────
+  private pendingFsOps = new Map<number, {
+    resolve: (v: FsOpResult) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+
+  // ── FS upload state ───────────────────────────────────────────────────────
+  private pendingUploadBegin = new Map<string, {
+    resolve: () => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  private pendingUploadChunks = new Map<string, {
+    resolve: () => void;
+    reject: (e: Error) => void;
+  }>();
+  private pendingUploadCommit = new Map<string, {
+    resolve: (v: FsUploadResult) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+
   constructor(private readonly baseUrl: string = getServerUrl()) {
     this.connect();
   }
@@ -315,6 +338,25 @@ export class WsTransport implements Transport {
       p.reject(new Error("transport destroyed"));
     }
     this.pendingWriteCommit.clear();
+    for (const p of this.pendingFsOps.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingFsOps.clear();
+    for (const p of this.pendingUploadBegin.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingUploadBegin.clear();
+    for (const p of this.pendingUploadChunks.values()) {
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingUploadChunks.clear();
+    for (const p of this.pendingUploadCommit.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingUploadCommit.clear();
   }
 
   private connect(): void {
@@ -491,6 +533,52 @@ export class WsTransport implements Transport {
             } else {
               p.resolve({ ok: false, conflict: false, error: msg.error ?? "write failed" });
             }
+            break;
+          }
+
+          case "fs:op_result": {
+            const reqId = msg.req_id;
+            if (reqId === undefined) break;
+            const p = this.pendingFsOps.get(reqId);
+            if (!p) break;
+            clearTimeout(p.timer);
+            this.pendingFsOps.delete(reqId);
+            p.resolve({ ok: msg.ok ?? false, error: msg.error });
+            break;
+          }
+
+          case "fs:upload_begin_ok": {
+            const uploadId = (msg as unknown as { upload_id: string }).upload_id;
+            const p = uploadId ? this.pendingUploadBegin.get(uploadId) : undefined;
+            if (!p) break;
+            clearTimeout(p.timer);
+            this.pendingUploadBegin.delete(uploadId);
+            p.resolve();
+            break;
+          }
+
+          case "fs:upload_chunk_ack": {
+            const uploadId = (msg as unknown as { upload_id: string }).upload_id;
+            const seq = (msg as unknown as { seq: number }).seq;
+            const key = `${uploadId}:${seq}`;
+            const p = this.pendingUploadChunks.get(key);
+            if (!p) break;
+            this.pendingUploadChunks.delete(key);
+            p.resolve();
+            break;
+          }
+
+          case "fs:upload_result": {
+            const uploadId = (msg as unknown as { upload_id: string }).upload_id;
+            const p = uploadId ? this.pendingUploadCommit.get(uploadId) : undefined;
+            if (!p) break;
+            clearTimeout(p.timer);
+            this.pendingUploadCommit.delete(uploadId);
+            p.resolve({
+              ok: msg.ok ?? false,
+              newMtime: msg.new_mtime,
+              error: msg.error,
+            });
             break;
           }
 
@@ -766,6 +854,167 @@ export class WsTransport implements Transport {
       } else {
         clearTimeout(timer);
         this.pendingWriteCommit.delete(writeId);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  // ── FS op ─────────────────────────────────────────────────────────────────
+
+  fsOp(
+    op: "create_file" | "create_dir" | "rename" | "delete" | "move",
+    params: { project: string; path: string; newPath?: string; forceGit?: boolean },
+  ): Promise<FsOpResult> {
+    return new Promise((resolve, reject) => {
+      const req_id = this.nextReqId++;
+      const timer = setTimeout(() => {
+        this.pendingFsOps.delete(req_id);
+        reject(new Error(`fs:op timeout (${op})`));
+      }, FS_REQ_TIMEOUT_MS);
+      this.pendingFsOps.set(req_id, { resolve, reject, timer });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({
+          kind: "fs:op",
+          req_id,
+          op,
+          project: params.project,
+          path: params.path,
+          new_path: params.newPath,
+          force_git: params.forceGit ?? false,
+        }));
+      } else {
+        clearTimeout(timer);
+        this.pendingFsOps.delete(req_id);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  // ── FS upload ─────────────────────────────────────────────────────────────
+
+  /**
+   * Upload a File via WS binary frames with ack-per-seq backpressure.
+   *
+   * Protocol: upload_begin → (upload_chunk JSON + Binary frame)* → upload_commit.
+   * In-flight window of 4: up to 4 chunk acks can be outstanding simultaneously.
+   */
+  async fsUploadFile(
+    project: string,
+    dir: string,
+    file: File,
+    onProgress?: (pct: number) => void,
+  ): Promise<FsUploadResult> {
+    const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const CHUNK_SIZE = 128 * 1024; // 128 KB
+    const IN_FLIGHT = 4;
+
+    // 1. Begin
+    await this.sendUploadBegin(uploadId, project, dir, file.name, file.size);
+
+    // 2. Chunk loop
+    const reader = file.stream().getReader();
+    let seq = 0;
+    let bytesSent = 0;
+    const inFlight: Array<Promise<void>> = [];
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      // Slice into CHUNK_SIZE pieces
+      let offset = 0;
+      while (offset < value.byteLength) {
+        const slice = value.slice(offset, offset + CHUNK_SIZE);
+        offset += slice.byteLength;
+        const currentSeq = seq++;
+
+        const ack = this.sendUploadChunk(uploadId, currentSeq, slice);
+        inFlight.push(ack);
+        bytesSent += slice.byteLength;
+        onProgress?.(file.size > 0 ? Math.min(99, Math.round((bytesSent / file.size) * 100)) : 50);
+
+        if (inFlight.length >= IN_FLIGHT) {
+          await inFlight.shift()!;
+        }
+      }
+    }
+
+    await Promise.all(inFlight);
+
+    // 3. Commit
+    const req_id = this.nextReqId++;
+    const result = await this.sendUploadCommit(req_id, uploadId);
+    onProgress?.(100);
+    return result;
+  }
+
+  private sendUploadBegin(
+    uploadId: string,
+    project: string,
+    dir: string,
+    filename: string,
+    len: number,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const req_id = this.nextReqId++;
+      const timer = setTimeout(() => {
+        this.pendingUploadBegin.delete(uploadId);
+        reject(new Error("fs:upload_begin timeout"));
+      }, FS_REQ_TIMEOUT_MS);
+      this.pendingUploadBegin.set(uploadId, { resolve, reject, timer });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({
+          kind: "fs:upload_begin",
+          req_id,
+          upload_id: uploadId,
+          project,
+          dir,
+          filename,
+          len,
+        }));
+      } else {
+        clearTimeout(timer);
+        this.pendingUploadBegin.delete(uploadId);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  private sendUploadChunk(uploadId: string, seq: number, data: Uint8Array): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const key = `${uploadId}:${seq}`;
+      const timer = setTimeout(() => {
+        this.pendingUploadChunks.delete(key);
+        reject(new Error(`upload chunk ack timeout (upload_id=${uploadId}, seq=${seq})`));
+      }, 30_000);
+      this.pendingUploadChunks.set(key, {
+        resolve: () => { clearTimeout(timer); resolve(); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        // JSON header first, then binary frame
+        this.ws.send(JSON.stringify({ kind: "fs:upload_chunk", upload_id: uploadId, seq }));
+        this.ws.send(data.buffer);
+      } else {
+        clearTimeout(timer);
+        this.pendingUploadChunks.delete(key);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  private sendUploadCommit(req_id: number, uploadId: string): Promise<FsUploadResult> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingUploadCommit.delete(uploadId);
+        reject(new Error("fs:upload_commit timeout"));
+      }, 60_000);
+      this.pendingUploadCommit.set(uploadId, { resolve, reject, timer });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ kind: "fs:upload_commit", req_id, upload_id: uploadId }));
+      } else {
+        clearTimeout(timer);
+        this.pendingUploadCommit.delete(uploadId);
         reject(new Error("WebSocket not connected"));
       }
     });

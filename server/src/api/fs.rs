@@ -1,4 +1,5 @@
 use axum::{
+    body::Body,
     extract::{Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
@@ -123,4 +124,69 @@ pub async fn stat(
         .map_err(ApiError::from)?;
     let file_stat = ops::stat(&canonical).await.map_err(AppError::Fs)?;
     Ok(Json(file_stat))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/fs/download?project=NAME&path=REL
+// ---------------------------------------------------------------------------
+
+pub async fn download(
+    State(state): State<AppState>,
+    Query(params): Query<ProjectPathParams>,
+) -> Result<Response, ApiError> {
+    let canonical = resolve(&state, &params.project, &params.path)
+        .await
+        .map_err(ApiError::from)?;
+
+    let meta = tokio::fs::metadata(&canonical).await.map_err(|_| {
+        ApiError::from(AppError::Fs(crate::fs::FsError::NotFound))
+    })?;
+
+    if !meta.is_file() {
+        return Err(ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)));
+    }
+
+    let filename = canonical
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "download".to_string());
+
+    let content_type = mime_guess::from_path(&canonical)
+        .first_raw()
+        .unwrap_or("application/octet-stream")
+        .to_string();
+
+    // Percent-encode non-ASCII for RFC 5987 compatibility.
+    let encoded_name: String = filename
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
+                c.to_string()
+            } else {
+                format!("%{:02X}", c as u32)
+            }
+        })
+        .collect();
+
+    let disposition = format!(
+        "attachment; filename=\"{filename}\"; filename*=UTF-8''{encoded_name}"
+    );
+
+    let file = tokio::fs::File::open(&canonical).await.map_err(|_| {
+        ApiError::from(AppError::Fs(crate::fs::FsError::NotFound))
+    })?;
+
+    let stream = tokio_util::io::ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CONTENT_DISPOSITION, disposition),
+            (header::CONTENT_LENGTH, meta.len().to_string()),
+        ],
+        body,
+    )
+        .into_response())
 }
