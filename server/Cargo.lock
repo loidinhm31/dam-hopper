@@ -444,6 +444,7 @@ dependencies = [
  "anyhow",
  "axum",
  "axum-extra",
+ "base64",
  "chrono",
  "clap",
  "dirs",

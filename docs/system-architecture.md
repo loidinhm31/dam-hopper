@@ -55,9 +55,10 @@ Handles TOML parsing, project discovery, feature flags.
 2. `DEV_HUB_WORKSPACE` env var
 3. `~/.config/dev-hub/config.toml` default path
 
-### fs/ (Phase 01: IDE File Explorer)
+### fs/ (Phase 01+: IDE File Explorer + Editor)
 
-**error.rs** — `FsError` enum (Unavailable, NotFound, PermissionDenied, etc.)
+**error.rs** — `FsError` enum (Unavailable, NotFound, PermissionDenied, TooLarge, Conflict).
+- `Conflict` variant (Phase 04): raised when write rejected due to mtime mismatch.
 
 **sandbox.rs** — `WorkspaceSandbox` validates paths stay within project bounds.
 - Cheap clone (PathBuf)
@@ -65,9 +66,10 @@ Handles TOML parsing, project discovery, feature flags.
 
 **ops.rs** — Filesystem operations:
 - `list_dir()` — directory contents with metadata
-- `read_file()` — text/binary detection, range reads (max 10MB)
+- `read_file()` — text/binary detection, range reads (max 100MB, Phase 04: capped at 10MB per REST call, unlimited via WS)
 - `stat()` — file metadata (kind, size, mtime, mime, isBinary)
 - `detect_binary()` — heuristic detection
+- `atomic_write_with_check()` (Phase 04) — mtime-guarded atomic write via tempfile + rename
 
 **mod.rs** — `FsSubsystem` (Arc<Mutex<Inner>>):
 - Lazy init: sandbox stored as Option (Unavailable if init failed)
@@ -203,4 +205,6 @@ API layer (handlers) catch AppError → HTTP status:
 
 **Phase 03 (Complete):** Web IDE shell—react-resizable-panels layout (file tree | editor | terminal); react-arborist tree component; TanStack Query + useFsSubscription hook for live tree sync; applyFsDelta merges server events into client cache; feature flag `ide_explorer` gates routes and sidebar link; /ide lazy route with fallback placeholder.
 
-**Future (Phase 04+):** Monaco editor integration, write operations (create, delete, move), advanced terminal features.
+**Phase 04 (Complete):** Monaco editor with tab mgmt + save. WS write protocol (fs:write_begin → fs:write_chunk* → fs:write_commit). File tiering (normal <1MB, degraded 1-5MB, large ≥5MB, binary). Conflict detection via mtime. Ctrl+S save, MonacoHost, EditorTabs, LargeFileViewer, BinaryPreview, ConflictDialog components.
+
+**Future (Phase 05+):** Create, delete, move operations, advanced terminal features.

@@ -164,7 +164,25 @@ Protocol: JSON frames. Client sends commands via `{kind:}` envelope, server broa
 **File Tree Subscription (Phase 03):**
 - `{ kind: "fs:subscribe_tree", req_id, project, path }` — start watching directory tree; server responds with `{ kind: "fs:tree_snapshot", sub_id, nodes: [...] }`
 - `{ kind: "fs:unsubscribe_tree", sub_id }` — stop watching
-- `{ kind: "fs:event", path, kind: "created|modified|deleted|renamed", from? }` — server pushes FS changes
+- `{ kind: "fs:event", sub_id, event: { kind, path, from? } }` — server pushes FS changes (created|modified|deleted|renamed)
+
+**File Read (Phase 04):**
+- `{ kind: "fs:read", req_id, project, path, offset?, len? }` — read file content with optional range
+  - Supports large files via offset+len (range reads)
+  - Server responds: `{ kind: "fs:read_result", req_id, ok, binary, mime?, mtime?, size?, data?, code? }`
+  - `data` is base64-encoded content (text or binary), max 100MB
+  - If `ok=false` and `code="TOO_LARGE"`: file exceeds cap; use range reads (LargeFileViewer)
+
+**File Write (Phase 04):**
+- `{ kind: "fs:write_begin", req_id, project, path, expected_mtime, size }` — initiate write
+  - Server responds: `{ kind: "fs:write_ack", req_id, write_id }`
+  - `expected_mtime` (Unix seconds) guards against concurrent modification; server rejects if stale
+- `{ kind: "fs:write_chunk", write_id, seq, eof, data }` — send base64 chunk
+  - Server acks each: `{ kind: "fs:write_chunk_ack", write_id, seq }`
+- `{ kind: "fs:write_commit", write_id }` — finalize write
+  - Server responds: `{ kind: "fs:write_result", write_id, ok, new_mtime?, conflict, error? }`
+  - `conflict=true` if server detected mtime mismatch; client shows ConflictDialog (overwrite or reload)
+  - `new_mtime` sent on success for next save guard
 
 **Git Events:**
 - Server broadcasts `{ kind: "git:progress", project, step, percent }` during clone/push/pull

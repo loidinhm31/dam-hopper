@@ -6,7 +6,7 @@ pub mod watcher;
 
 pub use error::FsError;
 pub use event::FsEvent;
-pub use ops::{DirEntry, FileStat, MAX_READ_BYTES};
+pub use ops::{atomic_write_with_check, DirEntry, FileStat, MAX_READ_BYTES};
 pub use sandbox::WorkspaceSandbox;
 pub use watcher::FsWatcherManager;
 

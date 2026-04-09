@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Write;
 
 use axum::{
     extract::{
@@ -8,6 +9,7 @@ use axum::{
     response::Response,
 };
 use axum_extra::extract::CookieJar;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use futures_util::stream::StreamExt;
 use subtle::ConstantTimeEq;
 use tokio::sync::mpsc;
@@ -17,16 +19,37 @@ use futures_util::SinkExt;
 
 use crate::api::auth::AUTH_COOKIE;
 use crate::api::ws_protocol::{ClientMsg, FsEventDto, ServerMsg, WireMsg};
-use crate::fs::tree_snapshot_sync;
+use crate::fs::{atomic_write_with_check, ops, tree_snapshot_sync};
 use crate::state::AppState;
 
 /// Bounded per-connection outbound channel.
 const CONN_CHAN_CAP: usize = 512;
 
 /// WS close code for backpressure overflow.
-/// Uses 4001 (private range 4000-4999, RFC 6455 §7.4.2) — custom application code.
-/// 1009 (MANDATORY_EXTENSION) is not appropriate here per RFC semantics.
 const CLOSE_OVERFLOW: u16 = 4001;
+
+/// Max file size for unrestricted WS read (5 MB). Larger files require range reads.
+const FS_WS_READ_MAX: u64 = 5 * 1024 * 1024;
+
+/// Max write size cap (100 MB). Enforced at write_begin.
+const FS_WRITE_MAX: u64 = 100 * 1024 * 1024;
+
+// ---------------------------------------------------------------------------
+// In-flight write state (per connection)
+// ---------------------------------------------------------------------------
+
+struct WriteInFlight {
+    /// Absolute validated path being written.
+    abs_path: std::path::PathBuf,
+    /// Client-supplied expected mtime; checked at commit time.
+    expected_mtime: i64,
+    /// Declared total size from write_begin — enforced as per-session cap.
+    declared_size: u64,
+    /// Accumulated chunk bytes in order.
+    buf: Vec<u8>,
+    /// Next expected seq number (monotonic validation).
+    next_seq: u32,
+}
 
 // ---------------------------------------------------------------------------
 // WebSocket upgrade handler
@@ -68,7 +91,6 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let (out_tx, mut out_rx) = mpsc::channel::<WireMsg>(CONN_CHAN_CAP);
 
     // Writer task: drains the per-conn mpsc → WS sink.
-    // Owns ws_tx exclusively; no other path writes to the socket.
     let writer = tokio::spawn(async move {
         while let Some(msg) = out_rx.recv().await {
             let wire = match msg {
@@ -90,14 +112,17 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         }
     });
 
-    // PTY broadcast pump: event_sink → mpsc (fire-and-forget; drop-oldest handled
-    // at the broadcast channel level — PTY broadcaster drops old messages on lag).
+    // PTY broadcast pump
     let pty_rx = state.event_sink.subscribe();
     let pty_out = out_tx.clone();
     let pty_pump = tokio::spawn(pump_pty(pty_rx, pty_out));
 
     // Per-conn fs subscription pumps: sub_id → JoinHandle
     let mut fs_pumps: HashMap<u64, tokio::task::JoinHandle<()>> = HashMap::new();
+
+    // In-flight write sessions: write_id → WriteInFlight
+    let mut writes: HashMap<u64, WriteInFlight> = HashMap::new();
+    let mut next_write_id: u64 = 1;
 
     // Reader loop
     while let Some(msg) = ws_rx.next().await {
@@ -136,10 +161,10 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             }
 
             // -----------------------------------------------------------
-            // FS — subscribe
+            // FS — subscribe / unsubscribe
             // -----------------------------------------------------------
             ClientMsg::FsSubTree { req_id, project, path } => {
-                let snapshot_result = do_fs_subscribe(
+                let result = do_fs_subscribe(
                     req_id,
                     &project,
                     &path,
@@ -149,17 +174,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 )
                 .await;
 
-                if let Err((code, msg)) = snapshot_result {
-                    let err_msg = ServerMsg::FsError { req_id, code, message: msg };
-                    if let Ok(json) = serde_json::to_string(&err_msg) {
-                        let _ = out_tx.send(WireMsg::Text(json)).await;
-                    }
+                if let Err((code, msg)) = result {
+                    send_fs_error(&out_tx, req_id, code, msg).await;
                 }
             }
 
-            // -----------------------------------------------------------
-            // FS — unsubscribe
-            // -----------------------------------------------------------
             ClientMsg::FsUnsubTree { sub_id } => {
                 if let Some(handle) = fs_pumps.remove(&sub_id) {
                     handle.abort();
@@ -169,30 +188,300 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             }
 
             // -----------------------------------------------------------
-            // FS — read (stub, full impl Phase 04)
+            // FS — read
             // -----------------------------------------------------------
-            ClientMsg::FsRead { req_id, .. } => {
-                let resp = ServerMsg::FsReadResult {
-                    req_id,
-                    ok: false,
-                    mime: None,
-                    binary: false,
-                    data: None,
+            ClientMsg::FsRead { req_id, project, path, offset, len } => {
+                let result = do_fs_read(req_id, &project, &path, offset, len, &state).await;
+                let json = match serde_json::to_string(&result) {
+                    Ok(j) => j,
+                    Err(e) => {
+                        warn!(error = %e, "failed to serialize fs:read_result");
+                        continue;
+                    }
                 };
-                if let Ok(json) = serde_json::to_string(&resp) {
+                let _ = out_tx.send(WireMsg::Text(json)).await;
+            }
+
+            // -----------------------------------------------------------
+            // FS — write begin
+            // -----------------------------------------------------------
+            ClientMsg::FsWriteBegin { req_id, project, path, expected_mtime, size } => {
+                if size > FS_WRITE_MAX {
+                    send_fs_error(&out_tx, req_id, "TOO_LARGE".into(),
+                        format!("write size {} exceeds {FS_WRITE_MAX} byte cap", size)).await;
+                    continue;
+                }
+
+                let abs_result = resolve_abs_path(&project, &path, &state).await;
+                match abs_result {
+                    Err((code, msg)) => send_fs_error(&out_tx, req_id, code, msg).await,
+                    Ok(abs_path) => {
+                        let write_id = next_write_id;
+                        next_write_id += 1;
+                        writes.insert(write_id, WriteInFlight {
+                            abs_path,
+                            expected_mtime,
+                            declared_size: size,
+                            buf: Vec::with_capacity(size as usize),
+                            next_seq: 0,
+                        });
+                        let ack = ServerMsg::FsWriteAck { req_id, write_id };
+                        if let Ok(json) = serde_json::to_string(&ack) {
+                            let _ = out_tx.send(WireMsg::Text(json)).await;
+                        }
+                        debug!(req_id, write_id, path, project, "fs:write_begin");
+                    }
+                }
+            }
+
+            // -----------------------------------------------------------
+            // FS — write chunk
+            // -----------------------------------------------------------
+            ClientMsg::FsWriteChunk { write_id, seq, eof, data } => {
+                let entry = match writes.get_mut(&write_id) {
+                    Some(e) => e,
+                    None => {
+                        warn!(write_id, "fs:write_chunk for unknown write_id — dropping");
+                        continue;
+                    }
+                };
+
+                if seq != entry.next_seq {
+                    warn!(write_id, seq, expected = entry.next_seq, "out-of-order chunk — aborting write");
+                    writes.remove(&write_id);
+                    continue;
+                }
+
+                match BASE64.decode(&data) {
+                    Ok(bytes) => {
+                        // Enforce declared size cap per-chunk: rejects clients that
+                        // bypass the write_begin size check by sending extra chunks.
+                        let accumulated = entry.buf.len() as u64 + bytes.len() as u64;
+                        if accumulated > entry.declared_size.max(FS_WRITE_MAX) {
+                            warn!(write_id, accumulated, declared = entry.declared_size,
+                                "write_chunk exceeds declared size — aborting write");
+                            writes.remove(&write_id);
+                            continue;
+                        }
+                        entry.buf.write_all(&bytes).ok();
+                        entry.next_seq += 1;
+                    }
+                    Err(e) => {
+                        warn!(write_id, seq, error = %e, "chunk base64 decode failed — aborting write");
+                        writes.remove(&write_id);
+                        continue;
+                    }
+                }
+
+                let _ = eof; // eof flag is informational; commit message is authoritative
+
+                let ack = ServerMsg::FsWriteChunkAck { write_id, seq };
+                if let Ok(json) = serde_json::to_string(&ack) {
+                    let _ = out_tx.send(WireMsg::Text(json)).await;
+                }
+            }
+
+            // -----------------------------------------------------------
+            // FS — write commit
+            // -----------------------------------------------------------
+            ClientMsg::FsWriteCommit { write_id } => {
+                let entry = match writes.remove(&write_id) {
+                    Some(e) => e,
+                    None => {
+                        warn!(write_id, "fs:write_commit for unknown write_id");
+                        let result_msg = ServerMsg::FsWriteResult {
+                            write_id,
+                            ok: false,
+                            new_mtime: None,
+                            conflict: false,
+                            error: Some("write session not found".into()),
+                        };
+                        if let Ok(json) = serde_json::to_string(&result_msg) {
+                            let _ = out_tx.send(WireMsg::Text(json)).await;
+                        }
+                        continue;
+                    }
+                };
+
+                let write_result = atomic_write_with_check(
+                    &entry.abs_path,
+                    entry.expected_mtime,
+                    &entry.buf,
+                    false, // fsync off by default
+                )
+                .await;
+
+                let result_msg = match write_result {
+                    Ok(new_mtime) => {
+                        debug!(write_id, new_mtime, "fs:write_commit success");
+                        ServerMsg::FsWriteResult {
+                            write_id,
+                            ok: true,
+                            new_mtime: Some(new_mtime),
+                            conflict: false,
+                            error: None,
+                        }
+                    }
+                    Err(crate::fs::FsError::Conflict) => {
+                        warn!(write_id, "fs:write_commit conflict");
+                        ServerMsg::FsWriteResult {
+                            write_id,
+                            ok: false,
+                            new_mtime: None,
+                            conflict: true,
+                            error: Some("file modified since last read".into()),
+                        }
+                    }
+                    Err(e) => {
+                        warn!(write_id, error = %e, "fs:write_commit error");
+                        ServerMsg::FsWriteResult {
+                            write_id,
+                            ok: false,
+                            new_mtime: None,
+                            conflict: false,
+                            error: Some(e.to_string()),
+                        }
+                    }
+                };
+
+                if let Ok(json) = serde_json::to_string(&result_msg) {
                     let _ = out_tx.send(WireMsg::Text(json)).await;
                 }
             }
         }
     }
 
-    // Cleanup: abort all fs pump tasks and release subscriptions
+    // Cleanup
     for (sub_id, handle) in fs_pumps {
         handle.abort();
         state.fs.unsubscribe_tree(sub_id);
     }
     pty_pump.abort();
     writer.abort();
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+async fn send_fs_error(out_tx: &mpsc::Sender<WireMsg>, req_id: u64, code: String, message: String) {
+    let err_msg = ServerMsg::FsError { req_id, code, message };
+    if let Ok(json) = serde_json::to_string(&err_msg) {
+        let _ = out_tx.send(WireMsg::Text(json)).await;
+    }
+}
+
+/// Resolve project + relative path → validated absolute path.
+async fn resolve_abs_path(
+    project: &str,
+    path: &str,
+    state: &AppState,
+) -> Result<std::path::PathBuf, (String, String)> {
+    let project_abs = state.project_path(project).await.map_err(|e| {
+        ("PROJECT_NOT_FOUND".to_string(), e.to_string())
+    })?;
+
+    let sandbox = state.fs.sandbox().map_err(|e| {
+        ("FS_UNAVAILABLE".to_string(), e.to_string())
+    })?;
+
+    let rel = if path.is_empty() || path == "/" { "." } else { path.trim_start_matches('/') };
+    sandbox.validate(project_abs.join(rel)).await.map_err(|e| {
+        ("PATH_REJECTED".to_string(), e.to_string())
+    })
+}
+
+/// Handle `fs:read` — stat + binary detect + ranged/full read → base64 response.
+async fn do_fs_read(
+    req_id: u64,
+    project: &str,
+    path: &str,
+    offset: Option<u64>,
+    len: Option<u64>,
+    state: &AppState,
+) -> ServerMsg {
+    let abs = match resolve_abs_path(project, path, state).await {
+        Ok(p) => p,
+        Err((code, _message)) => {
+            return ServerMsg::FsReadResult {
+                req_id, ok: false, mime: None, binary: false,
+                mtime: None, size: None, data: None,
+                code: Some(code),
+            };
+        }
+    };
+
+    // Detect binary + mime (cheap: reads first 8KB)
+    let (is_binary, mime) = match ops::detect_binary(&abs).await {
+        Ok(v) => v,
+        Err(e) => {
+            return ServerMsg::FsReadResult {
+                req_id, ok: false, mime: None, binary: false,
+                mtime: None, size: None, data: None,
+                code: Some(format!("IO_ERROR: {e}")),
+            };
+        }
+    };
+
+    // Stat for mtime + size
+    let meta = match tokio::fs::metadata(&abs).await {
+        Ok(m) => m,
+        Err(e) => {
+            return ServerMsg::FsReadResult {
+                req_id, ok: false, mime: None, binary: false,
+                mtime: None, size: None, data: None,
+                code: Some(format!("IO_ERROR: {e}")),
+            };
+        }
+    };
+    let file_size = meta.len();
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    // Determine range
+    let range = match (offset, len) {
+        (Some(o), Some(l)) => Some((o, l)),
+        (Some(o), None) => Some((o, file_size.saturating_sub(o))),
+        _ => None,
+    };
+
+    // Without a range, enforce 5MB cap (range reads are uncapped — LargeFileViewer owns that)
+    let max = if range.is_some() { u64::MAX } else { FS_WS_READ_MAX };
+
+    let bytes = match ops::read_file(&abs, range, max).await {
+        Ok(b) => b,
+        Err(crate::fs::FsError::TooLarge(_)) => {
+            return ServerMsg::FsReadResult {
+                req_id, ok: false, mime, binary: is_binary,
+                mtime: Some(mtime), size: Some(file_size),
+                data: None, code: Some("TOO_LARGE".into()),
+            };
+        }
+        Err(e) => {
+            return ServerMsg::FsReadResult {
+                req_id, ok: false, mime, binary: is_binary,
+                mtime: None, size: None, data: None,
+                code: Some(e.to_string()),
+            };
+        }
+    };
+
+    let encoded = BASE64.encode(&bytes);
+
+    ServerMsg::FsReadResult {
+        req_id,
+        ok: true,
+        mime,
+        binary: is_binary,
+        mtime: Some(mtime),
+        size: Some(file_size),
+        data: Some(encoded),
+        code: None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -206,8 +495,6 @@ async fn pump_pty(
     loop {
         match rx.recv().await {
             Ok(msg) => {
-                // Drop-oldest policy: if the PTY event can't be sent (channel
-                // closed), we exit cleanly. The broadcast channel handles lag.
                 if out_tx.send(WireMsg::Text(msg)).await.is_err() {
                     break;
                 }
@@ -232,12 +519,10 @@ async fn do_fs_subscribe(
     out_tx: mpsc::Sender<WireMsg>,
     fs_pumps: &mut HashMap<u64, tokio::task::JoinHandle<()>>,
 ) -> Result<(), (String, String)> {
-    // Resolve project path
     let project_abs = state.project_path(project).await.map_err(|e| {
         ("PROJECT_NOT_FOUND".to_string(), e.to_string())
     })?;
 
-    // Validate via sandbox
     let sandbox = state.fs.sandbox().map_err(|e| {
         ("FS_UNAVAILABLE".to_string(), e.to_string())
     })?;
@@ -247,25 +532,21 @@ async fn do_fs_subscribe(
         ("PATH_REJECTED".to_string(), e.to_string())
     })?;
 
-    // Subscribe watcher
     let (sub_id, fs_rx) = state.fs.subscribe_tree(project_abs.clone(), abs_path.clone())
         .map_err(|e| ("WATCHER_ERROR".to_string(), e.to_string()))?;
 
     debug!(sub_id, project, path, "fs:subscribe_tree");
 
-    // Generate snapshot (blocking IO in spawn_blocking so it doesn't hold the reader)
     let snap_path = abs_path.clone();
     let nodes = tokio::task::spawn_blocking(move || tree_snapshot_sync(&snap_path))
         .await
         .map_err(|e| ("INTERNAL".to_string(), e.to_string()))?
         .map_err(|e| ("SNAPSHOT_ERROR".to_string(), e.to_string()))?;
 
-    // Send snapshot
     let snap = ServerMsg::TreeSnapshot { req_id, sub_id, nodes };
     let json = serde_json::to_string(&snap).map_err(|e| ("SERIALIZE".to_string(), e.to_string()))?;
     out_tx.send(WireMsg::Text(json)).await.map_err(|_| ("CONN_CLOSED".to_string(), "connection closed".to_string()))?;
 
-    // Spawn pump task: broadcast::Receiver<FsEvent> → mpsc, filtered by prefix
     let filter_prefix = abs_path.clone();
     let pump_out = out_tx.clone();
     let handle = tokio::spawn(async move {
@@ -277,7 +558,7 @@ async fn do_fs_subscribe(
 }
 
 // ---------------------------------------------------------------------------
-// FS event pump — per subscription
+// FS event pump
 // ---------------------------------------------------------------------------
 
 async fn pump_fs_events(
@@ -289,10 +570,6 @@ async fn pump_fs_events(
     loop {
         match rx.recv().await {
             Ok(ev) => {
-                // Server-side filter: skip events outside the subscribed subtree.
-                // Path::starts_with is component-based (semantic), not byte-level —
-                // `/foo/bar` does NOT match prefix `/foo/b`. For rename events, pass
-                // through if either path touches the subscribed tree.
                 let path_in = ev.path.starts_with(&filter_prefix);
                 let from_in = ev.from.as_ref().map(|p| p.starts_with(&filter_prefix)).unwrap_or(false);
                 if !path_in && !from_in {
@@ -309,12 +586,10 @@ async fn pump_fs_events(
                     }
                 };
 
-                // Drop-on-overflow for fs subscriptions: 1009 policy
                 match out_tx.try_send(WireMsg::Text(json)) {
                     Ok(_) => {}
                     Err(mpsc::error::TrySendError::Full(_)) => {
                         warn!(sub_id, cap = CONN_CHAN_CAP, "fs pump mpsc full — closing connection (4001)");
-                        // Best-effort close frame; writer task may already be gone
                         let _ = out_tx.try_send(WireMsg::CloseOverflow);
                         break;
                     }

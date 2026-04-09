@@ -19,6 +19,10 @@ pub enum FsError {
     #[error("fs subsystem unavailable")]
     Unavailable,
 
+    /// Write rejected: file was modified since the client last read it (mtime mismatch).
+    #[error("conflict: file modified since last read")]
+    Conflict,
+
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -30,6 +34,7 @@ impl FsError {
             FsError::PathEscape | FsError::PermissionDenied => 403,
             FsError::TooLarge(_) => 413,
             FsError::Unavailable => 503,
+            FsError::Conflict => 409,
             FsError::Io(_) => 500,
         }
     }

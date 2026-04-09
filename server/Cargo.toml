@@ -81,8 +81,13 @@ regex = "1"
 # YAML frontmatter parsing for agent store items
 serde_yaml_ng = "0.9"
 
-[dev-dependencies]
+# Atomic file writes (production use in fs write protocol)
 tempfile = "3"
+
+# Base64 encoding for WS binary content transfer
+base64 = "0.22"
+
+[dev-dependencies]
 tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 
 [profile.release]

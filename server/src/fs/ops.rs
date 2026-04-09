@@ -166,6 +166,77 @@ pub async fn read_file(abs: &Path, range: Option<(u64, u64)>, max: u64) -> Resul
     Ok(buf)
 }
 
+/// Atomically write `bytes` to `abs`, guarded by mtime check.
+///
+/// 1. Stats `abs`; if mtime ≠ `expected_mtime` returns `FsError::Conflict`.
+/// 2. Creates a `NamedTempFile` in the same directory (same fs partition).
+/// 3. Writes all bytes; optionally fsyncs.
+/// 4. Atomically renames temp → `abs`.
+/// 5. Returns the new mtime (Unix seconds).
+///
+/// Temp file lives in the target directory to avoid cross-device rename failures.
+pub async fn atomic_write_with_check(
+    abs: &Path,
+    expected_mtime: i64,
+    bytes: &[u8],
+    fsync: bool,
+) -> Result<i64, FsError> {
+    // Mtime guard — stat the current file
+    let meta = fs::metadata(abs).await.map_err(map_io)?;
+    let current_mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    if current_mtime != expected_mtime {
+        return Err(FsError::Conflict);
+    }
+
+    // Write size cap: 100 MB
+    if bytes.len() as u64 > MAX_READ_BYTES {
+        return Err(FsError::TooLarge(bytes.len() as u64));
+    }
+
+    // Resolve parent directory; fail loudly if missing (sandbox guarantees it exists)
+    let parent = abs.parent().ok_or_else(|| FsError::Io(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "path has no parent",
+    )))?;
+
+    // Create temp file on same FS partition as target (avoids cross-device rename)
+    tokio::task::spawn_blocking({
+        let parent = parent.to_path_buf();
+        let bytes = bytes.to_vec();
+        let abs = abs.to_path_buf();
+        move || -> Result<(), FsError> {
+            use std::io::Write;
+            let mut tmp = tempfile::NamedTempFile::new_in(&parent)
+                .map_err(FsError::Io)?;
+            tmp.write_all(&bytes).map_err(FsError::Io)?;
+            if fsync {
+                tmp.as_file().sync_data().map_err(FsError::Io)?;
+            }
+            tmp.persist(&abs).map_err(|e| FsError::Io(e.error))?;
+            Ok(())
+        }
+    })
+    .await
+    .map_err(|e| FsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))??;
+
+    // Stat again for the real new mtime
+    let new_meta = fs::metadata(abs).await.map_err(map_io)?;
+    let new_mtime = new_meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    Ok(new_mtime)
+}
+
 fn map_io(e: std::io::Error) -> FsError {
     if e.kind() == std::io::ErrorKind::NotFound {
         FsError::NotFound

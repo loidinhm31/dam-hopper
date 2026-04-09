@@ -20,6 +20,51 @@ type Callback = (...args: unknown[]) => void;
 export type WsStatus = "connecting" | "connected" | "disconnected" | "error";
 
 const FS_REQ_TIMEOUT_MS = 15_000;
+const WRITE_CHUNK_SIZE = 128 * 1024; // 128 KB per chunk
+
+export interface FsReadResult {
+  ok: true;
+  content: string;       // base64-encoded
+  binary: boolean;
+  mime?: string;
+  mtime: number;
+  size: number;
+}
+
+export interface FsReadTooLarge {
+  ok: false;
+  code: "TOO_LARGE";
+  binary: boolean;
+  mime?: string;
+  mtime: number;
+  size: number;
+}
+
+export interface FsReadError {
+  ok: false;
+  code: string;
+  message?: string;
+}
+
+export type FsReadResponse = FsReadResult | FsReadTooLarge | FsReadError;
+
+export interface FsWriteResult {
+  ok: true;
+  newMtime: number;
+}
+
+export interface FsWriteConflict {
+  ok: false;
+  conflict: true;
+}
+
+export interface FsWriteError {
+  ok: false;
+  conflict: false;
+  error: string;
+}
+
+export type FsWriteResponse = FsWriteResult | FsWriteConflict | FsWriteError;
 
 /** IPC channel → REST endpoint mapping. */
 function channelToEndpoint(channel: string, data: unknown): { method: string; url: string; body?: unknown } {
@@ -192,6 +237,29 @@ export class WsTransport implements Transport {
   /** sub_id → set of event callbacks */
   private fsEventListeners = new Map<number, Set<(ev: FsEventDto) => void>>();
 
+  // ── FS read state ─────────────────────────────────────────────────────────
+  private pendingFsReads = new Map<number, {
+    resolve: (v: FsReadResponse) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+
+  // ── FS write state ────────────────────────────────────────────────────────
+  /** write_id → resolve/reject for write_begin response */
+  private pendingWriteBegin = new Map<number, {
+    resolve: (writeId: number) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  /** `${write_id}:${seq}` → resolve for chunk ack */
+  private pendingWriteChunks = new Map<string, { resolve: () => void; reject: (e: Error) => void }>();
+  /** write_id → resolve/reject for commit result */
+  private pendingWriteCommit = new Map<number, {
+    resolve: (v: FsWriteResponse) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+
   constructor(private readonly baseUrl: string = getServerUrl()) {
     this.connect();
   }
@@ -210,7 +278,6 @@ export class WsTransport implements Transport {
     return () => this.statusListeners.delete(cb);
   }
 
-  /** Teardown: close WS, cancel reconnect timer, clear all listeners. */
   destroy(): void {
     this.closed = true;
     if (this.reconnectTimer) {
@@ -229,6 +296,25 @@ export class WsTransport implements Transport {
     }
     this.pendingFsReqs.clear();
     this.fsEventListeners.clear();
+    for (const p of this.pendingFsReads.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingFsReads.clear();
+    for (const p of this.pendingWriteBegin.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingWriteBegin.clear();
+    for (const p of this.pendingWriteChunks.values()) {
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingWriteChunks.clear();
+    for (const p of this.pendingWriteCommit.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingWriteCommit.clear();
   }
 
   private connect(): void {
@@ -242,7 +328,6 @@ export class WsTransport implements Transport {
       wsProto = parsed.protocol === "https:" ? "wss:" : "ws:";
       host = parsed.host;
     } catch {
-      // baseUrl may be a relative path on same origin
       wsProto = location.protocol === "https:" ? "wss:" : "ws:";
       host = location.host;
     }
@@ -275,18 +360,32 @@ export class WsTransport implements Transport {
           event?: FsEventDto;
           code?: string;
           message?: string;
+          // read result
+          ok?: boolean;
+          mime?: string;
+          binary?: boolean;
+          mtime?: number;
+          size?: number;
+          // write
+          write_id?: number;
+          seq?: number;
+          new_mtime?: number;
+          conflict?: boolean;
+          error?: string;
         };
 
         switch (msg.kind) {
           case "terminal:output":
             if (msg.id) this.dataListeners.get(msg.id)?.forEach((cb) => cb(msg.data ?? ""));
             break;
+
           case "terminal:exit":
             if (msg.id) {
               const code = msg.exitCode !== undefined ? msg.exitCode : null;
               this.exitListeners.get(msg.id)?.forEach((cb) => cb(code));
             }
             break;
+
           case "fs:tree_snapshot": {
             const p = msg.req_id !== undefined ? this.pendingFsReqs.get(msg.req_id) : undefined;
             if (p) {
@@ -296,20 +395,105 @@ export class WsTransport implements Transport {
             }
             break;
           }
+
           case "fs:error": {
-            const p = msg.req_id !== undefined ? this.pendingFsReqs.get(msg.req_id) : undefined;
-            if (p) {
-              clearTimeout(p.timer);
-              this.pendingFsReqs.delete(msg.req_id!);
-              p.reject(new Error(`${msg.code ?? "FS_ERROR"}: ${msg.message ?? "unknown"}`));
+            // Could be a read error or subscribe error
+            const reqId = msg.req_id;
+            if (reqId !== undefined) {
+              const subscribeP = this.pendingFsReqs.get(reqId);
+              if (subscribeP) {
+                clearTimeout(subscribeP.timer);
+                this.pendingFsReqs.delete(reqId);
+                subscribeP.reject(new Error(`${msg.code ?? "FS_ERROR"}: ${msg.message ?? "unknown"}`));
+                break;
+              }
+              const readP = this.pendingFsReads.get(reqId);
+              if (readP) {
+                clearTimeout(readP.timer);
+                this.pendingFsReads.delete(reqId);
+                readP.resolve({ ok: false, code: msg.code ?? "FS_ERROR", message: msg.message });
+                break;
+              }
             }
             break;
           }
+
           case "fs:event":
             if (msg.sub_id !== undefined && msg.event) {
               this.fsEventListeners.get(msg.sub_id)?.forEach((cb) => cb(msg.event!));
             }
             break;
+
+          case "fs:read_result": {
+            const reqId = msg.req_id;
+            if (reqId === undefined) break;
+            const p = this.pendingFsReads.get(reqId);
+            if (!p) break;
+            clearTimeout(p.timer);
+            this.pendingFsReads.delete(reqId);
+
+            if (msg.ok) {
+              p.resolve({
+                ok: true,
+                content: msg.data ?? "",
+                binary: msg.binary ?? false,
+                mime: msg.mime,
+                mtime: msg.mtime ?? 0,
+                size: msg.size ?? 0,
+              });
+            } else if (msg.code === "TOO_LARGE") {
+              p.resolve({
+                ok: false,
+                code: "TOO_LARGE",
+                binary: msg.binary ?? false,
+                mime: msg.mime,
+                mtime: msg.mtime ?? 0,
+                size: msg.size ?? 0,
+              });
+            } else {
+              p.resolve({ ok: false, code: msg.code ?? "FS_ERROR", message: msg.message });
+            }
+            break;
+          }
+
+          case "fs:write_ack": {
+            const reqId = msg.req_id;
+            if (reqId === undefined) break;
+            const p = this.pendingWriteBegin.get(reqId);
+            if (!p) break;
+            clearTimeout(p.timer);
+            this.pendingWriteBegin.delete(reqId);
+            p.resolve(msg.write_id!);
+            break;
+          }
+
+          case "fs:write_chunk_ack": {
+            const key = `${msg.write_id}:${msg.seq}`;
+            const p = this.pendingWriteChunks.get(key);
+            if (!p) break;
+            this.pendingWriteChunks.delete(key);
+            p.resolve();
+            break;
+          }
+
+          case "fs:write_result": {
+            const writeId = msg.write_id;
+            if (writeId === undefined) break;
+            const p = this.pendingWriteCommit.get(writeId);
+            if (!p) break;
+            clearTimeout(p.timer);
+            this.pendingWriteCommit.delete(writeId);
+
+            if (msg.ok) {
+              p.resolve({ ok: true, newMtime: msg.new_mtime! });
+            } else if (msg.conflict) {
+              p.resolve({ ok: false, conflict: true });
+            } else {
+              p.resolve({ ok: false, conflict: false, error: msg.error ?? "write failed" });
+            }
+            break;
+          }
+
           default: {
             const payload = msg.payload ?? msg;
             this.eventListeners.get(msg.kind)?.forEach((cb) => cb(payload));
@@ -345,7 +529,6 @@ export class WsTransport implements Transport {
   async invoke<T>(channel: string, data?: unknown): Promise<T> {
     const { method, url: relativeUrl, body } = channelToEndpoint(channel, data);
 
-    // Build absolute URL — baseUrl may be cross-origin
     const fullUrl = relativeUrl.startsWith("/")
       ? `${this.baseUrl}${relativeUrl}`
       : relativeUrl;
@@ -360,7 +543,7 @@ export class WsTransport implements Transport {
     const init: RequestInit = {
       method,
       headers,
-      credentials: "include", // send cookies for same-origin; ignored cross-origin without CORS allow-credentials
+      credentials: "include",
     };
     if (body !== undefined) {
       init.body = JSON.stringify(body);
@@ -439,5 +622,152 @@ export class WsTransport implements Transport {
     if (!this.fsEventListeners.has(sub_id)) this.fsEventListeners.set(sub_id, new Set());
     this.fsEventListeners.get(sub_id)!.add(cb);
     return () => this.fsEventListeners.get(sub_id)?.delete(cb);
+  }
+
+  // ── FS read ───────────────────────────────────────────────────────────────
+
+  fsRead(
+    project: string,
+    path: string,
+    opts?: { offset?: number; len?: number },
+  ): Promise<FsReadResponse> {
+    return new Promise((resolve, reject) => {
+      const req_id = this.nextReqId++;
+      const timer = setTimeout(() => {
+        this.pendingFsReads.delete(req_id);
+        reject(new Error(`fs:read timeout (req_id=${req_id})`));
+      }, FS_REQ_TIMEOUT_MS);
+      this.pendingFsReads.set(req_id, { resolve, reject, timer });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({
+          kind: "fs:read",
+          req_id,
+          project,
+          path,
+          offset: opts?.offset,
+          len: opts?.len,
+        }));
+      } else {
+        clearTimeout(timer);
+        this.pendingFsReads.delete(req_id);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  // ── FS write ──────────────────────────────────────────────────────────────
+
+  /**
+   * Write a file atomically via the WS write protocol:
+   * write_begin → chunk* → write_commit.
+   *
+   * `content` is the UTF-8 string to write. `expectedMtime` is the mtime
+   * the client last observed (Unix seconds); the server rejects if stale.
+   */
+  async fsWriteFile(
+    project: string,
+    path: string,
+    content: string,
+    expectedMtime: number,
+  ): Promise<FsWriteResponse> {
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode(content);
+    const size = bytes.length;
+
+    // 1. write_begin → get write_id
+    const writeId = await this.sendWriteBegin(project, path, expectedMtime, size);
+
+    // 2. Chunk the content and send each chunk
+    let seq = 0;
+    let offset = 0;
+    while (offset < bytes.length) {
+      const chunk = bytes.slice(offset, offset + WRITE_CHUNK_SIZE);
+      offset += chunk.length;
+      const eof = offset >= bytes.length;
+      const b64 = btoa(String.fromCharCode(...chunk));
+      await this.sendWriteChunk(writeId, seq, eof, b64);
+      seq++;
+    }
+
+    // Handle empty file edge case
+    if (bytes.length === 0) {
+      await this.sendWriteChunk(writeId, 0, true, "");
+    }
+
+    // 3. Commit
+    return this.sendWriteCommit(writeId);
+  }
+
+  private sendWriteBegin(
+    project: string,
+    path: string,
+    expectedMtime: number,
+    size: number,
+  ): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const req_id = this.nextReqId++;
+      const timer = setTimeout(() => {
+        this.pendingWriteBegin.delete(req_id);
+        reject(new Error("fs:write_begin timeout"));
+      }, FS_REQ_TIMEOUT_MS);
+      this.pendingWriteBegin.set(req_id, { resolve, reject, timer });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({
+          kind: "fs:write_begin",
+          req_id,
+          project,
+          path,
+          expected_mtime: expectedMtime,
+          size,
+        }));
+      } else {
+        clearTimeout(timer);
+        this.pendingWriteBegin.delete(req_id);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  private sendWriteChunk(
+    writeId: number,
+    seq: number,
+    eof: boolean,
+    data: string,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const key = `${writeId}:${seq}`;
+      const timer = setTimeout(() => {
+        this.pendingWriteChunks.delete(key);
+        reject(new Error(`chunk ack timeout (write_id=${writeId}, seq=${seq})`));
+      }, 30_000);
+      this.pendingWriteChunks.set(key, {
+        resolve: () => { clearTimeout(timer); resolve(); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ kind: "fs:write_chunk", write_id: writeId, seq, eof, data }));
+      } else {
+        clearTimeout(timer);
+        this.pendingWriteChunks.delete(key);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  private sendWriteCommit(writeId: number): Promise<FsWriteResponse> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingWriteCommit.delete(writeId);
+        reject(new Error("fs:write_commit timeout"));
+      }, 30_000); // longer timeout for commit (fsync may be slow)
+      this.pendingWriteCommit.set(writeId, { resolve, reject, timer });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ kind: "fs:write_commit", write_id: writeId }));
+      } else {
+        clearTimeout(timer);
+        this.pendingWriteCommit.delete(writeId);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
   }
 }

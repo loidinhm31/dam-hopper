@@ -16,4 +16,16 @@ export default defineConfig({
       "/ws": { target: BACKEND, changeOrigin: true, ws: true },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          monaco: ["monaco-editor"],
+        },
+      },
+    },
+  },
+  worker: {
+    format: "es",
+  },
 });

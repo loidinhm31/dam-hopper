@@ -132,10 +132,10 @@ src/
 
 Types in `src/api/client.ts` **intentionally duplicate** Rust API shapes. This keeps the web package independent — no shared TypeScript lib.
 
-Update client types when API changes:
+Update client types when API changes (camelCase on wire, snake_case in Rust):
 
 ```typescript
-// Match Rust struct names + field names
+// Rest API
 export interface DirEntry {
   name: string;
   kind: 'file' | 'dir';
@@ -143,16 +143,38 @@ export interface DirEntry {
   mtime: number;
   isSymlink: boolean;
 }
+
+// WS protocol (Phase 04+)
+export interface FsReadResponse {
+  ok: boolean;
+  binary: boolean;
+  mime?: string;
+  mtime?: number;
+  size?: number;
+  data?: string;  // base64-encoded
+  code?: string;
+}
+
+export interface FsWriteResponse {
+  ok: boolean;
+  newMtime?: number;
+  conflict: boolean;
+  error?: string;
+}
 ```
 
 ### API Client Pattern
 
 ```typescript
-// WsTransport wraps both REST and WebSocket
-const response = await transport.invoke('GET /api/fs/list', {
+// REST via fetch
+const entries = await transport.invoke('GET /api/fs/list', {
   project: 'web',
   path: 'src'
 });
+
+// WS protocol (Phase 04+)
+const content = await transport.fsRead(project, path);
+await transport.fsWriteFile(project, path, content, mtime);
 ```
 
 ## Configuration (dev-hub.toml)

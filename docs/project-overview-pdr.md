@@ -85,10 +85,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - MIME type detection via mime_guess crate
 - Async I/O via tokio::fs
 
-**Future (Phase 02):**
-- File watcher (inotify) for live updates
-- Create/delete/move operations
-- Write permissions (read-only in Phase 01)
+**Phase 02+:** File watcher, create/delete/move ops (see Roadmap below)
 
 ### PR-005: Agent Store Distribution
 
@@ -202,30 +199,39 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 ### Phase 01: IDE File Explorer (Complete)
 - ✓ Filesystem sandbox
-- ✓ List/read/stat endpoints
+- ✓ List/read/stat REST endpoints
 - ✓ Binary detection
 - ✓ Feature gating
 
-### Phase 02: File Watcher
-- [ ] inotify integration (Linux), FSEvents (macOS), ReadDirectoryChangesW (Windows)
-- [ ] WebSocket push on file change
-- [ ] Diff visualization for modified files
+### Phase 02: File Watcher (Complete)
+- ✓ inotify integration (Linux), notify crate cross-platform
+- ✓ WebSocket subscription + fs:event push
+- ✓ Live tree sync on file changes
 
-### Phase 03: Write Operations
+### Phase 03: IDE Shell (Complete)
+- ✓ react-resizable-panels layout (tree | editor | terminal)
+- ✓ react-arborist file tree with live sync
+- ✓ TanStack Query + useFsSubscription hook
+- ✓ /ide lazy route with feature gate
+
+### Phase 04: Monaco Editor + Save (Complete)
+- ✓ Monaco integration with tab management
+- ✓ Ctrl+S save via 3-phase WS write protocol (begin → chunks → commit)
+- ✓ File tiering (normal <1MB, degraded 1-5MB, large ≥5MB, binary)
+- ✓ Mtime-guarded atomic writes (conflict detection)
+- ✓ ConflictDialog (overwrite or reload on concurrent edits)
+- ✓ LargeFileViewer (range reads), BinaryPreview (hex dump)
+
+### Phase 05: Write Operations (Planned)
 - [ ] Create file/directory
 - [ ] Delete file/directory
 - [ ] Move/rename operations
 - [ ] Undo/history tracking
 
-### Phase 04: Merge Conflict UI
-- [ ] Detect merge conflicts
-- [ ] Visual 3-way diff
-- [ ] Conflict resolution helpers
-
-### Phase 05: Advanced Terminal
-- [ ] Split panes (horizontal/vertical)
-- [ ] Session persistence
-- [ ] Command history search
+### Phase 06+: Advanced Features (Future)
+- [ ] Advanced Terminal (split panes, session persistence, search)
+- [ ] Git integration UI (blame, diff)
+- [ ] AI assistant integration
 
 ## Success Metrics
 
@@ -256,16 +262,18 @@ Workspace: toml
 ### Known Limitations
 
 - No native Windows PTY support (portable-pty limitation)
-- Max read size: 10MB per request (prevent DoS)
+- Max read size: 100MB (hard cap in fs::ops); 128KB per WS chunk
+- Max write size: 100MB
 - Symbolic link validation may follow platform limits
-- Agent store path not updated on workspace:switch (Phase 06 fix)
+- Binary files read-only in Phase 04 (no write support)
 
 ## Timeline
 
-| Phase | Scope | Est. Duration |
-|-------|-------|---|
-| 01 | IDE File Explorer | 2 weeks |
-| 02 | File Watcher | 1 week |
-| 03 | Write Operations | 2 weeks |
-| 04 | Merge Conflict UI | 2 weeks |
-| 05 | Advanced Terminal | 3 weeks |
+| Phase | Scope | Status |
+|-------|-------|--------|
+| 01 | IDE File Explorer | ✓ Complete |
+| 02 | File Watcher + WS subscription | ✓ Complete |
+| 03 | IDE Shell (layout + tree) | ✓ Complete |
+| 04 | Monaco Editor + Save | ✓ Complete (2026-04-09) |
+| 05 | Create/delete/move/rename | Planned |
+| 06+ | Advanced features (git UI, AI) | Future |

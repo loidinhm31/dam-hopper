@@ -11,7 +11,7 @@
 
 Date: 2026-04-07. Replace placeholder with Monaco via `@monaco-editor/react`. Vite worker setup, dynamic import, `manualChunks` split. Zustand tab store with viewState. Ctrl+S save via new `fs:write_*` WS messages. 1MB / 5MB tiering. Binary preview path. Range-read fallback viewer for ≥5MB.
 
-Priority: P2. Implementation: pending. Review: pending.
+Priority: P2. Implementation: done (2026-04-09). Review: approved.
 
 ## Key Insights
 

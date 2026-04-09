@@ -21,9 +21,12 @@ Core modules:
 **Language:** TypeScript/React 19 | **Build:** Vite | **Styling:** Tailwind v4
 
 Key components:
-- **api/** — WsTransport, REST/WebSocket client
-- **components/pages/** — TerminalsPage, ProjectsPage
-- **components/organisms/** — TerminalTreeView, TerminalTabBar
+- **api/** — WsTransport (REST/WebSocket client), FsTypes, ClientQueries
+- **stores/** — useEditorStore (tabs, save, conflict mgmt, Phase 04)
+- **lib/** — fileTier (size/binary-based tier selection), monacoSetup
+- **components/pages/** — TerminalsPage, ProjectsPage, IDEPage
+- **components/organisms/** — TerminalTreeView, EditorTabs (Phase 04), MonacoHost (Phase 04), LargeFileViewer (Phase 04), BinaryPreview (Phase 04)
+- **components/molecules/** — EditorTab (Phase 04), ConflictDialog (Phase 04)
 
 Data flow: Browser → fetch(/api/*) + WebSocket(/ws) → Axum routes → state + services.
 
@@ -31,7 +34,7 @@ Data flow: Browser → fetch(/api/*) + WebSocket(/ws) → Axum routes → state 
 
 | Flag | Config | Env | Purpose |
 |------|--------|-----|---------|
-| ide_explorer | `[features] ide_explorer = true` | `DEV_HUB_IDE=1` | File explorer + Monaco read/list/stat |
+| ide_explorer | `[features] ide_explorer = true` | `DEV_HUB_IDE=1` | File explorer + Monaco editor (Phase 03-04) |
 
 ## Key Services & Patterns
 
