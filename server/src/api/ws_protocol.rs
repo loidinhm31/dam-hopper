@@ -59,6 +59,48 @@ pub enum ClientMsg {
     },
     #[serde(rename = "fs:write_commit")]
     FsWriteCommit { write_id: u64 },
+
+    // FS — mutating ops (create/rename/delete/move)
+    #[serde(rename = "fs:op")]
+    FsOp {
+        req_id: u64,
+        /// "create_file" | "create_dir" | "rename" | "delete" | "move"
+        op: String,
+        project: String,
+        /// Source path (relative to project root).
+        path: String,
+        /// Destination path for rename/move (relative to project root).
+        new_path: Option<String>,
+        /// Allow .git/ writes for delete op.
+        #[serde(default)]
+        force_git: bool,
+    },
+
+    // FS — upload protocol (begin → chunk(binary)* → commit)
+    #[serde(rename = "fs:upload_begin")]
+    FsUploadBegin {
+        req_id: u64,
+        /// Client-chosen identifier for this upload session.
+        upload_id: String,
+        project: String,
+        /// Target directory (relative to project root).
+        dir: String,
+        /// Filename only — must not contain path separators.
+        filename: String,
+        /// Declared total file size in bytes.
+        len: u64,
+    },
+    /// JSON header for an upload chunk; raw bytes arrive in the NEXT binary WS frame.
+    #[serde(rename = "fs:upload_chunk")]
+    FsUploadChunk {
+        upload_id: String,
+        seq: u64,
+    },
+    #[serde(rename = "fs:upload_commit")]
+    FsUploadCommit {
+        req_id: u64,
+        upload_id: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +182,31 @@ pub enum ServerMsg {
         new_mtime: Option<i64>,
         /// True when the server rejected the write due to a concurrent modification.
         conflict: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+
+    // FS — mutating op result
+    #[serde(rename = "fs:op_result")]
+    FsOpResult {
+        req_id: u64,
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+
+    // FS — upload results
+    #[serde(rename = "fs:upload_begin_ok")]
+    FsUploadBeginOk { req_id: u64, upload_id: String },
+    #[serde(rename = "fs:upload_chunk_ack")]
+    FsUploadChunkAck { upload_id: String, seq: u64 },
+    #[serde(rename = "fs:upload_result")]
+    FsUploadResult {
+        req_id: u64,
+        upload_id: String,
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        new_mtime: Option<i64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },

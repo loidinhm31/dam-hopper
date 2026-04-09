@@ -1,13 +1,18 @@
+pub mod audit;
 pub mod error;
 pub mod event;
+pub mod mutate;
 pub mod ops;
 pub mod sandbox;
+pub mod upload;
 pub mod watcher;
 
 pub use error::FsError;
 pub use event::FsEvent;
+pub use mutate::{assert_safe_mutation, create_dir, create_file, delete, move_path, rename};
 pub use ops::{atomic_write_with_check, DirEntry, FileStat, MAX_READ_BYTES};
 pub use sandbox::WorkspaceSandbox;
+pub use upload::{UploadState, MAX_UPLOAD_BYTES};
 pub use watcher::FsWatcherManager;
 
 use std::collections::HashMap;

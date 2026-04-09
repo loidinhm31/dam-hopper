@@ -19,7 +19,7 @@ use futures_util::SinkExt;
 
 use crate::api::auth::AUTH_COOKIE;
 use crate::api::ws_protocol::{ClientMsg, FsEventDto, ServerMsg, WireMsg};
-use crate::fs::{atomic_write_with_check, ops, tree_snapshot_sync};
+use crate::fs::{atomic_write_with_check, mutate, ops, tree_snapshot_sync, UploadState, MAX_UPLOAD_BYTES};
 use crate::state::AppState;
 
 /// Bounded per-connection outbound channel.
@@ -124,6 +124,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let mut writes: HashMap<u64, WriteInFlight> = HashMap::new();
     let mut next_write_id: u64 = 1;
 
+    // In-flight upload sessions: upload_id → UploadState
+    let mut uploads: HashMap<String, UploadState> = HashMap::new();
+    // Pending binary frame correlation: set by fs:upload_chunk JSON header
+    let mut pending_binary: Option<(String, u64)> = None; // (upload_id, seq)
+
     // Reader loop
     while let Some(msg) = ws_rx.next().await {
         let msg = match msg {
@@ -131,10 +136,21 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             Err(_) => break,
         };
 
+        // Handle binary frames for upload chunks
+        if let Message::Binary(bytes) = msg {
+            if let Some((upload_id, seq)) = pending_binary.take() {
+                handle_upload_binary(&upload_id, seq, bytes.as_ref(), &mut uploads, &out_tx).await;
+            } else {
+                warn!("unexpected binary frame (no pending upload_chunk header) — dropping");
+            }
+            continue;
+        }
+
         let text = match msg {
             Message::Text(t) => t.to_string(),
             Message::Close(_) => break,
-            Message::Binary(_) | Message::Ping(_) | Message::Pong(_) => continue,
+            Message::Ping(_) | Message::Pong(_) => continue,
+            Message::Binary(_) => unreachable!("handled above"),
         };
 
         let parsed: ClientMsg = match serde_json::from_str(&text) {
@@ -348,6 +364,116 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     let _ = out_tx.send(WireMsg::Text(json)).await;
                 }
             }
+
+            // -----------------------------------------------------------
+            // FS — mutating ops
+            // -----------------------------------------------------------
+            ClientMsg::FsOp { req_id, op, project, path, new_path, force_git } => {
+                let result = do_fs_op(req_id, &op, &project, &path, new_path.as_deref(), force_git, &state).await;
+                let msg = match result {
+                    Ok(()) => ServerMsg::FsOpResult { req_id, ok: true, error: None },
+                    Err(e) => {
+                        warn!(req_id, op = %op, error = %e, "fs:op failed");
+                        ServerMsg::FsOpResult { req_id, ok: false, error: Some(e.to_string()) }
+                    }
+                };
+                if let Ok(json) = serde_json::to_string(&msg) {
+                    let _ = out_tx.send(WireMsg::Text(json)).await;
+                }
+            }
+
+            // -----------------------------------------------------------
+            // FS — upload begin
+            // -----------------------------------------------------------
+            ClientMsg::FsUploadBegin { req_id, upload_id, project, dir, filename, len } => {
+                let result = do_upload_begin(req_id, &upload_id, &project, &dir, &filename, len, &state, &mut uploads).await;
+                let msg = match result {
+                    Ok(()) => ServerMsg::FsUploadBeginOk { req_id, upload_id },
+                    Err(e) => {
+                        warn!(req_id, upload_id, error = %e, "fs:upload_begin failed");
+                        ServerMsg::FsError { req_id, code: "UPLOAD_BEGIN_FAILED".into(), message: e.to_string() }
+                    }
+                };
+                if let Ok(json) = serde_json::to_string(&msg) {
+                    let _ = out_tx.send(WireMsg::Text(json)).await;
+                }
+            }
+
+            // -----------------------------------------------------------
+            // FS — upload chunk header (binary frame follows)
+            // -----------------------------------------------------------
+            ClientMsg::FsUploadChunk { upload_id, seq } => {
+                // Validate state exists before accepting the binary frame.
+                if !uploads.contains_key(&upload_id) {
+                    warn!(upload_id, seq, "fs:upload_chunk for unknown upload_id — dropping");
+                    continue;
+                }
+                if uploads[&upload_id].next_seq != seq {
+                    warn!(upload_id, seq, expected = uploads[&upload_id].next_seq, "out-of-order chunk — aborting upload");
+                    uploads.remove(&upload_id);
+                    continue;
+                }
+                // Store the pending correlation; binary frame handler will pick it up.
+                pending_binary = Some((upload_id, seq));
+            }
+
+            // -----------------------------------------------------------
+            // FS — upload commit
+            // -----------------------------------------------------------
+            ClientMsg::FsUploadCommit { req_id, upload_id } => {
+                let state_opt = uploads.remove(&upload_id);
+                let msg = match state_opt {
+                    None => {
+                        warn!(req_id, upload_id, "fs:upload_commit for unknown upload_id");
+                        ServerMsg::FsUploadResult {
+                            req_id,
+                            upload_id,
+                            ok: false,
+                            new_mtime: None,
+                            error: Some("upload session not found".into()),
+                        }
+                    }
+                    Some(upload_state) => {
+                        let up_id = upload_state.target_abs.to_string_lossy().to_string();
+                        match tokio::task::spawn_blocking(move || upload_state.commit(false)).await {
+                            Ok(Ok(new_mtime)) => {
+                                debug!(req_id, new_mtime, "fs:upload_commit success");
+                                crate::audit_fs!("upload", "<upload>", up_id, true);
+                                ServerMsg::FsUploadResult {
+                                    req_id,
+                                    upload_id,
+                                    ok: true,
+                                    new_mtime: Some(new_mtime),
+                                    error: None,
+                                }
+                            }
+                            Ok(Err(e)) => {
+                                warn!(req_id, error = %e, "fs:upload_commit failed");
+                                ServerMsg::FsUploadResult {
+                                    req_id,
+                                    upload_id,
+                                    ok: false,
+                                    new_mtime: None,
+                                    error: Some(e.to_string()),
+                                }
+                            }
+                            Err(e) => {
+                                warn!(req_id, error = %e, "fs:upload_commit spawn_blocking error");
+                                ServerMsg::FsUploadResult {
+                                    req_id,
+                                    upload_id,
+                                    ok: false,
+                                    new_mtime: None,
+                                    error: Some(e.to_string()),
+                                }
+                            }
+                        }
+                    }
+                };
+                if let Ok(json) = serde_json::to_string(&msg) {
+                    let _ = out_tx.send(WireMsg::Text(json)).await;
+                }
+            }
         }
     }
 
@@ -481,6 +607,159 @@ async fn do_fs_read(
         size: Some(file_size),
         data: Some(encoded),
         code: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FS mutating op helper
+// ---------------------------------------------------------------------------
+
+async fn do_fs_op(
+    _req_id: u64,
+    op: &str,
+    project: &str,
+    path: &str,
+    new_path: Option<&str>,
+    force_git: bool,
+    state: &AppState,
+) -> Result<(), crate::fs::FsError> {
+    let project_abs = state.project_path(project).await.map_err(|e| {
+        crate::fs::FsError::MutationRefused(e.to_string())
+    })?;
+
+    let sandbox = state.fs.sandbox()?;
+
+    match op {
+        "create_file" | "create_dir" => {
+            // Target doesn't exist yet — validate via parent + filename split.
+            let rel = trim_leading_slash(path);
+            let proposed = project_abs.join(rel);
+            let parent = proposed.parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or(project_abs.clone());
+            let name = proposed.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            // Validate parent exists and is within sandbox, then construct new abs path.
+            let new_abs = sandbox.validate_new_path(parent, name).await?;
+            if op == "create_file" {
+                mutate::create_file(&new_abs, &project_abs).await
+            } else {
+                mutate::create_dir(&new_abs, &project_abs).await
+            }
+        }
+        "delete" => {
+            let rel = trim_leading_slash(path);
+            // Empty/root path: validate will succeed on project root.
+            // assert_safe_mutation will then reject it.
+            let abs = if rel == "." {
+                project_abs.clone()
+            } else {
+                sandbox.validate(project_abs.join(rel)).await?
+            };
+            mutate::delete(&abs, &project_abs, force_git).await
+        }
+        "rename" | "move" => {
+            let rel = trim_leading_slash(path);
+            let abs = sandbox.validate(project_abs.join(rel)).await?;
+
+            let dst_rel = new_path.ok_or_else(|| {
+                crate::fs::FsError::MutationRefused("rename/move requires new_path".into())
+            })?;
+            let dst_rel = trim_leading_slash(dst_rel);
+            let dst_proposed = project_abs.join(dst_rel);
+            let dst_parent = dst_proposed.parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or(project_abs.clone());
+            let dst_name = dst_proposed.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            let dst_abs = sandbox.validate_new_path(dst_parent, dst_name).await?;
+
+            if op == "rename" {
+                mutate::rename(&abs, &dst_abs, &project_abs).await
+            } else {
+                mutate::move_path(&abs, &dst_abs, &project_abs).await
+            }
+        }
+        _ => Err(crate::fs::FsError::MutationRefused(format!("unknown op: {op}"))),
+    }
+}
+
+fn trim_leading_slash(s: &str) -> &str {
+    if s.is_empty() || s == "/" { "." } else { s.trim_start_matches('/') }
+}
+
+// ---------------------------------------------------------------------------
+// Upload begin helper
+// ---------------------------------------------------------------------------
+
+async fn do_upload_begin(
+    _req_id: u64,
+    upload_id: &str,
+    project: &str,
+    dir: &str,
+    filename: &str,
+    len: u64,
+    state: &AppState,
+    uploads: &mut HashMap<String, UploadState>,
+) -> Result<(), crate::fs::FsError> {
+    if len > MAX_UPLOAD_BYTES {
+        return Err(crate::fs::FsError::TooLarge(len));
+    }
+
+    let project_abs = state.project_path(project).await.map_err(|e| {
+        crate::fs::FsError::MutationRefused(e.to_string())
+    })?;
+
+    let sandbox = state.fs.sandbox()?;
+
+    let dir_rel = trim_leading_slash(dir);
+    let dir_abs = sandbox.validate(project_abs.join(dir_rel)).await?;
+
+    // validate_new_path checks filename for path separators / ".." / empty
+    let target_abs = sandbox.validate_new_path(dir_abs, filename).await?;
+
+    let upload_state = UploadState::new(target_abs, len)?;
+    uploads.insert(upload_id.to_string(), upload_state);
+
+    debug!(upload_id, len, project, "fs:upload_begin accepted");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Upload binary frame handler
+// ---------------------------------------------------------------------------
+
+async fn handle_upload_binary(
+    upload_id: &str,
+    seq: u64,
+    data: &[u8],
+    uploads: &mut HashMap<String, UploadState>,
+    out_tx: &mpsc::Sender<WireMsg>,
+) {
+    let state = match uploads.get_mut(upload_id) {
+        Some(s) => s,
+        None => {
+            warn!(upload_id, seq, "binary frame: upload session not found — dropping");
+            return;
+        }
+    };
+
+    match state.append_chunk(data) {
+        Ok(()) => {
+            let ack = ServerMsg::FsUploadChunkAck {
+                upload_id: upload_id.to_string(),
+                seq,
+            };
+            if let Ok(json) = serde_json::to_string(&ack) {
+                let _ = out_tx.send(WireMsg::Text(json)).await;
+            }
+        }
+        Err(e) => {
+            warn!(upload_id, seq, error = %e, "upload chunk rejected — aborting upload");
+            uploads.remove(upload_id);
+        }
     }
 }
 

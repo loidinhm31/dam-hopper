@@ -46,7 +46,7 @@ sequenceDiagram
 | 02 | phase-02-watcher-ws-protocol.md | done (2026-04-08) | 4d | watcher + WS sub protocol + ws.rs refactor |
 | 03 | phase-03-web-ide-shell-readonly.md | done (2026-04-09) | 3d | three-pane shell + react-arborist tree |
 | 04 | phase-04-monaco-edit-save.md | done (2026-04-09) | 4d | Monaco + tabs + save + tiering |
-| 05 | phase-05-crud-upload-download.md | pending | 4d | mutating ops + chunked transfer |
+| 05 | phase-05-crud-upload-download.md | done (2026-04-09) | 4d | mutating ops + chunked transfer |
 | 06 | phase-06-atomic-design-refactor.md | done (2026-04-08) | 0.5d | components/ atomic tier cleanup — **merge BEFORE Phase 03** |
 
 ## Decisions log

@@ -11,7 +11,7 @@
 
 Date: 2026-04-07 (revised 2026-04-08). Add create/rename/delete/move ops, WS-chunked upload (`fs:upload_*` ack-per-seq backpressure), streaming download via REST. Server-side guardrails: refuse project root delete, refuse `.git/` writes unless override flag, audit log on every mutation. Integration tests per op.
 
-Priority: P2. Implementation: pending. Review: pending.
+Priority: P2. Implementation: done (2026-04-09). Review: approved (8.5/10).
 
 ## Key Insights
 
