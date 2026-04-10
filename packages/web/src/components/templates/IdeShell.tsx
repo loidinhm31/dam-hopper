@@ -10,9 +10,11 @@ interface IdeShellProps {
   tree: ReactNode;
   editor: ReactNode;
   terminal: ReactNode;
+  /** When true: skip editor pane + vertical resize handle, terminal fills full right panel */
+  hideEditor?: boolean;
 }
 
-export function IdeShell({ tree, editor, terminal }: IdeShellProps) {
+export function IdeShell({ tree, editor, terminal, hideEditor = false }: IdeShellProps) {
   const { collapsed, toggle } = useSidebarCollapse();
 
   // Horizontal: file tree width (same pattern as TerminalsPage)
@@ -98,18 +100,22 @@ export function IdeShell({ tree, editor, terminal }: IdeShellProps) {
 
       {/* Right panel: editor on top, terminal on bottom */}
       <div ref={rightPanelRef} className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Editor pane */}
-        <div style={{ height: `${editorPct}%` }} className="overflow-hidden">
-          {editor}
-        </div>
+        {!hideEditor && (
+          <>
+            {/* Editor pane */}
+            <div style={{ height: `${editorPct}%` }} className="overflow-hidden">
+              {editor}
+            </div>
 
-        {/* Vertical resize handle */}
-        <div
-          onMouseDown={handleVertMouseDown}
-          className="h-1 shrink-0 cursor-row-resize group relative hover:bg-[var(--color-primary)]/20 border-t border-[var(--color-border)]"
-        >
-          <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-0.5 bg-[var(--color-primary)]/50 opacity-0 group-hover:opacity-100 transition-opacity" />
-        </div>
+            {/* Vertical resize handle */}
+            <div
+              onMouseDown={handleVertMouseDown}
+              className="h-1 shrink-0 cursor-row-resize group relative hover:bg-[var(--color-primary)]/20 border-t border-[var(--color-border)]"
+            >
+              <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-0.5 bg-[var(--color-primary)]/50 opacity-0 group-hover:opacity-100 transition-opacity" />
+            </div>
+          </>
+        )}
 
         {/* Terminal pane */}
         <div className="flex-1 min-h-0 overflow-hidden">

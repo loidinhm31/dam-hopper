@@ -1,18 +1,17 @@
 import { useState, type ComponentType } from "react";
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, TerminalSquare, GitMerge, Settings, Folder, ChevronsLeft, ChevronsRight, Package, ServerCog, Code2 } from "lucide-react";
+import { LayoutDashboard, GitMerge, Settings, Folder, ChevronsLeft, ChevronsRight, Package, ServerCog, Code2 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { ConnectionDot } from "@/components/atoms/ConnectionDot.js";
 import { useIpc } from "@/hooks/useSSE.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
-import { useFeatureFlag } from "@/hooks/useFeatureFlag.js";
 
 type NavEntry = { to: string; icon: ComponentType<{ className?: string }>; label: string };
 
 const BASE_NAV: NavEntry[] = [
   { to: "/", icon: LayoutDashboard, label: "DASHBOARD" },
-  { to: "/terminals", icon: TerminalSquare, label: "TERMINALS" },
+  { to: "/workspace", icon: Code2, label: "WORKSPACE" },
   { to: "/git", icon: GitMerge, label: "GIT" },
   { to: "/agent-store", icon: Package, label: "AGENT STORE" },
   { to: "/settings", icon: Settings, label: "SETTINGS" },
@@ -26,11 +25,8 @@ interface SidebarProps {
 export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
   const { status } = useIpc();
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
-  const ideEnabled = useFeatureFlag("ide_explorer");
 
-  const nav: NavEntry[] = ideEnabled
-    ? [...BASE_NAV.slice(0, 2), { to: "/ide", icon: Code2, label: "IDE" }, ...BASE_NAV.slice(2)]
-    : BASE_NAV;
+  const nav: NavEntry[] = BASE_NAV;
 
   return (
     <aside
