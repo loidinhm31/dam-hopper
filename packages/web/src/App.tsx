@@ -1,16 +1,27 @@
 import { lazy, Suspense, useEffect } from "react";
-import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { DashboardPage } from "@/components/pages/DashboardPage.js";
 import { GitPage } from "@/components/pages/GitPage.js";
 import { SettingsPage } from "@/components/pages/SettingsPage.js";
-import { TerminalsPage } from "@/components/pages/TerminalsPage.js";
 import { AgentStorePage } from "@/components/pages/AgentStorePage.js";
 import { getTransport } from "@/api/transport.js";
 
-const IdePage = lazy(() => import("@/components/pages/IdePage.js"));
+const WorkspacePage = lazy(() => import("@/components/pages/WorkspacePage.js"));
 
-/** Registers Ctrl+` as a global shortcut to open a new free terminal. */
+const LOADING_FALLBACK = (
+  <div className="h-screen flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+    Loading…
+  </div>
+);
+
+/** Redirect /terminals or /ide to /workspace, preserving search params. */
+function LegacyRedirect({ to }: { to: string }) {
+  const location = useLocation();
+  return <Navigate to={`${to}${location.search}`} replace />;
+}
+
+/** Registers Ctrl+` as a global shortcut to open a new free terminal in workspace. */
 function GlobalShortcuts() {
   const navigate = useNavigate();
 
@@ -18,7 +29,7 @@ function GlobalShortcuts() {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.ctrlKey && e.code === "Backquote") {
         e.preventDefault();
-        navigate("/terminals?action=new-terminal");
+        navigate("/workspace?action=new-terminal");
       }
     }
     window.addEventListener("keydown", handleKeyDown);
@@ -43,18 +54,20 @@ export function App() {
       <GlobalShortcuts />
       <Routes>
         <Route path="/" element={<DashboardPage />} />
-        <Route path="/terminals" element={<TerminalsPage />} />
-        <Route path="/git" element={<GitPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/agent-store" element={<AgentStorePage />} />
         <Route
-          path="/ide"
+          path="/workspace"
           element={
-            <Suspense fallback={<div className="h-screen flex items-center justify-center text-xs text-[var(--color-text-muted)]">Loading IDE…</div>}>
-              <IdePage />
+            <Suspense fallback={LOADING_FALLBACK}>
+              <WorkspacePage />
             </Suspense>
           }
         />
+        {/* Backward-compat redirects — preserve search params for deep-links */}
+        <Route path="/terminals" element={<LegacyRedirect to="/workspace" />} />
+        <Route path="/ide" element={<LegacyRedirect to="/workspace" />} />
+        <Route path="/git" element={<GitPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/agent-store" element={<AgentStorePage />} />
       </Routes>
     </BrowserRouter>
   );
