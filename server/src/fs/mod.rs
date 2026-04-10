@@ -83,6 +83,24 @@ impl FsSubsystem {
         }
     }
 
+    /// Reinitialize the sandbox root after a workspace switch.
+    ///
+    /// Replaces the sandbox in-place so all existing `FsSubsystem` clones
+    /// (including the one in `AppState`) see the new root immediately.
+    /// Clears active subscriptions since they belong to the old workspace.
+    pub fn reinit_sandbox(&self, new_root: PathBuf) {
+        let sandbox = match WorkspaceSandbox::new(new_root) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                tracing::warn!(error = %e, "WorkspaceSandbox reinit failed — IDE FS ops unavailable");
+                None
+            }
+        };
+        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        inner.sandbox = sandbox;
+        inner.subs.clear();
+    }
+
     /// Returns a cloned sandbox handle, or `Err(Unavailable)` if init failed.
     ///
     /// Clone is cheap (just a PathBuf clone). Call site must not hold the
