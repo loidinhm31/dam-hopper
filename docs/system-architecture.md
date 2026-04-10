@@ -70,6 +70,7 @@ Handles TOML parsing, project discovery, feature flags.
 - `stat()` — file metadata (kind, size, mtime, mime, isBinary)
 - `detect_binary()` — heuristic detection
 - `atomic_write_with_check()` (Phase 04) — mtime-guarded atomic write via tempfile + rename
+- `search()` (Phase 07) — .gitignore-aware text search using `ignore` crate; returns file + match context; results capped at 1000
 
 **mod.rs** — `FsSubsystem` (Arc<Mutex<Inner>>):
 - Lazy init: sandbox stored as Option (Unavailable if init failed)
@@ -102,7 +103,11 @@ HTTP request handlers + WebSocket upgrade.
 
 **router.rs** — Route definitions (ide_explorer routes are feature-gated).
 
-**fs.rs** — File explorer handlers (list, read, stat).
+**fs.rs** — File explorer handlers:
+- `GET /api/fs/list` — directory contents with metadata
+- `GET /api/fs/read` — file text/binary content
+- `GET /api/fs/stat` — file metadata
+- `GET /api/fs/search` (Phase 07) — global file content search, .gitignore-aware, results capped at 1000
 
 **error.rs** — Maps AppError to HTTP status codes.
 
@@ -146,6 +151,46 @@ GET /api/fs/list?project=web&path=src
          ↓
     JSON response: { entries: [...] }
 ```
+
+## Data Flow: File Search Request (Phase 07)
+
+```
+GET /api/fs/search?project=web&q=pattern[&case=true&max=50]
+         ↓
+    search() handler (fs.rs)
+         ↓
+    WorkspaceSandbox.validate(project root)
+         ↓
+    spawn_blocking: walk_dir via ignore crate (respects .gitignore)
+    → filter by path + file type
+    → regex-escaped plain text search
+    → collect matches (file, line, column, context)
+         ↓
+    cap results at max (default 200, hardcap 1000)
+         ↓
+    JSON response: { results: [{ file: "...", matches: [...] }] }
+```
+
+## Frontend Components (Phase 07)
+
+**MarkdownHost (packages/web/src/components/organisms/)**
+- Renders .md/.mdx files in editor tabs
+- Three modes: Edit (Monaco), Split (Monaco left + Preview right), Preview-only
+- Mode toggle via toolbar buttons
+- Markdown parsing + syntax highlighting via react-markdown
+
+**SearchPanel (packages/web/src/components/)**
+- Debounced search input (useDeferredValue)
+- Results grouped by file
+- Match highlighting inline with context
+- Integrated into SidebarTabSwitcher as "SEARCH" tab
+- Ctrl+Shift+F focuses input
+
+**FileTree.tsx (react-arborist)**
+- `onMove` callback enabled for drag-and-drop
+- Drop on directory → move file/folder into directory
+- Drop on file → move into file's parent directory
+- All moves validated through server `ops.move()` sandbox
 
 ## Concurrency Model
 
@@ -209,4 +254,10 @@ API layer (handlers) catch AppError → HTTP status:
 
 **Phase 05 (Complete):** CRUD + WS-chunked upload + streaming download.
 
-**Phase 06 (Pending):** Unified workspace—merge IdePage + TerminalsPage into single WorkspacePage. Tabbed left sidebar (Files/Terminals), multi-terminal bottom panel with TerminalTabBar + MultiTerminalDisplay. Terminal state extracted to `useTerminalManager` hook. Single `/workspace` route; `/terminals` and `/ide` redirect. Feature flag `ide_explorer` controls editor/file-tree visibility within page (not route access).
+**Phase 06 (Complete):** Unified workspace—merge IdePage + TerminalsPage into single WorkspacePage. Tabbed left sidebar (Files/Terminals), multi-terminal bottom panel with TerminalTabBar + MultiTerminalDisplay. Terminal state extracted to `useTerminalManager` hook. Single `/workspace` route; `/terminals` and `/ide` redirect. Feature flag `ide_explorer` controls editor/file-tree visibility within page (not route access).
+
+**Phase 07 (Complete):** IDE explorer enhancements:
+  - **Markdown split-view preview:** `MarkdownHost` + `MarkdownPreview` components in packages/web/src/components/organisms/. EditorTabs routes .md/.mdx files to MarkdownHost. Toggle modes: Edit | Split | Preview-only.
+  - **Drag-and-drop file move:** FileTree.tsx DnD via react-arborist's built-in `onMove`. Drop on dir → move into dir. Drop on file → move to file's parent. Calls existing `ops.move()` with server-side sandbox validation.
+  - **Backend search API:** `GET /api/fs/search?project=X&q=QUERY[&case=bool&max=N]` in server/src/api/fs.rs. Uses `ignore` crate v0.4 for .gitignore-aware directory walking. Plain text search (regex-escaped server-side). Results capped at 1000, default 200.
+  - **Frontend search panel:** New "SEARCH" tab in SidebarTabSwitcher. SearchPanel component with debounced input (useDeferredValue), results grouped by file with match highlighting. `useFileSearch` hook in packages/web/src/hooks/. Ctrl+Shift+F keyboard shortcut to focus search. Gated behind ide_explorer feature flag.
