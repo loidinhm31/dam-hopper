@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Terminal as TerminalIcon, Plus } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -52,20 +52,25 @@ export default function WorkspacePage() {
   const projectName =
     activeProject ?? (projects.length > 0 ? projects[0].name : null);
 
+  const [searchOpen, setSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const openSearch = useCallback(() => {
+    setSearchOpen(true);
+    setTimeout(() => searchInputRef.current?.focus(), 30);
+  }, []);
 
   useEffect(() => {
     if (!ideEnabled) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.ctrlKey && e.shiftKey && e.key === "F") {
         e.preventDefault();
-        setLeftTab("search");
-        setTimeout(() => searchInputRef.current?.focus(), 50);
+        openSearch();
       }
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [ideEnabled]);
+  }, [ideEnabled, openSearch]);
 
   function handleFileOpen(node: FsArborNode) {
     if (projectName) void openFile(projectName, node);
@@ -108,32 +113,6 @@ export default function WorkspacePage() {
               onFileOpen={handleFileOpen}
               onOpenTerminal={() => handleLaunchShell(projectName)}
               className="flex-1"
-            />
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-              No projects configured
-            </div>
-          )}
-        </div>
-      )}
-
-      {leftTab === "search" && ideEnabled && (
-        <div className="flex-1 overflow-hidden">
-          {projectName ? (
-            <SearchPanel
-              project={projectName}
-              inputRef={searchInputRef}
-              onResultClick={(match) => {
-                void openFile(projectName, {
-                  id: match.path,
-                  name: match.path.split("/").pop()!,
-                  kind: "file",
-                  size: 0,
-                  mtime: 0,
-                  isSymlink: false,
-                  children: null,
-                });
-              }}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
@@ -303,11 +282,48 @@ export default function WorkspacePage() {
   );
 
   return (
-    <IdeShell
-      tree={leftPanel}
-      editor={<EditorTabs />}
-      terminal={terminalPanel}
-      hideEditor={!ideEnabled}
-    />
+    <>
+      <IdeShell
+        tree={leftPanel}
+        editor={<EditorTabs />}
+        terminal={terminalPanel}
+        hideEditor={!ideEnabled}
+      />
+
+      {/* Floating search dialog */}
+      {searchOpen && ideEnabled && projectName && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
+          onClick={() => setSearchOpen(false)}
+        >
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+
+          {/* Dialog */}
+          <div
+            className="relative z-10 w-full max-w-2xl mx-4 rounded-xl shadow-2xl border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden flex flex-col max-h-[70vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <SearchPanel
+              project={projectName}
+              inputRef={searchInputRef}
+              onClose={() => setSearchOpen(false)}
+              onResultClick={(match) => {
+                setSearchOpen(false);
+                void openFile(projectName, {
+                  id: match.path,
+                  name: match.path.split("/").pop()!,
+                  kind: "file",
+                  size: 0,
+                  mtime: 0,
+                  isSymlink: false,
+                  children: null,
+                });
+              }}
+            />
+          </div>
+        </div>
+      )}
+    </>
   );
 }

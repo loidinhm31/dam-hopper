@@ -1,5 +1,5 @@
-import { useRef, useMemo } from "react";
-import { Loader2, CaseSensitive, AlertTriangle } from "lucide-react";
+import { useRef, useMemo, useEffect } from "react";
+import { Loader2, CaseSensitive, AlertTriangle, X } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { useFileSearch } from "@/hooks/use-file-search.js";
 import type { SearchMatch } from "@/api/fs-types.js";
@@ -7,12 +7,22 @@ import type { SearchMatch } from "@/api/fs-types.js";
 interface SearchPanelProps {
   project: string;
   onResultClick: (match: SearchMatch) => void;
+  onClose?: () => void;
   inputRef?: React.RefObject<HTMLInputElement | null>;
 }
 
-export function SearchPanel({ project, onResultClick, inputRef }: SearchPanelProps) {
+export function SearchPanel({ project, onResultClick, onClose, inputRef }: SearchPanelProps) {
   const localInputRef = useRef<HTMLInputElement>(null);
   const resolvedRef = inputRef ?? localInputRef;
+
+  useEffect(() => {
+    if (!onClose) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose!();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
 
   const { query, setQuery, caseSensitive, setCaseSensitive, data, isLoading, isError } =
     useFileSearch(project);
@@ -55,9 +65,24 @@ export function SearchPanel({ project, onResultClick, inputRef }: SearchPanelPro
 
   return (
     <div className="flex flex-col h-full">
+      {/* Header row */}
+      <div className="shrink-0 flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)]">
+        <span className="text-[11px] font-semibold tracking-widest text-[var(--color-text-muted)] uppercase">
+          Search Files
+        </span>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
       {/* Search input */}
-      <div className="shrink-0 px-2 py-2 border-b border-[var(--color-border)] space-y-1.5">
-        <div className="flex items-center gap-1">
+      <div className="shrink-0 px-3 py-2 border-b border-[var(--color-border)] space-y-1.5">
+        <div className="flex items-center gap-1.5">
           <input
             ref={resolvedRef}
             autoFocus
