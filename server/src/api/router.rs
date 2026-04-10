@@ -113,6 +113,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             .route("/api/fs/read", get(fs_api::read))
             .route("/api/fs/stat", get(fs_api::stat))
             .route("/api/fs/download", get(fs_api::download))
+            .route("/api/fs/search", get(fs_api::search))
             .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth))
     } else {
         Router::new()

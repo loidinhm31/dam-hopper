@@ -77,6 +77,19 @@ export interface FsOpResult {
   error?: string;
 }
 
+export interface SearchMatch {
+  path: string;
+  line: number;
+  col: number;
+  text: string;
+}
+
+export interface SearchResponse {
+  query: string;
+  matches: SearchMatch[];
+  truncated: boolean;
+}
+
 export interface FsUploadResult {
   ok: boolean;
   newMtime?: number;
