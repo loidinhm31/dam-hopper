@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Terminal as TerminalIcon } from "lucide-react";
+import { Terminal as TerminalIcon, Plus } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { IdeShell } from "@/components/templates/IdeShell.js";
@@ -11,6 +11,13 @@ import { MultiTerminalDisplay } from "@/components/organisms/MultiTerminalDispla
 import { ProjectInfoPanel } from "@/components/organisms/ProjectInfoPanel.js";
 import { SidebarTabSwitcher, type SidebarTab } from "@/components/molecules/SidebarTabSwitcher.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select.js";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { useTerminalManager } from "@/hooks/useTerminalManager.js";
@@ -35,7 +42,7 @@ export default function WorkspacePage() {
   const {
     handleSelectProject, handleSelectTerminal, handleLaunchTerminal, handleLaunchProfile,
     handleLaunchFormSubmit, handleDeleteProfile, handleSaveProfile, handleAddFreeTerminal,
-    handleLaunchFreeWithCommand, handleLaunchSuggestedCommand, handleAddShell,
+    handleLaunchFreeWithCommand, handleLaunchSuggestedCommand, handleAddShell, handleLaunchShell,
     handleSelectTab, handleCloseTab, handleKillTerminal, handleRemoveFreeTerminal,
     handleOpenFreeTerminalSavePrompt, handleSaveFreeTerminalToProject, handleSessionExit,
     setSavePrompt, setFreeTerminalSavePrompt, setLaunchForm,
@@ -65,15 +72,16 @@ export default function WorkspacePage() {
         <div className="flex flex-col flex-1 overflow-hidden">
           {projects.length > 1 && (
             <div className="shrink-0 px-2 py-1.5 border-b border-[var(--color-border)]">
-              <select
-                value={projectName ?? ""}
-                onChange={(e) => setActiveProject(e.target.value)}
-                className="w-full text-xs bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-sm px-1.5 py-1 text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
-              >
-                {projects.map((p) => (
-                  <option key={p.name} value={p.name}>{p.name}</option>
-                ))}
-              </select>
+              <Select value={projectName ?? ""} onValueChange={setActiveProject}>
+                <SelectTrigger className="text-xs h-7">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {projects.map((p) => (
+                    <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           )}
           {projectName ? (
@@ -82,6 +90,7 @@ export default function WorkspacePage() {
               project={projectName}
               path=""
               onFileOpen={handleFileOpen}
+              onOpenTerminal={() => handleLaunchShell(projectName)}
               className="flex-1"
             />
           ) : (
@@ -130,13 +139,19 @@ export default function WorkspacePage() {
         <div className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
           <p className="text-xs font-medium text-[var(--color-text)] mb-2">Save terminal as profile in project</p>
           <div className="flex gap-2 flex-wrap">
-            <select
+            <Select
               value={freeTerminalSavePrompt.projectName}
-              onChange={(e) => setFreeTerminalSavePrompt((p) => p ? { ...p, projectName: e.target.value, error: undefined } : p)}
-              className={inputClass + " flex-1 min-w-32"}
+              onValueChange={(v) => setFreeTerminalSavePrompt((p) => p ? { ...p, projectName: v, error: undefined } : p)}
             >
-              {projects.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
-            </select>
+              <SelectTrigger className="flex-1 min-w-32 text-xs h-7">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {projects.map((p) => (
+                  <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <div className="flex-1 min-w-32">
               <input
                 type="text"
@@ -229,6 +244,16 @@ export default function WorkspacePage() {
           <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--color-text-muted)]">
             <TerminalIcon className="h-10 w-10 opacity-20" />
             <p className="text-sm">Select a project or terminal from the tree</p>
+            {projectName && (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => handleLaunchShell(projectName)}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Open Terminal
+              </Button>
+            )}
           </div>
         )}
       </div>

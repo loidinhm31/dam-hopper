@@ -12,6 +12,8 @@ interface TerminalPanelProps {
   project: string;
   /** Shell command to execute immediately on mount */
   command: string;
+  /** Working directory — only used when the session must be created (not reconnected) */
+  cwd?: string;
   /** Called when the PTY process exits */
   onExit?: (exitCode: number | null) => void;
   /** Called when Shift+Enter is pressed — used to open a new terminal */
@@ -46,6 +48,7 @@ export function TerminalPanel({
   sessionId,
   project,
   command,
+  cwd,
   onExit,
   onNewTerminal,
   className,
@@ -90,9 +93,9 @@ export function TerminalPanel({
 
     // Create or reconnect to existing PTY session
     api.workspace.status()
-      .then(() => transport.invoke<string[]>("terminal:list"))
-      .then((alive: string[]) => {
-        if (alive.includes(sessionId)) {
+      .then(() => transport.invoke<Array<{ id: string }>>("terminal:list"))
+      .then((alive) => {
+        if (alive.some((s) => s.id === sessionId)) {
           // Reconnect — replay scrollback so the user sees past output
           return transport
             .invoke<{ buffer: string }>("terminal:buffer", sessionId)
@@ -101,7 +104,7 @@ export function TerminalPanel({
             });
         }
         return transport
-          .invoke<string>("terminal:create", { id: sessionId, project, command, cols, rows })
+          .invoke<string>("terminal:create", { id: sessionId, project, command, cwd, cols, rows })
           .then(() => {});
       })
       .then(() => {

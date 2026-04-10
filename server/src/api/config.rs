@@ -4,7 +4,7 @@ use axum::{
     response::IntoResponse,
 };
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path as StdPath, PathBuf};
 
 use crate::config::{global_config_path, load_workspace_config, read_global_config_at, write_global_config_at};
 use crate::error::AppError;
@@ -28,9 +28,11 @@ pub async fn get_config(State(state): State<AppState>) -> impl IntoResponse {
 
 pub async fn update_config(
     State(state): State<AppState>,
-    Json(body): Json<Value>,
+    Json(mut body): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
     let config_path = state.config.read().await.config_path.clone();
+    let config_dir = config_path.parent().unwrap_or(StdPath::new("/"));
+    relativize_project_paths(&mut body, config_dir);
     write_json_as_toml(&config_path, &body)?;
     reload_config(&state).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -142,6 +144,30 @@ pub async fn get_project_status(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Convert absolute project paths to relative (relative to config_dir) so the
+/// TOML validator doesn't reject them. Mirrors the logic in `project_to_toml`.
+fn relativize_project_paths(body: &mut Value, config_dir: &StdPath) {
+    let Some(projects) = body.get_mut("projects").and_then(|p| p.as_array_mut()) else {
+        return;
+    };
+    for project in projects.iter_mut() {
+        let Some(path_str) = project.get("path").and_then(|v| v.as_str()).map(str::to_string) else {
+            continue;
+        };
+        let p = StdPath::new(&path_str);
+        if p.is_absolute() {
+            let rel = pathdiff::diff_paths(p, config_dir)
+                .unwrap_or_else(|| p.to_path_buf())
+                .to_string_lossy()
+                .to_string();
+            let rel = if rel.is_empty() { ".".to_string() } else { rel };
+            if let Some(obj) = project.as_object_mut() {
+                obj.insert("path".to_string(), Value::String(rel));
+            }
+        }
+    }
+}
 
 fn read_toml_value(path: &std::path::Path) -> Result<toml::Value, ApiError> {
     let content = std::fs::read_to_string(path)
