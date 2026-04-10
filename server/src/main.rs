@@ -24,6 +24,10 @@ struct Cli {
     #[arg(long, default_value = "4800", env = "DEV_HUB_PORT")]
     port: u16,
 
+    /// Host address to bind (default: 0.0.0.0 — all interfaces including Tailscale)
+    #[arg(long, default_value = "0.0.0.0", env = "DEV_HUB_HOST")]
+    host: std::net::IpAddr,
+
     /// Regenerate auth token and exit
     #[arg(long)]
     new_token: bool,
@@ -49,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
 
     let token = manage_token(cli.new_token)?;
     // Print token to stderr (not tracing) so it doesn't land in log aggregators
-    eprintln!("\n  Auth token: {token}\n  Open: http://127.0.0.1:{port}\n", port = cli.port);
+    eprintln!("\n  Auth token: {token}\n  Open: http://{host}:{port}\n", host = cli.host, port = cli.port);
 
     if cli.new_token {
         return Ok(());
@@ -151,7 +155,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Serve ─────────────────────────────────────────────────────────────────
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], cli.port));
+    let addr = SocketAddr::new(cli.host, cli.port);
     tracing::info!(addr = %addr, "Listening");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

@@ -20,7 +20,15 @@ export function getServerUrl(): string {
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const envUrl = (import.meta as any).env?.VITE_DEV_HUB_SERVER_URL as string | undefined;
-  if (envUrl) return envUrl.replace(/\/$/, "");
+  if (envUrl) {
+    // In dev mode, let Vite's proxy forward /api/* and /ws to the remote server.
+    // This avoids cross-origin requests entirely — no CORS configuration needed on the server.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if ((import.meta as any).env?.DEV) {
+      return `${location.protocol}//${location.host}`;
+    }
+    return envUrl.replace(/\/$/, "");
+  }
   return `${location.protocol}//${location.host}`;
 }
 
