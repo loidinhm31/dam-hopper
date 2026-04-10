@@ -52,6 +52,7 @@ export default function IdePage() {
           )}
           {projectName ? (
             <FileTree
+              key={projectName}
               project={projectName}
               path=""
               onFileOpen={handleFileOpen}

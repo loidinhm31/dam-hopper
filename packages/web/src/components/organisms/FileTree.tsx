@@ -1,6 +1,17 @@
 import { useRef, useState } from "react";
 import { Tree } from "react-arborist";
 import type { NodeApi, NodeRendererProps } from "react-arborist";
+
+/** Sentinel child injected into unloaded dirs so react-arborist renders a chevron. */
+const LOADING_PLACEHOLDER: FsArborNode = {
+  id: "__loading__",
+  name: "",
+  kind: "file",
+  size: 0,
+  mtime: 0,
+  isSymlink: false,
+  children: null,
+};
 import {
   ChevronRight,
   ChevronDown,
@@ -56,6 +67,16 @@ function NodeRenderer({
   dragHandle,
   onContextMenu,
 }: NodeRendererWithContextProps) {
+  // Hide the sentinel loading placeholder entirely
+  if (node.data.id === "__loading__") {
+    return (
+      <div ref={dragHandle} style={style} className="flex items-center gap-1.5 px-1 py-0.5 text-xs text-[var(--color-text-muted)] opacity-40 select-none">
+        <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+        Loading…
+      </div>
+    );
+  }
+
   const isDir = node.data.kind === "dir";
   const isHidden = node.data.name.startsWith(".");
 
@@ -70,7 +91,6 @@ function NodeRenderer({
         node.isFocused && !node.isSelected && "outline outline-1 outline-[var(--color-primary)]/40",
         isHidden && "opacity-50",
       )}
-      onClick={() => node.activate()}
       onContextMenu={(e) => onContextMenu(e, node)}
     >
       <span className="w-4 shrink-0 flex items-center justify-center">
@@ -136,18 +156,15 @@ export function FileTree({ project, path = "", onFileOpen, className }: FileTree
     ? (data?.nodes ?? [])
     : (data?.nodes ?? []).filter((n) => !n.name.startsWith("."));
 
-  function handleToggle(id: string) {
-    if (!data) return;
-    const node = findNode(data.nodes, id);
-    if (node?.kind === "dir" && node.children === null) {
-      void loadChildren(id);
-    }
-  }
-
   function handleActivate(node: NodeApi<FsArborNode>) {
+    if (node.data.id === "__loading__") return;
     if (node.data.kind === "file") {
       onFileOpen?.(node.data);
     } else {
+      // Load children on first expand if not yet fetched
+      if (node.data.children === null) {
+        void loadChildren(node.data.id);
+      }
       node.toggle();
     }
   }
@@ -290,10 +307,12 @@ export function FileTree({ project, path = "", onFileOpen, className }: FileTree
             data={visibleNodes}
             childrenAccessor={(d) => {
               if (d.kind !== "dir") return null;
-              return d.children ?? [];
+              // null children = not yet loaded → inject sentinel so arborist
+              // renders a chevron and treats the dir as expandable.
+              if (d.children === null) return [LOADING_PLACEHOLDER];
+              return d.children;
             }}
             openByDefault={false}
-            onToggle={handleToggle}
             onActivate={handleActivate}
             disableDrag
             disableDrop

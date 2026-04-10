@@ -124,7 +124,17 @@ async fn main() -> anyhow::Result<()> {
         .map(|s| s.split(',').map(|o| o.trim().to_string()).collect())
         .unwrap_or_default();
 
-    let fs = FsSubsystem::new(workspace_dir.clone());
+    // Use the directory that actually contains dev-hub.toml as the sandbox root.
+    // workspace_dir is the raw CLI arg / CWD, which may differ from the config
+    // location when the server is started from a subdirectory (e.g. server/).
+    // config.config_path is canonicalized by read_config(), so its parent is
+    // always the true workspace root that project paths are relative to.
+    let fs_root = config
+        .config_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| workspace_dir.clone());
+    let fs = FsSubsystem::new(fs_root);
 
     let state = AppState::new(
         workspace_dir.clone(),

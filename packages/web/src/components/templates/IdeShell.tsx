@@ -1,32 +1,10 @@
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
-import { Group, Panel, Separator } from "react-resizable-panels";
-import type { GroupImperativeHandle, Layout } from "react-resizable-panels";
+import { useRef, useState, type ReactNode } from "react";
+import { Sidebar } from "@/components/organisms/Sidebar.js";
+import { useSidebarCollapse } from "@/hooks/useSidebarCollapse.js";
+import { useResizeHandle } from "@/hooks/useResizeHandle.js";
 
-const STORAGE_KEY_MAIN = "ide-panel-main";
-const STORAGE_KEY_CENTER = "ide-panel-center";
-
-const MAIN_TREE_ID = "tree";
-const MAIN_RIGHT_ID = "right";
-const CENTER_EDITOR_ID = "editor";
-const CENTER_TERMINAL_ID = "terminal";
-
-function loadLayout(key: string): Layout | undefined {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return undefined;
-    return JSON.parse(raw) as Layout;
-  } catch {
-    return undefined;
-  }
-}
-
-function saveLayout(key: string, layout: Layout): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(layout));
-  } catch {
-    // ignore quota errors
-  }
-}
+const TREE_STORAGE_KEY = "devhub:ide-tree-width";
+const EDITOR_STORAGE_KEY = "devhub:ide-editor-height-pct";
 
 interface IdeShellProps {
   tree: ReactNode;
@@ -35,63 +13,109 @@ interface IdeShellProps {
 }
 
 export function IdeShell({ tree, editor, terminal }: IdeShellProps) {
-  const mainGroupRef = useRef<GroupImperativeHandle | null>(null);
-  const centerGroupRef = useRef<GroupImperativeHandle | null>(null);
+  const { collapsed, toggle } = useSidebarCollapse();
 
-  useEffect(() => {
-    const mainLayout = loadLayout(STORAGE_KEY_MAIN);
-    if (mainLayout && mainGroupRef.current) mainGroupRef.current.setLayout(mainLayout);
-    const centerLayout = loadLayout(STORAGE_KEY_CENTER);
-    if (centerLayout && centerGroupRef.current) centerGroupRef.current.setLayout(centerLayout);
-  }, []);
+  // Horizontal: file tree width (same pattern as TerminalsPage)
+  const {
+    width: treeWidth,
+    handleProps: treeResizeProps,
+    isDragging: isTreeDragging,
+  } = useResizeHandle({
+    min: 140,
+    max: 480,
+    defaultWidth: 240,
+    storageKey: TREE_STORAGE_KEY,
+  });
 
-  const handleMainLayoutChange = useCallback((layout: Layout) => {
-    saveLayout(STORAGE_KEY_MAIN, layout);
-  }, []);
+  // Vertical: editor / terminal split (percentage of right-panel height)
+  const [editorPct, setEditorPct] = useState<number>(() => {
+    const stored = localStorage.getItem(EDITOR_STORAGE_KEY);
+    if (stored) {
+      const v = parseInt(stored, 10);
+      if (!isNaN(v)) return Math.min(Math.max(v, 20), 85);
+    }
+    return 70;
+  });
+  const [isVertDragging, setIsVertDragging] = useState(false);
+  const rightPanelRef = useRef<HTMLDivElement>(null);
 
-  const handleCenterLayoutChange = useCallback((layout: Layout) => {
-    saveLayout(STORAGE_KEY_CENTER, layout);
-  }, []);
+  function handleVertMouseDown(e: React.MouseEvent) {
+    e.preventDefault();
+    const panel = rightPanelRef.current;
+    if (!panel) return;
+    const startY = e.clientY;
+    const startPct = editorPct;
+    const totalH = panel.getBoundingClientRect().height;
+
+    setIsVertDragging(true);
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+
+    function onMouseMove(ev: MouseEvent) {
+      const delta = ev.clientY - startY;
+      const newPct = Math.min(Math.max(startPct + (delta / totalH) * 100, 20), 85);
+      setEditorPct(newPct);
+    }
+
+    function onMouseUp() {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      setIsVertDragging(false);
+      setEditorPct((pct) => {
+        localStorage.setItem(EDITOR_STORAGE_KEY, String(Math.round(pct)));
+        return pct;
+      });
+    }
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }
+
+  const isDragging = isTreeDragging || isVertDragging;
 
   return (
-    <div className="flex h-screen overflow-hidden gradient-bg">
-      <Group
-        groupRef={mainGroupRef}
-        orientation="horizontal"
-        onLayoutChanged={handleMainLayoutChange}
-        className="flex-1"
+    <div className={`flex h-screen overflow-hidden gradient-bg${isDragging ? " select-none" : ""}`}>
+      {/* App sidebar — same as every other page */}
+      <Sidebar collapsed={collapsed} onToggle={toggle} />
+
+      {/* File tree panel */}
+      <div
+        style={{ width: treeWidth }}
+        className="shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] flex flex-col overflow-hidden"
       >
-        <Panel id={MAIN_TREE_ID} defaultSize={18} minSize={10} maxSize={40}>
-          <div className="h-full overflow-hidden glass-card border-r border-[var(--color-border)]">
-            {tree}
-          </div>
-        </Panel>
+        {tree}
+      </div>
 
-        <Separator className="w-1 hover:w-1.5 bg-[var(--color-border)] hover:bg-[var(--color-primary)]/40 transition-all cursor-col-resize" />
+      {/* Horizontal resize handle — identical to TerminalsPage */}
+      <div
+        {...treeResizeProps}
+        className="w-1 shrink-0 cursor-col-resize group relative hover:bg-[var(--color-primary)]/20"
+      >
+        <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 bg-[var(--color-primary)]/50 opacity-0 group-hover:opacity-100 transition-opacity" />
+      </div>
 
-        <Panel id={MAIN_RIGHT_ID} minSize={30}>
-          <Group
-            groupRef={centerGroupRef}
-            orientation="vertical"
-            onLayoutChanged={handleCenterLayoutChange}
-            className="h-full"
-          >
-            <Panel id={CENTER_EDITOR_ID} defaultSize={70} minSize={20}>
-              <div className="h-full overflow-hidden">
-                {editor}
-              </div>
-            </Panel>
+      {/* Right panel: editor on top, terminal on bottom */}
+      <div ref={rightPanelRef} className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Editor pane */}
+        <div style={{ height: `${editorPct}%` }} className="overflow-hidden">
+          {editor}
+        </div>
 
-            <Separator className="h-1 hover:h-1.5 bg-[var(--color-border)] hover:bg-[var(--color-primary)]/40 transition-all cursor-row-resize" />
+        {/* Vertical resize handle */}
+        <div
+          onMouseDown={handleVertMouseDown}
+          className="h-1 shrink-0 cursor-row-resize group relative hover:bg-[var(--color-primary)]/20 border-t border-[var(--color-border)]"
+        >
+          <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-0.5 bg-[var(--color-primary)]/50 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
 
-            <Panel id={CENTER_TERMINAL_ID} defaultSize={30} minSize={10}>
-              <div className="h-full overflow-hidden border-t border-[var(--color-border)]">
-                {terminal}
-              </div>
-            </Panel>
-          </Group>
-        </Panel>
-      </Group>
+        {/* Terminal pane */}
+        <div className="flex-1 min-h-0 overflow-hidden">
+          {terminal}
+        </div>
+      </div>
     </div>
   );
 }

@@ -77,6 +77,11 @@ pub async fn init_workspace(
 ) -> Result<impl IntoResponse, ApiError> {
     let path = std::path::PathBuf::from(&body.path);
     let cfg = load_workspace_config(&path).map_err(ApiError::from_app)?;
+    let sandbox_root = cfg.config_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| path.clone());
+    state.fs.reinit_sandbox(sandbox_root);
     *state.workspace_dir.write().await = path;
     *state.config.write().await = cfg;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -94,6 +99,12 @@ pub async fn switch_workspace(
     let cfg = load_workspace_config(&path).map_err(ApiError::from_app)?;
 
     state.pty_manager.dispose();
+
+    let sandbox_root = cfg.config_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| path.clone());
+    state.fs.reinit_sandbox(sandbox_root);
 
     *state.workspace_dir.write().await = path.clone();
     *state.config.write().await = cfg;

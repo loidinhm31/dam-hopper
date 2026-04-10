@@ -1,6 +1,9 @@
 [workspace]
 name = "my-workspace"
 
+[features]
+ide_explorer = true
+
 [[projects]]
 name = "api-server"
 path = "./api-server"
