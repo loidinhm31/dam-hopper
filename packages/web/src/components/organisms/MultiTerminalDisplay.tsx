@@ -5,6 +5,7 @@ export interface MountedSession {
   sessionId: string;
   project: string;
   command: string;
+  cwd?: string;
 }
 
 interface Props {
@@ -41,6 +42,7 @@ export function MultiTerminalDisplay({
             sessionId={s.sessionId}
             project={s.project}
             command={s.command}
+            cwd={s.cwd}
             onExit={() => onSessionExit?.(s.sessionId)}
             onNewTerminal={onNewTerminal}
             className="flex-1"

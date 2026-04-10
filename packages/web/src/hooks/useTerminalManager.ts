@@ -68,6 +68,7 @@ export interface TerminalManagerActions {
   handleLaunchFreeWithCommand: (command: string) => void;
   handleLaunchSuggestedCommand: (projectName: string, command: string) => void;
   handleAddShell: (projectName: string) => void;
+  handleLaunchShell: (projectName: string) => void;
   handleSelectTab: (sessionId: string) => void;
   handleCloseTab: (sessionId: string) => void;
   handleKillTerminal: (sessionId: string) => void;
@@ -78,7 +79,7 @@ export interface TerminalManagerActions {
   setSavePrompt: React.Dispatch<React.SetStateAction<SavePromptState | null>>;
   setFreeTerminalSavePrompt: React.Dispatch<React.SetStateAction<FreeTerminalSavePromptState | null>>;
   setLaunchForm: React.Dispatch<React.SetStateAction<LaunchFormState | null>>;
-  openTerminalTab: (sessionId: string, project: string, command: string) => void;
+  openTerminalTab: (sessionId: string, project: string, command: string, cwd?: string) => void;
 }
 
 const INVALID_PROFILE_NAME_RE = /[:]/;
@@ -168,7 +169,7 @@ export function useTerminalManager(
     return `${project}:${type}`;
   }
 
-  function openTerminalTab(sessionId: string, project: string, command: string) {
+  function openTerminalTab(sessionId: string, project: string, command: string, cwd?: string) {
     const { type, profile } = parseSessionId(sessionId);
     const isAdHoc = !profileSessionIds.has(sessionId) &&
       type === "terminal" &&
@@ -192,7 +193,7 @@ export function useTerminalManager(
       if (existing) {
         return [existing, ...prev.filter((s) => s.sessionId !== sessionId)];
       }
-      const next = [{ sessionId, project, command }, ...prev];
+      const next = [{ sessionId, project, command, cwd }, ...prev];
       return next.length > MAX_MOUNTED ? next.slice(0, MAX_MOUNTED) : next;
     });
 
@@ -233,11 +234,13 @@ export function useTerminalManager(
   }
 
   function handleLaunchTerminal(projectName: string, cmd: TreeCommand) {
+    const projectPath = projects.find((p) => p.name === projectName)?.path;
+    const resolvedCwd = cmd.cwd || projectPath;
     api.terminal
-      .create({ id: cmd.sessionId, project: projectName, command: cmd.command, cols: 120, rows: 30 })
+      .create({ id: cmd.sessionId, project: projectName, command: cmd.command, cwd: resolvedCwd, cols: 120, rows: 30 })
       .then(() => {
         void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
-        openTerminalTab(cmd.sessionId, projectName, cmd.command);
+        openTerminalTab(cmd.sessionId, projectName, cmd.command, resolvedCwd);
       })
       .catch((err: unknown) => console.error("[useTerminalManager] failed to create terminal", err));
   }
@@ -250,7 +253,7 @@ export function useTerminalManager(
       .create({ id: sessionId, project: projectName, command: cmd.command, cwd: cmd.cwd, cols: 120, rows: 30 })
       .then(() => {
         void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
-        openTerminalTab(sessionId, projectName, cmd.command);
+        openTerminalTab(sessionId, projectName, cmd.command, cmd.cwd);
       })
       .catch((err: unknown) => console.error("[useTerminalManager] failed to launch profile instance", err));
   }
@@ -269,7 +272,7 @@ export function useTerminalManager(
       .create({ id: sessionId, project: projectName, command: resolvedCommand, cwd: resolvedCwd, cols: 120, rows: 30 })
       .then(() => {
         void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
-        openTerminalTab(sessionId, projectName, resolvedCommand);
+        openTerminalTab(sessionId, projectName, resolvedCommand, resolvedCwd);
       })
       .catch((err: unknown) => console.error("[useTerminalManager] failed to launch terminal", err));
   }
@@ -360,18 +363,34 @@ export function useTerminalManager(
 
   function handleLaunchSuggestedCommand(projectName: string, command: string) {
     const sessionId = `terminal:${projectName}:_:${Date.now()}`;
+    const projectPath = projects.find((p) => p.name === projectName)?.path;
     api.terminal
-      .create({ id: sessionId, project: projectName, command, cols: 120, rows: 30 })
+      .create({ id: sessionId, project: projectName, command, cwd: projectPath, cols: 120, rows: 30 })
       .then(() => {
         void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
-        openTerminalTab(sessionId, projectName, command);
+        openTerminalTab(sessionId, projectName, command, projectPath);
       })
       .catch((err: unknown) => console.error("[useTerminalManager] failed to create suggested terminal", err));
   }
 
   function handleAddShell(projectName: string) {
-    setLaunchForm({ projectName, cwd: "", command: "" });
+    const projectPath = projects.find((p) => p.name === projectName)?.path ?? "";
+    setLaunchForm({ projectName, cwd: projectPath, command: "" });
     setSelection({ type: "project", name: projectName });
+  }
+
+  function handleLaunchShell(projectName: string) {
+    const platform = (window as { devhub?: { platform?: string } }).devhub?.platform;
+    const command = platform === "win32" ? "cmd.exe" : "bash";
+    const sessionId = `terminal:${projectName}:_:${Date.now()}`;
+    const projectPath = projects.find((p) => p.name === projectName)?.path;
+    api.terminal
+      .create({ id: sessionId, project: projectName, command, cwd: projectPath, cols: 120, rows: 30 })
+      .then(() => {
+        void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+        openTerminalTab(sessionId, projectName, command, projectPath);
+      })
+      .catch((err: unknown) => console.error("[useTerminalManager] failed to launch shell", err));
   }
 
   function handleSelectTab(sessionId: string) {
@@ -495,6 +514,7 @@ export function useTerminalManager(
       handleLaunchFreeWithCommand,
       handleLaunchSuggestedCommand,
       handleAddShell,
+      handleLaunchShell,
       handleSelectTab,
       handleCloseTab,
       handleKillTerminal,

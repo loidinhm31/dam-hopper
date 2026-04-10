@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { Tree } from "react-arborist";
 import type { NodeApi, NodeRendererProps } from "react-arborist";
 
@@ -118,6 +118,7 @@ interface FileTreeProps {
   project: string;
   path?: string;
   onFileOpen?: (node: FsArborNode) => void;
+  onOpenTerminal?: () => void;
   className?: string;
 }
 
@@ -138,7 +139,7 @@ interface DeleteState {
   loading: boolean;
 }
 
-export function FileTree({ project, path = "", onFileOpen, className }: FileTreeProps) {
+export function FileTree({ project, path = "", onFileOpen, onOpenTerminal, className }: FileTreeProps) {
   const [showHidden, setShowHidden] = useState(false);
   const { data, isLoading, isError, error, loadChildren } = useFsSubscription(project, path);
   const ops = useFsOps(project, path);
@@ -256,6 +257,20 @@ export function FileTree({ project, path = "", onFileOpen, className }: FileTree
     }
   }
 
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!onOpenTerminal) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.shiftKey && e.key === "Enter" && containerRef.current?.contains(document.activeElement)) {
+        e.preventDefault();
+        onOpenTerminal!();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onOpenTerminal]);
+
   return (
     <UploadDropzone
       currentDir={path}
@@ -290,7 +305,7 @@ export function FileTree({ project, path = "", onFileOpen, className }: FileTree
       </div>
 
       {/* Tree body */}
-      <div className="flex-1 overflow-hidden">
+      <div ref={containerRef} className="flex-1 overflow-hidden">
         {isLoading && (
           <div className="flex items-center justify-center h-16 gap-2 text-xs text-[var(--color-text-muted)]">
             <Loader2 className="h-4 w-4 animate-spin" />
