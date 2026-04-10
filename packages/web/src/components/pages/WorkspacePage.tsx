@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Terminal as TerminalIcon, Plus } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -9,6 +9,7 @@ import { TerminalTreeView } from "@/components/organisms/TerminalTreeView.js";
 import { TerminalTabBar } from "@/components/organisms/TerminalTabBar.js";
 import { MultiTerminalDisplay } from "@/components/organisms/MultiTerminalDisplay.js";
 import { ProjectInfoPanel } from "@/components/organisms/ProjectInfoPanel.js";
+import { SearchPanel } from "@/components/organisms/search-panel.js";
 import { SidebarTabSwitcher, type SidebarTab } from "@/components/molecules/SidebarTabSwitcher.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
@@ -51,6 +52,21 @@ export default function WorkspacePage() {
   const projectName =
     activeProject ?? (projects.length > 0 ? projects[0].name : null);
 
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!ideEnabled) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.ctrlKey && e.shiftKey && e.key === "F") {
+        e.preventDefault();
+        setLeftTab("search");
+        setTimeout(() => searchInputRef.current?.focus(), 50);
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [ideEnabled]);
+
   function handleFileOpen(node: FsArborNode) {
     if (projectName) void openFile(projectName, node);
   }
@@ -92,6 +108,32 @@ export default function WorkspacePage() {
               onFileOpen={handleFileOpen}
               onOpenTerminal={() => handleLaunchShell(projectName)}
               className="flex-1"
+            />
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+              No projects configured
+            </div>
+          )}
+        </div>
+      )}
+
+      {leftTab === "search" && ideEnabled && (
+        <div className="flex-1 overflow-hidden">
+          {projectName ? (
+            <SearchPanel
+              project={projectName}
+              inputRef={searchInputRef}
+              onResultClick={(match) => {
+                void openFile(projectName, {
+                  id: match.path,
+                  name: match.path.split("/").pop()!,
+                  kind: "file",
+                  size: 0,
+                  mtime: 0,
+                  isSymlink: false,
+                  children: null,
+                });
+              }}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">

@@ -90,6 +90,8 @@ function NodeRenderer({
         node.isSelected ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)]" : "text-[var(--color-text)]",
         node.isFocused && !node.isSelected && "outline outline-1 outline-[var(--color-primary)]/40",
         isHidden && "opacity-50",
+        node.isDragging && "opacity-40",
+        node.willReceiveDrop && "bg-[var(--color-primary)]/10 ring-1 ring-[var(--color-primary)]",
       )}
       onContextMenu={(e) => onContextMenu(e, node)}
     >
@@ -257,6 +259,31 @@ export function FileTree({ project, path = "", onFileOpen, onOpenTerminal, class
     }
   }
 
+  async function handleMove({
+    dragIds,
+    parentId,
+    parentNode,
+  }: {
+    dragIds: string[];
+    parentId: string | null;
+    parentNode: NodeApi<FsArborNode> | null;
+  }) {
+    const srcPath = dragIds[0];
+    if (!srcPath) return;
+    const name = srcPath.split("/").pop()!;
+
+    // Drop on file → use its parent dir as target
+    let destDir = parentId ?? "";
+    if (parentNode && parentNode.data.kind !== "dir") {
+      destDir = parentDir(parentNode.data.id);
+    }
+
+    const newPath = destDir ? `${destDir}/${name}` : name;
+    if (srcPath === newPath) return;
+    const result = await ops.move(srcPath, newPath);
+    if (!result.ok) setOpError(result.error ?? "Move failed");
+  }
+
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -329,8 +356,18 @@ export function FileTree({ project, path = "", onFileOpen, onOpenTerminal, class
             }}
             openByDefault={false}
             onActivate={handleActivate}
-            disableDrag
-            disableDrop
+            onMove={handleMove}
+            disableDrag={(node) => node?.data?.id === "__loading__"}
+            disableDrop={({ parentNode, dragNodes }) => {
+              if (!parentNode?.data) return false;
+              if (parentNode.data.id === "__loading__") return true;
+              // Prevent drop onto self or descendant
+              return dragNodes.some(
+                (d) =>
+                  d.data?.id === parentNode.data.id ||
+                  parentNode.data.id.startsWith((d.data?.id ?? "") + "/"),
+              );
+            }}
             disableEdit
             indent={16}
             rowHeight={24}

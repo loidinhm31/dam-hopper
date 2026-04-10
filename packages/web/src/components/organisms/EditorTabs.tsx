@@ -2,9 +2,9 @@
  * EditorTabs — tab bar + active editor host.
  *
  * - Tab bar: open tabs with dirty indicators and close buttons.
- * - Editor area: routes to MonacoHost / LargeFileViewer / BinaryPreview
- *   based on the active tab's tier.
- * - MonacoHost is lazy-loaded (dynamic import) to keep the main chunk clean.
+ * - Editor area: routes to MonacoHost / MarkdownHost / LargeFileViewer / BinaryPreview
+ *   based on the active tab's tier and file type.
+ * - MonacoHost / MarkdownHost are lazy-loaded (dynamic import) to keep the main chunk clean.
  * - ConflictDialog is shown when save returns a conflict.
  */
 import { lazy, Suspense } from "react";
@@ -17,6 +17,10 @@ import { ConflictDialog } from "@/components/organisms/ConflictDialog.js";
 
 const MonacoHost = lazy(() =>
   import("@/components/organisms/MonacoHost.js").then((m) => ({ default: m.MonacoHost })),
+);
+
+const MarkdownHost = lazy(() =>
+  import("@/components/organisms/markdown-host.js").then((m) => ({ default: m.MarkdownHost })),
 );
 
 export function EditorTabs() {
@@ -82,6 +86,26 @@ export function EditorTabs() {
             fileName={activeTab.name}
             size={activeTab.size}
           />
+        ) : /\.mdx?$/i.test(activeTab.name) ? (
+          <Suspense
+            fallback={
+              <div className="h-full flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)]">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading editor…
+              </div>
+            }
+          >
+            <MarkdownHost
+              tabKey={activeTab.key}
+              content={activeTab.content}
+              tier={activeTab.tier}
+              mime={activeTab.mime}
+              viewState={activeTab.viewState}
+              onChange={(val) => setContent(activeTab.key, val)}
+              onSave={() => void save(activeTab.key)}
+              onViewStateChange={(vs) => saveViewState(activeTab.key, vs)}
+            />
+          </Suspense>
         ) : (
           <Suspense
             fallback={

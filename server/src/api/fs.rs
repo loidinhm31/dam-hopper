@@ -14,6 +14,25 @@ use crate::state::AppState;
 use super::error::ApiError;
 
 // ---------------------------------------------------------------------------
+// Search types
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct SearchParams {
+    pub project: String,
+    pub q: String,
+    pub case: Option<bool>,
+    pub max: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct SearchResponse {
+    pub query: String,
+    pub matches: Vec<ops::SearchMatch>,
+    pub truncated: bool,
+}
+
+// ---------------------------------------------------------------------------
 // Shared param / response types
 // ---------------------------------------------------------------------------
 
@@ -189,4 +208,27 @@ pub async fn download(
         body,
     )
         .into_response())
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/fs/search?project=NAME&q=QUERY[&case=true&max=N]
+// ---------------------------------------------------------------------------
+
+pub async fn search(
+    State(state): State<AppState>,
+    Query(params): Query<SearchParams>,
+) -> Result<Json<SearchResponse>, ApiError> {
+    let root = resolve(&state, &params.project, "")
+        .await
+        .map_err(ApiError::from)?;
+    let max = params.max.unwrap_or(200).min(ops::MAX_SEARCH_RESULTS);
+    let (matches, truncated) =
+        ops::search_files(&root, &params.q, params.case.unwrap_or(false), max)
+            .await
+            .map_err(AppError::Fs)?;
+    Ok(Json(SearchResponse {
+        query: params.q,
+        matches,
+        truncated,
+    }))
 }

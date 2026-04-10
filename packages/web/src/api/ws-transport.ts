@@ -149,6 +149,13 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
       const params = new URLSearchParams({ project: d.project, path: d.path });
       return { method: "GET", url: `/api/fs/list?${params}` };
     }
+    case "fs:search": {
+      const d = data as { project: string; q: string; case?: boolean; max?: number };
+      const params = new URLSearchParams({ project: d.project, q: d.q });
+      if (d.case) params.set("case", "true");
+      if (d.max) params.set("max", String(d.max));
+      return { method: "GET", url: `/api/fs/search?${params}` };
+    }
 
     // Agent Store
     case "agent-store:list": {

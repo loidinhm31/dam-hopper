@@ -246,3 +246,105 @@ fn map_io(e: std::io::Error) -> FsError {
         FsError::Io(e)
     }
 }
+
+// ---------------------------------------------------------------------------
+// File content search
+// ---------------------------------------------------------------------------
+
+pub const MAX_SEARCH_RESULTS: usize = 1000;
+const MAX_LINE_LEN: usize = 500;
+const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
+
+#[derive(Debug, Serialize)]
+pub struct SearchMatch {
+    pub path: String,
+    pub line: u64,
+    pub col: u64,
+    pub text: String,
+}
+
+/// Search file contents within `root` for `query` (plain text, internally regex-escaped).
+///
+/// Returns `(matches, truncated)`. Walks only text files; respects .gitignore via the
+/// `ignore` crate. Capped at `max_results.min(MAX_SEARCH_RESULTS)`.
+pub async fn search_files(
+    root: &Path,
+    query: &str,
+    case_sensitive: bool,
+    max_results: usize,
+) -> Result<(Vec<SearchMatch>, bool), FsError> {
+    let root_clone = root.to_path_buf();
+    let escaped = regex::escape(query);
+    let max = max_results.min(MAX_SEARCH_RESULTS);
+
+    tokio::task::spawn_blocking(move || {
+        use ignore::WalkBuilder;
+        use regex::RegexBuilder;
+
+        let re = RegexBuilder::new(&escaped)
+            .case_insensitive(!case_sensitive)
+            .build()
+            .map_err(|e| FsError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Invalid pattern: {e}"),
+            )))?;
+
+        let mut matches: Vec<SearchMatch> = Vec::new();
+        let mut truncated = false;
+
+        for entry in WalkBuilder::new(&root_clone)
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .build()
+            .filter_map(|e| e.ok())
+        {
+            if !entry.file_type().map_or(false, |ft| ft.is_file()) {
+                continue;
+            }
+            let path = entry.path();
+
+            if let Ok(meta) = std::fs::metadata(path) {
+                if meta.len() > MAX_FILE_SIZE {
+                    continue;
+                }
+            }
+
+            // read_to_string skips binary files (non-UTF8 → Err)
+            let content = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let rel = path
+                .strip_prefix(&root_clone)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            for (line_idx, line) in content.lines().enumerate() {
+                if let Some(m) = re.find(line) {
+                    let text = if line.len() > MAX_LINE_LEN {
+                        format!("{}...", &line[..MAX_LINE_LEN])
+                    } else {
+                        line.to_string()
+                    };
+                    matches.push(SearchMatch {
+                        path: rel.clone(),
+                        line: (line_idx + 1) as u64,
+                        col: (m.start() + 1) as u64,
+                        text,
+                    });
+                    if matches.len() >= max {
+                        truncated = true;
+                        return Ok((matches, truncated));
+                    }
+                }
+            }
+        }
+        Ok((matches, truncated))
+    })
+    .await
+    .map_err(|e| FsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?
+}

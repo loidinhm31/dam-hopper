@@ -78,6 +78,9 @@ handlebars = "6"
 # Regex for URL validation in importer
 regex = "1"
 
+# .gitignore-aware directory walking for file content search
+ignore = "0.4"
+
 # YAML frontmatter parsing for agent store items
 serde_yaml_ng = "0.9"
 
