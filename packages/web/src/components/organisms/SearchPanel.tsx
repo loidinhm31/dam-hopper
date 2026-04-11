@@ -176,7 +176,7 @@ export function SearchPanel({ project, onResultClick, onClose, inputRef }: Searc
       </div>
 
       {/* Results */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto min-h-0">
         {grouped.length > 0 ? (
           grouped.map(([filePath, fileMatches]) => {
             const projectBadge = scope === "workspace" ? fileMatches[0].project : undefined;

@@ -381,7 +381,7 @@ export default function WorkspacePage() {
 
           {/* Dialog */}
           <div
-            className="relative z-10 w-full max-w-2xl mx-4 rounded-xl shadow-2xl border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden flex flex-col max-h-[70vh]"
+            className="relative z-10 w-full max-w-2xl mx-4 rounded-xl shadow-2xl border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden flex flex-col h-[70vh]"
             onClick={(e) => e.stopPropagation()}
           >
             <SearchPanel

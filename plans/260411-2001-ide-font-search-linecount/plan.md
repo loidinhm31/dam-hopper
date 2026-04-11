@@ -1,7 +1,7 @@
 ---
 title: "IDE Font Settings, Workspace Search, Status Bar"
 description: "System-wide and editor font sizing with Ctrl+Shift+wheel zoom, workspace-scoped file content search with selection-to-search, and editor status bar with line count"
-status: pending
+status: done
 priority: P2
 effort: 9h
 branch: main
@@ -24,8 +24,8 @@ Three IDE explorer enhancements:
 |---|-------|--------|--------|------|
 | 1 | Backend: global UI config + workspace search scope | done | 2.5h | [phase-01](./phase-01-backend-config-and-search.md) |
 | 2 | Frontend: settings store + Appearance UI + font apply | done | 2.5h | [phase-02](./phase-02-frontend-settings-and-font.md) |
-| 3 | Frontend: search panel scope toggle + selection-to-search | pending | 2.5h | [phase-03](./phase-03-frontend-search-enhancements.md) |
-| 4 | Frontend: editor status bar | pending | 1.5h | [phase-04](./phase-04-editor-status-bar.md) |
+| 3 | Frontend: search panel scope toggle + selection-to-search | done | 2.5h | [phase-03](./phase-03-frontend-search-enhancements.md) |
+| 4 | Frontend: editor status bar | done | 1.5h | [phase-04](./phase-04-editor-status-bar.md) |
 
 ## Dependencies
 
