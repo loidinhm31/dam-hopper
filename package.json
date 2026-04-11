@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "pnpm --filter @dev-hub/web build",
-    "dev": "pnpm --filter @dev-hub/web dev",
+    "dev": "pnpm --filter @dev-hub/web dev --host",
     "dev:server": "cd server && cargo run",
     "dev:server:watch": "cd server && cargo watch -x run",
     "build:server": "cd server && cargo build --release",

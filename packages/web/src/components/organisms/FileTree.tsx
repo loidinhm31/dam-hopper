@@ -2,16 +2,23 @@ import { useRef, useState, useEffect } from "react";
 import { Tree } from "react-arborist";
 import type { NodeApi, NodeRendererProps } from "react-arborist";
 
-/** Sentinel child injected into unloaded dirs so react-arborist renders a chevron. */
-const LOADING_PLACEHOLDER: FsArborNode = {
-  id: "__loading__",
-  name: "",
-  kind: "file",
-  size: 0,
-  mtime: 0,
-  isSymlink: false,
-  children: null,
-};
+const LOADING_SENTINEL_PREFIX = "__loading__:" as const;
+
+function loadingSentinel(parentId: string): FsArborNode {
+  return {
+    id: `${LOADING_SENTINEL_PREFIX}${parentId}`,
+    name: "",
+    kind: "file",
+    size: 0,
+    mtime: 0,
+    isSymlink: false,
+    children: null,
+  };
+}
+
+function isLoadingSentinel(id: string) {
+  return id.startsWith(LOADING_SENTINEL_PREFIX);
+}
 import {
   ChevronRight,
   ChevronDown,
@@ -67,8 +74,7 @@ function NodeRenderer({
   dragHandle,
   onContextMenu,
 }: NodeRendererWithContextProps) {
-  // Hide the sentinel loading placeholder entirely
-  if (node.data.id === "__loading__") {
+  if (isLoadingSentinel(node.data.id)) {
     return (
       <div ref={dragHandle} style={style} className="flex items-center gap-1.5 px-1 py-0.5 text-xs text-[var(--color-text-muted)] opacity-40 select-none">
         <Loader2 className="h-3 w-3 animate-spin shrink-0" />
@@ -155,17 +161,33 @@ export function FileTree({ project, path = "", onFileOpen, onOpenTerminal, class
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadDirRef = useRef<string>("");
 
+  // Track dirs the user has expanded so we can auto-reload them after a refetch
+  // wipes children back to null.
+  const expandedDirsRef = useRef<Set<string>>(new Set());
+  const loadChildrenRef = useRef(loadChildren);
+  loadChildrenRef.current = loadChildren;
+
+  useEffect(() => {
+    if (!data) return;
+    const unloaded = collectUnloadedExpanded(data.nodes, expandedDirsRef.current);
+    for (const id of unloaded) {
+      void loadChildrenRef.current(id);
+    }
+  // data identity changes on every refetch/delta — that's exactly when we want to run.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
   const visibleNodes = showHidden
     ? (data?.nodes ?? [])
     : (data?.nodes ?? []).filter((n) => !n.name.startsWith("."));
 
   function handleActivate(node: NodeApi<FsArborNode>) {
-    if (node.data.id === "__loading__") return;
+    if (isLoadingSentinel(node.data.id)) return;
     if (node.data.kind === "file") {
       onFileOpen?.(node.data);
     } else {
-      // Load children on first expand if not yet fetched
       if (node.data.children === null) {
+        expandedDirsRef.current.add(node.data.id);
         void loadChildren(node.data.id);
       }
       node.toggle();
@@ -349,18 +371,16 @@ export function FileTree({ project, path = "", onFileOpen, onOpenTerminal, class
             data={visibleNodes}
             childrenAccessor={(d) => {
               if (d.kind !== "dir") return null;
-              // null children = not yet loaded → inject sentinel so arborist
-              // renders a chevron and treats the dir as expandable.
-              if (d.children === null) return [LOADING_PLACEHOLDER];
+              if (d.children === null) return [loadingSentinel(d.id)];
               return d.children;
             }}
             openByDefault={false}
             onActivate={handleActivate}
             onMove={handleMove}
-            disableDrag={(node) => node?.data?.id === "__loading__"}
+            disableDrag={(node) => isLoadingSentinel(node?.data?.id ?? "")}
             disableDrop={({ parentNode, dragNodes }) => {
               if (!parentNode?.data) return false;
-              if (parentNode.data.id === "__loading__") return true;
+              if (isLoadingSentinel(parentNode.data.id)) return true;
               // Prevent drop onto self or descendant
               return dragNodes.some(
                 (d) =>
@@ -477,4 +497,18 @@ function parentDir(nodePath: string): string {
   const parts = nodePath.split("/");
   parts.pop();
   return parts.join("/");
+}
+
+/** Walk the tree and collect IDs of dirs that were expanded but now have unloaded children. */
+function collectUnloadedExpanded(nodes: FsArborNode[], expanded: Set<string>): string[] {
+  const result: string[] = [];
+  for (const n of nodes) {
+    if (n.kind !== "dir") continue;
+    if (expanded.has(n.id) && n.children === null) {
+      result.push(n.id);
+    } else if (n.children) {
+      result.push(...collectUnloadedExpanded(n.children, expanded));
+    }
+  }
+  return result;
 }

@@ -1,16 +1,23 @@
-import { useState, useDeferredValue } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getTransport } from "@/api/transport.js";
 import type { SearchResponse } from "@/api/fs-types.js";
 import type { SearchScope } from "@/stores/searchUi.js";
 
+const DEBOUNCE_MS = 350;
+const MAX_QUERY_LEN = 200;
+
 export function useFileSearch(project: string | null, scope: SearchScope = "project") {
   const [query, setQuery] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
-  const deferredQuery = useDeferredValue(query);
+  const [debouncedQuery, setDebouncedQuery] = useState("");
 
-  const MAX_QUERY_LEN = 200;
-  const trimmedQuery = deferredQuery.slice(0, MAX_QUERY_LEN);
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedQuery(query), DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [query]);
+
+  const trimmedQuery = debouncedQuery.slice(0, MAX_QUERY_LEN);
   const isWorkspace = scope === "workspace";
 
   const { data, isLoading, isError } = useQuery<SearchResponse>({
