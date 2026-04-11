@@ -266,6 +266,14 @@ export function useGitResolve(project: string) {
   });
 }
 
+export function useGitCommit(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (message: string) => api.git.commit(project, message),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["git-diff", project] }),
+  });
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 
 export function useGitFetch() {

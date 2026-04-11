@@ -145,10 +145,11 @@ fn extract_hunks(patch: &git2::Patch) -> Result<Vec<HunkInfo>, AppError> {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// List all changed files (staged + unstaged).
+/// List all changed files (staged + unstaged + untracked).
 ///
 /// A file modified both staged and unstaged appears twice — once with
 /// `staged: true` (index vs HEAD), once with `staged: false` (workdir vs index).
+/// Untracked files appear with `status: "added"` and `staged: false`.
 pub fn get_diff_files(project_path: &Path) -> Result<Vec<DiffFileEntry>, AppError> {
     let repo = open_repo(project_path)?;
     let mut entries: Vec<DiffFileEntry> = Vec::new();
@@ -164,11 +165,36 @@ pub fn get_diff_files(project_path: &Path) -> Result<Vec<DiffFileEntry>, AppErro
         .map_err(|e| AppError::Git(e.message().to_string()))?;
     collect_diff_entries(&staged_diff, true, &mut entries)?;
 
-    // Unstaged: index → workdir
+    // Unstaged: index → workdir (tracked files only)
     let unstaged_diff = repo
         .diff_index_to_workdir(None, Some(&mut opts))
         .map_err(|e| AppError::Git(e.message().to_string()))?;
     collect_diff_entries(&unstaged_diff, false, &mut entries)?;
+
+    // Untracked files (not yet `git add`ed, not ignored)
+    let mut status_opts = git2::StatusOptions::new();
+    status_opts
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .exclude_submodules(true)
+        .include_ignored(false);
+    let statuses = repo
+        .statuses(Some(&mut status_opts))
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
+    for entry in statuses.iter() {
+        if entry.status().contains(git2::Status::WT_NEW) {
+            if let Some(path) = entry.path() {
+                entries.push(DiffFileEntry {
+                    path: path.to_string(),
+                    status: "added".to_string(),
+                    staged: false,
+                    additions: 0,
+                    deletions: 0,
+                    old_path: None,
+                });
+            }
+        }
+    }
 
     Ok(entries)
 }
@@ -315,6 +341,9 @@ fn compute_hunks_for_file(repo: &Repository, rel_path: &str) -> Result<Vec<HunkI
 }
 
 /// Stage files into the index.
+///
+/// For deleted files (no longer on disk), stages the deletion via `remove_path`.
+/// For all other files, stages content via `add_path`.
 pub fn stage_files(project_path: &Path, paths: &[&str]) -> Result<(), AppError> {
     for rel in paths {
         safe_join(project_path, rel)?;
@@ -325,9 +354,17 @@ pub fn stage_files(project_path: &Path, paths: &[&str]) -> Result<(), AppError> 
         .map_err(|e| AppError::Git(e.message().to_string()))?;
 
     for rel in paths {
-        index
-            .add_path(Path::new(rel))
-            .map_err(|e| AppError::Git(format!("stage {rel}: {}", e.message())))?;
+        let abs_path = project_path.join(rel);
+        if abs_path.exists() {
+            index
+                .add_path(Path::new(rel))
+                .map_err(|e| AppError::Git(format!("stage {rel}: {}", e.message())))?;
+        } else {
+            // File was deleted from the working tree — stage the deletion.
+            index
+                .remove_path(Path::new(rel))
+                .map_err(|e| AppError::Git(format!("stage deletion {rel}: {}", e.message())))?;
+        }
     }
     index
         .write()
@@ -560,4 +597,40 @@ pub fn resolve_conflict(
         .write()
         .map_err(|e| AppError::Git(e.message().to_string()))?;
     Ok(())
+}
+
+/// Create a commit from the current index with the given message.
+/// Returns the new commit's hash as a hex string.
+pub fn commit_files(project_path: &Path, message: &str) -> Result<String, AppError> {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidInput("commit message cannot be empty".into()));
+    }
+    let repo = open_repo(project_path)?;
+    let sig = repo.signature().map_err(|e| {
+        AppError::Git(format!(
+            "git user not configured (set user.name and user.email): {}",
+            e.message()
+        ))
+    })?;
+    let mut index = repo
+        .index()
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
+    let tree_id = index
+        .write_tree()
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
+    let tree = repo
+        .find_tree(tree_id)
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
+    let parents: Vec<git2::Commit> = match repo.head() {
+        Ok(head) => vec![head
+            .peel_to_commit()
+            .map_err(|e| AppError::Git(e.message().to_string()))?],
+        Err(_) => vec![],
+    };
+    let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+    let oid = repo
+        .commit(Some("HEAD"), &sig, &sig, trimmed, &tree, &parent_refs)
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
+    Ok(oid.to_string())
 }

@@ -247,6 +247,10 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
       const d = data as { project: string; path: string; content: string };
       return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/resolve`, body: { path: d.path, content: d.content } };
     }
+    case "git:commit": {
+      const d = data as { project: string; message: string };
+      return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/commit`, body: { message: d.message } };
+    }
 
     default:
       throw new Error(`Unknown channel for WsTransport: ${channel}`);

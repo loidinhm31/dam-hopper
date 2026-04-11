@@ -1,4 +1,4 @@
-/// Route handlers for git diff, staging, discard, and conflict resolution.
+/// Route handlers for git diff, staging, discard, conflict resolution, and commit.
 ///
 /// All routes are scoped to a specific project: /api/git/:project/...
 /// Path parameters are validated via `safe_join` inside the git::diff module.
@@ -7,7 +7,7 @@ use axum::{
     extract::{Path, Query, State},
     response::IntoResponse,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::git;
 use crate::state::AppState;
@@ -188,4 +188,33 @@ pub async fn resolve(
         .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
         .map_err(ApiError::from_app)?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/git/{project}/commit  — { message: string }
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct CommitBody {
+    pub message: String,
+}
+
+#[derive(Serialize)]
+pub struct CommitResponse {
+    pub ok: bool,
+    pub hash: String,
+}
+
+pub async fn commit(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    Json(body): Json<CommitBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let proj_path = state.project_path(&project).await.map_err(ApiError::from_app)?;
+    let message = body.message;
+    let hash = tokio::task::spawn_blocking(move || git::commit_files(&proj_path, &message))
+        .await
+        .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+        .map_err(ApiError::from_app)?;
+    Ok(Json(CommitResponse { ok: true, hash }))
 }

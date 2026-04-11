@@ -1,7 +1,7 @@
-import { Files, Terminal, GitCompareArrows } from "lucide-react";
+import { Files, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 
-export type SidebarTab = "files" | "terminals" | "changes";
+export type SidebarTab = "files" | "terminals";
 
 interface TabDef {
   id: SidebarTab;
@@ -14,14 +14,12 @@ interface Props {
   activeTab: SidebarTab;
   onTabChange: (tab: SidebarTab) => void;
   hideFiles?: boolean;
-  changesCount?: number;
 }
 
-export function SidebarTabSwitcher({ activeTab, onTabChange, hideFiles = false, changesCount }: Props) {
+export function SidebarTabSwitcher({ activeTab, onTabChange, hideFiles = false }: Props) {
   const tabs: TabDef[] = [
     { id: "files", label: "FILES", icon: Files, hidden: hideFiles },
     { id: "terminals", label: "TERMINALS", icon: Terminal },
-    { id: "changes", label: "CHANGES", icon: GitCompareArrows },
   ];
 
   return (
@@ -40,11 +38,6 @@ export function SidebarTabSwitcher({ activeTab, onTabChange, hideFiles = false, 
         >
           <Icon className="h-3.5 w-3.5" />
           {label}
-          {id === "changes" && changesCount !== undefined && changesCount > 0 && (
-            <span className="ml-0.5 rounded-sm bg-[var(--color-warning)]/20 border border-[var(--color-warning)]/30 px-1 text-[9px] text-[var(--color-warning)]">
-              {changesCount}
-            </span>
-          )}
         </button>
       ))}
     </div>

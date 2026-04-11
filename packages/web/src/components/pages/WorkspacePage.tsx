@@ -10,9 +10,7 @@ import { TerminalTabBar } from "@/components/organisms/TerminalTabBar.js";
 import { MultiTerminalDisplay } from "@/components/organisms/MultiTerminalDisplay.js";
 import { ProjectInfoPanel } from "@/components/organisms/ProjectInfoPanel.js";
 import { SearchPanel } from "@/components/organisms/SearchPanel.js";
-import { ChangedFilesList } from "@/components/organisms/ChangedFilesList.js";
 import { SidebarTabSwitcher, type SidebarTab } from "@/components/molecules/SidebarTabSwitcher.js";
-import { useGitDiff } from "@/api/queries.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 
 const DiffViewer = lazy(() =>
@@ -65,8 +63,6 @@ export default function WorkspacePage() {
   const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
   const [selectedDiffIsConflict, setSelectedDiffIsConflict] = useState(false);
 
-  const { data: diffFiles = [] } = useGitDiff(projectName ?? "");
-
   const { open: searchOpen, close: closeSearch, openWith: openSearch } = useSearchUiStore();
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -97,7 +93,6 @@ export default function WorkspacePage() {
         activeTab={leftTab}
         onTabChange={setLeftTab}
         hideFiles={!ideEnabled}
-        changesCount={diffFiles.length}
       />
 
       {leftTab === "files" && ideEnabled && (
@@ -124,6 +119,11 @@ export default function WorkspacePage() {
               onFileOpen={handleFileOpen}
               onOpenTerminal={() => handleLaunchShell(projectName)}
               className="flex-1"
+              selectedDiffFile={selectedDiffFile}
+              onSelectDiffFile={(path, isConflict) => {
+                setSelectedDiffFile(path);
+                setSelectedDiffIsConflict(isConflict);
+              }}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
@@ -163,40 +163,6 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      {leftTab === "changes" && (
-        <div className="flex-1 overflow-hidden flex flex-col">
-          {projectName ? (
-            <>
-              {projects.length > 1 && (
-                <div className="shrink-0 px-2 py-1.5 border-b border-[var(--color-border)]">
-                  <Select value={projectName} onValueChange={setActiveProject}>
-                    <SelectTrigger className="text-xs h-7">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {projects.map((p) => (
-                        <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-              <ChangedFilesList
-                project={projectName}
-                selectedFile={selectedDiffFile}
-                onSelectFile={(path, isConflict) => {
-                  setSelectedDiffFile(path);
-                  setSelectedDiffIsConflict(isConflict);
-                }}
-              />
-            </>
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-              No projects configured
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 
@@ -332,7 +298,7 @@ export default function WorkspacePage() {
       <IdeShell
         tree={leftPanel}
         editor={
-          leftTab === "changes" && selectedDiffFile && projectName ? (
+          selectedDiffFile && projectName ? (
             <Suspense
               fallback={
                 <div className="h-full flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)] glass-card">
@@ -348,19 +314,16 @@ export default function WorkspacePage() {
                   onClose={() => setSelectedDiffFile(null)}
                   onResolved={() => setSelectedDiffFile(null)}
                 />
-              ) : (() => {
-                const entry = diffFiles.find((f) => f.path === selectedDiffFile);
-                return (
-                  <DiffViewer
-                    project={projectName}
-                    filePath={selectedDiffFile}
-                    fileStatus={entry?.status ?? "modified"}
-                    additions={entry?.additions ?? 0}
-                    deletions={entry?.deletions ?? 0}
-                    onClose={() => setSelectedDiffFile(null)}
-                  />
-                );
-              })()}
+              ) : (
+                <DiffViewer
+                  project={projectName}
+                  filePath={selectedDiffFile}
+                  fileStatus="modified"
+                  additions={0}
+                  deletions={0}
+                  onClose={() => setSelectedDiffFile(null)}
+                />
+              )}
             </Suspense>
           ) : (
             <EditorTabs />
