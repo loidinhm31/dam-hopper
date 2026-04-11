@@ -50,7 +50,7 @@ export function App() {
   }, [qc]);
 
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={import.meta.env.BASE_URL}>
       <GlobalShortcuts />
       <Routes>
         <Route path="/" element={<DashboardPage />} />
