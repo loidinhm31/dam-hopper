@@ -51,7 +51,7 @@ User action (rollback/stage/discard) → POST API → re-fetch diff list
 | # | File | Status | Effort | Summary |
 |---|------|--------|--------|---------|
 | 01 | phase-01-backend-diff-api.md | DONE | 1.5d | Diff endpoints, stage/unstage/discard APIs |
-| 02 | phase-02-changed-files-ui.md | pending | 1d | Changed files list with status, stage/unstage actions |
+| 02 | phase-02-changed-files-ui.md | DONE | 1d | Changed files list with status, stage/unstage actions |
 | 03 | phase-03-diff-viewer.md | pending | 1d | Monaco DiffEditor integration with hunk rollback |
 | 04 | phase-04-merge-conflict-ui.md | pending | 1.5d | 3-way merge conflict resolution editor |
 
