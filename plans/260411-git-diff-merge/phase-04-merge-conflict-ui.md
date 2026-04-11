@@ -6,7 +6,7 @@
 
 ## Overview
 - **Priority:** P2
-- **Status:** pending
+- **Status:** DONE
 - **Effort:** 1.5d
 
 Build IntelliJ-style 3-panel merge conflict resolution editor.
