@@ -6,6 +6,12 @@ import { GitPage } from "@/components/pages/GitPage.js";
 import { SettingsPage } from "@/components/pages/SettingsPage.js";
 import { AgentStorePage } from "@/components/pages/AgentStorePage.js";
 import { getTransport } from "@/api/transport.js";
+import { useSettingsStore } from "@/stores/settings.js";
+
+// Wire CSS var outside React so it updates synchronously with store changes
+useSettingsStore.subscribe((s) => {
+  document.documentElement.style.setProperty("--app-font-size", `${s.systemFontSize}px`);
+});
 
 const WorkspacePage = lazy(() => import("@/components/pages/WorkspacePage.js"));
 
@@ -41,6 +47,10 @@ function GlobalShortcuts() {
 
 export function App() {
   const qc = useQueryClient();
+
+  useEffect(() => {
+    void useSettingsStore.getState().hydrate();
+  }, []);
 
   useEffect(() => {
     const transport = getTransport();

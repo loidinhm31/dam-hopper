@@ -182,9 +182,16 @@ export interface WorkspaceStatus {
   projectCount?: number;
 }
 
+export interface UiConfig {
+  systemFontSize: number;
+  editorFontSize: number;
+  editorZoomWheelEnabled: boolean;
+}
+
 export interface GlobalConfig {
   defaults?: { workspace?: string };
   workspaces?: KnownWorkspace[];
+  ui?: UiConfig;
 }
 
 export interface Worktree {
@@ -270,6 +277,8 @@ export const api = {
     get: () => getTransport().invoke<GlobalConfig>("globalConfig:get"),
     updateDefaults: (defaults: { workspace?: string }) =>
       getTransport().invoke<{ updated: true }>("globalConfig:updateDefaults", defaults),
+    updateUi: (ui: UiConfig) =>
+      getTransport().invoke<{ updated: true }>("globalConfig:updateUi", ui),
   },
   projects: {
     list: () => getTransport().invoke<ProjectWithStatus[]>("projects:list"),

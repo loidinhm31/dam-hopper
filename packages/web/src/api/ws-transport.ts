@@ -80,6 +80,7 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
     // Global config
     case "globalConfig:get": return { method: "GET", url: "/api/global-config" };
     case "globalConfig:updateDefaults": return { method: "POST", url: "/api/global-config/defaults", body: { defaults: data } };
+    case "globalConfig:updateUi": return { method: "POST", url: "/api/global-config/ui", body: { ui: data } };
 
     // Projects
     case "projects:list": return { method: "GET", url: "/api/projects" };

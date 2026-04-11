@@ -11,6 +11,7 @@ import type {
   DiffFileEntry,
   FileDiffContent,
   ConflictFile,
+  UiConfig,
 } from "./client.js";
 import type { SessionInfo } from "@/api/client.js";
 
@@ -144,6 +145,14 @@ export function useUpdateGlobalDefaults() {
   return useMutation({
     mutationFn: (defaults: { workspace?: string }) =>
       api.globalConfig.updateDefaults(defaults),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["global-config"] }),
+  });
+}
+
+export function useUpdateUiConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ui: UiConfig) => api.globalConfig.updateUi(ui),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["global-config"] }),
   });
 }

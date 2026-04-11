@@ -10,6 +10,7 @@ import {
 } from "@/api/queries.js";
 import { ConfigEditor } from "@/components/organisms/ConfigEditor.js";
 import { GlobalConfigEditor } from "@/components/organisms/GlobalConfigEditor.js";
+import { SettingsAppearanceSection } from "@/components/organisms/SettingsAppearanceSection.js";
 
 export function SettingsPage() {
   const { data: config, isLoading, error } = useConfig();
@@ -92,6 +93,13 @@ export function SettingsPage() {
   return (
     <AppLayout title="Settings">
       <div className="max-w-3xl space-y-10">
+        <section>
+          <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">
+            Appearance
+          </h2>
+          <SettingsAppearanceSection />
+        </section>
+
         <section>
           <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">
             Global Settings

@@ -12,6 +12,7 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 import type * as monacoNs from "monaco-editor";
 import { useCallback, useEffect, useRef } from "react";
 import type { FileTier } from "@/lib/file-tier.js";
+import { useSettingsStore, clampFont } from "@/stores/settings.js";
 
 interface MonacoHostProps {
   tabKey: string;
@@ -53,6 +54,7 @@ export function MonacoHost({
   const editorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof monacoNs | null>(null);
   const viewStateRef = useRef<unknown>(viewState);
+  const wheelEnabledRef = useRef(useSettingsStore.getState().editorZoomWheelEnabled);
 
   // Persist latest viewState ref so blur handler always saves current state
   useEffect(() => {
@@ -80,6 +82,22 @@ export function MonacoHost({
         const vs = editor.saveViewState();
         if (vs) onViewStateChange(vs);
       });
+
+      // Ctrl+Shift+Wheel → zoom editor font (custom handler; Monaco's mouseWheelZoom only handles Ctrl)
+      const domNode = editor.getDomNode();
+      if (domNode) {
+        const handleWheel = (e: WheelEvent) => {
+          if (!e.ctrlKey || !e.shiftKey || !wheelEnabledRef.current) return;
+          e.preventDefault();
+          const delta = e.deltaY < 0 ? 1 : -1;
+          const store = useSettingsStore.getState();
+          store.saveDebounced({ editorFontSize: clampFont(store.editorFontSize + delta) });
+        };
+        domNode.addEventListener("wheel", handleWheel, { passive: false });
+        // Cleanup stored on the editor instance for the unmount effect
+        (editor as unknown as { _wheelCleanup?: () => void })._wheelCleanup = () =>
+          domNode.removeEventListener("wheel", handleWheel);
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [tabKey], // re-run only when tab changes
@@ -92,8 +110,25 @@ export function MonacoHost({
     editor.restoreViewState(viewState as monacoNs.editor.ICodeEditorViewState);
   }, [tabKey, viewState]);
 
+  // Subscribe to settings store — update Monaco font + keep wheel flag in sync
+  useEffect(() => {
+    const unsub = useSettingsStore.subscribe((s) => {
+      wheelEnabledRef.current = s.editorZoomWheelEnabled;
+      editorRef.current?.updateOptions({ fontSize: s.editorFontSize });
+    });
+    return () => {
+      unsub();
+      // Clean up wheel listener attached in handleMount
+      const ed = editorRef.current;
+      if (ed) {
+        (ed as unknown as { _wheelCleanup?: () => void })._wheelCleanup?.();
+      }
+    };
+  }, []);
+
   const isDegraded = tier === "degraded";
   const language = mimeToLanguage(mime);
+  const initialFontSize = useSettingsStore.getState().editorFontSize;
 
   return (
     <Editor
@@ -103,7 +138,7 @@ export function MonacoHost({
       onChange={(val) => onChange(val ?? "")}
       onMount={handleMount}
       options={{
-        fontSize: 13,
+        fontSize: initialFontSize,
         fontFamily: "JetBrains Mono, Fira Code, Cascadia Code, monospace",
         lineNumbers: "on",
         minimap: { enabled: !isDegraded },
