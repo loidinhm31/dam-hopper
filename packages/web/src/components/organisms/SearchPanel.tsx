@@ -2,6 +2,7 @@ import { useRef, useMemo, useEffect } from "react";
 import { Loader2, CaseSensitive, AlertTriangle, X } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { useFileSearch } from "@/hooks/useFileSearch.js";
+import { useSearchUiStore } from "@/stores/searchUi.js";
 import type { SearchMatch } from "@/api/fs-types.js";
 
 interface SearchPanelProps {
@@ -15,6 +16,8 @@ export function SearchPanel({ project, onResultClick, onClose, inputRef }: Searc
   const localInputRef = useRef<HTMLInputElement>(null);
   const resolvedRef = inputRef ?? localInputRef;
 
+  const { scope, setScope, initialQuery, consumeInitialQuery } = useSearchUiStore();
+
   useEffect(() => {
     if (!onClose) return;
     function onKeyDown(e: KeyboardEvent) {
@@ -25,7 +28,20 @@ export function SearchPanel({ project, onResultClick, onClose, inputRef }: Searc
   }, [onClose]);
 
   const { query, setQuery, caseSensitive, setCaseSensitive, data, isLoading, isError } =
-    useFileSearch(project);
+    useFileSearch(project, scope);
+
+  // One-shot seed from store initialQuery (set by Monaco Ctrl+Shift+F via openWith)
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (initialQuery && !seededRef.current) {
+      seededRef.current = true;
+      setQuery(initialQuery);
+      consumeInitialQuery(); // clear store so re-open without selection doesn't re-seed
+      setTimeout(() => resolvedRef.current?.select(), 20);
+    }
+  // consumeInitialQuery is stable (Zustand action); resolvedRef intentionally omitted
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialQuery, setQuery]);
 
   // Group matches by file path
   const grouped = useMemo(() => {
@@ -80,6 +96,26 @@ export function SearchPanel({ project, onResultClick, onClose, inputRef }: Searc
         )}
       </div>
 
+      {/* Scope toggle */}
+      <div className="shrink-0 px-3 pt-2">
+        <div className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden text-[11px] font-medium">
+          {(["project", "workspace"] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => setScope(s)}
+              className={cn(
+                "px-3 py-1 transition-colors capitalize",
+                scope === s
+                  ? "bg-[var(--color-primary)] text-white"
+                  : "bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
+              )}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Search input */}
       <div className="shrink-0 px-3 py-2 border-b border-[var(--color-border)] space-y-1.5">
         <div className="flex items-center gap-1.5">
@@ -87,7 +123,7 @@ export function SearchPanel({ project, onResultClick, onClose, inputRef }: Searc
             ref={resolvedRef}
             autoFocus
             type="text"
-            placeholder="Search files…"
+            placeholder={scope === "workspace" ? "Search all projects…" : "Search files…"}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="flex-1 text-xs px-2 py-1.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)] transition-colors"
@@ -142,33 +178,41 @@ export function SearchPanel({ project, onResultClick, onClose, inputRef }: Searc
       {/* Results */}
       <div className="flex-1 overflow-auto">
         {grouped.length > 0 ? (
-          grouped.map(([filePath, fileMatches]) => (
-            <div key={filePath} className="border-b border-[var(--color-border)]/40 last:border-0">
-              {/* File header */}
-              <div
-                className="sticky top-0 px-2 py-1 bg-[var(--color-surface-2)] text-[10px] font-semibold text-[var(--color-text-muted)] tracking-wide truncate cursor-pointer hover:text-[var(--color-text)] transition-colors"
-                title={filePath}
-                onClick={() => onResultClick(fileMatches[0])}
-              >
-                {filePath}
-              </div>
-              {/* Match lines */}
-              {fileMatches.map((m, i) => (
-                <button
-                  key={i}
-                  onClick={() => onResultClick(m)}
-                  className="w-full text-left flex items-start gap-2 px-3 py-1 hover:bg-[var(--color-surface-2)] transition-colors group"
+          grouped.map(([filePath, fileMatches]) => {
+            const projectBadge = scope === "workspace" ? fileMatches[0].project : undefined;
+            return (
+              <div key={`${projectBadge ?? ""}:${filePath}`} className="border-b border-[var(--color-border)]/40 last:border-0">
+                {/* File header */}
+                <div
+                  className="sticky top-0 px-2 py-1 bg-[var(--color-surface-2)] text-[10px] font-semibold text-[var(--color-text-muted)] tracking-wide truncate cursor-pointer hover:text-[var(--color-text)] transition-colors flex items-center gap-1.5"
+                  title={filePath}
+                  onClick={() => onResultClick(fileMatches[0])}
                 >
-                  <span className="shrink-0 text-[10px] text-[var(--color-text-muted)] font-mono w-8 text-right mt-0.5">
-                    {m.line}
-                  </span>
-                  <span className="text-[11px] font-mono text-[var(--color-text)] truncate leading-5">
-                    {highlightMatch(m.text.trimStart(), query, caseSensitive)}
-                  </span>
-                </button>
-              ))}
-            </div>
-          ))
+                  {projectBadge && (
+                    <span className="shrink-0 px-1.5 py-0.5 rounded-sm bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-mono text-[9px] tracking-normal">
+                      {projectBadge}
+                    </span>
+                  )}
+                  <span className="truncate">{filePath}</span>
+                </div>
+                {/* Match lines */}
+                {fileMatches.map((m, i) => (
+                  <button
+                    key={i}
+                    onClick={() => onResultClick(m)}
+                    className="w-full text-left flex items-start gap-2 px-3 py-1 hover:bg-[var(--color-surface-2)] transition-colors group"
+                  >
+                    <span className="shrink-0 text-[10px] text-[var(--color-text-muted)] font-mono w-8 text-right mt-0.5">
+                      {m.line}
+                    </span>
+                    <span className="text-[11px] font-mono text-[var(--color-text)] truncate leading-5">
+                      {highlightMatch(m.text.trimStart(), query, caseSensitive)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            );
+          })
         ) : (
           !isLoading &&
           query.length >= 2 &&

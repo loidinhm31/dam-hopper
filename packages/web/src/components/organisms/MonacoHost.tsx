@@ -13,6 +13,8 @@ import type * as monacoNs from "monaco-editor";
 import { useCallback, useEffect, useRef } from "react";
 import type { FileTier } from "@/lib/file-tier.js";
 import { useSettingsStore, clampFont } from "@/stores/settings.js";
+import { useSearchUiStore } from "@/stores/searchUi.js";
+import { mimeToMonacoLanguage } from "@/lib/mime-to-language.js";
 
 interface MonacoHostProps {
   tabKey: string;
@@ -23,23 +25,9 @@ interface MonacoHostProps {
   onChange: (value: string) => void;
   onSave: () => void;
   onViewStateChange: (vs: unknown) => void;
+  onEditorReady?: (editor: monacoNs.editor.IStandaloneCodeEditor | null) => void;
 }
 
-function mimeToLanguage(mime?: string, _tier?: FileTier): string {
-  if (!mime) return "plaintext";
-  if (mime.includes("typescript") || mime.includes("tsx")) return "typescript";
-  if (mime.includes("javascript") || mime.includes("jsx")) return "javascript";
-  if (mime.includes("json")) return "json";
-  if (mime.includes("html")) return "html";
-  if (mime.includes("css")) return "css";
-  if (mime.includes("xml")) return "xml";
-  if (mime.includes("markdown")) return "markdown";
-  if (mime.includes("rust")) return "rust";
-  if (mime.includes("python")) return "python";
-  if (mime.includes("yaml")) return "yaml";
-  if (mime.includes("toml")) return "toml";
-  return "plaintext";
-}
 
 export function MonacoHost({
   tabKey,
@@ -50,6 +38,7 @@ export function MonacoHost({
   onChange,
   onSave,
   onViewStateChange,
+  onEditorReady,
 }: MonacoHostProps) {
   const editorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof monacoNs | null>(null);
@@ -76,6 +65,18 @@ export function MonacoHost({
         monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
         () => onSave(),
       );
+
+      // Ctrl+Shift+F → open search panel with current selection as initial query
+      editor.addCommand(
+        monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF,
+        () => {
+          const sel = editor.getSelection();
+          const text = sel ? (editor.getModel()?.getValueInRange(sel) ?? "") : "";
+          useSearchUiStore.getState().openWith(text.trim());
+        },
+      );
+
+      onEditorReady?.(editor);
 
       // Persist view state on blur
       editor.onDidBlurEditorWidget(() => {
@@ -118,16 +119,18 @@ export function MonacoHost({
     });
     return () => {
       unsub();
+      onEditorReady?.(null);
       // Clean up wheel listener attached in handleMount
       const ed = editorRef.current;
       if (ed) {
         (ed as unknown as { _wheelCleanup?: () => void })._wheelCleanup?.();
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const isDegraded = tier === "degraded";
-  const language = mimeToLanguage(mime);
+  const language = mimeToMonacoLanguage(mime);
   const initialFontSize = useSettingsStore.getState().editorFontSize;
 
   return (

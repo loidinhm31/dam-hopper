@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
+import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { Terminal as TerminalIcon, Plus, Loader2 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/Select.js";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag.js";
 import { useEditorStore } from "@/stores/editor.js";
+import { useSearchUiStore } from "@/stores/searchUi.js";
 import { useTerminalManager } from "@/hooks/useTerminalManager.js";
 import { api } from "@/api/client.js";
 import type { FsArborNode } from "@/api/fs-types.js";
@@ -66,13 +67,8 @@ export default function WorkspacePage() {
 
   const { data: diffFiles = [] } = useGitDiff(projectName ?? "");
 
-  const [searchOpen, setSearchOpen] = useState(false);
+  const { open: searchOpen, close: closeSearch, openWith: openSearch } = useSearchUiStore();
   const searchInputRef = useRef<HTMLInputElement>(null);
-
-  const openSearch = useCallback(() => {
-    setSearchOpen(true);
-    setTimeout(() => searchInputRef.current?.focus(), 30);
-  }, []);
 
   useEffect(() => {
     if (!ideEnabled) return;
@@ -378,7 +374,7 @@ export default function WorkspacePage() {
       {searchOpen && ideEnabled && projectName && (
         <div
           className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
-          onClick={() => setSearchOpen(false)}
+          onClick={closeSearch}
         >
           {/* Backdrop */}
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
@@ -391,10 +387,14 @@ export default function WorkspacePage() {
             <SearchPanel
               project={projectName}
               inputRef={searchInputRef}
-              onClose={() => setSearchOpen(false)}
+              onClose={closeSearch}
               onResultClick={(match) => {
-                setSearchOpen(false);
-                void openFile(projectName, {
+                closeSearch();
+                const targetProject = match.project ?? projectName;
+                if (match.project && match.project !== projectName) {
+                  setActiveProject(match.project);
+                }
+                void openFile(targetProject, {
                   id: match.path,
                   name: match.path.split("/").pop()!,
                   kind: "file",

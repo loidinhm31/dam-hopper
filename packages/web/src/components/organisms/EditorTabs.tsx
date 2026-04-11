@@ -7,13 +7,16 @@
  * - MonacoHost / MarkdownHost are lazy-loaded (dynamic import) to keep the main chunk clean.
  * - ConflictDialog is shown when save returns a conflict.
  */
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState } from "react";
+import type * as monacoNs from "monaco-editor";
 import { FileCode, Loader2 } from "lucide-react";
 import { useEditorStore } from "@/stores/editor.js";
 import { EditorTab } from "@/components/molecules/EditorTab.js";
 import { LargeFileViewer } from "@/components/organisms/LargeFileViewer.js";
 import { BinaryPreview } from "@/components/organisms/BinaryPreview.js";
 import { ConflictDialog } from "@/components/organisms/ConflictDialog.js";
+import { EditorStatusBar } from "@/components/organisms/EditorStatusBar.js";
+import { mimeToLanguage } from "@/lib/mime-to-language.js";
 
 const MonacoHost = lazy(() =>
   import("@/components/organisms/MonacoHost.js").then((m) => ({ default: m.MonacoHost })),
@@ -27,6 +30,7 @@ export function EditorTabs() {
   const { tabs, activeKey, setActive, close, setContent, save, saveViewState, forceOverwrite, reloadTab, clearConflict } =
     useEditorStore();
 
+  const [activeEditor, setActiveEditor] = useState<monacoNs.editor.IStandaloneCodeEditor | null>(null);
   const activeTab = tabs.find((t) => t.key === activeKey) ?? null;
 
   if (tabs.length === 0) {
@@ -58,8 +62,9 @@ export function EditorTabs() {
         ))}
       </div>
 
-      {/* Editor area */}
-      <div className="flex-1 overflow-hidden relative">
+      {/* Editor area + status bar */}
+      <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+        <div className="flex-1 overflow-hidden relative">
         {activeTab === null ? (
           <div className="h-full flex items-center justify-center text-xs text-[var(--color-text-muted)]">
             No file open
@@ -124,6 +129,7 @@ export function EditorTabs() {
               onChange={(val) => setContent(activeTab.key, val)}
               onSave={() => void save(activeTab.key)}
               onViewStateChange={(vs) => saveViewState(activeTab.key, vs)}
+              onEditorReady={setActiveEditor}
             />
           </Suspense>
         )}
@@ -134,6 +140,12 @@ export function EditorTabs() {
             <Loader2 className="h-3 w-3 animate-spin" />
             Saving…
           </div>
+        )}
+      </div>
+
+        {/* Status bar — only for Monaco-hosted tabs */}
+        {activeTab && activeTab.tier !== "binary" && activeTab.tier !== "large" && !/\.mdx?$/i.test(activeTab.name) && (
+          <EditorStatusBar editor={activeEditor} language={mimeToLanguage(activeTab.mime)} />
         )}
       </div>
 

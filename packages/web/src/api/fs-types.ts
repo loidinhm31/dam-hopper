@@ -82,6 +82,8 @@ export interface SearchMatch {
   line: number;
   col: number;
   text: string;
+  /** Present when scope=workspace; identifies the source project */
+  project?: string;
 }
 
 export interface SearchResponse {
