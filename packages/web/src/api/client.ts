@@ -315,6 +315,8 @@ export const api = {
       getTransport().invoke<ConflictFile[]>("git:conflicts", { project }),
     resolve: (project: string, path: string, content: string) =>
       getTransport().invoke<{ ok: boolean }>("git:resolve", { project, path, content }),
+    commit: (project: string, message: string) =>
+      getTransport().invoke<{ ok: boolean; hash: string }>("git:commit", { project, message }),
   },
   config: {
     get: () => getTransport().invoke<DevHubConfig>("config:get"),
