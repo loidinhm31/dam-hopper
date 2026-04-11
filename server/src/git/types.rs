@@ -125,6 +125,61 @@ pub struct BranchUpdateResult {
     pub reason: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Diff / change management types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffFileEntry {
+    pub path: String,
+    /// "modified" | "added" | "deleted" | "renamed" | "copied" | "conflicted"
+    pub status: String,
+    pub staged: bool,
+    pub additions: usize,
+    pub deletions: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDiffContent {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified: Option<String>,
+    pub language: String,
+    pub hunks: Vec<HunkInfo>,
+    pub is_binary: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HunkInfo {
+    pub index: usize,
+    pub old_start: u32,
+    pub old_lines: u32,
+    pub new_start: u32,
+    pub new_lines: u32,
+    pub header: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictFile {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ancestor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ours: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theirs: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Worktree {

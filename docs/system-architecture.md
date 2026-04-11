@@ -89,7 +89,23 @@ Manages portable terminal sessions via `portable-pty`.
 ### git/
 Git operations via `git2` library + CLI fallback.
 
-**repository.rs** — Clone, push, pull, status, diff.
+**repository.rs** — Clone, push, pull, status.
+
+**types.rs** — Shared data types:
+- `DiffFileEntry` — file status, staged flag, additions/deletions
+- `FileDiffContent` — hunks, original+modified content, language detection, binary flag
+- `HunkInfo` — hunk position + header for unified diff display
+- `ConflictFile` — 3-way merge content (ancestor, ours, theirs)
+
+**diff.rs** (Phase 01) — Diff and conflict operations:
+- `get_diff_files()` — list changed files (staged + unstaged)
+- `get_file_diff()` — hunked diff for single file
+- `stage_files()` — stage paths for commit
+- `unstage_files()` — unstage paths
+- `discard_file()` — restore file from HEAD
+- `discard_hunk()` — revert single hunk (destructive)
+- `get_conflicts()` — list merge-conflicted files with 3-way content
+- `resolve_conflict()` — write resolved content, mark resolved
 
 ### agent_store/
 Distributes `.claude/` items across projects.
@@ -108,6 +124,16 @@ HTTP request handlers + WebSocket upgrade.
 - `GET /api/fs/read` — file text/binary content
 - `GET /api/fs/stat` — file metadata
 - `GET /api/fs/search` (Phase 07) — global file content search, .gitignore-aware, results capped at 1000
+
+**git_diff.rs** (Phase 01) — Git diff/staging/conflict handlers:
+- `GET /api/git/:project/diff` — list changed files
+- `GET /api/git/:project/diff/file?path=REL` — file diff with hunks
+- `POST /api/git/:project/stage` — stage files
+- `POST /api/git/:project/unstage` — unstage files
+- `POST /api/git/:project/discard` — discard file changes
+- `POST /api/git/:project/discard-hunk` — discard single hunk
+- `GET /api/git/:project/conflicts` — list merge conflicts
+- `POST /api/git/:project/resolve` — resolve merge conflict
 
 **error.rs** — Maps AppError to HTTP status codes.
 
@@ -244,7 +270,9 @@ API layer (handlers) catch AppError → HTTP status:
 
 ## Phase Progression
 
-**Phase 01 (Complete):** File explorer foundation—sandbox, list/read/stat REST endpoints.
+**Phase 01 (Complete):** 
+  - File explorer foundation—sandbox, list/read/stat REST endpoints.
+  - Git diff/staging/conflict API—8 endpoints for change management. `DiffFileEntry`, `FileDiffContent`, `HunkInfo`, `ConflictFile` types. `git::diff` module with hunked diff parsing, hunk-level discard, 3-way merge visualization.
 
 **Phase 02 (Complete):** Watcher subsystem via inotify/notify; WebSocket subscription protocol `{kind:}` envelope (hard cut from legacy `{type:}`); fs:subscribe_tree/fs:unsubscribe_tree/fs:event channels; health endpoint with feature flags.
 

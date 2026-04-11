@@ -210,6 +210,41 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
     case "ssh:checkAgent": return { method: "GET", url: "/api/ssh/agent" };
     case "ssh:addKey":    return { method: "POST", url: "/api/ssh/keys/load", body: data };
 
+    // Git diff / change management
+    case "git:diff": {
+      const d = data as { project: string };
+      return { method: "GET", url: `/api/git/${encodeURIComponent(d.project)}/diff` };
+    }
+    case "git:fileDiff": {
+      const d = data as { project: string; path: string };
+      const params = new URLSearchParams({ path: d.path });
+      return { method: "GET", url: `/api/git/${encodeURIComponent(d.project)}/diff/file?${params}` };
+    }
+    case "git:stage": {
+      const d = data as { project: string; paths: string[] };
+      return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/stage`, body: { paths: d.paths } };
+    }
+    case "git:unstage": {
+      const d = data as { project: string; paths: string[] };
+      return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/unstage`, body: { paths: d.paths } };
+    }
+    case "git:discard": {
+      const d = data as { project: string; path: string };
+      return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/discard`, body: { path: d.path } };
+    }
+    case "git:discardHunk": {
+      const d = data as { project: string; path: string; hunkIndex: number };
+      return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/discard-hunk`, body: { path: d.path, hunkIndex: d.hunkIndex } };
+    }
+    case "git:conflicts": {
+      const d = data as { project: string };
+      return { method: "GET", url: `/api/git/${encodeURIComponent(d.project)}/conflicts` };
+    }
+    case "git:resolve": {
+      const d = data as { project: string; path: string; content: string };
+      return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/resolve`, body: { path: d.path, content: d.content } };
+    }
+
     default:
       throw new Error(`Unknown channel for WsTransport: ${channel}`);
   }

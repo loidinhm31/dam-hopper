@@ -8,6 +8,9 @@ import type {
   AgentType,
   DistributionMethod,
   RepoScanItem,
+  DiffFileEntry,
+  FileDiffContent,
+  ConflictFile,
 } from "./client.js";
 import type { SessionInfo } from "@/api/client.js";
 
@@ -173,6 +176,88 @@ export function useUpdateProject() {
     },
   });
 }
+
+// ── Git Diff / Change Management ──────────────────────────────────────────────
+
+export function useGitDiff(project: string) {
+  return useQuery<DiffFileEntry[]>({
+    queryKey: ["git-diff", project],
+    queryFn: () => api.git.diff(project),
+    enabled: !!project,
+    staleTime: 0,
+  });
+}
+
+export function useGitFileDiff(project: string, path: string) {
+  return useQuery<FileDiffContent>({
+    queryKey: ["git-file-diff", project, path],
+    queryFn: () => api.git.fileDiff(project, path),
+    enabled: !!project && !!path,
+    staleTime: 0,
+  });
+}
+
+export function useGitConflicts(project: string) {
+  return useQuery<ConflictFile[]>({
+    queryKey: ["git-conflicts", project],
+    queryFn: () => api.git.conflicts(project),
+    enabled: !!project,
+    staleTime: 0,
+  });
+}
+
+export function useGitStage(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (paths: string[]) => api.git.stage(project, paths),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["git-diff", project] }),
+  });
+}
+
+export function useGitUnstage(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (paths: string[]) => api.git.unstage(project, paths),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["git-diff", project] }),
+  });
+}
+
+export function useGitDiscard(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (path: string) => api.git.discard(project, path),
+    onSuccess: (_data, path) => {
+      void qc.invalidateQueries({ queryKey: ["git-diff", project] });
+      void qc.invalidateQueries({ queryKey: ["git-file-diff", project, path] });
+    },
+  });
+}
+
+export function useGitDiscardHunk(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ path, hunkIndex }: { path: string; hunkIndex: number }) =>
+      api.git.discardHunk(project, path, hunkIndex),
+    onSuccess: (_data, { path }) => {
+      void qc.invalidateQueries({ queryKey: ["git-diff", project] });
+      void qc.invalidateQueries({ queryKey: ["git-file-diff", project, path] });
+    },
+  });
+}
+
+export function useGitResolve(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ path, content }: { path: string; content: string }) =>
+      api.git.resolve(project, path, content),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["git-conflicts", project] });
+      void qc.invalidateQueries({ queryKey: ["git-diff", project] });
+    },
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 
 export function useGitFetch() {
   const qc = useQueryClient();

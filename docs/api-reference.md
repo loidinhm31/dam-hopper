@@ -39,6 +39,11 @@ Body: `{ input: string }`
 
 ### Git Operations
 
+**GET /api/git/:project/status**
+Repository status.
+
+Response: `{ branch, ahead, behind, modified: [], untracked: [] }`
+
 **POST /api/git/:project/clone**
 Clone a repository.
 
@@ -49,10 +54,92 @@ Push commits.
 
 Body: `{ branch?: string, force?: bool }`
 
-**GET /api/git/:project/status**
-Repository status.
+### Git Diff & Change Management (Phase 01)
 
-Response: `{ branch, ahead, behind, modified: [], untracked: [] }`
+**GET /api/git/:project/diff**
+List changed files (staged + unstaged).
+
+Response:
+```json
+{
+  "entries": [
+    {
+      "path": "src/main.rs",
+      "status": "modified|added|deleted|renamed|copied|conflicted",
+      "staged": false,
+      "additions": 5,
+      "deletions": 2,
+      "oldPath": "src/old.rs"
+    }
+  ]
+}
+```
+
+**GET /api/git/:project/diff/file?path=REL**
+File diff content with hunks (HEAD vs working directory).
+
+Response:
+```json
+{
+  "path": "src/main.rs",
+  "original": "...",
+  "modified": "...",
+  "language": "rust",
+  "hunks": [
+    {
+      "index": 0,
+      "oldStart": 10,
+      "oldLines": 5,
+      "newStart": 10,
+      "newLines": 7,
+      "header": "@@ -10,5 +10,7 @@"
+    }
+  ],
+  "isBinary": false
+}
+```
+
+**POST /api/git/:project/stage**
+Stage files for commit.
+
+Body: `{ paths: string[] }`
+
+**POST /api/git/:project/unstage**
+Unstage files.
+
+Body: `{ paths: string[] }`
+
+**POST /api/git/:project/discard**
+Discard changes to file (restore from HEAD).
+
+Body: `{ path: string }`
+
+**POST /api/git/:project/discard-hunk**
+Discard single hunk from file.
+
+Body: `{ path: string, hunkIndex: number }`
+
+**GET /api/git/:project/conflicts**
+List conflicted files with 3-way merge content.
+
+Response:
+```json
+{
+  "conflicts": [
+    {
+      "path": "src/conflict.rs",
+      "ancestor": "...",
+      "ours": "...",
+      "theirs": "..."
+    }
+  ]
+}
+```
+
+**POST /api/git/:project/resolve**
+Resolve merge conflict.
+
+Body: `{ path: string, content: string }`
 
 ### IDE File Explorer (Feature-gated: ide_explorer)
 

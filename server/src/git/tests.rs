@@ -4,6 +4,10 @@ use std::process::Command;
 use tempfile::TempDir;
 
 use crate::git::cli_fallback::list_worktrees;
+use crate::git::diff::{
+    discard_file, discard_hunk, get_conflicts, get_diff_files, get_file_diff, resolve_conflict,
+    stage_files, unstage_files,
+};
 use crate::git::repository::{get_status, list_branches};
 use crate::git::types::GitProgressPhase;
 use crate::git::{BulkGitService, GitStatus, WorktreeAddOptions};
@@ -297,4 +301,149 @@ fn progress_channel_no_receiver_no_panic() {
     // No subscriber — should not panic
     let tx_opt = Some(tx);
     emit_completed(&tx_opt, "proj", "fetch", "Done");
+}
+
+// ---------------------------------------------------------------------------
+// Diff tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn diff_clean_repo_returns_empty() {
+    let repo = make_temp_repo();
+    let entries = get_diff_files(repo.path()).unwrap();
+    assert!(entries.is_empty());
+}
+
+#[test]
+fn diff_unstaged_modified_file() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("README.md"), "modified content").unwrap();
+
+    let entries = get_diff_files(path).unwrap();
+    assert!(!entries.is_empty());
+    let entry = entries.iter().find(|e| e.path == "README.md" && !e.staged).unwrap();
+    assert_eq!(entry.status, "modified");
+    assert!(!entry.staged);
+}
+
+#[test]
+fn diff_staged_new_file() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("new.txt"), "hello").unwrap();
+    git(&["add", "new.txt"], path);
+
+    let entries = get_diff_files(path).unwrap();
+    let staged = entries.iter().find(|e| e.path == "new.txt" && e.staged).unwrap();
+    assert_eq!(staged.status, "added");
+    assert!(staged.staged);
+}
+
+#[test]
+fn get_file_diff_returns_original_and_modified() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("README.md"), "new content\n").unwrap();
+
+    let diff = get_file_diff(path, "README.md").unwrap();
+    assert_eq!(diff.path, "README.md");
+    assert!(diff.original.is_some());
+    assert_eq!(diff.original.as_deref(), Some("# test"));
+    assert_eq!(diff.modified.as_deref(), Some("new content\n"));
+    assert!(!diff.is_binary);
+    assert!(!diff.hunks.is_empty());
+}
+
+#[test]
+fn get_file_diff_new_file_has_no_original() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("brand-new.txt"), "content").unwrap();
+
+    let diff = get_file_diff(path, "brand-new.txt").unwrap();
+    assert!(diff.original.is_none());
+    assert!(diff.modified.is_some());
+}
+
+#[test]
+fn stage_and_unstage_file() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("README.md"), "changed").unwrap();
+
+    stage_files(path, &["README.md"]).unwrap();
+
+    let entries = get_diff_files(path).unwrap();
+    let staged_entry = entries.iter().find(|e| e.path == "README.md" && e.staged);
+    assert!(staged_entry.is_some(), "file should be staged");
+
+    unstage_files(path, &["README.md"]).unwrap();
+
+    let entries2 = get_diff_files(path).unwrap();
+    let still_staged = entries2.iter().any(|e| e.path == "README.md" && e.staged);
+    assert!(!still_staged, "file should be unstaged");
+}
+
+#[test]
+fn discard_file_restores_content() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("README.md"), "changed content").unwrap();
+    let before = std::fs::read_to_string(path.join("README.md")).unwrap();
+    assert_eq!(before, "changed content");
+
+    discard_file(path, "README.md").unwrap();
+
+    let after = std::fs::read_to_string(path.join("README.md")).unwrap();
+    assert_eq!(after, "# test");
+}
+
+#[test]
+fn discard_hunk_reverts_specific_lines() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    // Write a multi-line file and commit it
+    std::fs::write(path.join("multi.txt"), "line1\nline2\nline3\nline4\n").unwrap();
+    git(&["add", "multi.txt"], path);
+    git(&["commit", "-m", "add multi"], path);
+
+    // Modify only line2
+    std::fs::write(path.join("multi.txt"), "line1\nMODIFIED\nline3\nline4\n").unwrap();
+
+    let entries = get_diff_files(path).unwrap();
+    assert!(entries.iter().any(|e| e.path == "multi.txt" && !e.staged));
+
+    // Discard hunk 0
+    discard_hunk(path, "multi.txt", 0).unwrap();
+
+    let after = std::fs::read_to_string(path.join("multi.txt")).unwrap();
+    assert!(after.contains("line2"), "line2 should be restored");
+    assert!(!after.contains("MODIFIED"));
+}
+
+#[test]
+fn safe_path_rejects_traversal() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    let result = get_file_diff(path, "../etc/passwd");
+    assert!(result.is_err());
+
+    let result2 = stage_files(path, &["../../outside"]);
+    assert!(result2.is_err());
+}
+
+#[test]
+fn conflicts_empty_when_no_merge() {
+    let repo = make_temp_repo();
+    let conflicts = get_conflicts(repo.path()).unwrap();
+    assert!(conflicts.is_empty());
 }

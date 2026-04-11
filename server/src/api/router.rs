@@ -16,8 +16,8 @@ const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 use crate::state::AppState;
 
 use super::{
-    agent_import, agent_memory, agent_store, auth, commands, config, fs as fs_api, git, settings,
-    ssh, terminal, workspace, ws,
+    agent_import, agent_memory, agent_store, auth, commands, config, fs as fs_api, git, git_diff,
+    settings, ssh, terminal, workspace, ws,
 };
 
 /// Build the full Axum router with auth middleware, CORS, and all routes.
@@ -62,6 +62,15 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/git/{project}/worktrees", delete(git::remove_worktree_route))
         .route("/api/git/{project}/branches", get(git::get_branches))
         .route("/api/git/{project}/branches/update", post(git::update_branch_route))
+        // Git diff / change management
+        .route("/api/git/{project}/diff", get(git_diff::list_diff))
+        .route("/api/git/{project}/diff/file", get(git_diff::get_file_diff))
+        .route("/api/git/{project}/stage", post(git_diff::stage))
+        .route("/api/git/{project}/unstage", post(git_diff::unstage))
+        .route("/api/git/{project}/discard", post(git_diff::discard))
+        .route("/api/git/{project}/discard-hunk", post(git_diff::discard_hunk))
+        .route("/api/git/{project}/conflicts", get(git_diff::list_conflicts))
+        .route("/api/git/{project}/resolve", post(git_diff::resolve))
         // Terminal — order matters: specific paths before parameterized
         .route("/api/terminal", post(terminal::create_session))
         .route("/api/terminal", get(terminal::list_sessions))

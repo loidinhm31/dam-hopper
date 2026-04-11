@@ -206,6 +206,43 @@ export interface GitOpResult {
   error?: string;
 }
 
+// ── Git Diff Types ────────────────────────────────────────────────────────────
+
+export interface DiffFileEntry {
+  path: string;
+  /** "modified" | "added" | "deleted" | "renamed" | "copied" | "conflicted" */
+  status: string;
+  staged: boolean;
+  additions: number;
+  deletions: number;
+  oldPath?: string;
+}
+
+export interface HunkInfo {
+  index: number;
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  header: string;
+}
+
+export interface FileDiffContent {
+  path: string;
+  original?: string;
+  modified?: string;
+  language: string;
+  hunks: HunkInfo[];
+  isBinary: boolean;
+}
+
+export interface ConflictFile {
+  path: string;
+  ancestor?: string;
+  ours?: string;
+  theirs?: string;
+}
+
 export interface CommandDefinition {
   name: string;
   command: string;
@@ -253,6 +290,22 @@ export const api = {
     branches: (project: string) => getTransport().invoke<Branch[]>("git:branches", project),
     updateBranch: (project: string, branch?: string) =>
       getTransport().invoke<GitOpResult[]>("git:updateBranch", { project, branch }),
+    diff: (project: string) =>
+      getTransport().invoke<DiffFileEntry[]>("git:diff", { project }),
+    fileDiff: (project: string, path: string) =>
+      getTransport().invoke<FileDiffContent>("git:fileDiff", { project, path }),
+    stage: (project: string, paths: string[]) =>
+      getTransport().invoke<{ ok: boolean }>("git:stage", { project, paths }),
+    unstage: (project: string, paths: string[]) =>
+      getTransport().invoke<{ ok: boolean }>("git:unstage", { project, paths }),
+    discard: (project: string, path: string) =>
+      getTransport().invoke<{ ok: boolean }>("git:discard", { project, path }),
+    discardHunk: (project: string, path: string, hunkIndex: number) =>
+      getTransport().invoke<{ ok: boolean }>("git:discardHunk", { project, path, hunkIndex }),
+    conflicts: (project: string) =>
+      getTransport().invoke<ConflictFile[]>("git:conflicts", { project }),
+    resolve: (project: string, path: string, content: string) =>
+      getTransport().invoke<{ ok: boolean }>("git:resolve", { project, path, content }),
   },
   config: {
     get: () => getTransport().invoke<DevHubConfig>("config:get"),
