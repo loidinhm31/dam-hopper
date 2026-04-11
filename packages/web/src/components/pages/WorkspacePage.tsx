@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { Terminal as TerminalIcon, Plus } from "lucide-react";
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
+import { Terminal as TerminalIcon, Plus, Loader2 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { IdeShell } from "@/components/templates/IdeShell.js";
@@ -14,6 +14,10 @@ import { ChangedFilesList } from "@/components/organisms/ChangedFilesList.js";
 import { SidebarTabSwitcher, type SidebarTab } from "@/components/molecules/SidebarTabSwitcher.js";
 import { useGitDiff } from "@/api/queries.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
+
+const DiffViewer = lazy(() =>
+  import("@/components/organisms/DiffViewer.js").then((m) => ({ default: m.DiffViewer })),
+);
 import {
   Select,
   SelectContent,
@@ -324,7 +328,34 @@ export default function WorkspacePage() {
     <>
       <IdeShell
         tree={leftPanel}
-        editor={<EditorTabs />}
+        editor={
+          leftTab === "changes" && selectedDiffFile && projectName ? (
+            <Suspense
+              fallback={
+                <div className="h-full flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)] glass-card">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading diff…
+                </div>
+              }
+            >
+              {(() => {
+                const entry = diffFiles.find((f) => f.path === selectedDiffFile);
+                return (
+                  <DiffViewer
+                    project={projectName}
+                    filePath={selectedDiffFile}
+                    fileStatus={entry?.status ?? "modified"}
+                    additions={entry?.additions ?? 0}
+                    deletions={entry?.deletions ?? 0}
+                    onClose={() => setSelectedDiffFile(null)}
+                  />
+                );
+              })()}
+            </Suspense>
+          ) : (
+            <EditorTabs />
+          )
+        }
         terminal={terminalPanel}
         hideEditor={!ideEnabled}
       />
