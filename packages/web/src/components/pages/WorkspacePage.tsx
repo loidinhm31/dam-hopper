@@ -18,6 +18,9 @@ import { Button, inputClass } from "@/components/atoms/Button.js";
 const DiffViewer = lazy(() =>
   import("@/components/organisms/DiffViewer.js").then((m) => ({ default: m.DiffViewer })),
 );
+const MergeConflictEditor = lazy(() =>
+  import("@/components/organisms/MergeConflictEditor.js").then((m) => ({ default: m.MergeConflictEditor })),
+);
 import {
   Select,
   SelectContent,
@@ -59,6 +62,7 @@ export default function WorkspacePage() {
     activeProject ?? (projects.length > 0 ? projects[0].name : null);
 
   const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
+  const [selectedDiffIsConflict, setSelectedDiffIsConflict] = useState(false);
 
   const { data: diffFiles = [] } = useGitDiff(projectName ?? "");
 
@@ -184,7 +188,10 @@ export default function WorkspacePage() {
               <ChangedFilesList
                 project={projectName}
                 selectedFile={selectedDiffFile}
-                onSelectFile={(path, _isConflict) => setSelectedDiffFile(path)}
+                onSelectFile={(path, isConflict) => {
+                  setSelectedDiffFile(path);
+                  setSelectedDiffIsConflict(isConflict);
+                }}
               />
             </>
           ) : (
@@ -334,11 +341,18 @@ export default function WorkspacePage() {
               fallback={
                 <div className="h-full flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)] glass-card">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading diff…
+                  Loading…
                 </div>
               }
             >
-              {(() => {
+              {selectedDiffIsConflict ? (
+                <MergeConflictEditor
+                  project={projectName}
+                  filePath={selectedDiffFile}
+                  onClose={() => setSelectedDiffFile(null)}
+                  onResolved={() => setSelectedDiffFile(null)}
+                />
+              ) : (() => {
                 const entry = diffFiles.find((f) => f.path === selectedDiffFile);
                 return (
                   <DiffViewer
