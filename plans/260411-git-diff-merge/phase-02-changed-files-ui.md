@@ -3,10 +3,11 @@
 ## Context
 - Parent: [plan.md](./plan.md)
 - Depends on: Phase 01
+- **Completed:** 2026-04-11
 
 ## Overview
 - **Priority:** P1
-- **Status:** pending
+- **Status:** DONE
 - **Effort:** 1d
 
 Build the changed files panel showing staged/unstaged files with status badges and stage/unstage/discard actions.

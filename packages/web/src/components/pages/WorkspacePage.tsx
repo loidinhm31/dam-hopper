@@ -9,8 +9,10 @@ import { TerminalTreeView } from "@/components/organisms/TerminalTreeView.js";
 import { TerminalTabBar } from "@/components/organisms/TerminalTabBar.js";
 import { MultiTerminalDisplay } from "@/components/organisms/MultiTerminalDisplay.js";
 import { ProjectInfoPanel } from "@/components/organisms/ProjectInfoPanel.js";
-import { SearchPanel } from "@/components/organisms/search-panel.js";
+import { SearchPanel } from "@/components/organisms/SearchPanel.js";
+import { ChangedFilesList } from "@/components/organisms/ChangedFilesList.js";
 import { SidebarTabSwitcher, type SidebarTab } from "@/components/molecules/SidebarTabSwitcher.js";
+import { useGitDiff } from "@/api/queries.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
   Select,
@@ -18,7 +20,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select.js";
+} from "@/components/ui/Select.js";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { useTerminalManager } from "@/hooks/useTerminalManager.js";
@@ -51,6 +53,10 @@ export default function WorkspacePage() {
 
   const projectName =
     activeProject ?? (projects.length > 0 ? projects[0].name : null);
+
+  const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
+
+  const { data: diffFiles = [] } = useGitDiff(projectName ?? "");
 
   const [searchOpen, setSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -87,6 +93,7 @@ export default function WorkspacePage() {
         activeTab={leftTab}
         onTabChange={setLeftTab}
         hideFiles={!ideEnabled}
+        changesCount={diffFiles.length}
       />
 
       {leftTab === "files" && ideEnabled && (
@@ -148,6 +155,38 @@ export default function WorkspacePage() {
               onRemoveFreeTerminal={handleRemoveFreeTerminal}
               onSaveFreeTerminal={handleOpenFreeTerminalSavePrompt}
             />
+          )}
+        </div>
+      )}
+
+      {leftTab === "changes" && (
+        <div className="flex-1 overflow-hidden flex flex-col">
+          {projectName ? (
+            <>
+              {projects.length > 1 && (
+                <div className="shrink-0 px-2 py-1.5 border-b border-[var(--color-border)]">
+                  <Select value={projectName} onValueChange={setActiveProject}>
+                    <SelectTrigger className="text-xs h-7">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {projects.map((p) => (
+                        <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <ChangedFilesList
+                project={projectName}
+                selectedFile={selectedDiffFile}
+                onSelectFile={(path, _isConflict) => setSelectedDiffFile(path)}
+              />
+            </>
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+              No projects configured
+            </div>
           )}
         </div>
       )}
