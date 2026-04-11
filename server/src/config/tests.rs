@@ -7,7 +7,7 @@ use super::{
     },
     parser::{read_config, write_config},
     presets::{get_effective_command, get_preset},
-    schema::{CommandKind, GlobalConfig, KnownWorkspace, ProjectType},
+    schema::{CommandKind, GlobalConfig, KnownWorkspace, ProjectType, UiConfig},
 };
 
 // ──────────────────────────────────────────────
@@ -235,6 +235,7 @@ fn global_config_roundtrip() {
             name: "ws1".to_string(),
             path: "/tmp/ws1".to_string(),
         }]),
+        ui: None,
     };
 
     write_global_config_at(&cfg_path, &cfg).unwrap();
@@ -393,4 +394,73 @@ run_command = "java -jar app.jar"
         get_effective_command(&cfg.projects[0], CommandKind::Run),
         "java -jar app.jar"
     );
+}
+
+// ──────────────────────────────────────────────
+// UiConfig tests
+// ──────────────────────────────────────────────
+
+#[test]
+fn ui_config_defaults() {
+    let ui = UiConfig::default();
+    assert_eq!(ui.system_font_size, 14);
+    assert_eq!(ui.editor_font_size, 14);
+    assert!(ui.editor_zoom_wheel_enabled);
+}
+
+#[test]
+fn ui_config_serde_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("dev-hub").join("config.toml");
+
+    let cfg = GlobalConfig {
+        defaults: None,
+        workspaces: None,
+        ui: Some(UiConfig {
+            system_font_size: 16,
+            editor_font_size: 12,
+            editor_zoom_wheel_enabled: false,
+        }),
+    };
+
+    write_global_config_at(&cfg_path, &cfg).unwrap();
+    let loaded = read_global_config_at(&cfg_path).unwrap().unwrap();
+    let ui = loaded.ui.unwrap();
+    assert_eq!(ui.system_font_size, 16);
+    assert_eq!(ui.editor_font_size, 12);
+    assert!(!ui.editor_zoom_wheel_enabled);
+}
+
+#[test]
+fn global_config_without_ui_section_parses_ok() {
+    // Older config files without [ui] must continue to load.
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    std::fs::write(&cfg_path, "[defaults]\nworkspace = \"/tmp/ws\"\n").unwrap();
+
+    let loaded = read_global_config_at(&cfg_path).unwrap().unwrap();
+    assert!(loaded.ui.is_none());
+    assert_eq!(loaded.defaults.unwrap().workspace.as_deref(), Some("/tmp/ws"));
+}
+
+#[test]
+fn validate_font_size_accepts_boundary_values() {
+    assert!(UiConfig::validate_font_size(10).is_ok());
+    assert!(UiConfig::validate_font_size(32).is_ok());
+    assert!(UiConfig::validate_font_size(14).is_ok());
+    assert!(UiConfig::validate_font_size(9).is_err());
+    assert!(UiConfig::validate_font_size(33).is_err());
+    assert!(UiConfig::validate_font_size(0).is_err());
+}
+
+#[test]
+fn ui_config_validate_font_sizes_checks_both_fields() {
+    let valid = UiConfig { system_font_size: 14, editor_font_size: 16, editor_zoom_wheel_enabled: true };
+    assert!(valid.validate_font_sizes().is_ok());
+
+    let bad_system = UiConfig { system_font_size: 5, editor_font_size: 14, editor_zoom_wheel_enabled: true };
+    assert!(bad_system.validate_font_sizes().is_err());
+
+    let bad_editor = UiConfig { system_font_size: 14, editor_font_size: 99, editor_zoom_wheel_enabled: false };
+    assert!(bad_editor.validate_font_sizes().is_err());
 }

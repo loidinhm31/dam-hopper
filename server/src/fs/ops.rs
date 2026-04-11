@@ -237,6 +237,75 @@ pub async fn atomic_write_with_check(
     Ok(new_mtime)
 }
 
+pub const MAX_WORKSPACE_SEARCH_RESULTS: usize = 500;
+
+/// Search across multiple project roots in parallel (max 4 concurrent blocking tasks).
+///
+/// Returns `(matches, truncated)`. Each match is tagged with `project_name`.
+/// Stops accumulating once `max_total` is reached; failed individual projects are
+/// logged and skipped (no hard failure).
+pub async fn search_workspace(
+    projects: Vec<(String, std::path::PathBuf)>,
+    query: &str,
+    case_sensitive: bool,
+    max_per_project: usize,
+    max_total: usize,
+) -> (Vec<SearchMatch>, bool) {
+    use tokio::task::JoinSet;
+    use tokio::sync::Semaphore;
+    use std::sync::Arc;
+
+    let sem = Arc::new(Semaphore::new(4));
+    let mut set: JoinSet<(String, Vec<SearchMatch>)> = JoinSet::new();
+
+    for (name, root) in projects {
+        let sem = Arc::clone(&sem);
+        let query = query.to_string();
+        set.spawn(async move {
+            let _permit = sem.acquire().await;
+            let start = std::time::Instant::now();
+            match search_files(&root, &query, case_sensitive, max_per_project).await {
+                Ok((matches, _)) => {
+                    tracing::debug!(
+                        project = %name,
+                        matches = matches.len(),
+                        elapsed_ms = start.elapsed().as_millis(),
+                        "workspace search project done"
+                    );
+                    (name, matches)
+                }
+                Err(e) => {
+                    tracing::warn!(project = %name, error = %e, "workspace search: project failed, skipping");
+                    (name, vec![])
+                }
+            }
+        });
+    }
+
+    let mut all: Vec<SearchMatch> = Vec::new();
+    let mut truncated = false;
+
+    while let Some(result) = set.join_next().await {
+        let Ok((project_name, mut matches)) = result else { continue };
+        for m in matches.iter_mut() {
+            m.project = Some(project_name.clone());
+        }
+        for m in matches {
+            if all.len() >= max_total {
+                truncated = true;
+                break;
+            }
+            all.push(m);
+        }
+        if truncated {
+            set.abort_all();
+            break;
+        }
+    }
+
+    (all, truncated)
+}
+
 fn map_io(e: std::io::Error) -> FsError {
     if e.kind() == std::io::ErrorKind::NotFound {
         FsError::NotFound
@@ -244,6 +313,69 @@ fn map_io(e: std::io::Error) -> FsError {
         FsError::PermissionDenied
     } else {
         FsError::Io(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn make_project(dir: &TempDir, name: &str, files: &[(&str, &str)]) -> (String, std::path::PathBuf) {
+        let root = dir.path().join(name);
+        std::fs::create_dir_all(&root).unwrap();
+        for (filename, content) in files {
+            std::fs::write(root.join(filename), content).unwrap();
+        }
+        (name.to_string(), root)
+    }
+
+    #[tokio::test]
+    async fn search_workspace_finds_across_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        let p1 = make_project(&dir, "alpha", &[("main.rs", "fn hello() {}\n"), ("lib.rs", "pub fn greet() {}")]);
+        let p2 = make_project(&dir, "beta", &[("main.py", "def hello():\n    pass\n")]);
+
+        let (matches, truncated) = search_workspace(
+            vec![p1, p2],
+            "hello",
+            false,
+            100,
+            500,
+        ).await;
+
+        assert!(!truncated);
+        assert!(matches.len() >= 2, "expected matches from both projects, got {}", matches.len());
+        let projects: std::collections::HashSet<_> = matches.iter()
+            .filter_map(|m| m.project.as_deref())
+            .collect();
+        assert!(projects.contains("alpha"));
+        assert!(projects.contains("beta"));
+    }
+
+    #[tokio::test]
+    async fn search_workspace_respects_total_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create a project with many matches
+        let content: String = (0..100).map(|i| format!("needle_line_{i}\n")).collect();
+        let p1 = make_project(&dir, "big", &[("a.txt", &content)]);
+        let p2 = make_project(&dir, "big2", &[("b.txt", &content)]);
+
+        let (matches, truncated) = search_workspace(vec![p1, p2], "needle", false, 50, 30).await;
+
+        assert!(truncated);
+        assert!(matches.len() <= 30);
+    }
+
+    #[tokio::test]
+    async fn search_workspace_tags_project_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let p1 = make_project(&dir, "proj-a", &[("f.txt", "unique_token_xyz")]);
+
+        let (matches, _) = search_workspace(vec![p1], "unique_token_xyz", false, 100, 500).await;
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].project.as_deref(), Some("proj-a"));
     }
 }
 
@@ -261,6 +393,8 @@ pub struct SearchMatch {
     pub line: u64,
     pub col: u64,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 /// Search file contents within `root` for `query` (plain text, internally regex-escaped).
@@ -335,6 +469,7 @@ pub async fn search_files(
                         line: (line_idx + 1) as u64,
                         col: (m.start() + 1) as u64,
                         text,
+                        project: None,
                     });
                     if matches.len() >= max {
                         truncated = true;

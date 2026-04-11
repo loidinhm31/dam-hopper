@@ -96,6 +96,34 @@ pub async fn update_global_defaults(
 }
 
 // ---------------------------------------------------------------------------
+// POST /api/global-config/ui  { ui: { system_font_size, editor_font_size, editor_zoom_wheel_enabled } }
+// ---------------------------------------------------------------------------
+
+pub async fn update_global_ui(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    let gc_path = global_config_path();
+    let mut gc = read_global_config_at(&gc_path)
+        .map_err(ApiError::from_app)?
+        .unwrap_or_default();
+
+    if let Some(ui_val) = body.get("ui") {
+        let new_ui: crate::config::schema::UiConfig =
+            serde_json::from_value(ui_val.clone())
+                .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
+        new_ui
+            .validate_font_sizes()
+            .map_err(|e| ApiError::from_app(AppError::InvalidInput(e)))?;
+        gc.ui = Some(new_ui);
+    }
+
+    write_global_config_at(&gc_path, &gc).map_err(ApiError::from_app)?;
+    *state.global_config.write().await = gc;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------------------
 // GET /api/projects
 // ---------------------------------------------------------------------------
 

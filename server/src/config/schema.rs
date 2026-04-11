@@ -257,8 +257,49 @@ pub struct KnownWorkspace {
     pub path: String,
 }
 
+fn default_system_font_size() -> u16 { 14 }
+fn default_editor_font_size() -> u16 { 14 }
+fn default_editor_zoom_wheel_enabled() -> bool { true }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiConfig {
+    #[serde(default = "default_system_font_size")]
+    pub system_font_size: u16,
+    #[serde(default = "default_editor_font_size")]
+    pub editor_font_size: u16,
+    #[serde(default = "default_editor_zoom_wheel_enabled")]
+    pub editor_zoom_wheel_enabled: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        UiConfig {
+            system_font_size: default_system_font_size(),
+            editor_font_size: default_editor_font_size(),
+            editor_zoom_wheel_enabled: default_editor_zoom_wheel_enabled(),
+        }
+    }
+}
+
+impl UiConfig {
+    /// Validates that both font sizes are in the allowed range [10, 32].
+    pub fn validate_font_sizes(&self) -> Result<(), String> {
+        Self::validate_font_size(self.system_font_size)?;
+        Self::validate_font_size(self.editor_font_size)
+    }
+
+    pub fn validate_font_size(size: u16) -> Result<(), String> {
+        if !(10..=32).contains(&size) {
+            return Err(format!("Font size {size} out of range [10, 32]"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GlobalConfig {
     pub defaults: Option<GlobalDefaults>,
     pub workspaces: Option<Vec<KnownWorkspace>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui: Option<UiConfig>,
 }

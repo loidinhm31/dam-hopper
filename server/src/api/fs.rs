@@ -8,7 +8,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
-use crate::fs::ops::{self, MAX_READ_BYTES};
+use crate::fs::ops::{self, MAX_READ_BYTES, MAX_WORKSPACE_SEARCH_RESULTS};
 use crate::state::AppState;
 
 use super::error::ApiError;
@@ -17,12 +17,22 @@ use super::error::ApiError;
 // Search types
 // ---------------------------------------------------------------------------
 
+#[derive(Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchScope {
+    #[default]
+    Project,
+    Workspace,
+}
+
 #[derive(Deserialize)]
 pub struct SearchParams {
-    pub project: String,
+    pub project: Option<String>,
     pub q: String,
     pub case: Option<bool>,
     pub max: Option<usize>,
+    #[serde(default)]
+    pub scope: SearchScope,
 }
 
 #[derive(Serialize)]
@@ -211,24 +221,47 @@ pub async fn download(
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/fs/search?project=NAME&q=QUERY[&case=true&max=N]
+// GET /api/fs/search?project=NAME&q=QUERY[&case=true&max=N&scope=project|workspace]
 // ---------------------------------------------------------------------------
 
 pub async fn search(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<SearchResponse>, ApiError> {
-    let root = resolve(&state, &params.project, "")
-        .await
-        .map_err(ApiError::from)?;
-    let max = params.max.unwrap_or(200).min(ops::MAX_SEARCH_RESULTS);
-    let (matches, truncated) =
-        ops::search_files(&root, &params.q, params.case.unwrap_or(false), max)
+    let case = params.case.unwrap_or(false);
+    let query = params.q.clone();
+
+    if params.scope == SearchScope::Workspace {
+        let projects: Vec<(String, std::path::PathBuf)> = {
+            let cfg = state.config.read().await;
+            cfg.projects
+                .iter()
+                .map(|p| (p.name.clone(), std::path::PathBuf::from(&p.path)))
+                .collect()
+        };
+        let (matches, truncated) = ops::search_workspace(
+            projects,
+            &query,
+            case,
+            200,
+            MAX_WORKSPACE_SEARCH_RESULTS,
+        )
+        .await;
+        Ok(Json(SearchResponse { query, matches, truncated }))
+    } else {
+        let project_name = params.project.ok_or_else(|| {
+            ApiError::from(AppError::InvalidInput(
+                "project parameter required for project scope".into(),
+            ))
+        })?;
+        let root = resolve(&state, &project_name, "")
             .await
-            .map_err(AppError::Fs)?;
-    Ok(Json(SearchResponse {
-        query: params.q,
-        matches,
-        truncated,
-    }))
+            .map_err(ApiError::from)?;
+        let max = params.max.unwrap_or(200).min(ops::MAX_SEARCH_RESULTS);
+        let (matches, truncated) =
+            ops::search_files(&root, &query, case, max)
+                .await
+                .map_err(AppError::Fs)?;
+        Ok(Json(SearchResponse { query, matches, truncated }))
+    }
 }

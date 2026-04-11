@@ -45,6 +45,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         // Global config
         .route("/api/global-config", get(config::get_global_config))
         .route("/api/global-config/defaults", post(config::update_global_defaults))
+        .route("/api/global-config/ui", post(config::update_global_ui))
         // Projects
         .route("/api/projects", get(config::list_projects))
         .route("/api/projects/{name}", get(config::get_project))
