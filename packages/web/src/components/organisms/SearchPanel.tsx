@@ -1,7 +1,7 @@
 import { useRef, useMemo, useEffect } from "react";
 import { Loader2, CaseSensitive, AlertTriangle, X } from "lucide-react";
 import { cn } from "@/lib/utils.js";
-import { useFileSearch } from "@/hooks/use-file-search.js";
+import { useFileSearch } from "@/hooks/useFileSearch.js";
 import type { SearchMatch } from "@/api/fs-types.js";
 
 interface SearchPanelProps {

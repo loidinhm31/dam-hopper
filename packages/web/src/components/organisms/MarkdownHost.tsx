@@ -8,7 +8,7 @@ import { lazy, Suspense, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import type { FileTier } from "@/lib/file-tier.js";
-import { MarkdownPreview } from "./markdown-preview.js";
+import { MarkdownPreview } from "./MarkdownPreview.js";
 
 const MonacoHost = lazy(() =>
   import("@/components/organisms/MonacoHost.js").then((m) => ({ default: m.MonacoHost })),

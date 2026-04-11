@@ -109,23 +109,39 @@ pnpm format      # Prettier
 
 **TypeScript:** `strict: true`, `target: ES2022`, `moduleResolution: bundler`.
 
+### Naming Conventions
+
+| Location | Convention | Example |
+|---|---|---|
+| React component files (`.tsx`) | **PascalCase** | `FileTree.tsx`, `SearchPanel.tsx` |
+| Hook files (`hooks/`) | **camelCase** | `useFileSearch.ts`, `useFsOps.ts` |
+| Non-component TS files | **kebab-case** | `ws-transport.ts`, `fs-types.ts`, `server-config.ts` |
+| Rust source files | **snake_case** | `fs_subsystem.rs`, `sandbox.rs` |
+| Docs / command `.md` files | **kebab-case** | `code-standards.md`, `api-reference.md` |
+
+> **Rule of thumb:** if the file exports a JSX component → PascalCase; if it exports a React hook → camelCase; everything else → kebab-case.
+
 ### Component Structure
 
 ```
 src/
 ├── api/
 │   ├── client.ts          # Type definitions (mirrors Rust API)
+│   ├── fs-types.ts        # Filesystem-specific types
 │   ├── transport.ts       # Fetch transport
 │   ├── ws-transport.ts    # WebSocket client
 │   └── queries.ts         # TanStack Query hooks
 ├── components/
-│   ├── atoms/             # Small reusable (Button, Badge)
-│   ├── organisms/         # Complex (TerminalTreeView, ProjectList)
-│   ├── pages/             # Full-screen pages
-│   └── layout/            # Layout wrappers
-└── styles/
-    ├── globals.css        # Tailwind imports
-    └── ...
+│   ├── atoms/             # Smallest reusable primitives (Button, Badge)
+│   ├── molecules/         # Composed atoms (EditorTab, SidebarTabSwitcher)
+│   ├── organisms/         # Feature-complete components (FileTree, TerminalPanel)
+│   ├── pages/             # Full-screen route pages
+│   ├── templates/         # Page-level layout shells (IdeShell, AppLayout)
+│   └── ui/                # Low-level headless UI primitives (Select)
+├── hooks/                 # Custom React hooks (camelCase filenames)
+├── lib/                   # Pure utilities, no React
+├── stores/                # Zustand stores
+└── types/                 # Shared TypeScript type declarations
 ```
 
 ### Client Types
@@ -214,6 +230,7 @@ On-disk uses snake_case; serde `#[serde(rename = "...")]` handles mapping.
 - Handle loading/error states in components
 - One component per file (unless very small atoms)
 - CSS class names via Tailwind utilities
+- **File naming**: component files → PascalCase; hook files → camelCase; all other `.ts` files → kebab-case
 
 ### Commit Messages
 

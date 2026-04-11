@@ -20,7 +20,7 @@ const MonacoHost = lazy(() =>
 );
 
 const MarkdownHost = lazy(() =>
-  import("@/components/organisms/markdown-host.js").then((m) => ({ default: m.MarkdownHost })),
+  import("@/components/organisms/MarkdownHost.js").then((m) => ({ default: m.MarkdownHost })),
 );
 
 export function EditorTabs() {

@@ -6,7 +6,7 @@
 
 ## Overview
 - **Priority:** P1
-- **Status:** pending
+- **Status:** DONE
 - **Effort:** 1d
 
 Integrate Monaco DiffEditor for viewing file diffs with side-by-side/inline toggle and built-in hunk rollback.
@@ -85,12 +85,12 @@ Simpler approach: Let user revert hunks in Monaco (in-memory), then "Save" write
 
 ## Todo
 
-- [ ] useFileDiff hook
-- [ ] DiffViewer component
-- [ ] Toolbar controls
-- [ ] Save modified content
-- [ ] WorkspacePage integration
-- [ ] Keyboard shortcuts
+- [x] useFileDiff hook
+- [x] DiffViewer component
+- [x] Toolbar controls
+- [x] Save modified content
+- [x] WorkspacePage integration
+- [x] Keyboard shortcuts
 
 ## Success Criteria
 
