@@ -5,12 +5,12 @@ use tempfile::TempDir;
 
 use crate::git::cli_fallback::list_worktrees;
 use crate::git::diff::{
-    discard_file, discard_hunk, get_conflicts, get_diff_files, get_file_diff, resolve_conflict,
+    discard_file, discard_hunk, get_conflicts, get_diff_files, get_file_diff,
     stage_files, unstage_files,
 };
 use crate::git::repository::{get_status, list_branches};
 use crate::git::types::GitProgressPhase;
-use crate::git::{BulkGitService, GitStatus, WorktreeAddOptions};
+use crate::git::{BulkGitService, WorktreeAddOptions};
 use crate::git::bulk::ProjectRef;
 
 // ---------------------------------------------------------------------------
@@ -311,7 +311,7 @@ fn progress_channel_no_receiver_no_panic() {
 fn diff_clean_repo_returns_empty() {
     let repo = make_temp_repo();
     let entries = get_diff_files(repo.path()).unwrap();
-    assert!(entries.is_empty());
+    assert!(entries.entries.is_empty());
 }
 
 #[test]
@@ -322,8 +322,8 @@ fn diff_unstaged_modified_file() {
     std::fs::write(path.join("README.md"), "modified content").unwrap();
 
     let entries = get_diff_files(path).unwrap();
-    assert!(!entries.is_empty());
-    let entry = entries.iter().find(|e| e.path == "README.md" && !e.staged).unwrap();
+    assert!(!entries.entries.is_empty());
+    let entry = entries.entries.iter().find(|e| e.path == "README.md" && !e.staged).unwrap();
     assert_eq!(entry.status, "modified");
     assert!(!entry.staged);
 }
@@ -337,7 +337,7 @@ fn diff_staged_new_file() {
     git(&["add", "new.txt"], path);
 
     let entries = get_diff_files(path).unwrap();
-    let staged = entries.iter().find(|e| e.path == "new.txt" && e.staged).unwrap();
+    let staged = entries.entries.iter().find(|e| e.path == "new.txt" && e.staged).unwrap();
     assert_eq!(staged.status, "added");
     assert!(staged.staged);
 }
@@ -380,13 +380,13 @@ fn stage_and_unstage_file() {
     stage_files(path, &["README.md"]).unwrap();
 
     let entries = get_diff_files(path).unwrap();
-    let staged_entry = entries.iter().find(|e| e.path == "README.md" && e.staged);
+    let staged_entry = entries.entries.iter().find(|e| e.path == "README.md" && e.staged);
     assert!(staged_entry.is_some(), "file should be staged");
 
     unstage_files(path, &["README.md"]).unwrap();
 
     let entries2 = get_diff_files(path).unwrap();
-    let still_staged = entries2.iter().any(|e| e.path == "README.md" && e.staged);
+    let still_staged = entries2.entries.iter().any(|e| e.path == "README.md" && e.staged);
     assert!(!still_staged, "file should be unstaged");
 }
 
@@ -419,7 +419,7 @@ fn discard_hunk_reverts_specific_lines() {
     std::fs::write(path.join("multi.txt"), "line1\nMODIFIED\nline3\nline4\n").unwrap();
 
     let entries = get_diff_files(path).unwrap();
-    assert!(entries.iter().any(|e| e.path == "multi.txt" && !e.staged));
+    assert!(entries.entries.iter().any(|e| e.path == "multi.txt" && !e.staged));
 
     // Discard hunk 0
     discard_hunk(path, "multi.txt", 0).unwrap();
