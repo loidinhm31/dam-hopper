@@ -148,9 +148,8 @@ fn extract_hunks(patch: &git2::Patch) -> Result<Vec<HunkInfo>, AppError> {
 /// List all changed files (staged + unstaged + untracked).
 ///
 /// Staged/unstaged tracked changes are always returned in full.
-/// Untracked files use `recurse_untracked_dirs: false` so large build
-/// artifact directories (e.g. `target/`, `node_modules/`) appear as a
-/// single directory entry rather than thousands of individual files.
+/// Untracked files use `recurse_untracked_dirs: true` to show individual
+/// untracked files instead of rolling them up into directories.
 /// Entries are capped at `UNTRACKED_PAGE_SIZE`; use `get_untracked_page`
 /// to paginate beyond the cap.
 pub fn get_diff_files(project_path: &Path) -> Result<DiffResponse, AppError> {
@@ -174,12 +173,12 @@ pub fn get_diff_files(project_path: &Path) -> Result<DiffResponse, AppError> {
         .map_err(|e| AppError::Git(e.message().to_string()))?;
     collect_diff_entries(&unstaged_diff, false, &mut entries)?;
 
-    // Untracked files — directory-level to avoid enumerating large artifact dirs.
-    // `recurse_untracked_dirs: false` → shows `target/` as one entry, not 100K files.
+    // Untracked files — list individual files.
+    // We rely on .gitignore to filter out large artifact dirs (node_modules, target).
     let mut status_opts = git2::StatusOptions::new();
     status_opts
         .include_untracked(true)
-        .recurse_untracked_dirs(false)
+        .recurse_untracked_dirs(true)
         .exclude_submodules(true)
         .include_ignored(false);
     let statuses = repo
