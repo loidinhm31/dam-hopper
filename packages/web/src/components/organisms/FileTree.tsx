@@ -474,7 +474,7 @@ export function FileTree({
               openByDefault={false}
               onActivate={handleActivate}
               onMove={handleMove}
-              disableDrag={(node) => isLoadingSentinel(node?.data?.id ?? "")}
+              disableDrag={(node) => isLoadingSentinel(node.id)}
               disableDrop={({ parentNode, dragNodes }) => {
                 if (!parentNode?.data) return false;
                 if (isLoadingSentinel(parentNode.data.id)) return true;

@@ -159,6 +159,11 @@ export function MergeConflictEditor({
   const theirsEditorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null);
   const resultEditorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null);
   const oursEditorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null);
+  const modelsRef = useRef<{
+    theirs: monacoNs.editor.ITextModel | null;
+    result: monacoNs.editor.ITextModel | null;
+    ours: monacoNs.editor.ITextModel | null;
+  }>({ theirs: null, result: null, ours: null });
   const monacoRef = useRef<typeof monacoNs | null>(null);
   const isSyncing = useRef(false);
   const decorationCollection = useRef<monacoNs.editor.IEditorDecorationsCollection | null>(null);
@@ -185,11 +190,21 @@ export function MergeConflictEditor({
       for (const ref of [theirsEditorRef, resultEditorRef, oursEditorRef]) {
         (ref.current as unknown as { _roCleanup?: () => void } | null)?._roCleanup?.();
       }
+      // Defer model disposal so Monaco's own editor cleanup runs first.
+      const { theirs, result, ours } = modelsRef.current;
+      requestAnimationFrame(() => {
+        if (theirs && !theirs.isDisposed()) theirs.dispose();
+        if (result && !result.isDisposed()) result.dispose();
+        if (ours && !ours.isDisposed()) ours.dispose();
+      });
     };
   }, []);
 
   const handleTheirsMount: OnMount = useCallback((editor, monaco) => {
     theirsEditorRef.current = editor;
+    modelsRef.current.theirs = editor.getModel();
+    editor.onDidChangeModel(() => { modelsRef.current.theirs = editor.getModel(); });
+
     if (!monacoRef.current) monacoRef.current = monaco;
     editor.onDidScrollChange((e) => {
       if (!isSyncing.current) syncScroll(e.scrollTop);
@@ -199,6 +214,9 @@ export function MergeConflictEditor({
 
   const handleResultMount: OnMount = useCallback((editor, monaco) => {
     resultEditorRef.current = editor;
+    modelsRef.current.result = editor.getModel();
+    editor.onDidChangeModel(() => { modelsRef.current.result = editor.getModel(); });
+
     if (!monacoRef.current) monacoRef.current = monaco;
 
     // Track content changes
@@ -216,6 +234,9 @@ export function MergeConflictEditor({
 
   const handleOursMount: OnMount = useCallback((editor, monaco) => {
     oursEditorRef.current = editor;
+    modelsRef.current.ours = editor.getModel();
+    editor.onDidChangeModel(() => { modelsRef.current.ours = editor.getModel(); });
+
     if (!monacoRef.current) monacoRef.current = monaco;
     editor.onDidScrollChange((e) => {
       if (!isSyncing.current) syncScroll(e.scrollTop);
@@ -353,11 +374,12 @@ export function MergeConflictEditor({
     fontFamily: "JetBrains Mono, Fira Code, Cascadia Code, monospace",
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
-    automaticLayout: false,
+    automaticLayout: true,
     lineNumbers: "on",
     wordWrap: "off",
     theme: "vs-dark",
     scrollbar: { vertical: "visible", horizontal: "auto" },
+    renderValidationDecorations: "off",
   };
 
   return (
@@ -461,6 +483,8 @@ export function MergeConflictEditor({
       <div className="flex-1 min-h-0 grid grid-cols-3 divide-x divide-[var(--color-border)]">
         {/* Theirs */}
         <Editor
+          height="100%"
+          keepCurrentModel
           value={conflictFile.theirs ?? ""}
           language={language}
           theme="vs-dark"
@@ -470,6 +494,8 @@ export function MergeConflictEditor({
 
         {/* Result (editable, workdir content) */}
         <Editor
+          height="100%"
+          keepCurrentModel
           defaultValue={workdirContent}
           language={language}
           theme="vs-dark"
@@ -479,6 +505,8 @@ export function MergeConflictEditor({
 
         {/* Ours */}
         <Editor
+          height="100%"
+          keepCurrentModel
           value={conflictFile.ours ?? ""}
           language={language}
           theme="vs-dark"

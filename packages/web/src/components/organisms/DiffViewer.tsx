@@ -126,7 +126,6 @@ export function DiffViewer({
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDirty, saveState]); // re-bind when save eligibility changes
 
   // Dispose models and ResizeObserver when the component unmounts.
@@ -159,6 +158,15 @@ export function DiffViewer({
         modelsRef.current.original = model.original;
         modelsRef.current.modified = model.modified;
       }
+
+      // Update model refs if they change (e.g. via props)
+      editor.onDidChangeModel(() => {
+        const newModel = editor.getModel();
+        if (newModel) {
+          modelsRef.current.original = newModel.original;
+          modelsRef.current.modified = newModel.modified;
+        }
+      });
 
       // Capture baseline on mount — this is the working-copy content from the API
       savedContentRef.current = modifiedEditor.getValue();
@@ -382,28 +390,31 @@ export function DiffViewer({
       )}
 
       {/* Monaco DiffEditor */}
-      <div ref={editorContainerRef} className="flex-1 overflow-hidden">
+      <div ref={editorContainerRef} className="flex-1 min-h-0 overflow-hidden">
         <DiffEditor
+          height="100%"
+          keepCurrentOriginalModel
+          keepCurrentModifiedModel
           original={data.original ?? ""}
           modified={isDeleted ? "" : (data.modified ?? "")}
           language={data.language}
           theme="vs-dark"
           onMount={handleMount}
-          keepCurrentModels={true}
           options={{
             renderSideBySide: sideBySide,
             originalEditable: false,
             readOnly: isDeleted || isAdded,
             renderMarginRevertIcon: true,
-            hideUnchangedRegions: { enabled: true, contextLineCount: 3 },
+            hideUnchangedRegions: { enabled: false },
             diffAlgorithm: "advanced",
             fontSize: 13,
             fontFamily: "JetBrains Mono, Fira Code, Cascadia Code, monospace",
             minimap: { enabled: false },
             scrollBeyondLastLine: false,
-            automaticLayout: false,
+            automaticLayout: true,
             lineNumbers: "on",
             wordWrap: "off",
+            renderValidationDecorations: "off",
           }}
         />
       </div>
