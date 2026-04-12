@@ -141,7 +141,7 @@ Resolve merge conflict.
 
 Body: `{ path: string, content: string }`
 
-### IDE File Explorer (Feature-gated: ide_explorer)
+### IDE File Explorer
 
 **GET /api/fs/list?project=NAME&path=REL**
 List directory contents.
@@ -185,7 +185,6 @@ Response:
 **Error Responses:**
 - 400: Invalid path (outside sandbox)
 - 404: Project/path not found
-- 503: Feature disabled or filesystem unavailable
 
 ### Agent Store
 
@@ -222,9 +221,7 @@ Response:
 {
   "status": "ok",
   "version": "0.2.0",
-  "features": {
-    "ide_explorer": true
-  }
+  "features": {}
 }
 ```
 

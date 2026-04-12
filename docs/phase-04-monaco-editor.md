@@ -162,7 +162,6 @@ Key methods:
 
 ## Integration Points
 
-- **Feature gate:** ide_explorer flag gates /ide route and EditorTabs component
 - **State:** useEditorStore (Zustand) + TanStack Query for fs:read
 - **Transport:** WsTransport wraps WS protocol (fsRead, fsWriteFile methods)
 - **UI:** react-resizable-panels (file tree | editor | terminal)

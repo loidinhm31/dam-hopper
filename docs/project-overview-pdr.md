@@ -80,7 +80,6 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Binary files return { binary: true, mime: "..." }
 
 **Technical Constraints:**
-- Feature-gated: ide_explorer flag in dev-hub.toml or DEV_HUB_IDE=1 env
 - Max read: 10MB per request (configurable)
 - MIME type detection via mime_guess crate
 - Async I/O via tokio::fs
@@ -175,15 +174,15 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 **Alternative Rejected:** Channels (too much boilerplate) or Actor model (overkill).
 
-### Decision: Feature-gated IDE Explorer
+### Decision: IDE Explorer Enabled by Default
 
-**Context:** File exploration may not be needed in all deployments; reduces attack surface.
+**Context:** File exploration is a core requirement of Dev-Hub's IDE-like functionality.
 
-**Decision:** IDE endpoints are conditional on ide_explorer feature flag.
+**Decision:** IDE endpoints are permanently enabled.
 
-**Rationale:** Can be disabled at build/deploy time or via config.
+**Rationale:** The feature gate added unnecessary complexity for the primary use case of the project.
 
-**Alternative Rejected:** Always-on endpoints (harder to disable in security-sensitive environments).
+**Alternative Rejected:** Feature-gated endpoints (was used in early development but removed to simplify architecture).
 
 ### Decision: Symlink-based Agent Store Distribution
 
@@ -201,7 +200,6 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Filesystem sandbox
 - ✓ List/read/stat REST endpoints
 - ✓ Binary detection
-- ✓ Feature gating
 
 ### Phase 02: File Watcher (Complete)
 - ✓ inotify integration (Linux), notify crate cross-platform

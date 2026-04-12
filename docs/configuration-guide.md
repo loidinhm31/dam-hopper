@@ -96,20 +96,8 @@ If omitted, defaults to `.dev-hub/agent-store/` in workspace root.
 
 ### Feature Flags
 
-Enable/disable features:
+All features are enabled by default.
 
-```toml
-[features]
-ide_explorer = true
-```
-
-**Available Flags:**
-
-| Flag | Default | Env Override | Purpose |
-|------|---------|---|---------|
-| ide_explorer | false | `DEV_HUB_IDE=1` | File tree explorer—enables `/api/fs/*` REST endpoints, WS tree subscription, web IDE shell (/ide route), sidebar IDE link |
-
-Features set in config can be overridden at runtime via environment variables.
 
 ## Global Configuration (~/.config/dev-hub/config.toml)
 
@@ -139,7 +127,6 @@ path = "/tmp/test-workspace"
 | Var | Type | Purpose |
 |-----|------|---------|
 | `DEV_HUB_WORKSPACE` | path | Override workspace path (takes priority over global config default) |
-| `DEV_HUB_IDE` | 1/0 | Force enable/disable ide_explorer feature |
 | `RUST_LOG` | string | Logging level (e.g., `dev_hub=debug,axum=info`) |
 
 ## Authentication Token
@@ -243,20 +230,6 @@ Check:
 2. Path is absolute or relative to CWD
 3. User has read permissions
 
-### Feature disabled
-
-Feature endpoints return 404 — check:
-
-```bash
-grep -A5 "\[features\]" dev-hub.toml
-```
-
-Or set env var:
-
-```bash
-DEV_HUB_IDE=1 cargo run -- --workspace /path/to/workspace
-```
-
 ### Project not discovered
 
 Error: `Project not found: {name}`
@@ -314,9 +287,6 @@ path = "./docs"
 type = "custom"
 build_command = "yarn build"
 run_command = "yarn start"
-
-[features]
-ide_explorer = true
 
 [agent_store]
 path = ".dev-hub/agent-store"

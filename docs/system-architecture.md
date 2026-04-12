@@ -22,7 +22,6 @@
 │  │  ├─ fs: FsSubsystem                                    │
 │  │  ├─ ssh_creds: Arc<RwLock<Option<...>>>               │
 │  │  ├─ auth_token: Arc<String>                            │
-│  │  └─ ide_explorer: bool (feature gate)                  │
 │  ├─ Router                                                 │
 │  │  ├─ /api/projects → ProjectList handler                │
 │  │  ├─ /api/pty/* → PTY spawn/send/kill                   │
@@ -48,7 +47,6 @@ Handles TOML parsing, project discovery, feature flags.
 **Key types:**
 - `DevHubConfig` — parsed workspace config
 - `ProjectConfig` — individual project settings
-- `FeaturesConfig` — feature flags (ide_explorer, etc.)
 
 **Path resolution priority:**
 1. `--workspace` CLI flag
@@ -249,7 +247,6 @@ GET /api/fs/search?project=web&q=pattern[&case=true&max=50]
 ## Feature Gating: IDE Explorer
 
 Routes `/api/fs/*` (list, read, stat) only registered when:
-- Config: `[features] ide_explorer = true` in dev-hub.toml
 - OR env: `DEV_HUB_IDE=1`
 
 If disabled, requests return 404.

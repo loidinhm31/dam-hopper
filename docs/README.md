@@ -39,10 +39,10 @@ Complete guide to the Dev-Hub workspace manager and IDE integration system.
 ### Features
 
 **IDE File Explorer (Phase 01)** — Feature-gated file listing, reading, and metadata.
-- Enable: `[features] ide_explorer = true` in dev-hub.toml or `DEV_HUB_IDE=1` env
+
 - Endpoints: GET /api/fs/list, /api/fs/read, /api/fs/stat
 - Sandbox: Path validation prevents escape attempts
-- See: [API Reference](./api-reference.md#ide-file-explorer-feature-gated-ide_explorer)
+
 
 **Workspace Management** — TOML-based config, project discovery, hot-reload.
 - Config: dev-hub.toml at workspace root
@@ -110,7 +110,7 @@ curl -H "Authorization: Bearer $TOKEN" \
   'http://localhost:4800/api/fs/stat?project=backend&path=src'
 ```
 
-Requires `[features] ide_explorer = true` in config.
+
 
 ### Run Tests
 
