@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Terminal as TerminalIcon, Plus, Loader2 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -12,13 +12,6 @@ import { ProjectInfoPanel } from "@/components/organisms/ProjectInfoPanel.js";
 import { SearchPanel } from "@/components/organisms/SearchPanel.js";
 import { SidebarTabSwitcher, type SidebarTab } from "@/components/molecules/SidebarTabSwitcher.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
-
-const DiffViewer = lazy(() =>
-  import("@/components/organisms/DiffViewer.js").then((m) => ({ default: m.DiffViewer })),
-);
-const MergeConflictEditor = lazy(() =>
-  import("@/components/organisms/MergeConflictEditor.js").then((m) => ({ default: m.MergeConflictEditor })),
-);
 import {
   Select,
   SelectContent,
@@ -36,12 +29,12 @@ import type { FsArborNode } from "@/api/fs-types.js";
 const ACTIVE_PROJECT_KEY = "devhub:active-project";
 
 export default function WorkspacePage() {
-  const ideEnabled = useFeatureFlag("ide_explorer");
+  const ideEnabled = true;
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeProject, setActiveProjectState] = useState<string | null>(
     () => localStorage.getItem(ACTIVE_PROJECT_KEY),
   );
-  const [leftTab, setLeftTab] = useState<SidebarTab>(ideEnabled ? "files" : "terminals");
+  const [leftTab, setLeftTab] = useState<SidebarTab>("files");
 
   function setActiveProject(name: string | null) {
     setActiveProjectState(name);
@@ -49,6 +42,7 @@ export default function WorkspacePage() {
     else localStorage.removeItem(ACTIVE_PROJECT_KEY);
   }
   const openFile = useEditorStore((s) => s.open);
+  const openDiff = useEditorStore((s) => s.openDiff);
 
   const { data: projects = [] } = useQuery({
     queryKey: ["projects"],
@@ -78,14 +72,10 @@ export default function WorkspacePage() {
   const projectName =
     activeProject ?? (projects.length > 0 ? projects[0].name : null);
 
-  const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
-  const [selectedDiffIsConflict, setSelectedDiffIsConflict] = useState(false);
-
   const { open: searchOpen, close: closeSearch, openWith: openSearch } = useSearchUiStore();
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!ideEnabled) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.ctrlKey && e.shiftKey && e.key === "F") {
         e.preventDefault();
@@ -94,7 +84,7 @@ export default function WorkspacePage() {
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [ideEnabled, openSearch]);
+  }, [openSearch]);
 
   function handleFileOpen(node: FsArborNode) {
     if (projectName) void openFile(projectName, node);
@@ -113,7 +103,7 @@ export default function WorkspacePage() {
         hideFiles={!ideEnabled}
       />
 
-      {leftTab === "files" && ideEnabled && (
+      {leftTab === "files" && (
         <div className="flex flex-col flex-1 overflow-hidden">
           {projects.length > 1 && (
             <div className="shrink-0 px-2 py-1.5 border-b border-[var(--color-border)]">
@@ -137,12 +127,11 @@ export default function WorkspacePage() {
               onFileOpen={handleFileOpen}
               onOpenTerminal={() => handleLaunchShell(projectName)}
               className="flex-1"
-              selectedDiffFile={selectedDiffFile}
               onSelectDiffFile={(path, isConflict) => {
-                setSelectedDiffFile(path);
-                setSelectedDiffIsConflict(isConflict);
+                if (projectName) openDiff(projectName, path, "modified", 0, 0);
               }}
-            />
+              />
+
           ) : (
             <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
               No projects configured
@@ -316,43 +305,14 @@ export default function WorkspacePage() {
       <IdeShell
         tree={leftPanel}
         editor={
-          selectedDiffFile && projectName ? (
-            <Suspense
-              fallback={
-                <div className="h-full flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)] glass-card">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading…
-                </div>
-              }
-            >
-              {selectedDiffIsConflict ? (
-                <MergeConflictEditor
-                  project={projectName}
-                  filePath={selectedDiffFile}
-                  onClose={() => setSelectedDiffFile(null)}
-                  onResolved={() => setSelectedDiffFile(null)}
-                />
-              ) : (
-                <DiffViewer
-                  project={projectName}
-                  filePath={selectedDiffFile}
-                  fileStatus="modified"
-                  additions={0}
-                  deletions={0}
-                  onClose={() => setSelectedDiffFile(null)}
-                />
-              )}
-            </Suspense>
-          ) : (
-            <EditorTabs />
-          )
+          <EditorTabs />
         }
         terminal={terminalPanel}
-        hideEditor={!ideEnabled}
+        hideEditor={false}
       />
 
       {/* Floating search dialog */}
-      {searchOpen && ideEnabled && projectName && (
+      {searchOpen && projectName && (
         <div
           className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
           onClick={closeSearch}

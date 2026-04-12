@@ -9,8 +9,9 @@ import { create } from "zustand";
 import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import { fileTier } from "@/lib/file-tier.js";
-import type { FileTier } from "@/lib/file-tier.js";
+import type { FileTier as FT } from "@/lib/file-tier.js";
 import type { FsArborNode } from "@/api/fs-types.js";
+export type FileTier = FT | "diff";
 
 export interface Tab {
   key: string;       // `${project}::${path}`
@@ -33,13 +34,25 @@ export interface Tab {
   saving: boolean;
   conflicted: boolean;
   error?: string;
+  /** Extra data for diff tabs. */
+  fileStatus?: string;
+  additions?: number;
+  deletions?: number;
 }
+
 
 interface EditorState {
   tabs: Tab[];
   activeKey: string | null;
 
   open: (project: string, node: FsArborNode) => Promise<void>;
+  openDiff: (
+    project: string,
+    path: string,
+    fileStatus: string,
+    additions: number,
+    deletions: number,
+  ) => void;
   close: (key: string) => void;
   setActive: (key: string) => void;
   setContent: (key: string, content: string) => void;
@@ -72,8 +85,43 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   activeKey: null,
 
   // ---------------------------------------------------------------------------
-  // open
+  // openDiff
   // ---------------------------------------------------------------------------
+  openDiff: (
+    project: string,
+    path: string,
+    fileStatus: string,
+    additions: number,
+    deletions: number,
+  ) => {
+    const key = `diff::${project}::${path}`;
+    const existing = get().tabs.find((t) => t.key === key);
+    if (existing) {
+      set({ activeKey: key });
+      return;
+    }
+
+    const newTab: Tab = {
+      key,
+      project,
+      path,
+      name: `Diff: ${path.split("/").pop()}`,
+      mtime: 0,
+      size: 0,
+      tier: "diff",
+      content: "",
+      savedContent: "",
+      dirty: false,
+      loading: false,
+      saving: false,
+      conflicted: false,
+      fileStatus,
+      additions,
+      deletions,
+    };
+
+    set((s) => ({ tabs: [...s.tabs, newTab], activeKey: key }));
+  },
   open: async (project: string, node: FsArborNode) => {
     if (node.kind !== "file") return;
 

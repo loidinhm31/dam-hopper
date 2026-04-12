@@ -14,6 +14,7 @@ import { useEditorStore } from "@/stores/editor.js";
 import { EditorTab } from "@/components/molecules/EditorTab.js";
 import { LargeFileViewer } from "@/components/organisms/LargeFileViewer.js";
 import { BinaryPreview } from "@/components/organisms/BinaryPreview.js";
+import { DiffViewer } from "@/components/organisms/DiffViewer.js";
 import { ConflictDialog } from "@/components/organisms/ConflictDialog.js";
 import { EditorStatusBar } from "@/components/organisms/EditorStatusBar.js";
 import { mimeToLanguage } from "@/lib/mime-to-language.js";
@@ -83,6 +84,15 @@ export function EditorTabs() {
             base64={activeTab.binaryBase64 ?? ""}
             fileName={activeTab.name}
             mime={activeTab.mime}
+          />
+        ) : activeTab.tier === "diff" ? (
+          <DiffViewer
+            project={activeTab.project}
+            filePath={activeTab.path}
+            fileStatus={activeTab.fileStatus ?? "modified"}
+            additions={activeTab.additions ?? 0}
+            deletions={activeTab.deletions ?? 0}
+            onClose={() => close(activeTab.key)}
           />
         ) : activeTab.tier === "large" ? (
           <LargeFileViewer
