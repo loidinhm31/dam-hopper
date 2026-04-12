@@ -44,9 +44,6 @@ pub struct AppState {
     /// Workspace-scoped filesystem subsystem (sandbox + watcher in Phase 02).
     /// Clone is cheap — Arc-backed.
     pub fs: FsSubsystem,
-    /// Captured from `config.features.ide_explorer` at startup — never changes
-    /// at runtime. Used for hard-gating route registration.
-    pub ide_explorer: bool,
 }
 
 impl AppState {
@@ -71,7 +68,6 @@ impl AppState {
         auth_token: String,
         fs: FsSubsystem,
     ) -> Self {
-        let ide_explorer = config.features.ide_explorer;
         Self {
             workspace_dir: Arc::new(RwLock::new(workspace_dir)),
             config: Arc::new(RwLock::new(config)),
@@ -83,7 +79,6 @@ impl AppState {
             auth_token: Arc::new(auth_token),
             ssh_creds: Arc::new(RwLock::new(None)),
             fs,
-            ide_explorer,
         }
     }
 }

@@ -35,7 +35,7 @@ fn make_state(tmp: &TempDir) -> AppState {
             terminals: vec![],
             agents: None,
         }],
-        features: FeaturesConfig { ide_explorer: true, ..Default::default() },
+        features: FeaturesConfig::default(),
         config_path: workspace_dir.join("dev-hub.toml"),
     };
     let (event_sink, _) = BroadcastEventSink::new(64);

@@ -89,10 +89,6 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Env override: DEV_HUB_IDE=1 enables IDE explorer regardless of TOML flag
-    if std::env::var("DEV_HUB_IDE").unwrap_or_default() == "1" {
-        config.features.ide_explorer = true;
-    }
 
     let gc_path = global_config_path();
     let global_config = read_global_config_at(&gc_path)

@@ -117,19 +117,14 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/settings/import", post(settings::import_settings))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
 
-    // IDE file explorer routes — only registered when feature flag is on.
-    // When off, any /api/fs/* request falls through to the SPA catch-all → 404.
-    let ide_routes = if state.ide_explorer {
-        Router::new()
-            .route("/api/fs/list", get(fs_api::list))
-            .route("/api/fs/read", get(fs_api::read))
-            .route("/api/fs/stat", get(fs_api::stat))
-            .route("/api/fs/download", get(fs_api::download))
-            .route("/api/fs/search", get(fs_api::search))
-            .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth))
-    } else {
-        Router::new()
-    };
+    // IDE file explorer routes.
+    let ide_routes = Router::new()
+        .route("/api/fs/list", get(fs_api::list))
+        .route("/api/fs/read", get(fs_api::read))
+        .route("/api/fs/stat", get(fs_api::stat))
+        .route("/api/fs/download", get(fs_api::download))
+        .route("/api/fs/search", get(fs_api::search))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
 
     Router::new()
         .merge(public)

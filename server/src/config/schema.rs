@@ -206,10 +206,6 @@ fn default_root() -> String {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FeaturesConfig {
-    /// Enable IDE-style file explorer + Monaco editor.
-    /// Also toggled via `DEV_HUB_IDE=1` env var.
-    #[serde(default)]
-    pub ide_explorer: bool,
 }
 
 // ──────────────────────────────────────────────

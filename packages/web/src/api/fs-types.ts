@@ -68,7 +68,6 @@ export interface HealthResponse {
   status: string;
   version: string;
   features: {
-    ide_explorer: boolean;
   };
 }
 
