@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use git2::{DiffOptions, Repository};
 
 use crate::error::AppError;
-use crate::git::types::{ConflictFile, DiffFileEntry, FileDiffContent, HunkInfo};
+use crate::git::types::{ConflictFile, DiffFileEntry, DiffResponse, FileDiffContent, HunkInfo, UNTRACKED_PAGE_SIZE};
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -147,10 +147,13 @@ fn extract_hunks(patch: &git2::Patch) -> Result<Vec<HunkInfo>, AppError> {
 
 /// List all changed files (staged + unstaged + untracked).
 ///
-/// A file modified both staged and unstaged appears twice — once with
-/// `staged: true` (index vs HEAD), once with `staged: false` (workdir vs index).
-/// Untracked files appear with `status: "added"` and `staged: false`.
-pub fn get_diff_files(project_path: &Path) -> Result<Vec<DiffFileEntry>, AppError> {
+/// Staged/unstaged tracked changes are always returned in full.
+/// Untracked files use `recurse_untracked_dirs: false` so large build
+/// artifact directories (e.g. `target/`, `node_modules/`) appear as a
+/// single directory entry rather than thousands of individual files.
+/// Entries are capped at `UNTRACKED_PAGE_SIZE`; use `get_untracked_page`
+/// to paginate beyond the cap.
+pub fn get_diff_files(project_path: &Path) -> Result<DiffResponse, AppError> {
     let repo = open_repo(project_path)?;
     let mut entries: Vec<DiffFileEntry> = Vec::new();
 
@@ -171,7 +174,56 @@ pub fn get_diff_files(project_path: &Path) -> Result<Vec<DiffFileEntry>, AppErro
         .map_err(|e| AppError::Git(e.message().to_string()))?;
     collect_diff_entries(&unstaged_diff, false, &mut entries)?;
 
-    // Untracked files (not yet `git add`ed, not ignored)
+    // Untracked files — directory-level to avoid enumerating large artifact dirs.
+    // `recurse_untracked_dirs: false` → shows `target/` as one entry, not 100K files.
+    let mut status_opts = git2::StatusOptions::new();
+    status_opts
+        .include_untracked(true)
+        .recurse_untracked_dirs(false)
+        .exclude_submodules(true)
+        .include_ignored(false);
+    let statuses = repo
+        .statuses(Some(&mut status_opts))
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
+
+    let mut untracked_total = 0usize;
+    for entry in statuses.iter() {
+        if entry.status().contains(git2::Status::WT_NEW) {
+            untracked_total += 1;
+            if untracked_total <= UNTRACKED_PAGE_SIZE {
+                if let Some(path) = entry.path() {
+                    entries.push(DiffFileEntry {
+                        path: path.to_string(),
+                        status: "added".to_string(),
+                        staged: false,
+                        additions: 0,
+                        deletions: 0,
+                        old_path: None,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(DiffResponse {
+        entries,
+        untracked_truncated: untracked_total > UNTRACKED_PAGE_SIZE,
+        untracked_total,
+    })
+}
+
+/// Paginate untracked files with full recursion.
+///
+/// Uses `recurse_untracked_dirs: true` to list individual files. Intended for
+/// use when the user explicitly requests more untracked files beyond the initial
+/// directory-level snapshot.
+pub fn get_untracked_page(
+    project_path: &Path,
+    offset: usize,
+    limit: usize,
+) -> Result<DiffResponse, AppError> {
+    let repo = open_repo(project_path)?;
+
     let mut status_opts = git2::StatusOptions::new();
     status_opts
         .include_untracked(true)
@@ -181,8 +233,17 @@ pub fn get_diff_files(project_path: &Path) -> Result<Vec<DiffFileEntry>, AppErro
     let statuses = repo
         .statuses(Some(&mut status_opts))
         .map_err(|e| AppError::Git(e.message().to_string()))?;
+
+    let mut untracked_total = 0usize;
+    let mut entries: Vec<DiffFileEntry> = Vec::new();
+
     for entry in statuses.iter() {
-        if entry.status().contains(git2::Status::WT_NEW) {
+        if !entry.status().contains(git2::Status::WT_NEW) {
+            continue;
+        }
+        let idx = untracked_total;
+        untracked_total += 1;
+        if idx >= offset && entries.len() < limit {
             if let Some(path) = entry.path() {
                 entries.push(DiffFileEntry {
                     path: path.to_string(),
@@ -196,7 +257,11 @@ pub fn get_diff_files(project_path: &Path) -> Result<Vec<DiffFileEntry>, AppErro
         }
     }
 
-    Ok(entries)
+    Ok(DiffResponse {
+        untracked_truncated: untracked_total > offset + limit,
+        untracked_total,
+        entries,
+    })
 }
 
 fn collect_diff_entries(

@@ -129,6 +129,24 @@ pub struct BranchUpdateResult {
 // Diff / change management types
 // ---------------------------------------------------------------------------
 
+/// Maximum untracked entries returned in the main diff response.
+/// Above this threshold entries are truncated and pagination is required.
+pub const UNTRACKED_PAGE_SIZE: usize = 500;
+
+/// Response envelope for the diff listing endpoint.
+///
+/// Staged/unstaged tracked changes are always returned in full.
+/// Untracked files are capped at `UNTRACKED_PAGE_SIZE` per request.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffResponse {
+    pub entries: Vec<DiffFileEntry>,
+    /// True when the untracked count exceeded `UNTRACKED_PAGE_SIZE`.
+    pub untracked_truncated: bool,
+    /// Total untracked count (exact if ≤ cap, capped at a scan limit otherwise).
+    pub untracked_total: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffFileEntry {

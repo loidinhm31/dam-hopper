@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { Tree } from "react-arborist";
 import type { NodeApi, NodeRendererProps } from "react-arborist";
 
@@ -34,7 +34,7 @@ import {
   Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
-import { useGitDiff, useGitStage, useGitUnstage, useGitDiscard, useGitCommit } from "@/api/queries.js";
+import { useGitDiff, useGitUntracked, useGitStage, useGitUnstage, useGitDiscard, useGitCommit } from "@/api/queries.js";
 import type { DiffFileEntry } from "@/api/client.js";
 import { useFsSubscription } from "@/hooks/useFsSubscription.js";
 import { useFsOps } from "@/hooks/useFsOps.js";
@@ -90,6 +90,7 @@ function NodeRenderer({
 
   const isDir = node.data.kind === "dir";
   const isHidden = node.data.name.startsWith(".");
+  const isLarge = !isDir && node.data.size > 5 * 1024 * 1024;
 
   return (
     <div
@@ -116,9 +117,15 @@ function NodeRenderer({
 
       <FileIcon name={node.data.name} isDir={isDir} isOpen={node.isOpen} />
 
-      <span className="truncate" title={node.data.name}>
+      <span className="truncate" title={isLarge ? `${node.data.name} — large file (read-only preview)` : node.data.name}>
         {node.data.name}
       </span>
+
+      {isLarge && (
+        <span className="ml-auto shrink-0 text-[10px] text-[var(--color-text-muted)] opacity-60">
+          {(node.data.size / (1024 * 1024)).toFixed(0)}MB
+        </span>
+      )}
     </div>
   );
 }
@@ -194,9 +201,20 @@ export function FileTree({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
-  const visibleNodes = showHidden
-    ? (data?.nodes ?? [])
-    : (data?.nodes ?? []).filter((n) => !n.name.startsWith("."));
+  const visibleNodes = useMemo(
+    () => showHidden
+      ? (data?.nodes ?? [])
+      : (data?.nodes ?? []).filter((n) => !n.name.startsWith(".")),
+    [data, showHidden],
+  );
+
+  // Stable reference — react-arborist uses this to build its internal flat list.
+  // Inline arrow function would cause a full list rebuild on every render.
+  const childrenAccessor = useCallback((d: FsArborNode) => {
+    if (d.kind !== "dir") return null;
+    if (d.children === null) return [loadingSentinel(d.id)];
+    return d.children;
+  }, []);
 
   function handleActivate(node: NodeApi<FsArborNode>) {
     if (isLoadingSentinel(node.data.id)) return;
@@ -452,11 +470,7 @@ export function FileTree({
           {data && (
             <Tree<FsArborNode>
               data={visibleNodes}
-              childrenAccessor={(d) => {
-                if (d.kind !== "dir") return null;
-                if (d.children === null) return [loadingSentinel(d.id)];
-                return d.children;
-              }}
+              childrenAccessor={childrenAccessor}
               openByDefault={false}
               onActivate={handleActivate}
               onMove={handleMove}
@@ -474,6 +488,7 @@ export function FileTree({
               disableEdit
               indent={16}
               rowHeight={24}
+              overscanCount={8}
               height={treeBodyHeight || undefined}
             >
               {(props) => (
@@ -853,6 +868,8 @@ function GitContextMenuPopover({
   );
 }
 
+const UNTRACKED_PAGE_SIZE = 500;
+
 export function ChangedFilesList({ project, selectedFile, onSelectFile }: ChangedFilesListProps) {
   const [commitMsg, setCommitMsg] = useState("");
   const [mutatingPaths, setMutatingPaths] = useState<Set<string>>(new Set());
@@ -862,16 +879,56 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
   const [changesOpen, setChangesOpen] = useState(true);
   const [unversionedOpen, setUnversionedOpen] = useState(true);
   const [commitSuccess, setCommitSuccess] = useState<string | null>(null);
+  const [untrackedPage, setUntrackedPage] = useState(0);
+  const [extraUntracked, setExtraUntracked] = useState<DiffFileEntry[]>([]);
 
-  const { data: files = [], isLoading, isError, refetch } = useGitDiff(project);
+  const { data, isLoading, isError, refetch } = useGitDiff(project);
   const stageMutation = useGitStage(project);
   const unstageMutation = useGitUnstage(project);
   const discardMutation = useGitDiscard(project);
   const commitMutation = useGitCommit(project);
 
-  const changedFiles = files.filter((f) => !(f.status === "added" && !f.staged));
-  const unversionedFiles = files.filter((f) => f.status === "added" && !f.staged);
-  const stagedCount = files.filter((f) => f.staged).length;
+  // Guard against stale cache holding old DiffFileEntry[] shape before response format changed
+  const isLegacyShape = Array.isArray(data);
+  const entries = isLegacyShape ? (data as unknown as DiffFileEntry[]) : (data?.entries ?? []);
+  const untrackedTruncated = isLegacyShape ? false : (data?.untrackedTruncated ?? false);
+  const untrackedTotal = isLegacyShape ? 0 : (data?.untrackedTotal ?? 0);
+
+  // Fetch next page of untracked files when user clicks "Load more"
+  const { data: nextPageData, isFetching: isLoadingMore } = useGitUntracked(
+    project,
+    (untrackedPage + 1) * UNTRACKED_PAGE_SIZE,
+    UNTRACKED_PAGE_SIZE,
+    untrackedTruncated && untrackedPage >= 0,
+  );
+
+  // Accumulate loaded pages; reset when project or base diff changes
+  useEffect(() => {
+    setExtraUntracked([]);
+    setUntrackedPage(0);
+  }, [project, data]);
+
+  useEffect(() => {
+    if (nextPageData && untrackedPage > 0) {
+      setExtraUntracked((prev) => {
+        const existingPaths = new Set(prev.map((f) => f.path));
+        const fresh = nextPageData.filter((f) => !existingPaths.has(f.path));
+        return [...prev, ...fresh];
+      });
+    }
+  }, [nextPageData, untrackedPage]);
+
+  const changedFiles = entries.filter((f) => !(f.status === "added" && !f.staged));
+  const unversionedFiles = [
+    ...entries.filter((f) => f.status === "added" && !f.staged),
+    ...extraUntracked,
+  ];
+  const stagedCount = entries.filter((f) => f.staged).length;
+  const hasMoreUntracked = untrackedTruncated && unversionedFiles.length < untrackedTotal;
+
+  function handleLoadMoreUntracked() {
+    setUntrackedPage((p) => p + 1);
+  }
 
   const trackMutating = useCallback((path: string) => {
     setMutatingPaths((p) => new Set([...p, path]));
@@ -1056,7 +1113,7 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
 
       {/* File list */}
       <div className="flex-1 overflow-y-auto">
-        {files.length === 0 ? (
+        {entries.length === 0 && !untrackedTruncated ? (
           <div className="flex flex-col items-center justify-center gap-1.5 py-8 text-[var(--color-text-muted)]">
             <span className="text-2xl opacity-20">✓</span>
             <span className="text-[11px]">No local changes</span>
@@ -1091,31 +1148,51 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
               </>
             )}
 
-            {unversionedFiles.length > 0 && (
+            {(unversionedFiles.length > 0 || untrackedTruncated) && (
               <>
                 <GitSectionHeader
                   label="Unversioned Files"
-                  count={unversionedFiles.length}
+                  count={untrackedTruncated ? untrackedTotal : unversionedFiles.length}
                   open={unversionedOpen}
                   onToggle={() => setUnversionedOpen((v) => !v)}
                   checkState="none"
                   onCheckAll={() => void handleStageAll(unversionedFiles.map((f) => f.path))}
                 />
-                {unversionedOpen && unversionedFiles.map((f) => (
-                  <GitFileRow
-                    key={f.path}
-                    entry={f}
-                    isSelected={selectedFile === f.path}
-                    checked={false}
-                    isMutating={mutatingPaths.has(f.path)}
-                    onSelect={() => onSelectFile(f.path, false)}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      setContextMenu({ x: e.clientX, y: e.clientY, entry: f, section: "unversioned" });
-                    }}
-                    onToggle={() => void handleStage(f.path)}
-                  />
-                ))}
+                {unversionedOpen && (
+                  <>
+                    {untrackedTruncated && (
+                      <div className="px-2 py-1.5 text-[10px] text-[var(--color-text-muted)] bg-[var(--color-surface-2)]/50 border-b border-[var(--color-border)]/40">
+                        Showing {unversionedFiles.length} of {untrackedTotal.toLocaleString()} unversioned files
+                      </div>
+                    )}
+                    {unversionedFiles.map((f) => (
+                      <GitFileRow
+                        key={f.path}
+                        entry={f}
+                        isSelected={selectedFile === f.path}
+                        checked={false}
+                        isMutating={mutatingPaths.has(f.path)}
+                        onSelect={() => onSelectFile(f.path, false)}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setContextMenu({ x: e.clientX, y: e.clientY, entry: f, section: "unversioned" });
+                        }}
+                        onToggle={() => void handleStage(f.path)}
+                      />
+                    ))}
+                    {hasMoreUntracked && (
+                      <button
+                        onClick={handleLoadMoreUntracked}
+                        disabled={isLoadingMore}
+                        className="w-full flex items-center justify-center gap-1.5 px-2 py-2 text-[10px] text-[var(--color-primary)] hover:bg-[var(--color-surface-2)] disabled:opacity-50 border-t border-[var(--color-border)]/40"
+                      >
+                        {isLoadingMore
+                          ? <><Loader2 className="h-3 w-3 animate-spin" /> Loading…</>
+                          : `Load ${Math.min(UNTRACKED_PAGE_SIZE, untrackedTotal - unversionedFiles.length).toLocaleString()} more`}
+                      </button>
+                    )}
+                  </>
+                )}
               </>
             )}
           </>

@@ -97,6 +97,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     set((s) => ({ tabs: [...s.tabs, placeholder], activeKey: key }));
 
+    // Skip network fetch for large files — LargeFileViewer handles chunked range reads.
+    if (optimisticTier === "large") {
+      set((s) => ({
+        tabs: s.tabs.map((t) => (t.key === key ? { ...t, loading: false } : t)),
+      }));
+      return;
+    }
+
     try {
       const result = await transport().fsRead(project, node.id);
 

@@ -74,10 +74,14 @@ impl FsWatcherManager {
             },
         )?;
 
-        // In notify-debouncer-full 0.4, Debouncer implements Watcher directly.
+        // Non-recursive: only watch the immediate directory.
+        // Recursive mode traverses every subdirectory to set up inotify watches,
+        // which is catastrophically slow for large workspaces (e.g. Rust `target/`
+        // with millions of files). The client's delta logic (applyFsDelta) only
+        // operates on depth-1 nodes anyway, so deep events would be no-ops.
         {
             let mut d = debouncer;
-            d.watch(root, notify::RecursiveMode::Recursive)?;
+            d.watch(root, notify::RecursiveMode::NonRecursive)?;
 
             let rx = tx.subscribe();
             map.insert(

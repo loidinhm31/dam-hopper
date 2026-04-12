@@ -79,6 +79,12 @@ export function DiffViewer({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
   const diffEditorRef = useRef<monacoNs.editor.IStandaloneDiffEditor | null>(null);
+  const editorContainerRef = useRef<HTMLDivElement>(null);
+  // Saved model refs so we can dispose them ourselves (keepCurrentModels=true).
+  const modelsRef = useRef<{
+    original: monacoNs.editor.ITextModel | null;
+    modified: monacoNs.editor.ITextModel | null;
+  }>({ original: null, modified: null });
   // Snapshot of content at last load/save — source of truth for dirty detection.
   // Avoids false-dirty when data refetches between an edit and a save.
   const savedContentRef = useRef<string>("");
@@ -123,10 +129,36 @@ export function DiffViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDirty, saveState]); // re-bind when save eligibility changes
 
+  // Dispose models and ResizeObserver when the component unmounts.
+  // keepCurrentModels=true prevents @monaco-editor/react from disposing models that
+  // Monaco's DiffEditorWidget may have already disposed, which causes the
+  // "TextModel got disposed before DiffEditorWidget model got reset" crash.
+  useEffect(() => {
+    return () => {
+      const editor = diffEditorRef.current;
+      if (editor) {
+        (editor as unknown as { _roCleanup?: () => void })._roCleanup?.();
+      }
+      // Defer model disposal so Monaco's own editor cleanup runs first.
+      const { original, modified } = modelsRef.current;
+      requestAnimationFrame(() => {
+        if (original && !original.isDisposed()) original.dispose();
+        if (modified && !modified.isDisposed()) modified.dispose();
+      });
+    };
+  }, []);
+
   const handleMount = useCallback(
     (editor: monacoNs.editor.IStandaloneDiffEditor) => {
       diffEditorRef.current = editor;
       const modifiedEditor = editor.getModifiedEditor();
+
+      // Save model refs for manual disposal on unmount.
+      const model = editor.getModel();
+      if (model) {
+        modelsRef.current.original = model.original;
+        modelsRef.current.modified = model.modified;
+      }
 
       // Capture baseline on mount — this is the working-copy content from the API
       savedContentRef.current = modifiedEditor.getValue();
@@ -135,8 +167,15 @@ export function DiffViewer({
         const current = modifiedEditor.getValue();
         setIsDirty(current !== savedContentRef.current);
       });
+
+      // Manual ResizeObserver layout instead of automaticLayout polling.
+      const container = editorContainerRef.current;
+      if (container) {
+        const ro = new ResizeObserver(() => { editor.layout(); });
+        ro.observe(container);
+        (editor as unknown as { _roCleanup?: () => void })._roCleanup = () => ro.disconnect();
+      }
     },
-    // No data dep — we read savedContentRef at mount time from the model value
     [],
   );
 
@@ -343,13 +382,14 @@ export function DiffViewer({
       )}
 
       {/* Monaco DiffEditor */}
-      <div className="flex-1 overflow-hidden">
+      <div ref={editorContainerRef} className="flex-1 overflow-hidden">
         <DiffEditor
           original={data.original ?? ""}
           modified={isDeleted ? "" : (data.modified ?? "")}
           language={data.language}
           theme="vs-dark"
           onMount={handleMount}
+          keepCurrentModels={true}
           options={{
             renderSideBySide: sideBySide,
             originalEditable: false,
@@ -361,7 +401,7 @@ export function DiffViewer({
             fontFamily: "JetBrains Mono, Fira Code, Cascadia Code, monospace",
             minimap: { enabled: false },
             scrollBeyondLastLine: false,
-            automaticLayout: true,
+            automaticLayout: false,
             lineNumbers: "on",
             wordWrap: "off",
           }}

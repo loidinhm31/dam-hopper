@@ -9,6 +9,7 @@ import type {
   DistributionMethod,
   RepoScanItem,
   DiffFileEntry,
+  DiffResponse,
   FileDiffContent,
   ConflictFile,
   UiConfig,
@@ -189,10 +190,19 @@ export function useUpdateProject() {
 // ── Git Diff / Change Management ──────────────────────────────────────────────
 
 export function useGitDiff(project: string) {
-  return useQuery<DiffFileEntry[]>({
+  return useQuery<DiffResponse>({
     queryKey: ["git-diff", project],
     queryFn: () => api.git.diff(project),
     enabled: !!project,
+    staleTime: 0,
+  });
+}
+
+export function useGitUntracked(project: string, offset: number, limit: number, enabled: boolean) {
+  return useQuery<DiffFileEntry[]>({
+    queryKey: ["git-untracked", project, offset, limit],
+    queryFn: () => api.git.untrackedFiles(project, offset, limit),
+    enabled: !!project && enabled,
     staleTime: 0,
   });
 }

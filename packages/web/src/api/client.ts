@@ -225,6 +225,12 @@ export interface DiffFileEntry {
   oldPath?: string;
 }
 
+export interface DiffResponse {
+  entries: DiffFileEntry[];
+  untrackedTruncated: boolean;
+  untrackedTotal: number;
+}
+
 export interface HunkInfo {
   index: number;
   oldStart: number;
@@ -300,7 +306,9 @@ export const api = {
     updateBranch: (project: string, branch?: string) =>
       getTransport().invoke<GitOpResult[]>("git:updateBranch", { project, branch }),
     diff: (project: string) =>
-      getTransport().invoke<DiffFileEntry[]>("git:diff", { project }),
+      getTransport().invoke<DiffResponse>("git:diff", { project }),
+    untrackedFiles: (project: string, offset: number, limit: number) =>
+      getTransport().invoke<DiffFileEntry[]>("git:untrackedFiles", { project, offset, limit }),
     fileDiff: (project: string, path: string) =>
       getTransport().invoke<FileDiffContent>("git:fileDiff", { project, path }),
     stage: (project: string, paths: string[]) =>

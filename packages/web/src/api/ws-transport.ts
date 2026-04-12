@@ -218,6 +218,11 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
       const d = data as { project: string };
       return { method: "GET", url: `/api/git/${encodeURIComponent(d.project)}/diff` };
     }
+    case "git:untrackedFiles": {
+      const d = data as { project: string; offset: number; limit: number };
+      const params = new URLSearchParams({ offset: String(d.offset), limit: String(d.limit) });
+      return { method: "GET", url: `/api/git/${encodeURIComponent(d.project)}/untracked?${params}` };
+    }
     case "git:fileDiff": {
       const d = data as { project: string; path: string };
       const params = new URLSearchParams({ path: d.path });

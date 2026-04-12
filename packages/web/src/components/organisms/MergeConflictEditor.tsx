@@ -172,12 +172,29 @@ export function MergeConflictEditor({
     isSyncing.current = false;
   }, []);
 
+  function attachResizeObserver(editor: monacoNs.editor.IStandaloneCodeEditor) {
+    const container = editor.getDomNode()?.parentElement;
+    if (!container) return;
+    const ro = new ResizeObserver(() => { editor.layout(); });
+    ro.observe(container);
+    (editor as unknown as { _roCleanup?: () => void })._roCleanup = () => ro.disconnect();
+  }
+
+  useEffect(() => {
+    return () => {
+      for (const ref of [theirsEditorRef, resultEditorRef, oursEditorRef]) {
+        (ref.current as unknown as { _roCleanup?: () => void } | null)?._roCleanup?.();
+      }
+    };
+  }, []);
+
   const handleTheirsMount: OnMount = useCallback((editor, monaco) => {
     theirsEditorRef.current = editor;
     if (!monacoRef.current) monacoRef.current = monaco;
     editor.onDidScrollChange((e) => {
       if (!isSyncing.current) syncScroll(e.scrollTop);
     });
+    attachResizeObserver(editor);
   }, [syncScroll]);
 
   const handleResultMount: OnMount = useCallback((editor, monaco) => {
@@ -194,6 +211,7 @@ export function MergeConflictEditor({
     editor.onDidScrollChange((e) => {
       if (!isSyncing.current) syncScroll(e.scrollTop);
     });
+    attachResizeObserver(editor);
   }, [syncScroll]);
 
   const handleOursMount: OnMount = useCallback((editor, monaco) => {
@@ -202,6 +220,7 @@ export function MergeConflictEditor({
     editor.onDidScrollChange((e) => {
       if (!isSyncing.current) syncScroll(e.scrollTop);
     });
+    attachResizeObserver(editor);
   }, [syncScroll]);
 
   // Apply decorations to result editor when conflict regions change
@@ -334,7 +353,7 @@ export function MergeConflictEditor({
     fontFamily: "JetBrains Mono, Fira Code, Cascadia Code, monospace",
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
-    automaticLayout: true,
+    automaticLayout: false,
     lineNumbers: "on",
     wordWrap: "off",
     theme: "vs-dark",

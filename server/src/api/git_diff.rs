@@ -23,11 +23,37 @@ pub async fn list_diff(
     Path(project): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = state.project_path(&project).await.map_err(ApiError::from_app)?;
-    let entries = tokio::task::spawn_blocking(move || git::get_diff_files(&path))
+    let resp = tokio::task::spawn_blocking(move || git::get_diff_files(&path))
         .await
         .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
         .map_err(ApiError::from_app)?;
-    Ok(Json(entries))
+    Ok(Json(resp))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/git/{project}/untracked?offset=0&limit=500  — paginate untracked
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct UntrackedQuery {
+    #[serde(default)]
+    pub offset: usize,
+    pub limit: Option<usize>,
+}
+
+pub async fn list_untracked(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    Query(q): Query<UntrackedQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = state.project_path(&project).await.map_err(ApiError::from_app)?;
+    let limit = q.limit.unwrap_or(git::UNTRACKED_PAGE_SIZE);
+    let offset = q.offset;
+    let resp = tokio::task::spawn_blocking(move || git::get_untracked_page(&path, offset, limit))
+        .await
+        .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+        .map_err(ApiError::from_app)?;
+    Ok(Json(resp))
 }
 
 // ---------------------------------------------------------------------------

@@ -65,6 +65,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/git/{project}/branches/update", post(git::update_branch_route))
         // Git diff / change management
         .route("/api/git/{project}/diff", get(git_diff::list_diff))
+        .route("/api/git/{project}/untracked", get(git_diff::list_untracked))
         .route("/api/git/{project}/diff/file", get(git_diff::get_file_diff))
         .route("/api/git/{project}/stage", post(git_diff::stage))
         .route("/api/git/{project}/unstage", post(git_diff::unstage))

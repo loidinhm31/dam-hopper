@@ -33,17 +33,35 @@ import { useTerminalManager } from "@/hooks/useTerminalManager.js";
 import { api } from "@/api/client.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 
+const ACTIVE_PROJECT_KEY = "devhub:active-project";
+
 export default function WorkspacePage() {
   const ideEnabled = useFeatureFlag("ide_explorer");
   const [searchParams, setSearchParams] = useSearchParams();
-  const [activeProject, setActiveProject] = useState<string | null>(null);
+  const [activeProject, setActiveProjectState] = useState<string | null>(
+    () => localStorage.getItem(ACTIVE_PROJECT_KEY),
+  );
   const [leftTab, setLeftTab] = useState<SidebarTab>(ideEnabled ? "files" : "terminals");
+
+  function setActiveProject(name: string | null) {
+    setActiveProjectState(name);
+    if (name) localStorage.setItem(ACTIVE_PROJECT_KEY, name);
+    else localStorage.removeItem(ACTIVE_PROJECT_KEY);
+  }
   const openFile = useEditorStore((s) => s.open);
 
   const { data: projects = [] } = useQuery({
     queryKey: ["projects"],
     queryFn: () => api.projects.list(),
   });
+
+  // Validate persisted project still exists in the current workspace.
+  useEffect(() => {
+    if (projects.length === 0) return;
+    if (activeProject && !projects.some((p) => p.name === activeProject)) {
+      setActiveProject(null);
+    }
+  }, [projects, activeProject]);
 
   const { state, derived, actions } = useTerminalManager(searchParams, setSearchParams);
   const { openTabs, activeTab, mountedSessions, launchForm, savePrompt, freeTerminalSavePrompt, selection } = state;

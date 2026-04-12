@@ -84,6 +84,15 @@ export function MonacoHost({
         if (vs) onViewStateChange(vs);
       });
 
+      // ResizeObserver layout — avoids automaticLayout's internal polling overhead.
+      const editorDomNode = editor.getDomNode();
+      const layoutContainer = editorDomNode?.parentElement;
+      if (layoutContainer) {
+        const ro = new ResizeObserver(() => { editor.layout(); });
+        ro.observe(layoutContainer);
+        (editor as unknown as { _roCleanup?: () => void })._roCleanup = () => ro.disconnect();
+      }
+
       // Ctrl+Shift+Wheel → zoom editor font (custom handler; Monaco's mouseWheelZoom only handles Ctrl)
       const domNode = editor.getDomNode();
       if (domNode) {
@@ -120,9 +129,9 @@ export function MonacoHost({
     return () => {
       unsub();
       onEditorReady?.(null);
-      // Clean up wheel listener attached in handleMount
       const ed = editorRef.current;
       if (ed) {
+        (ed as unknown as { _roCleanup?: () => void })._roCleanup?.();
         (ed as unknown as { _wheelCleanup?: () => void })._wheelCleanup?.();
       }
     };
@@ -150,7 +159,7 @@ export function MonacoHost({
         wordWrap: "off",
         renderWhitespace: "selection",
         tabSize: 2,
-        automaticLayout: true,
+        automaticLayout: false,
         readOnly: false,
       }}
     />
