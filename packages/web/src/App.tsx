@@ -5,6 +5,7 @@ import { DashboardPage } from "@/components/pages/DashboardPage.js";
 import { GitPage } from "@/components/pages/GitPage.js";
 import { SettingsPage } from "@/components/pages/SettingsPage.js";
 import { AgentStorePage } from "@/components/pages/AgentStorePage.js";
+import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
 import { getTransport } from "@/api/transport.js";
 import { useSettingsStore } from "@/stores/settings.js";
 
@@ -63,21 +64,23 @@ export function App() {
     <BrowserRouter basename={import.meta.env.BASE_URL}>
       <GlobalShortcuts />
       <Routes>
-        <Route path="/" element={<DashboardPage />} />
+        <Route path="/" element={<ErrorBoundary><DashboardPage /></ErrorBoundary>} />
         <Route
           path="/workspace"
           element={
-            <Suspense fallback={LOADING_FALLBACK}>
-              <WorkspacePage />
-            </Suspense>
+            <ErrorBoundary>
+              <Suspense fallback={LOADING_FALLBACK}>
+                <WorkspacePage />
+              </Suspense>
+            </ErrorBoundary>
           }
         />
         {/* Backward-compat redirects — preserve search params for deep-links */}
         <Route path="/terminals" element={<LegacyRedirect to="/workspace" />} />
         <Route path="/ide" element={<LegacyRedirect to="/workspace" />} />
-        <Route path="/git" element={<GitPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/agent-store" element={<AgentStorePage />} />
+        <Route path="/git" element={<ErrorBoundary><GitPage /></ErrorBoundary>} />
+        <Route path="/settings" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />
+        <Route path="/agent-store" element={<ErrorBoundary><AgentStorePage /></ErrorBoundary>} />
       </Routes>
     </BrowserRouter>
   );

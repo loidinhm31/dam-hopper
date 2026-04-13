@@ -19,7 +19,9 @@ use futures_util::SinkExt;
 
 use crate::api::auth::AUTH_COOKIE;
 use crate::api::ws_protocol::{ClientMsg, FsEventDto, ServerMsg, WireMsg};
-use crate::fs::{atomic_write_with_check, mutate, ops, tree_snapshot_sync, UploadState, MAX_UPLOAD_BYTES};
+use crate::fs::{
+    atomic_persist_with_check, mutate, ops, tree_snapshot_sync, UploadState, MAX_UPLOAD_BYTES,
+};
 use crate::state::AppState;
 
 /// Bounded per-connection outbound channel.
@@ -45,10 +47,12 @@ struct WriteInFlight {
     expected_mtime: i64,
     /// Declared total size from write_begin — enforced as per-session cap.
     declared_size: u64,
-    /// Accumulated chunk bytes in order.
-    buf: Vec<u8>,
     /// Next expected seq number (monotonic validation).
     next_seq: u32,
+    /// Temporary file co-located with the target.
+    temp: tempfile::NamedTempFile,
+    /// Total bytes written to the temp file.
+    bytes_written: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -126,8 +130,13 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
     // In-flight upload sessions: upload_id → UploadState
     let mut uploads: HashMap<String, UploadState> = HashMap::new();
-    // Pending binary frame correlation: set by fs:upload_chunk JSON header
-    let mut pending_binary: Option<(String, u64)> = None; // (upload_id, seq)
+
+    enum PendingBinary {
+        Upload { upload_id: String, seq: u64 },
+        Write { write_id: u64, seq: u32 },
+    }
+    // Pending binary frame correlation: set by fs:upload_chunk or fs:write_chunk_binary
+    let mut pending_binary: Option<PendingBinary> = None;
 
     // Reader loop
     while let Some(msg) = ws_rx.next().await {
@@ -136,12 +145,18 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             Err(_) => break,
         };
 
-        // Handle binary frames for upload chunks
+        // Handle binary frames for upload chunks and binary write chunks
         if let Message::Binary(bytes) = msg {
-            if let Some((upload_id, seq)) = pending_binary.take() {
-                handle_upload_binary(&upload_id, seq, bytes.as_ref(), &mut uploads, &out_tx).await;
-            } else {
-                warn!("unexpected binary frame (no pending upload_chunk header) — dropping");
+            match pending_binary.take() {
+                Some(PendingBinary::Upload { upload_id, seq }) => {
+                    handle_upload_binary(&upload_id, seq, bytes.as_ref(), &mut uploads, &out_tx).await;
+                }
+                Some(PendingBinary::Write { write_id, seq }) => {
+                    handle_write_binary(write_id, seq, bytes.as_ref(), &mut writes, &out_tx).await;
+                }
+                None => {
+                    warn!("unexpected binary frame (no pending header) — dropping");
+                }
             }
             continue;
         }
@@ -221,7 +236,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // -----------------------------------------------------------
             // FS — write begin
             // -----------------------------------------------------------
-            ClientMsg::FsWriteBegin { req_id, project, path, expected_mtime, size } => {
+            ClientMsg::FsWriteBegin { req_id, project, path, expected_mtime, size, encoding: _ } => {
                 if size > FS_WRITE_MAX {
                     send_fs_error(&out_tx, req_id, "TOO_LARGE".into(),
                         format!("write size {} exceeds {FS_WRITE_MAX} byte cap", size)).await;
@@ -232,13 +247,24 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 match abs_result {
                     Err((code, msg)) => send_fs_error(&out_tx, req_id, code, msg).await,
                     Ok(abs_path) => {
+                        let parent = abs_path.parent().unwrap_or(&abs_path);
+                        let temp = match tempfile::NamedTempFile::new_in(parent) {
+                            Ok(t) => t,
+                            Err(e) => {
+                                warn!(req_id, error = %e, "fs:write_begin: tempfile creation failed");
+                                send_fs_error(&out_tx, req_id, "IO_ERROR".into(), e.to_string()).await;
+                                continue;
+                            }
+                        };
+
                         let write_id = next_write_id;
                         next_write_id += 1;
                         writes.insert(write_id, WriteInFlight {
                             abs_path,
                             expected_mtime,
                             declared_size: size,
-                            buf: Vec::with_capacity(size as usize),
+                            temp,
+                            bytes_written: 0,
                             next_seq: 0,
                         });
                         let ack = ServerMsg::FsWriteAck { req_id, write_id };
@@ -270,16 +296,19 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
                 match BASE64.decode(&data) {
                     Ok(bytes) => {
-                        // Enforce declared size cap per-chunk: rejects clients that
-                        // bypass the write_begin size check by sending extra chunks.
-                        let accumulated = entry.buf.len() as u64 + bytes.len() as u64;
-                        if accumulated > entry.declared_size.max(FS_WRITE_MAX) {
+                        let accumulated = entry.bytes_written + bytes.len() as u64;
+                        if accumulated > entry.declared_size {
                             warn!(write_id, accumulated, declared = entry.declared_size,
                                 "write_chunk exceeds declared size — aborting write");
                             writes.remove(&write_id);
                             continue;
                         }
-                        entry.buf.write_all(&bytes).ok();
+                        if let Err(e) = entry.temp.write_all(&bytes) {
+                            warn!(write_id, error = %e, "write_chunk: tempfile write failed — aborting write");
+                            writes.remove(&write_id);
+                            continue;
+                        }
+                        entry.bytes_written = accumulated;
                         entry.next_seq += 1;
                     }
                     Err(e) => {
@@ -289,12 +318,33 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }
                 }
 
-                let _ = eof; // eof flag is informational; commit message is authoritative
+                let _ = eof;
 
                 let ack = ServerMsg::FsWriteChunkAck { write_id, seq };
                 if let Ok(json) = serde_json::to_string(&ack) {
                     let _ = out_tx.send(WireMsg::Text(json)).await;
                 }
+            }
+
+            // -----------------------------------------------------------
+            // FS — write chunk binary (binary frame follows)
+            // -----------------------------------------------------------
+            ClientMsg::FsWriteChunkBinary { write_id, seq } => {
+                let entry = match writes.get(&write_id) {
+                    Some(e) => e,
+                    None => {
+                        warn!(write_id, "fs:write_chunk_binary for unknown write_id — dropping");
+                        continue;
+                    }
+                };
+
+                if seq != entry.next_seq {
+                    warn!(write_id, seq, expected = entry.next_seq, "out-of-order binary chunk — aborting write");
+                    writes.remove(&write_id);
+                    continue;
+                }
+
+                pending_binary = Some(PendingBinary::Write { write_id, seq });
             }
 
             // -----------------------------------------------------------
@@ -319,10 +369,27 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }
                 };
 
-                let write_result = atomic_write_with_check(
+                // Integrity check: must have written exactly the declared size.
+                if entry.bytes_written != entry.declared_size {
+                    warn!(write_id, written = entry.bytes_written, declared = entry.declared_size,
+                        "fs:write_commit: bytes_written != declared_size — rejecting");
+                    let result_msg = ServerMsg::FsWriteResult {
+                        write_id,
+                        ok: false,
+                        new_mtime: None,
+                        conflict: false,
+                        error: Some(format!("incomplete write: sent {} of {} bytes", entry.bytes_written, entry.declared_size)),
+                    };
+                    if let Ok(json) = serde_json::to_string(&result_msg) {
+                        let _ = out_tx.send(WireMsg::Text(json)).await;
+                    }
+                    continue;
+                }
+
+                let write_result = atomic_persist_with_check(
                     &entry.abs_path,
                     entry.expected_mtime,
-                    &entry.buf,
+                    entry.temp,
                     false, // fsync off by default
                 )
                 .await;
@@ -414,7 +481,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     continue;
                 }
                 // Store the pending correlation; binary frame handler will pick it up.
-                pending_binary = Some((upload_id, seq));
+                pending_binary = Some(PendingBinary::Upload { upload_id, seq });
             }
 
             // -----------------------------------------------------------
@@ -760,6 +827,49 @@ async fn handle_upload_binary(
             warn!(upload_id, seq, error = %e, "upload chunk rejected — aborting upload");
             uploads.remove(upload_id);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Write binary frame handler
+// ---------------------------------------------------------------------------
+
+async fn handle_write_binary(
+    write_id: u64,
+    seq: u32,
+    data: &[u8],
+    writes: &mut HashMap<u64, WriteInFlight>,
+    out_tx: &mpsc::Sender<WireMsg>,
+) {
+    let entry = match writes.get_mut(&write_id) {
+        Some(e) => e,
+        None => {
+            warn!(write_id, seq, "binary frame: write session not found — dropping");
+            return;
+        }
+    };
+
+    // Note: seq check already done in FsWriteChunkBinary handler to set pending_binary
+    let accumulated = entry.bytes_written + data.len() as u64;
+    if accumulated > entry.declared_size {
+        warn!(write_id, accumulated, declared = entry.declared_size,
+            "binary write_chunk exceeds declared size — aborting write");
+        writes.remove(&write_id);
+        return;
+    }
+
+    if let Err(e) = entry.temp.write_all(data) {
+        warn!(write_id, error = %e, "binary write_chunk: tempfile write failed — aborting write");
+        writes.remove(&write_id);
+        return;
+    }
+
+    entry.bytes_written = accumulated;
+    entry.next_seq += 1;
+
+    let ack = ServerMsg::FsWriteChunkAck { write_id, seq };
+    if let Ok(json) = serde_json::to_string(&ack) {
+        let _ = out_tx.send(WireMsg::Text(json)).await;
     }
 }
 

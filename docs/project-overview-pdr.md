@@ -219,8 +219,9 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Mtime-guarded atomic writes (conflict detection)
 - ✓ ConflictDialog (overwrite or reload on concurrent edits)
 - ✓ LargeFileViewer (range reads), BinaryPreview (hex dump)
+- ✓ **Binary Streaming Optimization for Large Files (2026-04-14)**
 
-### Phase 05: Write Operations (Planned)
+### Phase 05: Write Operations (In Progress)
 - [ ] Create file/directory
 - [ ] Delete file/directory
 - [ ] Move/rename operations
@@ -272,6 +273,6 @@ Workspace: toml
 | 01 | IDE File Explorer | ✓ Complete |
 | 02 | File Watcher + WS subscription | ✓ Complete |
 | 03 | IDE Shell (layout + tree) | ✓ Complete |
-| 04 | Monaco Editor + Save | ✓ Complete (2026-04-09) |
-| 05 | Create/delete/move/rename | Planned |
+| 04 | Monaco Editor + Save | ✓ Complete (2026-04-14) |
+| 05 | Create/delete/move/rename | In Progress |
 | 06+ | Advanced features (git UI, AI) | Future |

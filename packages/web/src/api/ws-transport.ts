@@ -816,25 +816,34 @@ export class WsTransport implements Transport {
     const bytes = encoder.encode(content);
     const size = bytes.length;
 
-    // 1. write_begin → get write_id
-    const writeId = await this.sendWriteBegin(project, path, expectedMtime, size);
+    // 1. write_begin → get write_id (using binary encoding)
+    const writeId = await this.sendWriteBegin(project, path, expectedMtime, size, "binary");
 
-    // 2. Chunk the content and send each chunk
+    // 2. Chunk the content and send each chunk as binary
     let seq = 0;
     let offset = 0;
+    const inFlight: Array<Promise<void>> = [];
+    const WINDOW_SIZE = 4;
+
     while (offset < bytes.length) {
       const chunk = bytes.slice(offset, offset + WRITE_CHUNK_SIZE);
       offset += chunk.length;
-      const eof = offset >= bytes.length;
-      const b64 = btoa(String.fromCharCode(...chunk));
-      await this.sendWriteChunk(writeId, seq, eof, b64);
+
+      const ack = this.sendWriteChunkBinary(writeId, seq, chunk);
+      inFlight.push(ack);
       seq++;
+
+      if (inFlight.length >= WINDOW_SIZE) {
+        await inFlight.shift()!;
+      }
     }
 
     // Handle empty file edge case
     if (bytes.length === 0) {
-      await this.sendWriteChunk(writeId, 0, true, "");
+      await this.sendWriteChunkBinary(writeId, 0, new Uint8Array(0));
     }
+
+    await Promise.all(inFlight);
 
     // 3. Commit
     return this.sendWriteCommit(writeId);
@@ -845,6 +854,7 @@ export class WsTransport implements Transport {
     path: string,
     expectedMtime: number,
     size: number,
+    encoding?: "base64" | "binary",
   ): Promise<number> {
     return new Promise((resolve, reject) => {
       const req_id = this.nextReqId++;
@@ -861,6 +871,7 @@ export class WsTransport implements Transport {
           path,
           expected_mtime: expectedMtime,
           size,
+          encoding,
         }));
       } else {
         clearTimeout(timer);
@@ -888,6 +899,33 @@ export class WsTransport implements Transport {
       });
       if (this.ws?.readyState === WebSocket.OPEN) {
         this.ws.send(JSON.stringify({ kind: "fs:write_chunk", write_id: writeId, seq, eof, data }));
+      } else {
+        clearTimeout(timer);
+        this.pendingWriteChunks.delete(key);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  private sendWriteChunkBinary(
+    writeId: number,
+    seq: number,
+    data: Uint8Array,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const key = `${writeId}:${seq}`;
+      const timer = setTimeout(() => {
+        this.pendingWriteChunks.delete(key);
+        reject(new Error(`binary chunk ack timeout (write_id=${writeId}, seq=${seq})`));
+      }, 30_000);
+      this.pendingWriteChunks.set(key, {
+        resolve: () => { clearTimeout(timer); resolve(); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        // JSON header first, then binary frame
+        this.ws.send(JSON.stringify({ kind: "fs:write_chunk_binary", write_id: writeId, seq }));
+        this.ws.send(data.buffer);
       } else {
         clearTimeout(timer);
         this.pendingWriteChunks.delete(key);
