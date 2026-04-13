@@ -42,21 +42,29 @@ Afterward, server pushes: `fs:event { sub_id, event: { kind, path, from? } }` on
 - `data` is base64 (text or binary)
 - If `ok=false`, check `code` (e.g., "NOT_FOUND", "TOO_LARGE")
 
-### File System — Write (Phase 04)
+### File System — Write (Phase 04/05)
 
-Three messages in sequence:
+Binary streaming support added for large file handling.
 
 | Command | Payload | Response |
 |---------|---------|----------|
-| `fs:write_begin` | `req_id, project, path, expected_mtime, size` | `fs:write_ack { req_id, write_id }` |
+| `fs:write_begin` | `req_id, project, path, expected_mtime, size, encoding?` | `fs:write_ack { req_id, write_id }` |
 | `fs:write_chunk` | `write_id, seq, eof, data` | `fs:write_chunk_ack { write_id, seq }` |
+| `fs:write_chunk_binary` | `write_id, seq, eof, size` (follows raw binary) | `fs:write_chunk_ack { write_id, seq }` |
 | `fs:write_commit` | `write_id` | `fs:write_result { write_id, ok, new_mtime?, conflict, error? }` |
 
+**Protocol Flow:**
+1. `fs:write_begin`: Initializes session. `encoding` ("base64" | "binary") defaults to base64.
+2. **Chunking**:
+   - If `encoding="base64"`: Send `fs:write_chunk` with base64-encoded `data`.
+   - If `encoding="binary"`: Send `fs:write_chunk_binary` header, followed by the raw binary frame.
+3. `fs:write_commit`: Finalizes.
+
 **Key details:**
-- `expected_mtime` on begin guards against concurrent modification (mtime must match)
-- `size` is total bytes being written (server cap check)
-- Chunks are base64-encoded; empty files send single chunk with `data=""`, `eof=true`
-- On conflict: `conflict=true`, client retries with fresh mtime or reloads
+- `expected_mtime`: Guards against concurrent modifications (Optimistic Concurrency Control).
+- `size`: Total bytes declared; must match exactly at commit time.
+- On conflict: `conflict=true`, client must retry with fresh mtime.
+- Orphaned writes cleaned up after timeout.
 
 ## Server→Client Messages
 

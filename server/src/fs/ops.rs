@@ -253,6 +253,55 @@ pub async fn atomic_write_with_check(
     Ok(new_mtime)
 }
 
+/// Atomically persist a `NamedTempFile` to `abs`, guarded by mtime check.
+///
+/// 1. Stats `abs`; if mtime ≠ `expected_mtime` returns `FsError::Conflict`.
+/// 2. Persists the temp file; optionally fsyncs.
+/// 3. Returns the new mtime (Unix seconds).
+pub async fn atomic_persist_with_check(
+    abs: &Path,
+    expected_mtime: i64,
+    temp: tempfile::NamedTempFile,
+    fsync: bool,
+) -> Result<i64, FsError> {
+    // Mtime guard — stat the current file
+    let meta = fs::metadata(abs).await.map_err(map_io)?;
+    let current_mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    if current_mtime != expected_mtime {
+        return Err(FsError::Conflict);
+    }
+
+    tokio::task::spawn_blocking({
+        let abs = abs.to_path_buf();
+        move || -> Result<(), FsError> {
+            if fsync {
+                temp.as_file().sync_data().map_err(FsError::Io)?;
+            }
+            temp.persist(&abs).map_err(|e| FsError::Io(e.error))?;
+            Ok(())
+        }
+    })
+    .await
+    .map_err(|e| FsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))??;
+
+    // Stat again for the real new mtime
+    let new_meta = fs::metadata(abs).await.map_err(map_io)?;
+    let new_mtime = new_meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    Ok(new_mtime)
+}
+
 pub const MAX_WORKSPACE_SEARCH_RESULTS: usize = 500;
 
 /// Search across multiple project roots in parallel (max 4 concurrent blocking tasks).

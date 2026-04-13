@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { createElement } from "react";
 import { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";

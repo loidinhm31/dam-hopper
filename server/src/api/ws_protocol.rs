@@ -48,6 +48,9 @@ pub enum ClientMsg {
         expected_mtime: i64,
         /// Total byte size of the content being written (used for cap check).
         size: u64,
+        /// Optional encoding: "base64" (default) or "binary".
+        #[serde(default)]
+        encoding: Option<String>,
     },
     #[serde(rename = "fs:write_chunk")]
     FsWriteChunk {
@@ -56,6 +59,12 @@ pub enum ClientMsg {
         eof: bool,
         /// Base64-encoded chunk bytes.
         data: String,
+    },
+    /// JSON header for a write chunk; raw bytes arrive in the NEXT binary WS frame.
+    #[serde(rename = "fs:write_chunk_binary")]
+    FsWriteChunkBinary {
+        write_id: u64,
+        seq: u32,
     },
     #[serde(rename = "fs:write_commit")]
     FsWriteCommit { write_id: u64 },
