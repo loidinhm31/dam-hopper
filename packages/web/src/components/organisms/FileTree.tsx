@@ -43,6 +43,7 @@ import type { FsArborNode } from "@/api/fs-types.js";
 import { TreeContextMenu } from "./TreeContextMenu.js";
 import { UploadDropzone } from "./UploadDropzone.js";
 import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog.js";
+import { NewItemDialog } from "./NewItemDialog.js";
 
 // ---------------------------------------------------------------------------
 // File icon mapping (simple extension-based)
@@ -178,6 +179,7 @@ export function FileTree({
   const { progress, upload, clearProgress } = useFsUpload(project, path);
 
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  const [newItemDialog, setNewItemDialog] = useState<{ open: boolean, type: 'file' | 'folder', parentPath: string } | null>(null);
   const [rename, setRename] = useState<RenameState | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [deleteState, setDeleteState] = useState<DeleteState | null>(null);
@@ -239,20 +241,25 @@ export function FileTree({
   function handleNewFile() {
     if (!menu) return;
     const dir = menu.node.kind === "dir" ? menu.node.id : parentDir(menu.node.id);
-    const name = prompt("New file name:");
-    if (!name?.trim()) return;
-    void ops.createFile(dir ? `${dir}/${name.trim()}` : name.trim()).then((r) => {
-      if (!r.ok) setOpError(r.error ?? "Create failed");
-    });
+    setNewItemDialog({ open: true, type: "file", parentPath: dir });
   }
 
   function handleNewFolder() {
     if (!menu) return;
     const dir = menu.node.kind === "dir" ? menu.node.id : parentDir(menu.node.id);
-    const name = prompt("New folder name:");
-    if (!name?.trim()) return;
-    void ops.createDir(dir ? `${dir}/${name.trim()}` : name.trim()).then((r) => {
+    setNewItemDialog({ open: true, type: "folder", parentPath: dir });
+  }
+
+  function handleNewItemConfirm(name: string) {
+    if (!newItemDialog) return;
+    const { type, parentPath } = newItemDialog;
+    const fullPath = parentPath ? `${parentPath}/${name}` : name;
+
+    const promise = type === "file" ? ops.createFile(fullPath) : ops.createDir(fullPath);
+
+    void promise.then((r) => {
       if (!r.ok) setOpError(r.error ?? "Create failed");
+      setNewItemDialog(null);
     });
   }
 
@@ -587,6 +594,14 @@ export function FileTree({
         loading={deleteState?.loading ?? false}
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteState(null)}
+      />
+
+      {/* New file/folder dialog */}
+      <NewItemDialog
+        open={!!newItemDialog}
+        type={newItemDialog?.type ?? "file"}
+        onConfirm={handleNewItemConfirm}
+        onCancel={() => setNewItemDialog(null)}
       />
 
       {/* Progress done — clear after a moment */}
