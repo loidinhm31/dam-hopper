@@ -11,11 +11,11 @@
 └──────────────────────┬──────────────────────────────────────┘
                        │ HTTP/WebSocket
 ┌──────────────────────▼──────────────────────────────────────┐
-│  dev-hub-server (Rust, Axum, port 4800)                    │
+│  dam-hopper-server (Rust, Axum, port 4800)                    │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─ AppState (shared across all handlers)                  │
 │  │  ├─ workspace_dir: Arc<RwLock<PathBuf>>                │
-│  │  ├─ config: Arc<RwLock<DevHubConfig>>                  │
+│  │  ├─ config: Arc<RwLock<DamHopperConfig>>                  │
 │  │  ├─ pty_manager: PtySessionManager                     │
 │  │  ├─ agent_store: Arc<AgentStoreService>                │
 │  │  ├─ event_sink: BroadcastEventSink                     │
@@ -45,13 +45,13 @@
 Handles TOML parsing, project discovery, feature flags.
 
 **Key types:**
-- `DevHubConfig` — parsed workspace config
+- `DamHopperConfig` — parsed workspace config
 - `ProjectConfig` — individual project settings
 
 **Path resolution priority:**
 1. `--workspace` CLI flag
-2. `DEV_HUB_WORKSPACE` env var
-3. `~/.config/dev-hub/config.toml` default path
+2. `DAM_HOPPER_WORKSPACE` env var
+3. `~/.config/dam-hopper/config.toml` default path
 
 ### fs/ (Phase 01+: IDE File Explorer + Editor)
 
@@ -233,7 +233,7 @@ GET /api/fs/search?project=web&q=pattern[&case=true&max=50]
 ## Authentication & Security
 
 **Bearer token:**
-- Hex UUID stored in `~/.config/dev-hub/server-token`
+- Hex UUID stored in `~/.config/dam-hopper/server-token`
 - Validated via `subtle::constant_time_compare()`
 - All routes protected via middleware
 
@@ -247,7 +247,7 @@ GET /api/fs/search?project=web&q=pattern[&case=true&max=50]
 ## Feature Gating: IDE Explorer
 
 Routes `/api/fs/*` (list, read, stat) only registered when:
-- OR env: `DEV_HUB_IDE=1`
+- OR env: `DAM_HOPPER_IDE=1`
 
 If disabled, requests return 404.
 

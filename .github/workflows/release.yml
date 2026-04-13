@@ -30,15 +30,15 @@ jobs:
       - name: Package binary
         run: |
           cd server/target/release
-          tar czf dev-hub-server-linux-x86_64.tar.gz dev-hub-server
-          sha256sum dev-hub-server-linux-x86_64.tar.gz > dev-hub-server-linux-x86_64.tar.gz.sha256
+          tar czf dam-hopper-server-linux-x86_64.tar.gz dam-hopper-server
+          sha256sum dam-hopper-server-linux-x86_64.tar.gz > dam-hopper-server-linux-x86_64.tar.gz.sha256
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux-binary
           path: |
-            server/target/release/dev-hub-server-linux-x86_64.tar.gz
-            server/target/release/dev-hub-server-linux-x86_64.tar.gz.sha256
+            server/target/release/dam-hopper-server-linux-x86_64.tar.gz
+            server/target/release/dam-hopper-server-linux-x86_64.tar.gz.sha256
           retention-days: 7
 
   build-windows:
@@ -58,16 +58,16 @@ jobs:
 
       - name: Package binary
         run: |
-          Compress-Archive -Path server/target/release/dev-hub-server.exe -DestinationPath dev-hub-server-windows-x86_64.zip
-          $hash = (Get-FileHash dev-hub-server-windows-x86_64.zip -Algorithm SHA256).Hash.ToLower()
-          "$hash  dev-hub-server-windows-x86_64.zip" | Out-File -Encoding ascii dev-hub-server-windows-x86_64.zip.sha256
+          Compress-Archive -Path server/target/release/dam-hopper-server.exe -DestinationPath dam-hopper-server-windows-x86_64.zip
+          $hash = (Get-FileHash dam-hopper-server-windows-x86_64.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  dam-hopper-server-windows-x86_64.zip" | Out-File -Encoding ascii dam-hopper-server-windows-x86_64.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
           name: windows-binary
           path: |
-            dev-hub-server-windows-x86_64.zip
-            dev-hub-server-windows-x86_64.zip.sha256
+            dam-hopper-server-windows-x86_64.zip
+            dam-hopper-server-windows-x86_64.zip.sha256
           retention-days: 7
 
   build-web:
@@ -118,9 +118,9 @@ jobs:
           draft: false
           generate_release_notes: true
           files: |
-            artifacts/linux-binary/dev-hub-server-linux-x86_64.tar.gz
-            artifacts/linux-binary/dev-hub-server-linux-x86_64.tar.gz.sha256
-            artifacts/windows-binary/dev-hub-server-windows-x86_64.zip
-            artifacts/windows-binary/dev-hub-server-windows-x86_64.zip.sha256
+            artifacts/linux-binary/dam-hopper-server-linux-x86_64.tar.gz
+            artifacts/linux-binary/dam-hopper-server-linux-x86_64.tar.gz.sha256
+            artifacts/windows-binary/dam-hopper-server-windows-x86_64.zip
+            artifacts/windows-binary/dam-hopper-server-windows-x86_64.zip.sha256
             artifacts/web-dist/web-dist.tar.gz
             artifacts/web-dist/web-dist.tar.gz.sha256

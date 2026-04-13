@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use dev_hub_server::fs::{
+use dam_hopper_server::fs::{
     ops::{detect_binary, list_dir, read_file, stat, MAX_READ_BYTES},
     sandbox::WorkspaceSandbox,
     FsError,

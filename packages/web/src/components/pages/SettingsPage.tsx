@@ -217,7 +217,7 @@ export function SettingsPage() {
                 <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
                   Save a copy of the current{" "}
                   <code className="text-[var(--color-primary)]">
-                    dev-hub.toml
+                    dam-hopper.toml
                   </code>{" "}
                   to a chosen location. Preserves all formatting and comments.
                 </p>

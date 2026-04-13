@@ -7,7 +7,7 @@ use std::path::PathBuf as StdPathBuf;
 
 use crate::agent_store::AgentStoreService;
 use crate::commands::CommandRegistry;
-use crate::config::{DevHubConfig, GlobalConfig};
+use crate::config::{DamHopperConfig, GlobalConfig};
 use crate::error::AppError;
 use crate::fs::FsSubsystem;
 use crate::pty::{BroadcastEventSink, PtySessionManager};
@@ -23,7 +23,7 @@ pub struct AppState {
     /// Current workspace directory (may change on workspace:switch).
     pub workspace_dir: Arc<RwLock<PathBuf>>,
     /// Parsed workspace config (reloaded on switch/update).
-    pub config: Arc<RwLock<DevHubConfig>>,
+    pub config: Arc<RwLock<DamHopperConfig>>,
     /// Global config (known workspaces, defaults).
     pub global_config: Arc<RwLock<GlobalConfig>>,
     /// PTY session manager — internally Arc<Mutex<Inner>>, Clone is cheap.
@@ -36,7 +36,7 @@ pub struct AppState {
     pub command_registry: Arc<CommandRegistry>,
     /// Broadcast sink: PTY events + git progress fan-out to WebSocket clients.
     pub event_sink: BroadcastEventSink,
-    /// Auth token (hex UUID stored at ~/.config/dev-hub/server-token).
+    /// Auth token (hex UUID stored at ~/.config/dam-hopper/server-token).
     pub auth_token: Arc<String>,
     /// SSH credentials stored for the current session (set via /api/ssh/keys/load).
     /// Wrapped in Arc so cloning into git tasks is cheap (ref-count bump only).
@@ -60,7 +60,7 @@ impl AppState {
 
     pub fn new(
         workspace_dir: PathBuf,
-        config: DevHubConfig,
+        config: DamHopperConfig,
         global_config: GlobalConfig,
         pty_manager: PtySessionManager,
         agent_store: AgentStoreService,

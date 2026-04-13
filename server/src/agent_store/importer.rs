@@ -42,7 +42,7 @@ pub async fn scan_repo(repo_url: &str) -> Result<RepoScanResult> {
     validate_repo_url(repo_url)?;
 
     let tmp_dir = {
-        let base = std::env::temp_dir().join("devhub-import");
+        let base = std::env::temp_dir().join("damhopper-import");
         fs::create_dir_all(&base).await?;
         let id = uuid::Uuid::new_v4().to_string();
         base.join(id)

@@ -1,8 +1,8 @@
-# Dev-Hub Project Overview & PDR
+# DamHopper Project Overview & PDR
 
 ## Project Vision
 
-Dev-Hub is a **workspace-first IDE assistant** that manages multiple projects within a single workspace, providing integrated terminal management, file exploration, and AI-powered agent distribution.
+DamHopper is a **workspace-first IDE assistant** that manages multiple projects within a single workspace, providing integrated terminal management, file exploration, and AI-powered agent distribution.
 
 Target users: Developers managing monorepos or multi-project workspaces who want a lightweight, AI-friendly interface for common development tasks.
 
@@ -11,13 +11,13 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 ### PR-001: Workspace Management
 
 **Functional Requirements:**
-- Support TOML-based workspace configuration (dev-hub.toml)
+- Support TOML-based workspace configuration (dam-hopper.toml)
 - Auto-discover projects by type (Maven, Gradle, npm, pnpm, Cargo, custom)
 - Hot-reload workspace config without restart
-- Store global defaults at ~/.config/dev-hub/config.toml
+- Store global defaults at ~/.config/dam-hopper/config.toml
 
 **Acceptance Criteria:**
-- ✓ Load and parse dev-hub.toml
+- ✓ Load and parse dam-hopper.toml
 - ✓ Resolve relative project paths to absolute
 - ✓ Support workspace:switch via API
 - ✓ Fallback to global config defaults
@@ -61,7 +61,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 **Technical Constraints:**
 - git2 library for operations, CLI fallback for advanced ops
-- SSH key storage in ~/.config/dev-hub/credentials/
+- SSH key storage in ~/.config/dam-hopper/credentials/
 - Constant-time comparison for auth tokens
 
 ### PR-004: IDE File Explorer (Phase 01)
@@ -103,7 +103,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Health check reports broken links
 
 **Technical Constraints:**
-- Store path: .dev-hub/agent-store/
+- Store path: .dam-hopper/agent-store/
 - Symlinks relative to project root
 - Shallow clone for remote import (temp cleanup)
 - URL regex validation before clone
@@ -176,7 +176,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 ### Decision: IDE Explorer Enabled by Default
 
-**Context:** File exploration is a core requirement of Dev-Hub's IDE-like functionality.
+**Context:** File exploration is a core requirement of DamHopper's IDE-like functionality.
 
 **Decision:** IDE endpoints are permanently enabled.
 
@@ -188,7 +188,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 **Context:** Need to share .claude/ items across projects without duplication.
 
-**Decision:** Central store at .dev-hub/agent-store/, symlinks to projects.
+**Decision:** Central store at .dam-hopper/agent-store/, symlinks to projects.
 
 **Rationale:** No file duplication, easy to add/remove items, clear visibility of distribution.
 

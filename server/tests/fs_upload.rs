@@ -3,10 +3,10 @@
 /// Tests the full fs:upload_begin → fs:upload_chunk (binary) → fs:upload_commit cycle.
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use dev_hub_server::{
+use dam_hopper_server::{
     agent_store::AgentStoreService,
     api::build_router,
-    config::{DevHubConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo},
+    config::{DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo},
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
@@ -22,7 +22,7 @@ const CHUNK_SIZE: usize = 128 * 1024;
 
 fn make_state(tmp: &TempDir) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
-    let config = DevHubConfig {
+    let config = DamHopperConfig {
         workspace: WorkspaceInfo { name: "ws".into(), root: ".".into() },
         agent_store: None,
         projects: vec![ProjectConfig {
@@ -37,11 +37,11 @@ fn make_state(tmp: &TempDir) -> AppState {
             agents: None,
         }],
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dev-hub.toml"),
+        config_path: workspace_dir.join("dam-hopper.toml"),
     };
     let (event_sink, _) = BroadcastEventSink::new(64);
     let pty = PtySessionManager::new(Arc::new(NoopEventSink::default()));
-    let agent_store = AgentStoreService::new(workspace_dir.join(".dev-hub/agent-store"));
+    let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(workspace_dir.clone());
     AppState::new(workspace_dir, config, GlobalConfig::default(), pty, agent_store, event_sink, TEST_TOKEN.to_string(), fs)
 }

@@ -40,10 +40,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=server-builder /build/target/release/dev-hub-server /usr/local/bin/dev-hub-server
-COPY --from=web-builder /build/packages/web/dist /opt/dev-hub/web
+COPY --from=server-builder /build/target/release/dam-hopper-server /usr/local/bin/dam-hopper-server
+COPY --from=web-builder /build/packages/web/dist /opt/dam-hopper/web
 
 EXPOSE 4800
 
-ENTRYPOINT ["dev-hub-server"]
+ENTRYPOINT ["dam-hopper-server"]
 CMD ["--port", "4800"]

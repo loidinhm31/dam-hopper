@@ -134,7 +134,7 @@ function NodeRenderer({
 // FileTree
 // ---------------------------------------------------------------------------
 
-const CHANGES_SPLIT_KEY = "devhub:filetree-changes-split";
+const CHANGES_SPLIT_KEY = "dam-hopper:filetree-changes-split";
 
 interface FileTreeProps {
   project: string;
@@ -605,16 +605,6 @@ export function FileTree({
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function findNode(nodes: FsArborNode[], id: string): FsArborNode | undefined {
-  for (const n of nodes) {
-    if (n.id === id) return n;
-    if (n.children) {
-      const found = findNode(n.children, id);
-      if (found) return found;
-    }
-  }
-}
 
 function parentDir(nodePath: string): string {
   const parts = nodePath.split("/");

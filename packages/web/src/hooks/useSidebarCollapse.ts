@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 
-const STORAGE_KEY = "devhub:sidebar-collapsed";
+const STORAGE_KEY = "dam-hopper:sidebar-collapsed";
 
 function isEditableTarget(el: HTMLElement): boolean {
   return (

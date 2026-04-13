@@ -24,15 +24,19 @@ export function CommandSuggestionInput({
 }: Props) {
   const { query, setQuery, results } = useCommandSearch(projectType);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
-  const [open, setOpen] = useState(false);
+  const [openState, setOpenState] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Reset highlight when results change
+  // Derived open state: show if results exist and query is not empty
+  const hasResults = results.length > 0 && query.trim().length > 0;
+  const open = openState && hasResults;
+
+  // Reset highlight when results or query change
   useEffect(() => {
     setHighlightedIndex(-1);
-    setOpen(results.length > 0 && query.trim().length > 0);
+    setOpenState(true);
   }, [results, query]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -47,16 +51,16 @@ export function CommandSuggestionInput({
       if (!e.shiftKey && highlightedIndex >= 0 && results[highlightedIndex]) {
         onSelect(results[highlightedIndex].command);
         setQuery("");
-        setOpen(false);
+        setOpenState(false);
       } else {
         // Shift+Enter → always open empty shell immediately, ignoring any typed command
         // Plain Enter with no selection → submit whatever is in the input (empty = shell)
         onSubmitCustom(e.shiftKey ? "" : query.trim());
         setQuery("");
-        setOpen(false);
+        setOpenState(false);
       }
     } else if (e.key === "Escape") {
-      setOpen(false);
+      setOpenState(false);
       setHighlightedIndex(-1);
     }
   }
@@ -72,7 +76,7 @@ export function CommandSuggestionInput({
     if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
     onSelect(command);
     setQuery("");
-    setOpen(false);
+    setOpenState(false);
     inputRef.current?.focus();
   }
 
@@ -96,10 +100,10 @@ export function CommandSuggestionInput({
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
           onBlur={() => {
-            blurTimerRef.current = setTimeout(() => setOpen(false), 150);
+            blurTimerRef.current = setTimeout(() => setOpenState(false), 150);
           }}
           onFocus={() => {
-            if (results.length > 0 && query.trim()) setOpen(true);
+            if (results.length > 0 && query.trim()) setOpenState(true);
           }}
           placeholder={placeholder}
           className={cn(

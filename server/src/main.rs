@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use tracing_subscriber::{EnvFilter, fmt};
 
-use dev_hub_server::{
+use dam_hopper_server::{
     agent_store::AgentStoreService,
     api::build_router,
     config::{global_config_path, load_workspace_config, read_global_config_at},
@@ -14,18 +14,18 @@ use dev_hub_server::{
 };
 
 #[derive(Debug, Parser)]
-#[command(name = "dev-hub-server", version, about = "Dev-Hub Rust server")]
+#[command(name = "dam-hopper-server", version, about = "DamHopper Rust server")]
 struct Cli {
-    /// Path to workspace directory containing dev-hub.toml
-    #[arg(long, env = "DEV_HUB_WORKSPACE")]
+    /// Path to workspace directory containing dam-hopper.toml
+    #[arg(long, env = "DAM_HOPPER_WORKSPACE")]
     workspace: Option<PathBuf>,
 
     /// Port to listen on
-    #[arg(long, default_value = "4800", env = "DEV_HUB_PORT")]
+    #[arg(long, default_value = "4800", env = "DAM_HOPPER_PORT")]
     port: u16,
 
     /// Host address to bind (default: 0.0.0.0 — all interfaces including Tailscale)
-    #[arg(long, default_value = "0.0.0.0", env = "DEV_HUB_HOST")]
+    #[arg(long, default_value = "0.0.0.0", env = "DAM_HOPPER_HOST")]
     host: std::net::IpAddr,
 
     /// Regenerate auth token and exit
@@ -33,7 +33,7 @@ struct Cli {
     new_token: bool,
 
     /// Comma-separated list of allowed CORS origins (default: *)
-    #[arg(long, env = "DEV_HUB_CORS_ORIGINS")]
+    #[arg(long, env = "DAM_HOPPER_CORS_ORIGINS")]
     cors_origins: Option<String>,
 }
 
@@ -65,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     });
 
-    let mut config = match load_workspace_config(&workspace_dir) {
+    let config = match load_workspace_config(&workspace_dir) {
         Ok(cfg) => {
             tracing::info!(
                 workspace = cfg.workspace.name,
@@ -76,15 +76,15 @@ async fn main() -> anyhow::Result<()> {
         }
         Err(e) => {
             tracing::warn!(error = %e, workspace = %workspace_dir.display(), "Could not load workspace config — server will start without workspace");
-            dev_hub_server::config::DevHubConfig {
-                workspace: dev_hub_server::config::WorkspaceInfo {
+            dam_hopper_server::config::DamHopperConfig {
+                workspace: dam_hopper_server::config::WorkspaceInfo {
                     name: "unknown".into(),
                     root: ".".into(),
                 },
                 agent_store: None,
                 projects: vec![],
-                features: dev_hub_server::config::FeaturesConfig::default(),
-                config_path: workspace_dir.join("dev-hub.toml"),
+                features: dam_hopper_server::config::FeaturesConfig::default(),
+                config_path: workspace_dir.join("dam-hopper.toml"),
             }
         }
     };
@@ -107,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
         .agent_store
         .as_ref()
         .map(|a| a.path.clone())
-        .unwrap_or_else(|| ".dev-hub/agent-store".to_string());
+        .unwrap_or_else(|| ".dam-hopper/agent-store".to_string());
     let store_path = workspace_dir.join(&store_rel_path);
     let agent_store = AgentStoreService::new(store_path);
     if let Err(e) = agent_store.init().await {
@@ -124,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
         .map(|s| s.split(',').map(|o| o.trim().to_string()).collect())
         .unwrap_or_default();
 
-    // Use the directory that actually contains dev-hub.toml as the sandbox root.
+    // Use the directory that actually contains dam-hopper.toml as the sandbox root.
     // workspace_dir is the raw CLI arg / CWD, which may differ from the config
     // location when the server is started from a subdirectory (e.g. server/).
     // config.config_path is canonicalized by read_config(), so its parent is
@@ -165,7 +165,7 @@ async fn main() -> anyhow::Result<()> {
 fn token_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("dev-hub")
+        .join("dam-hopper")
         .join("server-token")
 }
 

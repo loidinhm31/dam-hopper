@@ -261,7 +261,7 @@ export function useTerminalManager(
   function handleLaunchFormSubmit() {
     if (!launchForm) return;
     const { projectName, cwd, command } = launchForm;
-    const platform = (window as { devhub?: { platform?: string } }).devhub?.platform;
+    const platform = (window as { damHopper?: { platform?: string } }).damHopper?.platform;
     const resolvedCommand = command.trim() || (platform === "win32" ? "cmd.exe" : "bash");
     const resolvedCwd = cwd.trim() || undefined;
     const sessionId = `terminal:${projectName}:_:${Date.now()}`;
@@ -380,7 +380,7 @@ export function useTerminalManager(
   }
 
   function handleLaunchShell(projectName: string) {
-    const platform = (window as { devhub?: { platform?: string } }).devhub?.platform;
+    const platform = (window as { damHopper?: { platform?: string } }).damHopper?.platform;
     const command = platform === "win32" ? "cmd.exe" : "bash";
     const sessionId = `terminal:${projectName}:_:${Date.now()}`;
     const projectPath = projects.find((p) => p.name === projectName)?.path;

@@ -123,7 +123,7 @@ pub struct AgentStoreConfig {
 }
 
 fn default_agent_store_path() -> String {
-    ".dev-hub/agent-store".to_string()
+    ".dam-hopper/agent-store".to_string()
 }
 
 impl Default for AgentStoreConfig {
@@ -213,7 +213,7 @@ pub struct FeaturesConfig {
 // ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct DevHubConfigRaw {
+pub struct DamHopperConfigRaw {
     pub workspace: WorkspaceInfo,
     pub agent_store: Option<AgentStoreConfig>,
     #[serde(default)]
@@ -227,7 +227,7 @@ pub struct DevHubConfigRaw {
 // ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
-pub struct DevHubConfig {
+pub struct DamHopperConfig {
     pub workspace: WorkspaceInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_store: Option<AgentStoreConfig>,

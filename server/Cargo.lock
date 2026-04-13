@@ -392,6 +392,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "dam-hopper-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "axum-extra",
+ "base64",
+ "chrono",
+ "clap",
+ "dirs",
+ "dotenvy",
+ "dunce",
+ "futures-util",
+ "git2",
+ "handlebars",
+ "ignore",
+ "infer",
+ "mime_guess",
+ "notify",
+ "notify-debouncer-full",
+ "pathdiff",
+ "portable-pty",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite 0.26.2",
+ "tokio-util",
+ "toml",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -470,48 +512,6 @@ checksum = "ab63b0e2bf4d5928aff72e83a7dace85d7bba5fe12dcc3c5a572d78caffd3f3c"
 dependencies = [
  "derive_builder_core",
  "syn",
-]
-
-[[package]]
-name = "dev-hub-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "axum-extra",
- "base64",
- "chrono",
- "clap",
- "dirs",
- "dotenvy",
- "dunce",
- "futures-util",
- "git2",
- "handlebars",
- "ignore",
- "infer",
- "mime_guess",
- "notify",
- "notify-debouncer-full",
- "pathdiff",
- "portable-pty",
- "regex",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "subtle",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite 0.26.2",
- "tokio-util",
- "toml",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

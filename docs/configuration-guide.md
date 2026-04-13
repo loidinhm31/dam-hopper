@@ -1,8 +1,8 @@
 # Configuration Guide
 
-## Workspace Configuration (dev-hub.toml)
+## Workspace Configuration (dam-hopper.toml)
 
-Create `dev-hub.toml` in your workspace root.
+Create `dam-hopper.toml` in your workspace root.
 
 ### Basic Setup
 
@@ -89,17 +89,17 @@ Optional: configure where the agent store directory is located.
 
 ```toml
 [agent_store]
-path = ".dev-hub/agent-store"
+path = ".dam-hopper/agent-store"
 ```
 
-If omitted, defaults to `.dev-hub/agent-store/` in workspace root.
+If omitted, defaults to `.dam-hopper/agent-store/` in workspace root.
 
 ### Feature Flags
 
 All features are enabled by default.
 
 
-## Global Configuration (~/.config/dev-hub/config.toml)
+## Global Configuration (~/.config/dam-hopper/config.toml)
 
 Store global defaults:
 
@@ -118,7 +118,7 @@ path = "/tmp/test-workspace"
 
 ### Fields
 
-**defaults.workspace** — Path to default workspace (fallback if no --workspace or DEV_HUB_WORKSPACE).
+**defaults.workspace** — Path to default workspace (fallback if no --workspace or DAM_HOPPER_WORKSPACE).
 
 **workspaces** — Known workspace shortcuts (referenced by server later, not currently used by CLI).
 
@@ -126,12 +126,12 @@ path = "/tmp/test-workspace"
 
 | Var | Type | Purpose |
 |-----|------|---------|
-| `DEV_HUB_WORKSPACE` | path | Override workspace path (takes priority over global config default) |
-| `RUST_LOG` | string | Logging level (e.g., `dev_hub=debug,axum=info`) |
+| `DAM_HOPPER_WORKSPACE` | path | Override workspace path (takes priority over global config default) |
+| `RUST_LOG` | string | Logging level (e.g., `dam_hopper=debug,axum=info`) |
 
 ## Authentication Token
 
-**Location:** `~/.config/dev-hub/server-token`
+**Location:** `~/.config/dam-hopper/server-token`
 
 **Permissions:** 0600 (read-only to user)
 
@@ -143,14 +143,14 @@ path = "/tmp/test-workspace"
 cd server && cargo run -- --new-token --workspace /path/to/workspace
 ```
 
-Saves to `~/.config/dev-hub/server-token`.
+Saves to `~/.config/dam-hopper/server-token`.
 
 ### Use Token
 
 Include in all API requests:
 
 ```bash
-curl -H "Authorization: Bearer $(cat ~/.config/dev-hub/server-token)" \
+curl -H "Authorization: Bearer $(cat ~/.config/dam-hopper/server-token)" \
   http://localhost:4800/api/projects
 ```
 
@@ -166,14 +166,14 @@ cargo run -- --workspace /path/to/workspace --port 4800
 ### With Logging
 
 ```bash
-RUST_LOG=dev_hub=debug cargo run -- --workspace /path/to/workspace
+RUST_LOG=dam_hopper=debug cargo run -- --workspace /path/to/workspace
 ```
 
 ### Release Build
 
 ```bash
 cargo build --release
-./target/release/dev-hub-server --workspace /path/to/workspace --port 4800
+./target/release/dam-hopper-server --workspace /path/to/workspace --port 4800
 ```
 
 ### Systemd Service
@@ -181,13 +181,13 @@ cargo build --release
 Install service file:
 
 ```bash
-sudo cp deploy/dev-hub.service /etc/systemd/system/
+sudo cp deploy/dam-hopper.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable dev-hub
-sudo systemctl start dev-hub
+sudo systemctl enable dam-hopper
+sudo systemctl start dam-hopper
 ```
 
-Edit `/etc/systemd/system/dev-hub.service` to set:
+Edit `/etc/systemd/system/dam-hopper.service` to set:
 - `--workspace` path
 - `--port`
 - `--cors-origins` (if needed)
@@ -211,7 +211,7 @@ SSH credentials are loaded on-demand via `/api/ssh/keys/load`:
 
 ```bash
 curl -X POST \
-  -H "Authorization: Bearer $(cat ~/.config/dev-hub/server-token)" \
+  -H "Authorization: Bearer $(cat ~/.config/dam-hopper/server-token)" \
   -H "Content-Type: application/json" \
   -d '{"privateKeyPath": "/home/user/.ssh/id_rsa"}' \
   http://localhost:4800/api/ssh/keys/load
@@ -226,7 +226,7 @@ Keys are stored in-memory per session (not persisted to disk).
 Error: `Workspace directory does not exist`
 
 Check:
-1. Path in dev-hub.toml exists: `ls /path/to/workspace`
+1. Path in dam-hopper.toml exists: `ls /path/to/workspace`
 2. Path is absolute or relative to CWD
 3. User has read permissions
 
@@ -234,7 +234,7 @@ Check:
 
 Error: `Project not found: {name}`
 
-Verify in dev-hub.toml:
+Verify in dam-hopper.toml:
 1. Project name is correct
 2. Project path exists relative to workspace root
 3. Project type matches actual structure
@@ -249,7 +249,7 @@ Regenerate token:
 
 ```bash
 cargo run -- --new-token --workspace /path/to/workspace
-cat ~/.config/dev-hub/server-token
+cat ~/.config/dam-hopper/server-token
 ```
 
 Include in Authorization header for all requests.
@@ -289,13 +289,13 @@ build_command = "yarn build"
 run_command = "yarn start"
 
 [agent_store]
-path = ".dev-hub/agent-store"
+path = ".dam-hopper/agent-store"
 ```
 
 Start server:
 
 ```bash
-dev-hub-server --workspace /path/to/web-app-monorepo --port 4800
+dam-hopper-server --workspace /path/to/web-app-monorepo --port 4800
 ```
 
 All four projects now accessible via `/api/projects` and `/api/fs/list?project=frontend&path=src`, etc.

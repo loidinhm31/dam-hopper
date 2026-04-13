@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import type {
-  DevHubConfig,
+  DamHopperConfig,
   ProjectConfig,
   ServiceConfig,
   TerminalProfile,
@@ -477,14 +477,14 @@ function ProjectForm({
 // ── ConfigEditor ─────────────────────────────────────────────────────────
 
 interface Props {
-  config: DevHubConfig;
-  onSave: (config: DevHubConfig) => Promise<unknown>;
+  config: DamHopperConfig;
+  onSave: (config: DamHopperConfig) => Promise<unknown>;
   isSaving?: boolean;
   saveError?: string | null;
 }
 
 export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
-  const [draft, setDraft] = useState<DevHubConfig>(() =>
+  const [draft, setDraft] = useState<DamHopperConfig>(() =>
     structuredClone(config),
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -538,7 +538,7 @@ export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
     setSaved(false);
     try {
       // C3: strip root from workspace before PUT — server derives root from configPath
-      const payload: DevHubConfig = {
+      const payload: DamHopperConfig = {
         workspace: { name: draft.workspace.name, root: draft.workspace.root },
         projects: draft.projects,
       };

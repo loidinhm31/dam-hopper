@@ -1,7 +1,7 @@
 [Unit]
-Description=Dev Hub Server
+Description=DamHopper Server
 After=network.target
-Documentation=https://github.com/loidinhm31/dev-hub
+Documentation=https://github.com/loidinhm31/dam-hopper
 
 [Service]
 Type=simple
@@ -10,13 +10,13 @@ Group=%i
 WorkingDirectory=%h
 
 # Binary location — adjust if installed elsewhere
-ExecStart=/usr/local/bin/dev-hub-server --workspace %h/workspace --port 4800
+ExecStart=/usr/local/bin/dam-hopper-server --workspace %h/workspace --port 4800
 
 # Generate auth token on first run; failure blocks startup
 ExecStartPre=/bin/sh -c \
-  'test -f %h/.config/dev-hub/server-token || \
-   /usr/local/bin/dev-hub-server --new-token --workspace %h/workspace || \
-   { echo "dev-hub: failed to generate auth token" >&2; exit 1; }'
+  'test -f %h/.config/dam-hopper/server-token || \
+   /usr/local/bin/dam-hopper-server --new-token --workspace %h/workspace || \
+   { echo "dam-hopper: failed to generate auth token" >&2; exit 1; }'
 
 Restart=on-failure
 RestartSec=5s
@@ -31,7 +31,7 @@ LockPersonality=true
 
 # Home is hidden except for explicitly listed paths
 ProtectHome=yes
-BindPaths=%h/.config/dev-hub
+BindPaths=%h/.config/dam-hopper
 BindPaths=%h/workspace
 
 # Network: allow TCP/Unix sockets only (no raw sockets, netlink etc.)

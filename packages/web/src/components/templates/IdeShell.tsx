@@ -3,8 +3,8 @@ import { Sidebar } from "@/components/organisms/Sidebar.js";
 import { useSidebarCollapse } from "@/hooks/useSidebarCollapse.js";
 import { useResizeHandle } from "@/hooks/useResizeHandle.js";
 
-const TREE_STORAGE_KEY = "devhub:ide-tree-width";
-const EDITOR_STORAGE_KEY = "devhub:ide-editor-height-pct";
+const TREE_STORAGE_KEY = "dam-hopper:ide-tree-width";
+const EDITOR_STORAGE_KEY = "dam-hopper:ide-editor-height-pct";
 
 interface IdeShellProps {
   tree: ReactNode;

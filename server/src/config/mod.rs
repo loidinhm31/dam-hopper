@@ -17,7 +17,7 @@ pub use global::{
 pub use parser::{read_config, write_config};
 pub use presets::{get_effective_command, get_preset, get_project_services};
 pub use schema::{
-    AgentAssignment, AgentStoreConfig, CommandKind, DevHubConfig, FeaturesConfig, GlobalConfig,
+    AgentAssignment, AgentStoreConfig, CommandKind, DamHopperConfig, FeaturesConfig, GlobalConfig,
     KnownWorkspace, ProjectAgents, ProjectConfig, ProjectType, ServiceConfig, TerminalProfile,
     WorkspaceInfo,
 };

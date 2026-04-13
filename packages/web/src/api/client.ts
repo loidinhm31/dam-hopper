@@ -72,7 +72,7 @@ export type DistributionMatrix = Record<
 >;
 
 // ── Memory + Import Types ─────────────────────────────────────────────────────
-// NOTE: These mirror types from @dev-hub/core. Duplication is intentional —
+// NOTE: These mirror types from @dam-hopper/core. Duplication is intentional —
 // the web renderer runs in Chromium and cannot import Node.js core packages.
 
 export interface MemoryTemplateInfo {
@@ -140,7 +140,7 @@ export interface WorkspaceConfig {
   root: string;
 }
 
-export interface DevHubConfig {
+export interface DamHopperConfig {
   workspace: WorkspaceConfig;
   projects: ProjectConfig[];
 }
@@ -327,8 +327,8 @@ export const api = {
       getTransport().invoke<{ ok: boolean; hash: string }>("git:commit", { project, message }),
   },
   config: {
-    get: () => getTransport().invoke<DevHubConfig>("config:get"),
-    update: (config: DevHubConfig) => getTransport().invoke<DevHubConfig>("config:update", config),
+    get: () => getTransport().invoke<DamHopperConfig>("config:get"),
+    update: (config: DamHopperConfig) => getTransport().invoke<DamHopperConfig>("config:update", config),
     updateProject: (name: string, data: Partial<ProjectConfig>) =>
       getTransport().invoke<ProjectConfig>("config:updateProject", { name, patch: data }),
   },

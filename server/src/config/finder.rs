@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 use crate::error::AppError;
 
 use super::parser::read_config;
-use super::schema::DevHubConfig;
+use super::schema::DamHopperConfig;
 
-pub const CONFIG_FILENAME: &str = "dev-hub.toml";
+pub const CONFIG_FILENAME: &str = "dam-hopper.toml";
 
-/// Walk up directory tree from `start_dir` looking for `dev-hub.toml`.
+/// Walk up directory tree from `start_dir` looking for `dam-hopper.toml`.
 /// Stops at the user's home directory or filesystem root.
 /// Returns `None` if not found.
 pub fn find_config_file(start_dir: &Path) -> Option<PathBuf> {
@@ -33,7 +33,7 @@ pub fn find_config_file(start_dir: &Path) -> Option<PathBuf> {
     }
 }
 
-pub fn load_workspace_config(start_dir: &Path) -> Result<DevHubConfig, AppError> {
+pub fn load_workspace_config(start_dir: &Path) -> Result<DamHopperConfig, AppError> {
     let config_path = find_config_file(start_dir).ok_or_else(|| {
         AppError::ConfigNotFound(format!(
             "No {} found starting from: {}",

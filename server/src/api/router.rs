@@ -32,7 +32,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/auth/status", get(auth::status))
         .route("/ws", get(ws::ws_handler));
 
-    // Protected routes — auth middleware checks devhub-auth cookie
+    // Protected routes — auth middleware checks damhopper-auth cookie
     let protected = Router::new()
         // Workspace
         .route("/api/workspace/status", get(workspace::get_status))

@@ -30,10 +30,10 @@ pnpm build:server
 cd server && cargo build --release
 
 # Run release server
-cd server && ./target/release/dev-hub-server --workspace /path/to/workspace
+cd server && ./target/release/dam-hopper-server --workspace /path/to/workspace
 
 # Get auth token after server started at least once:
-cat ~/.config/dev-hub/server-token
+cat ~/.config/dam-hopper/server-token
 
 # Regenerate auth token:
 cd server && cargo run -- --new-token --workspace /path/to/workspace
@@ -59,15 +59,15 @@ pnpm check
 
 ## Architecture
 
-Dev-Hub is a monorepo with two components:
+DamHopper is a monorepo with two components:
 
 - **`server/`** — Rust binary (Axum + Tokio). All business logic: config parsing, project discovery, git ops, PTY session management, agent store distribution, memory templates, repo import. REST + WebSocket API. Serves the web SPA via `tower-http` static file serving.
-- **`packages/web/`** (`@dev-hub/web`) — React 19 SPA (Vite + Tailwind v4). Connects to the Rust server via `WsTransport`: `fetch(/api/*)` for REST, `WebSocket(/ws)` for terminal I/O + push events.
+- **`packages/web/`** (`@dam-hopper/web`) — React 19 SPA (Vite + Tailwind v4). Connects to the Rust server via `WsTransport`: `fetch(/api/*)` for REST, `WebSocket(/ws)` for terminal I/O + push events.
 
 Data flow:
 
 ```
-dev-hub-server (Rust, Axum, port 4800)
+dam-hopper-server (Rust, Axum, port 4800)
 ├── config/ — TOML parsing, workspace discovery, global config
 ├── pty/ — portable-pty session manager (Map<uuid, PtySession>)
 ├── git/ — git2 + CLI fallback for operations
@@ -86,20 +86,20 @@ Browser
 
 ## Key Design Decisions
 
-**Auth**: Bearer token in `Authorization` header. Token stored in `~/.config/dev-hub/server-token`. Constant-time comparison via `subtle` crate. CORS configurable via `--cors-origins`.
+**Auth**: Bearer token in `Authorization` header. Token stored in `~/.config/dam-hopper/server-token`. Constant-time comparison via `subtle` crate. CORS configurable via `--cors-origins`.
 
 **PTY execution**: All process execution happens in `portable-pty` sessions managed by `PtySessionManager`. Sessions identified by UUID. PTY output broadcast via `tokio::sync::broadcast` channel. Buffer retained for live sessions only.
 
-**Config format**: `dev-hub.toml` uses snake_case on disk (`build_command`, `run_command`, `env_file`). Serde handles field mapping. No migration needed from prior Node server.
+**Config format**: `dam-hopper.toml` uses snake_case on disk (`build_command`, `run_command`, `env_file`). Serde handles field mapping. No migration needed from prior Node server.
 
 **Workspace resolution**: Priority order:
 1. `--workspace` CLI flag
-2. `DEV_HUB_WORKSPACE` env var
-3. Global config default path (`~/.config/dev-hub/config.toml`)
+2. `DAM_HOPPER_WORKSPACE` env var
+3. Global config default path (`~/.config/dam-hopper/config.toml`)
 
-**Agent store**: Distributes `.claude/` items (skills, commands, hooks, MCP servers, subagents) across projects via symlinks. Store at `.dev-hub/agent-store/`. `ship()` creates symlinks, `unship()` removes them, `absorb()` copies project file into store. Health check detects broken symlinks. Distribution matrix tracks which projects have which items.
+**Agent store**: Distributes `.claude/` items (skills, commands, hooks, MCP servers, subagents) across projects via symlinks. Store at `.dam-hopper/agent-store/`. `ship()` creates symlinks, `unship()` removes them, `absorb()` copies project file into store. Health check detects broken symlinks. Distribution matrix tracks which projects have which items.
 
-**Memory templates**: Handlebars templates in `.dev-hub/agent-store/memory-templates/`. `renderTemplate` applies context; `applyTemplate` writes rendered output to project `.claude/CLAUDE.md`.
+**Memory templates**: Handlebars templates in `.dam-hopper/agent-store/memory-templates/`. `renderTemplate` applies context; `applyTemplate` writes rendered output to project `.claude/CLAUDE.md`.
 
 **Import from repo**: Shallow git clone into temp dir; scans `.claude/` items; user selects what to import into local store. URL validated by regex before clone.
 
@@ -109,7 +109,7 @@ Browser
 
 
 
-## Workspace Config (`dev-hub.toml`)
+## Workspace Config (`dam-hopper.toml`)
 
 ```toml
 [workspace]

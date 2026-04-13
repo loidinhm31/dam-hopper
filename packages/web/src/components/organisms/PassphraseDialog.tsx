@@ -29,9 +29,16 @@ export function PassphraseDialog({
     if (open) {
       setPassphrase("");
       setSelectedKey(availableKeys[0] ?? "");
-      setTimeout(() => inputRef.current?.focus(), 0);
     }
-  }, [open, availableKeys]);
+  }, [open]); // Removed availableKeys to avoid unnecessary resets if it changes while open
+
+  // Handle focus
+  useEffect(() => {
+    if (open) {
+      const timer = setTimeout(() => inputRef.current?.focus(), 0);
+      return () => clearTimeout(timer);
+    }
+  }, [open]);
 
   // Escape to cancel
   useEffect(() => {

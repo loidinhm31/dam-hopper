@@ -141,14 +141,14 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
     reject?.(new Error("SSH_CANCELLED"));
   }, []);
 
-  const PassphraseDialogElement = createElement(PassphraseDialog, {
+  const PassphraseDialogElement = useMemo(() => createElement(PassphraseDialog, {
     open: state.open,
     onSubmit: handleSubmit,
     onCancel: handleCancel,
     loading: state.loading,
     error: state.error,
     availableKeys,
-  });
+  }), [state, handleSubmit, handleCancel, availableKeys]);
 
   return { PassphraseDialogElement, executeWithRetry };
 }

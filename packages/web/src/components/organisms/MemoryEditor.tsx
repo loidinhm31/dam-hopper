@@ -18,9 +18,8 @@ export function MemoryEditor({ projects }: Props) {
   const [content, setContent] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
+  const [initialPreview, setInitialPreview] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
-  // Track whether the user has modified the preview content (to warn on discard)
-  const originalPreviewRef = useRef<string | null>(null);
 
   const { data: memoryContent, isLoading, isFetching } = useMemoryFile(projectName, agent);
   const { data: templates = [] } = useMemoryTemplates();
@@ -31,7 +30,7 @@ export function MemoryEditor({ projects }: Props) {
   useEffect(() => {
     setContent(memoryContent ?? "");
     setPreview(null);
-    originalPreviewRef.current = null;
+    setInitialPreview(null);
     setSaveStatus("idle");
   }, [memoryContent, projectName, agent]);
 
@@ -43,7 +42,7 @@ export function MemoryEditor({ projects }: Props) {
       agent,
     });
     setPreview(result.content);
-    originalPreviewRef.current = result.content;
+    setInitialPreview(result.content);
   }
 
   async function handleSave(contentToSave = content) {
@@ -52,7 +51,7 @@ export function MemoryEditor({ projects }: Props) {
       await updateMemory.mutateAsync({ projectName, agent, content: contentToSave });
       setSaveStatus("saved");
       setPreview(null);
-      originalPreviewRef.current = null;
+      setInitialPreview(null);
       setTimeout(() => setSaveStatus("idle"), 2000);
     } catch {
       setSaveStatus("error");
@@ -62,22 +61,22 @@ export function MemoryEditor({ projects }: Props) {
   function handleDiscardPreview() {
     const previewEdited =
       preview !== null &&
-      originalPreviewRef.current !== null &&
-      preview !== originalPreviewRef.current;
+      initialPreview !== null &&
+      preview !== initialPreview;
     if (previewEdited && !window.confirm("Discard your edits to this preview?")) return;
     setPreview(null);
-    originalPreviewRef.current = null;
+    setInitialPreview(null);
   }
 
   function handleSwitchProject(name: string) {
-    if (preview !== null && preview !== originalPreviewRef.current) {
+    if (preview !== null && preview !== initialPreview) {
       if (!window.confirm("Switch project? Your preview edits will be lost.")) return;
     }
     setProjectName(name);
   }
 
   function handleSwitchAgent(a: AgentType) {
-    if (preview !== null && preview !== originalPreviewRef.current) {
+    if (preview !== null && preview !== initialPreview) {
       if (!window.confirm("Switch agent? Your preview edits will be lost.")) return;
     }
     setAgent(a);
@@ -193,7 +192,7 @@ export function MemoryEditor({ projects }: Props) {
           )}
           {preview !== null && (
             <div className="rounded border border-[var(--color-primary)]/40 bg-[var(--color-primary)]/5 px-2 py-1 text-[10px] text-[var(--color-primary)]">
-              Template preview{preview !== originalPreviewRef.current ? " *" : ""} — click "Apply &amp; Save" to write to project
+              Template preview{preview !== initialPreview ? " *" : ""} — click "Apply &amp; Save" to write to project
             </div>
           )}
           <textarea

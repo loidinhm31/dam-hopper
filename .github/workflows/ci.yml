@@ -44,8 +44,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dev-hub-server-linux-x86_64
-          path: server/target/release/dev-hub-server
+          name: dam-hopper-server-linux-x86_64
+          path: server/target/release/dam-hopper-server
           if-no-files-found: error
           retention-days: 7
 
@@ -67,8 +67,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dev-hub-server-windows-x86_64
-          path: server/target/release/dev-hub-server.exe
+          name: dam-hopper-server-windows-x86_64
+          path: server/target/release/dam-hopper-server.exe
           if-no-files-found: error
           retention-days: 7
 

@@ -30,7 +30,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$TOKEN" ]]; then
-  TOKEN_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/dev-hub/server-token"
+  TOKEN_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/dam-hopper/server-token"
   [[ -f "$TOKEN_FILE" ]] && TOKEN=$(cat "$TOKEN_FILE") || {
     echo "ERROR: No token. Pass --token or run the server once."; exit 1
   }
@@ -82,7 +82,7 @@ run_bench() {
   echo ""
 }
 
-echo "=== Dev-Hub Rust Server Benchmark ==="
+echo "=== DamHopper Rust Server Benchmark ==="
 echo "  Server     : $SERVER_URL"
 echo "  Tool       : $TOOL"
 echo "  Duration   : ${DURATION}s per endpoint"

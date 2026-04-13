@@ -91,7 +91,7 @@ fn status_with_modifications() {
 
 #[test]
 fn status_nonexistent_path_returns_not_found() {
-    let status = get_status(Path::new("/tmp/nonexistent-dev-hub-test-xyz"), "ghost").unwrap();
+    let status = get_status(Path::new("/tmp/nonexistent-dam-hopper-test-xyz"), "ghost").unwrap();
     assert_eq!(status.path_exists, Some(false));
     assert!(status.is_clean);
 }

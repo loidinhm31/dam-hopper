@@ -10,7 +10,7 @@ pub fn atomic_write(target: &Path, content: &str) -> Result<(), AppError> {
         AppError::Config(format!("Cannot create dir {}: {}", dir.display(), e))
     })?;
 
-    let tmp = dir.join(format!(".dev-hub-tmp-{}.tmp", uuid::Uuid::new_v4().simple()));
+    let tmp = dir.join(format!(".dam-hopper-tmp-{}.tmp", uuid::Uuid::new_v4().simple()));
 
     write_with_mode(&tmp, content)?;
 

@@ -40,7 +40,7 @@ jobs:
 
       - name: Build Web
         # Dynamically set the base path to the repository name for github.io hosting
-        run: pnpm --filter @dev-hub/web build --base=/${{ github.event.repository.name }}/
+        run: pnpm --filter @dam-hopper/web build --base=/${{ github.event.repository.name }}/
 
       - name: 404.html Trick
         # Copy index.html to 404.html to handle client-side routing refreshes on GitHub Pages

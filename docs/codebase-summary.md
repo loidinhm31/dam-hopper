@@ -1,9 +1,9 @@
 # Codebase Summary
 
-This document provides a high-level summary of the Dev-Hub codebase based on the latest automated compaction.
+This document provides a high-level summary of the DamHopper codebase based on the latest automated compaction.
 
 ## Overview
-Dev-Hub is a workspace management system designed for agent-based development, featuring a built-in file explorer, terminal manager, and integrated editor.
+DamHopper is a workspace management system designed for agent-based development, featuring a built-in file explorer, terminal manager, and integrated editor.
 
 ## Key Features
 - **IDE Explorer:** Provides a file tree, editor, and workspace navigation capabilities.

@@ -7,21 +7,22 @@ interface EditorStatusBarProps {
 }
 
 export function EditorStatusBar({ editor, language }: EditorStatusBarProps) {
-  const [position, setPosition] = useState({ line: 1, col: 1 });
-  const [lineCount, setLineCount] = useState<number | null>(null);
+  const [position, setPosition] = useState(() => {
+    if (editor) {
+      const pos = editor.getPosition();
+      if (pos) return { line: pos.lineNumber, col: pos.column };
+    }
+    return { line: 1, col: 1 };
+  });
+  const [lineCount, setLineCount] = useState<number | null>(() => {
+    return editor?.getModel()?.getLineCount() ?? null;
+  });
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!editor) {
-      setPosition({ line: 1, col: 1 });
-      setLineCount(null);
       return;
     }
-
-    // Seed initial values
-    const pos = editor.getPosition();
-    if (pos) setPosition({ line: pos.lineNumber, col: pos.column });
-    setLineCount(editor.getModel()?.getLineCount() ?? null);
 
     const cursorDisposable = editor.onDidChangeCursorPosition((e) => {
       setPosition({ line: e.position.lineNumber, col: e.position.column });
@@ -39,6 +40,18 @@ export function EditorStatusBar({ editor, language }: EditorStatusBarProps) {
       contentDisposable.dispose();
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
+  }, [editor]);
+
+  // Handle editor changes by resetting state (this is okay if it only happens on prop change)
+  useEffect(() => {
+    if (!editor) {
+      setPosition({ line: 1, col: 1 });
+      setLineCount(null);
+    } else {
+      const pos = editor.getPosition();
+      if (pos) setPosition({ line: pos.lineNumber, col: pos.column });
+      setLineCount(editor.getModel()?.getLineCount() ?? null);
+    }
   }, [editor]);
 
   if (!editor) return null;

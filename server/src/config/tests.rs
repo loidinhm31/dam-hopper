@@ -43,7 +43,7 @@ fn preset_custom_is_empty() {
 #[test]
 fn parse_minimal_config() {
     let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("dev-hub.toml");
+    let config_path = dir.path().join("dam-hopper.toml");
     std::fs::write(
         &config_path,
         r#"
@@ -69,7 +69,7 @@ type = "cargo"
 #[test]
 fn parse_config_with_services() {
     let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("dev-hub.toml");
+    let config_path = dir.path().join("dam-hopper.toml");
     std::fs::write(
         &config_path,
         r#"
@@ -102,7 +102,7 @@ run_command = "java -jar auth/target/*.jar"
 #[test]
 fn reject_duplicate_project_names() {
     let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("dev-hub.toml");
+    let config_path = dir.path().join("dam-hopper.toml");
     std::fs::write(
         &config_path,
         r#"
@@ -128,7 +128,7 @@ type = "npm"
 #[test]
 fn reject_absolute_project_path() {
     let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("dev-hub.toml");
+    let config_path = dir.path().join("dam-hopper.toml");
     std::fs::write(
         &config_path,
         "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"/etc/passwd\"\ntype=\"cargo\"",
@@ -140,7 +140,7 @@ fn reject_absolute_project_path() {
 #[test]
 fn reject_path_traversal_in_env_file() {
     let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("dev-hub.toml");
+    let config_path = dir.path().join("dam-hopper.toml");
     std::fs::write(
         &config_path,
         "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"\nenv_file=\"../../.ssh/id_rsa\"",
@@ -152,7 +152,7 @@ fn reject_path_traversal_in_env_file() {
 #[test]
 fn config_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("dev-hub.toml");
+    let config_path = dir.path().join("dam-hopper.toml");
     std::fs::write(
         &config_path,
         r#"
@@ -187,7 +187,7 @@ env_file = ".env"
 #[test]
 fn find_config_in_same_dir() {
     let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("dev-hub.toml");
+    let config_path = dir.path().join("dam-hopper.toml");
     std::fs::write(&config_path, "[workspace]\nname = \"x\"").unwrap();
 
     let found = find_config_file(dir.path());
@@ -197,7 +197,7 @@ fn find_config_in_same_dir() {
 #[test]
 fn find_config_walks_up() {
     let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("dev-hub.toml");
+    let config_path = dir.path().join("dam-hopper.toml");
     std::fs::write(&config_path, "[workspace]\nname = \"x\"").unwrap();
 
     let subdir = dir.path().join("a").join("b");
@@ -209,7 +209,7 @@ fn find_config_walks_up() {
 
 #[test]
 fn find_config_returns_none_for_isolated_tmpdir() {
-    // This tmpdir is guaranteed to be under /tmp which won't have a dev-hub.toml,
+    // This tmpdir is guaranteed to be under /tmp which won't have a dam-hopper.toml,
     // and the walk-up will stop at home or filesystem root before finding one.
     let dir = tempfile::tempdir().unwrap();
     let subdir = dir.path().join("no-config-here");
@@ -227,7 +227,7 @@ fn find_config_returns_none_for_isolated_tmpdir() {
 #[test]
 fn global_config_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
-    let cfg_path = dir.path().join("dev-hub").join("config.toml");
+    let cfg_path = dir.path().join("dam-hopper").join("config.toml");
 
     let cfg = GlobalConfig {
         defaults: None,
@@ -342,7 +342,7 @@ fn discover_skips_dotdirs_and_node_modules() {
 #[test]
 fn effective_command_uses_preset_when_no_services() {
     let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("dev-hub.toml");
+    let config_path = dir.path().join("dam-hopper.toml");
     std::fs::write(
         &config_path,
         "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"",
@@ -366,7 +366,7 @@ fn effective_command_uses_preset_when_no_services() {
 #[test]
 fn effective_command_uses_service_override() {
     let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("dev-hub.toml");
+    let config_path = dir.path().join("dam-hopper.toml");
     std::fs::write(
         &config_path,
         r#"
@@ -411,7 +411,7 @@ fn ui_config_defaults() {
 #[test]
 fn ui_config_serde_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
-    let cfg_path = dir.path().join("dev-hub").join("config.toml");
+    let cfg_path = dir.path().join("dam-hopper").join("config.toml");
 
     let cfg = GlobalConfig {
         defaults: None,

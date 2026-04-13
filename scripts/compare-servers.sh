@@ -3,11 +3,12 @@
 #
 # Usage:
 #   ./scripts/compare-servers.sh [--rust-url <url>] [--node-url <url>] [--token <token>]
+#   --token     read from ~/.config/dam-hopper/server-token
 #
 # Defaults:
 #   --rust-url  http://localhost:4800  (pnpm dev:server)
 #   --node-url  http://localhost:3001  (node packages/server/dist/index.js)
-#   --token     read from ~/.config/dev-hub/server-token
+#   --token     read from ~/.config/dam-hopper/server-token
 #
 # Requires: curl, jq
 
@@ -27,11 +28,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$TOKEN" ]]; then
-  TOKEN_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/dev-hub/server-token"
+  TOKEN_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/dam-hopper/server-token"
   if [[ -f "$TOKEN_FILE" ]]; then
     TOKEN=$(cat "$TOKEN_FILE")
   else
-    echo "ERROR: No token. Pass --token or start server once to generate ~/.config/dev-hub/server-token"
+    echo "ERROR: No token. Pass --token or start server once to generate ~/.config/dam-hopper/server-token"
     exit 1
   fi
 fi
@@ -124,7 +125,7 @@ wait_ready() {
   return 0
 }
 
-echo "=== Dev-Hub Server Comparison ==="
+echo "=== DamHopper Server Comparison ==="
 echo "  Rust : $RUST_URL"
 echo "  Node : $NODE_URL"
 echo ""

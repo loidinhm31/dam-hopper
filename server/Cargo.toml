@@ -1,10 +1,10 @@
 [package]
-name = "dev-hub-server"
+name = "dam-hopper-server"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "dev-hub-server"
+name = "dam-hopper-server"
 path = "src/main.rs"
 
 [features]

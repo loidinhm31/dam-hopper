@@ -1,10 +1,10 @@
 {
-  "name": "dev-hub",
+  "name": "dam-hopper",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "pnpm --filter @dev-hub/web build",
-    "dev": "pnpm --filter @dev-hub/web dev --host",
+    "build": "pnpm --filter @dam-hopper/web build",
+    "dev": "pnpm --filter @dam-hopper/web dev --host",
     "dev:server": "cd server && cargo run",
     "dev:server:watch": "cd server && cargo watch -x run",
     "build:server": "cd server && cargo build --release",
@@ -20,9 +20,11 @@
     "pnpm": ">=9"
   },
   "devDependencies": {
+    "@eslint/compat": "^2.0.5",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0",
+    "eslint-plugin-react-hooks": "^7.0.1",
     "prettier": "^3.0.0"
   }
 }

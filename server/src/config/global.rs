@@ -12,7 +12,7 @@ pub fn global_config_path() -> PathBuf {
         .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
         .unwrap_or_else(|| PathBuf::from("~/.config"));
 
-    xdg_home.join("dev-hub").join("config.toml")
+    xdg_home.join("dam-hopper").join("config.toml")
 }
 
 // ──────────────────────────────────────────────

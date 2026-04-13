@@ -88,7 +88,7 @@ export function WorkspaceSwitcher() {
             <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[var(--color-primary)]" />
           ) : null}
           <p className="flex-1 text-xs font-semibold text-[var(--color-text)] truncate tracking-wide">
-            {workspace?.name ?? "dev-hub"}
+            {workspace?.name ?? "dam-hopper"}
           </p>
           <ChevronDown
             className={`h-3 w-3 shrink-0 text-[var(--color-text-muted)]/50 transition-transform ${open ? "rotate-180" : ""}`}

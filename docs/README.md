@@ -1,13 +1,13 @@
-# Dev-Hub Documentation
+# DamHopper Documentation
 
-Complete guide to the Dev-Hub workspace manager and IDE integration system.
+Complete guide to the DamHopper workspace manager and IDE integration system.
 
 ## Getting Started
 
-**New to Dev-Hub?** Start here:
+**New to DamHopper?** Start here:
 
 1. **[Project Overview & PDR](./project-overview-pdr.md)** — Vision, requirements, architecture decisions
-2. **[Configuration Guide](./configuration-guide.md)** — Set up dev-hub.toml and workspace
+2. **[Configuration Guide](./configuration-guide.md)** — Set up dam-hopper.toml and workspace
 3. **[System Architecture](./system-architecture.md)** — How the system works
 
 ## Reference Documentation
@@ -30,7 +30,7 @@ Complete guide to the Dev-Hub workspace manager and IDE integration system.
 
 | Document | Purpose |
 |----------|---------|
-| Configuration Guide | dev-hub.toml syntax, env vars, feature flags, token generation |
+| Configuration Guide | dam-hopper.toml syntax, env vars, feature flags, token generation |
 | API Reference | All REST/WebSocket endpoints, authentication, examples |
 | Code Standards | Coding patterns, testing, structure, security checklist |
 
@@ -45,7 +45,7 @@ Complete guide to the Dev-Hub workspace manager and IDE integration system.
 
 
 **Workspace Management** — TOML-based config, project discovery, hot-reload.
-- Config: dev-hub.toml at workspace root
+- Config: dam-hopper.toml at workspace root
 - Support types: npm, pnpm, cargo, maven, gradle, custom
 - See: [Configuration Guide](./configuration-guide.md)
 
@@ -73,11 +73,11 @@ cd server
 cargo run -- --workspace /path/to/workspace --port 4800
 ```
 
-See token at `~/.config/dev-hub/server-token`.
+See token at `~/.config/dam-hopper/server-token`.
 
 ### Configure a Workspace
 
-1. Create `dev-hub.toml` in workspace root:
+1. Create `dam-hopper.toml` in workspace root:
 
 ```toml
 [workspace]
@@ -95,7 +95,7 @@ type = "cargo"
 ### Use File Explorer API
 
 ```bash
-TOKEN=$(cat ~/.config/dev-hub/server-token)
+TOKEN=$(cat ~/.config/dam-hopper/server-token)
 
 # List directory
 curl -H "Authorization: Bearer $TOKEN" \
@@ -149,7 +149,7 @@ docs/
 ├── project-overview-pdr.md       # Product requirements & roadmap
 ├── system-architecture.md        # Module breakdown & data flow
 ├── api-reference.md              # REST/WebSocket endpoints
-├── configuration-guide.md        # dev-hub.toml & setup
+├── configuration-guide.md        # dam-hopper.toml & setup
 ├── code-standards.md             # Patterns, testing, security
 └── codebase-summary.md           # Quick module reference
 ```
@@ -168,15 +168,15 @@ Always verify docs against actual code implementation before publishing.
 
 ## Quick Links
 
-- **GitHub:** https://github.com/loidinhm31/dev-hub
-- **Config File:** dev-hub.toml
-- **Token Location:** ~/.config/dev-hub/server-token
-- **Agent Store:** .dev-hub/agent-store/
-- **Global Config:** ~/.config/dev-hub/config.toml
+- **GitHub:** https://github.com/loidinhm31/dam-hopper
+- **Config File:** dam-hopper.toml
+- **Token Location:** ~/.config/dam-hopper/server-token
+- **Agent Store:** .dam-hopper/agent-store/
+- **Global Config:** ~/.config/dam-hopper/config.toml
 
 ## Questions or Issues?
 
 - Check relevant doc (use Ctrl+F for keywords)
 - Review code comments (// or /// in Rust/TypeScript)
 - Run tests: `cd server && cargo test`
-- Check logs: `RUST_LOG=dev_hub=debug cargo run ...`
+- Check logs: `RUST_LOG=dam_hopper=debug cargo run ...`

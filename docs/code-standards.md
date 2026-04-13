@@ -193,7 +193,7 @@ const content = await transport.fsRead(project, path);
 await transport.fsWriteFile(project, path, content, mtime);
 ```
 
-## Configuration (dev-hub.toml)
+## Configuration (dam-hopper.toml)
 
 ```toml
 [workspace]
@@ -249,7 +249,7 @@ Types: feat, fix, refactor, test, docs, perf, ci, chore.
 ## Build Artifacts
 
 **Rust:**
-- Release: `server/target/release/dev-hub-server`
+- Release: `server/target/release/dam-hopper-server`
 - Binary includes all dependencies (musl-libc for portability)
 
 **Web:**

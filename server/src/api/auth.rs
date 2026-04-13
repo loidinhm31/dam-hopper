@@ -12,7 +12,7 @@ use subtle::ConstantTimeEq;
 
 use crate::state::AppState;
 
-pub const AUTH_COOKIE: &str = "devhub-auth";
+pub const AUTH_COOKIE: &str = "damhopper-auth";
 
 // ---------------------------------------------------------------------------
 // Error response
@@ -59,7 +59,7 @@ fn token_matches(provided: &str, expected: &[u8]) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Validates auth on every protected request.
-/// Accepts `Authorization: Bearer <token>` header (cross-origin) or `devhub-auth` cookie (same-origin).
+/// Accepts `Authorization: Bearer <token>` header (cross-origin) or `damhopper-auth` cookie (same-origin).
 /// Constant-time comparison prevents timing side-channels.
 pub async fn require_auth(
     State(state): State<AppState>,

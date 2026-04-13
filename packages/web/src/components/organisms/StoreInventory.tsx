@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils.js";
-import { Badge } from "@/components/atoms/Badge.js";
 import type { AgentItemCategory, AgentStoreItem } from "@/api/client.js";
 
 const CATEGORY_META: Record<AgentItemCategory, { label: string; color: string }> = {

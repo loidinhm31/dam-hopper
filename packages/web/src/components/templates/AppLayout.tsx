@@ -21,7 +21,7 @@ export function AppLayout({ children, title }: Props) {
             <h1 className="text-xs font-semibold text-[var(--color-text)] tracking-widest uppercase">
               {title}
             </h1>
-            <span className="text-[var(--color-text-muted)]/30 text-xs">~/dev-hub/{title.toLowerCase()}</span>
+            <span className="text-[var(--color-text-muted)]/30 text-xs">~/dam-hopper/{title.toLowerCase()}</span>
           </header>
         )}
         <main className="flex-1 overflow-y-auto">

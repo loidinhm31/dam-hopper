@@ -2,12 +2,11 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client.js";
 import { getTransport } from "./transport.js";
 import type {
-  DevHubConfig,
+  DamHopperConfig,
   ProjectConfig,
   AgentItemCategory,
   AgentType,
   DistributionMethod,
-  RepoScanItem,
   DiffFileEntry,
   DiffResponse,
   FileDiffContent,
@@ -161,7 +160,7 @@ export function useUpdateUiConfig() {
 export function useUpdateConfig() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (config: DevHubConfig) => api.config.update(config),
+    mutationFn: (config: DamHopperConfig) => api.config.update(config),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["config"] });
       void qc.invalidateQueries({ queryKey: ["workspace"] });

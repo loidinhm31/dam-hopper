@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Terminal as TerminalIcon, Plus, Loader2 } from "lucide-react";
+import { Terminal as TerminalIcon, Plus } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { IdeShell } from "@/components/templates/IdeShell.js";
@@ -19,14 +19,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/Select.js";
-import { useFeatureFlag } from "@/hooks/useFeatureFlag.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { useSearchUiStore } from "@/stores/searchUi.js";
 import { useTerminalManager } from "@/hooks/useTerminalManager.js";
 import { api } from "@/api/client.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 
-const ACTIVE_PROJECT_KEY = "devhub:active-project";
+const ACTIVE_PROJECT_KEY = "dam-hopper:active-project";
 
 export default function WorkspacePage() {
   const ideEnabled = true;
@@ -51,11 +50,12 @@ export default function WorkspacePage() {
 
   // Validate persisted project still exists in the current workspace.
   useEffect(() => {
-    if (projects.length === 0) return;
-    if (activeProject && !projects.some((p) => p.name === activeProject)) {
-      setActiveProject(null);
+    if (projects.length > 0 && activeProject) {
+      if (!projects.some((p) => p.name === activeProject)) {
+        setActiveProject(null);
+      }
     }
-  }, [projects, activeProject]);
+  }, [projects]); // Only re-validate when projects list changes, not when activeProject changes
 
   const { state, derived, actions } = useTerminalManager(searchParams, setSearchParams);
   const { openTabs, activeTab, mountedSessions, launchForm, savePrompt, freeTerminalSavePrompt, selection } = state;
@@ -127,7 +127,7 @@ export default function WorkspacePage() {
               onFileOpen={handleFileOpen}
               onOpenTerminal={() => handleLaunchShell(projectName)}
               className="flex-1"
-              onSelectDiffFile={(path, isConflict) => {
+              onSelectDiffFile={(path, _isConflict) => {
                 if (projectName) openDiff(projectName, path, "modified", 0, 0);
               }}
               />

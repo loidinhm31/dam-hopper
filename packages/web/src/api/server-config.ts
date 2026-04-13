@@ -4,11 +4,11 @@
  * URL: localStorage (survives tab close, shared across tabs)
  * Token: sessionStorage (cleared on tab close, isolated per tab)
  *
- * Priority for URL: localStorage → VITE_DEV_HUB_SERVER_URL env → same-origin fallback
+ * Priority for URL: localStorage → VITE_DAM_HOPPER_SERVER_URL env → same-origin fallback
  */
 
-const KEY_URL = "devhub_server_url";
-const KEY_TOKEN = "devhub_auth_token";
+const KEY_URL = "damhopper_server_url";
+const KEY_TOKEN = "damhopper_auth_token";
 
 /** Returns the configured server URL, stripping trailing slash. */
 export function getServerUrl(): string {
@@ -19,7 +19,7 @@ export function getServerUrl(): string {
     // localStorage may be unavailable in some environments
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const envUrl = (import.meta as any).env?.VITE_DEV_HUB_SERVER_URL as string | undefined;
+  const envUrl = (import.meta as any).env?.VITE_DAM_HOPPER_SERVER_URL as string | undefined;
   if (envUrl) {
     // In dev mode, let Vite's proxy forward /api/* and /ws to the remote server.
     // This avoids cross-origin requests entirely — no CORS configuration needed on the server.

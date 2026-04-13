@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::path::{Path as StdPath, PathBuf};
 
 use crate::config::{global_config_path, load_workspace_config, read_global_config_at, write_global_config_at};
+use crate::config::schema::DamHopperConfig;
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::utils::atomic_write;
@@ -262,7 +263,7 @@ fn json_to_toml(v: &Value) -> Option<toml::Value> {
 
 async fn reload_config(state: &AppState) -> Result<(), ApiError> {
     let workspace_dir = state.workspace_dir.read().await.clone();
-    let new_cfg = load_workspace_config(&workspace_dir).map_err(ApiError::from_app)?;
+    let new_cfg: DamHopperConfig = load_workspace_config(&workspace_dir).map_err(ApiError::from_app)?;
     *state.config.write().await = new_cfg;
     Ok(())
 }

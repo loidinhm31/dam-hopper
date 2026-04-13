@@ -9,7 +9,7 @@ All requests require Bearer token in Authorization header:
 Authorization: Bearer {token}
 ```
 
-Token stored at `~/.config/dev-hub/server-token`.
+Token stored at `~/.config/dam-hopper/server-token`.
 
 ## REST Endpoints
 

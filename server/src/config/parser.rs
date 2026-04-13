@@ -4,7 +4,7 @@ use crate::error::AppError;
 use crate::utils::atomic_write;
 
 use super::schema::{
-    DevHubConfig, DevHubConfigRaw, ProjectConfig, ProjectConfigRaw, ServiceConfig,
+    DamHopperConfig, DamHopperConfigRaw, ProjectConfig, ProjectConfigRaw, ServiceConfig,
     TerminalProfile, TerminalProfileRaw,
 };
 
@@ -12,7 +12,7 @@ use super::schema::{
 // Read
 // ──────────────────────────────────────────────
 
-pub fn read_config(file_path: &Path) -> Result<DevHubConfig, AppError> {
+pub fn read_config(file_path: &Path) -> Result<DamHopperConfig, AppError> {
     let content = std::fs::read_to_string(file_path).map_err(|e| {
         AppError::Config(format!(
             "Cannot read config file {}: {}",
@@ -21,7 +21,7 @@ pub fn read_config(file_path: &Path) -> Result<DevHubConfig, AppError> {
         ))
     })?;
 
-    let raw: DevHubConfigRaw = toml::from_str(&content).map_err(|e| {
+    let raw: DamHopperConfigRaw = toml::from_str(&content).map_err(|e| {
         AppError::Config(format!(
             "Invalid TOML in {}: {}",
             file_path.display(),
@@ -42,7 +42,7 @@ pub fn read_config(file_path: &Path) -> Result<DevHubConfig, AppError> {
         .map(|p| resolve_project(p, config_dir))
         .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(DevHubConfig {
+    Ok(DamHopperConfig {
         workspace: raw.workspace,
         agent_store: raw.agent_store,
         projects,
@@ -51,7 +51,7 @@ pub fn read_config(file_path: &Path) -> Result<DevHubConfig, AppError> {
     })
 }
 
-fn validate_config(raw: &DevHubConfigRaw) -> Result<(), AppError> {
+fn validate_config(raw: &DamHopperConfigRaw) -> Result<(), AppError> {
     // Unique project names
     let names: Vec<&str> = raw.projects.iter().map(|p| p.name.as_str()).collect();
     let unique: std::collections::HashSet<_> = names.iter().collect();
@@ -165,7 +165,7 @@ fn resolve_terminal(raw: TerminalProfileRaw, project_path: &Path) -> TerminalPro
 // Write
 // ──────────────────────────────────────────────
 
-pub fn write_config(file_path: &Path, config: &DevHubConfig) -> Result<(), AppError> {
+pub fn write_config(file_path: &Path, config: &DamHopperConfig) -> Result<(), AppError> {
     let abs_path = file_path
         .canonicalize()
         .unwrap_or_else(|_| file_path.to_path_buf());
@@ -179,7 +179,7 @@ pub fn write_config(file_path: &Path, config: &DevHubConfig) -> Result<(), AppEr
     atomic_write(file_path, &toml_str)
 }
 
-fn build_raw_toml(config: &DevHubConfig, config_dir: &Path) -> toml::Value {
+fn build_raw_toml(config: &DamHopperConfig, config_dir: &Path) -> toml::Value {
     use toml::Value;
 
     let mut map = toml::map::Map::new();

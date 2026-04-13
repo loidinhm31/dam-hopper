@@ -216,7 +216,6 @@ function FreeTerminalRow({
 /** Expandable profile node with instance children */
 function ProfileRow({
   cmd,
-  projectName,
   selectedId,
   isExpanded,
   onToggle,
@@ -226,7 +225,6 @@ function ProfileRow({
   onDelete,
 }: {
   cmd: TreeCommand;
-  projectName: string;
   selectedId: string | null;
   isExpanded: boolean;
   onToggle: () => void;
@@ -328,11 +326,11 @@ export function TerminalTreeView({
   const [activeSuggestionProject, setActiveSuggestionProject] = useState<string | null>(null);
   const [showFreeSuggestion, setShowFreeSuggestion] = useState(false);
   const [terminalsExpanded, setTerminalsExpanded] = useState<boolean>(() => {
-    const stored = localStorage.getItem("devhub:expanded-free-terminals");
+    const stored = localStorage.getItem("dam-hopper:expanded-free-terminals");
     return stored === null ? true : stored === "true";
   });
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => {
-    const stored = localStorage.getItem("devhub:expanded-projects");
+    const stored = localStorage.getItem("dam-hopper:expanded-projects");
     if (stored) {
       try {
         return new Set(JSON.parse(stored) as string[]);
@@ -343,7 +341,7 @@ export function TerminalTreeView({
     return new Set(projects.map((p) => p.name));
   });
   const [expandedProfiles, setExpandedProfiles] = useState<Set<string>>(() => {
-    const stored = localStorage.getItem("devhub:expanded-profiles");
+    const stored = localStorage.getItem("dam-hopper:expanded-profiles");
     if (stored) {
       try {
         return new Set(JSON.parse(stored) as string[]);
@@ -354,24 +352,30 @@ export function TerminalTreeView({
     return new Set();
   });
 
+  // Keep track of which projects we've automatically expanded to avoid infinite updates
+  const autoExpandedRef = useRef<Set<string>>(new Set(projects.map(p => p.name)));
+
   // Auto-expand projects that are newly added
   useEffect(() => {
-    setExpandedProjects((prev) => {
-      const next = new Set(prev);
-      let changed = false;
-      for (const p of projects) {
-        if (!next.has(p.name)) {
-          next.add(p.name);
-          changed = true;
-        }
+    let changed = false;
+    const next = new Set(expandedProjects);
+    
+    for (const p of projects) {
+      if (!autoExpandedRef.current.has(p.name)) {
+        next.add(p.name);
+        autoExpandedRef.current.add(p.name);
+        changed = true;
       }
-      return changed ? next : prev;
-    });
-  }, [projects]);
+    }
+    
+    if (changed) {
+      setExpandedProjects(next);
+    }
+  }, [projects, expandedProjects]);
 
   function toggleTerminals() {
     setTerminalsExpanded((prev) => {
-      localStorage.setItem("devhub:expanded-free-terminals", String(!prev));
+      localStorage.setItem("dam-hopper:expanded-free-terminals", String(!prev));
       return !prev;
     });
   }
@@ -381,7 +385,7 @@ export function TerminalTreeView({
       const next = new Set(prev);
       if (next.has(name)) next.delete(name);
       else next.add(name);
-      localStorage.setItem("devhub:expanded-projects", JSON.stringify([...next]));
+      localStorage.setItem("dam-hopper:expanded-projects", JSON.stringify([...next]));
       return next;
     });
   }
@@ -391,7 +395,7 @@ export function TerminalTreeView({
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
-      localStorage.setItem("devhub:expanded-profiles", JSON.stringify([...next]));
+      localStorage.setItem("dam-hopper:expanded-profiles", JSON.stringify([...next]));
       return next;
     });
   }
@@ -535,7 +539,6 @@ export function TerminalTreeView({
                       <ProfileRow
                         key={cmd.key}
                         cmd={cmd}
-                        projectName={project.name}
                         selectedId={selectedId}
                         isExpanded={expandedProfiles.has(profileKey)}
                         onToggle={() => toggleProfile(profileKey)}

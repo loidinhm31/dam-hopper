@@ -10,15 +10,16 @@ export function useCommandSearch(projectType?: string) {
   useEffect(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
 
-    setResults([]);
-    if (!query.trim()) return;
-
-    timerRef.current = setTimeout(() => {
-      api.commands
-        .search(query, projectType, 8)
-        .then(setResults)
-        .catch(() => setResults([]));
-    }, 150);
+    if (query.trim()) {
+      timerRef.current = setTimeout(() => {
+        api.commands
+          .search(query, projectType, 8)
+          .then(setResults)
+          .catch(() => setResults([]));
+      }, 150);
+    } else if (results.length > 0) {
+      setResults([]);
+    }
 
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);

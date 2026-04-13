@@ -1,6 +1,6 @@
 /// End-to-end WebSocket FS subscription test.
 ///
-/// Spins a real dev-hub-server on an ephemeral port, connects via
+/// Spins a real dam-hopper-server on an ephemeral port, connects via
 /// tokio-tungstenite, exercises the full subscribe → snapshot → event → unsubscribe
 /// cycle, and verifies the refcount cleanup.
 use std::{
@@ -9,10 +9,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use dev_hub_server::{
+use dam_hopper_server::{
     agent_store::AgentStoreService,
     api::build_router,
-    config::{DevHubConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo},
+    config::{DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo},
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
@@ -28,7 +28,7 @@ const TEST_TOKEN: &str = "ws-test-token-xyz";
 fn make_test_state(tmp: &TempDir) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
 
-    let config = DevHubConfig {
+    let config = DamHopperConfig {
         workspace: WorkspaceInfo { name: "ws-test".into(), root: ".".into() },
         agent_store: None,
         projects: vec![ProjectConfig {
@@ -43,12 +43,12 @@ fn make_test_state(tmp: &TempDir) -> AppState {
             agents: None,
         }],
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dev-hub.toml"),
+        config_path: workspace_dir.join("dam-hopper.toml"),
     };
 
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
-    let agent_store = AgentStoreService::new(workspace_dir.join(".dev-hub/agent-store"));
+    let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(workspace_dir.clone());
 
     AppState::new(

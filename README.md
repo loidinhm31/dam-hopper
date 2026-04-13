@@ -1,10 +1,10 @@
-# dev-hub
+# dam-hopper
 
 A web-based app for managing multi-project development environments. Manage git operations, builds, and running services across all your projects from a single React UI backed by a Rust server with interactive PTY terminals.
 
 ## Features
 
-- **Workspace config** — Define projects once in `dev-hub.toml`, then operate on all of them
+- **Workspace config** — Define projects once in `dam-hopper.toml`, then operate on all of them
 - **Bulk git operations** — Fetch, pull, push across all projects with concurrent progress
 - **Build management** — Build/run projects using per-type presets (Maven, Gradle, npm, pnpm, Cargo) or custom commands
 - **Interactive terminals** — Full PTY terminals (xterm.js + portable-pty) per command — color, interactivity, scrollback
@@ -23,7 +23,7 @@ A web-based app for managing multi-project development environments. Manage git 
 
 ```bash
 git clone <repo>
-cd dev-hub
+cd dam-hopper
 
 # Build Rust server
 cd server && cargo build --release
@@ -32,13 +32,13 @@ cd server && cargo build --release
 cd .. && pnpm install && pnpm build
 
 # Run (web dist is served by the Rust server)
-DEV_HUB_WORKSPACE=/path/to/workspace ./server/target/release/dev-hub-server
+DAM_HOPPER_WORKSPACE=/path/to/workspace ./server/target/release/dam-hopper-server
 # Open http://localhost:4800 — token printed to terminal on startup
 ```
 
 ## Configuration
 
-Create a `dev-hub.toml` in your workspace root:
+Create a `dam-hopper.toml` in your workspace root:
 
 ```toml
 [workspace]
@@ -100,5 +100,5 @@ server/        # Rust binary (Axum + Tokio) — all backend logic
     agent_store/ # symlink-based agent config distribution
     api/       # Axum REST routes + WebSocket handler
 packages/
-  web/         # @dev-hub/web — React 19 SPA (Vite + Tailwind v4)
+  web/         # @dam-hopper/web — React 19 SPA (Vite + Tailwind v4)
 ```

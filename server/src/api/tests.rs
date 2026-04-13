@@ -7,7 +7,7 @@ use tower::ServiceExt;
 use crate::{
     agent_store::AgentStoreService,
     api::build_router,
-    config::{DevHubConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo},
+    config::{DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo},
     fs::FsSubsystem,
     pty::{BroadcastEventSink, PtySessionManager, NoopEventSink},
     state::AppState,
@@ -27,14 +27,14 @@ fn make_state(tmp: &TempDir) -> AppState {
 
     // Create a minimal config file so config_path.exists() returns true (required by
     // /api/workspace/status `ready` field).
-    let config_file = workspace_dir.join("dev-hub.toml");
+    let config_file = workspace_dir.join("dam-hopper.toml");
     std::fs::write(
         &config_file,
         "[workspace]\nname = \"test-workspace\"\n",
     )
     .ok();
 
-    let config = DevHubConfig {
+    let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
             root: ".".into(),
@@ -42,12 +42,12 @@ fn make_state(tmp: &TempDir) -> AppState {
         agent_store: None,
         projects: vec![],
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dev-hub.toml"),
+        config_path: workspace_dir.join("dam-hopper.toml"),
     };
 
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
-    let agent_store = AgentStoreService::new(workspace_dir.join(".dev-hub/agent-store"));
+    let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(workspace_dir.clone());
 
     AppState::new(
@@ -63,7 +63,7 @@ fn make_state(tmp: &TempDir) -> AppState {
 }
 
 fn auth_cookie() -> String {
-    format!("devhub-auth={TEST_TOKEN}")
+    format!("damhopper-auth={TEST_TOKEN}")
 }
 
 async fn get(state: AppState, path: &str) -> axum::response::Response {
@@ -129,7 +129,7 @@ async fn protected_route_with_wrong_cookie_returns_401() {
     let router = build_router(state, vec![]);
     let req = Request::builder()
         .uri("/api/workspace/status")
-        .header("Cookie", "devhub-auth=wrong-token")
+        .header("Cookie", "damhopper-auth=wrong-token")
         .body(Body::empty())
         .unwrap();
     let resp = router.oneshot(req).await.unwrap();
@@ -151,7 +151,7 @@ async fn login_with_valid_token_sets_cookie() {
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let set_cookie = resp.headers().get("set-cookie").unwrap().to_str().unwrap();
-    assert!(set_cookie.contains("devhub-auth="));
+    assert!(set_cookie.contains("damhopper-auth="));
     assert!(set_cookie.contains("HttpOnly"));
 }
 
@@ -405,7 +405,7 @@ async fn settings_export_returns_json() {
 fn make_state_with_project(tmp: &TempDir) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
 
-    let config = DevHubConfig {
+    let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
             root: ".".into(),
@@ -423,12 +423,12 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
             agents: None,
         }],
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dev-hub.toml"),
+        config_path: workspace_dir.join("dam-hopper.toml"),
     };
 
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
-    let agent_store = AgentStoreService::new(workspace_dir.join(".dev-hub/agent-store"));
+    let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(workspace_dir.clone());
 
     AppState::new(
@@ -518,7 +518,7 @@ async fn terminal_list_detailed_returns_array() {
 // ---------------------------------------------------------------------------
 
 async fn seed_skill_item(tmp: &TempDir, item_name: &str) {
-    let skills_dir = tmp.path().join(".dev-hub/agent-store/skills");
+    let skills_dir = tmp.path().join(".dam-hopper/agent-store/skills");
     tokio::fs::create_dir_all(&skills_dir).await.unwrap();
     tokio::fs::write(
         skills_dir.join(format!("{item_name}.md")),
