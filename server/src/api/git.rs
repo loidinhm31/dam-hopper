@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use crate::git::{
     BulkGitService, WorktreeAddOptions,
-    add_worktree, list_branches, list_worktrees, remove_worktree, update_branch,
+    add_worktree, list_branches, list_worktrees, remove_worktree, update_branch, get_log,
 };
 use crate::git::bulk::ProjectRef;
 use crate::git::progress::create_progress_channel;
@@ -171,6 +171,26 @@ pub async fn get_branches(
     let path = resolve_project_path(&state, &project).await?;
     let branches = list_branches(&path).map_err(ApiError::from_app)?;
     Ok(Json(branches))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/git/:project/log
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct GetLogQuery {
+    pub limit: Option<usize>,
+}
+
+pub async fn get_log_route(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<GetLogQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_project_path(&state, &project).await?;
+    let limit = query.limit.unwrap_or(100);
+    let log = get_log(&path, limit).map_err(ApiError::from_app)?;
+    Ok(Json(log))
 }
 
 // ---------------------------------------------------------------------------

@@ -105,6 +105,11 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
       const d = data as { project: string; branch?: string };
       return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/branches/update`, body: { branch: d.branch } };
     }
+    case "git:log": {
+      const d = data as { project: string; limit?: number };
+      const qs = d.limit ? `?limit=${d.limit}` : "";
+      return { method: "GET", url: `/api/git/${encodeURIComponent(d.project)}/log${qs}` };
+    }
 
     // Config
     case "config:get":    return { method: "GET", url: "/api/config" };

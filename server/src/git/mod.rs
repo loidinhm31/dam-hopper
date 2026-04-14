@@ -15,11 +15,11 @@ pub use diff::{
     get_untracked_page, resolve_conflict, stage_files, unstage_files,
 };
 pub use progress::ProgressSender;
-pub use repository::{fetch, get_status, list_branches, pull, update_branch};
+pub use repository::{fetch, get_status, list_branches, pull, update_branch, get_log};
 pub use types::{
     BranchInfo, BranchUpdateResult, ConflictFile, DiffFileEntry, DiffResponse, FileDiffContent,
     GitOperation, GitOperationResult, GitProgressEvent, GitProgressPhase, GitStatus, HunkInfo,
-    Worktree, WorktreeAddOptions, UNTRACKED_PAGE_SIZE,
+    GitLogEntry, Worktree, WorktreeAddOptions, UNTRACKED_PAGE_SIZE,
 };
 pub use worktree::{
     add as add_worktree, list as list_worktrees, prune as prune_worktrees,

@@ -213,6 +213,16 @@ export interface GitOpResult {
   error?: string;
 }
 
+export interface GitLogEntry {
+  hash: string;
+  parents: string[];
+  authorName: string;
+  authorEmail: string;
+  timestamp: number;
+  message: string;
+  refs: string[];
+}
+
 // ── Git Diff Types ────────────────────────────────────────────────────────────
 
 export interface DiffFileEntry {
@@ -305,6 +315,8 @@ export const api = {
     branches: (project: string) => getTransport().invoke<Branch[]>("git:branches", project),
     updateBranch: (project: string, branch?: string) =>
       getTransport().invoke<GitOpResult[]>("git:updateBranch", { project, branch }),
+    log: (project: string, limit?: number) => 
+      getTransport().invoke<GitLogEntry[]>("git:log", { project, limit }),
     diff: (project: string) =>
       getTransport().invoke<DiffResponse>("git:diff", { project }),
     untrackedFiles: (project: string, offset: number, limit: number) =>

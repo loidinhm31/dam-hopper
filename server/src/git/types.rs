@@ -126,6 +126,22 @@ pub struct BranchUpdateResult {
 }
 
 // ---------------------------------------------------------------------------
+// Git Log Graph types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLogEntry {
+    pub hash: String,
+    pub parents: Vec<String>,
+    pub author_name: String,
+    pub author_email: String,
+    pub timestamp: i64,
+    pub message: String,
+    pub refs: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Diff / change management types
 // ---------------------------------------------------------------------------
 

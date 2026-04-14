@@ -82,6 +82,14 @@ export function useBranches(project: string) {
   });
 }
 
+export function useGitLog(project: string, limit?: number) {
+  return useQuery({
+    queryKey: ["git-log", project, limit],
+    queryFn: () => api.git.log(project, limit),
+    enabled: !!project,
+  });
+}
+
 export function useConfig() {
   return useQuery({
     queryKey: ["config"],

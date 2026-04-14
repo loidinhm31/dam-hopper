@@ -664,3 +664,65 @@ pub fn update_branch(
         }
     }
 }
+
+pub fn get_log(project_path: &Path, limit: usize) -> Result<Vec<crate::git::types::GitLogEntry>, AppError> {
+    use std::process::Command;
+
+    let output = Command::new("git")
+        .current_dir(project_path)
+        .arg("log")
+        .arg("--all")
+        .arg("--date-order")
+        .arg(format!("-n {}", limit))
+        .arg("--format=%H%x00%P%x00%aN%x00%aE%x00%at%x00%s%x00%D")
+        .output()
+        .map_err(|e| AppError::Git(format!("Failed to execute git log: {}", e)))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::Git(format!("git log error: {}", err)));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut entries = Vec::new();
+
+    for line in stdout.lines() {
+        if line.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split('\0').collect();
+        if parts.len() < 7 {
+            continue; // Malformed line
+        }
+
+        let hash = parts[0].to_string();
+        let parents = parts[1]
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
+        let author_name = parts[2].to_string();
+        let author_email = parts[3].to_string();
+        let timestamp = parts[4].parse::<i64>().unwrap_or(0);
+        let message = parts[5].to_string();
+        
+        // Parse refs like "HEAD -> main, origin/main, tag: v1.0"
+        let refs: Vec<String> = parts[6]
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        entries.push(crate::git::types::GitLogEntry {
+            hash,
+            parents,
+            author_name,
+            author_email,
+            timestamp,
+            message,
+            refs,
+        });
+    }
+
+    Ok(entries)
+}

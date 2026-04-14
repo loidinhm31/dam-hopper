@@ -6,6 +6,7 @@ import { useProjects, useGitFetch, useGitPull } from "@/api/queries.js";
 import type { GitOpResult } from "@/api/client.js";
 import { Badge } from "@/components/atoms/Badge.js";
 import { useGitWithSshRetry } from "@/hooks/useGitWithSshRetry.js";
+import { GitLogTree } from "@/components/organisms/GitLogTree.js";
 
 interface SectionResults {
   results: GitOpResult[];
@@ -153,6 +154,28 @@ export function GitPage() {
           {pullResults && <ResultsSummary results={pullResults} />}
         </section>
       </div>
+
+      {/* Git Graph View */}
+      {selected.size === 1 ? (
+        <div className="mt-8">
+          <h2 className="text-base font-semibold text-[var(--color-text)] mb-3">
+             Git Log ({[...selected][0]})
+          </h2>
+          <div className="h-[600px] flex flex-col">
+              <GitLogTree project={[...selected][0]} />
+          </div>
+        </div>
+      ) : (
+        <div className="mt-8 p-8 flex flex-col items-center justify-center text-center border-2 border-dashed border-[var(--color-border)] rounded-lg bg-[var(--color-surface)]/50">
+           <svg className="w-12 h-12 text-[var(--color-text-muted)] mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+           </svg>
+           <h3 className="font-medium text-[var(--color-text)]">No Project Selected</h3>
+           <p className="mt-1 text-sm text-[var(--color-text-muted)]">
+             Select exactly one project above to view its Git history graph, structured similarly to IDE tools.
+           </p>
+        </div>
+      )}
     </AppLayout>
   );
 }
