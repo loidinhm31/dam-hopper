@@ -7,6 +7,7 @@ import type { GitOpResult } from "@/api/client.js";
 import { Badge } from "@/components/atoms/Badge.js";
 import { useGitWithSshRetry } from "@/hooks/useGitWithSshRetry.js";
 import { GitLogTree } from "@/components/organisms/GitLogTree.js";
+import { GitLocalChanges } from "@/components/organisms/GitLocalChanges.js";
 
 interface SectionResults {
   results: GitOpResult[];
@@ -157,12 +158,34 @@ export function GitPage() {
 
       {/* Git Graph View */}
       {selected.size === 1 ? (
-        <div className="mt-8">
-          <h2 className="text-base font-semibold text-[var(--color-text)] mb-3">
-             Git Log ({[...selected][0]})
+        <div className="mt-8 space-y-4">
+          <h2 className="text-base font-semibold text-[var(--color-text)]">
+             Git Repository: {[...selected][0]}
           </h2>
-          <div className="h-[600px] flex flex-col">
-              <GitLogTree project={[...selected][0]} />
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 h-[700px]">
+            {/* Sidebar: Commit / Local Changes */}
+            <div className="lg:col-span-1 flex flex-col h-full overflow-hidden">
+              <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] flex items-center gap-2">
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Local Changes
+              </div>
+              <GitLocalChanges project={[...selected][0]} />
+            </div>
+
+            {/* Main: Git Log Graph */}
+            <div className="lg:col-span-3 flex flex-col h-full overflow-hidden">
+              <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] flex items-center gap-2">
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16" />
+                </svg>
+                Commits
+              </div>
+              <div className="flex-1 min-h-0">
+                <GitLogTree project={[...selected][0]} />
+              </div>
+            </div>
           </div>
         </div>
       ) : (
