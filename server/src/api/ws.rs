@@ -11,7 +11,6 @@ use axum::{
 use axum_extra::extract::CookieJar;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use futures_util::stream::StreamExt;
-use subtle::ConstantTimeEq;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
@@ -65,16 +64,12 @@ pub async fn ws_handler(
     jar: CookieJar,
     State(state): State<AppState>,
 ) -> Response {
-    let expected = state.auth_token.as_bytes();
+    let token = params.get("token").cloned()
+        .or_else(|| jar.get(AUTH_COOKIE).map(|c| c.value().to_string()));
 
-    let auth_ok = params
-        .get("token")
-        .map(|t| t.as_bytes().ct_eq(expected).into())
-        .unwrap_or(false)
-        || jar
-            .get(AUTH_COOKIE)
-            .map(|c| c.value().as_bytes().ct_eq(expected).into())
-            .unwrap_or(false);
+    let auth_ok = token
+        .map(|t| crate::api::auth::validate_jwt(&t, &state.jwt_secret))
+        .unwrap_or(false);
 
     if !auth_ok {
         return axum::response::IntoResponse::into_response((

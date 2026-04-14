@@ -27,6 +27,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
     // Public routes — no auth required
     let public = Router::new()
         .route("/api/health", get(settings::health))
+        .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/status", get(auth::status))

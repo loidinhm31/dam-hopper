@@ -36,14 +36,16 @@ pub struct AppState {
     pub command_registry: Arc<CommandRegistry>,
     /// Broadcast sink: PTY events + git progress fan-out to WebSocket clients.
     pub event_sink: BroadcastEventSink,
-    /// Auth token (hex UUID stored at ~/.config/dam-hopper/server-token).
-    pub auth_token: Arc<String>,
+    /// JWT signing secret (hex UUID stored at ~/.config/dam-hopper/server-token).
+    pub jwt_secret: Arc<String>,
     /// SSH credentials stored for the current session (set via /api/ssh/keys/load).
     /// Wrapped in Arc so cloning into git tasks is cheap (ref-count bump only).
     pub ssh_creds: Arc<RwLock<Option<Arc<SshCredStore>>>>,
     /// Workspace-scoped filesystem subsystem (sandbox + watcher in Phase 02).
     /// Clone is cheap — Arc-backed.
     pub fs: FsSubsystem,
+    /// MongoDB Database, if configured
+    pub db: Option<mongodb::Database>,
 }
 
 impl AppState {
@@ -65,8 +67,9 @@ impl AppState {
         pty_manager: PtySessionManager,
         agent_store: AgentStoreService,
         event_sink: BroadcastEventSink,
-        auth_token: String,
+        jwt_secret: String,
         fs: FsSubsystem,
+        db: Option<mongodb::Database>,
     ) -> Self {
         Self {
             workspace_dir: Arc::new(RwLock::new(workspace_dir)),
@@ -76,9 +79,10 @@ impl AppState {
             agent_store: Arc::new(agent_store),
             command_registry: Arc::new(CommandRegistry::new()),
             event_sink,
-            auth_token: Arc::new(auth_token),
+            jwt_secret: Arc::new(jwt_secret),
             ssh_creds: Arc::new(RwLock::new(None)),
             fs,
+            db,
         }
     }
 }
