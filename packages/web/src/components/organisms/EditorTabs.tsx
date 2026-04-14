@@ -7,7 +7,7 @@
  * - MonacoHost / MarkdownHost are lazy-loaded (dynamic import) to keep the main chunk clean.
  * - ConflictDialog is shown when save returns a conflict.
  */
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useState, useEffect } from "react";
 import type * as monacoNs from "monaco-editor";
 import { FileCode, Loader2 } from "lucide-react";
 import { useEditorStore } from "@/stores/editor.js";
@@ -27,18 +27,41 @@ const MarkdownHost = lazy(() =>
   import("@/components/organisms/MarkdownHost.js").then((m) => ({ default: m.MarkdownHost })),
 );
 
-export function EditorTabs() {
-  const { tabs, activeKey, setActive, close, setContent, save, saveViewState, forceOverwrite, reloadTab, clearConflict } =
-    useEditorStore();
+export function EditorTabs({ project }: { project: string | null }) {
+  const {
+    tabs,
+    activeKeys,
+    setActive,
+    close,
+    setContent,
+    save,
+    saveViewState,
+    forceOverwrite,
+    reloadTab,
+    clearConflict,
+    loadContent,
+  } = useEditorStore();
 
-  const [activeEditor, setActiveEditor] = useState<monacoNs.editor.IStandaloneCodeEditor | null>(null);
-  const activeTab = tabs.find((t) => t.key === activeKey) ?? null;
+  const [activeEditor, setActiveEditor] = useState<monacoNs.editor.IStandaloneCodeEditor | null>(
+    null,
+  );
 
-  if (tabs.length === 0) {
+  const projectTabs = project ? tabs.filter((t) => t.project === project) : [];
+  const activeKey = project ? activeKeys[project] : null;
+  const activeTab = projectTabs.find((t) => t.key === activeKey) ?? null;
+
+  // Auto-hydrate active tab if content is not loaded
+  useEffect(() => {
+    if (activeTab?.hydrated && !activeTab.loading) {
+      void loadContent(activeTab.key);
+    }
+  }, [activeTab?.key, activeTab?.hydrated, activeTab?.loading, loadContent]);
+
+  if (!project || projectTabs.length === 0) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 text-[var(--color-text-muted)] glass-card">
         <FileCode className="h-10 w-10 opacity-20" />
-        <p className="text-sm opacity-40">Select a file to open</p>
+        <p className="text-sm opacity-40">Select a file from {project ?? "a project"} to open</p>
       </div>
     );
   }
@@ -51,13 +74,13 @@ export function EditorTabs() {
         className="shrink-0 flex overflow-x-auto border-b border-[var(--color-border)] bg-[var(--color-surface-2)]"
         style={{ scrollbarWidth: "none" }}
       >
-        {tabs.map((tab) => (
+        {projectTabs.map((tab) => (
           <EditorTab
             key={tab.key}
             name={tab.name}
             active={tab.key === activeKey}
             dirty={tab.dirty}
-            onClick={() => setActive(tab.key)}
+            onClick={() => project && setActive(project, tab.key)}
             onClose={() => close(tab.key)}
           />
         ))}
