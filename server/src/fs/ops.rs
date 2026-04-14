@@ -99,23 +99,35 @@ pub async fn detect_binary(abs: &Path) -> Result<(bool, Option<String>), FsError
     let n = file.read(&mut buf).await?;
     let probe = &buf[..n];
 
+    let mut detected_mime = None;
+
     // 1. Magic-bytes detection via infer
     if let Some(kind) = infer::get(probe) {
-        return Ok((true, Some(kind.mime_type().to_string())));
+        let mime = kind.mime_type();
+        if !mime.starts_with("text/") {
+            return Ok((true, Some(mime.to_string())));
+        } else {
+            detected_mime = Some(mime.to_string());
+        }
     }
 
     // 2. NUL byte scan
     if probe.contains(&0u8) {
-        return Ok((true, None));
+        let ret_mime = detected_mime.or_else(|| mime_guess::from_path(abs).first_raw().map(|m| m.to_string()));
+        return Ok((true, ret_mime));
     }
 
     // 3. UTF-8 validity
     if std::str::from_utf8(probe).is_err() {
-        return Ok((true, None));
+        let ret_mime = detected_mime.or_else(|| mime_guess::from_path(abs).first_raw().map(|m| m.to_string()));
+        return Ok((true, ret_mime));
     }
 
-    let mime = mime_guess::from_path(abs).first_raw().map(|m| m.to_string());
-    Ok((false, mime))
+    if detected_mime.is_none() {
+        detected_mime = mime_guess::from_path(abs).first_raw().map(|m| m.to_string());
+    }
+    
+    Ok((false, detected_mime))
 }
 
 pub async fn stat(abs: &Path) -> Result<FileStat, FsError> {

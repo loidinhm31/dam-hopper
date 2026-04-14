@@ -101,7 +101,8 @@ On conflict (`ok=false, conflict=true`): client shows ConflictDialog—user choo
 
 `useEditorStore` (Zustand) manages:
 - **tabs:** open files keyed by `${project}::${path}`
-- **activeKey:** currently active tab
+- **activeKeys:** Record of currently active tab key per project (persisted)
+- **Persistence:** Tabs are persisted per-project via `localStorage` (metadata only), and content is auto-hydrated upon activation.
 - **Tab shape:**
   - `content`: decoded UTF-8 string (Monaco binding)
   - `savedContent`: last committed version (dirty = content !== savedContent)

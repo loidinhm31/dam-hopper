@@ -305,7 +305,7 @@ export default function WorkspacePage() {
       <IdeShell
         tree={leftPanel}
         editor={
-          <EditorTabs />
+          <EditorTabs project={projectName} />
         }
         terminal={terminalPanel}
         hideEditor={false}
