@@ -18,6 +18,13 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const TEST_TOKEN: &str = "upload-test-token";
+fn test_jwt() -> String {
+    use jsonwebtoken::{encode, Header, EncodingKey};
+    #[derive(serde::Serialize)]
+    struct Claims { sub: String, exp: usize }
+    let claims = Claims { sub: "test-user".into(), exp: (chrono::Utc::now().timestamp() as usize) + 3600 };
+    encode(&Header::default(), &claims, &EncodingKey::from_secret(TEST_TOKEN.as_bytes())).unwrap()
+}
 const CHUNK_SIZE: usize = 128 * 1024;
 
 fn make_state(tmp: &TempDir) -> AppState {
@@ -43,7 +50,7 @@ fn make_state(tmp: &TempDir) -> AppState {
     let pty = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(workspace_dir.clone());
-    AppState::new(workspace_dir, config, GlobalConfig::default(), pty, agent_store, event_sink, TEST_TOKEN.to_string(), fs)
+    AppState::new(workspace_dir, config, GlobalConfig::default(), pty, agent_store, event_sink, TEST_TOKEN.to_string(), fs, None)
 }
 
 async fn spawn_server(state: AppState) -> SocketAddr {
@@ -57,7 +64,7 @@ async fn spawn_server(state: AppState) -> SocketAddr {
 type WsStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 async fn connect(addr: SocketAddr) -> WsStream {
-    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), TEST_TOKEN);
+    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), test_jwt());
     let (ws, _) = connect_async(&url).await.expect("WS connect failed");
     ws
 }
