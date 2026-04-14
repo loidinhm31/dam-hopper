@@ -41,6 +41,8 @@ const TOKEN_CAPACITY: usize = 512;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+
     fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -52,8 +54,8 @@ async fn main() -> anyhow::Result<()> {
     // ── Auth token ────────────────────────────────────────────────────────────
 
     let token = manage_token(cli.new_token)?;
-    // Print token to stderr (not tracing) so it doesn't land in log aggregators
-    eprintln!("\n  Auth token: {token}\n  Open: http://{host}:{port}\n", host = cli.host, port = cli.port);
+    // Print server start URL to stderr
+    eprintln!("\n  Server started\n  Open: http://{host}:{port}\n", host = cli.host, port = cli.port);
 
     if cli.new_token {
         return Ok(());
@@ -136,6 +138,15 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| workspace_dir.clone());
     let fs = FsSubsystem::new(fs_root);
 
+    let db = if let (Ok(uri), Ok(name)) = (std::env::var("MONGODB_URI"), std::env::var("MONGODB_DATABASE")) {
+        tracing::info!(%name, "Connecting to MongoDB...");
+        let client_options = mongodb::options::ClientOptions::parse(&uri).await?;
+        let client = mongodb::Client::with_options(client_options)?;
+        Some(client.database(&name))
+    } else {
+        None
+    };
+
     let state = AppState::new(
         workspace_dir.clone(),
         config,
@@ -145,6 +156,7 @@ async fn main() -> anyhow::Result<()> {
         event_sink,
         token,
         fs,
+        db,
     );
 
     let router = build_router(state, allowed_origins);

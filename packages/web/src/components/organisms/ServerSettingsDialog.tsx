@@ -8,17 +8,24 @@ import {
   setAuthToken,
   clearAuthToken,
   isCrossOriginServer,
+  getAuthUsername,
+  setAuthUsername,
+  clearAuthUsername,
+  buildAuthHeaders,
 } from "@/api/server-config.js";
 
 interface Props {
   open: boolean;
   onClose: () => void;
+  closable?: boolean;
 }
 
 type TestState = "idle" | "testing" | "ok" | "fail";
 
-export function ServerSettingsDialog({ open, onClose }: Props) {
+export function ServerSettingsDialog({ open, onClose, closable = true }: Props) {
   const [url, setUrl] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [token, setToken] = useState("");
   const [testState, setTestState] = useState<TestState>("idle");
   const [testError, setTestError] = useState<string | null>(null);
@@ -28,6 +35,8 @@ export function ServerSettingsDialog({ open, onClose }: Props) {
     if (open) {
       setUrl(getServerUrl());
       setToken(getAuthToken() ?? "");
+      setUsername(getAuthUsername());
+      setPassword("");
       setTestState("idle");
       setTestError(null);
       setSaved(false);
@@ -51,15 +60,28 @@ export function ServerSettingsDialog({ open, onClose }: Props) {
     setTestState("testing");
     setTestError(null);
     try {
-      const headers: Record<string, string> = {};
-      const t = token.trim();
-      if (t) headers["Authorization"] = `Bearer ${t}`;
+      const u = username.trim();
+      const p = password.trim();
+      const bodyContent = { username: u, password: p };
+
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
       try {
-        const res = await fetch(`${normalized}/api/health`, { headers, signal: controller.signal });
-        setTestState(res.ok ? "ok" : "fail");
-        if (!res.ok) setTestError(`HTTP ${res.status}`);
+        const res = await fetch(`${normalized}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(bodyContent),
+          signal: controller.signal
+        });
+        const data = await res.json().catch(() => null);
+
+        if (res.ok && data?.token) {
+          setToken(data.token);
+          setTestState("ok");
+        } else {
+          setTestState("fail");
+          setTestError(data?.error || `HTTP ${res.status}`);
+        }
       } finally {
         clearTimeout(timeout);
       }
@@ -87,6 +109,12 @@ export function ServerSettingsDialog({ open, onClose }: Props) {
       clearAuthToken();
     }
 
+    if (username) {
+      setAuthUsername(username.trim());
+    } else {
+      clearAuthUsername();
+    }
+
     setSaved(true);
     // Reload for clean reconnect: ensures transport listeners, WS status, and React
     // query state all start fresh against the new server. Transport swap without reload
@@ -97,13 +125,40 @@ export function ServerSettingsDialog({ open, onClose }: Props) {
   function handleReset() {
     setUrl(`${location.protocol}//${location.host}`);
     setToken("");
+    setUsername("");
+    setPassword("");
+  }
+
+  async function handleLogout() {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      await fetch(`${getServerUrl()}/api/auth/logout`, {
+        method: "POST",
+        headers: buildAuthHeaders(),
+        signal: controller.signal
+      });
+    } catch {
+      // ignore network errors on logout
+    } finally {
+      clearTimeout(timeout);
+    }
+    clearAuthToken();
+    clearAuthUsername();
+    setToken("");
+    setUsername("");
+    setPassword("");
+    setTestState("idle");
+    setSaved(false);
+    // Reload page to force AuthGuard to lock the app
+    window.location.reload();
   }
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
       style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onClick={(e) => { if (closable && e.target === e.currentTarget) onClose(); }}
     >
       <div
         className="w-full max-w-md rounded-2xl border border-[var(--color-border)] shadow-2xl"
@@ -117,12 +172,14 @@ export function ServerSettingsDialog({ open, onClose }: Props) {
               Server Connection
             </span>
           </div>
-          <button
-            onClick={onClose}
-            className="rounded p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
-          >
-            <X size={14} />
-          </button>
+          {closable && (
+            <button
+              onClick={onClose}
+              className="rounded p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+            >
+              <X size={14} />
+            </button>
+          )}
         </div>
 
         {/* Body */}
@@ -158,14 +215,35 @@ export function ServerSettingsDialog({ open, onClose }: Props) {
 
           <div>
             <label className="mb-1.5 block text-xs font-medium text-[var(--color-text)]">
-              Auth Token {crossOrigin ? "(required)" : "(optional — leave empty for cookie auth)"}
+              Username
+            </label>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Username"
+              className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2"
+              style={{
+                background: "var(--color-background)",
+                borderColor: "var(--color-border)",
+                color: "var(--color-text)",
+                caretColor: "var(--color-primary)",
+              }}
+            />
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--color-text)]">
+              Password {crossOrigin ? "(required)" : ""}
             </label>
             <input
               type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder={crossOrigin ? "Paste your server token…" : "Leave empty for same-origin cookie auth"}
-              className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2"
+              value={password}
+              onChange={(e) => {
+                 setPassword(e.target.value);
+              }}
+              placeholder="Password"
+              className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2 mb-2"
               style={{
                 background: "var(--color-background)",
                 borderColor: "var(--color-border)",
@@ -205,22 +283,34 @@ export function ServerSettingsDialog({ open, onClose }: Props) {
 
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-[var(--color-border)] px-5 py-4">
-          <button
-            onClick={handleReset}
-            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-          >
-            Reset to default
-          </button>
-          <div className="flex gap-2">
+          <div className="flex gap-4 items-center">
             <button
-              onClick={onClose}
-              className="rounded-lg px-3.5 py-2 text-xs font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+              onClick={handleReset}
+              className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
             >
-              Cancel
+              Reset to default
             </button>
+            {getAuthToken() && (
+              <button
+                onClick={handleLogout}
+                className="text-xs font-semibold text-red-500 hover:text-red-400 transition-colors"
+              >
+                Logout
+              </button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            {closable && (
+              <button
+                onClick={onClose}
+                className="rounded-lg px-3.5 py-2 text-xs font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+              >
+                Cancel
+              </button>
+            )}
             <button
               onClick={handleSave}
-              disabled={saved || !urlSchemeValid}
+              disabled={saved || !urlSchemeValid || !username || !password || testState !== "ok"}
               className="rounded-lg px-4 py-2 text-xs font-semibold text-white transition-opacity disabled:opacity-60"
               style={{ background: saved ? "var(--color-success)" : "var(--color-primary)" }}
             >

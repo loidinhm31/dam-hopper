@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { DashboardPage } from "@/components/pages/DashboardPage.js";
 import { GitPage } from "@/components/pages/GitPage.js";
 import { SettingsPage } from "@/components/pages/SettingsPage.js";
@@ -8,6 +8,8 @@ import { AgentStorePage } from "@/components/pages/AgentStorePage.js";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
 import { getTransport } from "@/api/transport.js";
 import { useSettingsStore } from "@/stores/settings.js";
+import { getServerUrl, buildAuthHeaders } from "@/api/server-config.js";
+import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 
 // Wire CSS var outside React so it updates synchronously with store changes
 useSettingsStore.subscribe((s) => {
@@ -46,6 +48,32 @@ function GlobalShortcuts() {
   return null;
 }
 
+function AuthGuard({ children }: { children: React.ReactNode }) {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['auth-status'],
+    queryFn: async () => {
+      const res = await fetch(`${getServerUrl()}/api/auth/status`, {
+        headers: buildAuthHeaders()
+      });
+      if (!res.ok) throw new Error("Not authenticated");
+      return res.json();
+    },
+    retry: false
+  });
+
+  if (isLoading) return <>{LOADING_FALLBACK}</>;
+  
+  if (isError || !data?.authenticated) {
+    return (
+      <div className="h-screen w-screen bg-[var(--color-surface)] relative">
+         <ServerSettingsDialog open={true} onClose={() => {}} closable={false} />
+      </div>
+    );
+  }
+
+  return <>{children}</>;
+}
+
 export function App() {
   const qc = useQueryClient();
 
@@ -63,25 +91,27 @@ export function App() {
   return (
     <BrowserRouter basename={import.meta.env.BASE_URL}>
       <GlobalShortcuts />
-      <Routes>
-        <Route path="/" element={<ErrorBoundary><DashboardPage /></ErrorBoundary>} />
-        <Route
-          path="/workspace"
-          element={
-            <ErrorBoundary>
-              <Suspense fallback={LOADING_FALLBACK}>
-                <WorkspacePage />
-              </Suspense>
-            </ErrorBoundary>
-          }
-        />
-        {/* Backward-compat redirects — preserve search params for deep-links */}
-        <Route path="/terminals" element={<LegacyRedirect to="/workspace" />} />
-        <Route path="/ide" element={<LegacyRedirect to="/workspace" />} />
-        <Route path="/git" element={<ErrorBoundary><GitPage /></ErrorBoundary>} />
-        <Route path="/settings" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />
-        <Route path="/agent-store" element={<ErrorBoundary><AgentStorePage /></ErrorBoundary>} />
-      </Routes>
+      <AuthGuard>
+        <Routes>
+          <Route path="/" element={<ErrorBoundary><DashboardPage /></ErrorBoundary>} />
+          <Route
+            path="/workspace"
+            element={
+              <ErrorBoundary>
+                <Suspense fallback={LOADING_FALLBACK}>
+                  <WorkspacePage />
+                </Suspense>
+              </ErrorBoundary>
+            }
+          />
+          {/* Backward-compat redirects — preserve search params for deep-links */}
+          <Route path="/terminals" element={<LegacyRedirect to="/workspace" />} />
+          <Route path="/ide" element={<LegacyRedirect to="/workspace" />} />
+          <Route path="/git" element={<ErrorBoundary><GitPage /></ErrorBoundary>} />
+          <Route path="/settings" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />
+          <Route path="/agent-store" element={<ErrorBoundary><AgentStorePage /></ErrorBoundary>} />
+        </Routes>
+      </AuthGuard>
     </BrowserRouter>
   );
 }

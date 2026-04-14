@@ -9,6 +9,7 @@
 
 const KEY_URL = "damhopper_server_url";
 const KEY_TOKEN = "damhopper_auth_token";
+const KEY_USERNAME = "damhopper_auth_username";
 
 /** Returns the configured server URL, stripping trailing slash. */
 export function getServerUrl(): string {
@@ -88,6 +89,33 @@ export function setAuthToken(token: string): void {
 export function clearAuthToken(): void {
   try {
     sessionStorage.removeItem(KEY_TOKEN);
+  } catch {
+    // ignore
+  }
+}
+
+/** Returns the auth username stored in sessionStorage, or empty string if not set. */
+export function getAuthUsername(): string {
+  try {
+    return sessionStorage.getItem(KEY_USERNAME) || "";
+  } catch {
+    return "";
+  }
+}
+
+/** Persist auth username in sessionStorage. */
+export function setAuthUsername(username: string): void {
+  try {
+    sessionStorage.setItem(KEY_USERNAME, username);
+  } catch {
+    // ignore
+  }
+}
+
+/** Remove stored auth username. */
+export function clearAuthUsername(): void {
+  try {
+    sessionStorage.removeItem(KEY_USERNAME);
   } catch {
     // ignore
   }
