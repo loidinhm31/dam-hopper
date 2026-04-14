@@ -59,11 +59,26 @@ fn make_state(tmp: &TempDir) -> AppState {
         event_sink,
         TEST_TOKEN.to_string(),
         fs,
+        None,
     )
 }
 
+fn test_jwt() -> String {
+    use jsonwebtoken::{encode, Header, EncodingKey};
+    #[derive(serde::Serialize)]
+    struct Claims {
+        sub: String,
+        exp: usize,
+    }
+    let claims = Claims {
+        sub: "test-user".to_string(),
+        exp: (chrono::Utc::now().timestamp() as usize) + 3600,
+    };
+    encode(&Header::default(), &claims, &EncodingKey::from_secret(TEST_TOKEN.as_bytes())).unwrap()
+}
+
 fn auth_cookie() -> String {
-    format!("damhopper-auth={TEST_TOKEN}")
+    format!("damhopper-auth={}", test_jwt())
 }
 
 async fn get(state: AppState, path: &str) -> axum::response::Response {
@@ -137,30 +152,11 @@ async fn protected_route_with_wrong_cookie_returns_401() {
 }
 
 #[tokio::test]
-async fn login_with_valid_token_sets_cookie() {
+async fn login_returns_401_without_db() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
     let router = build_router(state, vec![]);
-    let body = serde_json::json!({ "token": TEST_TOKEN });
-    let req = Request::builder()
-        .method("POST")
-        .uri("/api/auth/login")
-        .header("Content-Type", "application/json")
-        .body(Body::from(body.to_string()))
-        .unwrap();
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let set_cookie = resp.headers().get("set-cookie").unwrap().to_str().unwrap();
-    assert!(set_cookie.contains("damhopper-auth="));
-    assert!(set_cookie.contains("HttpOnly"));
-}
-
-#[tokio::test]
-async fn login_with_wrong_token_returns_401() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    let router = build_router(state, vec![]);
-    let body = serde_json::json!({ "token": "wrong" });
+    let body = serde_json::json!({ "username": "test-user", "password": "password" });
     let req = Request::builder()
         .method("POST")
         .uri("/api/auth/login")
@@ -170,6 +166,8 @@ async fn login_with_wrong_token_returns_401() {
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
+
+
 
 #[tokio::test]
 async fn auth_status_returns_401_without_cookie() {
@@ -195,7 +193,7 @@ async fn protected_route_with_bearer_token_returns_200() {
     let router = build_router(state, vec![]);
     let req = Request::builder()
         .uri("/api/workspace/status")
-        .header("Authorization", format!("Bearer {TEST_TOKEN}"))
+        .header("Authorization", format!("Bearer {}", test_jwt()))
         .body(Body::empty())
         .unwrap();
     let resp = router.oneshot(req).await.unwrap();
@@ -223,7 +221,7 @@ async fn auth_status_returns_200_with_bearer_token() {
     let router = build_router(state, vec![]);
     let req = Request::builder()
         .uri("/api/auth/status")
-        .header("Authorization", format!("Bearer {TEST_TOKEN}"))
+        .header("Authorization", format!("Bearer {}", test_jwt()))
         .body(Body::empty())
         .unwrap();
     let resp = router.oneshot(req).await.unwrap();
@@ -440,6 +438,7 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         event_sink,
         TEST_TOKEN.to_string(),
         fs,
+        None,
     )
 }
 

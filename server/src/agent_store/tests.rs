@@ -5,7 +5,7 @@ use tokio::fs;
 use super::schema::{AgentItemCategory, AgentType, DistributionMethod};
 use super::store::AgentStoreService;
 use super::scanner::scan_project;
-use super::distributor::{ship, unship, absorb, health_check};
+use super::distributor::{ship, unship, health_check};
 use super::memory::{render_template, TemplateContext, ProjectContext, WorkspaceContext, list_memory_templates};
 use super::importer::{scan_local_dir, import_from_repo};
 

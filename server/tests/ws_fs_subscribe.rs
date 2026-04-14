@@ -24,6 +24,13 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const TEST_TOKEN: &str = "ws-test-token-xyz";
+fn test_jwt() -> String {
+    use jsonwebtoken::{encode, Header, EncodingKey};
+    #[derive(serde::Serialize)]
+    struct Claims { sub: String, exp: usize }
+    let claims = Claims { sub: "test-user".into(), exp: (chrono::Utc::now().timestamp() as usize) + 3600 };
+    encode(&Header::default(), &claims, &EncodingKey::from_secret(TEST_TOKEN.as_bytes())).unwrap()
+}
 
 fn make_test_state(tmp: &TempDir) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
@@ -60,6 +67,7 @@ fn make_test_state(tmp: &TempDir) -> AppState {
         event_sink,
         TEST_TOKEN.to_string(),
         fs,
+        None,
     )
 }
 
@@ -110,7 +118,7 @@ async fn ws_fs_subscribe_receives_snapshot() {
     let state = make_test_state(&tmp);
     let addr = spawn_server(state).await;
 
-    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), TEST_TOKEN);
+    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), test_jwt());
     let (mut ws, _) = connect_async(&url).await.expect("WS connect failed");
 
     // Subscribe
@@ -148,7 +156,7 @@ async fn ws_fs_subscribe_receives_create_event() {
     let state = make_test_state(&tmp);
     let addr = spawn_server(state).await;
 
-    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), TEST_TOKEN);
+    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), test_jwt());
     let (mut ws, _) = connect_async(&url).await.expect("WS connect failed");
 
     ws.send(Message::Text(
@@ -197,7 +205,7 @@ async fn ws_fs_unsubscribe_stops_events() {
     let state = make_test_state(&tmp);
     let addr = spawn_server(state).await;
 
-    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), TEST_TOKEN);
+    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), test_jwt());
     let (mut ws, _) = connect_async(&url).await.expect("WS connect failed");
 
     ws.send(Message::Text(
@@ -253,7 +261,7 @@ async fn ws_fs_subscribe_nonexistent_project_returns_error() {
     let state = make_test_state(&tmp);
     let addr = spawn_server(state).await;
 
-    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), TEST_TOKEN);
+    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), test_jwt());
     let (mut ws, _) = connect_async(&url).await.expect("WS connect failed");
 
     ws.send(Message::Text(
@@ -288,7 +296,7 @@ async fn watcher_shared_between_two_connections() {
     let state = make_test_state(&tmp);
     let addr = spawn_server(state).await;
 
-    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), TEST_TOKEN);
+    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), test_jwt());
     let (mut ws1, _) = connect_async(&url).await.unwrap();
     let (mut ws2, _) = connect_async(&url).await.unwrap();
 
