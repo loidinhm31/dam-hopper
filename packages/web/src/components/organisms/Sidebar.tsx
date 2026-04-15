@@ -1,8 +1,9 @@
 import { useState, type ComponentType } from "react";
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, GitMerge, Settings, Folder, ChevronsLeft, ChevronsRight, Package, ServerCog, Code2 } from "lucide-react";
+import { LayoutDashboard, GitMerge, Settings, ChevronsLeft, ChevronsRight, Package, ServerCog, Code2 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { ConnectionDot } from "@/components/atoms/ConnectionDot.js";
+import { Logo } from "@/components/atoms/Logo.js";
 import { useIpc } from "@/hooks/useSSE.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
@@ -42,13 +43,16 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
       )}>
         {!collapsed ? (
           <div>
-            <p className="text-[10px] text-[var(--color-primary)] font-bold tracking-widest mb-1 opacity-70">
-              ┌─ WORKSPACE
-            </p>
+            <div className="flex items-center gap-2 mb-2">
+              <Logo size="sm" />
+              <p className="text-[10px] text-[var(--color-primary)] font-bold tracking-widest opacity-70">
+                ┌─ WORKSPACE
+              </p>
+            </div>
             <WorkspaceSwitcher />
           </div>
         ) : (
-          <Folder className="h-4 w-4 text-[var(--color-primary)]" />
+          <Logo size="md" />
         )}
       </div>
 
