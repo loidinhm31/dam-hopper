@@ -11,6 +11,66 @@ Authorization: Bearer {token}
 
 Token stored at `~/.config/dam-hopper/server-token`.
 
+### Dev Mode (--no-auth)
+
+The server supports a `--no-auth` authentication bypass mode for local development (Phase 01). When enabled:
+- All protected routes bypass authentication checks
+- Login endpoint returns dev tokens without credential verification
+- Status endpoint returns `dev_mode: true`
+- See [Phase 01: Server-Side Auth Bypass](../phase-01-server-auth-bypass/) for details
+
+**Safety**: This mode fails immediately if `MONGODB_URI` is set or `RUST_ENV=production` is detected.
+
+### Auth Endpoints
+
+**POST /api/auth/login**
+Authenticate and receive auth token.
+
+Body (normal mode):
+```json
+{ "username": "user", "password": "pass" }
+```
+
+Body (--no-auth mode):
+```json
+{}
+```
+
+Response:
+```json
+{
+  "ok": true,
+  "token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+  "dev_mode": false
+}
+```
+
+**GET /api/auth/status**
+Check authentication status.
+
+Response (authenticated):
+```json
+{
+  "authenticated": true,
+  "user": "username",
+  "dev_mode": false
+}
+```
+
+Response (--no-auth mode):
+```json
+{
+  "authenticated": true,
+  "user": "dev-user",
+  "dev_mode": true
+}
+```
+
+**POST /api/auth/logout**
+Clear authentication session.
+
+Response: `{ "ok": true }`
+
 ## REST Endpoints
 
 ### Projects

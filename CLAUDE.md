@@ -38,11 +38,6 @@ cat ~/.config/dam-hopper/server-token
 # Regenerate auth token:
 cd server && cargo run -- --new-token --workspace /path/to/workspace
 
-# Dev mode (no authentication) — bypasses MongoDB auth, auto-generates dev token
-cd server && cargo run -- --no-auth --workspace /path/to/workspace
-# Or via env var:
-DAM_HOPPER_NO_AUTH=1 cargo run -- --workspace /path/to/workspace
-
 # Lint (packages/web only)
 pnpm lint
 
@@ -60,6 +55,43 @@ cd server && cargo test test_name
 # Full check
 pnpm check
 ```
+
+## Development Mode (No Auth)
+
+**Phase 01: Server-Side Auth Bypass** enables local development without MongoDB. Start the server with `--no-auth` to bypass authentication entirely:
+
+```bash
+# Via npm script (recommended for dev:server)
+npm run dev:server -- --no-auth --workspace /path/to/workspace
+
+# Or directly via cargo
+cd server && cargo run -- --no-auth --workspace /path/to/workspace
+
+# Or via environment variable
+DAM_HOPPER_NO_AUTH=1 cargo run -- --workspace /path/to/workspace
+```
+
+### Behavior
+
+When `--no-auth` is enabled:
+- ⚠️ Startup warning banner printed to stderr
+- `/api/auth/login` returns a dev token immediately (no credentials required)
+- `/api/auth/status` returns `{ authenticated: true, dev_mode: true, user: "dev-user" }`
+- All protected routes accessible without authentication tokens
+- Dev token: 30-day expiry, subject = `"dev-user"`
+
+### Safety Features
+
+Auth bypass **cannot be used in production** due to multiple failsafe mechanisms:
+
+1. **MongoDB Configuration Check**: Fails if `MONGODB_URI` is set (prevents accidental database access)
+2. **Environment Detection**: Fails if `RUST_ENV=production` or `ENVIRONMENT=production`
+3. **Startup Warning**: Multi-line banner emphasizing dev-only usage
+4. **ERROR-Level Logging**: `⚠️ NO-AUTH mode enabled — authentication bypassed`
+
+The server exits immediately if both `--no-auth` and a production environment are detected, ensuring safe local-only usage.
+
+**See** [Phase 01 Documentation](./docs/phase-01-server-auth-bypass/) for technical details, security considerations, and comprehensive test coverage.
 
 
 ## Architecture

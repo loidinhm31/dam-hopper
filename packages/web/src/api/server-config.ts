@@ -25,12 +25,21 @@ export interface ServerProfile {
 
 /** Returns the configured server URL, stripping trailing slash. */
 export function getServerUrl(): string {
+  // Priority 1: Active profile
+  const activeProfile = getActiveProfile();
+  if (activeProfile) {
+    return activeProfile.url.replace(/\/$/, "");
+  }
+  
+  // Priority 2: Legacy localStorage (for migration period)
   try {
     const stored = localStorage.getItem(KEY_URL);
     if (stored) return stored;
   } catch {
     // localStorage may be unavailable in some environments
   }
+  
+  // Priority 3: Env var
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const envUrl = (import.meta as any).env?.VITE_DAM_HOPPER_SERVER_URL as string | undefined;
   if (envUrl) {
@@ -42,6 +51,8 @@ export function getServerUrl(): string {
     }
     return envUrl.replace(/\/$/, "");
   }
+  
+  // Fallback: same origin
   return `${location.protocol}//${location.host}`;
 }
 
@@ -79,28 +90,34 @@ export function hasServerUrl(): boolean {
   }
 }
 
+/** Get token storage key for profile-aware storage */
+function tokenKey(profileId?: string): string {
+  const id = profileId || getActiveProfileId();
+  return id ? `damhopper_auth_token_${id}` : KEY_TOKEN;
+}
+
 /** Returns the auth token stored in sessionStorage, or null if not set. */
-export function getAuthToken(): string | null {
+export function getAuthToken(profileId?: string): string | null {
   try {
-    return sessionStorage.getItem(KEY_TOKEN);
+    return sessionStorage.getItem(tokenKey(profileId));
   } catch {
     return null;
   }
 }
 
 /** Persist auth token in sessionStorage (cleared on tab close). */
-export function setAuthToken(token: string): void {
+export function setAuthToken(token: string, profileId?: string): void {
   try {
-    sessionStorage.setItem(KEY_TOKEN, token);
+    sessionStorage.setItem(tokenKey(profileId), token);
   } catch {
     // ignore
   }
 }
 
 /** Remove stored auth token (logout). */
-export function clearAuthToken(): void {
+export function clearAuthToken(profileId?: string): void {
   try {
-    sessionStorage.removeItem(KEY_TOKEN);
+    sessionStorage.removeItem(tokenKey(profileId));
   } catch {
     // ignore
   }

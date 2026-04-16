@@ -63,6 +63,24 @@ pub fn validate_jwt(provided: &str, secret: &str) -> bool {
     decode::<Claims>(provided, &DecodingKey::from_secret(secret.as_bytes()), &validation).is_ok()
 }
 
+/// Generate JWT token for a given subject (username) with 30-day expiration.
+/// 
+/// Returns `Ok(token)` on success, or `Err` if encoding fails.
+/// Callers should handle errors appropriately (log and return error response).
+fn generate_jwt(subject: &str, secret: &str) -> anyhow::Result<String> {
+    let exp = (chrono::Utc::now().timestamp() as usize) + 30 * 24 * 3600;
+    let claims = Claims { 
+        sub: subject.to_string(), 
+        exp 
+    };
+    
+    encode(
+        &Header::default(), 
+        &claims, 
+        &EncodingKey::from_secret(secret.as_bytes())
+    ).map_err(|e| anyhow::anyhow!("JWT encoding failed: {}", e))
+}
+
 // ---------------------------------------------------------------------------
 // Auth middleware
 // ---------------------------------------------------------------------------
@@ -74,7 +92,7 @@ pub async fn require_auth(
     request: Request,
     next: Next,
 ) -> Response {
-    // Dev mode: bypass all auth checks
+    // Dev mode: skip JWT validation entirely (perf: avoids decode + signature check)
     if state.no_auth {
         return next.run(request).await;
     }
@@ -104,6 +122,8 @@ pub struct LoginBody {
 struct LoginResponse {
     ok: bool,
     token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dev_mode: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -146,24 +166,27 @@ pub async fn login(
 ) -> Response {
     // Dev mode: return dev token immediately (no credentials check)
     if state.no_auth {
-        let exp = (chrono::Utc::now().timestamp() as usize) + 30 * 24 * 3600;
-        let claims = Claims { sub: "dev-user".to_string(), exp };
-        let jwt_token = encode(
-            &Header::default(), 
-            &claims, 
-            &EncodingKey::from_secret(state.jwt_secret.as_bytes())
-        ).unwrap_or_default();
+        let jwt_token = match generate_jwt("dev-user", &state.jwt_secret) {
+            Ok(token) => token,
+            Err(e) => {
+                tracing::error!("Dev mode JWT generation failed: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorBody { error: "Failed to generate dev token".into() })
+                ).into_response();
+            }
+        };
         
         let cookie_attrs = format!("{AUTH_COOKIE}={}; HttpOnly; Secure; Path=/; SameSite=Strict", jwt_token);
         
         return (
             StatusCode::OK,
             [(header::SET_COOKIE, cookie_attrs)],
-            Json(serde_json::json!({
-                "ok": true,
-                "token": jwt_token,
-                "dev_mode": true
-            })),
+            Json(LoginResponse {
+                ok: true,
+                token: Some(jwt_token),
+                dev_mode: Some(true),
+            }),
         ).into_response();
     }
 
@@ -187,17 +210,23 @@ pub async fn login(
         return (StatusCode::UNAUTHORIZED, Json(ErrorBody { error: "Invalid credentials".into() })).into_response();
     }
 
-    let exp = (chrono::Utc::now().timestamp() as usize) + 30 * 24 * 3600;
-
-    let claims = Claims { sub: logged_in_sub, exp };
-    let jwt_token = encode(&Header::default(), &claims, &EncodingKey::from_secret(state.jwt_secret.as_bytes())).unwrap_or_default();
+    let jwt_token = match generate_jwt(&logged_in_sub, &state.jwt_secret) {
+        Ok(token) => token,
+        Err(e) => {
+            tracing::error!("JWT generation failed for user {}: {}", logged_in_sub, e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorBody { error: "Failed to generate authentication token".into() })
+            ).into_response();
+        }
+    };
 
     let cookie_attrs = format!("{AUTH_COOKIE}={}; HttpOnly; Secure; Path=/; SameSite=Strict", jwt_token);
 
     (
         StatusCode::OK,
         [(header::SET_COOKIE, cookie_attrs)],
-        Json(LoginResponse { ok: true, token: Some(jwt_token) }),
+        Json(LoginResponse { ok: true, token: Some(jwt_token), dev_mode: None }),
     )
         .into_response()
 }
@@ -208,7 +237,7 @@ pub async fn logout() -> Response {
     (
         StatusCode::OK,
         [(header::SET_COOKIE, clear)],
-        Json(LoginResponse { ok: true, token: None }),
+        Json(LoginResponse { ok: true, token: None, dev_mode: None }),
     )
         .into_response()
 }

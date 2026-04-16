@@ -1,4 +1,4 @@
-import { useState, type ComponentType } from "react";
+import { useState, useEffect, type ComponentType } from "react";
 import { NavLink } from "react-router-dom";
 import { LayoutDashboard, GitMerge, Settings, ChevronsLeft, ChevronsRight, Package, ServerCog, Code2 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
@@ -8,7 +8,7 @@ import { useIpc } from "@/hooks/useSSE.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 import { ServerProfilesDialog } from "@/components/organisms/ServerProfilesDialog.js";
-import { getActiveProfile, type ServerProfile } from "@/api/server-config.js";
+import { getActiveProfile, getServerUrl, buildAuthHeaders, type ServerProfile } from "@/api/server-config.js";
 
 type NavEntry = { to: string; icon: ComponentType<{ className?: string }>; label: string };
 
@@ -30,8 +30,33 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [profilesDialogOpen, setProfilesDialogOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ServerProfile | null | undefined>(undefined);
+  const [isDevMode, setIsDevMode] = useState(false);
   
   const activeProfile = getActiveProfile();
+
+  // Check if server is in dev mode
+  useEffect(() => {
+    if (status !== "connected") {
+      setIsDevMode(false);
+      return;
+    }
+    
+    const checkDevMode = async () => {
+      try {
+        const res = await fetch(`${getServerUrl()}/api/auth/status`, {
+          headers: buildAuthHeaders()
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setIsDevMode(!!data.dev_mode);
+        }
+      } catch {
+        // Ignore errors
+      }
+    };
+    
+    void checkDevMode();
+  }, [status]);
 
   const nav: NavEntry[] = BASE_NAV;
   
@@ -156,7 +181,7 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
           )}
           title={collapsed ? (activeProfile?.name || "Server connection") : undefined}
         >
-          <ConnectionDot status={status} collapsed={collapsed} />
+          <ConnectionDot status={status} collapsed={collapsed} devMode={isDevMode} />
           {!collapsed && activeProfile && (
             <span className="text-xs text-[var(--color-text-muted)] truncate flex-1 text-left">
               {activeProfile.name}

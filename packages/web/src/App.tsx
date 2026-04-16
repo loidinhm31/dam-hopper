@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { DashboardPage } from "@/components/pages/DashboardPage.js";
@@ -8,7 +8,14 @@ import { AgentStorePage } from "@/components/pages/AgentStorePage.js";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
 import { getTransport } from "@/api/transport.js";
 import { useSettingsStore } from "@/stores/settings.js";
-import { getServerUrl, buildAuthHeaders, migrateToProfiles } from "@/api/server-config.js";
+import { 
+  getServerUrl, 
+  buildAuthHeaders, 
+  migrateToProfiles, 
+  getActiveProfile, 
+  getAuthToken, 
+  setAuthToken 
+} from "@/api/server-config.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 
 // Wire CSS var outside React so it updates synchronously with store changes
@@ -49,6 +56,36 @@ function GlobalShortcuts() {
 }
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
+  const [autoLoginAttempted, setAutoLoginAttempted] = useState(false);
+  const profile = getActiveProfile();
+  
+  // Auto-login for "none" auth profiles if no token exists
+  useEffect(() => {
+    const attemptAutoLogin = async () => {
+      if (autoLoginAttempted) return;
+      if (!profile) return;
+      if (profile.authType !== "none") return;
+      if (getAuthToken()) return; // Already have token
+      
+      try {
+        const res = await fetch(`${getServerUrl()}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if (data.token) {
+          setAuthToken(data.token);
+        }
+      } catch {
+        // Will show server settings dialog if auth check fails
+      }
+      setAutoLoginAttempted(true);
+    };
+    
+    void attemptAutoLogin();
+  }, [profile, autoLoginAttempted]);
+  
   const { data, isLoading, isError } = useQuery({
     queryKey: ['auth-status'],
     queryFn: async () => {
@@ -58,10 +95,14 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
       if (!res.ok) throw new Error("Not authenticated");
       return res.json();
     },
-    retry: false
+    retry: false,
+    // Wait for auto-login attempt if needed
+    enabled: !profile || profile.authType !== "none" || autoLoginAttempted
   });
 
-  if (isLoading) return <>{LOADING_FALLBACK}</>;
+  if (isLoading || (profile?.authType === "none" && !autoLoginAttempted)) {
+    return <>{LOADING_FALLBACK}</>;
+  }
   
   if (isError || !data?.authenticated) {
     return (

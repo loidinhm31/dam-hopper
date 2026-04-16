@@ -5,6 +5,7 @@ export type ConnectionStatus = "connected" | "connecting" | "disconnected" | "er
 interface Props {
   status: ConnectionStatus;
   collapsed?: boolean;
+  devMode?: boolean;
 }
 
 const DOT_CLASS: Record<ConnectionStatus, string> = {
@@ -28,14 +29,21 @@ const LABELS: Record<ConnectionStatus, string> = {
   error:        "error",
 };
 
-export function ConnectionDot({ status, collapsed = false }: Props) {
+export function ConnectionDot({ status, collapsed = false, devMode = false }: Props) {
   return (
     <span className="flex items-center gap-1.5 text-xs tracking-wide">
       <span className={cn("inline-block h-1.5 w-1.5 rounded-full shrink-0", DOT_CLASS[status])} />
       {!collapsed && (
-        <span className={cn("uppercase text-[10px] tracking-widest", LABEL_CLASS[status])}>
-          {LABELS[status]}
-        </span>
+        <>
+          <span className={cn("uppercase text-[10px] tracking-widest", LABEL_CLASS[status])}>
+            {LABELS[status]}
+          </span>
+          {devMode && status === "connected" && (
+            <span className="px-1 py-0.5 text-[9px] font-semibold tracking-wider bg-yellow-500/20 text-yellow-500 rounded uppercase">
+              DEV
+            </span>
+          )}
+        </>
       )}
     </span>
   );

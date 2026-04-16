@@ -151,36 +151,7 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    // Production safety guard for no-auth mode
-    if cli.no_auth {
-        // Prevent accidental deployment with no-auth + MongoDB configured
-        if db.is_some() {
-            anyhow::bail!(
-                "FATAL: --no-auth cannot be used when MongoDB is configured (MONGODB_URI is set).\n\
-                 This combination is unsafe and forbidden."
-            );
-        }
-        
-        // Check for production environment indicators
-        if std::env::var("RUST_ENV").unwrap_or_default() == "production" 
-            || std::env::var("ENVIRONMENT").unwrap_or_default() == "production" {
-            anyhow::bail!(
-                "FATAL: --no-auth is not allowed in production environment.\n\
-                 Set RUST_ENV or ENVIRONMENT to 'development' for local dev."
-            );
-        }
-        
-        // Prominent multi-line warning banner
-        eprintln!("\n⚠️  ═══════════════════════════════════════════════════════");
-        eprintln!("⚠️  SECURITY WARNING: Authentication disabled!");
-        eprintln!("⚠️  All API requests will bypass authentication checks.");
-        eprintln!("⚠️  This mode is for LOCAL DEVELOPMENT ONLY.");
-        eprintln!("⚠️  DO NOT use in production or with sensitive data.");
-        eprintln!("⚠️  ═══════════════════════════════════════════════════════\n");
-        
-        tracing::error!("⚠️  NO-AUTH mode enabled — authentication bypassed");
-    }
-
+    // AppState::new() performs production safety validation for no-auth mode
     let state = AppState::new(
         workspace_dir.clone(),
         config,
@@ -192,7 +163,7 @@ async fn main() -> anyhow::Result<()> {
         fs,
         db,
         cli.no_auth,
-    );
+    )?;
 
     let router = build_router(state, allowed_origins);
 

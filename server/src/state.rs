@@ -62,6 +62,11 @@ impl AppState {
             .ok_or_else(|| AppError::NotFound(format!("Project not found: {name}")))
     }
 
+    /// Create new AppState with production safety validation for no-auth mode.
+    /// 
+    /// Returns `Err` if:
+    /// - `no_auth` is enabled with MongoDB configured (security risk)
+    /// - `no_auth` is enabled in production environment (detected via RUST_ENV or ENVIRONMENT)
     pub fn new(
         workspace_dir: PathBuf,
         config: DamHopperConfig,
@@ -73,8 +78,40 @@ impl AppState {
         fs: FsSubsystem,
         db: Option<mongodb::Database>,
         no_auth: bool,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        // Production safety guards for no-auth mode
+        if no_auth {
+            // Prevent accidental deployment with no-auth + MongoDB configured
+            if db.is_some() {
+                anyhow::bail!(
+                    "FATAL: --no-auth cannot be used when MongoDB is configured (MONGODB_URI is set).\n\
+                     This combination is unsafe and forbidden."
+                );
+            }
+            
+            // Check for production environment indicators
+            if std::env::var("RUST_ENV").unwrap_or_default() == "production" 
+                || std::env::var("ENVIRONMENT").unwrap_or_default() == "production" {
+                anyhow::bail!(
+                    "FATAL: --no-auth is not allowed in production environment.\n\
+                     Set RUST_ENV or ENVIRONMENT to 'development' for local dev."
+                );
+            }
+            
+            // Prominent multi-line warning banner
+            eprintln!(concat!(
+                "\n⚠️  ═══════════════════════════════════════════════════════\n",
+                "⚠️  SECURITY WARNING: Authentication disabled!\n",
+                "⚠️  All API requests will bypass authentication checks.\n",
+                "⚠️  This mode is for LOCAL DEVELOPMENT ONLY.\n",
+                "⚠️  DO NOT use in production or with sensitive data.\n",
+                "⚠️  ═══════════════════════════════════════════════════════\n"
+            ));
+            
+            tracing::error!("⚠️  NO-AUTH mode enabled — authentication bypassed");
+        }
+
+        Ok(Self {
             workspace_dir: Arc::new(RwLock::new(workspace_dir)),
             config: Arc::new(RwLock::new(config)),
             global_config: Arc::new(RwLock::new(global_config)),
@@ -87,6 +124,6 @@ impl AppState {
             fs,
             db,
             no_auth,
-        }
+        })
     }
 }

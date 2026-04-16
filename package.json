@@ -5,7 +5,7 @@
   "scripts": {
     "build": "pnpm --filter @dam-hopper/web build",
     "dev": "pnpm --filter @dam-hopper/web dev --host",
-    "dev:server": "cd server && cargo run",
+    "dev:server": "cd server && cargo run -- --no-auth",
     "dev:server:watch": "cd server && cargo watch -x run",
     "build:server": "cd server && cargo build --release",
     "serve": "cd server && cargo run --release",
