@@ -61,7 +61,7 @@ fn make_state(tmp: &TempDir) -> AppState {
         fs,
         None,
         false,
-    )
+    ).expect("make_state failed")
 }
 
 fn test_jwt() -> String {
@@ -420,6 +420,9 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
             tags: None,
             terminals: vec![],
             agents: None,
+            restart_policy: crate::config::RestartPolicy::Never,
+            restart_max_retries: crate::config::DEFAULT_RESTART_MAX_RETRIES,
+            health_check_url: None,
         }],
         features: FeaturesConfig::default(),
         config_path: workspace_dir.join("dam-hopper.toml"),
@@ -441,7 +444,7 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         fs,
         None,
         false,
-    )
+    ).expect("make_state_with_project failed")
 }
 
 #[tokio::test]

@@ -7,7 +7,7 @@ use super::{
     },
     parser::{read_config, write_config},
     presets::{get_effective_command, get_preset},
-    schema::{CommandKind, GlobalConfig, KnownWorkspace, ProjectType, UiConfig},
+    schema::{CommandKind, GlobalConfig, KnownWorkspace, ProjectType, RestartPolicy, UiConfig},
 };
 
 // ──────────────────────────────────────────────
@@ -178,6 +178,126 @@ env_file = ".env"
     assert_eq!(original.projects[0].name, reloaded.projects[0].name);
     assert_eq!(original.projects[0].env_file, reloaded.projects[0].env_file);
     assert_eq!(original.projects[0].tags, reloaded.projects[0].tags);
+}
+
+// ──────────────────────────────────────────────
+// RestartPolicy parse tests
+// ──────────────────────────────────────────────
+
+#[test]
+fn restart_policy_defaults_when_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"",
+    )
+    .unwrap();
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(cfg.projects[0].restart_policy, RestartPolicy::Never);
+    assert_eq!(cfg.projects[0].restart_max_retries, 5);
+    assert!(cfg.projects[0].health_check_url.is_none());
+}
+
+#[test]
+fn restart_policy_on_failure_and_custom_retries() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[workspace]
+name = "w"
+
+[[projects]]
+name = "p"
+path = "."
+type = "cargo"
+restart = "on-failure"
+restart_max_retries = 3
+"#,
+    )
+    .unwrap();
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(cfg.projects[0].restart_policy, RestartPolicy::OnFailure);
+    assert_eq!(cfg.projects[0].restart_max_retries, 3);
+}
+
+#[test]
+fn restart_policy_always_parsed() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"\nrestart=\"always\"",
+    )
+    .unwrap();
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(cfg.projects[0].restart_policy, RestartPolicy::Always);
+}
+
+#[test]
+fn restart_policy_invalid_string_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"\nrestart=\"on-error\"",
+    )
+    .unwrap();
+    assert!(read_config(&config_path).is_err());
+}
+
+#[test]
+fn health_check_url_invalid_scheme_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"\nhealth_check_url=\"ftp://example.com\"",
+    )
+    .unwrap();
+    assert!(read_config(&config_path).is_err());
+}
+
+#[test]
+fn restart_policy_roundtrip_preserves_non_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[workspace]
+name = "rt-restart-ws"
+
+[[projects]]
+name = "svc"
+path = "./svc"
+type = "cargo"
+restart = "on-failure"
+restart_max_retries = 3
+health_check_url = "http://localhost:8080/health"
+"#,
+    )
+    .unwrap();
+
+    let original = read_config(&config_path).unwrap();
+    assert_eq!(original.projects[0].restart_policy, RestartPolicy::OnFailure);
+    assert_eq!(original.projects[0].restart_max_retries, 3);
+    assert_eq!(
+        original.projects[0].health_check_url.as_deref(),
+        Some("http://localhost:8080/health")
+    );
+
+    write_config(&config_path, &original).unwrap();
+    let reloaded = read_config(&config_path).unwrap();
+
+    assert_eq!(reloaded.projects[0].restart_policy, RestartPolicy::OnFailure);
+    assert_eq!(reloaded.projects[0].restart_max_retries, 3);
+    assert_eq!(
+        reloaded.projects[0].health_check_url.as_deref(),
+        Some("http://localhost:8080/health")
+    );
 }
 
 // ──────────────────────────────────────────────

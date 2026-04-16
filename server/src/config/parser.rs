@@ -4,8 +4,8 @@ use crate::error::AppError;
 use crate::utils::atomic_write;
 
 use super::schema::{
-    DamHopperConfig, DamHopperConfigRaw, ProjectConfig, ProjectConfigRaw, ServiceConfig,
-    TerminalProfile, TerminalProfileRaw,
+    DamHopperConfig, DamHopperConfigRaw, ProjectConfig, ProjectConfigRaw, RestartPolicy,
+    ServiceConfig, TerminalProfile, TerminalProfileRaw, DEFAULT_RESTART_MAX_RETRIES,
 };
 
 // ──────────────────────────────────────────────
@@ -100,6 +100,16 @@ fn validate_config(raw: &DamHopperConfigRaw) -> Result<(), AppError> {
                 )));
             }
         }
+
+        // health_check_url must be an http/https URL when present
+        if let Some(url) = &project.health_check_url {
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return Err(AppError::Config(format!(
+                    "Project '{}': health_check_url must start with http:// or https://, got: {}",
+                    project.name, url
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -147,6 +157,9 @@ fn resolve_project(raw: ProjectConfigRaw, config_dir: &Path) -> Result<ProjectCo
         tags: raw.tags,
         terminals,
         agents: raw.agents,
+        restart_policy: raw.restart.unwrap_or(RestartPolicy::Never),
+        restart_max_retries: raw.restart_max_retries.unwrap_or(DEFAULT_RESTART_MAX_RETRIES),
+        health_check_url: raw.health_check_url,
     })
 }
 
@@ -283,6 +296,22 @@ fn project_to_toml(p: &ProjectConfig, config_dir: &Path) -> toml::Value {
             })
             .collect();
         map.insert("terminals".to_string(), Value::Array(terms));
+    }
+
+    // Only write non-default restart fields to keep TOML files clean.
+    if p.restart_policy != RestartPolicy::Never {
+        let policy_str = match p.restart_policy {
+            RestartPolicy::Never => "never",
+            RestartPolicy::OnFailure => "on-failure",
+            RestartPolicy::Always => "always",
+        };
+        map.insert("restart".to_string(), Value::String(policy_str.to_string()));
+    }
+    if p.restart_max_retries != DEFAULT_RESTART_MAX_RETRIES {
+        map.insert("restart_max_retries".to_string(), Value::Integer(p.restart_max_retries as i64));
+    }
+    if let Some(url) = &p.health_check_url {
+        map.insert("health_check_url".to_string(), Value::String(url.clone()));
     }
 
     // NOTE: `agents` is intentionally not written back — writeConfig is the build/run UI path.

@@ -123,6 +123,9 @@ pub async fn init_workspace(
                         tags: None,
                         terminals: vec![],
                         agents: None,
+                        restart_policy: crate::config::RestartPolicy::Never,
+                        restart_max_retries: crate::config::DEFAULT_RESTART_MAX_RETRIES,
+                        health_check_url: None,
                     }
                 })
                 .collect();

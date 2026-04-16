@@ -161,6 +161,9 @@ build_command = "..."    # overrides preset
 run_command = "..."      # overrides preset
 env_file = ".env"        # optional
 tags = ["backend"]       # optional
+restart = "on-failure"   # optional: never (default) | on-failure | always
+restart_max_retries = 5  # optional: default 5; only written to TOML when non-default
+health_check_url = "http://localhost:8080/health"  # optional: must be http:// or https://
 ```
 
 

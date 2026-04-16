@@ -48,6 +48,9 @@ fn make_test_state(tmp: &TempDir) -> AppState {
             tags: None,
             terminals: vec![],
             agents: None,
+            restart_policy: Default::default(),
+            restart_max_retries: 5,
+            health_check_url: None,
         }],
         features: FeaturesConfig::default(),
         config_path: workspace_dir.join("dam-hopper.toml"),
@@ -69,7 +72,7 @@ fn make_test_state(tmp: &TempDir) -> AppState {
         fs,
         None,
         false,
-    )
+    ).expect("make_test_state failed")
 }
 
 async fn spawn_server(state: AppState) -> SocketAddr {

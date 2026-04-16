@@ -53,6 +53,21 @@ impl std::fmt::Display for CommandKind {
 }
 
 // ──────────────────────────────────────────────
+// Restart policy
+// ──────────────────────────────────────────────
+
+pub const DEFAULT_RESTART_MAX_RETRIES: u32 = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum RestartPolicy {
+    #[default]
+    Never,
+    OnFailure,
+    Always,
+}
+
+// ──────────────────────────────────────────────
 // Service config
 // Single struct — on-disk TOML uses snake_case which serde handles via rename.
 // ──────────────────────────────────────────────
@@ -152,6 +167,9 @@ pub struct ProjectConfigRaw {
     pub tags: Option<Vec<String>>,
     pub terminals: Option<Vec<TerminalProfileRaw>>,
     pub agents: Option<ProjectAgents>,
+    pub restart: Option<RestartPolicy>,
+    pub restart_max_retries: Option<u32>,
+    pub health_check_url: Option<String>,
 }
 
 /// Terminal profile as stored on disk (relative cwd).
@@ -167,6 +185,7 @@ pub struct TerminalProfileRaw {
 // ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectConfig {
     pub name: String,
     pub path: String, // absolute — String for JSON/IPC serialization boundary
@@ -183,6 +202,10 @@ pub struct ProjectConfig {
     pub terminals: Vec<TerminalProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agents: Option<ProjectAgents>,
+    pub restart_policy: RestartPolicy,
+    pub restart_max_retries: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_check_url: Option<String>,
 }
 
 // ──────────────────────────────────────────────

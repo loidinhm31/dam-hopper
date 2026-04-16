@@ -9,8 +9,9 @@
 - Date: 2026-04-16
 - Description: Add `restart`, `restart_max_retries`, `health_check_url` fields to project TOML schema. Parse and propagate defaults.
 - Priority: P1
-- Implementation status: pending
-- Review status: pending
+- Implementation status: DONE
+- Review status: approved
+- Completed: 2026-04-16
 
 ## Key Insights
 - `ProjectConfigRaw` (on-disk TOML) uses `snake_case`; serde `rename_all = "kebab-case"` on the policy enum matches `"on-failure"` spelling.

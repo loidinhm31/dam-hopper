@@ -124,6 +124,8 @@ export interface TerminalProfile {
   cwd: string;
 }
 
+export type RestartPolicy = "never" | "on-failure" | "always";
+
 export interface ProjectConfig {
   name: string;
   path: string;
@@ -133,6 +135,9 @@ export interface ProjectConfig {
   terminals?: TerminalProfile[];
   envFile?: string;
   tags?: string[];
+  restartPolicy?: RestartPolicy;
+  restartMaxRetries?: number;
+  healthCheckUrl?: string;
 }
 
 export interface WorkspaceConfig {

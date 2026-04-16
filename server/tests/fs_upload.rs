@@ -42,6 +42,9 @@ fn make_state(tmp: &TempDir) -> AppState {
             tags: None,
             terminals: vec![],
             agents: None,
+            restart_policy: Default::default(),
+            restart_max_retries: 5,
+            health_check_url: None,
         }],
         features: FeaturesConfig::default(),
         config_path: workspace_dir.join("dam-hopper.toml"),
@@ -50,7 +53,7 @@ fn make_state(tmp: &TempDir) -> AppState {
     let pty = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(workspace_dir.clone());
-    AppState::new(workspace_dir, config, GlobalConfig::default(), pty, agent_store, event_sink, TEST_TOKEN.to_string(), fs, None, false)
+    AppState::new(workspace_dir, config, GlobalConfig::default(), pty, agent_store, event_sink, TEST_TOKEN.to_string(), fs, None, false).expect("make_state failed")
 }
 
 async fn spawn_server(state: AppState) -> SocketAddr {
