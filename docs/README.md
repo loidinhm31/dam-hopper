@@ -13,12 +13,19 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 ## Feature Guides
 
 - **[Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md)** — Manage and switch between multiple server connections
+- **[Frontend Components](./frontend-components.md)** — React component architecture, lifecycle UI (Phase 06+)
 
 ## Reference Documentation
 
 - **[API Reference](./api-reference.md)** — REST endpoints, WebSocket protocol, response formats
 - **[Code Standards](./code-standards.md)** — Rust & TypeScript conventions, patterns, testing
 - **[Codebase Summary](./codebase-summary.md)** — Module breakdown, key services, data flow
+- **[WebSocket Protocol Guide](./ws-protocol-guide.md)** — Message format, events, Phase 5+ enhancements
+
+## Implementation Plans
+
+- **[Terminal Enhancement Phase 06](../plans/20260415-terminal-enhancement/phase-06-frontend-lifecycle-ui.md)** — Status dots, restart badges, lifecycle banners (COMPLETE ✓)
+- **[Terminal Enhancement Test Plan](../plans/20260415-terminal-enhancement/phase-06-test-plan.md)** — Manual testing procedures
 
 ## Key Sections
 
@@ -38,6 +45,13 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 | API Reference | All REST/WebSocket endpoints, authentication, examples |
 | Code Standards | Coding patterns, testing, structure, security checklist |
 
+### Frontend Development
+
+| Document | Purpose |
+|----------|---------|
+| Frontend Components | React component architecture, lifecycle management, event handling |
+| WebSocket Protocol Guide | Real-time message formats, Phase 5+ events (exit, restart, reconnect) |
+
 ## Core Concepts
 
 ### Features
@@ -47,7 +61,6 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - Endpoints: GET /api/fs/list, /api/fs/read, /api/fs/stat
 - Sandbox: Path validation prevents escape attempts
 
-
 **Workspace Management** — TOML-based config, project discovery, hot-reload.
 - Config: dam-hopper.toml at workspace root
 - Support types: npm, pnpm, cargo, maven, gradle, custom
@@ -56,6 +69,9 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 **Terminal Sessions** — Isolated PTY per project, output streaming.
 - API: /api/pty/spawn, /api/pty/{id}/send
 - WebSocket: Real-time output + events
+- **Phase 04:** Auto-restart with exponential backoff, policy-driven (never/on-failure/always)
+- **Phase 05:** Enhanced exit events with restart metadata, separate FS/PTY channels
+- **Phase 06:** Lifecycle UI with status dots, restart badges, exit/restart/reconnect banners
 - See: [API Reference](./api-reference.md#terminals)
 
 **Git Operations** — Clone, push, pull, status with progress.
@@ -78,6 +94,45 @@ cargo run -- --workspace /path/to/workspace --port 4800
 ```
 
 See token at `~/.config/dam-hopper/server-token`.
+
+### Understand a Component
+
+1. Find component in `packages/web/src/components/`
+2. Check [Frontend Components](./frontend-components.md) for architecture overview
+3. Review event subscriptions via [WebSocket Protocol Guide](./ws-protocol-guide.md)
+4. Trace type definitions in `packages/web/src/api/client.ts`
+
+### Debug Session Lifecycle
+
+Terminal lifecycle follows six main states:
+- **alive** — Process running (🟢 green dot)
+- **restarting** — Exited, will restart after backoff (🟡 yellow dot)
+- **crashed** — Exited non-zero, no restart (🔴 red dot)
+- **exited** — Exited zero, no restart (⚪ gray dot)
+
+See [Frontend Components](./frontend-components.md#data-flow-terminal-lifecycle) for detailed flow.
+
+## Recent Changes
+
+**Phase 06 (Complete ✓):**
+- ✓ Added session lifecycle status helpers (`session-status.ts`)
+- ✓ Implemented status dots in TerminalTreeView (color-coded by state)
+- ✓ Added restart badge in DashboardPage (shows count when > 0)
+- ✓ Implemented exit/restart/reconnect banners in TerminalPanel (ANSI-colored)
+- ✓ Wired WebSocket event handlers for lifecycle events
+- ✓ Added query invalidation on process restart
+
+**Phase 05 (Complete ✓):**
+- ✓ Backend: Enhanced `terminal:exit` with willRestart/restartInMs/restartCount
+- ✓ Backend: New `process:restarted` event
+- ✓ Backend: Separated PTY and FS channels to prevent FS overflow from killing connection
+- ✓ Frontend: Transport listeners for new events
+
+**Phase 04 (Complete ✓):**
+- ✓ Auto-restart engine with exponential backoff
+- ✓ Configurable restart policy per terminal (never/on-failure/always)
+- ✓ Restart count tracking
+- ✓ Supervisor pattern for safe async restarts
 
 ### Configure a Workspace
 

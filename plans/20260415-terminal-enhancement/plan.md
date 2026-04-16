@@ -43,7 +43,7 @@ Combines **F-01 (Process Lifecycle Management)** with **4 crash fixes** from deb
 | 3 | F-01 Session Metadata — restart_count, last_exit_at | [phase-03-session-meta-extension.md](./phase-03-session-meta-extension.md) | DONE | 4h |
 | 4 | F-01 Restart Engine — reader_thread respawn + backoff | [phase-04-restart-engine.md](./phase-04-restart-engine.md) | DONE (2026-04-16) | 8h |
 | 5 | WS Events + Bug Fix B — enhanced exit event, FS/PTY channel split | [phase-05-ws-events-channel-split.md](./phase-05-ws-events-channel-split.md) | DONE (2026-04-17) | 8h |
-| 6 | Frontend — status dots, restart badge, Fix C banner, Fix D reconnect UX | [phase-06-frontend-lifecycle-ui.md](./phase-06-frontend-lifecycle-ui.md) | pending | 8h |
+| 6 | Frontend — status dots, restart badge, Fix C banner, Fix D reconnect UX | [phase-06-frontend-lifecycle-ui.md](./phase-06-frontend-lifecycle-ui.md) | DONE (2026-04-17) | 8h |
 | 7 | Tombstone Idempotency — auto-clean on terminal:create | [phase-07-create-idempotency.md](./phase-07-create-idempotency.md) | pending | 3h |
 
 **Total:** ~37h (4–5 days).

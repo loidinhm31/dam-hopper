@@ -85,6 +85,8 @@ export function TerminalPanel({
     // Track all cleanups so the effect return can always run them
     let unsubData: (() => void) | null = null;
     let unsubExit: (() => void) | null = null;
+    let unsubRestart: (() => void) | null = null;
+    let unsubStatus: (() => void) | null = null;
     let inputDisposable: { dispose: () => void } | null = null;
     let observer: ResizeObserver | null = null;
     let fitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -113,9 +115,32 @@ export function TerminalPanel({
           term.write(data);
         });
 
-        // Handle PTY exit
-        unsubExit = transport.onTerminalExit(sessionId, (exitCode) => {
+        // Handle PTY exit with enhanced restart metadata
+        unsubExit = transport.onTerminalExitEnhanced(sessionId, (exitEvent) => {
+          const { exitCode, willRestart, restartIn } = exitEvent;
+          // Choose banner color and text based on restart intent
+          const color = willRestart ? "\x1b[33m" : exitCode === 0 ? "\x1b[32m" : "\x1b[31m";
+          const text = willRestart
+            ? `[Process exited (code ${exitCode ?? "?"}), restarting in ${Math.round((restartIn ?? 0) / 1000)}s…]`
+            : `[Process exited with code ${exitCode ?? "?"}]`;
+          term.write(`\r\n${color}${text}\x1b[0m\r\n`);
           onExit?.(exitCode);
+        });
+
+        // Handle process restart event
+        unsubRestart = transport.onProcessRestarted(sessionId, (restartEvent) => {
+          const { restartCount } = restartEvent;
+          term.write(`\x1b[33m[Process restarted (#${restartCount})]\x1b[0m\r\n`);
+        });
+
+        // Handle WebSocket connection status for reconnect banner
+        unsubStatus = transport.onStatusChange((status) => {
+          if (status === "disconnected") {
+            term.write(`\r\n\x1b[2m[Reconnecting…]\x1b[0m`);
+          } else if (status === "connected") {
+            // Clear the reconnecting message by writing over it
+            term.write(`\x1b[2K\r\x1b[2m[Reconnected]\x1b[0m\r\n`);
+          }
         });
 
         // Forward user input → PTY stdin
@@ -168,6 +193,8 @@ export function TerminalPanel({
       cancelAnimationFrame(mountRafId);
       unsubData?.();
       unsubExit?.();
+      unsubRestart?.();
+      unsubStatus?.();
       inputDisposable?.dispose();
       if (fitTimer) clearTimeout(fitTimer);
       observer?.disconnect();

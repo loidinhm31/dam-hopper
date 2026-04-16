@@ -16,6 +16,7 @@ import { CommandSuggestionInput } from "@/components/atoms/CommandSuggestionInpu
 import type { TreeProject, TreeCommand } from "@/hooks/useTerminalTree.js";
 import type { SessionInfo } from "@/api/client.js";
 import type { ProjectType } from "@/api/client.js";
+import { getSessionStatus, getStatusDotColor } from "@/lib/session-status.js";
 
 interface Props {
   projects: TreeProject[];
@@ -41,13 +42,9 @@ function StatusDot({ session }: { session?: SessionInfo | null }) {
   if (!session) {
     return <span className="h-2 w-2 rounded-full bg-[var(--color-text-muted)]/30 shrink-0" />;
   }
-  if (session.alive) {
-    return <span className="h-2 w-2 rounded-full bg-green-500 shrink-0" />;
-  }
-  if (session.exitCode !== 0 && session.exitCode !== null && session.exitCode !== undefined) {
-    return <span className="h-2 w-2 rounded-full bg-red-500 shrink-0" />;
-  }
-  return <span className="h-2 w-2 rounded-full bg-amber-500 shrink-0" />;
+  const status = getSessionStatus(session);
+  const dotColor = getStatusDotColor(status);
+  return <span className={`h-2 w-2 rounded-full ${dotColor} shrink-0`} />;
 }
 
 function CommandRow({
