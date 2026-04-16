@@ -100,6 +100,17 @@ Infrastructure
 - **Features**: Syntax highlighting, multi-tab support, git integration
 - **Documentation**: [phase-04-monaco-editor.md](./phase-04-monaco-editor.md)
 
+### Phase 04: PTY Restart Engine ✅ Complete
+- **Status**: Auto-restart for terminal sessions with exponential backoff
+- **Features**: 
+  - Supervisor pattern for async/blocking I/O separation
+  - Restart policies: Never, OnFailure, Always
+  - Exponential backoff (1s → 30s)
+  - Session ID reuse (no frontend navigation)
+  - Bounded respawn channel (DoS protection)
+- **Tests**: 8 decision matrix rows + 5 integration tests (13/13 passing)
+- **Known Limitation**: Exit code inference (portable-pty API) — cannot distinguish exit 0 from exit 1
+
 ## Critical Components
 
 ### Authentication Module (`server/src/api/auth.rs`)

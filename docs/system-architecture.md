@@ -97,15 +97,60 @@ Handles TOML parsing, project discovery, feature flags.
 - Active profile ID: localStorage (survives browser close, shared across tabs)
 - Auth token: sessionStorage (cleared on tab close, isolated per tab) — password never stored
 
-### pty/
-Manages portable terminal sessions via `portable-pty`.
+### pty/ (Phase 04: Restart Engine ✅)
 
-**session_manager.rs** — `PtySessionManager` (Arc<Mutex<Inner>>):
-- Map<uuid, PtySession>
-- `spawn()` creates new session
-- `send()` writes to stdin
-- Output broadcast via `tokio::sync::broadcast`
-- Buffer retained only during live session
+Manages portable terminal sessions with automatic restart capabilities.
+
+**manager.rs** — `PtySessionManager` (Arc<Mutex<Inner>>):
+- Map<id, LiveSession> for active sessions
+- Map<id, DeadSession> tombstones (60s TTL)
+- `create()` spawns PTY + dedicated reader thread
+- `kill()` marks session dead, retains 60s tombstone for reconnect
+- `remove()` immediately evicts session (no restart on user kill)
+- Bounded respawn channel (256 slots) prevents DoS
+
+**session.rs** — Session state management:
+- `SessionMeta` — public status (id, alive, exit_code, restart_count)
+- `LiveSession` — owns master PTY + writer, reader thread reference
+- `DeadSession` — tombstone with exit code, restart decision, backoff delay
+- `RespawnOpts` — cloneable subset of PtyCreateOpts for respawn
+
+**Restart Engine (Phase 04):**
+
+**Supervisor Pattern** — decouples blocking I/O from async restart logic:
+1. Reader thread (std::thread) reads PTY output blocking
+2. On EOF: infer exit code → decide restart → send RespawnCmd
+3. Supervisor task (tokio) receives cmd, waits backoff, calls create()
+4. New session inherits same ID (no frontend navigation needed)
+
+**Decision Matrix:**
+| Policy | Exit=0 | Exit≠0 | Killed |
+|--------|--------|--------|---------|
+| Never | ✗ | ✗ | ✗ |
+| OnFailure* | ✗ | ✓ | ✗ |
+| Always | ✓ | ✓ | ✗ |
+
+*OnFailure currently acts like Always due to portable-pty API limitation
+
+**Exponential Backoff:**
+- 1s, 2s, 4s, 8s, 16s, 30s (max)
+- Cap at `MAX_RESTART_DELAY_MS` (30s)
+- Resets to 1s on clean exit (exit_code == 0)
+
+**Exit Code Inference** (Limitation):
+- portable-pty API only signals EOF (no waitpid equivalent)
+- Inferred as: process in live map → exit 0; not found → exit -1
+- Cannot distinguish exit 0 from exit 1 (architectural limitation)
+- Upstream issue filed: requires std::process wrapper as future work
+
+**Known Issues (Phase 04 Review):** Both fixed before merge:
+1. Bounded channel prevents unbounded respawn queue growth (DoS vector)
+2. Exit code always 0 for natural exits (OnFailure policy broken)
+
+**Tests (Phase 04):**
+- 8 decision matrix rows (all 8/8 passing)
+- 5 integration tests (all passing)
+- Covers: session create/list, write/buffer, resize, kill, respawn
 
 ### git/
 Git operations via `git2` library + CLI fallback.

@@ -41,7 +41,7 @@ Combines **F-01 (Process Lifecycle Management)** with **4 crash fixes** from deb
 | 1 | Bug Fix A — Filter dead in reconnect check | [phase-01-fix-dead-session-reconnect.md](./phase-01-fix-dead-session-reconnect.md) | pending | 2h |
 | 2 | F-01 Config Extension — RestartPolicy enum | [phase-02-config-restart-policy.md](./phase-02-config-restart-policy.md) | DONE | 4h |
 | 3 | F-01 Session Metadata — restart_count, last_exit_at | [phase-03-session-meta-extension.md](./phase-03-session-meta-extension.md) | DONE | 4h |
-| 4 | F-01 Restart Engine — reader_thread respawn + backoff | [phase-04-restart-engine.md](./phase-04-restart-engine.md) | pending | 8h |
+| 4 | F-01 Restart Engine — reader_thread respawn + backoff | [phase-04-restart-engine.md](./phase-04-restart-engine.md) | DONE (2026-04-16) | 8h |
 | 5 | WS Events + Bug Fix B — enhanced exit event, FS/PTY channel split | [phase-05-ws-events-channel-split.md](./phase-05-ws-events-channel-split.md) | pending | 8h |
 | 6 | Frontend — status dots, restart badge, Fix C banner, Fix D reconnect UX | [phase-06-frontend-lifecycle-ui.md](./phase-06-frontend-lifecycle-ui.md) | pending | 8h |
 | 7 | Tombstone Idempotency — auto-clean on terminal:create | [phase-07-create-idempotency.md](./phase-07-create-idempotency.md) | pending | 3h |

@@ -7,10 +7,16 @@
 
 ## Overview
 - Date: 2026-04-16
+- Completion date: 2026-04-16
 - Description: Make PTY reader thread decide whether to respawn on EOF. Exponential backoff 1s→30s, max retries, suppress on manual kill, reset counter on clean-after-restart.
 - Priority: P1
-- Implementation status: pending
-- Review status: pending
+- Implementation status: complete
+- Review status: reviewed (2026-04-16)
+- Review score: 8.5/10 (after critical fixes)
+- Review highlights: Supervisor pattern well-executed, decision matrix fully tested. Critical issues addressed: bounded channel (DoS prevention), exit code documentation (portable-pty API limitation).
+- Files modified: `server/src/pty/manager.rs` (~200 lines), `server/src/pty/tests.rs` (~160 lines)
+- Tests: 8 unit tests (decision matrix), 5 integration tests (restart cycles)
+- Core features: killed HashSet, decide_restart, restart_delay_ms, RespawnCmd, reader_thread integration, supervisor_loop, respawn_internal
 
 ## Key Insights
 - Reader thread runs on a blocking OS thread (portable-pty reader). It cannot call `async fn create` directly. Schedule respawn via `tokio::runtime::Handle::current().spawn(...)` captured at manager construction, or pass a `tokio::sync::mpsc::UnboundedSender<RespawnCmd>` consumed by a supervisor task.
