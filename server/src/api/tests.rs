@@ -60,6 +60,7 @@ fn make_state(tmp: &TempDir) -> AppState {
         TEST_TOKEN.to_string(),
         fs,
         None,
+        false,
     )
 }
 
@@ -439,6 +440,7 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         TEST_TOKEN.to_string(),
         fs,
         None,
+        false,
     )
 }
 

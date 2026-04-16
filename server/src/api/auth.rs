@@ -74,6 +74,11 @@ pub async fn require_auth(
     request: Request,
     next: Next,
 ) -> Response {
+    // Dev mode: bypass all auth checks
+    if state.no_auth {
+        return next.run(request).await;
+    }
+
     let ok = extract_token(&request, &jar)
         .map(|t| validate_jwt(&t, &state.jwt_secret))
         .unwrap_or(false);
@@ -139,6 +144,29 @@ pub async fn login(
     State(state): State<AppState>,
     Json(body): Json<LoginBody>,
 ) -> Response {
+    // Dev mode: return dev token immediately (no credentials check)
+    if state.no_auth {
+        let exp = (chrono::Utc::now().timestamp() as usize) + 30 * 24 * 3600;
+        let claims = Claims { sub: "dev-user".to_string(), exp };
+        let jwt_token = encode(
+            &Header::default(), 
+            &claims, 
+            &EncodingKey::from_secret(state.jwt_secret.as_bytes())
+        ).unwrap_or_default();
+        
+        let cookie_attrs = format!("{AUTH_COOKIE}={}; HttpOnly; Secure; Path=/; SameSite=Strict", jwt_token);
+        
+        return (
+            StatusCode::OK,
+            [(header::SET_COOKIE, cookie_attrs)],
+            Json(serde_json::json!({
+                "ok": true,
+                "token": jwt_token,
+                "dev_mode": true
+            })),
+        ).into_response();
+    }
+
     let mut is_authenticated = false;
     let mut logged_in_sub = "unknown".to_string();
 
@@ -191,6 +219,15 @@ pub async fn status(
     jar: CookieJar,
     request: Request,
 ) -> Response {
+    // Dev mode: always authenticated
+    if state.no_auth {
+        return Json(serde_json::json!({
+            "authenticated": true,
+            "dev_mode": true,
+            "user": "dev-user"
+        })).into_response();
+    }
+
     let ok = extract_token(&request, &jar)
         .map(|t| validate_jwt(&t, &state.jwt_secret))
         .unwrap_or(false);

@@ -81,8 +81,32 @@ See individual phase docs. Major: FS/PTY channel separation (Phase 5), reader th
 
 ## Unresolved Questions
 
-1. Default restart policy — `"never"` (explicit, recommended) vs `"on-failure"`.
-2. Reset restart_count on clean exit after restart? Recommended: yes.
-3. Should Phase 7 idempotency replace Phase 1 fix entirely, or complement it (defense in depth)? Recommended: keep both.
-4. FS event pump overflow — raise `CONN_CHAN_CAP` to 2048 OR separate channels? See Phase 5 decision.
-5. Should restart events also fire `terminal:changed` to refresh the session list? Likely yes.
+1. ~~Default restart policy — `"never"` (explicit, recommended) vs `"on-failure"`.~~ **Resolved:** `"never"`.
+2. ~~Reset restart_count on clean exit after restart? Recommended: yes.~~ **Resolved:** Yes, reset on clean exit (matches systemd/Docker semantics).
+3. ~~Should Phase 7 idempotency replace Phase 1 fix entirely, or complement it (defense in depth)? Recommended: keep both.~~ **Resolved:** Skip Phase 1, do Phase 7 only (server-side fix is sufficient).
+4. ~~FS event pump overflow — raise `CONN_CHAN_CAP` to 2048 OR separate channels? See Phase 5 decision.~~ **Resolved:** Separate channels (pty_tx + fs_tx, overflow drops FS subscription only).
+5. ~~Should restart events also fire `terminal:changed` to refresh the session list? Likely yes.~~ **Resolved:** Yes, fire `terminal:changed` on restart.
+
+## Validated Architecture Decisions
+
+- **Restart engine pattern:** Supervisor task + mpsc channel (reader thread sends `RespawnCmd`, dedicated tokio task handles async sleep + respawn).
+- **Session ID on respawn:** Reuse same session ID (frontend tab stays connected, receives banner + fresh output).
+
+## Validation Summary
+
+**Validated:** 2026-04-16
+**Questions asked:** 7
+
+### Confirmed Decisions
+- Default restart policy: `"never"` — explicit opt-in, safest for dev-tool running arbitrary commands
+- Restart counter reset: yes on clean exit (code=0) — matches systemd/Docker behavior, gives fresh retries
+- Phase 1 vs Phase 7: **skip Phase 1**, only do Phase 7 (server-side tombstone cleanup is the permanent fix)
+- FS/PTY channel split: separate channels with FS overflow dropping subscription only
+- Supervisor task pattern (mpsc channel from reader thread to async supervisor)
+- Reuse same session ID on respawn (no frontend tab navigation changes needed)
+- Fire `terminal:changed` alongside `process:restarted` for dashboard/sidebar auto-refresh
+
+### Action Items
+- [ ] Remove Phase 1 from the phase table and dependency graph (saves ~2h)
+- [ ] Update Phase 7 to note it is now the sole fix for Failure Mode 4 (no Phase 1 belt-and-suspenders)
+- [ ] Update dependency graph: Phase 7 no longer references Phase 1 as a prerequisite complement

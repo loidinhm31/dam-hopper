@@ -38,6 +38,11 @@ cat ~/.config/dam-hopper/server-token
 # Regenerate auth token:
 cd server && cargo run -- --new-token --workspace /path/to/workspace
 
+# Dev mode (no authentication) — bypasses MongoDB auth, auto-generates dev token
+cd server && cargo run -- --no-auth --workspace /path/to/workspace
+# Or via env var:
+DAM_HOPPER_NO_AUTH=1 cargo run -- --workspace /path/to/workspace
+
 # Lint (packages/web only)
 pnpm lint
 

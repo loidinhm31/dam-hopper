@@ -187,24 +187,25 @@ async fn test_health_check_broken_symlink() {
     fs::create_dir_all(&skills_dir).await.unwrap();
 
     // Create a symlink pointing to a nonexistent target
-    let broken_link = skills_dir.join("broken-skill");
     #[cfg(unix)]
-    std::os::unix::fs::symlink("/nonexistent/path/broken", &broken_link).unwrap();
+    {
+        let broken_link = skills_dir.join("broken-skill");
+        std::os::unix::fs::symlink("/nonexistent/path/broken", &broken_link).unwrap();
+
+        let store_path = tmp.path().join("store");
+        let result = health_check(
+            &store_path,
+            &[("project", project_path.as_path())],
+            AgentType::all(),
+        ).await;
+
+        assert_eq!(result.broken_symlinks.len(), 1, "expected 1 broken symlink");
+        assert_eq!(result.broken_symlinks[0].project, "project");
+    }
     #[cfg(not(unix))]
     {
         // Skip this test on non-unix
-        return;
     }
-
-    let store_path = tmp.path().join("store");
-    let result = health_check(
-        &store_path,
-        &[("project", project_path.as_path())],
-        AgentType::all(),
-    ).await;
-
-    assert_eq!(result.broken_symlinks.len(), 1, "expected 1 broken symlink");
-    assert_eq!(result.broken_symlinks[0].project, "project");
 }
 
 // ── Memory template tests ─────────────────────────────────────────────────────

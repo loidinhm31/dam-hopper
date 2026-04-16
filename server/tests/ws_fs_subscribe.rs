@@ -68,6 +68,7 @@ fn make_test_state(tmp: &TempDir) -> AppState {
         TEST_TOKEN.to_string(),
         fs,
         None,
+        false,
     )
 }
 

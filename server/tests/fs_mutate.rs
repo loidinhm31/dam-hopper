@@ -49,7 +49,7 @@ fn make_state(tmp: &TempDir) -> AppState {
     let pty = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(workspace_dir.clone());
-    AppState::new(workspace_dir, config, GlobalConfig::default(), pty, agent_store, event_sink, TEST_TOKEN.to_string(), fs, None)
+    AppState::new(workspace_dir, config, GlobalConfig::default(), pty, agent_store, event_sink, TEST_TOKEN.to_string(), fs, None, false)
 }
 
 async fn spawn_server(state: AppState) -> SocketAddr {

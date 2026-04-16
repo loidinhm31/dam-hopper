@@ -193,6 +193,54 @@ const content = await transport.fsRead(project, path);
 await transport.fsWriteFile(project, path, content, mtime);
 ```
 
+## Authentication & Security Patterns (Phase 01+)
+
+### No-Auth Dev Mode
+
+The `--no-auth` flag enables local development without MongoDB authentication:
+
+```bash
+# Command-line flag
+cd server && cargo run -- --no-auth --workspace /path/to/workspace
+
+# Environment variable
+DAM_HOPPER_NO_AUTH=1 cargo run -- --workspace /path/to/workspace
+```
+
+**Implementation Pattern** (auth.rs):
+
+```rust
+pub async fn require_auth(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    request: Request,
+    next: Next,
+) -> Response {
+    // Dev mode: bypass all auth checks
+    if state.no_auth {
+        return next.run(request).await;
+    }
+
+    // Normal JWT validation...
+}
+```
+
+**Production Safety**:
+- Panics if MongoDB configured while no-auth enabled
+- Panics if RUST_ENV or ENVIRONMENT set to "production"
+- Multi-line warning banner on startup
+- ERROR-level logging for visibility
+
+See [Phase 01 documentation](./phase-01-server-auth-bypass/index.md) for complete security considerations.
+
+### JWT Pattern
+
+- **Token Storage**: `~/.config/dam-hopper/server-token` (hex UUID)
+- **Signing Algorithm**: HS256 (HMAC-SHA256)
+- **Cookie Transport**: httpOnly, Secure, SameSite=Strict
+- **Validation**: Constant-time comparison via `subtle` crate
+- **Expiry**: 30 days for production, 30 days for dev mode
+
 ## Configuration (dam-hopper.toml)
 
 ```toml

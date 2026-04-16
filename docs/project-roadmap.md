@@ -5,7 +5,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 ## Status Overview
 
 - **Current Phase:** Phase 05: Write Operations (In Progress)
-- **Last Milestone:** Phase 04: Monaco Editor + Save (Completed 2026-04-09)
+- **Last Milestone:** Phase 01: Multi-Server Auth Bypass (Completed 2026-04-16)
 - **Next Milestone:** Phase 05: Create/delete/move/rename operations
 
 ## Roadmap Phases
@@ -60,6 +60,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-04-16:** Completed Phase 01: Multi-Server Auth Bypass.
+    - ✅ Added `--no-auth` CLI flag for dev mode authentication bypass
+    - ✅ Updated AppState with `no_auth: bool` field
+    - ✅ Modified auth middleware, login handler, and status endpoint
+    - ✅ Added production safety guards (panics if no_auth + MongoDB or prod env)
+    - ✅ Created 7 integration tests (all passing)
+    - ✅ Code reviewed: 9.5/10 (critical security issue resolved)
 - **2026-04-14:** Implemented Binary Streaming for Large File Writes.
     - Switched `fsWriteFile` from base64 text frames to zero-overhead binary frames for large files.
     - Introduced `NamedTempFile` buffering on the server to prevent RAM spikes during large saves.

@@ -46,6 +46,8 @@ pub struct AppState {
     pub fs: FsSubsystem,
     /// MongoDB Database, if configured
     pub db: Option<mongodb::Database>,
+    /// Dev mode: skip authentication checks
+    pub no_auth: bool,
 }
 
 impl AppState {
@@ -70,6 +72,7 @@ impl AppState {
         jwt_secret: String,
         fs: FsSubsystem,
         db: Option<mongodb::Database>,
+        no_auth: bool,
     ) -> Self {
         Self {
             workspace_dir: Arc::new(RwLock::new(workspace_dir)),
@@ -83,6 +86,7 @@ impl AppState {
             ssh_creds: Arc::new(RwLock::new(None)),
             fs,
             db,
+            no_auth,
         }
     }
 }
