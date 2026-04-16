@@ -92,7 +92,10 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
       if (autoLoginAttempted) return;
       if (!profile) return;
       if (profile.authType !== "none") return;
-      if (getAuthToken()) return; // Already have token
+      if (getAuthToken()) {
+        setAutoLoginAttempted(true);
+        return;
+      }
       
       try {
         const controller = new AbortController();
@@ -108,8 +111,8 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
         if (data.token) {
           setAuthToken(data.token);
         }
-      } catch {
-        // Will show server settings dialog if auth check fails
+      } catch (err) {
+        console.error('[AuthGuard] Auto-login failed:', err);
       }
       setAutoLoginAttempted(true);
     };
