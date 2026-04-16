@@ -33,6 +33,15 @@ export function useInitWorkspace() {
   });
 }
 
+export function useDiscoverProjects(path: string | null) {
+  return useQuery({
+    queryKey: ["workspace-discover", path],
+    queryFn: () => api.workspace.discover(path!),
+    enabled: !!path,
+    staleTime: 30_000,
+  });
+}
+
 // ── Queries ─────────────────────────────────────────────────────────────────
 
 export function useWorkspace() {

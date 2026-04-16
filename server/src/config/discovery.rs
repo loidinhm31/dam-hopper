@@ -1,11 +1,14 @@
 use std::path::Path;
 
+use serde::Serialize;
+
 use super::{
     presets::{get_preset, DETECTION_ORDER},
     schema::ProjectType,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiscoveredProject {
     pub name: String,
     pub path: String,

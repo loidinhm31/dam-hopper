@@ -40,6 +40,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/workspace", get(workspace::get_workspace))
         .route("/api/workspace/init", post(workspace::init_workspace))
         .route("/api/workspace/switch", post(workspace::switch_workspace))
+        .route("/api/workspace/discover", get(workspace::discover_projects_handler))
         .route("/api/workspace/known", get(workspace::list_known))
         .route("/api/workspace/known", post(workspace::add_known))
         .route("/api/workspace/known", delete(workspace::remove_known))

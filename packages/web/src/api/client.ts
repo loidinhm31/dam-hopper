@@ -182,6 +182,18 @@ export interface WorkspaceStatus {
   projectCount?: number;
 }
 
+export interface DiscoveredProject {
+  name: string;
+  path: string;
+  projectType: ProjectType;
+  isGitRepo: boolean;
+}
+
+export interface DiscoverResponse {
+  path: string;
+  projects: DiscoveredProject[];
+}
+
 export interface UiConfig {
   systemFontSize: number;
   editorFontSize: number;
@@ -288,6 +300,7 @@ export const api = {
     removeKnown: (path: string) => getTransport().invoke<{ removed: boolean }>("workspace:removeKnown", path),
     status: () => getTransport().invoke<WorkspaceStatus>("workspace:status"),
     init: (path: string) => getTransport().invoke<{ name: string; root: string }>("workspace:init", path),
+    discover: (path: string) => getTransport().invoke<DiscoverResponse>("workspace:discover", path),
   },
   globalConfig: {
     get: () => getTransport().invoke<GlobalConfig>("globalConfig:get"),

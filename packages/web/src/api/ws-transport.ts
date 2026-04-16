@@ -74,6 +74,7 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
     case "workspace:get":      return { method: "GET", url: "/api/workspace" };
     case "workspace:init":     return { method: "POST", url: "/api/workspace/init", body: { path: data } };
     case "workspace:switch":   return { method: "POST", url: "/api/workspace/switch", body: { path: data } };
+    case "workspace:discover": return { method: "GET", url: `/api/workspace/discover?path=${encodeURIComponent(data as string)}` };
     case "workspace:known":    return { method: "GET", url: "/api/workspace/known" };
     case "workspace:addKnown": return { method: "POST", url: "/api/workspace/known", body: { path: data } };
     case "workspace:removeKnown": return { method: "DELETE", url: "/api/workspace/known", body: { path: data } };
