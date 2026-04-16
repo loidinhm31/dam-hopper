@@ -2,17 +2,18 @@ use std::{
     collections::HashMap,
     io::Read as _,
     sync::{Arc, Mutex, atomic::Ordering},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem as _};
 use tracing::{debug, info, warn};
 
 use crate::{
+    config::schema::RestartPolicy,
     error::AppError,
     pty::{
         event_sink::EventSink,
-        session::{DeadSession, LiveSession, SessionMeta},
+        session::{DeadSession, LiveSession, RespawnOpts, SessionMeta},
     },
 };
 
@@ -28,6 +29,26 @@ pub struct PtyCreateOpts {
     pub cols: u16,
     pub rows: u16,
     pub project: Option<String>,
+    pub restart_policy: RestartPolicy,
+    pub restart_max_retries: u32,
+}
+
+impl PtyCreateOpts {
+    /// Returns a Clone-safe snapshot suitable for re-spawning this session.
+    /// Excludes raw FDs (master/writer) which are not cloneable.
+    pub fn clone_for_respawn(&self) -> RespawnOpts {
+        RespawnOpts {
+            id: self.id.clone(),
+            command: self.command.clone(),
+            cwd: self.cwd.clone(),
+            env: self.env.clone(),
+            cols: self.cols,
+            rows: self.rows,
+            project: self.project.clone(),
+            restart_policy: self.restart_policy,
+            restart_max_retries: self.restart_max_retries,
+        }
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -116,14 +137,16 @@ impl PtySessionManager {
             .take_writer()
             .map_err(|e| AppError::PtyError(format!("take_writer failed: {e}")))?;
 
+        let respawn_opts = opts.clone_for_respawn();
         let meta = SessionMeta::new(
             opts.id.clone(),
             opts.project,
             opts.command,
             opts.cwd,
+            opts.restart_policy,
         );
 
-        let session = LiveSession::new(meta.clone(), pair.master, writer);
+        let session = LiveSession::new(meta.clone(), pair.master, writer, respawn_opts);
         let buffer = session.buffer_ref();
         let shutdown = session.shutdown_ref();
 
@@ -249,16 +272,7 @@ impl PtySessionManager {
         let mut inner = self.inner.lock().unwrap();
         if let Some(session) = inner.live.remove(id) {
             session.signal_shutdown();
-            let dead = DeadSession {
-                meta: {
-                    let mut m = session.meta;
-                    m.alive = false;
-                    m.exit_code = None;
-                    m
-                },
-                died_at: Instant::now(),
-            };
-            inner.dead.insert(id.to_string(), dead);
+            inner.dead.insert(id.to_string(), DeadSession::killed(session.meta));
         }
     }
 }
@@ -320,16 +334,7 @@ fn reader_thread(
     {
         let mut inner = inner.lock().unwrap();
         if let Some(session) = inner.live.remove(&session_id) {
-            let dead = DeadSession {
-                meta: {
-                    let mut m = session.meta;
-                    m.alive = false;
-                    m.exit_code = Some(exit_code);
-                    m
-                },
-                died_at: Instant::now(),
-            };
-            inner.dead.insert(session_id.clone(), dead);
+            inner.dead.insert(session_id.clone(), DeadSession::exited(session.meta, exit_code));
         }
     }
 

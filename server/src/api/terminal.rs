@@ -7,6 +7,7 @@ use axum::{
 use serde::Deserialize;
 use std::collections::HashMap;
 
+use crate::config::schema::{RestartPolicy, DEFAULT_RESTART_MAX_RETRIES};
 use crate::pty::manager::PtyCreateOpts;
 use crate::state::AppState;
 
@@ -41,6 +42,19 @@ pub async fn create_session(
     let cwd = body.cwd.unwrap_or_else(|| {
         std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
     });
+
+    // Resolve restart policy from project config when a project name is provided.
+    let (restart_policy, restart_max_retries) = if let Some(ref project_name) = body.project {
+        let cfg = state.config.read().await;
+        if let Some(proj) = cfg.projects.iter().find(|p| p.name == *project_name) {
+            (proj.restart_policy, proj.restart_max_retries)
+        } else {
+            (RestartPolicy::default(), DEFAULT_RESTART_MAX_RETRIES)
+        }
+    } else {
+        (RestartPolicy::default(), DEFAULT_RESTART_MAX_RETRIES)
+    };
+
     let meta = state.pty_manager.create(PtyCreateOpts {
         id: body.id,
         command: body.command,
@@ -49,6 +63,8 @@ pub async fn create_session(
         cols: body.cols,
         rows: body.rows,
         project: body.project,
+        restart_policy,
+        restart_max_retries,
     }).map_err(ApiError::from_app)?;
     Ok(Json(meta))
 }

@@ -11,6 +11,7 @@ mod pty_tests {
         time::{Duration, Instant},
     };
 
+    use crate::config::schema::{RestartPolicy, DEFAULT_RESTART_MAX_RETRIES};
     use crate::pty::{
         event_sink::{EventSink, NoopEventSink},
         manager::{PtyCreateOpts, PtySessionManager},
@@ -43,6 +44,8 @@ mod pty_tests {
             cols: 80,
             rows: 24,
             project: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: DEFAULT_RESTART_MAX_RETRIES,
         }
     }
 
@@ -96,6 +99,9 @@ mod pty_tests {
         assert_eq!(meta.id, "build:test-meta");
         assert!(meta.alive);
         assert_eq!(meta.exit_code, None);
+        assert_eq!(meta.restart_count, 0);
+        assert_eq!(meta.last_exit_at, None);
+        assert_eq!(meta.restart_policy, RestartPolicy::Never);
         mgr.remove("build:test-meta").unwrap();
     }
 
