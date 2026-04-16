@@ -9,8 +9,8 @@
 - Date: 2026-04-16
 - Description: Extend `SessionMeta`, `DeadSession`, and `PtyCreateOpts` with restart tracking fields. Pass policy through create-session API.
 - Priority: P1
-- Implementation status: pending
-- Review status: pending
+- Implementation status: DONE
+- Review status: DONE (2026-04-16)
 
 ## Key Insights
 - `SessionMeta` already includes `alive`, `exit_code`, `started_at` — additive fields only.
@@ -47,12 +47,12 @@ terminal:create request
 6. Fix up existing tests.
 
 ## Todo
-- [ ] `SessionMeta` fields + ctor
-- [ ] `DeadSession` fields
-- [ ] `PtyCreateOpts` fields + clone helper
-- [ ] `LiveSession` stores respawn template
-- [ ] API terminal.rs wires policy
-- [ ] Existing tests compile
+- [x] `SessionMeta` fields + ctor
+- [x] `DeadSession` fields
+- [x] `PtyCreateOpts` fields + clone helper
+- [x] `LiveSession` stores respawn template
+- [x] API terminal.rs wires policy
+- [x] Existing tests compile
 
 ## Success Criteria
 - `cargo test` passes.
