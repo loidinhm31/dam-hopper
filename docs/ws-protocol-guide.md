@@ -76,9 +76,58 @@ Binary streaming support added for large file handling.
 
 ### Terminal Events
 
+#### Basic Exit Event (Legacy)
+```json
+{ "kind": "terminal:exited", "id": "uuid", "code": 0 }
+```
+
+#### Enhanced Exit Event (Phase 5+)
+With restart metadata:
+```json
+{
+  "kind": "terminal:exit",
+  "id": "uuid",
+  "exitCode": 1,
+  "willRestart": true,
+  "restartInMs": 2000,
+  "restartCount": 1
+}
+```
+
+**Fields:**
+- `exitCode` — Process exit code (number)
+- `willRestart` — (optional) If true, process will restart after backoff
+- `restartInMs` — (optional) Milliseconds until restart attempt
+- `restartCount` — (optional) Cumulative restart counter
+
+**Backward Compatibility:** Old clients receive functional event; new optional fields ignored if not understood.
+
+#### Process Restarted Event (Phase 5+)
+```json
+{
+  "kind": "process:restarted",
+  "id": "uuid",
+  "restartCount": 2,
+  "previousExitCode": 1
+}
+```
+
+**Usage:** Frontend listens for this to update restart badge and write restart banner.
+
+#### Filesystem Overflow Event (Phase 5+)
+```json
+{
+  "kind": "fs:overflow",
+  "sub_id": 456,
+  "message": "file system event queue full — subscription paused"
+}
+```
+
+**Usage:** Indicates that FS subscription has overflowed. PTY connection remains active. Frontend can optionally re-subscribe after condition clears.
+
+#### Other Terminal Events
 ```json
 { "kind": "terminal:spawned", "id": "uuid", ... }
-{ "kind": "terminal:exited", "id": "uuid", "code": 0 }
 ```
 
 ### File System — Tree Events

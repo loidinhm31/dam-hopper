@@ -1,4 +1,4 @@
-import { FolderGit2, CheckCircle2, AlertCircle, Activity, Hammer, Play, Terminal, Wrench, Square } from "lucide-react";
+import { FolderGit2, CheckCircle2, AlertCircle, Activity, Hammer, Play, Terminal, Wrench, Square, RotateCw } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/atoms/Button.js";
 import { useQueryClient } from "@tanstack/react-query";
@@ -10,6 +10,7 @@ import { useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import type { SessionInfo } from "@/api/client.js";
 import { api } from "@/api/client.js";
+import { getSessionStatus, getStatusDotColor, getStatusGlowClass } from "@/lib/session-status.js";
 
 interface ActivityEntry {
   id: number;
@@ -41,6 +42,23 @@ function SessionRow({ session, onNavigate, onKill }: {
   onKill: (id: string) => void;
 }) {
   const Icon = TYPE_ICON[session.type] ?? Terminal;
+  const status = getSessionStatus(session);
+  const dotColor = getStatusDotColor(status);
+  const glowClass = getStatusGlowClass(status);
+
+  // Tooltip for status dot
+  const statusTooltip = (() => {
+    if (status === "alive") return "Running";
+    if (status === "restarting") {
+      const restartInSec = session.restartInMs ? Math.round(session.restartInMs / 1000) : 0;
+      return `Restarting in ${restartInSec}s`;
+    }
+    if (status === "crashed") return `Crashed (exit code ${session.exitCode ?? "?"})`;
+    return `Exited (code ${session.exitCode ?? 0})`;
+  })();
+
+  // Show restart badge if restartCount > 0
+  const showRestartBadge = (session.restartCount ?? 0) > 0;
 
   return (
     <li
@@ -60,7 +78,19 @@ function SessionRow({ session, onNavigate, onKill }: {
       <span className="text-[10px] text-[var(--color-text-muted)]/60 tabular-nums shrink-0">
         {formatUptime(session.startedAt)}
       </span>
-      <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-success)] status-glow-green shrink-0" />
+      {showRestartBadge && (
+        <span
+          className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] bg-yellow-500/10 text-yellow-500 shrink-0"
+          title={`Restarted ${session.restartCount} time(s)`}
+        >
+          <RotateCw className="h-2.5 w-2.5" />
+          {session.restartCount}
+        </span>
+      )}
+      <span
+        className={`inline-block h-1.5 w-1.5 rounded-full ${dotColor} ${glowClass} shrink-0`}
+        title={statusTooltip}
+      />
       <button
         className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-danger)]/60 hover:text-[var(--color-danger)]"
         onClick={(e) => { e.stopPropagation(); onKill(session.id); }}

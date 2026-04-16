@@ -263,20 +263,108 @@ GET /api/fs/search?project=web&q=pattern[&case=true&max=50]
     JSON response: { results: [{ file: "...", matches: [...] }] }
 ```
 
-## Frontend Components (Phase 07)
+## Frontend Components (Phase 06+)
 
-**MarkdownHost (packages/web/src/components/organisms/)**
-- Renders .md/.mdx files in editor tabs
-- Three modes: Edit (Monaco), Split (Monaco left + Preview right), Preview-only
-- Mode toggle via toolbar buttons
-- Markdown parsing + syntax highlighting via react-markdown
+React 19 single-page application at `packages/web/` using Vite + Tailwind CSS.
 
-**SearchPanel (packages/web/src/components/)**
-- Debounced search input (useDeferredValue)
-- Results grouped by file
-- Match highlighting inline with context
-- Integrated into SidebarTabSwitcher as "SEARCH" tab
-- Ctrl+Shift+F focuses input
+### Component Architecture
+
+**TerminalPanel** (`packages/web/src/components/organisms/TerminalPanel.tsx`)
+- Renders single terminal session using xterm.js
+- Subscribes to Transport events: `onTerminalExit`, `onProcessRestarted`, `onTransportStatus`
+- Writes ANSI banners for lifecycle events:
+  - Exit: Green (code=0), Red (code≠0, no restart), Yellow (willRestart)
+  - Restart: Yellow `[Process restarted (#N)]`
+  - Reconnect: Dim `[Reconnecting…]` / `[Reconnected]`
+- Creates/reconnects to PTY session on mount via `terminal:spawn` command
+
+**TerminalTreeView** (`packages/web/src/components/organisms/TerminalTreeView.tsx`)
+- Sidebar tree displaying projects + commands + sessions
+- Renders `StatusDot` component (NEW: Phase 6) for each session
+- Status dots reflect session lifecycle via `getSessionStatus()` helper
+- Color mapping:
+  - 🟢 Green: alive
+  - 🟡 Yellow: restarting (willRestart=true, within backoff)
+  - 🔴 Red: crashed (exit≠0, no restart)
+  - ⚪ Gray: exited cleanly (exit=0)
+- Expandable profile nodes show instance children + alive count badge
+
+**DashboardPage** (`packages/web/src/components/pages/DashboardPage.tsx`)
+- Main view: all sessions with metadata (uptime, exit code)
+- **SessionRow** renders:
+  - Status dot (via `getSessionStatus`)
+  - Restart badge `↻ N` (when `restartCount > 0`, yellow background)
+  - Uptime and command
+- Queries invalidated on `process:restarted` event → auto-refresh
+
+### Session Lifecycle Helpers (Phase 06)
+
+**session-status.ts** (`packages/web/src/lib/session-status.ts`)
+- `getSessionStatus(sess: SessionInfo): "alive" | "restarting" | "crashed" | "exited"` — determines UI status
+- `getStatusDotColor(status): string` — maps status to Tailwind class
+- `getStatusGlowClass(status): string` — optional glow effect for active states
+- Centralized logic prevents UI inconsistencies across components
+
+**session-status.test.ts**
+- Unit tests for all status transitions
+- Color mapping validation
+- Edge cases (null exit code, missing fields)
+
+### Transport Events (Phase 06)
+
+**WebSocket Transport** (`packages/web/src/api/ws-transport.ts`)
+- New event listeners (Phase 5 contract):
+  - `onTerminalExit(id, callback)` — trigger exit banner, call onExit
+  - `onProcessRestarted(id, callback)` — trigger restart banner, invalidate queries
+  - `onTransportStatus(callback)` — listen to WS connection status changes
+
+### SessionInfo Type Extensions
+
+```ts
+export interface SessionInfo {
+  id: string;
+  project?: string;
+  command: string;
+  cwd: string;
+  type: "build" | "run" | "custom" | "shell" | "terminal" | "free" | "unknown";
+  alive: boolean;
+  exitCode?: number | null;
+  startedAt: number;
+  // Phase 3 restart policy fields
+  restartPolicy?: "never" | "on-failure" | "always";
+  restartCount?: number;
+  lastExitAt?: number;
+  // Phase 5 exit event fields
+  willRestart?: boolean;       // Indicates if process will auto-restart
+  restartInMs?: number;        // Milliseconds until restart attempt
+}
+```
+
+### Data Flow: Terminal Lifecycle
+
+```
+User launches terminal
+  ↓
+terminal:spawn → Backend creates PTY
+  ↓
+terminal:spawned → Frontend stores SessionInfo (alive=true)
+  ↓
+TerminalPanel mounts, xterm renders, streams output
+  ↓
+Process exits
+  ↓
+terminal:exit (willRestart flag set by backend)
+  ↓
+TerminalPanel writes exit banner (color based on exit code + willRestart)
+  ↓
+If willRestart=true, waits for restart...
+  ↓
+process:restarted event
+  ↓
+TerminalPanel writes restart banner, UI updates badge
+  ↓
+xterm resumes streaming (same session ID, new PTY)
+```
 
 **FileTree.tsx (react-arborist)**
 - `onMove` callback enabled for drag-and-drop

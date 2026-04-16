@@ -11,6 +11,13 @@ export interface SessionInfo {
   alive: boolean;
   exitCode?: number | null;
   startedAt: number;
+  // Phase 3 restart policy fields (mirrors backend)
+  restartPolicy?: "never" | "on-failure" | "always";
+  restartCount?: number;
+  lastExitAt?: number;
+  // Phase 5 exit event fields (willRestart computed by server on exit)
+  willRestart?: boolean;
+  restartInMs?: number;
 }
 
 // ── Agent Store Types ─────────────────────────────────────────────────────────
