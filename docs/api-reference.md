@@ -99,6 +99,56 @@ Response:
 }
 ```
 
+## Client-Side Profile Management (Phase 2)
+
+Profile management lives entirely in the browser via **localStorage** — no server endpoints required.
+
+### Data Model
+
+```typescript
+export interface ServerProfile {
+  id: string;                    // UUID v4
+  name: string;                  // "Local Dev", "Production", etc.
+  url: string;                   // "http://localhost:4800"
+  authType: "basic" | "none";    // Authentication method
+  username?: string;             // For basic auth display (password never stored)
+  createdAt: number;             // Unix timestamp
+}
+```
+
+### API Functions
+
+All functions in `packages/web/src/api/server-config.ts`.
+
+**Profile Getters:**
+- `getProfiles(): ServerProfile[]` — fetch all profiles
+- `getActiveProfileId(): string | null` — currently selected profile ID
+- `getActiveProfile(): ServerProfile | null` — currently selected profile object
+
+**Profile Management:**
+- `createProfile(data: Omit<ServerProfile, "id" | "createdAt">): ServerProfile` — add new profile, auto-generates UUID and timestamp
+- `updateProfile(id: string, data: Partial<...>): void` — modify profile fields
+- `deleteProfile(id: string): void` — remove profile (clears active if deleted)
+- `setActiveProfile(id: string): void` — switch active profile
+
+**Persistence:**
+- `getProfiles() / saveProfiles(profiles: ServerProfile[]): void` — localStorage key: `damhopper_server_profiles`
+- Active profile ID stored in `damhopper_active_profile_id`
+
+**Migration:**
+- `migrateToProfiles(): void` — (called in `App.tsx`) converts legacy single-server config to profile system on first app load
+  - if profiles already exist → no-op
+  - if legacy `damhopper_server_url` exists → creates "Default Server" profile and sets active
+
+### Storage Breakdown
+
+| Key | Storage | Scope | Persistence |
+|-----|---------|-------|-------------|
+| `damhopper_server_profiles` | localStorage | Shared (all tabs) | Survives browser close |
+| `damhopper_active_profile_id` | localStorage | Shared (all tabs) | Survives browser close |
+| `damhopper_auth_token` | sessionStorage | Per-tab | Cleared on tab close |
+| `damhopper_auth_username` | sessionStorage | Per-tab | Cleared on tab close |
+
 **POST /api/git/:project/stage**
 Stage files for commit.
 

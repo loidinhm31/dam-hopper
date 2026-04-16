@@ -74,6 +74,29 @@ Handles TOML parsing, project discovery, feature flags.
 - Lazy init: sandbox stored as Option (Unavailable if init failed)
 - Cheap clone pattern
 
+### Multi-Server Profile Management (Phase 2)
+
+**Client-side only** — no backend involvement. React component integration:
+
+**File:** `packages/web/src/api/server-config.ts`
+- `ServerProfile` interface: { id (UUID), name, url, authType, username?, createdAt (timestamp) }
+- Functions: `getProfiles()`, `saveProfiles()`, `createProfile()`, `updateProfile()`, `deleteProfile()`, `setActiveProfile()`, `getActiveProfile()`, `migrateToProfiles()`
+- Storage: localStorage with keys `damhopper_server_profiles` (all profiles) + `damhopper_active_profile_id` (current)
+
+**Components:**
+- `ServerSettingsDialog.tsx` (organisms/) — create/edit profile form with URL + auth type selector
+- `ServerProfilesDialog.tsx` (organisms/) — list profiles, switch active, delete, edit (calls callbacks to parent)
+- `Sidebar.tsx` — displays active profile name; "Change Server" button opens `ServerProfilesDialog`
+
+**Integration in App.tsx:**
+- Calls `migrateToProfiles()` at startup to convert legacy config
+- Sidebar triggers profile switcher dialog (with callback for page reload if needed)
+
+**Data Persistence:**
+- Profiles: localStorage (survives browser close, shared across tabs)
+- Active profile ID: localStorage (survives browser close, shared across tabs)
+- Auth token: sessionStorage (cleared on tab close, isolated per tab) — password never stored
+
 ### pty/
 Manages portable terminal sessions via `portable-pty`.
 

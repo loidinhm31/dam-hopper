@@ -10,6 +10,10 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 2. **[Configuration Guide](./configuration-guide.md)** — Set up dam-hopper.toml and workspace
 3. **[System Architecture](./system-architecture.md)** — How the system works
 
+## Feature Guides
+
+- **[Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md)** — Manage and switch between multiple server connections
+
 ## Reference Documentation
 
 - **[API Reference](./api-reference.md)** — REST endpoints, WebSocket protocol, response formats

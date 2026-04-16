@@ -68,6 +68,7 @@ DamHopper is a monorepo with two components:
 
 - **`server/`** — Rust binary (Axum + Tokio). All business logic: config parsing, project discovery, git ops, PTY session management, agent store distribution, memory templates, repo import. REST + WebSocket API. Serves the web SPA via `tower-http` static file serving.
 - **`packages/web/`** (`@dam-hopper/web`) — React 19 SPA (Vite + Tailwind v4). Connects to the Rust server via `WsTransport`: `fetch(/api/*)` for REST, `WebSocket(/ws)` for terminal I/O + push events.
+  - **Multi-server profiles** (Phase 2): Client-side profile management via localStorage. Switch between multiple server endpoints without page reload. Profiles stored as `{ id, name, url, authType, username, createdAt }`. Migration auto-converts legacy single-server config on first app load via `migrateToProfiles()` in `App.tsx`.
 
 Data flow:
 

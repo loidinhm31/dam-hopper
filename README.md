@@ -10,6 +10,7 @@ A web-based app for managing multi-project development environments. Manage git 
 - **Interactive terminals** — Full PTY terminals (xterm.js + portable-pty) per command — color, interactivity, scrollback
 - **Git worktrees** — Create, list, and remove worktrees interactively
 - **Workspace switching** — Switch between multiple workspace configs without restarting
+- **Multi-server profiles** — Manage multiple server connections (local dev, staging, production) with instant switching via UI profile selector
 - **Agent store** — Distribute Claude/Gemini agent configs (skills, commands, hooks) across projects via symlinks
 
 ## Requirements

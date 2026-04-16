@@ -8,7 +8,7 @@ import { AgentStorePage } from "@/components/pages/AgentStorePage.js";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
 import { getTransport } from "@/api/transport.js";
 import { useSettingsStore } from "@/stores/settings.js";
-import { getServerUrl, buildAuthHeaders } from "@/api/server-config.js";
+import { getServerUrl, buildAuthHeaders, migrateToProfiles } from "@/api/server-config.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 
 // Wire CSS var outside React so it updates synchronously with store changes
@@ -79,6 +79,8 @@ export function App() {
 
   useEffect(() => {
     void useSettingsStore.getState().hydrate();
+    // Migrate legacy single-server config to profile system
+    migrateToProfiles();
   }, []);
 
   useEffect(() => {

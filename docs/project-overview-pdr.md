@@ -127,6 +127,35 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Store token securely (0600 file permissions)
 - Log auth failures without leaking tokens
 
+### PR-007: Multi-Server Profile Management (Phase 2)
+
+**Functional Requirements:**
+- Manage multiple server connection profiles in browser (no backend involvement)
+- Switch between servers without page reload
+- Store profile metadata: name, URL, auth type, username
+- Automatically migrate legacy single-server config to profile system
+- Display active profile in UI sidebar
+
+**Acceptance Criteria:**
+- ✓ Create/read/update/delete profiles via localStorage
+- ✓ `ServerProfile` model: { id (UUID v4), name, url, authType ("basic"|"none"), username?, createdAt (timestamp) }
+- ✓ Server profiles list via `ServerProfilesDialog.tsx` component
+- ✓ Profile editor via `ServerSettingsDialog.tsx` component
+- ✓ Active profile indicator in `Sidebar.tsx`
+- ✓ `migrateToProfiles()` called in `App.tsx` startup — converts legacy `damhopper_server_url` + `damhopper_auth_username` to "Default Server" profile
+- ✓ Profile switching without browser reload
+- ✓ Delete active profile clears active ID
+
+**Storage:**
+- Profiles JSON: localStorage key `damhopper_server_profiles`
+- Active profile ID: localStorage key `damhopper_active_profile_id`
+
+**Non-Functional Requirements:**
+- Password never stored (only display username)
+- UUID v4 for profile IDs (browser crypto.randomUUID())
+- Storage quota: typical localStorage limit (5-10MB)
+- Profile switching instant (no network latency)
+
 ## Non-Functional Requirements
 
 ### Performance

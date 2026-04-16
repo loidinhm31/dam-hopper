@@ -1,5 +1,8 @@
 # Phase 2: Multi-Server Connection Management (Frontend)
 
+**Status**: ✅ DONE
+**Completed**: 2026-04-16
+
 **Goal**: Add UI for managing multiple server profiles and switching between them.
 
 ## Data Model

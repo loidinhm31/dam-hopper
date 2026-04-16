@@ -98,6 +98,93 @@ No mocking of filesystem or git.
 
 ## TypeScript Frontend (packages/web/)
 
+### Profile Management Pattern
+
+Multi-server profile management lives in `packages/web/src/api/server-config.ts` with a client-side-only architecture.
+
+**Data Model:**
+
+```typescript
+export interface ServerProfile {
+  id: string;                    // UUID v4 via crypto.randomUUID()
+  name: string;                  // User-friendly name
+  url: string;                   // Server endpoint (auto-normalized: strip trailing slash, prepend http:// if no scheme)
+  authType: "basic" | "none";    // Authentication type
+  username?: string;             // Display name (password never stored)
+  createdAt: number;             // Unix timestamp from Date.now()
+}
+```
+
+**CRUD Functions:**
+
+```typescript
+// Retrieval
+export function getProfiles(): ServerProfile[] { /* parse localStorage */ }
+export function getActiveProfileId(): string | null { /* from localStorage */ }
+export function getActiveProfile(): ServerProfile | null { /* find active */ }
+
+// Mutation
+export function createProfile(data: Omit<ServerProfile, "id" | "createdAt">): ServerProfile {
+  // auto-generate id + timestamp, append to profiles list, persist
+}
+
+export function updateProfile(id: string, data: Partial<Omit<ServerProfile, "id" | "createdAt">>): void {
+  // merge fields, persist
+}
+
+export function deleteProfile(id: string): void {
+  // remove from list, clear active if deleted profile is active, persist
+}
+
+export function setActiveProfile(id: string): void { /* localStorage.setItem(KEY_ACTIVE_PROFILE, id) */ }
+
+// Persistence
+export function saveProfiles(profiles: ServerProfile[]): void {
+  // Wrapper around JSON.stringify + localStorage.setItem(KEY_PROFILES, ...)
+  // Always wrap in try/catch (localStorage may be unavailable)
+}
+
+// Backward Compatibility
+export function migrateToProfiles(): void {
+  // If profiles already exist → no-op
+  // If legacy damhopper_server_url exists and not same-origin → create "Default Server" profile
+  // Called in App.tsx at startup
+}
+```
+
+**localStorage Keys:**
+- `damhopper_server_profiles` — JSON stringified array of `ServerProfile[]`
+- `damhopper_active_profile_id` — active profile UUID
+- `damhopper_server_url` — *(legacy, migrated away)* single server URL
+- `damhopper_auth_token` — *(sessionStorage, not localStorage)* Bearer token (cleared on tab close)
+- `damhopper_auth_username` — *(sessionStorage, not localStorage)* username (cleared on tab close)
+
+**Error Handling:**
+
+All localStorage operations wrapped in `try/catch`. Failures silently return defaults (empty array, null). localStorage may be unavailable in private browsing or sandboxed contexts.
+
+**Component Integration:**
+
+- `ServerProfilesDialog.tsx` — modal list for switching/deleting profiles
+  - calls `getProfiles()` + `getActiveProfileId()` on open
+  - calls `setActiveProfile(id)` on switch
+  - calls `deleteProfile(id)` on delete (with confirmation)
+  - exports profile to parent via `onEditProfile`, `onSwitchProfile` callbacks (for page reload if needed)
+
+- `ServerSettingsDialog.tsx` — form for creating/editing profile
+  - calls `createProfile(data)` or `updateProfile(id, data)`
+  - accepts profile object (or null for new)
+  - auto-normalizes URL (strips trailing slash, prepends http:// if no scheme)
+
+- `Sidebar.tsx` — active profile pill + "Change Server" button
+  - displays `getActiveProfile()?.name` or "Not Connected"
+  - opens `ServerProfilesDialog` on click
+
+**Testing Notes:**
+
+- localStorage is mocked in test environments (jsdom default). Manually mock localStorage if testing profile persistence.
+- No server call involved — all operations are synchronous (except JSON parse/stringify).
+
 ### Build & Type Checking
 
 ```bash

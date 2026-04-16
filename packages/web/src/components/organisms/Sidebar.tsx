@@ -7,6 +7,8 @@ import { Logo } from "@/components/atoms/Logo.js";
 import { useIpc } from "@/hooks/useSSE.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
+import { ServerProfilesDialog } from "@/components/organisms/ServerProfilesDialog.js";
+import { getActiveProfile, type ServerProfile } from "@/api/server-config.js";
 
 type NavEntry = { to: string; icon: ComponentType<{ className?: string }>; label: string };
 
@@ -26,8 +28,31 @@ interface SidebarProps {
 export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
   const { status } = useIpc();
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
+  const [profilesDialogOpen, setProfilesDialogOpen] = useState(false);
+  const [editingProfile, setEditingProfile] = useState<ServerProfile | null | undefined>(undefined);
+  
+  const activeProfile = getActiveProfile();
 
   const nav: NavEntry[] = BASE_NAV;
+  
+  function handleOpenProfiles() {
+    setProfilesDialogOpen(true);
+  }
+  
+  function handleEditProfile(profile: ServerProfile | null) {
+    setProfilesDialogOpen(false);
+    setEditingProfile(profile);
+    setServerSettingsOpen(true);
+  }
+  
+  function handleSwitchProfile(_profile: ServerProfile) {
+    // Page will reload automatically via ServerProfilesDialog
+  }
+  
+  function handleCloseSettings() {
+    setServerSettingsOpen(false);
+    setEditingProfile(undefined);
+  }
 
   return (
     <aside
@@ -115,21 +140,33 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
           </button>
           {!collapsed && (
             <button
-              onClick={() => setServerSettingsOpen(true)}
-              title="Server connection settings"
+              onClick={handleOpenProfiles}
+              title="Manage server connections"
               className="p-1.5 hover:bg-[var(--color-surface-2)] rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
             >
               <ServerCog size={14} />
             </button>
           )}
         </div>
-        <div className={cn(collapsed ? "flex justify-center px-0 py-0.5" : "px-1 py-0.5")}>
+        <button
+          onClick={handleOpenProfiles}
+          className={cn(
+            "flex items-center gap-2 rounded-sm hover:bg-[var(--color-surface-2)] transition-colors",
+            collapsed ? "justify-center px-0 py-1" : "px-1 py-1"
+          )}
+          title={collapsed ? (activeProfile?.name || "Server connection") : undefined}
+        >
           <ConnectionDot status={status} collapsed={collapsed} />
-        </div>
+          {!collapsed && activeProfile && (
+            <span className="text-xs text-[var(--color-text-muted)] truncate flex-1 text-left">
+              {activeProfile.name}
+            </span>
+          )}
+        </button>
         {collapsed && (
           <button
-            onClick={() => setServerSettingsOpen(true)}
-            title="Server connection settings"
+            onClick={handleOpenProfiles}
+            title="Manage server connections"
             className="flex justify-center p-1.5 hover:bg-[var(--color-surface-2)] rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
           >
             <ServerCog size={14} />
@@ -137,7 +174,20 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
         )}
       </div>
 
-      <ServerSettingsDialog open={serverSettingsOpen} onClose={() => setServerSettingsOpen(false)} />
+      <ServerSettingsDialog 
+        open={serverSettingsOpen} 
+        onClose={handleCloseSettings}
+        profile={editingProfile}
+        onSaved={() => {
+          handleCloseSettings();
+        }}
+      />
+      <ServerProfilesDialog
+        open={profilesDialogOpen}
+        onClose={() => setProfilesDialogOpen(false)}
+        onEditProfile={handleEditProfile}
+        onSwitchProfile={handleSwitchProfile}
+      />
     </aside>
   );
 }

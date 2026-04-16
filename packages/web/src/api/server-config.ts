@@ -10,6 +10,18 @@
 const KEY_URL = "damhopper_server_url";
 const KEY_TOKEN = "damhopper_auth_token";
 const KEY_USERNAME = "damhopper_auth_username";
+const KEY_PROFILES = "damhopper_server_profiles";
+const KEY_ACTIVE_PROFILE = "damhopper_active_profile_id";
+
+/** Server profile interface */
+export interface ServerProfile {
+  id: string;                    // UUID v4
+  name: string;                  // "Local Dev", "Production", etc.
+  url: string;                   // "http://localhost:4800"
+  authType: "basic" | "none";    // Authentication method
+  username?: string;             // For basic auth display (password never stored)
+  createdAt: number;             // Unix timestamp
+}
 
 /** Returns the configured server URL, stripping trailing slash. */
 export function getServerUrl(): string {
@@ -139,3 +151,113 @@ export function buildAuthHeaders(): Record<string, string> {
   const token = getAuthToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
+
+// ===========================
+// Multi-Server Profile Management
+// ===========================
+
+/** Generate UUID v4 */
+function uuid(): string {
+  return crypto.randomUUID();
+}
+
+/** Get all server profiles from localStorage */
+export function getProfiles(): ServerProfile[] {
+  try {
+    const stored = localStorage.getItem(KEY_PROFILES);
+    if (stored) return JSON.parse(stored) as ServerProfile[];
+  } catch {
+    // ignore parse errors
+  }
+  return [];
+}
+
+/** Save all profiles to localStorage */
+export function saveProfiles(profiles: ServerProfile[]): void {
+  try {
+    localStorage.setItem(KEY_PROFILES, JSON.stringify(profiles));
+  } catch {
+    // ignore
+  }
+}
+
+/** Get active profile ID */
+export function getActiveProfileId(): string | null {
+  try {
+    return localStorage.getItem(KEY_ACTIVE_PROFILE);
+  } catch {
+    return null;
+  }
+}
+
+/** Get the currently active profile */
+export function getActiveProfile(): ServerProfile | null {
+  const id = getActiveProfileId();
+  if (!id) return null;
+  return getProfiles().find(p => p.id === id) ?? null;
+}
+
+/** Set the active profile by ID */
+export function setActiveProfile(id: string): void {
+  try {
+    localStorage.setItem(KEY_ACTIVE_PROFILE, id);
+  } catch {
+    // ignore
+  }
+}
+
+/** Create a new server profile */
+export function createProfile(data: Omit<ServerProfile, "id" | "createdAt">): ServerProfile {
+  const profile: ServerProfile = {
+    ...data,
+    id: uuid(),
+    createdAt: Date.now(),
+  };
+  const profiles = getProfiles();
+  profiles.push(profile);
+  saveProfiles(profiles);
+  return profile;
+}
+
+/** Update an existing profile by ID */
+export function updateProfile(id: string, data: Partial<Omit<ServerProfile, "id" | "createdAt">>): void {
+  const profiles = getProfiles();
+  const idx = profiles.findIndex(p => p.id === id);
+  if (idx >= 0) {
+    profiles[idx] = { ...profiles[idx], ...data };
+    saveProfiles(profiles);
+  }
+}
+
+/** Delete a profile by ID */
+export function deleteProfile(id: string): void {
+  const profiles = getProfiles().filter(p => p.id !== id);
+  saveProfiles(profiles);
+  // If deleted active profile, clear active
+  if (getActiveProfileId() === id) {
+    try {
+      localStorage.removeItem(KEY_ACTIVE_PROFILE);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/** Migrate legacy single-server config to profile system */
+export function migrateToProfiles(): void {
+  if (getProfiles().length > 0) return; // Already migrated
+  
+  const existingUrl = localStorage.getItem(KEY_URL);
+  const existingUsername = getAuthUsername();
+  
+  if (existingUrl && existingUrl !== `${location.protocol}//${location.host}`) {
+    const profile = createProfile({
+      name: "Default Server",
+      url: existingUrl,
+      authType: "basic",
+      username: existingUsername || undefined,
+    });
+    setActiveProfile(profile.id);
+  }
+}
+

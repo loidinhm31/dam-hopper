@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { X, Server, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import type { ServerProfile } from "@/api/server-config.js";
 import {
   getServerUrl,
   setServerUrl,
@@ -12,18 +13,26 @@ import {
   setAuthUsername,
   clearAuthUsername,
   buildAuthHeaders,
+  createProfile,
+  updateProfile,
+  getActiveProfile,
+  setActiveProfile,
 } from "@/api/server-config.js";
 
 interface Props {
   open: boolean;
   onClose: () => void;
   closable?: boolean;
+  profile?: ServerProfile | null;  // null = new profile, undefined = legacy mode
+  onSaved?: (profile: ServerProfile) => void;
 }
 
 type TestState = "idle" | "testing" | "ok" | "fail";
 
-export function ServerSettingsDialog({ open, onClose, closable = true }: Props) {
+export function ServerSettingsDialog({ open, onClose, closable = true, profile, onSaved }: Props) {
+  const [name, setName] = useState("");
   const [url, setUrl] = useState("");
+  const [authType, setAuthType] = useState<"basic" | "none">("basic");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [token, setToken] = useState("");
@@ -31,17 +40,38 @@ export function ServerSettingsDialog({ open, onClose, closable = true }: Props) 
   const [testError, setTestError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
+  const isEditMode = profile !== undefined;
+
   useEffect(() => {
     if (open) {
-      setUrl(getServerUrl());
+      if (profile) {
+        // Edit existing profile
+        setName(profile.name);
+        setUrl(profile.url);
+        setAuthType(profile.authType);
+        setUsername(profile.username || "");
+        setPassword("");
+      } else if (isEditMode) {
+        // New profile (profile = null)
+        setName("");
+        setUrl("");
+        setAuthType("basic");
+        setUsername("");
+        setPassword("");
+      } else {
+        // Legacy mode (profile = undefined)
+        setName("");
+        setUrl(getServerUrl());
+        setAuthType("basic");
+        setUsername(getAuthUsername());
+        setPassword("");
+      }
       setToken(getAuthToken() ?? "");
-      setUsername(getAuthUsername());
-      setPassword("");
       setTestState("idle");
       setTestError(null);
       setSaved(false);
     }
-  }, [open]);
+  }, [open, profile, isEditMode]);
 
   if (!open) return null;
 
@@ -60,9 +90,10 @@ export function ServerSettingsDialog({ open, onClose, closable = true }: Props) 
     setTestState("testing");
     setTestError(null);
     try {
+      // Different body based on auth type
       const u = username.trim();
       const p = password.trim();
-      const bodyContent = { username: u, password: p };
+      const bodyContent = authType === "none" ? {} : { username: u, password: p };
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
@@ -78,6 +109,11 @@ export function ServerSettingsDialog({ open, onClose, closable = true }: Props) 
         if (res.ok && data?.token) {
           setToken(data.token);
           setTestState("ok");
+          
+          // Show dev mode indicator if applicable
+          if (data.dev_mode) {
+            setTestError("✓ Dev mode active");
+          }
         } else {
           setTestState("fail");
           setTestError(data?.error || `HTTP ${res.status}`);
@@ -95,31 +131,64 @@ export function ServerSettingsDialog({ open, onClose, closable = true }: Props) 
     if (!urlSchemeValid) return;
 
     const t = token.trim();
-    const isSameOrigin = !normalized || normalized === `${location.protocol}//${location.host}`;
-
-    if (isSameOrigin) {
-      clearServerUrl();
+    
+    if (isEditMode) {
+      // Profile mode: create or update profile
+      const profileData = {
+        name: name.trim() || "Unnamed Server",
+        url: normalized,
+        authType,
+        username: authType === "basic" ? username.trim() || undefined : undefined,
+      };
+      
+      let savedProfile: ServerProfile;
+      if (profile) {
+        // Update existing profile
+        updateProfile(profile.id, profileData);
+        savedProfile = { ...profile, ...profileData };
+      } else {
+        // Create new profile
+        savedProfile = createProfile(profileData);
+        setActiveProfile(savedProfile.id);
+      }
+      
+      // Store token for this profile
+      if (t) {
+        setAuthToken(t);
+      }
+      
+      setSaved(true);
+      
+      // Notify parent and close
+      onSaved?.(savedProfile);
+      
+      // Reload for clean reconnect
+      setTimeout(() => window.location.reload(), 800);
     } else {
-      setServerUrl(normalized); // setServerUrl also normalizes protocol
-    }
+      // Legacy mode: direct URL/token storage
+      const isSameOrigin = !normalized || normalized === `${location.protocol}//${location.host}`;
 
-    if (t) {
-      setAuthToken(t);
-    } else {
-      clearAuthToken();
-    }
+      if (isSameOrigin) {
+        clearServerUrl();
+      } else {
+        setServerUrl(normalized);
+      }
 
-    if (username) {
-      setAuthUsername(username.trim());
-    } else {
-      clearAuthUsername();
-    }
+      if (t) {
+        setAuthToken(t);
+      } else {
+        clearAuthToken();
+      }
 
-    setSaved(true);
-    // Reload for clean reconnect: ensures transport listeners, WS status, and React
-    // query state all start fresh against the new server. Transport swap without reload
-    // leaves stale listener closures in useIpc() effects.
-    setTimeout(() => window.location.reload(), 800);
+      if (username) {
+        setAuthUsername(username.trim());
+      } else {
+        clearAuthUsername();
+      }
+
+      setSaved(true);
+      setTimeout(() => window.location.reload(), 800);
+    }
   }
 
   function handleReset() {
@@ -184,6 +253,27 @@ export function ServerSettingsDialog({ open, onClose, closable = true }: Props) 
 
         {/* Body */}
         <div className="px-5 py-5 space-y-4">
+          {isEditMode && (
+            <div>
+              <label className="mb-1.5 block text-xs font-medium text-[var(--color-text)]">
+                Profile Name
+              </label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="My Server"
+                className="w-full rounded-lg border px-3.5 py-2 text-sm transition-colors focus:outline-none focus:ring-2"
+                style={{
+                  background: "var(--color-background)",
+                  borderColor: "var(--color-border)",
+                  color: "var(--color-text)",
+                  caretColor: "var(--color-primary)",
+                }}
+              />
+            </div>
+          )}
+          
           <div>
             <label className="mb-1.5 block text-xs font-medium text-[var(--color-text)]">
               Server URL
@@ -213,45 +303,81 @@ export function ServerSettingsDialog({ open, onClose, closable = true }: Props) 
             )}
           </div>
 
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-[var(--color-text)]">
-              Username
-            </label>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="Username"
-              className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2"
-              style={{
-                background: "var(--color-background)",
-                borderColor: "var(--color-border)",
-                color: "var(--color-text)",
-                caretColor: "var(--color-primary)",
-              }}
-            />
-          </div>
+          {isEditMode && (
+            <div>
+              <label className="mb-1.5 block text-xs font-medium text-[var(--color-text)]">
+                Authentication Type
+              </label>
+              <div className="flex gap-4">
+                <label className="flex items-center gap-2 text-sm text-[var(--color-text)] cursor-pointer">
+                  <input
+                    type="radio"
+                    name="authType"
+                    value="basic"
+                    checked={authType === "basic"}
+                    onChange={() => setAuthType("basic")}
+                    className="cursor-pointer"
+                  />
+                  Basic Auth
+                </label>
+                <label className="flex items-center gap-2 text-sm text-[var(--color-text)] cursor-pointer">
+                  <input
+                    type="radio"
+                    name="authType"
+                    value="none"
+                    checked={authType === "none"}
+                    onChange={() => setAuthType("none")}
+                    className="cursor-pointer"
+                  />
+                  No Auth (Dev Mode)
+                </label>
+              </div>
+            </div>
+          )}
 
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-[var(--color-text)]">
-              Password {crossOrigin ? "(required)" : ""}
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => {
-                 setPassword(e.target.value);
-              }}
-              placeholder="Password"
-              className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2 mb-2"
-              style={{
-                background: "var(--color-background)",
-                borderColor: "var(--color-border)",
-                color: "var(--color-text)",
-                caretColor: "var(--color-primary)",
-              }}
-            />
-          </div>
+          {authType === "basic" && (
+            <>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-[var(--color-text)]">
+                  Username
+                </label>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="Username"
+                  className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2"
+                  style={{
+                    background: "var(--color-background)",
+                    borderColor: "var(--color-border)",
+                    color: "var(--color-text)",
+                    caretColor: "var(--color-primary)",
+                  }}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-[var(--color-text)]">
+                  Password {crossOrigin ? "(required)" : ""}
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => {
+                     setPassword(e.target.value);
+                  }}
+                  placeholder="Password"
+                  className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2 mb-2"
+                  style={{
+                    background: "var(--color-background)",
+                    borderColor: "var(--color-border)",
+                    color: "var(--color-text)",
+                    caretColor: "var(--color-primary)",
+                  }}
+                />
+              </div>
+            </>
+          )}
 
           {/* Test connection */}
           <div className="flex items-center gap-3">
@@ -310,11 +436,16 @@ export function ServerSettingsDialog({ open, onClose, closable = true }: Props) 
             )}
             <button
               onClick={handleSave}
-              disabled={saved || !urlSchemeValid || !username || !password || testState !== "ok"}
+              disabled={
+                saved || 
+                !urlSchemeValid || 
+                testState !== "ok" ||
+                (authType === "basic" && (!username || !password))
+              }
               className="rounded-lg px-4 py-2 text-xs font-semibold text-white transition-opacity disabled:opacity-60"
               style={{ background: saved ? "var(--color-success)" : "var(--color-primary)" }}
             >
-              {saved ? "Saved!" : "Save & reconnect"}
+              {saved ? "Saved!" : (isEditMode ? "Save profile" : "Save & reconnect")}
             </button>
           </div>
         </div>
