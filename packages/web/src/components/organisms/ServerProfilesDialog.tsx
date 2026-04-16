@@ -31,7 +31,9 @@ export function ServerProfilesDialog({ open, onClose, onEditProfile, onSwitchPro
   function handleSwitch(profile: ServerProfile) {
     setActiveProfile(profile.id);
     onSwitchProfile(profile);
-    // Page will reload via onSwitchProfile handler
+    onClose(); // Close dialog before reload
+    // Force page reload to apply new server connection
+    window.location.reload();
   }
 
   function handleDelete(id: string) {
