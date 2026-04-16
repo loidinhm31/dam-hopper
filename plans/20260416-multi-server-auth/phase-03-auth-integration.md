@@ -272,9 +272,24 @@ Click profile → setActiveProfile(id) → Clear old token → Auto-login if non
 
 ## Verification
 
-- [ ] "none" auth profile auto-logs-in on switch
-- [ ] "basic" auth profile shows login dialog
-- [ ] Tokens stored per-profile (switching doesn't lose tokens)
-- [ ] Dev mode indicator visible when connected to no-auth server
-- [ ] Error when "none" profile connects to auth-required server
-- [ ] Token refresh works for both auth types
+✅ "none" auth profile auto-logs-in on switch
+✅ "basic" auth profile shows login dialog
+✅ Tokens stored per-profile (switching doesn't lose tokens)
+✅ Dev mode indicator visible when connected to no-auth server
+✅ Error when "none" profile connects to auth-required server
+✅ Token refresh works for both auth types
+
+---
+
+## Status: ✅ COMPLETED
+
+**Completed**: April 16, 2026  
+**Code Review**: 7.5/10 (CODE_REVIEW_PHASE3_20260416.md)
+
+**Implementation Notes:**
+- All core functionality delivered
+- TypeScript compilation: zero errors
+- Auto-login implemented in App.tsx
+- Profile-aware token storage functional
+- Dev mode badge displayed in ConnectionDot
+- Some improvement areas noted in code review (race conditions, error handling)
