@@ -23,10 +23,14 @@ use crate::fs::{
 };
 use crate::state::AppState;
 
-/// Bounded per-connection outbound channel.
-const CONN_CHAN_CAP: usize = 512;
+/// Bounded per-connection outbound channels (split for PTY + FS).
+/// PTY (control + terminal output) uses backpressure via .await.
+/// FS (file events) uses try_send; overflow drops the subscription only.
+/// Both use 512 cap to handle burst scenarios (large git operations, parallel builds).
+const PTY_CHAN_CAP: usize = 512;
+const FS_CHAN_CAP: usize = 512;
 
-/// WS close code for backpressure overflow.
+/// WS close code for backpressure overflow (deprecated with channel split).
 const CLOSE_OVERFLOW: u16 = 4001;
 
 /// Max file size for unrestricted WS read (5 MB). Larger files require range reads.
@@ -87,11 +91,20 @@ pub async fn ws_handler(
 
 async fn handle_socket(socket: WebSocket, state: AppState) {
     let (mut ws_tx, mut ws_rx) = socket.split();
-    let (out_tx, mut out_rx) = mpsc::channel::<WireMsg>(CONN_CHAN_CAP);
 
-    // Writer task: drains the per-conn mpsc → WS sink.
+    // Split channels: PTY (with backpressure) + FS (try_send, overflow drops sub only)
+    let (pty_tx, mut pty_rx) = mpsc::channel::<WireMsg>(PTY_CHAN_CAP);
+    let (fs_tx, mut fs_rx) = mpsc::channel::<WireMsg>(FS_CHAN_CAP);
+
+    // Writer task: drains both channels → WS sink using select.
     let writer = tokio::spawn(async move {
-        while let Some(msg) = out_rx.recv().await {
+        loop {
+            let msg = tokio::select! {
+                Some(m) = pty_rx.recv() => m,
+                Some(m) = fs_rx.recv() => m,
+                else => break,
+            };
+
             let wire = match msg {
                 WireMsg::Text(t) => Message::Text(t.into()),
                 WireMsg::Binary(b) => Message::Binary(b.into()),
@@ -111,10 +124,10 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         }
     });
 
-    // PTY broadcast pump
-    let pty_rx = state.event_sink.subscribe();
-    let pty_out = out_tx.clone();
-    let pty_pump = tokio::spawn(pump_pty(pty_rx, pty_out));
+    // PTY broadcast pump (uses pty_tx with .await for proper backpressure)
+    let pty_rx_broadcast = state.event_sink.subscribe();
+    let pty_out = pty_tx.clone();
+    let pty_pump = tokio::spawn(pump_pty(pty_rx_broadcast, pty_out));
 
     // Per-conn fs subscription pumps: sub_id → JoinHandle
     let mut fs_pumps: HashMap<u64, tokio::task::JoinHandle<()>> = HashMap::new();
@@ -144,10 +157,10 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         if let Message::Binary(bytes) = msg {
             match pending_binary.take() {
                 Some(PendingBinary::Upload { upload_id, seq }) => {
-                    handle_upload_binary(&upload_id, seq, bytes.as_ref(), &mut uploads, &out_tx).await;
+                    handle_upload_binary(&upload_id, seq, bytes.as_ref(), &mut uploads, &pty_tx).await;
                 }
                 Some(PendingBinary::Write { write_id, seq }) => {
-                    handle_write_binary(write_id, seq, bytes.as_ref(), &mut writes, &out_tx).await;
+                    handle_write_binary(write_id, seq, bytes.as_ref(), &mut writes, &pty_tx).await;
                 }
                 None => {
                     warn!("unexpected binary frame (no pending header) — dropping");
@@ -195,13 +208,14 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     &project,
                     &path,
                     &state,
-                    out_tx.clone(),
+                    pty_tx.clone(),
+                    fs_tx.clone(),
                     &mut fs_pumps,
                 )
                 .await;
 
                 if let Err((code, msg)) = result {
-                    send_fs_error(&out_tx, req_id, code, msg).await;
+                    send_fs_error(&pty_tx, req_id, code, msg).await;
                 }
             }
 
@@ -225,7 +239,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         continue;
                     }
                 };
-                let _ = out_tx.send(WireMsg::Text(json)).await;
+                let _ = pty_tx.send(WireMsg::Text(json)).await;
             }
 
             // -----------------------------------------------------------
@@ -233,21 +247,21 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // -----------------------------------------------------------
             ClientMsg::FsWriteBegin { req_id, project, path, expected_mtime, size, encoding: _ } => {
                 if size > FS_WRITE_MAX {
-                    send_fs_error(&out_tx, req_id, "TOO_LARGE".into(),
+                    send_fs_error(&pty_tx, req_id, "TOO_LARGE".into(),
                         format!("write size {} exceeds {FS_WRITE_MAX} byte cap", size)).await;
                     continue;
                 }
 
                 let abs_result = resolve_abs_path(&project, &path, &state).await;
                 match abs_result {
-                    Err((code, msg)) => send_fs_error(&out_tx, req_id, code, msg).await,
+                    Err((code, msg)) => send_fs_error(&pty_tx, req_id, code, msg).await,
                     Ok(abs_path) => {
                         let parent = abs_path.parent().unwrap_or(&abs_path);
                         let temp = match tempfile::NamedTempFile::new_in(parent) {
                             Ok(t) => t,
                             Err(e) => {
                                 warn!(req_id, error = %e, "fs:write_begin: tempfile creation failed");
-                                send_fs_error(&out_tx, req_id, "IO_ERROR".into(), e.to_string()).await;
+                                send_fs_error(&pty_tx, req_id, "IO_ERROR".into(), e.to_string()).await;
                                 continue;
                             }
                         };
@@ -264,7 +278,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         });
                         let ack = ServerMsg::FsWriteAck { req_id, write_id };
                         if let Ok(json) = serde_json::to_string(&ack) {
-                            let _ = out_tx.send(WireMsg::Text(json)).await;
+                            let _ = pty_tx.send(WireMsg::Text(json)).await;
                         }
                         debug!(req_id, write_id, path, project, "fs:write_begin");
                     }
@@ -317,7 +331,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
                 let ack = ServerMsg::FsWriteChunkAck { write_id, seq };
                 if let Ok(json) = serde_json::to_string(&ack) {
-                    let _ = out_tx.send(WireMsg::Text(json)).await;
+                    let _ = pty_tx.send(WireMsg::Text(json)).await;
                 }
             }
 
@@ -358,7 +372,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             error: Some("write session not found".into()),
                         };
                         if let Ok(json) = serde_json::to_string(&result_msg) {
-                            let _ = out_tx.send(WireMsg::Text(json)).await;
+                            let _ = pty_tx.send(WireMsg::Text(json)).await;
                         }
                         continue;
                     }
@@ -376,7 +390,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         error: Some(format!("incomplete write: sent {} of {} bytes", entry.bytes_written, entry.declared_size)),
                     };
                     if let Ok(json) = serde_json::to_string(&result_msg) {
-                        let _ = out_tx.send(WireMsg::Text(json)).await;
+                        let _ = pty_tx.send(WireMsg::Text(json)).await;
                     }
                     continue;
                 }
@@ -423,7 +437,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 };
 
                 if let Ok(json) = serde_json::to_string(&result_msg) {
-                    let _ = out_tx.send(WireMsg::Text(json)).await;
+                    let _ = pty_tx.send(WireMsg::Text(json)).await;
                 }
             }
 
@@ -440,7 +454,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }
                 };
                 if let Ok(json) = serde_json::to_string(&msg) {
-                    let _ = out_tx.send(WireMsg::Text(json)).await;
+                    let _ = pty_tx.send(WireMsg::Text(json)).await;
                 }
             }
 
@@ -457,7 +471,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }
                 };
                 if let Ok(json) = serde_json::to_string(&msg) {
-                    let _ = out_tx.send(WireMsg::Text(json)).await;
+                    let _ = pty_tx.send(WireMsg::Text(json)).await;
                 }
             }
 
@@ -533,7 +547,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }
                 };
                 if let Ok(json) = serde_json::to_string(&msg) {
-                    let _ = out_tx.send(WireMsg::Text(json)).await;
+                    let _ = pty_tx.send(WireMsg::Text(json)).await;
                 }
             }
         }
@@ -798,7 +812,7 @@ async fn handle_upload_binary(
     seq: u64,
     data: &[u8],
     uploads: &mut HashMap<String, UploadState>,
-    out_tx: &mpsc::Sender<WireMsg>,
+    pty_tx: &mpsc::Sender<WireMsg>,
 ) {
     let state = match uploads.get_mut(upload_id) {
         Some(s) => s,
@@ -815,7 +829,7 @@ async fn handle_upload_binary(
                 seq,
             };
             if let Ok(json) = serde_json::to_string(&ack) {
-                let _ = out_tx.send(WireMsg::Text(json)).await;
+                let _ = pty_tx.send(WireMsg::Text(json)).await;
             }
         }
         Err(e) => {
@@ -834,7 +848,7 @@ async fn handle_write_binary(
     seq: u32,
     data: &[u8],
     writes: &mut HashMap<u64, WriteInFlight>,
-    out_tx: &mpsc::Sender<WireMsg>,
+    pty_tx: &mpsc::Sender<WireMsg>,
 ) {
     let entry = match writes.get_mut(&write_id) {
         Some(e) => e,
@@ -864,7 +878,7 @@ async fn handle_write_binary(
 
     let ack = ServerMsg::FsWriteChunkAck { write_id, seq };
     if let Ok(json) = serde_json::to_string(&ack) {
-        let _ = out_tx.send(WireMsg::Text(json)).await;
+        let _ = pty_tx.send(WireMsg::Text(json)).await;
     }
 }
 
@@ -874,12 +888,12 @@ async fn handle_write_binary(
 
 async fn pump_pty(
     mut rx: tokio::sync::broadcast::Receiver<String>,
-    out_tx: mpsc::Sender<WireMsg>,
+    pty_tx: mpsc::Sender<WireMsg>,
 ) {
     loop {
         match rx.recv().await {
             Ok(msg) => {
-                if out_tx.send(WireMsg::Text(msg)).await.is_err() {
+                if pty_tx.send(WireMsg::Text(msg)).await.is_err() {
                     break;
                 }
             }
@@ -900,7 +914,8 @@ async fn do_fs_subscribe(
     project: &str,
     path: &str,
     state: &AppState,
-    out_tx: mpsc::Sender<WireMsg>,
+    pty_tx: mpsc::Sender<WireMsg>,
+    fs_tx: mpsc::Sender<WireMsg>,
     fs_pumps: &mut HashMap<u64, tokio::task::JoinHandle<()>>,
 ) -> Result<(), (String, String)> {
     let project_abs = state.project_path(project).await.map_err(|e| {
@@ -929,12 +944,11 @@ async fn do_fs_subscribe(
 
     let snap = ServerMsg::TreeSnapshot { req_id, sub_id, nodes };
     let json = serde_json::to_string(&snap).map_err(|e| ("SERIALIZE".to_string(), e.to_string()))?;
-    out_tx.send(WireMsg::Text(json)).await.map_err(|_| ("CONN_CLOSED".to_string(), "connection closed".to_string()))?;
+    pty_tx.send(WireMsg::Text(json)).await.map_err(|_| ("CONN_CLOSED".to_string(), "connection closed".to_string()))?;
 
     let filter_prefix = abs_path.clone();
-    let pump_out = out_tx.clone();
     let handle = tokio::spawn(async move {
-        pump_fs_events(sub_id, fs_rx, filter_prefix, pump_out).await;
+        pump_fs_events(sub_id, fs_rx, filter_prefix, fs_tx, pty_tx).await;
     });
 
     fs_pumps.insert(sub_id, handle);
@@ -949,7 +963,8 @@ async fn pump_fs_events(
     sub_id: u64,
     mut rx: tokio::sync::broadcast::Receiver<crate::fs::FsEvent>,
     filter_prefix: std::path::PathBuf,
-    out_tx: mpsc::Sender<WireMsg>,
+    fs_tx: mpsc::Sender<WireMsg>,
+    pty_tx: mpsc::Sender<WireMsg>,
 ) {
     loop {
         match rx.recv().await {
@@ -970,11 +985,19 @@ async fn pump_fs_events(
                     }
                 };
 
-                match out_tx.try_send(WireMsg::Text(json)) {
+                match fs_tx.try_send(WireMsg::Text(json)) {
                     Ok(_) => {}
                     Err(mpsc::error::TrySendError::Full(_)) => {
-                        warn!(sub_id, cap = CONN_CHAN_CAP, "fs pump mpsc full — closing connection (4001)");
-                        let _ = out_tx.try_send(WireMsg::CloseOverflow);
+                        warn!(sub_id, cap = FS_CHAN_CAP, "fs pump mpsc full — dropping subscription");
+                        
+                        // Send overflow notice via pty channel (proper backpressure)
+                        let overflow = ServerMsg::FsOverflow {
+                            sub_id,
+                            message: format!("FS event buffer full ({}); subscription dropped", FS_CHAN_CAP),
+                        };
+                        if let Ok(json) = serde_json::to_string(&overflow) {
+                            let _ = pty_tx.send(WireMsg::Text(json)).await;
+                        }
                         break;
                     }
                     Err(mpsc::error::TrySendError::Closed(_)) => break,

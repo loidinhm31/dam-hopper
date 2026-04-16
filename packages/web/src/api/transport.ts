@@ -15,6 +15,23 @@ export interface Transport {
   /** Terminal exit subscription. Returns unsubscribe fn. */
   onTerminalExit(id: string, cb: (exitCode: number | null) => void): () => void;
 
+  /** Terminal exit subscription with restart metadata (optional, not all transports support). */
+  onTerminalExitEnhanced?(id: string, cb: (exit: {
+    exitCode: number | null;
+    willRestart: boolean;
+    restartIn?: number;
+    restartCount?: number;
+  }) => void): () => void;
+
+  /** Process restart subscription (optional, not all transports support). */
+  onProcessRestarted?(id: string, cb: (restart: {
+    restartCount: number;
+    previousExitCode: number | null;
+  }) => void): () => void;
+
+  /** FS overflow subscription (optional, not all transports support). */
+  onFsOverflow?(sub_id: number, cb: (message: string) => void): () => void;
+
   /** Push event subscription (git:progress, workspace:changed, etc.) */
   onEvent(channel: string, cb: (payload: unknown) => void): () => void;
 

@@ -284,8 +284,22 @@ export class WsTransport implements Transport {
   private eventListeners = new Map<string, Set<Callback>>();
   /** sessionId → data callbacks */
   private dataListeners = new Map<string, Set<(data: string) => void>>();
-  /** sessionId → exit callbacks */
+  /** sessionId → exit callbacks (basic: exitCode only) */
   private exitListeners = new Map<string, Set<(exitCode: number | null) => void>>();
+  /** sessionId → enhanced exit callbacks (includes restart metadata) */
+  private exitEnhancedListeners = new Map<string, Set<(exit: {
+    exitCode: number | null;
+    willRestart: boolean;
+    restartIn?: number;
+    restartCount?: number;
+  }) => void>>();
+  /** sessionId → restart callbacks */
+  private restartListeners = new Map<string, Set<(restart: {
+    restartCount: number;
+    previousExitCode: number | null;
+  }) => void>>();
+  /** sub_id → overflow callbacks */
+  private fsOverflowListeners = new Map<number, Set<(message: string) => void>>();
 
   // ── FS subscription state ─────────────────────────────────────────────────
   private nextReqId = 1;
@@ -373,6 +387,9 @@ export class WsTransport implements Transport {
     this.eventListeners.clear();
     this.dataListeners.clear();
     this.exitListeners.clear();
+    this.exitEnhancedListeners.clear();
+    this.restartListeners.clear();
+    this.fsOverflowListeners.clear();
     for (const p of this.pendingFsReqs.values()) {
       clearTimeout(p.timer);
       p.reject(new Error("transport destroyed"));
@@ -484,7 +501,32 @@ export class WsTransport implements Transport {
           case "terminal:exit":
             if (msg.id) {
               const code = msg.exitCode !== undefined ? msg.exitCode : null;
+              // Basic exit listener (backward-compatible)
               this.exitListeners.get(msg.id)?.forEach((cb) => cb(code));
+              // Enhanced exit listener (includes restart metadata)
+              this.exitEnhancedListeners.get(msg.id)?.forEach((cb) => cb({
+                exitCode: code,
+                willRestart: msg.willRestart ?? false,
+                restartIn: msg.restartIn,
+                restartCount: msg.restartCount,
+              }));
+            }
+            break;
+
+          case "process:restarted":
+            if (msg.id) {
+              this.restartListeners.get(msg.id)?.forEach((cb) => cb({
+                restartCount: msg.restartCount ?? 0,
+                previousExitCode: msg.previousExitCode !== undefined ? msg.previousExitCode : null,
+              }));
+            }
+            // Fire generic terminal:changed for dashboard refresh
+            this.eventListeners.get("terminal:changed")?.forEach((cb) => cb({}));
+            break;
+
+          case "fs:overflow":
+            if (msg.sub_id !== undefined) {
+              this.fsOverflowListeners.get(msg.sub_id)?.forEach((cb) => cb(msg.message ?? "FS event buffer overflow"));
             }
             break;
 
@@ -732,6 +774,32 @@ export class WsTransport implements Transport {
     if (!this.exitListeners.has(id)) this.exitListeners.set(id, new Set());
     this.exitListeners.get(id)!.add(cb);
     return () => this.exitListeners.get(id)?.delete(cb);
+  }
+
+  onTerminalExitEnhanced(id: string, cb: (exit: {
+    exitCode: number | null;
+    willRestart: boolean;
+    restartIn?: number;
+    restartCount?: number;
+  }) => void): () => void {
+    if (!this.exitEnhancedListeners.has(id)) this.exitEnhancedListeners.set(id, new Set());
+    this.exitEnhancedListeners.get(id)!.add(cb);
+    return () => this.exitEnhancedListeners.get(id)?.delete(cb);
+  }
+
+  onProcessRestarted(id: string, cb: (restart: {
+    restartCount: number;
+    previousExitCode: number | null;
+  }) => void): () => void {
+    if (!this.restartListeners.has(id)) this.restartListeners.set(id, new Set());
+    this.restartListeners.get(id)!.add(cb);
+    return () => this.restartListeners.get(id)?.delete(cb);
+  }
+
+  onFsOverflow(sub_id: number, cb: (message: string) => void): () => void {
+    if (!this.fsOverflowListeners.has(sub_id)) this.fsOverflowListeners.set(sub_id, new Set());
+    this.fsOverflowListeners.get(sub_id)!.add(cb);
+    return () => this.fsOverflowListeners.get(sub_id)?.delete(cb);
   }
 
   onEvent(channel: string, cb: (payload: unknown) => void): () => void {

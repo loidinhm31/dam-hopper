@@ -146,6 +146,32 @@ pub enum ServerMsg {
     #[serde(rename = "terminal:output")]
     TermOutput { id: String, data: String },
 
+    // Terminal exit — enhanced with restart metadata
+    #[serde(rename = "terminal:exit")]
+    TermExit {
+        id: String,
+        #[serde(rename = "exitCode")]
+        exit_code: Option<i32>,
+        #[serde(rename = "willRestart")]
+        will_restart: bool,
+        /// Milliseconds until restart attempt (present if willRestart=true).
+        #[serde(rename = "restartIn", skip_serializing_if = "Option::is_none")]
+        restart_in: Option<u64>,
+        /// Cumulative restart counter (present if willRestart=true after first restart).
+        #[serde(rename = "restartCount", skip_serializing_if = "Option::is_none")]
+        restart_count: Option<u32>,
+    },
+
+    // Process restarted successfully
+    #[serde(rename = "process:restarted")]
+    ProcessRestarted {
+        id: String,
+        #[serde(rename = "restartCount")]
+        restart_count: u32,
+        #[serde(rename = "previousExitCode")]
+        previous_exit_code: Option<i32>,
+    },
+
     // FS — tree
     #[serde(rename = "fs:tree_snapshot")]
     TreeSnapshot { req_id: u64, sub_id: u64, nodes: Vec<TreeNode> },
@@ -153,6 +179,13 @@ pub enum ServerMsg {
     FsEventMsg { sub_id: u64, event: FsEventDto },
     #[serde(rename = "fs:error")]
     FsError { req_id: u64, code: String, message: String },
+
+    // FS — overflow notice (subscription dropped)
+    #[serde(rename = "fs:overflow")]
+    FsOverflow {
+        sub_id: u64,
+        message: String,
+    },
 
     // FS — read
     #[serde(rename = "fs:read_result")]
@@ -227,4 +260,90 @@ pub enum WireMsg {
     Binary(Vec<u8>),
     /// Signal the writer task to send a close frame with the given code.
     CloseOverflow,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_terminal_exit_enhanced_serialization() {
+        // Full payload with all optional fields
+        let msg_full = ServerMsg::TermExit {
+            id: "test-123".to_string(),
+            exit_code: Some(1),
+            will_restart: true,
+            restart_in: Some(2000),
+            restart_count: Some(3),
+        };
+        let json_full = serde_json::to_value(&msg_full).unwrap();
+        assert_eq!(json_full["kind"], "terminal:exit");
+        assert_eq!(json_full["id"], "test-123");
+        assert_eq!(json_full["exitCode"], 1);
+        assert_eq!(json_full["willRestart"], true);
+        assert_eq!(json_full["restartIn"], 2000);
+        assert_eq!(json_full["restartCount"], 3);
+
+        // Minimal payload (no restart)
+        let msg_min = ServerMsg::TermExit {
+            id: "test-456".to_string(),
+            exit_code: Some(0),
+            will_restart: false,
+            restart_in: None,
+            restart_count: None,
+        };
+        let json_min = serde_json::to_value(&msg_min).unwrap();
+        assert_eq!(json_min["kind"], "terminal:exit");
+        assert_eq!(json_min["exitCode"], 0);
+        assert_eq!(json_min["willRestart"], false);
+        // Optional fields should not be present
+        assert!(json_min.get("restartIn").is_none());
+        assert!(json_min.get("restartCount").is_none());
+    }
+
+    #[test]
+    fn test_process_restarted_serialization() {
+        let msg = ServerMsg::ProcessRestarted {
+            id: "test-789".to_string(),
+            restart_count: 5,
+            previous_exit_code: Some(1),
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["kind"], "process:restarted");
+        assert_eq!(json["id"], "test-789");
+        assert_eq!(json["restartCount"], 5);
+        assert_eq!(json["previousExitCode"], 1);
+
+        // With null previous exit code
+        let msg_null = ServerMsg::ProcessRestarted {
+            id: "test-999".to_string(),
+            restart_count: 1,
+            previous_exit_code: None,
+        };
+        let json_null = serde_json::to_value(&msg_null).unwrap();
+        assert_eq!(json_null["previousExitCode"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn test_fs_overflow_serialization() {
+        let msg = ServerMsg::FsOverflow {
+            sub_id: 42,
+            message: "Buffer overflow detected".to_string(),
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["kind"], "fs:overflow");
+        assert_eq!(json["sub_id"], 42);
+        assert_eq!(json["message"], "Buffer overflow detected");
+    }
+
+    #[test]
+    fn test_backward_compatible_exit_parsing() {
+        // Old clients should still be able to parse basic exit events
+        let json_str = r#"{"kind":"terminal:exit","id":"legacy","exitCode":0,"willRestart":false}"#;
+        let parsed: Result<serde_json::Value, _> = serde_json::from_str(json_str);
+        assert!(parsed.is_ok());
+        let val = parsed.unwrap();
+        assert_eq!(val["kind"], "terminal:exit");
+        assert_eq!(val["exitCode"], 0);
+    }
 }
