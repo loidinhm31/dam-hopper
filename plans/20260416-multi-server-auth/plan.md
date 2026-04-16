@@ -1,7 +1,8 @@
 # Multi-Server Connection & Auth Modes
 
-**Status**: In Progress  
+**Status**: ✅ COMPLETED  
 **Created**: 2026-04-16  
+**Completed**: 2026-04-16  
 **Complexity**: Medium
 
 ## Phase Status
@@ -31,7 +32,17 @@
 - ✅ All tests passed (100% coverage)
 - ✅ Code reviewed: 9/10
 
-### Phase 3: Auth Type Handling - PENDING  
+### Phase 3: Auth Type Integration ✅ COMPLETED
+**Completed**: 2026-04-16
+
+**Implementation Summary:**
+- ✅ Updated getServerUrl() to use active profile
+- ✅ Implemented per-profile token storage (profile-aware keys)
+- ✅ Added auto-login for "none" auth profiles in App.tsx
+- ✅ Updated ConnectionDot with dev mode badge indicator
+- ✅ Modified Sidebar with profile name in connection status
+- ✅ TypeScript compilation passed (zero errors)
+- ✅ Code reviewed: 7.5/10 (with improvement notes)  
 
 ## Problem Statement
 
