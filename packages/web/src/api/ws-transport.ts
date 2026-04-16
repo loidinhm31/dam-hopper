@@ -674,7 +674,7 @@ export class WsTransport implements Transport {
     }, this.backoffMs);
   }
 
-  async invoke<T>(channel: string, data?: unknown): Promise<T> {
+  async invoke<T>(channel: string, data?: unknown, timeoutMs = 30000): Promise<T> {
     const { method, url: relativeUrl, body } = channelToEndpoint(channel, data);
 
     const fullUrl = relativeUrl.startsWith("/")
@@ -688,25 +688,38 @@ export class WsTransport implements Transport {
       headers["Content-Type"] = "application/json";
     }
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
     const init: RequestInit = {
       method,
       headers,
       credentials: "include",
+      signal: controller.signal,
     };
     if (body !== undefined) {
       init.body = JSON.stringify(body);
     }
 
-    const response = await fetch(fullUrl, init);
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
-      throw new Error(err.error ?? `HTTP ${response.status}`);
+    try {
+      const response = await fetch(fullUrl, init);
+      clearTimeout(timeout);
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
+        throw new Error(err.error ?? `HTTP ${response.status}`);
+      }
+      const ct = response.headers.get("content-type") ?? "";
+      if (ct.includes("application/json")) {
+        return response.json() as Promise<T>;
+      }
+      return response.text() as unknown as T;
+    } catch (error) {
+      clearTimeout(timeout);
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(`Request timeout after ${timeoutMs}ms`);
+      }
+      throw error;
     }
-    const ct = response.headers.get("content-type") ?? "";
-    if (ct.includes("application/json")) {
-      return response.json() as Promise<T>;
-    }
-    return response.text() as unknown as T;
   }
 
   onTerminalData(id: string, cb: (data: string) => void): () => void {
