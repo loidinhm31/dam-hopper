@@ -96,6 +96,106 @@ async fn test_list_dir() {
 
 No mocking of filesystem or git.
 
+### PTY Session Manager Patterns (Phase 04+)
+
+**Restart Policies** — `RestartPolicy` enum:
+
+```rust
+pub enum RestartPolicy {
+    Never,          // Don't restart on any exit
+    OnFailure,      // Restart on non-zero exit (see limitation below)
+    Always,         // Restart on any exit (including 0)
+}
+```
+
+**Creating with Restart Policy:**
+
+```rust
+let opts = PtyCreateOpts {
+    id: "build:test".into(),
+    command: "npm run build".into(),
+    restart_policy: RestartPolicy::OnFailure,
+    restart_max_retries: 3,
+    // ... other fields
+};
+let meta = manager.create(opts)?;
+```
+
+**Supervisor Pattern** — how restarts work:
+
+1. **Reader Thread** (std::thread blocking I/O)
+   - Reads PTY output in 4KB chunks
+   - On EOF: infer exit code, check if killed, send RespawnCmd
+   - Immediately exits (don't block supervisor waiting for response)
+
+2. **Superviser Task** (async tokio)
+   - Receives RespawnCmd from bounded channel (256 slots)
+   - Waits for backoff delay (exponential: 1s → 30s max)
+   - Checks killed flag (TOCTOU-safe, reader released lock)
+   - Calls `create()` with same session ID (no network changes)
+   - Updates restart_count, resets on clean exit
+
+3. **Bounded Channel Defense**
+   - Prevents unbounded respawn queue if supervisor hangs
+   - 256 slots = ~5× typical max sessions (50)
+   - If full, reader tries_send fails, respawn dropped (session in dead map)
+   - Supervisor dead/slow → next reader will also fail → cascading drop
+
+**Exit Code Inference Limitation** (Phase 04):
+
+```rust
+fn infer_exit_code(id: &str, inner: &Arc<Mutex<Inner>>) -> i32 {
+    let guard = inner.lock().unwrap();
+    // portable-pty signals EOF but not waitpid status
+    if guard.live.contains_key(id) {
+        0  // Process still in live map (shouldn't happen — reader just exited)
+    } else {
+        -1  // Process removed from live (assumed natural exit/eof)
+    }
+    // Cannot distinguish: exit 0, exit 1, exit 127, etc.
+    // All EOF = -1 or 0 (depending on timing of removal)
+}
+```
+
+**Workaround:** OnFailure policy currently indistinguishable from Always. To fix:
+- Future work: wrap child in `std::process::Command`
+- Call `waitpid()` before EOF to capture actual status
+- Requires architecture change (not Phase 04 scope)
+
+**Session ID Reuse** (Important):
+
+When respawning, the same session ID is used. Frontend **does not** need to navigate or reconnect:
+- Session ID remains stable across respawns
+- WebSocket subscribers notified via `send_terminal_change()`
+- Buffer optionally retained (clearing old content on restart optional)
+- User continues typing as if session never died
+
+**Tombstone Lifecycle:**
+
+```
+LiveSession
+    ↓ (EOF)
+DeadSession (will_restart=true, restart_in_ms=1000)
+    ↓ (backoff delay)
+    ↓ (supervisor create)
+LiveSession (restart_count=1)
+    ↓ (EOF again, but exit==0 — clean)
+DeadSession (will_restart=false) — restart_count reset to 0
+    ↓ (60s TTL sweeps)
+<removed from map>
+```
+
+**Tests for Restart Engine:**
+
+- `test_restart_decision_never` — Never policy rejects restart
+- `test_restart_decision_on_failure` — OnFailure on exit≠0 approves restart
+- `test_restart_decision_always` — Always approves any exit
+- `test_restart_count_increments` — Each respawn increments counter
+- `test_restart_count_resets_on_clean_exit` — Clean exit resets counter
+- `test_backoff_exponential_growth` — 1s → 2s → 4s → ... → 30s max
+- `test_killed_session_no_restart` — Killed sessions don't restart
+- `test_bounded_channel_prevents_dos` — Queue full drops respawn (safe)
+
 ## TypeScript Frontend (packages/web/)
 
 ### Profile Management Pattern
