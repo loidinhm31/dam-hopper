@@ -15,7 +15,8 @@ import {
   migrateToProfiles, 
   getActiveProfile, 
   getAuthToken, 
-  setAuthToken 
+  setAuthToken,
+  getProfiles
 } from "@/api/server-config.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 import { WorkspaceSetupWizard } from "@/components/organisms/WorkspaceSetupWizard.js";
@@ -55,6 +56,30 @@ function GlobalShortcuts() {
   }, [navigate]);
 
   return null;
+}
+
+function ServerProfileGuard({ children }: { children: React.ReactNode }) {
+  const profiles = getProfiles();
+  const activeProfile = getActiveProfile();
+  const needsSetup = profiles.length === 0 || !activeProfile;
+
+  if (needsSetup) {
+    return (
+      <div className="h-screen w-screen bg-[var(--color-surface)] relative">
+        <ServerSettingsDialog 
+          open={true} 
+          onClose={() => {}} 
+          closable={false}
+          profile={null}
+          onSaved={() => {
+            // Page will reload automatically via ServerSettingsDialog
+          }}
+        />
+      </div>
+    );
+  }
+
+  return <>{children}</>;
 }
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -159,9 +184,10 @@ export function App() {
   return (
     <BrowserRouter basename={import.meta.env.BASE_URL}>
       <GlobalShortcuts />
-      <AuthGuard>
-        <WorkspaceGuard>
-          <Routes>
+      <ServerProfileGuard>
+        <AuthGuard>
+          <WorkspaceGuard>
+            <Routes>
             <Route path="/" element={<ErrorBoundary><DashboardPage /></ErrorBoundary>} />
             <Route
               path="/workspace"
@@ -179,9 +205,10 @@ export function App() {
             <Route path="/git" element={<ErrorBoundary><GitPage /></ErrorBoundary>} />
             <Route path="/settings" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />
             <Route path="/agent-store" element={<ErrorBoundary><AgentStorePage /></ErrorBoundary>} />
-          </Routes>
-        </WorkspaceGuard>
-      </AuthGuard>
+            </Routes>
+          </WorkspaceGuard>
+        </AuthGuard>
+      </ServerProfileGuard>
     </BrowserRouter>
   );
 }
