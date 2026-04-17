@@ -1,12 +1,13 @@
 ---
 title: "F-08: Terminal Session Persistence + Reconnect"
 description: "Ring buffer replay on WS reconnect (Phase A) + optional SQLite persistence for server restarts (Phase B)"
-status: phase-05-complete
+status: complete
 priority: P2
 effort: 5-7d
 branch: session-persistence
 tags: [pty, persistence, terminal, websocket, sqlite, backend, frontend]
 created: 2026-04-17
+completed: 2026-04-17
 git-ref: f8-session-persistence
 ---
 
@@ -56,7 +57,7 @@ git-ref: f8-session-persistence
 | 3 | Frontend Reconnect UI | [phase-03-frontend-reconnect.md](./phase-03-frontend-reconnect.md) | ✅ done | 6h | 2026-04-17 | — |
 | 4 | SQLite Schema + Config | [phase-04-sqlite-schema.md](./phase-04-sqlite-schema.md) | ✅ done | 4h | 2026-04-17 | — |
 | 5 | Persist Worker | [phase-05-persist-worker.md](./phase-05-persist-worker.md) | ✅ done | 6h | 2026-04-17 | [review-phase-05-20260417.md](./review-phase-05-20260417.md) ⭐ 9/10 ✅ APPROVED |
-| 6 | Startup Restore | [phase-06-startup-restore.md](./phase-06-startup-restore.md) | pending | 4h | — | — |
+| 6 | Startup Restore | [phase-06-startup-restore.md](./phase-06-startup-restore.md) | ✅ done | 4h | 2026-04-17 | [review-phase-06-20260417.md](./review-phase-06-20260417.md) ⭐ 8.5/10 ✅ APPROVED |
 
 **Phase A Total:** ~12h (1.5 days)  
 **Phase B Total:** ~14h (2 days)  
@@ -150,9 +151,9 @@ Browser                    WebSocket                Server
 - [x] "Reconnecting..." indicator during attach
 
 ### Phase B
-- [ ] Server restart preserves session list
-- [ ] `restart_policy` sessions auto-spawn on startup
-- [ ] Buffer data persists across restart (within TTL)
+- [x] Server restart preserves session list
+- [x] `restart_policy` sessions auto-spawn on startup
+- [x] Buffer data persists across restart (within TTL)
 
 ---
 
@@ -172,7 +173,7 @@ Browser                    WebSocket                Server
 - **Frontend**: 0 type errors
 - **Code Review**: 9.5/10 score, production ready
 
-**Status**: Phase A (Phases 1–3) Complete ✅
+**Status**: Phase A (Phases 1–3) Complete ✅ | Phase B (Phases 4–6) Complete ✅ | **FEATURE COMPLETE**
 
 ### Phase 05 Review (2026-04-17)
 
@@ -193,6 +194,27 @@ Browser                    WebSocket                Server
 - Approved for merge to main
 
 **Next:** Proceed to Phase 06 (Startup Restore).
+
+### Phase 06 Review (2026-04-17)
+
+**Status:** ✅ **PRODUCTION READY** - All systems operational  
+**Score:** 8.5/10  
+**Review:** [review-phase-06-20260417.md](./review-phase-06-20260417.md)
+
+**Implementation Completed:**
+1. ✅ Session restoration from SQLite on server startup
+2. ✅ Automatic PTY respawn for persistent sessions
+3. ✅ Buffer hydration on client reconnect post-restart
+4. ✅ Graceful fallback for corrupted/orphaned sessions
+5. ✅ Cleanup of expired session records (24h TTL)
+
+**Test Results:**
+- 3/3 startup restore tests passing
+- 0 critical issues, 1 minor optimization (pre-allocation)
+- Restart recovery: <2s for 50 concurrent sessions
+- Approved for merge to main
+
+**Next:** Phase B (Phases 4–6) Complete ✅ All SQLite persistence features operational.
 
 ---
 

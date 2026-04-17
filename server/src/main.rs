@@ -110,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
     // ── Session persistence (Phase 05) ────────────────────────────────────────
     // Create persist worker and channel BEFORE PtySessionManager so we can pass persist_tx.
 
-    let persist_tx = if config.server.session_persistence {
+    let (persist_tx, session_store) = if config.server.session_persistence {
         // Expand tilde in path (use default if starts with ~)
         let db_path = if config.server.session_db_path.starts_with("~/") {
             let suffix = config.server.session_db_path.strip_prefix("~/").unwrap();
@@ -131,7 +131,7 @@ async fn main() -> anyhow::Result<()> {
                     path = %parent.display(),
                     "Failed to create session DB directory — persistence disabled"
                 );
-                None
+                (None, None)
             } else {
                 match dam_hopper_server::persistence::SessionStore::open(&db_path) {
                     Ok(store) => {
@@ -141,13 +141,15 @@ async fn main() -> anyhow::Result<()> {
                             "Session persistence enabled"
                         );
                         
+                        let store_arc = std::sync::Arc::new(store);
+                        
                         // Create bounded channel for persist commands (256 slots)
                         let (tx, rx) = std::sync::mpsc::sync_channel(256);
                         
                         // Spawn persist worker thread
                         let worker = dam_hopper_server::persistence::PersistWorker::new(
                             rx,
-                            std::sync::Arc::new(store),
+                            store_arc.clone(),
                         );
                         std::thread::Builder::new()
                             .name("persist-worker".to_string())
@@ -157,7 +159,7 @@ async fn main() -> anyhow::Result<()> {
                             .expect("Failed to spawn persist worker thread");
                         
                         tracing::info!("Persist worker thread spawned");
-                        Some(tx)
+                        (Some(tx), Some(store_arc))
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -165,23 +167,42 @@ async fn main() -> anyhow::Result<()> {
                             path = %db_path.display(),
                             "Failed to open session database — persistence disabled"
                         );
-                        None
+                        (None, None)
                     }
                 }
             }
         } else {
-            None
+            (None, None)
         }
     } else {
         tracing::debug!("Session persistence disabled");
-        None
+        (None, None)
     };
 
     let pty_manager = PtySessionManager::with_persist(
         std::sync::Arc::new(event_sink.clone()),
         persist_tx.clone(), // Clone to keep sender alive until end of main() for graceful shutdown
+        session_store.clone(),
     );
     pty_manager.spawn_cleanup_task();
+
+    // ── Restore sessions from persistence (Phase 06) ──────────────────────────
+    if let Some(store) = &session_store {
+        match dam_hopper_server::persistence::restore_sessions(
+            store,
+            &pty_manager,
+            &config,
+        )
+        .await
+        {
+            Ok(count) => {
+                tracing::info!(count, "Restored sessions from persistence");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to restore sessions from persistence");
+            }
+        }
+    }
 
     let store_rel_path = config
         .agent_store
