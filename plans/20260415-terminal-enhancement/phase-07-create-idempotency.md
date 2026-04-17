@@ -9,8 +9,9 @@
 - Date: 2026-04-16
 - Description: Make `terminal:create` drop any matching `DeadSession` tombstone before spawning, so clients never have to distinguish live from dead. Deprecates the client-side `alive` filter.
 - Priority: P2
-- Implementation status: pending
-- Review status: pending
+- Implementation status: completed
+- Review status: approved (9.5/10)
+- Completed: 2026-04-17
 
 ## Key Insights
 - `PtySessionManager::create` currently kills any live session with the same id but does NOT remove a dead tombstone. Client must detect.
@@ -37,11 +38,11 @@ Server-only change within `PtySessionManager::create`.
 5. Update Phase 1 comment to note this is now defense-in-depth.
 
 ## Todo
-- [ ] `create` drops dead tombstone
-- [ ] `create` inserts into `killed` pre-spawn, removes post-spawn
-- [ ] Supervisor re-check after backoff respects `killed`
-- [ ] Race integration test
-- [ ] Comment update in Phase 1 code site
+- [x] `create` drops dead tombstone
+- [x] `create` inserts into `killed` pre-spawn, removes post-spawn
+- [x] Supervisor re-check after backoff respects `killed`
+- [x] Race integration test
+- [x] Comment update in Phase 1 code site
 
 ## Success Criteria
 - `cargo test` passes including new race test.

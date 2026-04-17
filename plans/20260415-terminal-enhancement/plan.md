@@ -1,12 +1,13 @@
 ---
 title: "Terminal Enhancement: F-01 Process Lifecycle + Crash Fixes"
 description: "Auto-restart engine, exit tracking, status dots; plus fixes for dead-session reconnect bug, FS/PTY channel coupling, silent exit, and reconnect UX."
-status: pending
+status: completed
 priority: P1
 effort: 4-5d
 branch: main
 tags: [pty, lifecycle, terminal, websocket, backend, frontend]
 created: 2026-04-16
+completed: 2026-04-17
 ---
 
 # Terminal Enhancement — Implementation Plan
@@ -44,7 +45,7 @@ Combines **F-01 (Process Lifecycle Management)** with **4 crash fixes** from deb
 | 4 | F-01 Restart Engine — reader_thread respawn + backoff | [phase-04-restart-engine.md](./phase-04-restart-engine.md) | DONE (2026-04-16) | 8h |
 | 5 | WS Events + Bug Fix B — enhanced exit event, FS/PTY channel split | [phase-05-ws-events-channel-split.md](./phase-05-ws-events-channel-split.md) | DONE (2026-04-17) | 8h |
 | 6 | Frontend — status dots, restart badge, Fix C banner, Fix D reconnect UX | [phase-06-frontend-lifecycle-ui.md](./phase-06-frontend-lifecycle-ui.md) | DONE (2026-04-17) | 8h |
-| 7 | Tombstone Idempotency — auto-clean on terminal:create | [phase-07-create-idempotency.md](./phase-07-create-idempotency.md) | pending | 3h |
+| 7 | Tombstone Idempotency — auto-clean on terminal:create | [phase-07-create-idempotency.md](./phase-07-create-idempotency.md) | DONE (2026-04-17) | 3h |
 
 **Total:** ~37h (4–5 days).
 
@@ -107,6 +108,6 @@ See individual phase docs. Major: FS/PTY channel separation (Phase 5), reader th
 - Fire `terminal:changed` alongside `process:restarted` for dashboard/sidebar auto-refresh
 
 ### Action Items
-- [ ] Remove Phase 1 from the phase table and dependency graph (saves ~2h)
-- [ ] Update Phase 7 to note it is now the sole fix for Failure Mode 4 (no Phase 1 belt-and-suspenders)
-- [ ] Update dependency graph: Phase 7 no longer references Phase 1 as a prerequisite complement
+- [x] Remove Phase 1 from the phase table and dependency graph (saves ~2h)
+- [x] Update Phase 7 to note it is now the sole fix for Failure Mode 4 (no Phase 1 belt-and-suspenders)
+- [x] Update dependency graph: Phase 7 no longer references Phase 1 as a prerequisite complement

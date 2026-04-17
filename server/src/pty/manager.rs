@@ -151,6 +151,11 @@ impl PtySessionManager {
         // Kill any existing session with this ID before recreating.
         self.kill_internal(&opts.id);
 
+        // Release lock before slow I/O operations (openpty, spawn_command).
+        // Reacquire after spawn to update state atomically.
+        // SAFETY: kill_internal marks session as killed, so supervisor won't
+        // restart it even if we're preempted here.
+
         let pty_system = NativePtySystem::default();
         let pair = pty_system
             .openpty(PtySize {
@@ -200,7 +205,18 @@ impl PtySessionManager {
 
         {
             let mut inner = self.inner.lock().unwrap();
+            // TOCTOU guard: if concurrent create() already inserted this ID while
+            // we were spawning, kill it and replace (matches pre-existing behavior).
+            if let Some(existing) = inner.live.get(&opts.id) {
+                warn!(id = %opts.id, "Concurrent create detected, replacing existing session");
+                existing.signal_shutdown();
+            }
             inner.dead.remove(&opts.id);
+            // Clear killed flag after successful spawn:
+            // 1. Cancels any pending supervisor restart queued during backoff
+            // 2. Re-enables auto-restart for future crashes (if policy != never)
+            // This ensures create() is fully idempotent across race conditions.
+            inner.killed.remove(&opts.id);
             inner.live.insert(opts.id.clone(), session);
         }
 
@@ -310,6 +326,21 @@ impl PtySessionManager {
                 let removed = before - guard.dead.len();
                 if removed > 0 {
                     debug!(removed, "Dead session tombstones swept");
+                }
+                // Clean up killed set entries for sessions that no longer exist.
+                // Prevents unbounded memory growth when session IDs are never reused.
+                let before_killed = guard.killed.len();
+                // Collect orphaned IDs to avoid borrow checker conflict with retain closure.
+                let orphaned: Vec<String> = guard.killed.iter()
+                    .filter(|id| !guard.live.contains_key(*id) && !guard.dead.contains_key(*id))
+                    .cloned()
+                    .collect();
+                for id in orphaned {
+                    guard.killed.remove(&id);
+                }
+                let removed_killed = before_killed - guard.killed.len();
+                if removed_killed > 0 {
+                    debug!(removed = removed_killed, "Orphaned killed set entries cleaned");
                 }
             }
         });

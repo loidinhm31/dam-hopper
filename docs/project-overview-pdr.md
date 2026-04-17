@@ -33,17 +33,33 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Run pre-configured build/run commands
 - Stream terminal output to connected WebSocket clients
 - Support terminal input (stdin) via API
+- Auto-restart crashed processes with configurable policy
+- Ensure idempotent session creation
 
 **Acceptance Criteria:**
 - ✓ Spawn new PTY session with UUID
 - ✓ Broadcast output to multiple subscribers
 - ✓ Retain buffer for live sessions only
 - ✓ Graceful shutdown (SIGTERM → SIGKILL)
+- ✓ Auto-restart on crash per policy (never/on-failure/always)
+- ✓ Exponential backoff (1s→30s max)
+- ✓ Session ID reused across restarts (frontend tab stays connected)
+- ✓ Idempotent create: removes dead tombstones, cancels pending restarts, safe to retry (Phase 07 ✓)
 
 **Technical Constraints:**
 - portable-pty for cross-platform compatibility
-- Tokio broadcast channels for fan-out
-- Server-Sent Events or WebSocket for output streaming
+- Tokio broadcast channels for fan-out + separate PTY/FS channels
+- WebSocket for output streaming + lifecycle events
+- Supervisor pattern: reader thread (blocking) + supervisor task (async restart)
+- Killed set prevents double-spawn during concurrent creates
+- Cleanup task prunes dead tombstones (60s TTL) and orphaned killed entries (every 30s)
+
+**Phase-Based Implementation:**
+- Phase 02: Config extension — RestartPolicy enum per terminal
+- Phase 03: Session metadata — restart_count, last_exit_at fields
+- Phase 04: Restart engine — supervisor + exponential backoff
+- Phase 05: Enhanced WS events — terminal:exit (willRestart field) + process:restarted
+- Phase 07: Idempotency — killed set lifecycle, TOCTOU guard, memory leak fix
 
 ### PR-003: Git Operations
 

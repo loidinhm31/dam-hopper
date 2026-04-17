@@ -196,6 +196,124 @@ DeadSession (will_restart=false) — restart_count reset to 0
 - `test_killed_session_no_restart` — Killed sessions don't restart
 - `test_bounded_channel_prevents_dos` — Queue full drops respawn (safe)
 
+### Idempotent Creation Pattern (Phase 07)
+
+**Problem:** Without the killed set, a race between supervisor restart and user create could allow two shells to spawn with the same ID.
+
+**Solution:** Three-phase killed set lifecycle ensures at most one winner:
+
+| Phase | Action | Killed Set State |
+|-------|--------|------------------|
+| Create pre-spawn | User calls `create()` | Insert ID |
+| Slow I/O | Lock released, openpty + spawn | Held in set |
+| Create post-spawn | Lock reacquired, session active | Remove ID |
+
+**Reader/Supervisor Interaction:**
+- Reader detects EOF, sends RespawnCmd, releases lock
+- Meanwhile, user calls `create()` — enters killed set
+- Supervisor wakes from backoff, checks killed set — ID is there → skip respawn
+- Create finishes, removes ID — now future kills can mark session again
+
+**TOCTOU Guard (Create):**
+
+```rust
+{
+    let mut inner = self.inner.lock().unwrap();
+    // TOCTOU: If another thread inserted this ID while we spawned,
+    // detect it here and replace (matches pre-existing behavior).
+    if let Some(existing) = inner.live.get(&opts.id) {
+        warn!("Concurrent create detected, replacing");
+        existing.signal_shutdown();
+    }
+    inner.dead.remove(&opts.id);        // Clean tombstone
+    inner.killed.remove(&opts.id);      // Clear kill flag
+    inner.live.insert(opts.id.clone(), session);
+}
+```
+
+**Lock Optimization (Create):**
+The lock is released before slow I/O:
+
+```rust
+// ❌ Bad: lock held during openpty + spawn (~50ms)
+{
+    let mut inner = self.inner.lock().unwrap();
+    let pair = pty_system.openpty(...)?;  // This blocks!
+    // ... spawn ...
+}
+
+// ✅ Good: only held for state changes
+self.kill_internal(&opts.id);  // Insert into killed, remove from live
+// <LOCK RELEASED>
+let pair = pty_system.openpty(...)?;   // No lock contention
+// ...spawn...
+// <LOCK REACQUIRED>
+{
+    let mut inner = self.inner.lock().unwrap();
+    // TOCTOU check here
+    inner.dead.remove(&opts.id);
+    inner.killed.remove(&opts.id);
+    inner.live.insert(opts.id.clone(), session);
+}
+```
+
+**Cleanup Task (30s interval):**
+
+```rust
+pub fn spawn_cleanup_task(&self) {
+    let inner = Arc::clone(&self.inner);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            let mut guard = inner.lock().unwrap();
+            // Sweep dead tombstones (60s TTL)
+            guard.dead.retain(|_, d| d.died_at.elapsed() < DEAD_SESSION_TTL);
+            // Prune orphaned killed set entries
+            // (IDs no longer in live or dead maps)
+            let orphaned: Vec<String> = guard.killed.iter()
+                .filter(|id| !guard.live.contains_key(*id) 
+                         && !guard.dead.contains_key(*id))
+                .cloned()
+                .collect();
+            for id in orphaned {
+                guard.killed.remove(&id);
+            }
+        }
+    });
+}
+```
+
+**Why Killed Set Can Grow Unbounded (without cleanup):**
+- Session X exits while supervisor backoff is in progress
+- User calls `create(X)` → ID inserted into killed set
+- Create finishes, ID removed from killed set
+- If sessions are never reused (different project each time), killed set grows forever
+
+**Test Case:**
+
+```rust
+#[test]
+fn create_during_backoff_cancels_pending_restart() {
+    let mgr = make_manager();
+    // Process exits with OnFailure policy, supervisor queues 1s backoff restart
+    mgr.create(opts("test:id", "exit 1"))?;
+    wait_for(Duration::from_secs(2), || !mgr.is_alive("test:id"));
+    
+    // During backoff window (200ms later), user calls create again
+    std::thread::sleep(Duration::from_millis(200));
+    mgr.create(opts("test:id", "echo hello")).unwrap();
+    
+    // Wait past original backoff window (1.2s total)
+    std::thread::sleep(Duration::from_millis(1500));
+    
+    // Verify only one session exists (not double-spawned)
+    let sessions = mgr.list();
+    let count = sessions.iter().filter(|s| s.id == "test:id").count();
+    assert_eq!(count, 1);
+}
+```
+
 ## TypeScript Frontend (packages/web/)
 
 ### Profile Management Pattern
