@@ -63,6 +63,12 @@ impl ScrollbackBuffer {
         }
     }
 
+    /// Returns a snapshot of the current buffer data and total_written offset.
+    /// Used by persist worker to clone buffer state without blocking writer.
+    pub fn snapshot(&self) -> (Vec<u8>, u64) {
+        (self.data.clone(), self.total_written)
+    }
+
     /// Returns buffer contents as a lossy UTF-8 string (matches Node impl behaviour).
     pub fn as_str_lossy(&self) -> std::borrow::Cow<'_, str> {
         String::from_utf8_lossy(&self.data)

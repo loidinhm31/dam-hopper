@@ -1,7 +1,7 @@
 ---
 title: "F-08: Terminal Session Persistence + Reconnect"
 description: "Ring buffer replay on WS reconnect (Phase A) + optional SQLite persistence for server restarts (Phase B)"
-status: phase-04-complete
+status: phase-05-complete
 priority: P2
 effort: 5-7d
 branch: session-persistence
@@ -55,7 +55,7 @@ git-ref: f8-session-persistence
 | 2 | Protocol Extension (`terminal:attach`) | [phase-02-protocol-extension.md](./phase-02-protocol-extension.md) | ✅ done | 4h | 2026-04-17 |
 | 3 | Frontend Reconnect UI | [phase-03-frontend-reconnect.md](./phase-03-frontend-reconnect.md) | ✅ done | 6h | 2026-04-17 |
 | 4 | SQLite Schema + Config | [phase-04-sqlite-schema.md](./phase-04-sqlite-schema.md) | ✅ done | 4h | 2026-04-17 |
-| 5 | Persist Worker | [phase-05-persist-worker.md](./phase-05-persist-worker.md) | pending | 6h | — |
+| 5 | Persist Worker | [phase-05-persist-worker.md](./phase-05-persist-worker.md) | ✅ done | 6h | 2026-04-17 |
 | 6 | Startup Restore | [phase-06-startup-restore.md](./phase-06-startup-restore.md) | pending | 4h | — |
 
 **Phase A Total:** ~12h (1.5 days)  
@@ -173,6 +173,24 @@ Browser                    WebSocket                Server
 - **Code Review**: 9.5/10 score, production ready
 
 **Status**: Phase A (Phases 1–3) Complete ✅
+
+### Phase 05 Review (2026-04-17)
+
+**Status:** ❌ **BLOCKED** - Critical issues found  
+**Score:** 6.5/10  
+**Review:** [review-phase-05-20260417.md](./review-phase-05-20260417.md)
+
+**Critical Issues (MUST FIX):**
+1. 🚨 **Blocking send()** in PTY reader hot path — use try_send() (4 locations)
+2. 🔥 **Buffer cloned on EVERY read** (100s/sec) instead of on flush (1/5s) — architectural fix required
+
+**High Priority:**
+3. Remove unused `updated_at` field (dead code warning)
+4. Add explicit shutdown signal to worker
+
+**Impact:** PTY freeze on queue full + massive memory churn. Implementation cannot be merged until fixed.
+
+**Next:** Fix blocking issues, load test, then proceed to Phase 06.
 
 ---
 
