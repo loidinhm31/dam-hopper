@@ -815,6 +815,21 @@ fn is_eof_error(e: &std::io::Error) -> bool {
 // Command construction
 // ---------------------------------------------------------------------------
 
+/// Strip Windows UNC path prefix (\\?\) if present.
+/// CMD.EXE doesn't support UNC paths, causing "UNC paths are not supported" error.
+/// Converts `\\?\C:\path` to `C:\path`.
+fn strip_unc_prefix(path: &str) -> String {
+    if cfg!(target_os = "windows") && path.starts_with(r"\\?\UNC\") {
+        // UNC network path: \\?\UNC\server\share -> \\server\share
+        path.strip_prefix(r"\\?\UNC\").map(|p| format!(r"\\{}", p)).unwrap_or_else(|| path.to_string())
+    } else if cfg!(target_os = "windows") && path.starts_with(r"\\?\") {
+        // UNC prefix for long paths: \\?\C:\path -> C:\path
+        path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
+    } else {
+        path.to_string()
+    }
+}
+
 fn build_command(opts: &PtyCreateOpts) -> CommandBuilder {
     let is_interactive = opts.command.is_empty();
 
@@ -836,7 +851,9 @@ fn build_command(opts: &PtyCreateOpts) -> CommandBuilder {
     for arg in args {
         cmd.arg(arg);
     }
-    cmd.cwd(&opts.cwd);
+    // Strip UNC prefix to avoid CMD.EXE "UNC paths are not supported" error
+    let safe_cwd = strip_unc_prefix(&opts.cwd);
+    cmd.cwd(safe_cwd);
     cmd
 }
 
@@ -975,6 +992,43 @@ fn decide_restart(
 // ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod strip_unc_prefix_tests {
+    use super::strip_unc_prefix;
+
+    #[test]
+    fn strips_unc_long_path_prefix() {
+        assert_eq!(
+            strip_unc_prefix(r"\\?\C:\Users\test\path"),
+            r"C:\Users\test\path"
+        );
+    }
+
+    #[test]
+    fn strips_unc_network_path_prefix() {
+        assert_eq!(
+            strip_unc_prefix(r"\\?\UNC\server\share\path"),
+            r"\\server\share\path"
+        );
+    }
+
+    #[test]
+    fn leaves_normal_windows_path_unchanged() {
+        assert_eq!(
+            strip_unc_prefix(r"C:\Users\test\path"),
+            r"C:\Users\test\path"
+        );
+    }
+
+    #[test]
+    fn leaves_unix_path_unchanged() {
+        assert_eq!(
+            strip_unc_prefix("/home/user/path"),
+            "/home/user/path"
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests {
