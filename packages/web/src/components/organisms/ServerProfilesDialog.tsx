@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { X, Plus, Server, Check, Trash2, Edit2 } from "lucide-react";
 import type { ServerProfile } from "@/api/server-config.js";
 import {
@@ -7,6 +8,7 @@ import {
   setActiveProfile,
   deleteProfile,
 } from "@/api/server-config.js";
+import { reinitializeTransport } from "@/api/transport-utils.js";
 
 interface Props {
   open: boolean;
@@ -18,6 +20,7 @@ interface Props {
 export function ServerProfilesDialog({ open, onClose, onEditProfile, onSwitchProfile }: Props) {
   const [profiles, setProfiles] = useState<ServerProfile[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     if (open) {
@@ -31,9 +34,14 @@ export function ServerProfilesDialog({ open, onClose, onEditProfile, onSwitchPro
   function handleSwitch(profile: ServerProfile) {
     setActiveProfile(profile.id);
     onSwitchProfile(profile);
-    onClose(); // Close dialog before reload
-    // Force page reload to apply new server connection
-    window.location.reload();
+    onClose();
+    
+    // Reinitialize transport with new server URL (without page reload)
+    reinitializeTransport(profile.url);
+    
+    // Invalidate all queries to refetch data from the new server
+    void queryClient.invalidateQueries();
+    void queryClient.resetQueries();
   }
 
   function handleDelete(id: string) {
