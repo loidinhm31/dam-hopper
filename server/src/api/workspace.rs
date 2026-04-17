@@ -136,6 +136,7 @@ pub async fn init_workspace(
                     root: ".".to_string(),
                 },
                 agent_store: None,
+                server: crate::config::ServerConfig::default(),
                 projects,
                 features: FeaturesConfig::default(),
                 config_path: config_path.clone(),

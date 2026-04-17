@@ -45,6 +45,7 @@ pub fn read_config(file_path: &Path) -> Result<DamHopperConfig, AppError> {
     Ok(DamHopperConfig {
         workspace: raw.workspace,
         agent_store: raw.agent_store,
+        server: raw.server,
         projects,
         features: raw.features,
         config_path: canonical,

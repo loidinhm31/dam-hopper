@@ -108,7 +108,38 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [ ] Client updates terminal with only new bytes
 - [ ] Measures: ~90% bandwidth reduction vs full buffer resend
 
-**Phase 03-06: Additional Session Persistence Features (Planned)**
+**Phase 03: Frontend Reconnect UI (Planned)**
+- [ ] Implement xterm.js terminal reconnect UI
+- [ ] Session recovery on WebSocket reconnect
+- [ ] Visual status indicators during reconnect
+- [ ] Graceful fallback to full buffer on replay
+
+**Phase 04: SQLite Schema + Config (Backend)**
+**Status: [COMPLETED 2026-04-17]**
+- [x] Added rusqlite dependency
+- [x] Created persistence module with SessionStore CRUD operations
+- [x] Created SQL schema with sessions and session_buffers tables
+- [x] Added ServerConfig to config schema with session_persistence, session_db_path, session_buffer_ttl_hours
+- [x] Parse [server] section in config loader
+- [x] Initialize SessionStore in main.rs when enabled
+- [x] 6 unit tests passing (all CRUD operations covered)
+- [x] Code review score: 9/10 (after critical fixes)
+- [x] Security: Database file permissions (0o600), SQL injection prevention
+- [x] Files: 12 files created/modified, ~480 lines
+
+**Phase 05: Persist Worker (Planned)**
+- [ ] Implement background worker for periodic session snapshots
+- [ ] Buffer flushing to SQLite on configurable interval
+- [ ] TTL-based buffer cleanup
+- [ ] Integration with SessionStore
+
+**Phase 06: Startup Restore (Planned)**
+- [ ] Load persisted sessions on server startup
+- [ ] Restore buffer content to memory
+- [ ] Maintain session IDs across restarts
+- [ ] Handle corrupted database gracefully
+
+**Phase 07-Additional Session Persistence Features (Planned)**
 - [ ] Session snapshots (save/restore terminal state)
 - [ ] Offline replay (queue commands during disconnect)
 - [ ] Cross-browser session recovery

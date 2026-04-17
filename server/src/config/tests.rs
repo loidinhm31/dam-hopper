@@ -356,6 +356,7 @@ fn global_config_roundtrip() {
             path: "/tmp/ws1".to_string(),
         }]),
         ui: None,
+        server: crate::config::ServerConfig::default(),
     };
 
     write_global_config_at(&cfg_path, &cfg).unwrap();
@@ -541,6 +542,7 @@ fn ui_config_serde_roundtrip() {
             editor_font_size: 12,
             editor_zoom_wheel_enabled: false,
         }),
+        server: crate::config::ServerConfig::default(),
     };
 
     write_global_config_at(&cfg_path, &cfg).unwrap();

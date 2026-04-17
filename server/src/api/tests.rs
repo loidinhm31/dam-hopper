@@ -40,6 +40,7 @@ fn make_state(tmp: &TempDir) -> AppState {
             root: ".".into(),
         },
         agent_store: None,
+        server: crate::config::ServerConfig::default(),
         projects: vec![],
         features: FeaturesConfig::default(),
         config_path: workspace_dir.join("dam-hopper.toml"),
@@ -410,6 +411,7 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
             root: ".".into(),
         },
         agent_store: None,
+        server: crate::config::ServerConfig::default(),
         projects: vec![ProjectConfig {
             name: "test-project".into(),
             path: workspace_dir.to_string_lossy().into_owned(),

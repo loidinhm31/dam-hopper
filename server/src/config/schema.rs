@@ -232,6 +232,47 @@ pub struct FeaturesConfig {
 }
 
 // ──────────────────────────────────────────────
+// Server config
+// ──────────────────────────────────────────────
+
+fn default_session_persistence() -> bool {
+    false
+}
+
+fn default_session_db_path() -> String {
+    "~/.config/dam-hopper/sessions.db".to_string()
+}
+
+fn default_session_buffer_ttl_hours() -> u64 {
+    24
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerConfig {
+    /// Enable SQLite session persistence (default: false)
+    #[serde(default = "default_session_persistence")]
+    pub session_persistence: bool,
+    
+    /// Database file path (default: ~/.config/dam-hopper/sessions.db)
+    #[serde(default = "default_session_db_path")]
+    pub session_db_path: String,
+    
+    /// TTL for dead session buffers in hours (default: 24)
+    #[serde(default = "default_session_buffer_ttl_hours")]
+    pub session_buffer_ttl_hours: u64,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        ServerConfig {
+            session_persistence: default_session_persistence(),
+            session_db_path: default_session_db_path(),
+            session_buffer_ttl_hours: default_session_buffer_ttl_hours(),
+        }
+    }
+}
+
+// ──────────────────────────────────────────────
 // Top-level workspace config (on-disk)
 // ──────────────────────────────────────────────
 
@@ -239,6 +280,8 @@ pub struct FeaturesConfig {
 pub struct DamHopperConfigRaw {
     pub workspace: WorkspaceInfo,
     pub agent_store: Option<AgentStoreConfig>,
+    #[serde(default)]
+    pub server: ServerConfig,
     #[serde(default)]
     pub projects: Vec<ProjectConfigRaw>,
     #[serde(default)]
@@ -254,6 +297,7 @@ pub struct DamHopperConfig {
     pub workspace: WorkspaceInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_store: Option<AgentStoreConfig>,
+    pub server: ServerConfig,
     pub projects: Vec<ProjectConfig>,
     pub features: FeaturesConfig,
     /// Absolute path of the config file that was loaded (internal use only).
@@ -321,4 +365,6 @@ pub struct GlobalConfig {
     pub workspaces: Option<Vec<KnownWorkspace>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui: Option<UiConfig>,
+    #[serde(default)]
+    pub server: ServerConfig,
 }
