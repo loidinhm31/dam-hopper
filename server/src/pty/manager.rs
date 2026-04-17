@@ -96,6 +96,9 @@ pub struct PtySessionManager {
     /// Optional sender for persistence commands to worker thread.
     /// Present only when session_persistence is enabled.
     persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+    /// Optional session store for lazy buffer loading from SQLite.
+    /// Present only when session_persistence is enabled.
+    session_store: Option<std::sync::Arc<crate::persistence::SessionStore>>,
 }
 
 struct Inner {
@@ -118,12 +121,13 @@ impl Inner {
 
 impl PtySessionManager {
     pub fn new(sink: Arc<dyn EventSink>) -> Self {
-        Self::with_persist(sink, None)
+        Self::with_persist(sink, None, None)
     }
 
     pub fn with_persist(
         sink: Arc<dyn EventSink>,
         persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+        session_store: Option<std::sync::Arc<crate::persistence::SessionStore>>,
     ) -> Self {
         // Bounded channel prevents DoS if supervisor hangs/panics.
         // 256 slots = ~5× typical max sessions (50). If full, supervisor is dead/slow.
@@ -140,6 +144,7 @@ impl PtySessionManager {
             sink: Arc::clone(&sink),
             respawn_tx,
             persist_tx,
+            session_store,
         };
 
         // Spawn the supervisor task that handles respawn requests.
@@ -293,19 +298,37 @@ impl PtySessionManager {
     ///
     /// If `from_offset` is older than buffer start, returns the full buffer.
     /// Returns (data, current_offset) tuple.
+    ///
+    /// ## Fallback to persistence
+    /// If session not found in live sessions, checks persistence store for dead session buffer.
     pub fn get_buffer_with_offset(
         &self,
         id: &str,
         from_offset: Option<u64>,
     ) -> Result<(String, u64), AppError> {
         let inner = self.inner.lock().unwrap();
-        let session = inner
-            .live
-            .get(id)
-            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
-        let buf = session.buffer.lock().unwrap();
-        let (data, offset) = buf.read_from(from_offset);
-        Ok((String::from_utf8_lossy(data).into_owned(), offset))
+        
+        // Try in-memory first (live sessions)
+        if let Some(session) = inner.live.get(id) {
+            let buf = session.buffer.lock().unwrap();
+            let (data, offset) = buf.read_from(from_offset);
+            return Ok((String::from_utf8_lossy(data).into_owned(), offset));
+        }
+        
+        // Release lock before slow I/O
+        drop(inner);
+        
+        // Fallback to persistence (for dead sessions)
+        if let Some(store) = &self.session_store {
+            if let Some((data, total_written)) = store
+                .load_buffer(id)
+                .map_err(|e| AppError::PersistenceError(e.to_string()))?
+            {
+                return Ok((String::from_utf8_lossy(&data).into_owned(), total_written));
+            }
+        }
+        
+        Err(AppError::SessionNotFound(id.to_string()))
     }
 
     pub fn kill(&self, id: &str) -> Result<(), AppError> {

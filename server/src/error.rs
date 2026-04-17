@@ -25,6 +25,9 @@ pub enum AppError {
     #[error("Session not found: {0}")]
     SessionNotFound(String),
 
+    #[error("Persistence error: {0}")]
+    PersistenceError(String),
+
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 

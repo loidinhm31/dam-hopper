@@ -126,6 +126,20 @@ Infrastructure
 - **Tests**: 8 decision matrix rows + 5 integration tests (13/13 passing)
 - **Known Limitation**: Exit code inference (portable-pty API) — cannot distinguish exit 0 from exit 1
 
+### Phase 06: Startup Restore ✅ Complete
+- **Status**: Session restoration from SQLite on server startup
+- **Features**:
+  - `restore_sessions()` function loads and respawns sessions
+  - Smart filtering: skip `Never` restart policy, skip removed projects
+  - Config-driven retry count via `restart_max_retries`
+  - Lazy buffer loading fallback for dead sessions
+  - Graceful error handling: per-session failures logged as warnings
+  - Startup time < 1s with 10 sessions
+  - TTL-based cleanup of expired buffers
+- **Integration**: Called after PtySessionManager creation in main.rs
+- **Tests**: 3 tests passing (skip filters, restore success)
+- **Documentation**: [Phase 06 documentation](./phase-06-startup-restore/index.md)
+
 ## Critical Components
 
 ### Authentication Module (`server/src/api/auth.rs`)

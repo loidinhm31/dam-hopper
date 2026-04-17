@@ -1,5 +1,7 @@
+mod restore;
 mod worker;
 
+pub use restore::restore_sessions;
 pub use worker::{PersistCmd, PersistWorker};
 
 use crate::config::RestartPolicy;
