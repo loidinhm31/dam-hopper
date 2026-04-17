@@ -299,7 +299,9 @@ export function FileTree({
 
   function handleDownload() {
     if (!menu || menu.node.kind !== "file") return;
-    ops.download(menu.node.id);
+    void ops.download(menu.node.id).catch((error) => {
+      setOpError(error?.message ?? "Download failed");
+    });
   }
 
   function handleUploadHere() {

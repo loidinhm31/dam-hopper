@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import type { FsOpResult } from "@/api/fs-types.js";
+import { getServerUrl, getAuthToken } from "@/api/server-config.js";
 
 /**
  * Wraps transport.fsOp with query cache invalidation after each mutation.
@@ -50,14 +51,33 @@ export function useFsOps(project: string, subscribedPath: string) {
     return result;
   }
 
-  function download(path: string): void {
+  async function download(path: string): Promise<void> {
     const params = new URLSearchParams({ project, path });
-    const a = document.createElement("a");
-    a.href = `/api/fs/download?${params}`;
-    a.download = path.split("/").pop() ?? "download";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const token = getAuthToken();
+    const headers: HeadersInit = {};
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    try {
+      const response = await fetch(`${getServerUrl()}/api/fs/download?${params}`, { headers });
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.statusText}`);
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = path.split("/").pop() ?? "download";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Download failed:", error);
+      throw error;
+    }
   }
 
   return { createFile, createDir, rename, deleteEntry, move, download };
