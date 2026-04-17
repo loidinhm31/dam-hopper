@@ -53,6 +53,56 @@ Handles TOML parsing, project discovery, feature flags.
 2. `DAM_HOPPER_WORKSPACE` env var
 3. `~/.config/dam-hopper/config.toml` default path
 
+### persistence/ (Phase 04)
+
+SQLite-backed session persistence infrastructure for surviving server restarts.
+
+**Disabled by default** — enable via `[server] session_persistence = true` in dam-hopper.toml.
+
+**Schema (001_initial.sql):**
+
+| Table | Purpose |
+|-------|---------|
+| sessions | Session metadata: id, project, command, cwd, session_type, restart_policy, restart_max_retries, env_json, cols, rows, created_at, updated_at |
+| session_buffers | Scrollback buffers: session_id, data (BLOB), total_written, updated_at |
+
+Indexes on `project` and `updated_at` for efficient queries.
+
+**SessionStore API:**
+
+- `open(path) → Result<Self>` — Creates/opens database, runs migrations, sets 0o600 permissions (Unix)
+- `save_session(meta, env, cols, rows, restart_max_retries) → Result` — INSERT OR REPLACE into sessions
+- `save_buffer(id, data, total_written) → Result` — Persist scrollback buffer
+- `load_sessions() → Result<Vec<PersistedSession>>` — Load all saved sessions from database
+- `load_buffer(id) → Result<Option<(Vec<u8>, u64)>>` — Load buffer data + byte count for session
+- `delete_buffer_before(cutoff_ms) → Result` — TTL-based cleanup of expired buffers
+- `delete_session_buffer(id) → Result` — Remove buffer for specific session
+
+**Thread Safety:** Arc<Mutex<Connection>> — safe for concurrent access across async runtime.
+
+**Session Storage Format:**
+
+```rust
+pub struct PersistedSession {
+    pub meta: SessionMeta,        // id, project, command, cwd, session_type, restart_policy
+    pub env: HashMap<String, String>,  // Stored as JSON blob in database
+    pub cols: u16,                // Terminal width
+    pub rows: u16,                // Terminal height
+}
+```
+
+**Data Integrity:**
+
+- RestartPolicy and SessionType enums stored as lowercase strings in database
+- Environment variables serialized to JSON for portability
+- created_at / updated_at in milliseconds (Unix epoch)
+- total_written counter tracks bytes for buffer offset tracking (Phase 02)
+
+**Use Cases:**
+- Server restart recovery: restore active sessions + their scrollback on reboot
+- Long-running tasks: preserve build/run output across server updates
+- Debug experience: buffer history available immediately without re-running commands
+
 ### fs/ (Phase 01+: IDE File Explorer + Editor)
 
 **error.rs** — `FsError` enum (Unavailable, NotFound, PermissionDenied, TooLarge, Conflict).

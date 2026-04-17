@@ -98,6 +98,42 @@ If omitted, defaults to `.dam-hopper/agent-store/` in workspace root.
 
 All features are enabled by default.
 
+### Server Configuration
+
+Optional: configure session persistence and TTL settings for server restart recovery.
+
+```toml
+[server]
+session_persistence = false  # Enable SQLite session persistence (default: false)
+session_db_path = "~/.config/dam-hopper/sessions.db"  # Database file location
+session_buffer_ttl_hours = 24  # TTL for dead session buffers in hours (default: 24)
+```
+
+**Fields:**
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| session_persistence | bool | false | Enable to persist session metadata + scrollback buffers across server restarts |
+| session_db_path | string | ~/.config/dam-hopper/sessions.db | SQLite database path (supports ~ expansion); must be on local filesystem |
+| session_buffer_ttl_hours | u64 | 24 | Hours before dead session buffers are auto-deleted; prevents unbounded database growth |
+
+**Security Note:** On Unix systems, database files are created with 0o600 permissions (user-only access). Ensure the directory containing `session_db_path` is not world-readable.
+
+**Example:**
+
+```toml
+[server]
+session_persistence = true
+session_db_path = "~/.local/share/dam-hopper/sessions.db"
+session_buffer_ttl_hours = 48
+```
+
+When enabled:
+- Session metadata (id, project, command, cwd, restart_policy, etc.) is saved to SQLite
+- Session scrollback buffers (PTY output) are persisted with the session
+- On server restart, sessions can be restored from the database
+- Dead sessions are kept for 60 seconds to allow reconnection; buffers are cleaned up per TTL
+
 
 ## Global Configuration (~/.config/dam-hopper/config.toml)
 

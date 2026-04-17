@@ -88,6 +88,7 @@ async fn main() -> anyhow::Result<()> {
                     root: ".".into(),
                 },
                 agent_store: None,
+                server: dam_hopper_server::config::ServerConfig::default(),
                 projects: vec![],
                 features: dam_hopper_server::config::FeaturesConfig::default(),
                 config_path: workspace_dir.join("dam-hopper.toml"),
@@ -118,6 +119,53 @@ async fn main() -> anyhow::Result<()> {
     let agent_store = AgentStoreService::new(store_path);
     if let Err(e) = agent_store.init().await {
         tracing::warn!(error = %e, "Agent store init failed — will retry on first use");
+    }
+
+    // ── Session persistence (Phase 04) ────────────────────────────────────────
+
+    if config.server.session_persistence {
+        // Expand tilde in path (use default if starts with ~)
+        let db_path = if config.server.session_db_path.starts_with("~/") {
+            let suffix = config.server.session_db_path.strip_prefix("~/").unwrap();
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("~"))
+                .join(suffix)
+        } else if config.server.session_db_path == "~" {
+            dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"))
+        } else {
+            PathBuf::from(&config.server.session_db_path)
+        };
+        
+        // Ensure parent directory exists
+        if let Some(parent) = db_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::warn!(
+                    error = %e,
+                    path = %parent.display(),
+                    "Failed to create session DB directory — persistence disabled"
+                );
+            } else {
+                match dam_hopper_server::persistence::SessionStore::open(&db_path) {
+                    Ok(_store) => {
+                        tracing::info!(
+                            path = %db_path.display(),
+                            ttl_hours = config.server.session_buffer_ttl_hours,
+                            "Session persistence enabled"
+                        );
+                        // TODO Phase 05: Store in AppState, spawn persist worker
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            path = %db_path.display(),
+                            "Failed to open session database — persistence disabled"
+                        );
+                    }
+                }
+            }
+        }
+    } else {
+        tracing::debug!("Session persistence disabled");
     }
 
     probe_inotify_limit();

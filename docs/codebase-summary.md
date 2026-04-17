@@ -7,8 +7,8 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 **DamHopper** is a workspace management system for agent-based development. It combines a Rust backend server with a React web frontend to provide an integrated development environment for managing workspaces, agents, terminals, and file operations.
 
 **Repository Structure**: 
-- 235 total files
-- ~449K tokens
+- 274 total files
+- ~564K tokens
 - Predominantly Rust (server) and TypeScript/React (web)
 
 ## Key Features
@@ -94,6 +94,21 @@ Infrastructure
 - **Safety**: Production guards prevent unsafe configurations
 - **Tests**: Dev mode, normal mode regression, production safety
 - **Documentation**: [phase-01-server-auth-bypass/](./phase-01-server-auth-bypass/)
+
+### Phase 04: SQLite Session Persistence ✅ Complete
+- **Status**: Session persistence infrastructure with CRUD operations
+- **Features**:
+  - SQLite-backed `SessionStore` for session metadata and scrollback buffers
+  - Two-table schema: `sessions` (metadata) and `session_buffers` (output)
+  - Configuration section `[server]` with three settings:
+    - `session_persistence` (bool, default false)
+    - `session_db_path` (string, default ~/.config/dam-hopper/sessions.db)
+    - `session_buffer_ttl_hours` (u64, default 24)
+  - 0o600 Unix file permissions for security
+  - Automatic migrations on startup
+  - Integrates with Phase 04 auto-restart and Phase 02 buffer offset tracking
+- **Tests**: 6 unit tests passing (open, save_session, save_buffer, load_sessions, load_buffer, delete_buffer_before)
+- **Documentation**: [Configuration Guide - Server Configuration](./configuration-guide.md#server-configuration), [System Architecture - persistence/ module](./system-architecture.md#persistence-phase-04)
 
 ### Phase 04: Monaco Editor ✅ Complete
 - **Status**: Advanced editor integration

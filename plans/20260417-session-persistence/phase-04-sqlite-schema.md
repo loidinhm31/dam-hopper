@@ -125,13 +125,21 @@ pub struct PersistedSession {
 7. Add unit tests for CRUD operations.
 
 ## Todo
-- [ ] Add rusqlite dependency
-- [ ] Create persistence module
-- [ ] Create migration SQL
-- [ ] Add ServerConfig to schema
-- [ ] Parse [server] section
-- [ ] Initialize in main.rs
-- [ ] Unit tests for SessionStore
+- [x] Add rusqlite dependency
+- [x] Create persistence module
+- [x] Create migration SQL
+- [x] Add ServerConfig to schema
+- [x] Parse [server] section
+- [x] Initialize in main.rs
+- [x] Unit tests for SessionStore
+
+## Code Review
+- **Status:** Complete (2026-04-17)
+- **Score:** 8.5/10
+- **Report:** [review-phase-04-20260417.md](./review-phase-04-20260417.md)
+- **Critical issues:** 1 (database file permissions)
+- **Warnings:** 2 (mutex locking, hardcoded values)
+- **Suggestions:** 4 (error handling, cleanup scheduling)
 
 ## Test Cases
 

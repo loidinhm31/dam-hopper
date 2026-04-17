@@ -29,6 +29,7 @@ fn make_state(tmp: &TempDir) -> AppState {
     let config = DamHopperConfig {
         workspace: WorkspaceInfo { name: "ws".into(), root: ".".into() },
         agent_store: None,
+        server: dam_hopper_server::config::ServerConfig::default(),
         projects: vec![ProjectConfig {
             name: "proj".into(),
             path: workspace_dir.to_string_lossy().into_owned(),
