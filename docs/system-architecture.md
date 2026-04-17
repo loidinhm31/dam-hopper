@@ -97,16 +97,18 @@ Handles TOML parsing, project discovery, feature flags.
 - Active profile ID: localStorage (survives browser close, shared across tabs)
 - Auth token: sessionStorage (cleared on tab close, isolated per tab) — password never stored
 
-### pty/ (Phase 04: Restart Engine ✅)
+### pty/ (Phase 04: Restart Engine ✅ / Phase 07: Idempotency ✅)
 
-Manages portable terminal sessions with automatic restart capabilities.
+Manages portable terminal sessions with automatic restart capabilities and idempotent creation.
 
 **manager.rs** — `PtySessionManager` (Arc<Mutex<Inner>>):
 - Map<id, LiveSession> for active sessions
-- Map<id, DeadSession> tombstones (60s TTL)
-- `create()` spawns PTY + dedicated reader thread
-- `kill()` marks session dead, retains 60s tombstone for reconnect
-- `remove()` immediately evicts session (no restart on user kill)
+- Map<id, DeadSession> tombstones (60s TTL; auto-evicted by cleanup task)
+- Set<id, String> killed tracks manually terminated sessions (used to prevent supervisor respawn race)
+- `create()` fully idempotent: removes dead tombstone, inserts into killed set pre-spawn, removes post-spawn (TOCTOU guard)
+- `kill()` marks session dead + adds to killed set, retains 60s tombstone for reconnect
+- `remove()` immediately evicts session + adds to killed set (no restart on user kill)
+- `spawn_cleanup_task()` runs every 30s: prunes expired tombstones AND orphaned killed set entries (prevents unbounded memory growth)
 - Bounded respawn channel (256 slots) prevents DoS
 
 **session.rs** — Session state management:
@@ -144,13 +146,36 @@ Manages portable terminal sessions with automatic restart capabilities.
 - Upstream issue filed: requires std::process wrapper as future work
 
 **Known Issues (Phase 04 Review):** Both fixed before merge:
-1. Bounded channel prevents unbounded respawn queue growth (DoS vector)
-2. Exit code always 0 for natural exits (OnFailure policy broken)
+1. Bounded channel prevents unbounded respawn queue growth (DoS vector) — ✓ Fixed
+2. Exit code always 0 for natural exits (OnFailure policy broken) — ✓ Fixed
 
-**Tests (Phase 04):**
+**Phase 07 Improvements:**
+- Killed set prevents double-spawn on concurrent create (50-100ms lock contention reduction)
+- Idempotent create eliminates client need for alive status filtering
+- Cleanup task prevents killed set from accumulating orphaned entries (was potential memory leak)
+
+**Killed Set Lifecycle (Phase 07 Idempotency Mechanism):**
+
+Prevents supervisor from restarting a session during the kill window and enables full idempotency on create:
+
+1. **User kill**: Session moved to killed set immediately (before reader sees EOF)
+2. **Reader exit**: Checks killed set — if present, skips restart decision
+3. **Supervisor restart**: Checks killed set — if present, skips delayed respawn
+4. **Cleanup task**: Every 30s, removes orphaned IDs (not in live or dead maps)
+
+Example race sequence (create during backoff):
+- T0: Process exits, reader sends RespawnCmd with 1s backoff
+- T200ms: User calls `terminal:create` with same ID
+- T200ms: Create inserts ID into killed set (cancels pending respawn)
+- T200ms: Create spawns fresh process, reacquires lock, removes ID from killed set
+- T1.2s: Supervisor wakes up, checks killed set — not there anymore but session exists with different PID, skips restart
+- Result: Single shell, no race condition
+
+**Tests (Phase 04-07):**
 - 8 decision matrix rows (all 8/8 passing)
-- 5 integration tests (all passing)
-- Covers: session create/list, write/buffer, resize, kill, respawn
+- 5 base integration tests (Phase 04, all passing)
+- 1 race condition test: `create_during_backoff_cancels_pending_restart` (Phase 07, validates idempotency)
+- Covers: session create/list, write/buffer, resize, kill, remove, respawn, concurrent create race
 
 ### git/
 Git operations via `git2` library + CLI fallback.

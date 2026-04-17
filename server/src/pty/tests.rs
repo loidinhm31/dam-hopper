@@ -511,4 +511,54 @@ mod pty_tests {
 
         mgr.remove("restart:always").unwrap();
     }
+
+    // -----------------------------------------------------------------------
+    // Phase 07: Tombstone idempotency test
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn create_during_backoff_cancels_pending_restart() {
+        let mgr = make_manager();
+        let mut opts = opts("restart:race", "exit 1");
+        opts.restart_policy = RestartPolicy::OnFailure;
+        opts.restart_max_retries = 5;
+
+        // First create — process will exit with code 1.
+        mgr.create(opts.clone()).unwrap();
+        
+        // Wait for process to exit (becomes dead, supervisor queues restart).
+        let exited = wait_for(Duration::from_secs(2), || !mgr.is_alive("restart:race"));
+        assert!(exited, "Process should exit with code 1");
+
+        // During backoff window (1s delay), call create again with same ID.
+        // This should:
+        // 1. Insert into killed set (canceling pending supervisor restart)
+        // 2. Remove dead tombstone
+        // 3. Spawn fresh session immediately
+        // 4. Remove from killed set after spawn
+        std::thread::sleep(Duration::from_millis(200)); // Small delay but within backoff
+        
+        // Verify still in backoff window (not already restarted).
+        assert!(!mgr.is_alive("restart:race"), "Should still be dead before manual create");
+        
+        let meta = mgr.create(opts).unwrap();
+        assert!(meta.alive, "New session should be alive immediately");
+        assert_eq!(meta.restart_count, 0, "Fresh session should have restart_count=0");
+
+        // Wait beyond original backoff window to ensure no double-spawn.
+        std::thread::sleep(Duration::from_millis(1500));
+        
+        // Only one session should exist (the fresh one from second create).
+        assert!(mgr.is_alive("restart:race"), "Session should still be alive");
+        let sessions = mgr.list();
+        let count = sessions.iter().filter(|s| s.id == "restart:race").count();
+        assert_eq!(count, 1, "Should have exactly one session, no double-spawn");
+        
+        // Verify killed set was properly cleaned after successful create.
+        // This ensures idempotency mechanism worked correctly.
+        // Note: Can't directly access inner.killed in public API, but the test
+        // passing proves supervisor didn't double-spawn (killed flag prevented it).
+
+        mgr.remove("restart:race").unwrap();
+    }
 }

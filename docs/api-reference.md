@@ -83,11 +83,18 @@ Response: `{ projects: [ { name, path, type } ] }`
 ### Terminals
 
 **POST /api/pty/spawn**
-Create new PTY session.
+Create new PTY session (idempotent as of Phase 07).
 
 Body: `{ project, profile, env_overrides? }`
 
 Response: `{ sessionId: uuid }`
+
+**Idempotency Guarantees (Phase 07):**
+- Calling create with the same `sessionId` during restart backoff will immediately spawn a fresh session
+- Any pending supervisor respawn for that ID is automatically cancelled (killed set flag)
+- Dead session tombstones are cleaned up automatically
+- No need for client-side alive status filtering—safe to retry without state checks
+- Lock released before slow I/O (openpty, spawn), reacquired with TOCTOU guard to detect concurrent creates
 
 **GET /api/pty/:sessionId**
 Stream PTY output (Server-Sent Events).
@@ -96,6 +103,21 @@ Stream PTY output (Server-Sent Events).
 Send input to running PTY.
 
 Body: `{ input: string }`
+
+**GET /api/pty/:sessionId/resize**
+Resize terminal.
+
+Body: `{ cols: number, rows: number }`
+
+**POST /api/pty/:sessionId/kill**
+Gracefully terminate session (SIGTERM, then SIGKILL if needed).
+
+Response: `{ ok: true }`
+
+**POST /api/pty/:sessionId/remove**
+Immediately evict session without restart (cancels pending auto-restart).
+
+Response: `{ ok: true }`
 
 ### Git Operations
 
