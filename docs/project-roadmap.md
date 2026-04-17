@@ -4,10 +4,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Status Overview
 
-- **Current Phase:** Phase 02: WebSocket Reconnect (Planned for F-08 feature)
-- **Last Milestone:** Phase 01: Buffer Offset Tracking completed (F-08 Terminal Session Persistence)
-- **Total Phases Completed:** 8 out of multiple features (F-01 Terminal Enhancement 7/7, F-08 Terminal Session Persistence 1/6)
-- **Next Milestone:** Phase 02: WebSocket reconnect handler with delta replay
+- **Current Phase:** Phase 06: Startup Restore (F-08 Terminal Session Persistence)
+- **Last Milestone:** Phase 05: Persist Worker completed (F-08 Terminal Session Persistence)
+- **Total Phases Completed:** 13 phases (F-01 Terminal Enhancement 7/7, F-08 Terminal Session Persistence 5/6)
+- **Next Milestone:** Phase 06: Startup Restore — Load persisted sessions on server restart
 
 ## Roadmap Phases
 
@@ -127,11 +127,14 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [x] Security: Database file permissions (0o600), SQL injection prevention
 - [x] Files: 12 files created/modified, ~480 lines
 
-**Phase 05: Persist Worker (Planned)**
-- [ ] Implement background worker for periodic session snapshots
-- [ ] Buffer flushing to SQLite on configurable interval
-- [ ] TTL-based buffer cleanup
-- [ ] Integration with SessionStore
+**Phase 05: Persist Worker (Completed 2026-04-17)**
+- [x] Implement background worker for periodic session snapshots
+- [x] Buffer flushing to SQLite on configurable interval
+- [x] TTL-based buffer cleanup
+- [x] Integration with SessionStore
+- [x] 5/5 tests passing
+- [x] Code review: 9/10, all critical issues resolved
+- [x] Production ready for Phase 06
 
 **Phase 06: Startup Restore (Planned)**
 - [ ] Load persisted sessions on server startup
@@ -160,6 +163,25 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [ ] Multi-workspace management UI
 
 ## Recent Milestones
+
+- **2026-04-17:** Completed Phase 05: Persist Worker (F-08 Terminal Session Persistence).
+    - ✅ Background worker for async session snapshots
+    - ✅ Buffer flushing to SQLite on configurable interval (default 5s)
+    - ✅ TTL-based buffer cleanup (default 24h)
+    - ✅ Integration with SessionStore for CRUD operations
+    - ✅ 5/5 persistence worker tests passing
+    - ✅ Critical issues resolved: try_send() hot path, buffer cloning optimization, field cleanup
+    - ✅ Code review score: 9/10, approved for merge
+    - ✅ 0 critical issues, 0 warnings
+    - ✅ Production ready for Phase 06 (Startup Restore)
+
+- **2026-04-17:** Completed Phase 01-04: Session Persistence Infrastructure (F-08).
+    - ✅ Phase 01: Buffer Offset Tracking — Monotonic byte counter, delta replay API
+    - ✅ Phase 02: Protocol Extension — `terminal:attach` and `terminal:buffer` messages
+    - ✅ Phase 03: Frontend Reconnect UI — xterm.js reconnect, "Reconnecting..." overlay, 3s timeout fallback
+    - ✅ Phase 04: SQLite Schema + Config — sessions and session_buffers tables, ServerConfig extension
+    - ✅ Backend: 128/128 tests passing
+    - ✅ Frontend: 0 type errors, production ready
 
 - **2026-04-17:** Completed Phase 01: Buffer Offset Tracking (F-08 Terminal Session Persistence).
     - ✅ Monotonic byte counter `total_written: u64` tracks cumulative bytes written

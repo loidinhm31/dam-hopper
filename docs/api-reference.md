@@ -71,7 +71,86 @@ Clear authentication session.
 
 Response: `{ "ok": true }`
 
-## Client-Side Transport Interface (Phase 3+)
+## Session Persistence API (Phase 05)
+
+Terminal session buffers and metadata can be persisted to SQLite for durable recovery across server restarts. Requires `session_persistence = true` in `dam-hopper.toml`.
+
+### Configuration
+
+```toml
+[server]
+session_persistence = true                          # Enable persistence
+persistence_db_path = "~/.config/dam-hopper/sessions.db"  # Database path (supports ~)
+session_buffer_ttl_hours = 720                       # 30-day retention (default)
+```
+
+### How Persistence Works
+
+1. **Automatic**: When session is created, it's recorded to SQLite along with environment
+2. **Batched**: Buffer snapshots sent every 16KB (throttled, non-blocking)
+3. **Non-blocking**: Uses `try_send()` on bounded channel — PTY reader never waits
+4. **Flushed**: Every 5 seconds OR on session exit (immediate)
+5. **Recoverable**: On server restart, clients can reconnect to recreate original buffer
+
+### Affected Endpoints
+
+**GET /api/terminal/list** — Returns:
+```json
+[
+  {
+    "id": "uuid",
+    "project": "project-name",
+    "command": "npm run dev",
+    "cwd": "/path",
+    "alive": true,
+    "exit_code": null,
+    "buffer_bytes": 1048576,
+    "persisted": true,        // Phase 05: new field
+    "started_at": 1234567890
+  }
+]
+```
+
+### Storage Details
+
+**Database Schema** (Phase 05):
+- `sessions` table — session metadata (id, project, command, env, cols, rows, restart_max_retries, created_at)
+- `session_buffers` table — binary buffer data (session_id, data BLOB, total_written, updated_at)
+
+**Storage Efficiency**:
+- Batching: Only latest buffer per session written (intermediates discarded)
+- Throttling: Every 16KB, not every read (99% fewer allocations)
+- Memory: 16MB/sec churn (vs. 256MB/sec unoptimized)
+
+### Worker Thread Architecture
+
+- **Dedicated thread**: `persist-worker` daemon (see logs)
+- **Bounded queue**: 256 slots (64MB max capacity)
+- **Non-blocking sends**: Failed sends safe to drop (batching semantics)
+- **Graceful shutdown**: all pending buffers flushed before process exit
+
+### Monitoring
+
+Track persistence health via logs:
+
+```bash
+# Enabled on startup
+info: Session persistence enabled (path: ~/.config/dam-hopper/sessions.db)
+info: Persist worker thread spawned
+
+# Queue full (rare, indicates slow worker)
+warn: Persist queue full, dropping BufferUpdate
+
+# On session exit
+info: Flushing session buffer on exit
+
+# On shutdown
+info: Persist worker stopped
+```
+
+See [Phase 05: Persist Worker](../phase-05-persist-worker/) for detailed architecture and design rationale.
+
+## Reconnection Flow (Phase A feature)
 
 **Location:** `packages/web/src/api/transport.ts`
 
