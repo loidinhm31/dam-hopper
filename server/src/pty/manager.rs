@@ -93,6 +93,9 @@ pub struct PtySessionManager {
     /// Bounded sender (256 slots) for respawn requests from reader threads.
     /// Consumed by supervisor_loop task. If queue full, supervisor is dead/slow.
     respawn_tx: mpsc::Sender<RespawnCmd>,
+    /// Optional sender for persistence commands to worker thread.
+    /// Present only when session_persistence is enabled.
+    persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
 }
 
 struct Inner {
@@ -115,6 +118,13 @@ impl Inner {
 
 impl PtySessionManager {
     pub fn new(sink: Arc<dyn EventSink>) -> Self {
+        Self::with_persist(sink, None)
+    }
+
+    pub fn with_persist(
+        sink: Arc<dyn EventSink>,
+        persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+    ) -> Self {
         // Bounded channel prevents DoS if supervisor hangs/panics.
         // 256 slots = ~5× typical max sessions (50). If full, supervisor is dead/slow.
         let (respawn_tx, respawn_rx) = mpsc::channel(256);
@@ -122,10 +132,14 @@ impl PtySessionManager {
         // Clone respawn_tx before moving it into manager.
         let respawn_tx_clone = respawn_tx.clone();
         
+        // Clone persist_tx before moving it into manager.
+        let persist_tx_clone = persist_tx.clone();
+        
         let manager = Self {
             inner: Arc::new(Mutex::new(Inner::new())),
             sink: Arc::clone(&sink),
             respawn_tx,
+            persist_tx,
         };
 
         // Spawn the supervisor task that handles respawn requests.
@@ -136,6 +150,7 @@ impl PtySessionManager {
             inner_clone,
             sink_clone,
             respawn_tx_clone,
+            persist_tx_clone,
         ));
 
         manager
@@ -227,13 +242,27 @@ impl PtySessionManager {
         let inner_ref = Arc::clone(&self.inner);
         let session_id = opts.id.clone();
         let respawn_tx = self.respawn_tx.clone();
+        let persist_tx = self.persist_tx.clone();
 
         std::thread::Builder::new()
             .name(format!("pty-reader:{session_id}"))
             .spawn(move || {
-                reader_thread(session_id, reader, buffer, shutdown, sink, inner_ref, respawn_tx);
+                reader_thread(session_id, reader, buffer, shutdown, sink, inner_ref, respawn_tx, persist_tx);
             })
             .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
+
+        // Send SessionCreated to persist worker (if enabled)
+        if let Some(tx) = &self.persist_tx {
+            if let Err(e) = tx.try_send(crate::persistence::PersistCmd::SessionCreated {
+                meta: meta.clone(),
+                env: opts.env.clone(),
+                cols: opts.cols,
+                rows: opts.rows,
+                restart_max_retries: opts.restart_max_retries,
+            }) {
+                warn!("Persist queue full, dropping SessionCreated: {}", e);
+            }
+        }
 
         self.sink.send_terminal_changed();
         info!(id = %opts.id, "PTY session created");
@@ -294,6 +323,16 @@ impl PtySessionManager {
         }
         inner.dead.remove(id);
         drop(inner);
+        
+        // Send SessionRemoved to persist worker (if enabled)
+        if let Some(tx) = &self.persist_tx {
+            if let Err(e) = tx.try_send(crate::persistence::PersistCmd::SessionRemoved {
+                session_id: id.to_string(),
+            }) {
+                warn!("Persist queue full, dropping SessionRemoved: {}", e);
+            }
+        }
+        
         self.sink.send_terminal_changed();
         Ok(())
     }
@@ -392,8 +431,16 @@ fn reader_thread(
     sink: Arc<dyn EventSink>,
     inner: Arc<Mutex<Inner>>,
     respawn_tx: mpsc::Sender<RespawnCmd>,
+    persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
 ) {
     let mut chunk = vec![0u8; 4096];
+    // Throttle buffer snapshots: only send to persist worker every 16KB to reduce memory churn.
+    // Performance: reduces snapshot frequency from ~100/sec to ~6/sec on fast terminals (16x improvement).
+    // Trade-off: Sessions with < 16KB output won't persist to SQLite (acceptable: WS reconnect still works,
+    // only server restart loses buffer for short sessions like quick commands or failed builds).
+    let mut bytes_since_snapshot = 0usize;
+    const SNAPSHOT_THRESHOLD: usize = 16 * 1024; // 16KB
+    
     loop {
         if shutdown.load(Ordering::Relaxed) {
             break;
@@ -410,6 +457,24 @@ fn reader_thread(
                 {
                     let mut buf = buffer.lock().unwrap();
                     buf.push(data);
+                    bytes_since_snapshot += n;
+                    
+                    // Send buffer update to persist worker (if enabled)
+                    // Throttle: only snapshot every 16KB to reduce memory churn from 256KB copies
+                    if bytes_since_snapshot >= SNAPSHOT_THRESHOLD {
+                        if let Some(tx) = &persist_tx {
+                            let (snapshot_data, total_written) = buf.snapshot();
+                            if let Err(_) = tx.try_send(crate::persistence::PersistCmd::BufferUpdate {
+                                session_id: session_id.clone(),
+                                data: snapshot_data,
+                                total_written,
+                            }) {
+                                // Queue full - this is expected under load. Worker will flush latest on timer.
+                                // Dropping is safe: batching means worker only persists latest anyway.
+                            }
+                            bytes_since_snapshot = 0;
+                        }
+                    }
                 }
                 let data_str = String::from_utf8_lossy(data).into_owned();
                 sink.send_terminal_data(&session_id, &data_str);
@@ -434,6 +499,15 @@ fn reader_thread(
     // window), supervisor will detect killed flag and skip respawn.
     let exit_code = infer_exit_code(&session_id, &inner);
     info!(id = %session_id, exit_code, "PTY session exited");
+
+    // Send SessionExited to persist worker for immediate flush (if enabled)
+    if let Some(tx) = &persist_tx {
+        if let Err(e) = tx.try_send(crate::persistence::PersistCmd::SessionExited {
+            session_id: session_id.clone(),
+        }) {
+            warn!(session_id = %session_id, "Persist queue full, dropping SessionExited: {}", e);
+        }
+    }
 
     let (respawn_opts, restart_count, _was_killed, should_restart, _delay_ms) = {
         let mut inner_guard = inner.lock().unwrap();
@@ -525,6 +599,7 @@ async fn supervisor_loop(
     inner: Arc<Mutex<Inner>>,
     sink: Arc<dyn EventSink>,
     respawn_tx: mpsc::Sender<RespawnCmd>,
+    persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
 ) {
     while let Some(cmd) = respawn_rx.recv().await {
         let session_id = cmd.id.clone();
@@ -557,6 +632,7 @@ async fn supervisor_loop(
             &inner,
             &sink,
             &respawn_tx,
+            persist_tx.clone(),
         ).await {
             warn!(id = %session_id, error = %e, "Respawn failed");
         } else {
@@ -573,6 +649,7 @@ async fn respawn_internal(
     inner: &Arc<Mutex<Inner>>,
     sink: &Arc<dyn EventSink>,
     respawn_tx: &mpsc::Sender<RespawnCmd>,
+    persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
 ) -> Result<(), AppError> {
     let opts = &cmd.respawn_opts;
 
@@ -667,6 +744,7 @@ async fn respawn_internal(
                 sink_clone,
                 inner_clone,
                 respawn_tx_clone,
+                persist_tx,
             );
         })
         .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;

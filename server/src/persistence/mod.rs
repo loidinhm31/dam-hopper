@@ -1,3 +1,7 @@
+mod worker;
+
+pub use worker::{PersistCmd, PersistWorker};
+
 use crate::config::RestartPolicy;
 use crate::pty::SessionMeta;
 use rusqlite::{params, Connection, OptionalExtension};

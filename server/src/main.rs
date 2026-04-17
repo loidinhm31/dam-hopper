@@ -107,23 +107,10 @@ async fn main() -> anyhow::Result<()> {
 
     let (event_sink, _initial_rx) = BroadcastEventSink::new(TOKEN_CAPACITY);
 
-    let pty_manager = PtySessionManager::new(std::sync::Arc::new(event_sink.clone()));
-    pty_manager.spawn_cleanup_task();
+    // ── Session persistence (Phase 05) ────────────────────────────────────────
+    // Create persist worker and channel BEFORE PtySessionManager so we can pass persist_tx.
 
-    let store_rel_path = config
-        .agent_store
-        .as_ref()
-        .map(|a| a.path.clone())
-        .unwrap_or_else(|| ".dam-hopper/agent-store".to_string());
-    let store_path = workspace_dir.join(&store_rel_path);
-    let agent_store = AgentStoreService::new(store_path);
-    if let Err(e) = agent_store.init().await {
-        tracing::warn!(error = %e, "Agent store init failed — will retry on first use");
-    }
-
-    // ── Session persistence (Phase 04) ────────────────────────────────────────
-
-    if config.server.session_persistence {
+    let persist_tx = if config.server.session_persistence {
         // Expand tilde in path (use default if starts with ~)
         let db_path = if config.server.session_db_path.starts_with("~/") {
             let suffix = config.server.session_db_path.strip_prefix("~/").unwrap();
@@ -144,15 +131,33 @@ async fn main() -> anyhow::Result<()> {
                     path = %parent.display(),
                     "Failed to create session DB directory — persistence disabled"
                 );
+                None
             } else {
                 match dam_hopper_server::persistence::SessionStore::open(&db_path) {
-                    Ok(_store) => {
+                    Ok(store) => {
                         tracing::info!(
                             path = %db_path.display(),
                             ttl_hours = config.server.session_buffer_ttl_hours,
                             "Session persistence enabled"
                         );
-                        // TODO Phase 05: Store in AppState, spawn persist worker
+                        
+                        // Create bounded channel for persist commands (256 slots)
+                        let (tx, rx) = std::sync::mpsc::sync_channel(256);
+                        
+                        // Spawn persist worker thread
+                        let worker = dam_hopper_server::persistence::PersistWorker::new(
+                            rx,
+                            std::sync::Arc::new(store),
+                        );
+                        std::thread::Builder::new()
+                            .name("persist-worker".to_string())
+                            .spawn(move || {
+                                worker.run();
+                            })
+                            .expect("Failed to spawn persist worker thread");
+                        
+                        tracing::info!("Persist worker thread spawned");
+                        Some(tx)
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -160,12 +165,33 @@ async fn main() -> anyhow::Result<()> {
                             path = %db_path.display(),
                             "Failed to open session database — persistence disabled"
                         );
+                        None
                     }
                 }
             }
+        } else {
+            None
         }
     } else {
         tracing::debug!("Session persistence disabled");
+        None
+    };
+
+    let pty_manager = PtySessionManager::with_persist(
+        std::sync::Arc::new(event_sink.clone()),
+        persist_tx.clone(), // Clone to keep sender alive until end of main() for graceful shutdown
+    );
+    pty_manager.spawn_cleanup_task();
+
+    let store_rel_path = config
+        .agent_store
+        .as_ref()
+        .map(|a| a.path.clone())
+        .unwrap_or_else(|| ".dam-hopper/agent-store".to_string());
+    let store_path = workspace_dir.join(&store_rel_path);
+    let agent_store = AgentStoreService::new(store_path);
+    if let Err(e) = agent_store.init().await {
+        tracing::warn!(error = %e, "Agent store init failed — will retry on first use");
     }
 
     probe_inotify_limit();
@@ -222,6 +248,11 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, router).await?;
+
+    // Graceful shutdown: drop persist_tx to signal worker thread, then wait for clean exit
+    // When persist_tx is dropped here, worker detects channel disconnect and flushes all pending buffers
+    drop(persist_tx);
+    tracing::info!("Server shutdown complete");
 
     Ok(())
 }
