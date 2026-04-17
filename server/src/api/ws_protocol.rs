@@ -21,6 +21,12 @@ pub enum ClientMsg {
     TermWrite { id: String, data: String },
     #[serde(rename = "terminal:resize")]
     TermResize { id: String, cols: u16, rows: u16 },
+    #[serde(rename = "terminal:attach")]
+    TermAttach {
+        id: String,
+        /// Client's last received byte offset (optional, for delta replay)
+        from_offset: Option<u64>,
+    },
 
     // FS — subscribe
     #[serde(rename = "fs:subscribe_tree")]
@@ -145,6 +151,16 @@ pub enum ServerMsg {
     // Terminal output
     #[serde(rename = "terminal:output")]
     TermOutput { id: String, data: String },
+
+    // Terminal buffer replay (response to terminal:attach)
+    #[serde(rename = "terminal:buffer")]
+    TermBuffer {
+        id: String,
+        /// Base64-encoded buffer content (lossy UTF-8)
+        data: String,
+        /// Current buffer byte offset (client stores for next attach)
+        offset: u64,
+    },
 
     // Terminal exit — enhanced with restart metadata
     #[serde(rename = "terminal:exit")]
