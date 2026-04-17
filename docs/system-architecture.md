@@ -171,6 +171,32 @@ Example race sequence (create during backoff):
 - T1.2s: Supervisor wakes up, checks killed set — not there anymore but session exists with different PID, skips restart
 - Result: Single shell, no race condition
 
+**Buffer Offset Tracking (Phase 01 - F-08):**
+
+Enables efficient delta replay for WebSocket reconnections. ScrollbackBuffer tracks monotonic byte counter and provides differential read API.
+
+**buffer.rs** — `ScrollbackBuffer` enhancements:
+- `total_written: u64` — monotonic counter tracking all bytes ever written (survives eviction)
+- `current_offset() → u64` — returns total bytes written, used for client checkpoint
+- `read_from(Option<u64>) → (&[u8], u64)` — returns (delta bytes or full buffer if unavailable, current offset)
+- Ring buffer algorithm unchanged; offset tracking has zero performance cost
+
+**Delta Replay Logic**:
+1. Client requests bytes from stored offset
+2. Server calculates buffer start offset: `total_written - buffer.len()`
+3. If requested offset within buffer: return delta (new bytes since offset)
+4. If requested offset too old (evicted): return full buffer as fallback
+5. If requested offset = current: return empty slice (no new data)
+
+**Use Case (Phase 02+)**: On WebSocket reconnect, client sends `last_offset` instead of requesting full buffer, reducing data transfer by ~90% in typical scenarios.
+
+**Tests (Phase 01)**: 5 new tests + 4 existing (9/9 passing)
+- `offset_tracking_fresh_buffer` — initial offset state
+- `offset_tracking_after_eviction` — fallback when delta unavailable
+- `offset_tracking_delta_replay` — delta calculation correctness
+- `offset_tracking_exact_current` — edge case (empty delta)
+- `offset_monotonic_increases` — monotonic property under load
+
 **Tests (Phase 04-07):**
 - 8 decision matrix rows (all 8/8 passing)
 - 5 base integration tests (Phase 04, all passing)

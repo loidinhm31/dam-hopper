@@ -309,6 +309,8 @@ These features don't block daily work but significantly improve the experience a
 
 **Complexity:** MEDIUM (3-4 days) — react-resizable-panels already used in IDE shell; extend to terminal area.
 
+**Optional Enhancement (requires F-08 Phase B):** Server-side layout persistence via SQLite. If F-08B (session SQLite persistence) ships first, terminal layouts can be stored server-side for cross-device consistency. Add ~1 day. Without F-08B, localStorage is sufficient for single-device use.
+
 ---
 
 ### F-15: Port Forwarding / Service Discovery
