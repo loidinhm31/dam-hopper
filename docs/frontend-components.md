@@ -44,7 +44,7 @@ packages/web/src/
 
 **Location:** `packages/web/src/components/organisms/TerminalPanel.tsx`
 
-**Purpose:** Renders a single terminal session using xterm.js. Handles lifecycle events (output, exit, restart, reconnect).
+**Purpose:** Renders a single terminal session using xterm.js. Handles lifecycle events (output, exit, restart, reconnect) and session attachment (Phase 3).
 
 **Props:**
 ```ts
@@ -59,12 +59,54 @@ interface TerminalPanelProps {
 }
 ```
 
+**Lifecycle & Attachment (Phase 3):**
+
+TerminalPanel implements smart session persistence via the attach protocol:
+
+1. **Mount Detection** (`useEffect`):
+   - Checks if session already exists via `terminal:list`
+   - If exists → call `terminalAttach()` to reconnect with buffer replay
+   - If not exists → call `terminal:create` to spawn new session
+
+2. **Attach Flow**:
+   ```ts
+   // Setup listener BEFORE sending attach (Phase 3)
+   unsubBuffer = transport.onTerminalBuffer(sessionId, ({ data, offset }) => {
+     term.clear();
+     term.write(data);  // Replay buffered output
+     setAttachState("attached");
+   });
+
+   // Send attach request to server
+   transport.terminalAttach(sessionId);
+
+   // Timeout fallback: if no buffer within 3s, create new session
+   attachTimeout = setTimeout(() => {
+     createSession();
+   }, 3000);
+   ```
+
+3. **UI Feedback** (`attachState`):
+   - State machine: `idle` → `attaching` → `attached` (or → `creating`)
+   - When `attachState === "attaching"`: Show spinner overlay
+   ```tsx
+   {attachState === "attaching" && (
+     <div className="absolute inset-0 bg-slate-900/50 flex items-center justify-center backdrop-blur-sm">
+       <div className="text-sm text-slate-300 flex items-center gap-2 animate-pulse">
+         <svg className="animate-spin h-4 w-4" ...> {/* spinner */} </svg>
+         Reconnecting...
+       </div>
+     </div>
+   )}
+   ```
+
 **Key Hooks Inside:**
 - `useEffect` — initializes xterm, sets up event listeners, manages PTY lifecycle
 - Transport event subscriptions:
-  - `onTerminalExit()` → writes exit banner, calls `onExit`
+  - `onTerminalBuffer()` — receives replayed buffer on attach (Phase 3)
+  - `onTerminalExitEnhanced()` → writes exit banner, calls `onExit`
   - `onProcessRestarted()` → writes restart banner, updates session state
-  - `onTransportStatus()` → writes reconnect status banners
+  - `onStatusChange()` → writes reconnect status banners on WS disconnect/reconnect
 
 **Banner Logic:**
 ```ts
@@ -76,6 +118,11 @@ term.write(`\r\n${color}[banner text]\x1b[0m\r\n`);
 if (status === "disconnected") term.write("\r\n\x1b[2m[Reconnecting…]\x1b[0m\r\n");
 if (status === "connected") term.write("\r\n\x1b[2m[Reconnected]\x1b[0m\r\n");
 ```
+
+**Cleanup (Phase 3):**
+- Unsubscribe buffer listener on unmount or when attached
+- Clear attach timeout if pending
+- PTY session persists across navigation for user recall
 
 ### TerminalTreeView
 

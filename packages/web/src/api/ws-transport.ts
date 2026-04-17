@@ -298,6 +298,11 @@ export class WsTransport implements Transport {
     restartCount: number;
     previousExitCode: number | null;
   }) => void>>();
+  /** sessionId → buffer callbacks (for terminal:attach response) */
+  private bufferListeners = new Map<string, Set<(buffer: {
+    data: string;
+    offset: number;
+  }) => void>>();
   /** sub_id → overflow callbacks */
   private fsOverflowListeners = new Map<number, Set<(message: string) => void>>();
 
@@ -471,7 +476,12 @@ export class WsTransport implements Transport {
           kind: string;
           id?: string;
           data?: string;
+          offset?: number;
           exitCode?: number | null;
+          willRestart?: boolean;
+          restartIn?: number;
+          restartCount?: number;
+          previousExitCode?: number | null;
           payload?: unknown;
           req_id?: number;
           sub_id?: number;
@@ -496,6 +506,15 @@ export class WsTransport implements Transport {
         switch (msg.kind) {
           case "terminal:output":
             if (msg.id) this.dataListeners.get(msg.id)?.forEach((cb) => cb(msg.data ?? ""));
+            break;
+
+          case "terminal:buffer":
+            if (msg.id) {
+              this.bufferListeners.get(msg.id)?.forEach((cb) => cb({
+                data: msg.data ?? "",
+                offset: msg.offset ?? 0,
+              }));
+            }
             break;
 
           case "terminal:exit":
@@ -818,6 +837,22 @@ export class WsTransport implements Transport {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ kind: "terminal:resize", id, cols, rows }));
     }
+  }
+
+  terminalAttach(id: string, fromOffset?: number): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        kind: "terminal:attach",
+        id,
+        from_offset: fromOffset ?? null,
+      }));
+    }
+  }
+
+  onTerminalBuffer(id: string, cb: (buffer: { data: string; offset: number }) => void): () => void {
+    if (!this.bufferListeners.has(id)) this.bufferListeners.set(id, new Set());
+    this.bufferListeners.get(id)!.add(cb);
+    return () => this.bufferListeners.get(id)?.delete(cb);
   }
 
   // ── FS subscription methods ───────────────────────────────────────────────

@@ -71,6 +71,127 @@ Clear authentication session.
 
 Response: `{ "ok": true }`
 
+## Client-Side Transport Interface (Phase 3+)
+
+**Location:** `packages/web/src/api/transport.ts`
+
+The `Transport` interface abstracts WebSocket and REST communication. All frontend modules use `getTransport()` to access the singleton instance.
+
+### Core Methods
+
+**invoke<T>(channel: string, data?: unknown): Promise<T>**
+Request/response messaging mapped to REST endpoints.
+
+Example:
+```ts
+const sessions = await transport.invoke<Array<{ id: string }>>("terminal:list");
+const newSession = await transport.invoke<{ id: string }>("terminal:create", { 
+  project: "api-server", 
+  command: "npm run dev",
+  cols: 80,
+  rows: 24
+});
+```
+
+### Terminal Subscriptions
+
+**onTerminalData(id: string, cb: (data: string) => void): () => void**
+Subscribe to PTY output stream. Callback receives chunks of terminal data (plain text or ANSI codes).
+
+Returns unsubscribe function.
+
+**onTerminalExit(id: string, cb: (exitCode: number | null) => void): () => void**
+Subscribe to basic PTY exit event.
+
+Returns unsubscribe function.
+
+**onTerminalExitEnhanced?(id: string, cb: (exit: {...}) => void): () => void** (Optional, Phase 5+)
+Subscribe to enhanced exit event with restart metadata.
+
+Callback receives:
+```ts
+{
+  exitCode: number | null;
+  willRestart: boolean;
+  restartIn?: number;       // milliseconds
+  restartCount?: number;
+}
+```
+
+Returns unsubscribe function.
+
+**onProcessRestarted?(id: string, cb: (restart: {...}) => void): () => void** (Optional, Phase 5+)
+Subscribe to process restart event.
+
+Callback receives:
+```ts
+{
+  restartCount: number;
+  previousExitCode: number | null;
+}
+```
+
+Returns unsubscribe function.
+
+### Session Attachment (Phase 3)
+
+**terminalAttach?(id: string, fromOffset?: number): void** (Optional)
+Fire-and-forget message to request buffer replay from server.
+
+- `id` — Session UUID
+- `fromOffset` — Optional byte offset for delta sync (omit for full buffer)
+
+Must call `onTerminalBuffer()` listener BEFORE sending attach request to receive response.
+
+Example:
+```ts
+// Setup listener first
+transport.onTerminalBuffer(sessionId, ({ data, offset }) => {
+  term.write(data);  // Replay buffered content
+  storeOffset(offset);  // Save offset for next attach
+});
+
+// Then send attach
+transport.terminalAttach(sessionId, lastKnownOffset);
+```
+
+**onTerminalBuffer?(id: string, cb: (buffer: {data: string; offset: number}) => void): () => void** (Optional, Phase 3+)
+Subscribe to buffer replay response from `terminal:attach` request.
+
+Callback receives:
+```ts
+{
+  data: string;       // Base64-encoded terminal content
+  offset: number;     // Current byte offset (incremental counter)
+}
+```
+
+Use case: On reconnect, request buffered terminal output to show user previous session content.
+
+Returns unsubscribe function.
+
+### Terminal Control
+
+**terminalWrite(id: string, data: string): void**
+Fire-and-forget message to send input to PTY stdin.
+
+**terminalResize(id: string, cols: number, rows: number): void**
+Fire-and-forget message to resize PTY dimensions.
+
+### Event Subscriptions
+
+**onEvent(channel: string, cb: (payload: unknown) => void): () => void**
+Subscribe to push events (git:progress, workspace:changed, etc.).
+
+Returns unsubscribe function.
+
+**onStatusChange?(cb: (status: string) => void): () => void** (Optional)
+Subscribe to WebSocket connection status changes.
+
+Status values: `"connecting"`, `"connected"`, `"disconnected"`, `"error"`
+
+Returns unsubscribe function.
+
 ## REST Endpoints
 
 ### Projects

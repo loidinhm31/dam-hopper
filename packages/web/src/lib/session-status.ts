@@ -1,4 +1,4 @@
-import type { SessionInfo } from "./client.js";
+import type { SessionInfo } from "@/api/client.js";
 
 /**
  * Session lifecycle status for UI rendering.

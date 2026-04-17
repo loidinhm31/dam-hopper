@@ -40,6 +40,15 @@ export interface Transport {
 
   /** Fire-and-forget terminal resize */
   terminalResize(id: string, cols: number, rows: number): void;
+
+  /** Fire-and-forget terminal attach (for reconnect with buffer replay) */
+  terminalAttach?(id: string, fromOffset?: number): void;
+
+  /** Terminal buffer subscription (response to terminal:attach). Returns unsubscribe fn. */
+  onTerminalBuffer?(id: string, cb: (buffer: { data: string; offset: number }) => void): () => void;
+
+  /** Connection status subscription. Returns unsubscribe fn. */
+  onStatusChange?(cb: (status: string) => void): () => void;
 }
 
 let _transport: Transport | null = null;

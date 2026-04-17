@@ -60,6 +60,28 @@ Request buffer replay from a session (for reconnection or delta sync):
 
 **Use Case:** On WebSocket reconnect, client sends `terminal:attach` with stored offset instead of re-requesting full buffer, reducing bandwidth ~90% in typical scenarios.
 
+#### Frontend Reconnect UI (Phase 3)
+
+**Attach Workflow:**
+1. TerminalPanel mounts or WebSocket reconnects
+2. Frontend queries `terminal:list` to check if session exists
+3. If session found → call `terminalAttach()` without `from_offset` (initial attach) or with stored offset (delta attach)
+4. Register `onTerminalBuffer()` listener BEFORE sending attach request
+5. On buffer response → clear xterm display and write replayed content
+6. Timeout fallback (3s): if no buffer response, create new session via `terminal:spawn`
+
+**UI States:**
+- `idle` — Ready for attach
+- `attaching` — Waiting for buffer response; show spinner overlay with "Reconnecting…"
+- `attached` — Buffer received/session created; hide overlay and resume output streaming
+- `creating` — Creating new session (timeout fallback or no existing session)
+
+**Overlay:**
+- Rendered when `attachState === "attaching"`
+- Semi-transparent dark backdrop (`bg-slate-900/50`) with blur
+- Animated spinner with "Reconnecting…" text
+- Auto-dismisses on buffer response or timeout
+
 ### File System — Subscribe (Phase 02+)
 
 | Command | Payload | Response |
