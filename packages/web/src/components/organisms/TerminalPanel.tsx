@@ -187,22 +187,21 @@ export function TerminalPanel({
         }) ?? null;
 
         // Forward user input → PTY stdin
-        // Ctrl+Shift+C → copy selection; Ctrl+Shift+V → paste from clipboard
         inputDisposable = term.onData((data) => {
           transport.terminalWrite(sessionId, data);
         });
 
+        // Custom keyboard shortcuts:
+        // - Ctrl+Shift+C: copy selection
+        // - Ctrl+`: global shortcut (don't forward to PTY)
+        // - Shift+Enter: open new terminal
+        // Note: Ctrl+Shift+V paste is handled by xterm's native paste event (not here) to avoid duplication
         term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+          // Copy selection to clipboard
           if (e.ctrlKey && e.shiftKey && e.code === "KeyC" && e.type === "keydown") {
             const sel = term.getSelection();
             if (sel) void navigator.clipboard.writeText(sel);
             return false; // prevent sending to PTY
-          }
-          if (e.ctrlKey && e.shiftKey && e.code === "KeyV" && e.type === "keydown") {
-            void navigator.clipboard.readText().then((text) => {
-              transport.terminalWrite(sessionId, text);
-            });
-            return false;
           }
           // Ctrl+` is a global shortcut — don't forward to PTY
           if (e.ctrlKey && e.code === "Backquote") return false;
