@@ -21,7 +21,44 @@ All messages use JSON with `kind` tag (not legacy `type`). Phase 02 hard-cut fro
 | `terminal:spawn` | `project, profile, env_overrides?` | `terminal:spawned { id, ... }` |
 | `terminal:write` | `id, data` | (no response; server queues) |
 | `terminal:resize` | `id, cols, rows` | (ACK implicit) |
+| `terminal:attach` | `id, from_offset?` | `terminal:buffer { id, data, offset }` (Phase 02+) |
 | `terminal:kill` | `id` | (ACK implicit) |
+
+#### Terminal Attach (Phase 02+)
+
+Request buffer replay from a session (for reconnection or delta sync):
+
+**Request:**
+```json
+{
+  "kind": "terminal:attach",
+  "id": "uuid",
+  "from_offset": 4096
+}
+```
+
+**Fields:**
+- `id` — Session UUID to attach to
+- `from_offset` — Optional. Client's last received byte offset. If omitted or greater than current offset, returns full buffer. If older than buffer start (evicted), returns full buffer as fallback.
+
+**Response on success:**
+```json
+{
+  "kind": "terminal:buffer",
+  "id": "uuid",
+  "data": "base64_encoded_content",
+  "offset": 5120
+}
+```
+
+**Fields:**
+- `id` — Echo of request session ID
+- `data` — Base64-encoded buffer content (delta if `from_offset` provided; full otherwise). Lossy UTF-8 decoding used.
+- `offset` — Current buffer byte offset. Client stores this for next attach.
+
+**Error behavior:** If session not found, server logs warning and sends no response. Client should interpret timeout as session dead and create new session via `terminal:spawn`.
+
+**Use Case:** On WebSocket reconnect, client sends `terminal:attach` with stored offset instead of re-requesting full buffer, reducing bandwidth ~90% in typical scenarios.
 
 ### File System — Subscribe (Phase 02+)
 
@@ -73,6 +110,30 @@ Binary streaming support added for large file handling.
 ```json
 { "kind": "terminal:output", "id": "uuid", "data": "..." }
 ```
+
+### Terminal Buffer Replay (Phase 02+)
+
+Response to `terminal:attach` request. Contains accumulated buffer content for reconnection/delta sync:
+
+```json
+{
+  "kind": "terminal:buffer",
+  "id": "uuid",
+  "data": "base64_encoded_buffer_content",
+  "offset": 5120
+}
+```
+
+**Fields:**
+- `id` — Session UUID
+- `data` — Base64-encoded buffer content (delta or full depending on `from_offset`). Entire content is lossy UTF-8.
+- `offset` — Current accumulated byte offset (monotonically increasing counter). Client stores for next attach to request delta only.
+
+**Buffer Management:**
+- Server maintains a ring buffer (scrollback) for each live session. 
+- `offset` field points to total bytes written since session creation (survives buffer eviction).
+- On attach with `from_offset` older than buffer start: fallback to full buffer.
+- On attach with `from_offset` = current offset: returns empty `data` (no new content).
 
 ### Terminal Events
 

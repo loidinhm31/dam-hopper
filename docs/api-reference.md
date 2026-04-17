@@ -373,8 +373,14 @@ Protocol: JSON frames. Client sends commands via `{kind:}` envelope, server broa
 **Terminal Messages:**
 - `{ kind: "terminal:spawn", project, profile, env_overrides? }` → server responds with `{ kind: "terminal:spawned", id, ... }`
 - `{ kind: "terminal:write", id, data }` — send input
+- `{ kind: "terminal:attach", id, from_offset? }` — request buffer replay (Phase 02+); server responds with `{ kind: "terminal:buffer", id, data, offset }`
+  - `from_offset` (optional) — client's last received byte offset for delta sync
+  - Server sends full buffer if `from_offset` omitted or too old (evicted)
+  - Server sends empty `data` if `from_offset` equals current offset (no new content)
+  - Error case: session not found → no response; client should timeout and create new session
 - `{ kind: "terminal:kill", id }` — terminate session
 - `{ kind: "terminal:output", id, chunk }` — server pushes PTY output
+- `{ kind: "terminal:buffer", id, data, offset }` — server response to `terminal:attach` with buffer content + current offset (Phase 02+)
 - `{ kind: "terminal:exited", id, code }` — session ended
 
 **File Tree Subscription (Phase 03):**

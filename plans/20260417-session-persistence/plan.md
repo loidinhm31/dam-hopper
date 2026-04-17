@@ -52,7 +52,7 @@ git-ref: f8-session-persistence
 | # | Phase | File | Status | Effort | Completed |
 |---|-------|------|--------|--------|----------|
 | 1 | Buffer Offset Tracking | [phase-01-buffer-offset-tracking.md](./phase-01-buffer-offset-tracking.md) | ✅ done | 2h | 2026-04-17 |
-| 2 | Protocol Extension (`terminal:attach`) | [phase-02-protocol-extension.md](./phase-02-protocol-extension.md) | pending | 4h | — |
+| 2 | Protocol Extension (`terminal:attach`) | [phase-02-protocol-extension.md](./phase-02-protocol-extension.md) | ✅ done | 4h | 2026-04-17 |
 | 3 | Frontend Reconnect UI | [phase-03-frontend-reconnect.md](./phase-03-frontend-reconnect.md) | pending | 6h | — |
 | 4 | SQLite Schema + Config | [phase-04-sqlite-schema.md](./phase-04-sqlite-schema.md) | pending | 4h | — |
 | 5 | Persist Worker | [phase-05-persist-worker.md](./phase-05-persist-worker.md) | pending | 6h | — |

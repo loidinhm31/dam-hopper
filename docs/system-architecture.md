@@ -171,7 +171,7 @@ Example race sequence (create during backoff):
 - T1.2s: Supervisor wakes up, checks killed set — not there anymore but session exists with different PID, skips restart
 - Result: Single shell, no race condition
 
-**Buffer Offset Tracking (Phase 01 - F-08):**
+**Buffer Offset Tracking (Phase 01 - F-08 + Phase 02 Protocol Extension):**
 
 Enables efficient delta replay for WebSocket reconnections. ScrollbackBuffer tracks monotonic byte counter and provides differential read API.
 
@@ -188,14 +188,41 @@ Enables efficient delta replay for WebSocket reconnections. ScrollbackBuffer tra
 4. If requested offset too old (evicted): return full buffer as fallback
 5. If requested offset = current: return empty slice (no new data)
 
-**Use Case (Phase 02+)**: On WebSocket reconnect, client sends `last_offset` instead of requesting full buffer, reducing data transfer by ~90% in typical scenarios.
+**Phase 02: Protocol Messages**
 
-**Tests (Phase 01)**: 5 new tests + 4 existing (9/9 passing)
-- `offset_tracking_fresh_buffer` — initial offset state
-- `offset_tracking_after_eviction` — fallback when delta unavailable
-- `offset_tracking_delta_replay` — delta calculation correctness
-- `offset_tracking_exact_current` — edge case (empty delta)
-- `offset_monotonic_increases` — monotonic property under load
+New WebSocket protocol messages enable explicit buffer attachment:
+
+**manager.rs** — `PtySessionManager` enhancements:
+- `get_buffer_with_offset(id: &str, from_offset: Option<u64>) → Result<(String, u64), AppError>` — returns (utf8-lossy buffer data, current offset)
+- Error handling: returns `SessionNotFound` if session not in live map
+- Integration with existing session lifecycle: returned data respects current buffer state
+
+**ws.rs** — WebSocket handler:
+- `ClientMsg::TermAttach { id, from_offset }` — client requests buffer replay
+- Handler calls `get_buffer_with_offset()` → sends `ServerMsg::TermBuffer`
+- Error behavior: session not found → logs warning, no response (client creates new session via `terminal:spawn`)
+- Response `ServerMsg::TermBuffer { id, data, offset }` — contains base64-encoded delta or full buffer
+
+**Use Case (Phase 02+)**: On WebSocket reconnect, client sends `terminal:attach` with last stored offset instead of requesting full buffer, reducing data transfer by ~90% in typical scenarios.
+
+**Error Handling:**
+- Silent failure (no response) on session-not-found enables graceful client fallback: interpret timeout as session dead, re-create via `terminal:spawn`
+- No error response required; client implements timeout-based detection
+- Server logs warning for diagnostics
+
+**Buffer States:**
+- Empty buffer (no writes yet) → offset = 0, data = ""
+- Old offset (evicted from ring buffer) → fallback to full buffer
+- Current offset → data = "" (no new content)
+- Mid-range offset → data = delta (new bytes since offset)
+
+**Tests (Phase 02)**: 4 Unix integration tests + 2 Windows unit tests (6/6 passing)
+- `get_buffer_with_offset_returns_full_buffer_when_no_offset` — returns full buffer when from_offset=None
+- `get_buffer_with_offset_returns_delta_when_offset_provided` — returns delta between two offsets
+- `get_buffer_with_offset_returns_full_buffer_when_offset_too_old` — fallback to full buffer when offset evicted
+- `get_buffer_with_offset_returns_error_for_nonexistent_session` — error handling for dead sessions
+- Unit test (manager.rs): `get_buffer_with_offset_session_not_found` 
+- Unit test (manager.rs): `get_buffer_with_offset_with_some_offset_session_not_found`
 
 **Tests (Phase 04-07):**
 - 8 decision matrix rows (all 8/8 passing)

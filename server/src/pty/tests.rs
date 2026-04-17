@@ -561,4 +561,101 @@ mod pty_tests {
 
         mgr.remove("restart:race").unwrap();
     }
+
+    // -----------------------------------------------------------------------
+    // Phase 02: Buffer offset tracking & replay tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn get_buffer_with_offset_returns_full_buffer_when_no_offset() {
+        let mgr = make_manager();
+        mgr.create(opts("shell:offset-test1", "cat")).unwrap();
+        mgr.write("shell:offset-test1", b"hello\n").unwrap();
+        
+        // Wait for data to appear in buffer.
+        let ok = wait_for(Duration::from_secs(2), || {
+            mgr.get_buffer("shell:offset-test1")
+                .map(|b| b.contains("hello"))
+                .unwrap_or(false)
+        });
+        assert!(ok, "buffer should contain 'hello' within 2s");
+
+        // Get full buffer (no offset).
+        let (data, offset) = mgr.get_buffer_with_offset("shell:offset-test1", None).unwrap();
+        assert!(data.contains("hello"), "data should contain 'hello'");
+        assert!(offset > 0, "offset should be > 0 after writing data");
+
+        mgr.remove("shell:offset-test1").unwrap();
+    }
+
+    #[test]
+    fn get_buffer_with_offset_returns_delta_when_offset_provided() {
+        let mgr = make_manager();
+        mgr.create(opts("shell:offset-test2", "cat")).unwrap();
+        
+        // Write first chunk.
+        mgr.write("shell:offset-test2", b"first\n").unwrap();
+        let ok1 = wait_for(Duration::from_secs(2), || {
+            mgr.get_buffer("shell:offset-test2")
+                .map(|b| b.contains("first"))
+                .unwrap_or(false)
+        });
+        assert!(ok1, "buffer should contain 'first'");
+
+        // Get current offset.
+        let (data1, offset1) = mgr.get_buffer_with_offset("shell:offset-test2", None).unwrap();
+        assert!(data1.contains("first"), "first read should contain 'first'");
+
+        // Write second chunk.
+        mgr.write("shell:offset-test2", b"second\n").unwrap();
+        let ok2 = wait_for(Duration::from_secs(2), || {
+            mgr.get_buffer("shell:offset-test2")
+                .map(|b| b.contains("second"))
+                .unwrap_or(false)
+        });
+        assert!(ok2, "buffer should contain 'second'");
+
+        // Get delta (from previous offset).
+        let (data2, offset2) = mgr.get_buffer_with_offset("shell:offset-test2", Some(offset1)).unwrap();
+        assert!(data2.contains("second"), "delta should contain 'second'");
+        assert!(!data2.contains("first"), "delta should NOT contain 'first' (already seen)");
+        assert!(offset2 > offset1, "offset should have advanced");
+
+        mgr.remove("shell:offset-test2").unwrap();
+    }
+
+    #[test]
+    fn get_buffer_with_offset_returns_full_buffer_when_offset_too_old() {
+        use crate::pty::buffer::ScrollbackBuffer;
+        
+        // This test uses a small buffer capacity to force eviction.
+        // However, we can't easily override the buffer capacity in a live session,
+        // so we test the buffer directly here rather than via manager.
+        
+        let cap = 10;  // Small capacity for testing eviction.
+        let mut buf = ScrollbackBuffer::new(cap);
+        
+        buf.push(b"1234567890");  // Fill buffer to capacity.
+        let offset1 = buf.current_offset();  // offset = 10
+        
+        buf.push(b"ABCDEFGHIJ");  // This evicts old data.
+        let offset2 = buf.current_offset();  // offset = 20
+        
+        // Request from offset1, which is now older than buffer start.
+        let (data, offset) = buf.read_from(Some(offset1));
+        assert_eq!(offset, offset2, "should return current offset");
+        assert_eq!(data, b"ABCDEFGHIJ", "should return full buffer when offset too old");
+        
+        // Request from offset2 (current), should return empty.
+        let (data2, offset3) = buf.read_from(Some(offset2));
+        assert_eq!(offset3, offset2, "offset unchanged");
+        assert_eq!(data2.len(), 0, "no new data since offset2");
+    }
+
+    #[test]
+    fn get_buffer_with_offset_returns_error_for_nonexistent_session() {
+        let mgr = make_manager();
+        let result = mgr.get_buffer_with_offset("nonexistent", None);
+        assert!(result.is_err(), "should return error for nonexistent session");
+    }
 }

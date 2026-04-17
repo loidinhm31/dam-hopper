@@ -198,6 +198,26 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     debug!(id = %id, error = %e, "PTY resize error");
                 }
             }
+            ClientMsg::TermAttach { id, from_offset } => {
+                match state.pty_manager.get_buffer_with_offset(&id, from_offset) {
+                    Ok((data, offset)) => {
+                        let msg = ServerMsg::TermBuffer {
+                            id: id.clone(),
+                            data,
+                            offset,
+                        };
+                        if let Ok(json) = serde_json::to_string(&msg) {
+                            if let Err(e) = pty_tx.send(WireMsg::Text(json)).await {
+                                warn!(id = %id, error = %e, "Failed to send terminal:buffer");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(id = %id, error = %e, "terminal:attach failed");
+                        // No response — client should detect via timeout and create new session
+                    }
+                }
+            }
 
             // -----------------------------------------------------------
             // FS — subscribe / unsubscribe

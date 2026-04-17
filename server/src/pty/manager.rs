@@ -260,6 +260,25 @@ impl PtySessionManager {
         Ok(buf.as_str_lossy().into_owned())
     }
 
+    /// Returns buffer data from a given offset + current buffer offset.
+    ///
+    /// If `from_offset` is older than buffer start, returns the full buffer.
+    /// Returns (data, current_offset) tuple.
+    pub fn get_buffer_with_offset(
+        &self,
+        id: &str,
+        from_offset: Option<u64>,
+    ) -> Result<(String, u64), AppError> {
+        let inner = self.inner.lock().unwrap();
+        let session = inner
+            .live
+            .get(id)
+            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+        let buf = session.buffer.lock().unwrap();
+        let (data, offset) = buf.read_from(from_offset);
+        Ok((String::from_utf8_lossy(data).into_owned(), offset))
+    }
+
     pub fn kill(&self, id: &str) -> Result<(), AppError> {
         self.kill_internal(id);
         Ok(())
@@ -849,5 +868,29 @@ fn decide_restart(
             Some(restart_delay_ms(restart_count))
         }
         RestartPolicy::Never => None, // Already handled above, but satisfy match.
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pty::event_sink::NoopEventSink;
+
+    #[tokio::test]
+    async fn get_buffer_with_offset_session_not_found() {
+        let mgr = PtySessionManager::new(Arc::new(NoopEventSink));
+        let err = mgr.get_buffer_with_offset("nonexistent", None).unwrap_err();
+        assert!(matches!(err, AppError::SessionNotFound(_)), "Expected SessionNotFound error, got: {err:?}");
+    }
+
+    #[tokio::test]
+    async fn get_buffer_with_offset_with_some_offset_session_not_found() {
+        let mgr = PtySessionManager::new(Arc::new(NoopEventSink));
+        let err = mgr.get_buffer_with_offset("ghost", Some(1024)).unwrap_err();
+        assert!(matches!(err, AppError::SessionNotFound(_)), "Expected SessionNotFound error, got: {err:?}");
     }
 }
