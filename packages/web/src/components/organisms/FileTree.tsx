@@ -353,14 +353,16 @@ export function FileTree({
   const containerRef = useRef<HTMLDivElement>(null);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const [treeBodyHeight, setTreeBodyHeight] = useState(0);
+  const [treeBodyWidth, setTreeBodyWidth] = useState(0);
 
-  // Measure the tree body's pixel height so react-arborist can virtualize correctly.
-  // Auto-sizing via CSS alone is unreliable when height flows through multiple flex layers.
+  // Measure the tree body's pixel dimensions so react-arborist can virtualize correctly.
+  // Auto-sizing via CSS alone is unreliable when dimensions flow through multiple flex layers.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const ro = new ResizeObserver(([entry]) => {
       setTreeBodyHeight(entry.contentRect.height);
+      setTreeBodyWidth(entry.contentRect.width);
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -499,6 +501,7 @@ export function FileTree({
               rowHeight={24}
               overscanCount={8}
               height={treeBodyHeight || undefined}
+              width={treeBodyWidth || undefined}
             >
               {(props) => (
                 <NodeRenderer
