@@ -38,7 +38,7 @@ export function useTerminalTree() {
 
   const sessionMap = useMemo(() => {
     const map = new Map<string, SessionInfo>();
-    for (const s of sessions) map.set(s.id, s);
+    for (const s of sessions) if (s.id) map.set(s.id, s);
     return map;
   }, [sessions]);
 
@@ -82,7 +82,8 @@ export function useTerminalTree() {
 
       // Custom commands from config
       for (const [key, cmd] of Object.entries(p.commands ?? {})) {
-        const sessionId = `custom:${p.name}:${key}`;
+        const safeKey = key.replace(/[^a-zA-Z0-9:._-]/g, "-");
+        const sessionId = `custom:${p.name}:${safeKey}`;
         commands.push({
           key,
           type: "custom",
@@ -96,7 +97,7 @@ export function useTerminalTree() {
       for (const terminal of p.terminals ?? []) {
         const sanitizedName = terminal.name.replace(/ /g, "_");
         const prefix = `terminal:${p.name}:${sanitizedName}:`;
-        const matchingSessions = sessions.filter((s) => s.id.startsWith(prefix));
+        const matchingSessions = sessions.filter((s) => s.id?.startsWith(prefix));
         commands.push({
           key: `terminal:${terminal.name}`,
           label: terminal.name,

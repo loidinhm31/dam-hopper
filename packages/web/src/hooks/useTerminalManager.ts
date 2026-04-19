@@ -134,7 +134,7 @@ export function useTerminalManager(
   const [freeTerminalSavePrompt, setFreeTerminalSavePrompt] = useState<FreeTerminalSavePromptState | null>(null);
 
   const sessionMap = useMemo(
-    () => new Map<string, SessionInfo>(sessions.map((s) => [s.id, s])),
+    () => new Map<string, SessionInfo>(sessions.filter((s) => s.id).map((s) => [s.id, s])),
     [sessions],
   );
 
@@ -314,10 +314,15 @@ export function useTerminalManager(
     if (!savePrompt) return;
     const { sessionId, name } = savePrompt;
 
+    const mounted = mountedSessions.find((s) => s.sessionId === sessionId);
     const session = sessionMap.get(sessionId);
-    if (!session?.project) return;
+    const projectName = mounted?.project || session?.project;
+    const command = mounted?.command || session?.command;
+    const cwd = mounted?.cwd || session?.cwd;
 
-    const project = projects.find((p) => p.name === session.project);
+    if (!projectName) return;
+
+    const project = projects.find((p) => p.name === projectName);
     if (!project) return;
 
     const existingNames = (project.terminals ?? []).map((t) => t.name);
@@ -330,8 +335,8 @@ export function useTerminalManager(
     setSavePrompt(null);
 
     void api.config
-      .updateProject(session.project ?? "", {
-        terminals: [...(project.terminals ?? []), { name: name.trim(), command: session.command, cwd: session.cwd || "." }],
+      .updateProject(projectName, {
+        terminals: [...(project.terminals ?? []), { name: name.trim(), command: command ?? "", cwd: cwd || "." }],
       })
       .then(() => {
         void qc.invalidateQueries({ queryKey: ["projects"] });
@@ -443,8 +448,12 @@ export function useTerminalManager(
     if (!freeTerminalSavePrompt) return;
     const { sessionId, projectName, name } = freeTerminalSavePrompt;
 
+    const mounted = mountedSessions.find((s) => s.sessionId === sessionId);
     const session = sessionMap.get(sessionId);
-    if (!session?.command) return;
+    const command = mounted?.command || session?.command;
+    const cwd = mounted?.cwd || session?.cwd;
+
+    if (!command) return;
 
     const project = projects.find((p) => p.name === projectName);
     if (!project) return;
@@ -460,7 +469,7 @@ export function useTerminalManager(
 
     void api.config
       .updateProject(projectName, {
-        terminals: [...(project.terminals ?? []), { name: name.trim(), command: session.command, cwd: session.cwd || "." }],
+        terminals: [...(project.terminals ?? []), { name: name.trim(), command, cwd: cwd || "." }],
       })
       .then(() => {
         void qc.invalidateQueries({ queryKey: ["projects"] });

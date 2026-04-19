@@ -74,6 +74,7 @@ impl PtyCreateOpts {
 
 #[derive(serde::Serialize)]
 pub struct SessionDetail {
+    #[serde(flatten)]
     pub meta: SessionMeta,
     pub buffer_bytes: usize,
 }

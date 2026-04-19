@@ -54,9 +54,11 @@ export function TerminalPanel({
   className,
 }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const sessionIdRef = useRef(sessionId);
+  // Sanitize session ID: server only allows [a-zA-Z0-9:._-]
+  const safeSessionId = sessionId.replace(/[^a-zA-Z0-9:._-]/g, "-");
+  const sessionIdRef = useRef(safeSessionId);
   const [attachState, setAttachState] = useState<"idle" | "attaching" | "attached" | "creating">("idle");
-  sessionIdRef.current = sessionId;
+  sessionIdRef.current = safeSessionId;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -100,7 +102,7 @@ export function TerminalPanel({
     const createSession = () => {
       setAttachState("creating");
       return transport
-        .invoke<string>("terminal:create", { id: sessionId, project, command, cwd, cols, rows })
+        .invoke<string>("terminal:create", { id: safeSessionId, project, command, cwd, cols, rows })
         .then(() => {
           setAttachState("attached"); // treat created session as "attached" for consistency
         });
@@ -112,7 +114,7 @@ export function TerminalPanel({
       
       // Set up buffer listener BEFORE sending attach
       if (transport.onTerminalBuffer) {
-        unsubBuffer = transport.onTerminalBuffer(sessionId, ({ data, offset }) => {
+        unsubBuffer = transport.onTerminalBuffer(safeSessionId, ({ data, offset }) => {
           // Clear terminal and write buffer
           term.clear();
           term.write(data);
@@ -128,12 +130,12 @@ export function TerminalPanel({
 
       // Send attach message
       if (transport.terminalAttach) {
-        transport.terminalAttach(sessionId);
+        transport.terminalAttach(safeSessionId);
       }
 
       // Timeout fallback: if no buffer response within 3s, create new session
       attachTimeout = setTimeout(() => {
-        console.warn(`[TerminalPanel] terminal:attach timeout for ${sessionId}, creating new session`);
+        console.warn(`[TerminalPanel] terminal:attach timeout for ${safeSessionId}, creating new session`);
         unsubBuffer?.();
         unsubBuffer = null;
         void createSession();
@@ -144,7 +146,7 @@ export function TerminalPanel({
     api.workspace.status()
       .then(() => transport.invoke<Array<{ id: string }>>("terminal:list"))
       .then((alive) => {
-        if (alive.some((s) => s.id === sessionId)) {
+        if (alive.some((s) => s.id === safeSessionId)) {
           // Session exists — attach to it
           attachToSession();
         } else {
@@ -154,12 +156,12 @@ export function TerminalPanel({
       })
       .then(() => {
         // Stream PTY output → xterm
-        unsubData = transport.onTerminalData(sessionId, (data) => {
+        unsubData = transport.onTerminalData(safeSessionId, (data) => {
           term.write(data);
         });
 
         // Handle PTY exit with enhanced restart metadata
-        unsubExit = transport.onTerminalExitEnhanced?.(sessionId, (exitEvent) => {
+        unsubExit = transport.onTerminalExitEnhanced?.(safeSessionId, (exitEvent) => {
           const { exitCode, willRestart, restartIn } = exitEvent;
           // Choose banner color and text based on restart intent
           const color = willRestart ? "\x1b[33m" : exitCode === 0 ? "\x1b[32m" : "\x1b[31m";
@@ -171,7 +173,7 @@ export function TerminalPanel({
         }) ?? null;
 
         // Handle process restart event
-        unsubRestart = transport.onProcessRestarted?.(sessionId, (restartEvent) => {
+        unsubRestart = transport.onProcessRestarted?.(safeSessionId, (restartEvent) => {
           const { restartCount } = restartEvent;
           term.write(`\x1b[33m[Process restarted (#${restartCount})]\x1b[0m\r\n`);
         }) ?? null;
@@ -188,7 +190,7 @@ export function TerminalPanel({
 
         // Forward user input → PTY stdin
         inputDisposable = term.onData((data) => {
-          transport.terminalWrite(sessionId, data);
+          transport.terminalWrite(safeSessionId, data);
         });
 
         // Custom keyboard shortcuts:
@@ -218,7 +220,7 @@ export function TerminalPanel({
           if (fitTimer) clearTimeout(fitTimer);
           fitTimer = setTimeout(() => {
             fitAddon.fit();
-            transport.terminalResize(sessionId, term.cols, term.rows);
+            transport.terminalResize(safeSessionId, term.cols, term.rows);
           }, 200);
         });
         observer.observe(container);

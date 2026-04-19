@@ -288,7 +288,7 @@ function CommandsSection({
                       ? `build:${projectName}`
                       : type === "run"
                         ? `run:${projectName}`
-                        : `custom:${projectName}:${key}`,
+                        : `custom:${projectName}:${key.replace(/[^a-zA-Z0-9:._-]/g, "-")}`,
                 })
               }
               title={`Launch ${key}`}
