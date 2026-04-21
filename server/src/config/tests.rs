@@ -541,6 +541,13 @@ fn ui_config_serde_roundtrip() {
             system_font_size: 16,
             editor_font_size: 12,
             editor_zoom_wheel_enabled: false,
+            terminal_order: vec!["term1".to_string(), "term2".to_string()],
+            project_order: vec!["proj1".to_string()],
+            project_command_order: {
+                let mut m = std::collections::HashMap::new();
+                m.insert("proj1".to_string(), vec!["cmd1".to_string()]);
+                m
+            },
         }),
         server: crate::config::ServerConfig::default(),
     };
@@ -551,6 +558,9 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(ui.system_font_size, 16);
     assert_eq!(ui.editor_font_size, 12);
     assert!(!ui.editor_zoom_wheel_enabled);
+    assert_eq!(ui.terminal_order, vec!["term1", "term2"]);
+    assert_eq!(ui.project_order, vec!["proj1"]);
+    assert_eq!(ui.project_command_order.get("proj1").unwrap(), &vec!["cmd1"]);
 }
 
 #[test]
@@ -577,12 +587,33 @@ fn validate_font_size_accepts_boundary_values() {
 
 #[test]
 fn ui_config_validate_font_sizes_checks_both_fields() {
-    let valid = UiConfig { system_font_size: 14, editor_font_size: 16, editor_zoom_wheel_enabled: true };
+    let valid = UiConfig {
+        system_font_size: 14,
+        editor_font_size: 16,
+        editor_zoom_wheel_enabled: true,
+        terminal_order: vec![],
+        project_order: vec![],
+        project_command_order: std::collections::HashMap::new(),
+    };
     assert!(valid.validate_font_sizes().is_ok());
 
-    let bad_system = UiConfig { system_font_size: 5, editor_font_size: 14, editor_zoom_wheel_enabled: true };
+    let bad_system = UiConfig {
+        system_font_size: 5,
+        editor_font_size: 14,
+        editor_zoom_wheel_enabled: true,
+        terminal_order: vec![],
+        project_order: vec![],
+        project_command_order: std::collections::HashMap::new(),
+    };
     assert!(bad_system.validate_font_sizes().is_err());
 
-    let bad_editor = UiConfig { system_font_size: 14, editor_font_size: 99, editor_zoom_wheel_enabled: false };
+    let bad_editor = UiConfig {
+        system_font_size: 14,
+        editor_font_size: 99,
+        editor_zoom_wheel_enabled: false,
+        terminal_order: vec![],
+        project_order: vec![],
+        project_command_order: std::collections::HashMap::new(),
+    };
     assert!(bad_editor.validate_font_sizes().is_err());
 }

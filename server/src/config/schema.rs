@@ -244,13 +244,14 @@ fn default_session_buffer_ttl_hours() -> u64 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ServerConfig {
     /// Database file path (default: ~/.config/dam-hopper/sessions.db)
-    #[serde(default = "default_session_db_path")]
+    #[serde(default = "default_session_db_path", alias = "session_db_path")]
     pub session_db_path: String,
 
     /// TTL for dead session buffers in hours (default: 24)
-    #[serde(default = "default_session_buffer_ttl_hours")]
+    #[serde(default = "default_session_buffer_ttl_hours", alias = "session_buffer_ttl_hours")]
     pub session_buffer_ttl_hours: u64,
 }
 
@@ -301,11 +302,13 @@ pub struct DamHopperConfig {
 // ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct GlobalDefaults {
     pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct KnownWorkspace {
     pub name: String,
     pub path: String,
@@ -316,13 +319,20 @@ fn default_editor_font_size() -> u16 { 14 }
 fn default_editor_zoom_wheel_enabled() -> bool { true }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UiConfig {
-    #[serde(default = "default_system_font_size")]
+    #[serde(default = "default_system_font_size", alias = "system_font_size")]
     pub system_font_size: u16,
-    #[serde(default = "default_editor_font_size")]
+    #[serde(default = "default_editor_font_size", alias = "editor_font_size")]
     pub editor_font_size: u16,
-    #[serde(default = "default_editor_zoom_wheel_enabled")]
+    #[serde(default = "default_editor_zoom_wheel_enabled", alias = "editor_zoom_wheel_enabled")]
     pub editor_zoom_wheel_enabled: bool,
+    #[serde(default, alias = "terminal_order")]
+    pub terminal_order: Vec<String>,
+    #[serde(default, alias = "project_order")]
+    pub project_order: Vec<String>,
+    #[serde(default, alias = "project_command_order")]
+    pub project_command_order: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl Default for UiConfig {
@@ -331,6 +341,9 @@ impl Default for UiConfig {
             system_font_size: default_system_font_size(),
             editor_font_size: default_editor_font_size(),
             editor_zoom_wheel_enabled: default_editor_zoom_wheel_enabled(),
+            terminal_order: vec![],
+            project_order: vec![],
+            project_command_order: std::collections::HashMap::new(),
         }
     }
 }
@@ -351,6 +364,7 @@ impl UiConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct GlobalConfig {
     pub defaults: Option<GlobalDefaults>,
     pub workspaces: Option<Vec<KnownWorkspace>>,
