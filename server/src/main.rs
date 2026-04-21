@@ -107,76 +107,44 @@ async fn main() -> anyhow::Result<()> {
 
     let (event_sink, _initial_rx) = BroadcastEventSink::new(TOKEN_CAPACITY);
 
-    // ── Session persistence (Phase 05) ────────────────────────────────────────
-    // Create persist worker and channel BEFORE PtySessionManager so we can pass persist_tx.
+    // ── Session persistence ───────────────────────────────────────────────────
+    // Always enabled. DB path comes from config (default: ~/.config/dam-hopper/sessions.db).
 
-    let (persist_tx, session_store) = if config.server.session_persistence {
-        // Expand tilde in path (use default if starts with ~)
-        let db_path = if config.server.session_db_path.starts_with("~/") {
-            let suffix = config.server.session_db_path.strip_prefix("~/").unwrap();
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("~"))
-                .join(suffix)
-        } else if config.server.session_db_path == "~" {
-            dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"))
+    let db_path = if config.server.session_db_path.starts_with("~/") {
+        let suffix = config.server.session_db_path.strip_prefix("~/").unwrap();
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("~"))
+            .join(suffix)
+    } else if config.server.session_db_path == "~" {
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"))
+    } else {
+        PathBuf::from(&config.server.session_db_path)
+    };
+
+    let (persist_tx, session_store) = {
+        let parent = db_path.parent().unwrap_or(&db_path);
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!(error = %e, path = %parent.display(), "Failed to create session DB directory");
+            (None, None)
         } else {
-            PathBuf::from(&config.server.session_db_path)
-        };
-        
-        // Ensure parent directory exists
-        if let Some(parent) = db_path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                tracing::warn!(
-                    error = %e,
-                    path = %parent.display(),
-                    "Failed to create session DB directory — persistence disabled"
-                );
-                (None, None)
-            } else {
-                match dam_hopper_server::persistence::SessionStore::open(&db_path) {
-                    Ok(store) => {
-                        tracing::info!(
-                            path = %db_path.display(),
-                            ttl_hours = config.server.session_buffer_ttl_hours,
-                            "Session persistence enabled"
-                        );
-                        
-                        let store_arc = std::sync::Arc::new(store);
-                        
-                        // Create bounded channel for persist commands (256 slots)
-                        let (tx, rx) = std::sync::mpsc::sync_channel(256);
-                        
-                        // Spawn persist worker thread
-                        let worker = dam_hopper_server::persistence::PersistWorker::new(
-                            rx,
-                            store_arc.clone(),
-                        );
-                        std::thread::Builder::new()
-                            .name("persist-worker".to_string())
-                            .spawn(move || {
-                                worker.run();
-                            })
-                            .expect("Failed to spawn persist worker thread");
-                        
-                        tracing::info!("Persist worker thread spawned");
-                        (Some(tx), Some(store_arc))
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            path = %db_path.display(),
-                            "Failed to open session database — persistence disabled"
-                        );
-                        (None, None)
-                    }
+            match dam_hopper_server::persistence::SessionStore::open(&db_path) {
+                Ok(store) => {
+                    tracing::info!(path = %db_path.display(), "Session store opened");
+                    let store_arc = std::sync::Arc::new(store);
+                    let (tx, rx) = std::sync::mpsc::sync_channel(256);
+                    let worker = dam_hopper_server::persistence::PersistWorker::new(rx, store_arc.clone());
+                    std::thread::Builder::new()
+                        .name("persist-worker".to_string())
+                        .spawn(move || worker.run())
+                        .expect("Failed to spawn persist worker thread");
+                    (Some(tx), Some(store_arc))
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, path = %db_path.display(), "Failed to open session DB");
+                    (None, None)
                 }
             }
-        } else {
-            (None, None)
         }
-    } else {
-        tracing::debug!("Session persistence disabled");
-        (None, None)
     };
 
     let pty_manager = PtySessionManager::with_persist(

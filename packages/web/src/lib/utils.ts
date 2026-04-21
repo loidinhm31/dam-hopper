@@ -26,6 +26,11 @@ export function timeAgo(dateStr: string): string {
   return `${Math.floor(ms / 86_400_000)}d ago`;
 }
 
+/** Sanitize a single segment of a session ID (colons are separators — don't include them). */
+export function sanitizeSessionSegment(segment: string): string {
+  return segment.replace(/[^a-zA-Z0-9._-]/g, "-");
+}
+
 /**
  * Generate a UUID v4 that works in both secure (HTTPS) and insecure (HTTP/LAN)
  * contexts. `crypto.randomUUID()` is only available in secure contexts, but

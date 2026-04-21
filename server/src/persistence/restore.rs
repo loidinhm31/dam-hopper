@@ -1,7 +1,7 @@
 use tracing::{debug, info, warn};
 
 use crate::{
-    config::schema::{DamHopperConfig, RestartPolicy},
+    config::schema::DamHopperConfig,
     error::AppError,
     pty::manager::{PtyCreateOpts, PtySessionManager},
 };
@@ -11,10 +11,11 @@ use super::SessionStore;
 /// Restores sessions from SQLite persistence on server startup.
 ///
 /// ## Behavior
-/// - Only sessions with `restart_policy != Never` are restored.
-/// - Only sessions that were alive at persist time are restored.
+/// - Only sessions with `alive = 1` in the DB are restored (cleanly exited
+///   or explicitly removed sessions stay dormant).
 /// - Sessions for removed projects are skipped with warning.
-/// - Buffer data is loaded lazily via `terminal:attach`, not here.
+/// - The restored session's scrollback is hydrated from the persisted buffer
+///   so clients see pre-restart history on `terminal:attach`.
 ///
 /// ## Returns
 /// Number of sessions successfully restored.
@@ -34,11 +35,7 @@ pub async fn restore_sessions(
     let mut restored = 0;
 
     for session in persisted {
-        // Skip non-restartable sessions
-        if session.meta.restart_policy == RestartPolicy::Never {
-            debug!(id = %session.meta.id, "Skipping never-restart session");
-            continue;
-        }
+        let id = session.meta.id.clone();
 
         // Verify project still exists in config
         let project_exists = config
@@ -48,14 +45,13 @@ pub async fn restore_sessions(
 
         if session.meta.project.is_some() && !project_exists {
             warn!(
-                id = %session.meta.id,
+                id = %id,
                 project = ?session.meta.project,
                 "Skipping session for removed project"
             );
             continue;
         }
 
-        // Spawn PTY
         // Use restart_max_retries from project config if available, otherwise use default
         let restart_max_retries = session
             .meta
@@ -71,7 +67,7 @@ pub async fn restore_sessions(
             .unwrap_or(crate::config::schema::DEFAULT_RESTART_MAX_RETRIES);
 
         let opts = PtyCreateOpts {
-            id: session.meta.id.clone(),
+            id: id.clone(),
             command: session.meta.command.clone(),
             cwd: session.meta.cwd.clone(),
             env: session.env,
@@ -84,11 +80,35 @@ pub async fn restore_sessions(
 
         match pty_manager.create(opts) {
             Ok(_) => {
-                info!(id = %session.meta.id, "Restored session from persistence");
+                // Hydrate the new PTY's scrollback with persisted output so
+                // the client sees history on attach. The re-spawned process
+                // will then append new output on top.
+                match store.load_buffer(&id) {
+                    Ok(Some((data, total_written))) => {
+                        if let Err(e) = pty_manager.hydrate_buffer(&id, &data, total_written) {
+                            warn!(id = %id, error = %e, "Failed to hydrate restored buffer");
+                        } else {
+                            debug!(
+                                id = %id,
+                                bytes = data.len(),
+                                total_written,
+                                "Hydrated restored session buffer"
+                            );
+                        }
+                    }
+                    Ok(None) => {
+                        debug!(id = %id, "No persisted buffer to hydrate");
+                    }
+                    Err(e) => {
+                        warn!(id = %id, error = %e, "Failed to load buffer for hydration");
+                    }
+                }
+
+                info!(id = %id, "Restored session from persistence");
                 restored += 1;
             }
             Err(e) => {
-                warn!(id = %session.meta.id, error = %e, "Failed to restore session");
+                warn!(id = %id, error = %e, "Failed to restore session");
             }
         }
     }
@@ -110,7 +130,8 @@ mod tests {
     use super::*;
     use crate::{
         config::schema::{
-            DamHopperConfig, ProjectConfig, ProjectType, ServerConfig, WorkspaceInfo,
+            DamHopperConfig, ProjectConfig, ProjectType, RestartPolicy, ServerConfig,
+            WorkspaceInfo,
         },
         persistence::SessionStore,
         pty::{event_sink::BroadcastEventSink, session::SessionMeta},
@@ -132,7 +153,6 @@ mod tests {
             },
             agent_store: None,
             server: ServerConfig {
-                session_persistence: true,
                 session_db_path: "test.db".to_string(),
                 session_buffer_ttl_hours: 24,
             },
@@ -156,15 +176,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restore_skips_never_restart_sessions() {
+    async fn restore_respawns_never_policy_sessions() {
+        // Persistence no longer gates on restart_policy — any session that was
+        // alive when the server stopped should come back on restart.
         let (store, _temp) = create_test_store();
         let config = create_test_config();
 
-        // Create a session with Never restart policy
         let meta = SessionMeta {
-            id: "test-session-1".to_string(),
+            id: "test-never-session".to_string(),
             project: Some("test-project".to_string()),
-            command: "npm run dev".to_string(),
+            command: "echo hi".to_string(),
             cwd: "/test/path".to_string(),
             session_type: crate::pty::session::SessionType::Shell,
             alive: true,
@@ -178,16 +199,93 @@ mod tests {
         let env = HashMap::new();
         store.save_session(&meta, &env, 120, 32, 5).unwrap();
 
-        // Create manager
         let (event_sink, _rx) = BroadcastEventSink::new(100);
         let pty_manager = PtySessionManager::new(Arc::new(event_sink));
 
-        // Restore should skip the session
         let restored = restore_sessions(&store, &pty_manager, &config)
             .await
             .unwrap();
 
-        assert_eq!(restored, 0);
+        assert_eq!(restored, 1);
+    }
+
+    #[tokio::test]
+    async fn restore_skips_dead_sessions() {
+        let (store, _temp) = create_test_store();
+        let config = create_test_config();
+
+        let meta = SessionMeta {
+            id: "test-dead-session".to_string(),
+            project: Some("test-project".to_string()),
+            command: "echo done".to_string(),
+            cwd: "/test/path".to_string(),
+            session_type: crate::pty::session::SessionType::Shell,
+            alive: true,
+            exit_code: None,
+            started_at: crate::pty::session::now_ms(),
+            restart_count: 0,
+            last_exit_at: None,
+            restart_policy: RestartPolicy::OnFailure,
+        };
+
+        let env = HashMap::new();
+        store.save_session(&meta, &env, 120, 32, 5).unwrap();
+        store.mark_session_dead("test-dead-session").unwrap();
+
+        let (event_sink, _rx) = BroadcastEventSink::new(100);
+        let pty_manager = PtySessionManager::new(Arc::new(event_sink));
+
+        let restored = restore_sessions(&store, &pty_manager, &config)
+            .await
+            .unwrap();
+
+        assert_eq!(restored, 0, "Sessions marked dead must not respawn");
+    }
+
+    #[tokio::test]
+    async fn restore_hydrates_buffer_from_persistence() {
+        let (store, _temp) = create_test_store();
+        let config = create_test_config();
+
+        let meta = SessionMeta {
+            id: "test-hydrate".to_string(),
+            project: Some("test-project".to_string()),
+            command: "true".to_string(),
+            cwd: "/test/path".to_string(),
+            session_type: crate::pty::session::SessionType::Shell,
+            alive: true,
+            exit_code: None,
+            started_at: crate::pty::session::now_ms(),
+            restart_count: 0,
+            last_exit_at: None,
+            restart_policy: RestartPolicy::Never,
+        };
+
+        let env = HashMap::new();
+        store.save_session(&meta, &env, 120, 32, 5).unwrap();
+        let persisted = b"pre-restart history\n";
+        store
+            .save_buffer("test-hydrate", persisted, persisted.len() as u64)
+            .unwrap();
+
+        let (event_sink, _rx) = BroadcastEventSink::new(100);
+        let pty_manager = PtySessionManager::new(Arc::new(event_sink));
+
+        let restored = restore_sessions(&store, &pty_manager, &config)
+            .await
+            .unwrap();
+        assert_eq!(restored, 1);
+
+        // Give the freshly-spawned `true` process a moment, then read the buffer.
+        // Hydrated bytes must appear at the start regardless of what the new
+        // process prints.
+        let (data, _) = pty_manager
+            .get_buffer_with_offset("test-hydrate", None)
+            .unwrap();
+        assert!(
+            data.contains("pre-restart history"),
+            "expected hydrated buffer in {data:?}"
+        );
     }
 
     #[tokio::test]

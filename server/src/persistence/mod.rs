@@ -53,10 +53,20 @@ impl SessionStore {
         }
         
         let conn = Connection::open(path)?;
-        
-        // Run migrations
+
+        // Run migrations (idempotent)
         conn.execute_batch(include_str!("migrations/001_initial.sql"))?;
-        
+
+        // 002: add `alive` column — SQLite ALTER TABLE isn't idempotent, so guard it.
+        let has_alive: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'alive'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_alive == 0 {
+            conn.execute_batch(include_str!("migrations/002_alive.sql"))?;
+        }
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -91,10 +101,10 @@ impl SessionStore {
         };
 
         conn.execute(
-            "INSERT OR REPLACE INTO sessions 
-             (id, project, command, cwd, session_type, restart_policy, restart_max_retries, 
-              env_json, cols, rows, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT OR REPLACE INTO sessions
+             (id, project, command, cwd, session_type, restart_policy, restart_max_retries,
+              env_json, cols, rows, created_at, updated_at, alive)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1)",
             params![
                 meta.id,
                 meta.project,
@@ -111,6 +121,17 @@ impl SessionStore {
             ],
         )?;
 
+        Ok(())
+    }
+
+    /// Marks a session as dead without deleting it, so the buffer remains
+    /// available for replay but `load_sessions` won't resurrect it on startup.
+    pub fn mark_session_dead(&self, id: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE sessions SET alive = 0, updated_at = ?1 WHERE id = ?2",
+            params![now_ms() as i64, id],
+        )?;
         Ok(())
     }
 
@@ -136,9 +157,10 @@ impl SessionStore {
     pub fn load_sessions(&self) -> Result<Vec<PersistedSession>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, project, command, cwd, session_type, restart_policy, 
+            "SELECT id, project, command, cwd, session_type, restart_policy,
                     env_json, cols, rows, created_at
              FROM sessions
+             WHERE alive = 1
              ORDER BY created_at DESC",
         )?;
 
@@ -229,7 +251,7 @@ impl SessionStore {
         let cutoff = now_ms() - (ttl_hours * 60 * 60 * 1000);
 
         let deleted = conn.execute(
-            "DELETE FROM session_buffers WHERE updated_at < ?1",
+            "DELETE FROM session_buffers WHERE updated_at <= ?1",
             params![cutoff as i64],
         )?;
 

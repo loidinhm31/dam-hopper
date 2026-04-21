@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem as _};
+use portable_pty::{Child as PtyChild, CommandBuilder, NativePtySystem, PtySize, PtySystem as _};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
@@ -42,6 +42,7 @@ struct RespawnCmd {
 // PtyCreateOpts
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct PtyCreateOpts {
     pub id: String,
     pub command: String,
@@ -95,10 +96,10 @@ pub struct PtySessionManager {
     /// Consumed by supervisor_loop task. If queue full, supervisor is dead/slow.
     respawn_tx: mpsc::Sender<RespawnCmd>,
     /// Optional sender for persistence commands to worker thread.
-    /// Present only when session_persistence is enabled.
+    /// None only if the session DB failed to open at startup.
     persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     /// Optional session store for lazy buffer loading from SQLite.
-    /// Present only when session_persistence is enabled.
+    /// None only if the session DB failed to open at startup.
     session_store: Option<std::sync::Arc<crate::persistence::SessionStore>>,
 }
 
@@ -195,7 +196,7 @@ impl PtySessionManager {
             cmd.env(k, v);
         }
 
-        let _child = pair
+        let child = pair
             .slave
             .spawn_command(cmd)
             .map_err(|e| AppError::PtyError(format!("spawn failed: {e}")))?;
@@ -253,7 +254,7 @@ impl PtySessionManager {
         std::thread::Builder::new()
             .name(format!("pty-reader:{session_id}"))
             .spawn(move || {
-                reader_thread(session_id, reader, buffer, shutdown, sink, inner_ref, respawn_tx, persist_tx);
+                reader_thread(session_id, reader, child, buffer, shutdown, sink, inner_ref, respawn_tx, persist_tx);
             })
             .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
 
@@ -334,6 +335,23 @@ impl PtySessionManager {
 
     pub fn kill(&self, id: &str) -> Result<(), AppError> {
         self.kill_internal(id);
+        Ok(())
+    }
+
+    /// Seeds a live session's scrollback with persisted buffer data.
+    /// Called on startup restore so clients see pre-restart history on attach.
+    pub fn hydrate_buffer(
+        &self,
+        id: &str,
+        data: &[u8],
+        total_written: u64,
+    ) -> Result<(), AppError> {
+        let inner = self.inner.lock().unwrap();
+        let session = inner
+            .live
+            .get(id)
+            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+        session.buffer.lock().unwrap().hydrate(data, total_written);
         Ok(())
     }
 
@@ -450,6 +468,7 @@ impl PtySessionManager {
 fn reader_thread(
     session_id: String,
     mut reader: Box<dyn std::io::Read + Send>,
+    mut child: Box<dyn PtyChild + Send + Sync>,
     buffer: Arc<Mutex<crate::pty::buffer::ScrollbackBuffer>>,
     shutdown: Arc<std::sync::atomic::AtomicBool>,
     sink: Arc<dyn EventSink>,
@@ -514,14 +533,10 @@ fn reader_thread(
         }
     }
 
-    // Transition to dead — store exit in tombstone, notify sink.
-    //
-    // Check if this was a manual kill (appeared in killed set) or natural exit.
-    // If eligible for restart, send RespawnCmd to supervisor and mark tombstone.
-    //
-    // Note: Lock released before try_send. If user calls kill() here (TOCTOU
-    // window), supervisor will detect killed flag and skip respawn.
-    let exit_code = infer_exit_code(&session_id, &inner);
+    // Collect real exit code from child. By the time the PTY reader sees EOF the
+    // child has exited (slave-side fd closed), so wait() returns immediately.
+    // Falls back to 0 on error (treated as clean exit).
+    let exit_code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(0);
     info!(id = %session_id, exit_code, "PTY session exited");
 
     // Send SessionExited to persist worker for immediate flush (if enabled)
@@ -711,7 +726,7 @@ async fn respawn_internal(
         build_cmd.env(k, v);
     }
 
-    let _child = pair
+    let child = pair
         .slave
         .spawn_command(build_cmd)
         .map_err(|e| AppError::PtyError(format!("spawn failed: {e}")))?;
@@ -751,6 +766,21 @@ async fn respawn_internal(
         inner_guard.live.insert(session_id.to_string(), session);
     }
 
+    // Re-mark the session as alive in persistence. SessionExited flipped alive=0
+    // when the previous run exited; without this, restore after a server restart
+    // would skip the re-spawned session.
+    if let Some(tx) = &persist_tx {
+        if let Err(e) = tx.try_send(crate::persistence::PersistCmd::SessionCreated {
+            meta: meta.clone(),
+            env: opts.env.clone(),
+            cols: opts.cols,
+            rows: opts.rows,
+            restart_max_retries: opts.restart_max_retries,
+        }) {
+            warn!("Persist queue full, dropping SessionCreated (respawn): {}", e);
+        }
+    }
+
     // Spawn reader thread for the restarted session.
     let inner_clone = Arc::clone(inner);
     let sink_clone = Arc::clone(sink);
@@ -763,6 +793,7 @@ async fn respawn_internal(
             reader_thread(
                 id_clone,
                 reader,
+                child,
                 buffer,
                 shutdown,
                 sink_clone,
@@ -776,33 +807,6 @@ async fn respawn_internal(
     info!(id = %session_id, restart_count = meta.restart_count, "Session restarted");
     Ok(())
 }
-fn infer_exit_code(id: &str, inner: &Arc<Mutex<Inner>>) -> i32 {
-    // LIMITATION: portable-pty doesn't expose child exit status (no waitpid() API).
-    // We infer 0 (clean) vs -1 (killed) based on whether session was removed
-    // by kill() before reader_thread observed EOF.
-    //
-    // This means we CANNOT distinguish between `exit 0` and `exit 1` in natural
-    // exits. Current behavior:
-    //   - EOF + session still in live map → assume exit 0
-    //   - EOF + session already removed → manual kill, exit -1
-    //
-    // **Impact on restart policies:**
-    //   - `OnFailure`: Cannot detect failures — treated same as `Always`
-    //   - `Always`: Correct behavior
-    //   - `Never`: Correct behavior (no restart regardless)
-    //
-    // **Workaround:** For real exit codes, wrap child in std::process::Command
-    // and call wait() manually (requires architecture change).
-    let guard = inner.lock().unwrap();
-    if guard.live.contains_key(id) {
-        // Still live — infer clean exit (EOF from process)
-        0
-    } else {
-        // Already removed by kill() — treat as killed
-        -1
-    }
-}
-
 fn is_eof_error(e: &std::io::Error) -> bool {
     matches!(
         e.kind(),
@@ -998,6 +1002,7 @@ fn decide_restart(
 mod strip_unc_prefix_tests {
     use super::strip_unc_prefix;
 
+    #[cfg(windows)]
     #[test]
     fn strips_unc_long_path_prefix() {
         assert_eq!(
@@ -1006,6 +1011,7 @@ mod strip_unc_prefix_tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn strips_unc_network_path_prefix() {
         assert_eq!(
@@ -1014,6 +1020,7 @@ mod strip_unc_prefix_tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn leaves_normal_windows_path_unchanged() {
         assert_eq!(

@@ -123,8 +123,12 @@ impl PersistWorker {
                 true
             }
             PersistCmd::SessionExited { session_id } => {
-                // Flush immediately on exit
+                // Flush buffer immediately, then mark dead so restore skips it.
+                // Row and buffer are kept so attach can still replay the final output.
                 self.flush_session(&session_id);
+                if let Err(e) = self.store.mark_session_dead(&session_id) {
+                    warn!(session_id, error = %e, "Failed to mark session dead");
+                }
                 true
             }
             PersistCmd::SessionRemoved { session_id } => {

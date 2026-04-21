@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useTerminalTree, FREE_TERMINAL_PREFIX } from "@/hooks/useTerminalTree.js";
 import { useTerminalSessions, useProjects } from "@/api/queries.js";
 import { api } from "@/api/client.js";
-import { generateUUID } from "@/lib/utils.js";
+import { generateUUID, sanitizeSessionSegment } from "@/lib/utils.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TreeCommand, TreeProject } from "@/hooks/useTerminalTree.js";
@@ -246,7 +246,7 @@ export function useTerminalManager(
   }
 
   function handleLaunchProfile(projectName: string, cmd: TreeCommand) {
-    const sanitizedName = (cmd.profileName ?? "terminal").replace(/ /g, "_");
+    const sanitizedName = sanitizeSessionSegment((cmd.profileName ?? "terminal").replace(/ /g, "_"));
     const sessionId = `terminal:${projectName}:${sanitizedName}:${Date.now()}`;
 
     api.terminal
@@ -281,7 +281,7 @@ export function useTerminalManager(
     const project = projects.find((p) => p.name === projectName);
     if (!project) return;
 
-    const sanitizedName = profileName.replace(/ /g, "_");
+    const sanitizedName = sanitizeSessionSegment(profileName.replace(/ /g, "_"));
     const prefix = `terminal:${projectName}:${sanitizedName}:`;
     const instanceIds = sessions.filter((s) => s.id.startsWith(prefix)).map((s) => s.id);
 
