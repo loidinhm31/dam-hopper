@@ -6,6 +6,8 @@ interface UseResizeHandleOptions {
   max: number;
   defaultWidth: number;
   storageKey?: string;
+  /** When true, dragging left increases width (right-side panels) */
+  reversed?: boolean;
 }
 
 interface UseResizeHandleReturn {
@@ -21,6 +23,7 @@ export function useResizeHandle({
   max,
   defaultWidth,
   storageKey,
+  reversed = false,
 }: UseResizeHandleOptions): UseResizeHandleReturn {
   const [width, setWidth] = useState<number>(() => {
     if (storageKey) {
@@ -52,7 +55,8 @@ export function useResizeHandle({
     document.body.style.userSelect = "none";
 
     function onMouseMove(ev: MouseEvent) {
-      const newWidth = Math.min(Math.max(startWidth.current + (ev.clientX - startX.current), min), max);
+      const delta = ev.clientX - startX.current;
+      const newWidth = Math.min(Math.max(startWidth.current + (reversed ? -delta : delta), min), max);
       setWidth(newWidth);
     }
 

@@ -10,7 +10,7 @@ import { TerminalTabBar } from "@/components/organisms/TerminalTabBar.js";
 import { MultiTerminalDisplay } from "@/components/organisms/MultiTerminalDisplay.js";
 import { ProjectInfoPanel } from "@/components/organisms/ProjectInfoPanel.js";
 import { SearchPanel } from "@/components/organisms/SearchPanel.js";
-import { SidebarTabSwitcher, type SidebarTab } from "@/components/molecules/SidebarTabSwitcher.js";
+
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
   Select,
@@ -28,13 +28,10 @@ import type { FsArborNode } from "@/api/fs-types.js";
 const ACTIVE_PROJECT_KEY = "dam-hopper:active-project";
 
 export default function WorkspacePage() {
-  const ideEnabled = true;
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeProject, setActiveProjectState] = useState<string | null>(
     () => localStorage.getItem(ACTIVE_PROJECT_KEY),
   );
-  const [leftTab, setLeftTab] = useState<SidebarTab>("files");
-
   function setActiveProject(name: string | null) {
     setActiveProjectState(name);
     if (name) localStorage.setItem(ACTIVE_PROJECT_KEY, name);
@@ -97,80 +94,64 @@ export default function WorkspacePage() {
 
   const leftPanel = (
     <div className="flex flex-col h-full">
-      <SidebarTabSwitcher
-        activeTab={leftTab}
-        onTabChange={setLeftTab}
-        hideFiles={!ideEnabled}
-      />
-
-      {leftTab === "files" && (
-        <div className="flex flex-col flex-1 overflow-hidden">
-          {projects.length > 1 && (
-            <div className="shrink-0 px-2 py-1.5 border-b border-[var(--color-border)]">
-              <Select value={projectName ?? ""} onValueChange={setActiveProject}>
-                <SelectTrigger className="text-xs h-7">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {projects.map((p) => (
-                    <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          {projectName ? (
-            <FileTree
-              key={projectName}
-              project={projectName}
-              path=""
-              onFileOpen={handleFileOpen}
-              onOpenTerminal={() => handleLaunchShell(projectName)}
-              className="flex-1"
-              onSelectDiffFile={(path, _isConflict) => {
-                if (projectName) openDiff(projectName, path, "modified", 0, 0);
-              }}
-              />
-
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-              No projects configured
-            </div>
-          )}
+      {projects.length > 1 && (
+        <div className="shrink-0 px-2 py-1.5 border-b border-[var(--color-border)]">
+          <Select value={projectName ?? ""} onValueChange={setActiveProject}>
+            <SelectTrigger className="text-xs h-7">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {projects.map((p) => (
+                <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       )}
-
-      {leftTab === "terminals" && (
-        <div className="flex-1 overflow-hidden">
-          {isLoading ? (
-            <div className="flex items-center justify-center flex-1 h-full">
-              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
-            </div>
-          ) : (
-            <TerminalTreeView
-              projects={tree}
-              freeTerminals={freeTerminals}
-              selectedId={selectedId}
-              onSelectProject={handleSelectProjectInTree}
-              onSelectTerminal={handleSelectTerminal}
-              onLaunchTerminal={handleLaunchTerminal}
-              onKillTerminal={handleKillTerminal}
-              onAddShell={handleAddShell}
-              onLaunchProfile={handleLaunchProfile}
-              onDeleteProfile={handleDeleteProfile}
-              onLaunchSuggestedCommand={handleLaunchSuggestedCommand}
-              onAddFreeTerminal={handleAddFreeTerminal}
-              onLaunchFreeWithCommand={handleLaunchFreeWithCommand}
-              onSelectFreeTerminal={handleSelectTerminal}
-              onKillFreeTerminal={handleKillTerminal}
-              onRemoveFreeTerminal={handleRemoveFreeTerminal}
-              onSaveFreeTerminal={handleOpenFreeTerminalSavePrompt}
-            />
-          )}
+      {projectName ? (
+        <FileTree
+          key={projectName}
+          project={projectName}
+          path=""
+          onFileOpen={handleFileOpen}
+          onOpenTerminal={() => handleLaunchShell(projectName)}
+          className="flex-1"
+          onSelectDiffFile={(path, _isConflict) => {
+            if (projectName) openDiff(projectName, path, "modified", 0, 0);
+          }}
+        />
+      ) : (
+        <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+          No projects configured
         </div>
       )}
-
     </div>
+  );
+
+  const terminalTreePanel = isLoading ? (
+    <div className="flex items-center justify-center flex-1 h-full">
+      <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
+    </div>
+  ) : (
+    <TerminalTreeView
+      projects={tree}
+      freeTerminals={freeTerminals}
+      selectedId={selectedId}
+      onSelectProject={handleSelectProjectInTree}
+      onSelectTerminal={handleSelectTerminal}
+      onLaunchTerminal={handleLaunchTerminal}
+      onKillTerminal={handleKillTerminal}
+      onAddShell={handleAddShell}
+      onLaunchProfile={handleLaunchProfile}
+      onDeleteProfile={handleDeleteProfile}
+      onLaunchSuggestedCommand={handleLaunchSuggestedCommand}
+      onAddFreeTerminal={handleAddFreeTerminal}
+      onLaunchFreeWithCommand={handleLaunchFreeWithCommand}
+      onSelectFreeTerminal={handleSelectTerminal}
+      onKillFreeTerminal={handleKillTerminal}
+      onRemoveFreeTerminal={handleRemoveFreeTerminal}
+      onSaveFreeTerminal={handleOpenFreeTerminalSavePrompt}
+    />
   );
 
   const terminalPanel = (
@@ -304,10 +285,9 @@ export default function WorkspacePage() {
     <>
       <IdeShell
         tree={leftPanel}
-        editor={
-          <EditorTabs project={projectName} />
-        }
+        editor={<EditorTabs project={projectName} />}
         terminal={terminalPanel}
+        terminalTree={terminalTreePanel}
         hideEditor={false}
       />
 
