@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useProjects } from "@/api/queries.js";
+import { useProjects, useGlobalConfig } from "@/api/queries.js";
 import { useTerminalSessions } from "@/api/queries.js";
 import { sanitizeSessionSegment } from "@/lib/utils.js";
 import type { ProjectType } from "@/api/client.js";
@@ -36,6 +36,7 @@ export function useTerminalTree() {
   const { data: projects = [], isLoading: projectsLoading } = useProjects();
   const { data: sessions = [], isLoading: sessionsLoading } =
     useTerminalSessions();
+  const { data: globalConfig } = useGlobalConfig();
 
   const sessionMap = useMemo(() => {
     const map = new Map<string, SessionInfo>();
@@ -44,13 +45,30 @@ export function useTerminalTree() {
   }, [sessions]);
 
   const freeTerminals = useMemo<SessionInfo[]>(() => {
-    return sessions
-      .filter((s) => s.id?.startsWith(FREE_TERMINAL_PREFIX))
-      .sort((a, b) => a.startedAt - b.startedAt);
-  }, [sessions]);
+    const list = sessions.filter((s) => s.id?.startsWith(FREE_TERMINAL_PREFIX));
+    const order = globalConfig?.ui?.terminalOrder ?? [];
+
+    if (order.length > 0) {
+      return [...list].sort((a, b) => {
+        const idxA = order.indexOf(a.id);
+        const idxB = order.indexOf(b.id);
+
+        if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+        if (idxA !== -1) return -1;
+        if (idxB !== -1) return 1;
+
+        return a.startedAt - b.startedAt;
+      });
+    }
+
+    return list.sort((a, b) => a.startedAt - b.startedAt);
+  }, [sessions, globalConfig]);
 
   const tree = useMemo<TreeProject[]>(() => {
-    return projects.map((p) => {
+    const projectOrder = globalConfig?.ui?.projectOrder ?? [];
+    const commandOrderMap = globalConfig?.ui?.projectCommandOrder ?? {};
+
+    const unsortedTree = projects.map((p) => {
       const commands: TreeCommand[] = [];
 
       // Build command
@@ -111,6 +129,19 @@ export function useTerminalTree() {
         });
       }
 
+      // Sort commands within project
+      const pCommandOrder = commandOrderMap[p.name] ?? [];
+      if (pCommandOrder.length > 0) {
+        commands.sort((a, b) => {
+          const idxA = pCommandOrder.indexOf(a.key);
+          const idxB = pCommandOrder.indexOf(b.key);
+          if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+          if (idxA !== -1) return -1;
+          if (idxB !== -1) return 1;
+          return 0; // maintain original relative order
+        });
+      }
+
       const activeCount = commands.filter(
         (c) => c.session?.alive || c.sessions?.some((s) => s.alive),
       ).length;
@@ -125,7 +156,21 @@ export function useTerminalTree() {
         activeCount,
       };
     });
-  }, [projects, sessionMap, sessions]);
+
+    // Sort projects
+    if (projectOrder.length > 0) {
+      unsortedTree.sort((a, b) => {
+        const idxA = projectOrder.indexOf(a.name);
+        const idxB = projectOrder.indexOf(b.name);
+        if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+        if (idxA !== -1) return -1;
+        if (idxB !== -1) return 1;
+        return 0;
+      });
+    }
+
+    return unsortedTree;
+  }, [projects, sessionMap, sessions, globalConfig]);
 
   return { tree, freeTerminals, isLoading: projectsLoading || sessionsLoading };
 }

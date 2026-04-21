@@ -210,6 +210,9 @@ export interface UiConfig {
   systemFontSize: number;
   editorFontSize: number;
   editorZoomWheelEnabled: boolean;
+  terminalOrder?: string[];
+  projectOrder?: string[];
+  projectCommandOrder?: Record<string, string[]>;
 }
 
 export interface GlobalConfig {
