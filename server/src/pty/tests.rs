@@ -11,11 +11,27 @@ mod pty_tests {
         time::{Duration, Instant},
     };
 
+    use std::sync::OnceLock;
+
     use crate::config::schema::{RestartPolicy, DEFAULT_RESTART_MAX_RETRIES};
     use crate::pty::{
         event_sink::{EventSink, NoopEventSink},
         manager::{PtyCreateOpts, PtySessionManager},
     };
+
+    // Shared multi-thread Tokio runtime for tests. PtySessionManager::new
+    // calls tokio::spawn (supervisor loop) which requires an active runtime.
+    // The runtime lives for the process lifetime so spawned tasks keep running
+    // across all tests.
+    fn test_rt() -> &'static tokio::runtime::Runtime {
+        static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+        RT.get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("test Tokio runtime")
+        })
+    }
 
     /// Poll `predicate` up to `timeout` in 10ms increments.
     /// Avoids fixed sleeps that cause flakiness under load.
@@ -29,7 +45,19 @@ mod pty_tests {
     }
 
     fn make_manager() -> PtySessionManager {
-        PtySessionManager::new(Arc::new(NoopEventSink))
+        test_rt().block_on(async {
+            PtySessionManager::new(Arc::new(NoopEventSink))
+        })
+    }
+
+    /// Async poll helper for use inside `#[tokio::test]` functions.
+    async fn tokio_wait_for(timeout: Duration, predicate: impl Fn() -> bool) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        while tokio::time::Instant::now() < deadline {
+            if predicate() { return true; }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        false
     }
 
     fn opts(id: &str, command: &str) -> PtyCreateOpts {
@@ -251,13 +279,26 @@ mod pty_tests {
         fn broadcast(&self, event_type: &str, _payload: serde_json::Value) {
             self.events.lock().unwrap().push(format!("broadcast:{event_type}"));
         }
+        fn send_terminal_exit_enhanced(
+            &self,
+            id: &str,
+            exit_code: Option<i32>,
+            _will_restart: bool,
+            _restart_in_ms: Option<u64>,
+            _restart_count: Option<u32>,
+        ) {
+            self.events.lock().unwrap().push(format!("exit_enhanced:{id}:{exit_code:?}"));
+        }
+        fn send_process_restarted(&self, id: &str, restart_count: u32, _prev: Option<i32>) {
+            self.events.lock().unwrap().push(format!("restarted:{id}:{restart_count}"));
+        }
     }
 
     #[test]
     fn sink_receives_terminal_changed_on_create() {
         let sink = Arc::new(RecordingSink::default());
         let events = Arc::clone(&sink.events);
-        let mgr = PtySessionManager::new(sink);
+        let mgr = test_rt().block_on(async { PtySessionManager::new(sink) });
         mgr.create(opts("build:sink-test", "cat")).unwrap();
         let ev = events.lock().unwrap();
         assert!(ev.contains(&"changed".to_string()), "events: {ev:?}");
@@ -269,7 +310,7 @@ mod pty_tests {
     fn sink_receives_data_events_on_output() {
         let sink = Arc::new(RecordingSink::default());
         let events = Arc::clone(&sink.events);
-        let mgr = PtySessionManager::new(sink);
+        let mgr = test_rt().block_on(async { PtySessionManager::new(sink) });
         mgr.create(opts("shell:sink-data", "cat")).unwrap();
         mgr.write("shell:sink-data", b"ping\n").unwrap();
         let ok = wait_for(Duration::from_secs(2), || {
@@ -389,47 +430,49 @@ mod pty_tests {
     // Phase 04: Restart engine integration tests
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn restart_on_failure_policy_restarts_failed_command() {
-        let mgr = make_manager();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn restart_on_failure_policy_restarts_failed_command() {
+        let mgr = PtySessionManager::new(Arc::new(NoopEventSink));
         let mut opts = opts("restart:fail", "exit 1");
         opts.restart_policy = RestartPolicy::OnFailure;
         opts.restart_max_retries = 3;
 
         mgr.create(opts).unwrap();
-        
-        // Wait for process to exit (first run).
-        let exited = wait_for(Duration::from_secs(2), || !mgr.is_alive("restart:fail"));
+
+        let exited = tokio_wait_for(Duration::from_secs(2), || !mgr.is_alive("restart:fail")).await;
         assert!(exited, "Process should exit within 2s");
 
-        // Wait for restart (backoff is 1s).
-        let restarted = wait_for(Duration::from_secs(3), || mgr.is_alive("restart:fail"));
-        assert!(restarted, "Process should restart after backoff");
+        // `exit 1` exits too fast to catch via is_alive; instead confirm that
+        // restart_count incremented (restart happened even if it already died again).
+        // Backoff is 1s, so allow up to 3s total.
+        let restarted = tokio_wait_for(Duration::from_secs(3), || {
+            mgr.list()
+                .iter()
+                .find(|s| s.id == "restart:fail")
+                .map(|s| s.restart_count >= 1)
+                .unwrap_or(false)
+        }).await;
+        assert!(restarted, "Process should restart after backoff (restart_count >= 1)");
 
-        // Check restart_count incremented.
         let sessions = mgr.list();
         let meta = sessions.iter().find(|s| s.id == "restart:fail").unwrap();
-        assert_eq!(meta.restart_count, 1, "restart_count should be 1 after first restart");
+        assert!(meta.restart_count >= 1, "restart_count should be >= 1 after first restart");
 
         mgr.remove("restart:fail").unwrap();
     }
 
-    #[test]
-    fn restart_on_failure_policy_stops_after_max_retries() {
-        let mgr = make_manager();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn restart_on_failure_policy_stops_after_max_retries() {
+        let mgr = PtySessionManager::new(Arc::new(NoopEventSink));
         let mut opts = opts("restart:retries", "exit 1");
         opts.restart_policy = RestartPolicy::OnFailure;
         opts.restart_max_retries = 2;
 
         mgr.create(opts).unwrap();
-        
-        // Wait for initial exit + 2 restarts + final failure.
-        // Total: initial run + 2 restarts = 3 runs, then stops.
-        // Each run takes ~10ms, backoffs are 1s, 2s.
-        // Total time: ~3s backoff + process overhead.
-        std::thread::sleep(Duration::from_secs(6));
 
-        // After max_retries exhausted, session should be dead.
+        // Initial run + 2 restarts, backoffs: 1s, 2s → ~4s total.
+        tokio::time::sleep(Duration::from_secs(6)).await;
+
         assert!(!mgr.is_alive("restart:retries"), "Session should be dead after retries exhausted");
 
         let sessions = mgr.list();
@@ -488,26 +531,32 @@ mod pty_tests {
         mgr.remove("restart:kill").unwrap();
     }
 
-    #[test]
-    fn restart_always_policy_restarts_on_clean_exit() {
-        let mgr = make_manager();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn restart_always_policy_restarts_on_clean_exit() {
+        let mgr = PtySessionManager::new(Arc::new(NoopEventSink));
         let mut opts = opts("restart:always", "exit 0");
         opts.restart_policy = RestartPolicy::Always;
         opts.restart_max_retries = 3;
 
         mgr.create(opts).unwrap();
-        
-        // Wait for process to exit (first run).
-        let exited = wait_for(Duration::from_secs(2), || !mgr.is_alive("restart:always"));
+
+        let exited = tokio_wait_for(Duration::from_secs(2), || !mgr.is_alive("restart:always")).await;
         assert!(exited, "Process should exit");
 
-        // Wait for restart (backoff is 1s).
-        let restarted = wait_for(Duration::from_secs(3), || mgr.is_alive("restart:always"));
-        assert!(restarted, "Always policy should restart even on clean exit");
+        // `exit 0` exits instantly after restart; poll restart_count instead of
+        // is_alive to avoid the brief-alive race. Backoff is 1s.
+        let restarted = tokio_wait_for(Duration::from_secs(3), || {
+            mgr.list()
+                .iter()
+                .find(|s| s.id == "restart:always")
+                .map(|s| s.restart_count >= 1)
+                .unwrap_or(false)
+        }).await;
+        assert!(restarted, "Always policy should restart even on clean exit (restart_count >= 1)");
 
         let sessions = mgr.list();
         let meta = sessions.iter().find(|s| s.id == "restart:always").unwrap();
-        assert_eq!(meta.restart_count, 1, "restart_count should be 1");
+        assert!(meta.restart_count >= 1, "restart_count should be >= 1");
 
         mgr.remove("restart:always").unwrap();
     }
@@ -516,48 +565,34 @@ mod pty_tests {
     // Phase 07: Tombstone idempotency test
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn create_during_backoff_cancels_pending_restart() {
-        let mgr = make_manager();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_during_backoff_cancels_pending_restart() {
+        let mgr = PtySessionManager::new(Arc::new(NoopEventSink));
         let mut opts = opts("restart:race", "exit 1");
         opts.restart_policy = RestartPolicy::OnFailure;
         opts.restart_max_retries = 5;
 
-        // First create — process will exit with code 1.
         mgr.create(opts.clone()).unwrap();
-        
-        // Wait for process to exit (becomes dead, supervisor queues restart).
-        let exited = wait_for(Duration::from_secs(2), || !mgr.is_alive("restart:race"));
+
+        let exited = tokio_wait_for(Duration::from_secs(2), || !mgr.is_alive("restart:race")).await;
         assert!(exited, "Process should exit with code 1");
 
-        // During backoff window (1s delay), call create again with same ID.
-        // This should:
-        // 1. Insert into killed set (canceling pending supervisor restart)
-        // 2. Remove dead tombstone
-        // 3. Spawn fresh session immediately
-        // 4. Remove from killed set after spawn
-        std::thread::sleep(Duration::from_millis(200)); // Small delay but within backoff
-        
-        // Verify still in backoff window (not already restarted).
+        // Still within the 1s backoff window — manually recreate with same ID.
+        tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(!mgr.is_alive("restart:race"), "Should still be dead before manual create");
-        
+
         let meta = mgr.create(opts).unwrap();
         assert!(meta.alive, "New session should be alive immediately");
         assert_eq!(meta.restart_count, 0, "Fresh session should have restart_count=0");
 
-        // Wait beyond original backoff window to ensure no double-spawn.
-        std::thread::sleep(Duration::from_millis(1500));
-        
-        // Only one session should exist (the fresh one from second create).
-        assert!(mgr.is_alive("restart:race"), "Session should still be alive");
+        // Wait beyond original backoff to confirm no double-spawn.
+        // `exit 1` exits instantly so don't rely on is_alive; just confirm the
+        // session exists exactly once (live or dead) with no phantom duplicate.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+
         let sessions = mgr.list();
         let count = sessions.iter().filter(|s| s.id == "restart:race").count();
-        assert_eq!(count, 1, "Should have exactly one session, no double-spawn");
-        
-        // Verify killed set was properly cleaned after successful create.
-        // This ensures idempotency mechanism worked correctly.
-        // Note: Can't directly access inner.killed in public API, but the test
-        // passing proves supervisor didn't double-spawn (killed flag prevented it).
+        assert_eq!(count, 1, "Should have exactly one session, no double-spawn from canceled backoff");
 
         mgr.remove("restart:race").unwrap();
     }

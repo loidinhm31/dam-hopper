@@ -85,6 +85,17 @@ impl ScrollbackBuffer {
     pub fn clear(&mut self) {
         self.data.clear();
     }
+
+    /// Seed an empty buffer with persisted data (e.g. on startup restore).
+    /// Keeps only the tail that fits within `capacity` and preserves the
+    /// original `total_written` so delta replay offsets stay monotonic.
+    pub fn hydrate(&mut self, data: &[u8], total_written: u64) {
+        self.data.clear();
+        let keep = data.len().min(self.capacity);
+        let start = data.len() - keep;
+        self.data.extend_from_slice(&data[start..]);
+        self.total_written = total_written;
+    }
 }
 
 #[cfg(test)]

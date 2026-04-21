@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useProjects } from "@/api/queries.js";
 import { useTerminalSessions } from "@/api/queries.js";
+import { sanitizeSessionSegment } from "@/lib/utils.js";
 import type { ProjectType } from "@/api/client.js";
 import type { SessionInfo } from "@/api/client.js";
 
@@ -95,7 +96,7 @@ export function useTerminalTree() {
 
       // Saved terminal profiles
       for (const terminal of p.terminals ?? []) {
-        const sanitizedName = terminal.name.replace(/ /g, "_");
+        const sanitizedName = sanitizeSessionSegment(terminal.name.replace(/ /g, "_"));
         const prefix = `terminal:${p.name}:${sanitizedName}:`;
         const matchingSessions = sessions.filter((s) => s.id?.startsWith(prefix));
         commands.push({
