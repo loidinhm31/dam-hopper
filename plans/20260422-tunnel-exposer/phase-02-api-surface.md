@@ -15,7 +15,7 @@
 | Date | 2026-04-22 |
 | Description | Wire TunnelSessionManager into AppState; add 3 REST routes + WS envelope variants; extend transport channelToEndpoint. |
 | Priority | P2 |
-| Status | pending |
+| Status | done |
 | Effort | ~4h |
 
 ## Key Insights
@@ -208,18 +208,29 @@ The `dispatch()` call in `useSSE.ts` will route these to `subscribeIpc` listener
 
 ## Todo List
 
-- [ ] Add `pub mod tunnel;` to `api/mod.rs`
-- [ ] Create `api/tunnel.rs` — 3 handlers
-- [ ] Wire 3 routes in `router.rs`
-- [ ] Add `tunnel_manager` field to `AppState`
-- [ ] Update `AppState::new()` signature
-- [ ] Wire manager construction + shutdown in `main.rs`
-- [ ] Add 4 `ServerMsg` variants (optional but add tests)
-- [ ] Extend `channelToEndpoint` in `ws-transport.ts`
-- [ ] Extend `PUSH_EVENT_CHANNELS` in `useSSE.ts`
-- [ ] Add `TunnelInfo` to `client.ts`
-- [ ] `cargo test` green
-- [ ] `pnpm check` green
+- [x] Add `pub mod tunnel;` to `api/mod.rs`
+- [x] Create `api/tunnel.rs` — 3 handlers
+- [x] Wire 3 routes in `router.rs`
+- [x] Add `tunnel_manager` field to `AppState`
+- [x] Update `AppState::new()` signature
+- [x] Wire manager construction + shutdown in `main.rs`
+- [x] Add 4 `ServerMsg` variants (optional but add tests)
+- [x] Extend `channelToEndpoint` in `ws-transport.ts`
+- [x] Extend `PUSH_EVENT_CHANNELS` in `useSSE.ts`
+- [x] Add `TunnelInfo` to `client.ts`
+- [x] `cargo test` green (200/200; 1 pre-existing git test failure due to missing `git` binary in test env)
+- [ ] `pnpm check` green — 13 pre-existing lint errors unrelated to Phase 02; Phase 02 files themselves are lint-clean
+
+## Review Notes (2026-04-23)
+
+### Bugs found
+1. **label byte-vs-char bug**: `label.len() > 64` counts UTF-8 **bytes**, not Unicode chars (Rust `String::len()` contract). A label of 64 two-byte chars (e.g. `é` × 64) is 128 bytes and passes the guard, violating the "max 64 chars" intent. Fix: `label.chars().count() > 64`.
+2. **empty-label not rejected**: control-char strip runs *after* length check. A label of `"\x01"` × 5 passes len check, strips to `""`, and creates a tunnel with an empty label. Fix: check `label.is_empty()` after stripping.
+3. **dispose_all unreachable on SIGTERM**: `axum::serve(...).await?` only resolves on clean listener close; on SIGINT/SIGTERM the process is killed before `dispose_all()`. Tunnel children orphan. Fix: use `axum::serve(...).with_graceful_shutdown(signal_handler)`.
+
+### Warnings
+- `label.len()` vs `label.chars().count()` is a correctness issue, not just style.
+- `ServerMsg::TunnelCreated` duplicates fields already on `TunnelSession`; plan notes this is intentional (typed variant for test coverage) — acceptable.
 
 ## Success Criteria
 

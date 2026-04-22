@@ -36,6 +36,10 @@ const PUSH_EVENT_CHANNELS = [
   "config:changed",
   "workspace:changed",
   "terminal:changed",
+  "tunnel:created",
+  "tunnel:ready",
+  "tunnel:failed",
+  "tunnel:stopped",
 ] as const;
 
 let initialized = false;

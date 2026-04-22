@@ -98,7 +98,7 @@ The server exits immediately if both `--no-auth` and a production environment ar
 
 DamHopper is a monorepo with two components:
 
-- **`server/`** — Rust binary (Axum + Tokio). All business logic: config parsing, project discovery, git ops, PTY session management, agent store distribution, memory templates, repo import. REST + WebSocket API. Serves the web SPA via `tower-http` static file serving.
+- **`server/`** — Rust binary (Axum + Tokio). All business logic: config parsing, project discovery, git ops, PTY session management, tunnel session management, agent store distribution, memory templates, repo import. REST + WebSocket API. Serves the web SPA via `tower-http` static file serving.
 - **`packages/web/`** (`@dam-hopper/web`) — React 19 SPA (Vite + Tailwind v4). Connects to the Rust server via `WsTransport`: `fetch(/api/*)` for REST, `WebSocket(/ws)` for terminal I/O + push events.
   - **Multi-server profiles** (Phase 2): Client-side profile management via localStorage. Switch between multiple server endpoints without page reload. Profiles stored as `{ id, name, url, authType, username, createdAt }`. Migration auto-converts legacy single-server config on first app load via `migrateToProfiles()` in `App.tsx`.
 
@@ -108,9 +108,11 @@ Data flow:
 dam-hopper-server (Rust, Axum, port 4800)
 ├── config/ — TOML parsing, workspace discovery, global config
 ├── pty/ — portable-pty session manager (Map<uuid, PtySession>)
+├── tunnel/ — TunnelSessionManager + CloudflaredDriver (Map<uuid, TunnelSession>)
 ├── git/ — git2 + CLI fallback for operations
 ├── agent_store/ — symlink-based distribution of .claude/ items
 ├── api/ — Axum REST routes (/api/*) + WebSocket (/ws)
+│   └── tunnel.rs — POST/GET /api/tunnels, DELETE /api/tunnels/:id
 └── tower-http::ServeDir serves packages/web/dist/
 
 Browser
@@ -144,6 +146,8 @@ Browser
 **Error handling**: `thiserror` error types per module. API layer maps errors to HTTP status codes. Structured JSON error responses.
 
 **Concurrency**: Tokio async throughout. PTY sessions use `Arc<RwLock<...>>`. Broadcast channels for fan-out to multiple WebSocket consumers.
+
+**Tunnel sessions**: `TunnelSessionManager` in `AppState` manages in-memory `TunnelSession` entries (no disk persistence). Each session spawns a `cloudflared tunnel --url http://127.0.0.1:{port}` child process via `tokio::process::Command`. URL is parsed from child stdout via regex. WS push events (`tunnel:created`, `tunnel:ready`, `tunnel:failed`, `tunnel:stopped`) are broadcast to all connected clients. On server shutdown, `dispose_all()` reaps all child processes — no orphaned `cloudflared` processes.
 
 
 

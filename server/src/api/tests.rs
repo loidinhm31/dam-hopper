@@ -11,7 +11,12 @@ use crate::{
     fs::FsSubsystem,
     pty::{BroadcastEventSink, PtySessionManager, NoopEventSink},
     state::AppState,
+    tunnel::{CloudflaredDriver, TunnelSessionManager},
 };
+
+fn make_tunnel_manager(event_sink: &BroadcastEventSink) -> TunnelSessionManager {
+    TunnelSessionManager::new(Arc::new(event_sink.clone()), Arc::new(CloudflaredDriver))
+}
 
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -50,6 +55,7 @@ fn make_state(tmp: &TempDir) -> AppState {
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(workspace_dir.clone());
+    let tunnel_manager = make_tunnel_manager(&event_sink);
 
     AppState::new(
         workspace_dir,
@@ -62,6 +68,7 @@ fn make_state(tmp: &TempDir) -> AppState {
         fs,
         None,
         false,
+        tunnel_manager,
     ).expect("make_state failed")
 }
 
@@ -434,6 +441,7 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(workspace_dir.clone());
+    let tunnel_manager = make_tunnel_manager(&event_sink);
 
     AppState::new(
         workspace_dir,
@@ -446,6 +454,7 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         fs,
         None,
         false,
+        tunnel_manager,
     ).expect("make_state_with_project failed")
 }
 

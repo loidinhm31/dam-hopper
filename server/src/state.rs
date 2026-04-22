@@ -12,6 +12,7 @@ use crate::error::AppError;
 use crate::fs::FsSubsystem;
 use crate::pty::{BroadcastEventSink, PtySessionManager};
 use crate::ssh::SshCredStore;
+use crate::tunnel::TunnelSessionManager;
 
 /// Shared application state across all Axum handlers.
 ///
@@ -48,6 +49,8 @@ pub struct AppState {
     pub db: Option<mongodb::Database>,
     /// Dev mode: skip authentication checks
     pub no_auth: bool,
+    /// Tunnel session manager — Arc-backed, Clone is cheap.
+    pub tunnel_manager: TunnelSessionManager,
 }
 
 impl AppState {
@@ -78,6 +81,7 @@ impl AppState {
         fs: FsSubsystem,
         db: Option<mongodb::Database>,
         no_auth: bool,
+        tunnel_manager: TunnelSessionManager,
     ) -> anyhow::Result<Self> {
         // Production safety guards for no-auth mode
         if no_auth {
@@ -124,6 +128,7 @@ impl AppState {
             fs,
             db,
             no_auth,
+            tunnel_manager,
         })
     }
 }

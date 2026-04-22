@@ -11,6 +11,8 @@ use dam_hopper_server::{
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
 };
+
+mod common;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -54,7 +56,8 @@ fn make_state(tmp: &TempDir) -> AppState {
     let pty = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(workspace_dir.clone());
-    AppState::new(workspace_dir, config, GlobalConfig::default(), pty, agent_store, event_sink, TEST_TOKEN.to_string(), fs, None, false).expect("make_state failed")
+    let tunnel_manager = common::make_tunnel_manager(&event_sink);
+    AppState::new(workspace_dir, config, GlobalConfig::default(), pty, agent_store, event_sink, TEST_TOKEN.to_string(), fs, None, false, tunnel_manager).expect("make_state failed")
 }
 
 async fn spawn_server(state: AppState) -> SocketAddr {
