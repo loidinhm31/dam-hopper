@@ -52,7 +52,7 @@ dam-hopper runs on a remote box. Dev servers started inside that workspace bind 
 | # | Phase | File | Effort | Status |
 |---|-------|------|--------|--------|
 | 1 | Backend core + driver trait | `phase-01-backend-core.md` | ~10h | done |
-| 2 | REST + WS API surface | `phase-02-api-surface.md` | ~4h | pending |
+| 2 | REST + WS API surface | `phase-02-api-surface.md` | ~4h | done |
 | 3 | Web UI | `phase-03-web-ui.md` | ~8h | pending |
 
 ## Dependency Graph

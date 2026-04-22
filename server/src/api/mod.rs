@@ -12,6 +12,7 @@ pub mod router;
 pub mod settings;
 pub mod ssh;
 pub mod terminal;
+pub mod tunnel;
 pub mod workspace;
 pub mod ws;
 pub mod ws_protocol;

@@ -253,6 +253,35 @@ pub enum ServerMsg {
         error: Option<String>,
     },
 
+    // Tunnel lifecycle events (server → client push)
+    #[serde(rename = "tunnel:created")]
+    TunnelCreated {
+        id: String,
+        port: u16,
+        label: String,
+        driver: String,
+        status: String,
+        #[serde(rename = "startedAt")]
+        started_at: i64,
+    },
+
+    #[serde(rename = "tunnel:ready")]
+    TunnelReady {
+        id: String,
+        url: String,
+    },
+
+    #[serde(rename = "tunnel:failed")]
+    TunnelFailed {
+        id: String,
+        error: String,
+    },
+
+    #[serde(rename = "tunnel:stopped")]
+    TunnelStopped {
+        id: String,
+    },
+
     // FS — upload results
     #[serde(rename = "fs:upload_begin_ok")]
     FsUploadBeginOk { req_id: u64, upload_id: String },
@@ -361,5 +390,57 @@ mod tests {
         let val = parsed.unwrap();
         assert_eq!(val["kind"], "terminal:exit");
         assert_eq!(val["exitCode"], 0);
+    }
+
+    #[test]
+    fn test_tunnel_created_serialization() {
+        let msg = ServerMsg::TunnelCreated {
+            id: "abc-123".to_string(),
+            port: 3000,
+            label: "frontend".to_string(),
+            driver: "cloudflared".to_string(),
+            status: "starting".to_string(),
+            started_at: 1714000000000,
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["kind"], "tunnel:created");
+        assert_eq!(json["id"], "abc-123");
+        assert_eq!(json["port"], 3000);
+        assert_eq!(json["label"], "frontend");
+        assert_eq!(json["status"], "starting");
+        assert_eq!(json["startedAt"], 1714000000000i64);
+    }
+
+    #[test]
+    fn test_tunnel_ready_serialization() {
+        let msg = ServerMsg::TunnelReady {
+            id: "abc-123".to_string(),
+            url: "https://example.trycloudflare.com".to_string(),
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["kind"], "tunnel:ready");
+        assert_eq!(json["id"], "abc-123");
+        assert_eq!(json["url"], "https://example.trycloudflare.com");
+    }
+
+    #[test]
+    fn test_tunnel_failed_serialization() {
+        let msg = ServerMsg::TunnelFailed {
+            id: "abc-123".to_string(),
+            error: "timeout waiting for URL".to_string(),
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["kind"], "tunnel:failed");
+        assert_eq!(json["error"], "timeout waiting for URL");
+    }
+
+    #[test]
+    fn test_tunnel_stopped_serialization() {
+        let msg = ServerMsg::TunnelStopped {
+            id: "abc-123".to_string(),
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["kind"], "tunnel:stopped");
+        assert_eq!(json["id"], "abc-123");
     }
 }

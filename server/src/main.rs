@@ -11,6 +11,7 @@ use dam_hopper_server::{
     probe_inotify_limit,
     pty::{BroadcastEventSink, PtySessionManager},
     state::AppState,
+    tunnel::{CloudflaredDriver, TunnelSessionManager},
 };
 
 #[derive(Debug, Parser)]
@@ -214,6 +215,12 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    let tunnel_driver = std::sync::Arc::new(CloudflaredDriver);
+    let tunnel_manager = TunnelSessionManager::new(
+        std::sync::Arc::new(event_sink.clone()),
+        tunnel_driver,
+    );
+
     // AppState::new() performs production safety validation for no-auth mode
     let state = AppState::new(
         workspace_dir.clone(),
@@ -226,8 +233,10 @@ async fn main() -> anyhow::Result<()> {
         fs,
         db,
         cli.no_auth,
+        tunnel_manager,
     )?;
 
+    let tunnel_manager_shutdown = state.tunnel_manager.clone();
     let router = build_router(state, allowed_origins);
 
     // ── Serve ─────────────────────────────────────────────────────────────────
@@ -236,7 +245,31 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(addr = %addr, "Listening");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, router).await?;
+
+    #[cfg(unix)]
+    let shutdown_signal = async {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).unwrap_or_else(|_| {
+            // fallback: never fires, but ctrl_c still works
+            signal(SignalKind::hangup()).expect("failed to install SIGTERM handler")
+        });
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = sigterm.recv() => {},
+        }
+    };
+
+    #[cfg(not(unix))]
+    let shutdown_signal = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown_signal)
+        .await?;
+
+    // Reap all tunnel children before exit — no orphaned cloudflared processes.
+    tunnel_manager_shutdown.dispose_all().await;
 
     // Graceful shutdown: drop persist_tx to signal worker thread, then wait for clean exit
     // When persist_tx is dropped here, worker detects channel disconnect and flushes all pending buffers

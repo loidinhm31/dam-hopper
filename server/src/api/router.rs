@@ -17,7 +17,7 @@ use crate::state::AppState;
 
 use super::{
     agent_import, agent_memory, agent_store, auth, commands, config, fs as fs_api, git, git_diff,
-    settings, ssh, terminal, workspace, ws,
+    settings, ssh, terminal, tunnel, workspace, ws,
 };
 
 /// Build the full Axum router with auth middleware, CORS, and all routes.
@@ -84,6 +84,10 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/terminal/{id}/buffer", get(terminal::get_buffer))
         .route("/api/terminal/{id}", delete(terminal::kill_session))
         .route("/api/terminal/{id}/remove", delete(terminal::remove_session))
+        // Tunnels
+        .route("/api/tunnels", post(tunnel::create_tunnel))
+        .route("/api/tunnels", get(tunnel::list_tunnels))
+        .route("/api/tunnels/{id}", delete(tunnel::stop_tunnel))
         // Agent Store — static paths before dynamic
         .route("/api/agent-store/matrix", get(agent_store::get_matrix))
         .route("/api/agent-store/scan", get(agent_store::scan))

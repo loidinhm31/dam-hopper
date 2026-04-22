@@ -1,7 +1,7 @@
 # Brainstorm: Localhost Tunnel Exposer
 
 **Date:** 2026-04-21
-**Status:** Brainstorm complete — ready to plan
+**Status:** Phase A (backend core) + Phase B (REST + WS API surface) complete — Phase C (Web UI) pending
 **Owner:** @loidinhm31
 
 ---
@@ -19,7 +19,7 @@ Need: **click-and-play expose of a remote `localhost:PORT` to a public HTTPS URL
 | Audience | Teammates on the open internet (public URL) |
 | Network | No public IP; likely behind NAT — outbound-only must work |
 | 3rd-party setup | No account/domain required on user side |
-| Lifecycle | Named, persistent until killed; survives dam-hopper restart (URL may rotate) |
+| Lifecycle | In-memory session, random URL, lives until explicit stop or server shutdown. No disk persistence, no auto-respawn. |
 | Auth overlay | None — fully public URL, user-acknowledged risk |
 | Port input | Manual: user types `port` + `label` |
 | Architecture | Pluggable `TunnelDriver` trait; cloudflared is first impl |
@@ -85,13 +85,12 @@ pub struct TunnelSession {
 pub struct TunnelSessionManager {
     sessions: Arc<RwLock<HashMap<Uuid, TunnelSession>>>,
     events: broadcast::Sender<TunnelEvent>,
-    config_path: PathBuf,  // persists labels+ports+driver across restarts
 }
 ```
 
 - Spawns `cloudflared tunnel --url http://127.0.0.1:{port} --no-autoupdate --metrics 127.0.0.1:0` as a child process (reuse PTY-free subprocess path; tokio `Command` is enough).
 - Parses stdout/stderr for the URL line (stable regex: `https://[a-z0-9-]+\.trycloudflare\.com`).
-- Stores `{ label, port, driver }` tuples in `~/.config/dam-hopper/tunnels.toml`. On startup, re-spawn each → new URL → broadcast `TunnelUrlRotated` event.
+- **No disk persistence.** Sessions live in-memory only. Server shutdown → all child processes reaped via Drop / shutdown hook → all tunnels gone. User recreates on next boot.
 - Ships `cloudflared` resolution strategy: `$PATH` → `~/.dam-hopper/bin/cloudflared` → prompt user to install (don't auto-download on first launch; let it be explicit).
 
 ### 5.2 API surface (minimal)
@@ -107,7 +106,6 @@ WebSocket events (envelope `kind`):
 - `tunnel_ready`   `{ id, url }`
 - `tunnel_failed`  `{ id, error }`
 - `tunnel_stopped` `{ id }`
-- `tunnel_url_rotated` `{ id, old_url, new_url }`  ← fired on restart-recovery
 
 ### 5.3 Web UI
 
@@ -117,7 +115,7 @@ WebSocket events (envelope `kind`):
 - Ready state: click URL to open in new tab; copy button; QR-code popover for mobile testing.
 - Failed state: inline error + retry button.
 - Warning banner on first use: *"Public URL — anyone with the link can reach your port. Stop when done."*
-- On `tunnel_url_rotated`: toast *"Tunnel URL changed — re-share."*
+- On reconnect after server restart: tunnel list comes back empty (intentional). No recovery toast needed.
 
 ### 5.4 Binary distribution
 
@@ -137,12 +135,12 @@ WebSocket events (envelope `kind`):
 
 | Risk | Mitigation |
 | --- | --- |
-| Quick Tunnel URL rotates on every restart | Surface `tunnel_url_rotated` event + toast; document clearly; offer Dev Tunnels driver later for stable URLs |
+| Quick Tunnel URL rotates on every restart | Tunnels don't survive server restart by design — user explicitly recreates, gets fresh URL. Zero reconciliation logic. |
 | cloudflared binary absent on host | First-run installer flow; clear error if skipped |
-| 200 concurrent request cap hit during team demo | Document limit; escalate path = Dev Tunnels driver (free tier higher) or user-owned named CF tunnel |
+| 200 concurrent request cap hit during team demo | Document limit; escalate path = Dev Tunnels driver (free tier higher) |
 | SSE-based dev servers break | Rare (most use WS). Document. Future: add driver-level capability flags. |
-| User forgets to kill tunnel | Auto-kill on dam-hopper server shutdown; daily reminder toast for tunnels older than 24h |
-| cloudflared process zombies after crash | Tokio child-watch task; reap + restart with backoff; cap retries |
+| User forgets to kill tunnel | Auto-kill on dam-hopper server shutdown via Drop/shutdown hook. |
+| cloudflared child process zombies after crash | Tokio child-watch task marks status=`Failed` and reaps. **No auto-restart** — user clicks retry. |
 
 ## 8. Success criteria
 
@@ -150,7 +148,7 @@ WebSocket events (envelope `kind`):
 - ✅ Works from a home/corporate NATted dev box with zero firewall tweaks
 - ✅ Zero Cloudflare/ngrok/GitHub account needed to ship MVP
 - ✅ Stop action actually kills the child (verified via `ps` after)
-- ✅ Restart recovery re-spawns saved tunnels and notifies URL change
+- ✅ Server shutdown reaps all children — no orphaned `cloudflared` processes
 - ✅ Second driver (Dev Tunnels or ngrok) can be added without touching UI — trait abstraction proven
 
 ## 9. Out of scope (MVP)
@@ -164,12 +162,12 @@ WebSocket events (envelope `kind`):
 
 ## 10. Next steps
 
-1. Validate plan via `/plan:hard` or `/plan:fast` — includes driver trait, session manager, API routes, UI panel, installer flow
-2. Phase split suggestion (for parallel plan):
-   - **Phase A:** `TunnelDriver` trait + cloudflared impl + session manager + persistence (backend-only, testable)
-   - **Phase B:** REST + WS API surface (thin layer on A)
-   - **Phase C:** Web UI panel + installer flow + warning banners
-3. Confirm cloudflared install strategy (bundled vs. lazy download) before writing the plan
+1. ~~Validate plan via `/plan:hard` or `/plan:fast`~~ — done
+2. Phase split:
+   - **Phase A:** `TunnelDriver` trait + `CloudflaredDriver` + `TunnelSessionManager` — **done** (ce9f887)
+   - **Phase B:** REST + WS API surface — **done** (3 REST handlers, 4 `ServerMsg` variants, `AppState::tunnel_manager`, graceful shutdown reap, web channel mappings)
+   - **Phase C:** Web UI panel + installer flow + warning banners — **pending**
+3. ~~Confirm cloudflared install strategy~~ — resolved: lazy download into `~/.dam-hopper/bin/` on first use
 
 ---
 

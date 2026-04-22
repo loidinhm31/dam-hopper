@@ -14,6 +14,8 @@ use dam_hopper_server::{
     pty::{BroadcastEventSink, PtySessionManager},
     state::AppState,
 };
+
+mod common;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -60,6 +62,7 @@ fn create_no_auth_state(workspace_root: PathBuf) -> AppState {
     std::env::remove_var("RUST_ENV");
     std::env::remove_var("ENVIRONMENT");
     
+    let tunnel_manager = common::make_tunnel_manager(&event_sink);
     let state = AppState::new(
         workspace_root,
         config,
@@ -71,6 +74,7 @@ fn create_no_auth_state(workspace_root: PathBuf) -> AppState {
         fs,
         None, // no MongoDB
         true, // no_auth = true
+        tunnel_manager,
     ).expect("Failed to create no-auth AppState in test");
     
     // Restore environment variables
@@ -107,6 +111,7 @@ fn create_normal_auth_state(workspace_root: PathBuf) -> AppState {
     let jwt_secret = "test-secret-key".to_string();
     let fs = FsSubsystem::new(workspace_root.clone());
     
+    let tunnel_manager = common::make_tunnel_manager(&event_sink);
     AppState::new(
         workspace_root,
         config,
@@ -118,6 +123,7 @@ fn create_normal_auth_state(workspace_root: PathBuf) -> AppState {
         fs,
         None, // no MongoDB
         false, // no_auth = false
+        tunnel_manager,
     ).expect("Failed to create normal auth AppState in test")
 }
 
@@ -312,6 +318,7 @@ async fn test_no_auth_with_mongodb_fails() {
     let mongodb_client = mongodb::Client::with_uri_str("mongodb://fake").await.unwrap();
     let mock_db = Some(mongodb_client.database("test"));
     
+    let tunnel_manager = common::make_tunnel_manager(&event_sink);
     let result = AppState::new(
         workspace_root,
         config,
@@ -323,6 +330,7 @@ async fn test_no_auth_with_mongodb_fails() {
         fs,
         mock_db,
         true, // no_auth = true + MongoDB = ERROR
+        tunnel_manager,
     );
     
     assert!(result.is_err(), "AppState::new() should fail with no_auth + MongoDB");
@@ -366,6 +374,7 @@ async fn test_no_auth_in_production_env_fails() {
     let jwt_secret = "test-secret-key".to_string();
     let fs = FsSubsystem::new(workspace_root.clone());
     
+    let tunnel_manager = common::make_tunnel_manager(&event_sink);
     let result = AppState::new(
         workspace_root,
         config,
@@ -377,8 +386,9 @@ async fn test_no_auth_in_production_env_fails() {
         fs,
         None,
         true, // no_auth = true in production = ERROR
+        tunnel_manager,
     );
-    
+
     // Clean up environment variable
     std::env::remove_var("RUST_ENV");
     

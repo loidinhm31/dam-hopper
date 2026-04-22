@@ -263,6 +263,14 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
       return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/commit`, body: { message: d.message } };
     }
 
+    // Tunnels
+    case "tunnel:create": return { method: "POST", url: "/api/tunnels", body: data };
+    case "tunnel:list":   return { method: "GET",  url: "/api/tunnels" };
+    case "tunnel:stop": {
+      const d = data as { id: string };
+      return { method: "DELETE", url: `/api/tunnels/${encodeURIComponent(d.id)}` };
+    }
+
     default:
       throw new Error(`Unknown channel for WsTransport: ${channel}`);
   }

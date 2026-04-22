@@ -78,6 +78,20 @@ export type DistributionMatrix = Record<
   Record<string, { shipped: boolean; method: DistributionMethod | null }>
 >;
 
+// ── Tunnel Types ──────────────────────────────────────────────────────────────
+
+export interface TunnelInfo {
+  id: string;
+  port: number;
+  label: string;
+  driver: string;
+  status: "starting" | "ready" | "failed" | "stopped";
+  url?: string;
+  error?: string;
+  startedAt: number;
+  pid?: number;
+}
+
 // ── Memory + Import Types ─────────────────────────────────────────────────────
 // NOTE: These mirror types from @dam-hopper/core. Duplication is intentional —
 // the web renderer runs in Chromium and cannot import Node.js core packages.
@@ -455,5 +469,11 @@ export const api = {
   fs: {
     list: (project: string, path: string) =>
       getTransport().invoke<FsListResponse>("fs:list", { project, path }),
+  },
+  tunnels: {
+    list: () => getTransport().invoke<TunnelInfo[]>("tunnel:list"),
+    create: (port: number, label: string) =>
+      getTransport().invoke<TunnelInfo>("tunnel:create", { port, label }),
+    stop: (id: string) => getTransport().invoke<void>("tunnel:stop", { id }),
   },
 };
