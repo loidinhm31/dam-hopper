@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use crate::fs::FsError;
+use crate::tunnel::TunnelError;
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -39,6 +40,9 @@ pub enum AppError {
 
     #[error("FS error: {0}")]
     Fs(FsError),
+
+    #[error("Tunnel error: {0}")]
+    Tunnel(TunnelError),
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
@@ -46,6 +50,12 @@ pub type Result<T> = std::result::Result<T, AppError>;
 impl From<serde_json::Error> for AppError {
     fn from(e: serde_json::Error) -> Self {
         AppError::Internal(e.to_string())
+    }
+}
+
+impl From<TunnelError> for AppError {
+    fn from(e: TunnelError) -> Self {
+        AppError::Tunnel(e)
     }
 }
 
@@ -58,7 +68,17 @@ impl AppError {
             | AppError::GitNotFound(_) => 404,
             AppError::Config(_) | AppError::InvalidInput(_) => 400,
             AppError::Fs(e) => e.status_code(),
+            AppError::Tunnel(e) => tunnel_error_status(e),
             _ => 500,
         }
+    }
+}
+
+fn tunnel_error_status(e: &TunnelError) -> u16 {
+    match e {
+        TunnelError::NotFound(_) => 404,
+        TunnelError::DuplicatePort(_) => 409,
+        TunnelError::BinaryMissing | TunnelError::BinaryMissingHint(_) => 503,
+        TunnelError::SpawnFailed(_) | TunnelError::InstallFailed(_) | TunnelError::Io(_) => 500,
     }
 }

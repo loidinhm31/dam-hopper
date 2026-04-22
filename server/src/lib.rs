@@ -9,6 +9,7 @@ pub mod persistence;
 pub mod pty;
 pub mod ssh;
 pub mod state;
+pub mod tunnel;
 pub mod utils;
 
 /// Check inotify watch limit at startup (Linux only).
