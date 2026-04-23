@@ -85,6 +85,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/terminal/{id}", delete(terminal::kill_session))
         .route("/api/terminal/{id}/remove", delete(terminal::remove_session))
         // Tunnels
+        .route("/api/tunnels/install", get(tunnel::install_status).post(tunnel::install_cloudflared))
         .route("/api/tunnels", post(tunnel::create_tunnel))
         .route("/api/tunnels", get(tunnel::list_tunnels))
         .route("/api/tunnels/{id}", delete(tunnel::stop_tunnel))

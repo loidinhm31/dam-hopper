@@ -15,6 +15,8 @@ pub enum TunnelError {
     SpawnFailed(String),
     #[error("install failed: {0}")]
     InstallFailed(String),
+    #[error("install already in progress")]
+    InstallInProgress,
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }

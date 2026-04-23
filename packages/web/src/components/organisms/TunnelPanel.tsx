@@ -8,10 +8,11 @@ import {
   RefreshCw,
   Download,
   AlertCircle,
+  Loader2,
 } from "lucide-react";
 import QRCode from "react-qr-code";
 import { cn } from "@/lib/utils.js";
-import { useTunnels } from "@/hooks/useTunnels.js";
+import { useTunnels, type InstallState } from "@/hooks/useTunnels.js";
 import { useCopyToClipboard } from "@/hooks/useClipboard.js";
 import type { TunnelInfo } from "@/api/client.js";
 
@@ -259,30 +260,87 @@ function NewTunnelDialog({
 
 // ── Installer row ─────────────────────────────────────────────────────────────
 
-function InstallerRow({ onDismiss }: { onDismiss: () => void }) {
+function InstallerRow({
+  installState,
+  onInstall,
+  onDismiss,
+}: {
+  installState: InstallState;
+  onInstall: () => void;
+  onDismiss: () => void;
+}) {
+  const { status, downloaded, total, error } = installState;
+  const pct = total > 0 ? Math.round((downloaded / total) * 100) : null;
+
   return (
     <div className="mx-2 mb-2 p-2 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded text-xs flex items-start gap-2">
-      <Download size={12} className="shrink-0 mt-0.5 text-[var(--color-text-muted)]" />
+      {status === "installing" ? (
+        <Loader2 size={12} className="shrink-0 mt-0.5 text-[var(--color-text-muted)] animate-spin" />
+      ) : status === "done" ? (
+        <Check size={12} className="shrink-0 mt-0.5 text-green-500" />
+      ) : (
+        <Download size={12} className="shrink-0 mt-0.5 text-[var(--color-text-muted)]" />
+      )}
       <div className="flex-1 min-w-0">
-        <p className="text-[var(--color-text)] font-medium mb-0.5">
-          cloudflared not found
-        </p>
-        <p className="text-[var(--color-text-muted)] leading-relaxed">
-          Linux:{" "}
-          <a
-            href="https://developers.cloudflare.com/cloudflared/get-started/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline hover:no-underline"
-          >
-            install guide
-          </a>
-          <br />
-          macOS:{" "}
-          <code className="font-mono bg-[var(--color-surface)] px-1 rounded">
-            brew install cloudflared
-          </code>
-        </p>
+        {status === "idle" || status === "error" ? (
+          <>
+            <p className="text-[var(--color-text)] font-medium mb-0.5">
+              cloudflared not found on server
+            </p>
+            <p className="text-[var(--color-text-muted)] leading-relaxed mb-1.5">
+              Linux / arm64 server:{" "}
+              <button
+                onClick={onInstall}
+                className="underline hover:no-underline cursor-pointer"
+              >
+                auto-install
+              </button>
+              <br />
+              macOS server:{" "}
+              <code className="font-mono bg-[var(--color-surface)] px-1 rounded">
+                brew install cloudflared
+              </code>
+              <br />
+              Other:{" "}
+              <a
+                href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:no-underline"
+              >
+                downloads page
+              </a>
+            </p>
+            {error && (
+              <p className="text-red-500 leading-relaxed">{error}</p>
+            )}
+            <button
+              onClick={onInstall}
+              className="mt-0.5 px-2 py-0.5 bg-[var(--color-accent)] text-white rounded hover:opacity-80 transition-opacity font-medium"
+            >
+              Auto-install on server
+            </button>
+          </>
+        ) : status === "installing" ? (
+          <>
+            <p className="text-[var(--color-text)] font-medium mb-1">
+              Installing cloudflared on server…
+            </p>
+            <div className="w-full bg-[var(--color-surface)] rounded-full h-1.5 overflow-hidden">
+              <div
+                className="h-full bg-[var(--color-accent)] transition-all duration-300"
+                style={{ width: pct !== null ? `${pct}%` : "40%" }}
+              />
+            </div>
+            {pct !== null && (
+              <p className="text-[var(--color-text-muted)] mt-0.5">{pct}%</p>
+            )}
+          </>
+        ) : (
+          <p className="text-green-500 font-medium">
+            cloudflared installed — try creating a tunnel now
+          </p>
+        )}
       </div>
       <button
         onClick={onDismiss}
@@ -299,11 +357,19 @@ function InstallerRow({ onDismiss }: { onDismiss: () => void }) {
 // ── Main panel ────────────────────────────────────────────────────────────────
 
 export function TunnelPanel() {
-  const { tunnels, isLoading, error, createTunnel, stopTunnel } = useTunnels();
+  const { tunnels, isLoading, error, createTunnel, stopTunnel, installCloudflared, installState } = useTunnels();
   const [showDialog, setShowDialog] = useState(false);
   const [binaryMissing, setBinaryMissing] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [warned, setWarned] = useState(() => !!localStorage.getItem(WARNED_KEY));
+
+  // Auto-dismiss installer row 1.5s after successful install
+  useEffect(() => {
+    if (installState.status === "done") {
+      const t = setTimeout(() => setBinaryMissing(false), 1500);
+      return () => clearTimeout(t);
+    }
+  }, [installState.status]);
 
   function dismiss() {
     localStorage.setItem(WARNED_KEY, "1");
@@ -353,7 +419,13 @@ export function TunnelPanel() {
       {!warned && <WarningBanner onDismiss={dismiss} />}
 
       {/* Binary missing hint */}
-      {binaryMissing && <InstallerRow onDismiss={() => setBinaryMissing(false)} />}
+      {binaryMissing && (
+        <InstallerRow
+          installState={installState}
+          onInstall={() => void installCloudflared()}
+          onDismiss={() => setBinaryMissing(false)}
+        />
+      )}
 
       {/* Retry error */}
       {retryError && (

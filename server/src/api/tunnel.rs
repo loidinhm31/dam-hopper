@@ -62,6 +62,27 @@ pub async fn create_tunnel(
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct InstallStatusResponse {
+    pub installing: bool,
+    pub installed: bool,
+}
+
+pub async fn install_status(State(state): State<AppState>) -> Json<InstallStatusResponse> {
+    let (installing, installed) = state.tunnel_manager.install_status().await;
+    Json(InstallStatusResponse { installing, installed })
+}
+
+pub async fn install_cloudflared(State(state): State<AppState>) -> impl IntoResponse {
+    match state.tunnel_manager.start_install() {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(TunnelError::InstallInProgress) => {
+            (StatusCode::CONFLICT, err("install already in progress")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, err(format!("{e}"))).into_response(),
+    }
+}
+
 pub async fn list_tunnels(State(state): State<AppState>) -> Json<Vec<TunnelSession>> {
     Json(state.tunnel_manager.list().await)
 }
