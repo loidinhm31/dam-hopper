@@ -264,6 +264,8 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
     }
 
     // Tunnels
+    case "tunnel:install:status": return { method: "GET", url: "/api/tunnels/install" };
+    case "tunnel:install": return { method: "POST", url: "/api/tunnels/install" };
     case "tunnel:create": return { method: "POST", url: "/api/tunnels", body: data };
     case "tunnel:list":   return { method: "GET",  url: "/api/tunnels" };
     case "tunnel:stop": {
