@@ -67,12 +67,12 @@ export function resetTransportListeners(): void {
 }
 
 /** Duck-type interface for WsTransport status methods. Avoids a hard import cycle. */
-interface HasWsStatus {
+export interface HasWsStatus {
   getStatus(): IpcStatus;
   onStatusChange(cb: (status: IpcStatus) => void): () => void;
 }
 
-function hasWsStatus(t: unknown): t is HasWsStatus {
+export function hasWsStatus(t: unknown): t is HasWsStatus {
   return typeof t === "object" && t !== null && "getStatus" in t && "onStatusChange" in t;
 }
 

@@ -1,7 +1,7 @@
 ---
 title: "Localhost Tunnel Exposer"
 description: "Click-and-play cloudflared Quick Tunnel panel that exposes remote localhost ports as public HTTPS URLs with zero account setup."
-status: in_progress
+status: done
 priority: P2
 effort: 22h
 branch: main
@@ -53,7 +53,7 @@ dam-hopper runs on a remote box. Dev servers started inside that workspace bind 
 |---|-------|------|--------|--------|
 | 1 | Backend core + driver trait | `phase-01-backend-core.md` | ~10h | done |
 | 2 | REST + WS API surface | `phase-02-api-surface.md` | ~4h | done |
-| 3 | Web UI | `phase-03-web-ui.md` | ~8h | pending |
+| 3 | Web UI | `phase-03-web-ui.md` | ~8h | done |
 
 ## Dependency Graph
 

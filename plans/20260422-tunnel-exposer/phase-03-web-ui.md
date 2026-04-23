@@ -16,7 +16,7 @@
 | Date | 2026-04-22 |
 | Description | TunnelPanel organism + useTunnels hook + Sidebar integration. First-use warning banner, installer prompt, QR popover. |
 | Priority | P2 |
-| Status | pending |
+| Status | done |
 | Effort | ~8h |
 
 ## Key Insights
