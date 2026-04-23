@@ -13,6 +13,7 @@ export default defineConfig(({ mode }) => {
       alias: { "@": "/src" },
     },
     server: {
+      allowedHosts: true,
       proxy: {
         "/api": { target: backend, changeOrigin: true, secure: false },
         "/ws": { target: backend, changeOrigin: true, ws: true, secure: false },
