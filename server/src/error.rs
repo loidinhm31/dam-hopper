@@ -79,6 +79,7 @@ fn tunnel_error_status(e: &TunnelError) -> u16 {
         TunnelError::NotFound(_) => 404,
         TunnelError::DuplicatePort(_) => 409,
         TunnelError::BinaryMissing | TunnelError::BinaryMissingHint(_) => 503,
+        TunnelError::InstallInProgress => 409,
         TunnelError::SpawnFailed(_) | TunnelError::InstallFailed(_) | TunnelError::Io(_) => 500,
     }
 }
