@@ -40,6 +40,9 @@ const PUSH_EVENT_CHANNELS = [
   "tunnel:ready",
   "tunnel:failed",
   "tunnel:stopped",
+  "install:progress",
+  "install:done",
+  "install:failed",
 ] as const;
 
 let initialized = false;
