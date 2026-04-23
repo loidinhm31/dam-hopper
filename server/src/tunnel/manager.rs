@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::sync::{mpsc, RwLock};
@@ -10,8 +11,17 @@ use crate::pty::EventSink;
 use super::{
     driver::{DriverHandle, TunnelDriver, TunnelDriverEvent},
     error::TunnelError,
+    installer::TunnelInstaller,
     session::{TunnelSession, TunnelStatus},
 };
+
+/// Resets the `installing` flag on drop — ensures cleanup even on task panic.
+struct InstallGuard(Arc<AtomicBool>);
+impl Drop for InstallGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
 
 #[derive(Clone)]
 pub struct TunnelSessionManager {
@@ -19,6 +29,7 @@ pub struct TunnelSessionManager {
     handles: Arc<RwLock<HashMap<Uuid, DriverHandle>>>,
     sink: Arc<dyn EventSink>,
     driver: Arc<dyn TunnelDriver>,
+    installing: Arc<AtomicBool>,
 }
 
 impl TunnelSessionManager {
@@ -28,7 +39,45 @@ impl TunnelSessionManager {
             handles: Arc::new(RwLock::new(HashMap::new())),
             sink,
             driver,
+            installing: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Spawn a background task that downloads cloudflared to `~/.dam-hopper/bin/`.
+    /// Broadcasts `install:progress`, `install:done`, or `install:failed` over WS.
+    /// Returns `Err(InstallInProgress)` if an install is already running.
+    pub fn start_install(&self) -> Result<(), TunnelError> {
+        if self.installing.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+            return Err(TunnelError::InstallInProgress);
+        }
+        let sink = self.sink.clone();
+        // Guard resets the flag on drop — handles both normal completion and panics.
+        let guard = InstallGuard(self.installing.clone());
+        tokio::spawn(async move {
+            let _guard = guard;
+            let result = TunnelInstaller::install(|downloaded, total| {
+                sink.broadcast("install:progress", serde_json::json!({
+                    "downloaded": downloaded,
+                    "total": total,
+                }));
+            }).await;
+            match result {
+                Ok(path) => sink.broadcast("install:done", serde_json::json!({
+                    "path": path.to_string_lossy(),
+                })),
+                Err(e) => sink.broadcast("install:failed", serde_json::json!({
+                    "error": e.to_string(),
+                })),
+            }
+        });
+        Ok(())
+    }
+
+    /// Returns `(installing, installed)` for the install status endpoint.
+    pub async fn install_status(&self) -> (bool, bool) {
+        let installing = self.installing.load(Ordering::Acquire);
+        let installed = TunnelInstaller::resolve().await.is_ok();
+        (installing, installed)
     }
 
     /// Create a new tunnel session. Returns 409-equivalent if a session for

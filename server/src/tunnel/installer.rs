@@ -89,7 +89,7 @@ fn platform_hint() -> TunnelError {
     match OS {
         "macos" => TunnelError::BinaryMissingHint("brew install cloudflared".into()),
         "windows" => TunnelError::BinaryMissingHint(
-            "download from https://developers.cloudflare.com/cloudflared/install".into(),
+            "download from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/".into(),
         ),
         _ => TunnelError::InstallFailed(format!("unsupported platform: {OS}/{ARCH}")),
     }
