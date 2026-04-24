@@ -1,11 +1,60 @@
-import { memo, useEffect, useRef } from "react";
-import { SplitSquareHorizontal, X } from "lucide-react";
+import { memo, useState, useEffect, useRef } from "react";
+import { useDroppable, useDndMonitor } from "@dnd-kit/core";
 import { cn } from "@/lib/utils.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
 import type { PaneNode } from "@/types/terminal-layout.js";
 import type { UseTerminalLayoutResult } from "@/hooks/useTerminalLayout.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
+import { TabBar } from "@/components/organisms/TabBar.js";
+
+// ─── PaneDropZones ────────────────────────────────────────────────────────────
+// Always mounted so dnd-kit has registered droppables before drag starts.
+// Uses pointer-events-none when not dragging to avoid blocking terminal input.
+
+interface PaneDropZonesProps {
+  paneId: string;
+  isDragging: boolean;
+}
+
+function PaneDropZones({ paneId, isDragging }: PaneDropZonesProps) {
+  const top = useDroppable({ id: `${paneId}:top` });
+  const bottom = useDroppable({ id: `${paneId}:bottom` });
+  const left = useDroppable({ id: `${paneId}:left` });
+  const right = useDroppable({ id: `${paneId}:right` });
+  const center = useDroppable({ id: `${paneId}:center` });
+
+  const edgeClass = (isOver: boolean) =>
+    cn(
+      "absolute transition-colors duration-75 z-10",
+      !isDragging && "pointer-events-none",
+      isDragging && isOver
+        ? "bg-blue-500/30 ring-2 ring-inset ring-blue-400"
+        : "bg-transparent",
+    );
+
+  return (
+    <>
+      {/* Top edge strip */}
+      <div ref={top.setNodeRef} className={cn(edgeClass(top.isOver), "inset-x-0 top-0 h-5")} />
+      {/* Bottom edge strip */}
+      <div ref={bottom.setNodeRef} className={cn(edgeClass(bottom.isOver), "inset-x-0 bottom-0 h-5")} />
+      {/* Left edge strip */}
+      <div ref={left.setNodeRef} className={cn(edgeClass(left.isOver), "inset-y-0 left-0 w-5")} />
+      {/* Right edge strip */}
+      <div ref={right.setNodeRef} className={cn(edgeClass(right.isOver), "inset-y-0 right-0 w-5")} />
+      {/* Center zone */}
+      <div
+        ref={center.setNodeRef}
+        className={cn(
+          "absolute inset-5 z-9 transition-colors duration-75",
+          !isDragging && "pointer-events-none",
+          isDragging && center.isOver ? "bg-blue-500/10" : "bg-transparent",
+        )}
+      />
+    </>
+  );
+}
 
 interface PaneContainerProps {
   node: PaneNode;
@@ -29,6 +78,14 @@ export const PaneContainer = memo(function PaneContainer({
   const fitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isFocused = layout.focusedPaneId === node.id;
+
+  // Track drag state to show/hide drop zones
+  const [isDragging, setIsDragging] = useState(false);
+  useDndMonitor({
+    onDragStart: () => setIsDragging(true),
+    onDragEnd: () => setIsDragging(false),
+    onDragCancel: () => setIsDragging(false),
+  });
 
   // ── reparent terminal elements into this container ──────────────────────
   useEffect(() => {
@@ -233,88 +290,30 @@ export const PaneContainer = memo(function PaneContainer({
         }
       }}
     >
-      {/* Pane header: tabs + controls */}
-      {paneTabs.length > 0 && (
-        <div className="flex items-center shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
-          {/* Tab strip */}
-          <div className="flex items-center overflow-x-auto min-w-0 flex-1">
-            {paneTabs.map((tab) => {
-              const isActive = tab.sessionId === node.activeSessionId;
-              return (
-                <button
-                  key={tab.sessionId}
-                  type="button"
-                  className={cn(
-                    "flex items-center gap-1.5 px-3 py-1.5 text-xs shrink-0 border-b-2 transition-colors whitespace-nowrap",
-                    isActive
-                      ? "border-[var(--color-primary)] text-[var(--color-text)]"
-                      : "border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
-                  )}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    layout.setActiveSession(node.id, tab.sessionId);
-                    layout.setFocusedPaneId(node.id);
-                  }}
-                >
-                  <span className="max-w-32 truncate">{tab.label}</span>
-                  <span
-                    role="button"
-                    aria-label="Close tab"
-                    tabIndex={0}
-                    className="opacity-40 hover:opacity-100 rounded hover:bg-[var(--color-danger)]/20 p-0.5"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onCloseTab(tab.sessionId);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.stopPropagation();
-                        onCloseTab(tab.sessionId);
-                      }
-                    }}
-                  >
-                    <X className="h-2.5 w-2.5" />
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Split button */}
-          <button
-            type="button"
-            title="Split pane (Ctrl+Shift+5)"
-            className="shrink-0 p-1.5 mr-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-elevated)] transition-colors"
-            onClick={(e) => {
-              e.stopPropagation();
-              layout.splitPane(node.id, "vertical");
-            }}
-          >
-            <SplitSquareHorizontal className="h-3.5 w-3.5" />
-          </button>
-
-          {/* Close pane button (only when multiple panes exist) */}
-          {hasSplit && (
-            <button
-              type="button"
-              title="Close pane"
-              className="shrink-0 p-1.5 mr-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 transition-colors"
-              onClick={(e) => {
-                e.stopPropagation();
-                layout.closePane(node.id);
-              }}
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-      )}
+      {/* Pane header: draggable tabs + controls */}
+      <TabBar
+        paneId={node.id}
+        paneTabs={paneTabs}
+        activeSessionId={node.activeSessionId}
+        hasSplit={hasSplit}
+        onSelectTab={(sessionId) => {
+          layout.setActiveSession(node.id, sessionId);
+          layout.setFocusedPaneId(node.id);
+        }}
+        onCloseTab={onCloseTab}
+        onSplitPane={() => layout.splitPane(node.id, "vertical")}
+        onClosePane={() => layout.closePane(node.id)}
+      />
 
       {/* Terminal host div — terminal elements are reparented into here */}
+      {/* relative + overflow-hidden so drop zone overlays are clipped to this area */}
       <div
         ref={containerRef}
         className="flex-1 min-h-0 overflow-hidden relative bg-[#0f172a]"
-      />
+      >
+        {/* Drop zones — always in DOM so dnd-kit has them registered */}
+        <PaneDropZones paneId={node.id} isDragging={isDragging} />
+      </div>
     </div>
   );
 });

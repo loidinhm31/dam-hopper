@@ -198,6 +198,17 @@ function removeSessionFromPane(
   };
 }
 
+/** Move a session from one pane to another. */
+function moveTabBetweenPanes(
+  tree: LayoutNode,
+  sessionId: string,
+  fromPaneId: string,
+  toPaneId: string,
+): LayoutNode {
+  const withRemoved = removeSessionFromPane(tree, fromPaneId, sessionId);
+  return addSessionToPane(withRemoved, toPaneId, sessionId);
+}
+
 /** Set active session in a pane. */
 function setActivePaneSession(
   tree: LayoutNode,
@@ -235,6 +246,7 @@ export interface UseTerminalLayoutResult {
   addSessionToPane: (paneId: string, sessionId: string) => void;
   removeSessionFromPane: (paneId: string, sessionId: string) => void;
   setActiveSession: (paneId: string, sessionId: string) => void;
+  moveTabToPane: (sessionId: string, fromPaneId: string, toPaneId: string) => void;
   pruneSessions: (liveSessions: Set<string>) => void;
   getPanes: () => PaneNode[];
   getPaneById: (paneId: string) => PaneNode | undefined;
@@ -317,6 +329,14 @@ export function useTerminalLayout(): UseTerminalLayoutResult {
     });
   }, []);
 
+  const moveTabToPane = useCallback((sessionId: string, fromPaneId: string, toPaneId: string) => {
+    setRoot((prev) => {
+      const next = moveTabBetweenPanes(prev, sessionId, fromPaneId, toPaneId);
+      saveLayout(next);
+      return next;
+    });
+  }, []);
+
   const pruneSessions = useCallback((liveSessions: Set<string>) => {
     setRoot((prev) => {
       const pruned = pruneDeadSessions(prev, liveSessions);
@@ -349,6 +369,7 @@ export function useTerminalLayout(): UseTerminalLayoutResult {
     addSessionToPane: addSession,
     removeSessionFromPane: removeSession,
     setActiveSession,
+    moveTabToPane,
     pruneSessions,
     getPanes,
     getPaneById,

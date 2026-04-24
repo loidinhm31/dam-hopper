@@ -82,9 +82,11 @@ Infrastructure
 - **Build Tool**: Vite 5.1.3
 - **State Management**: Zustand (stores), TanStack Query
 - **HTTP Client**: Axios
-- **UI Framework**: Bootstrap 5
+- **UI Framework**: Bootstrap 5, Tailwind CSS v4
 - **Code Editor**: Monaco Editor
 - **Terminal**: xterm.js
+- **Drag & Drop**: @dnd-kit/core 6.3.1 (Phase 02: Drag-to-Split)
+- **Layout**: react-resizable-panels (resizable split panes)
 
 ## Recent Phases
 

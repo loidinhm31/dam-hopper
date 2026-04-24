@@ -452,8 +452,243 @@ if (status === "restarting") {
 }
 ```
 
+## Drag-to-Split Terminal Layout (Phase 02)
+
+**Feature:** Interactive terminal pane splitting via drag-and-drop. Users drag terminal tabs to pane edges to create new splits, or to pane centers to move tabs between existing panes.
+
+**Dependencies:** `@dnd-kit/core@6.3.1`, `@dnd-kit/utilities@3.2.2`
+
+### SplitLayout
+
+**Location:** `packages/web/src/components/organisms/SplitLayout.tsx`
+
+**Purpose:** Root layout container wrapping dnd-kit context with drag handlers. Manages split layout tree and implements drag-end logic.
+
+**Key Features:**
+- **DndContext** — Wraps entire split layout tree
+- **PointerSensor** — 8px activation threshold (prevents accidental drags from clicks)
+- **pointerWithin** collision strategy — Accurate zone detection for edge/center targets
+- **DragOverlay** — Floating label showing dragged tab name during drag
+- **handleDragEnd()** — Implements split/transfer logic:
+  - Drag to **edge zone** (top/bottom/left/right) → calls `layout.splitPane()` with direction
+  - Drag to **center zone** → calls `layout.moveTabToPane()` to transfer tab
+  - Validates source ≠ target pane before transfer
+  - Collapses source pane if last tab left
+
+**Props:**
+```ts
+interface SplitLayoutProps {
+  layout: UseTerminalLayoutResult;        // Layout state + methods
+  mountedSessions: MountedSession[];      // Active terminal sessions
+  openTabs: TabEntry[];                   // Open tabs from TerminalTabBar
+  onNewTerminal: () => void;              // Callback: launch new terminal
+  onSessionExit: (sessionId: string) => void;
+  onSelectTab: (sessionId: string) => void;
+  onCloseTab: (sessionId: string) => void;
+}
+```
+
+**Drag End Handler Pattern:**
+```ts
+const handleDragEnd = (event: DragEndEvent) => {
+  const { over } = event;
+  if (!over) return;
+  
+  const [paneId, zone] = over.id.toString().split(":");
+  const dragData = event.active.data.current as DragItem;
+  
+  if (zone === "center") {
+    layout.moveTabToPane(dragData.sessionId, dragData.sourcePaneId, paneId);
+  } else {
+    const direction = zone === "top" || "bottom" ? "horizontal" : "vertical";
+    layout.splitPane(paneId, direction, dragData.sessionId);
+  }
+};
+```
+
+### TabBar
+
+**Location:** `packages/web/src/components/organisms/TabBar.tsx`
+
+**Purpose:** Draggable tab bar for a single pane. Each tab shows session label and close button.
+
+**Exports:**
+- `TabBar` — Tab bar component
+- `DragItem` — Interface for drag payload
+
+**DragItem Interface:**
+```ts
+export interface DragItem {
+  type: "terminal-tab";
+  sessionId: string;
+  sourcePaneId: string;  // Pane tab was dragged from
+}
+```
+
+**DraggableTab Component:**
+- Grip handle (≡ icon) with listeners — Only listeners here to avoid blocking tab click
+- Tab label — Clickable to select/focus, click doesn't trigger drag
+- Close button (✕) — Kill session in pane
+- **isDragging** state — Opacity reduced while dragging
+
+**Props:**
+```ts
+interface TabBarProps {
+  paneId: string;
+  tabs: TabEntry[];
+  activeSessionId?: string | null;
+  onSelectTab: (sessionId: string) => void;
+  onCloseTab: (sessionId: string) => void;
+}
+```
+
+**Styling:**
+- Active tab: `border-b-2 border-[var(--color-primary)]`
+- Inactive: `border-transparent` (underline hidden)
+- Dragging: `opacity-40`
+- Grip handle: Hover shows opacity toggle (30% → 70%)
+
+### PaneContainer
+
+**Location:** `packages/web/src/components/organisms/PaneContainer.tsx`
+
+**Purpose:** Individual pane container that renders terminals and manages drop zones. One `PaneContainer` per pane node in the layout tree.
+
+**PaneDropZones Component:**
+Five droppable zones around the pane edges (always rendered but display-toggled):
+
+```tsx
+function PaneDropZones({ paneId, isDragging }: PaneDropZonesProps) {
+  const top = useDroppable({ id: `${paneId}:top` });
+  const bottom = useDroppable({ id: `${paneId}:bottom` });
+  const left = useDroppable({ id: `${paneId}:left` });
+  const right = useDroppable({ id: `${paneId}:right` });
+  const center = useDroppable({ id: `${paneId}:center` });
+  // ... render zones with absolute positioning
+}
+```
+
+**Zone Configuration:**
+| Zone | Position | Size | Action |
+|------|----------|------|--------|
+| **top** | `inset-x-0 top-0` | `h-5` | Split horizontal above |
+| **bottom** | `inset-x-0 bottom-0` | `h-5` | Split horizontal below |
+| **left** | `inset-y-0 left-0` | `w-5` | Split vertical left |
+| **right** | `inset-y-0 right-0` | `w-5` | Split vertical right |
+| **center** | `inset-5` (rest of pane) | Interior | Transfer tab (no split) |
+
+**Visual Feedback:**
+- **Dragging state active** → Zones have `pointer-events: auto`
+- **Over edge/center** → `bg-blue-500/30 ring-2 ring-blue-400` (20ms transition)
+- **Not dragging** → `pointer-events-none` (doesn't block terminal input)
+
+**PaneContainer Props:**
+```ts
+interface PaneContainerProps {
+  node: PaneNode;                        // Pane metadata
+  layout: UseTerminalLayoutResult;       // Layout state + splitPane(), moveTabToPane()
+  mountedSessions: MountedSession[];     // Terminal DOM elements
+  openTabs: TabEntry[];                  // Tabs available in this pane
+  onNewTerminal: () => void;
+  onSessionExit: (sessionId: string) => void;
+  onSelectTab: (sessionId: string) => void;
+  onCloseTab: (sessionId: string) => void;
+}
+```
+
+**Drag State Tracking:**
+```ts
+const [isDragging, setIsDragging] = useState(false);
+useDndMonitor({
+  onDragStart: () => setIsDragging(true),
+  onDragEnd: () => setIsDragging(false),
+  onDragCancel: () => setIsDragging(false),
+});
+```
+
+### useTerminalLayout — New Methods (Phase 02)
+
+**Location:** `packages/web/src/hooks/useTerminalLayout.ts`
+
+#### moveTabToPane(sessionId, fromPaneId, toPaneId)
+
+**Purpose:** Atomically move a tab from one pane to another without splitting.
+
+**Signature:**
+```ts
+moveTabToPane(sessionId: string, fromPaneId: string, toPaneId: string): void
+```
+
+**Behavior:**
+1. Add `sessionId` to target pane's session list
+2. Remove from source pane's session list
+3. If source pane is now empty → collapse (delete pane node from tree)
+4. Auto-focus target pane after transfer
+5. If sessions list exists in both panes, set target as active session
+
+**Usage:**
+```ts
+// Called from SplitLayout handleDragEnd when dropping on center zone
+layout.moveTabToPane(draggedSessionId, currentPaneId, targetPaneId);
+```
+
+### Drag-to-Split User Flow
+
+```
+User drags tab by grip handle
+       ↓
+[DragOverlay shows floating tab label]
+       ↓
+    ┌──────────────────────────────┐
+    │ Pointer moves over pane      │
+    │ (5 zones now visible)        │
+    └──────────────────────────────┘
+       ↓
+    ┌──────────────────────────────┐
+    │ User hovers over zone:       │
+    │ - Edge (top/bottom/left/r)   │
+    │ - Center                     │
+    └──────────────────────────────┘
+       ↓
+    [Blue highlight appears on zone]
+       ↓
+    [User releases mouse]
+       ↓
+    ┌──────────────────────────────┐
+    │ handleDragEnd fires:         │
+    │ - If edge → splitPane()      │
+    │ - If center → moveTabToPane()│
+    └──────────────────────────────┘
+       ↓
+    ┌──────────────────────────────┐
+    │ Layout tree updates          │
+    │ React reconciliation         │
+    │ New pane rendered            │
+    │ Tab moves or splits          │
+    └──────────────────────────────┘
+```
+
+### Edge Case Behaviors
+
+| Scenario | Behavior |
+|----------|----------|
+| Drag to **same pane center** | No-op (ignored) |
+| Drag **last tab** from source pane | Source pane collapses if other panes exist |
+| Drag to **pane with other tabs** | Tab appended, target pane assumes focus |
+| **Rapid successive drags** | Each drag is independent; layout updates after each release |
+| Drag **outside any drop zone** | Cancel (no effect) |
+
+### Performance Notes
+
+- **PaneDropZones:** Rendered always but invisible when not dragging (no React unmount cost)
+- **DndContext:** Singleton per SplitLayout; all panes share same context
+- **Collision Detection:** `pointerWithin` — Fast spatial queries
+- **DragOverlay:** Only renders during active drag (no background cost)
+- **useDndMonitor:** Lightweight event listener (no polling)
+
 ## Related Documentation
 
+- [Phase 02 Implementation Plan](../plans/20260424-terminal-split-and-port-forward/plan.md)
 - [Phase 06 Implementation Plan](../plans/20260415-terminal-enhancement/phase-06-frontend-lifecycle-ui.md)
 - [WebSocket Protocol](./ws-protocol-guide.md) — Event payload shapes
 - [System Architecture](./system-architecture.md) — Backend integration
