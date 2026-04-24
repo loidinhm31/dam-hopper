@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { cn } from "@/lib/utils.js";
 import { getTransport } from "@/api/transport.js";
 import { api } from "@/api/client.js";
+import { registerTerminal, removeTerminal } from "@/lib/terminal-registry.js";
 
 interface TerminalPanelProps {
   /** Unique session ID (e.g. "build:api-server", "run:api-server") */
@@ -18,6 +19,8 @@ interface TerminalPanelProps {
   onExit?: (exitCode: number | null) => void;
   /** Called when Shift+Enter is pressed — used to open a new terminal */
   onNewTerminal?: () => void;
+  /** Called after the xterm Terminal instance is opened and registered; used by PaneContainer to reparent */
+  onTerminalReady?: (sessionId: string) => void;
   className?: string;
 }
 
@@ -51,18 +54,24 @@ export function TerminalPanel({
   cwd,
   onExit,
   onNewTerminal,
+  onTerminalReady,
   className,
 }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Sanitize session ID: server only allows [a-zA-Z0-9:._-]
   const safeSessionId = sessionId.replace(/[^a-zA-Z0-9:._-]/g, "-");
   const sessionIdRef = useRef(safeSessionId);
+  const openedRef = useRef(false);
   const [attachState, setAttachState] = useState<"idle" | "attaching" | "attached" | "creating">("idle");
   sessionIdRef.current = safeSessionId;
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
+    // StrictMode double-invoke guard: only open once per mount
+    if (openedRef.current) return;
+    openedRef.current = true;
 
     const term = new Terminal({
       theme: DARK_THEME,
@@ -77,7 +86,11 @@ export function TerminalPanel({
     term.loadAddon(fitAddon);
     term.open(container);
 
-    // Fit after open and focus so newly-created terminals are immediately interactive
+    // Register in global registry so PaneContainer can reparent the terminal element
+    registerTerminal(safeSessionId, term, fitAddon);
+    onTerminalReady?.(safeSessionId);
+
+    // Initial fit — container may be hidden (display:none); FitAddon safely no-ops if dims=0
     const mountRafId = requestAnimationFrame(() => {
       fitAddon.fit();
       term.focus();
@@ -215,15 +228,29 @@ export function TerminalPanel({
           return true;
         });
 
-        // Resize PTY on panel resize — debounced to avoid xterm flicker during CSS transitions
+        // PTY resize: fired by fitAddon.fit() (called by PaneContainer on panel resize).
+        // Notifies the server of the new terminal dimensions.
+        const resizeDisposable = term.onResize(({ cols: c, rows: r }) => {
+          transport.terminalResize(safeSessionId, c, r);
+        });
+
+        // Fallback ResizeObserver: fires when this hidden container changes size.
+        // No-op after the terminal element is reparented to PaneContainer, but harmless.
         observer = new ResizeObserver(() => {
           if (fitTimer) clearTimeout(fitTimer);
           fitTimer = setTimeout(() => {
             fitAddon.fit();
-            transport.terminalResize(safeSessionId, term.cols, term.rows);
           }, 200);
         });
         observer.observe(container);
+        // Extend inputDisposable to also clean up the resize listener
+        const _inputDisposable = inputDisposable;
+        inputDisposable = {
+          dispose: () => {
+            _inputDisposable?.dispose();
+            resizeDisposable.dispose();
+          },
+        };
       })
       .catch((err: unknown) => {
         term.write(
@@ -244,6 +271,8 @@ export function TerminalPanel({
       if (fitTimer) clearTimeout(fitTimer);
       if (attachTimeout) clearTimeout(attachTimeout);
       observer?.disconnect();
+      removeTerminal(safeSessionId);
+      openedRef.current = false;
       term.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

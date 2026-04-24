@@ -246,8 +246,11 @@ export default function WorkspacePage() {
           <MultiTerminalDisplay
             activeSessionId={activeTab}
             mountedSessions={mountedSessions}
+            openTabs={tabsWithLiveSession}
             onSessionExit={handleSessionExit}
             onNewTerminal={handleAddFreeTerminal}
+            onSelectTab={handleSelectTab}
+            onCloseTab={handleCloseTab}
           />
         ) : projects.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-4 text-[var(--color-text-muted)]">
