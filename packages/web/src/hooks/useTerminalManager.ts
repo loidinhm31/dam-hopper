@@ -44,6 +44,7 @@ export interface TerminalManagerState {
   savePrompt: SavePromptState | null;
   freeTerminalSavePrompt: FreeTerminalSavePromptState | null;
   selection: SelectionState;
+  focusedPaneId: string | null;
 }
 
 export interface TerminalManagerDerived {
@@ -79,6 +80,7 @@ export interface TerminalManagerActions {
   setSavePrompt: React.Dispatch<React.SetStateAction<SavePromptState | null>>;
   setFreeTerminalSavePrompt: React.Dispatch<React.SetStateAction<FreeTerminalSavePromptState | null>>;
   setLaunchForm: React.Dispatch<React.SetStateAction<LaunchFormState | null>>;
+  setFocusedPaneId: React.Dispatch<React.SetStateAction<string | null>>;
   openTerminalTab: (sessionId: string, project: string, command: string, cwd?: string) => void;
 }
 
@@ -132,6 +134,7 @@ export function useTerminalManager(
   const [launchForm, setLaunchForm] = useState<LaunchFormState | null>(null);
   const [savePrompt, setSavePrompt] = useState<SavePromptState | null>(null);
   const [freeTerminalSavePrompt, setFreeTerminalSavePrompt] = useState<FreeTerminalSavePromptState | null>(null);
+  const [focusedPaneId, setFocusedPaneId] = useState<string | null>(null);
 
   const sessionMap = useMemo(
     () => new Map<string, SessionInfo>(sessions.filter((s) => s.id).map((s) => [s.id, s])),
@@ -509,7 +512,7 @@ export function useTerminalManager(
         : null;
 
   return {
-    state: { openTabs, activeTab, mountedSessions, launchForm, savePrompt, freeTerminalSavePrompt, selection },
+    state: { openTabs, activeTab, mountedSessions, launchForm, savePrompt, freeTerminalSavePrompt, selection, focusedPaneId },
     derived: { tree, freeTerminals, isLoading, tabsWithLiveSession, selectedId, sessionMap, freeTerminalIndexMap },
     actions: {
       handleSelectProject,
@@ -534,6 +537,7 @@ export function useTerminalManager(
       setSavePrompt,
       setFreeTerminalSavePrompt,
       setLaunchForm,
+      setFocusedPaneId,
       openTerminalTab,
     },
   };
