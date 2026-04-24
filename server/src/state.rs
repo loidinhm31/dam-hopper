@@ -10,6 +10,7 @@ use crate::commands::CommandRegistry;
 use crate::config::{DamHopperConfig, GlobalConfig};
 use crate::error::AppError;
 use crate::fs::FsSubsystem;
+use crate::port_forward::PortForwardManager;
 use crate::pty::{BroadcastEventSink, PtySessionManager};
 use crate::ssh::SshCredStore;
 use crate::tunnel::TunnelSessionManager;
@@ -51,6 +52,9 @@ pub struct AppState {
     pub no_auth: bool,
     /// Tunnel session manager — Arc-backed, Clone is cheap.
     pub tunnel_manager: TunnelSessionManager,
+    /// Port forward manager — tracks PTY-detected ports. Arc-backed, Clone is cheap.
+    /// `None` on non-Linux (proc poller disabled) but stdout scan still works.
+    pub port_forward_manager: Option<Arc<PortForwardManager>>,
 }
 
 impl AppState {
@@ -82,6 +86,7 @@ impl AppState {
         db: Option<mongodb::Database>,
         no_auth: bool,
         tunnel_manager: TunnelSessionManager,
+        port_forward_manager: Option<Arc<PortForwardManager>>,
     ) -> anyhow::Result<Self> {
         // Production safety guards for no-auth mode
         if no_auth {
@@ -129,6 +134,7 @@ impl AppState {
             db,
             no_auth,
             tunnel_manager,
+            port_forward_manager,
         })
     }
 }

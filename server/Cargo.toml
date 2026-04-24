@@ -81,6 +81,9 @@ handlebars = "6"
 # Regex for URL validation in importer
 regex = "1"
 
+# once_cell for lazy statics (port regex bank)
+once_cell = "1"
+
 # .gitignore-aware directory walking for file content search
 ignore = "0.4"
 
@@ -96,6 +99,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 [target.'cfg(unix)'.dependencies]
 # SIGTERM for graceful child process shutdown
 nix = { version = "0.29", features = ["signal", "process"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# /proc/net/tcp polling for port detection (Linux only)
+procfs = { version = "0.17", default-features = false }
 
 # Base64 encoding for WS binary content transfer
 base64 = "0.22"

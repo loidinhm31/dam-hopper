@@ -297,6 +297,24 @@ pub enum ServerMsg {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+
+    // Port forward — push events (server → client)
+    #[serde(rename = "port:discovered")]
+    PortDiscovered {
+        port: u16,
+        session_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+        detected_via: String,
+        proxy_url: String,
+        state: String,
+    },
+
+    #[serde(rename = "port:lost")]
+    PortLost {
+        port: u16,
+        session_id: String,
+    },
 }
 
 /// Wire message — either a JSON text frame, raw binary frame, or close signal.

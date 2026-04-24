@@ -17,6 +17,7 @@
 │  │  ├─ workspace_dir: Arc<RwLock<PathBuf>>                │
 │  │  ├─ config: Arc<RwLock<DamHopperConfig>>                  │
 │  │  ├─ pty_manager: PtySessionManager                     │
+│  │  ├─ port_forward_manager: Option<PortForwardManager>   │
 │  │  ├─ agent_store: Arc<AgentStoreService>                │
 │  │  ├─ event_sink: BroadcastEventSink                     │
 │  │  ├─ fs: FsSubsystem                                    │
@@ -25,6 +26,7 @@
 │  ├─ Router                                                 │
 │  │  ├─ /api/projects → ProjectList handler                │
 │  │  ├─ /api/pty/* → PTY spawn/send/kill                   │
+│  │  ├─ /api/ports → Port detection list                   │
 │  │  ├─ /api/git/* → Clone/push/status                     │
 │  │  ├─ /api/fs/* → [conditional] List/read/stat           │
 │  │  ├─ /api/agent-store/* → Distribution/import           │
@@ -340,6 +342,43 @@ New WebSocket protocol messages enable explicit buffer attachment:
 - 1 race condition test: `create_during_backoff_cancels_pending_restart` (Phase 07, validates idempotency)
 - Covers: session create/list, write/buffer, resize, kill, remove, respawn, concurrent create race
 
+### port_forward/ (Phase 03: Port Detection ⧖)
+
+Automatic detection and tracking of ports opened by running processes in PTY sessions.
+
+**manager.rs** — `PortForwardManager` (Arc<RwLock<HashMap<u16, DetectedPort>>>):
+- In-memory registry tracking up to 100 detected ports (prevents unbounded memory growth)
+- Port states: `Provisional` (from stdout regex), `Listening` (confirmed via /proc/net/tcp), `Closed` (detected lost)
+- `report_stdout_hit()` — PTY scanner fires on regex match, inserts Provisional entry, broadcasts `port:discovered`
+- `confirm_listen()` — /proc poller upgrades Provisional → Listening, re-broadcasts `port:discovered` with state update
+- `report_lost()` — cleanup on close detection, broadcasts `port:lost`
+- Non-blocking design: write lock released before broadcasting (I/O)
+
+**detector.rs** — Port detection logic:
+- `strip_ansi()` — removes ANSI CSI (`\x1b[...m`) and OSC (`\x1b]...\x07`) sequences from stdout
+- `PORT_REGEXES` (lazy via `once_cell`) — 7-pattern bank: listening on, localhost:port, http://localhost:port, etc.
+- `port_is_safe()` — safety filter: blocks system ports (<1024) + danger list (22, 25, 110, 143, 3306, 5432, 6379, 27017)
+- `scan_chunk()` — called per PTY output chunk, ANSI-stripped, regex applied, returns first safe port match
+
+**session.rs** — Port state and metadata:
+- `DetectedPort` — port number, detection source (stdout_regex or proc_net), session_id, project, proxy_url, state
+- `PortState` enum — Provisional, Listening, Closed
+
+**mod.rs** — Poller integration:
+- Linux-only /proc/net/tcp poller (2s interval via `procfs` crate)
+- Confirms provisional ports by checking /proc state, detects lost ports (no longer in /proc)
+- Cross-references session IDs to label port origin (which project/session discovered it)
+
+**Integration:**
+- PtySessionManager reader thread calls `detector::scan_chunk()` for each stdout chunk
+- PortForwardManager methods called from detector + poller
+- EventSink broadcasts port events to all connected WebSocket clients
+
+**Limitations:**
+- Linux-only poller (Windows/macOS no /proc/net/tcp, fallback: stdout-only detection)
+- Poller 2s latency before state confirmation
+- Port 0 (ephemeral) not tracked (not useful for proxying)
+
 ### git/
 Git operations via `git2` library + CLI fallback.
 
@@ -388,6 +427,11 @@ HTTP request handlers + WebSocket upgrade.
 - `POST /api/git/:project/discard-hunk` — discard single hunk
 - `GET /api/git/:project/conflicts` — list merge conflicts
 - `POST /api/git/:project/resolve` — resolve merge conflict
+
+**port_forward.rs** (Phase 03) — Port detection handler:
+- `GET /api/ports` — returns all detected ports: `{ "ports": [{ port, session_id, project, state, proxy_url }, ...] }`
+- On non-Linux or when manager absent: returns empty ports array
+- Protected endpoint (requires auth token)
 
 **error.rs** — Maps AppError to HTTP status codes.
 

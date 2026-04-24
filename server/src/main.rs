@@ -8,6 +8,7 @@ use dam_hopper_server::{
     api::build_router,
     config::{global_config_path, load_workspace_config, read_global_config_at},
     fs::FsSubsystem,
+    port_forward::{PortForwardManager, proc_poll_loop},
     probe_inotify_limit,
     pty::{BroadcastEventSink, PtySessionManager},
     state::AppState,
@@ -221,6 +222,17 @@ async fn main() -> anyhow::Result<()> {
         tunnel_driver,
     );
 
+    // ── Port forward manager ──────────────────────────────────────────────────
+    let port_forward_manager = std::sync::Arc::new(PortForwardManager::new(
+        std::sync::Arc::new(event_sink.clone()),
+    ));
+
+    // Wire port_forward_manager into pty_manager so reader threads can scan stdout.
+    {
+        let mut cell = pty_manager.port_forward_manager.write().unwrap();
+        *cell = Some(std::sync::Arc::clone(&port_forward_manager));
+    }
+
     // AppState::new() performs production safety validation for no-auth mode
     let state = AppState::new(
         workspace_dir.clone(),
@@ -234,9 +246,14 @@ async fn main() -> anyhow::Result<()> {
         db,
         cli.no_auth,
         tunnel_manager,
+        Some(port_forward_manager.clone()),
     )?;
 
     let tunnel_manager_shutdown = state.tunnel_manager.clone();
+
+    // Spawn /proc/net/tcp polling loop for port detection (Linux-only; warns on other OS).
+    tokio::spawn(proc_poll_loop(port_forward_manager));
+
     let router = build_router(state, allowed_origins);
 
     // ── Serve ─────────────────────────────────────────────────────────────────

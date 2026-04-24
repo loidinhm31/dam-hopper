@@ -6,6 +6,7 @@ pub mod error;
 pub mod fs;
 pub mod git;
 pub mod persistence;
+pub mod port_forward;
 pub mod pty;
 pub mod ssh;
 pub mod state;

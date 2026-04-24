@@ -12,6 +12,7 @@ use tracing::{debug, info, warn};
 use crate::{
     config::schema::RestartPolicy,
     error::AppError,
+    port_forward::PortForwardManager,
     pty::{
         event_sink::EventSink,
         session::{DeadSession, LiveSession, RespawnOpts, SessionMeta},
@@ -101,6 +102,9 @@ pub struct PtySessionManager {
     /// Optional session store for lazy buffer loading from SQLite.
     /// None only if the session DB failed to open at startup.
     session_store: Option<std::sync::Arc<crate::persistence::SessionStore>>,
+    /// Port forward manager — set after construction via `set_port_forward_manager`.
+    /// Shared with supervisor_loop so restarted sessions also get stdout scanning.
+    pub port_forward_manager: Arc<std::sync::RwLock<Option<Arc<PortForwardManager>>>>,
 }
 
 struct Inner {
@@ -147,17 +151,20 @@ impl PtySessionManager {
             respawn_tx,
             persist_tx,
             session_store,
+            port_forward_manager: Arc::new(std::sync::RwLock::new(None)),
         };
 
         // Spawn the supervisor task that handles respawn requests.
         let inner_clone = Arc::clone(&manager.inner);
         let sink_clone = Arc::clone(&sink);
+        let pfm_cell = Arc::clone(&manager.port_forward_manager);
         tokio::spawn(supervisor_loop(
             respawn_rx,
             inner_clone,
             sink_clone,
             respawn_tx_clone,
             persist_tx_clone,
+            pfm_cell,
         ));
 
         manager
@@ -213,6 +220,7 @@ impl PtySessionManager {
             .map_err(|e| AppError::PtyError(format!("take_writer failed: {e}")))?;
 
         let respawn_opts = opts.clone_for_respawn();
+        let project_name = opts.project.clone();
         let meta = SessionMeta::new(
             opts.id.clone(),
             opts.project,
@@ -250,11 +258,12 @@ impl PtySessionManager {
         let session_id = opts.id.clone();
         let respawn_tx = self.respawn_tx.clone();
         let persist_tx = self.persist_tx.clone();
+        let port_forward_manager = self.port_forward_manager.read().unwrap().clone();
 
         std::thread::Builder::new()
             .name(format!("pty-reader:{session_id}"))
             .spawn(move || {
-                reader_thread(session_id, reader, child, buffer, shutdown, sink, inner_ref, respawn_tx, persist_tx);
+                reader_thread(session_id, reader, child, buffer, shutdown, sink, inner_ref, respawn_tx, persist_tx, port_forward_manager, project_name);
             })
             .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
 
@@ -475,6 +484,8 @@ fn reader_thread(
     inner: Arc<Mutex<Inner>>,
     respawn_tx: mpsc::Sender<RespawnCmd>,
     persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+    port_forward_manager: Option<Arc<PortForwardManager>>,
+    project: Option<String>,
 ) {
     let mut chunk = vec![0u8; 4096];
     // Throttle buffer snapshots: only send to persist worker every 16KB to reduce memory churn.
@@ -520,6 +531,10 @@ fn reader_thread(
                     }
                 }
                 let data_str = String::from_utf8_lossy(data).into_owned();
+                // Port forward: scan chunk for service startup messages (sync, ~µs).
+                if let Some(pfm) = &port_forward_manager {
+                    crate::port_forward::scan_chunk(data, &session_id, project.as_deref(), pfm);
+                }
                 sink.send_terminal_data(&session_id, &data_str);
             }
             Err(e) if is_eof_error(&e) => {
@@ -639,6 +654,7 @@ async fn supervisor_loop(
     sink: Arc<dyn EventSink>,
     respawn_tx: mpsc::Sender<RespawnCmd>,
     persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+    pfm_cell: Arc<std::sync::RwLock<Option<Arc<PortForwardManager>>>>,
 ) {
     while let Some(cmd) = respawn_rx.recv().await {
         let session_id = cmd.id.clone();
@@ -672,6 +688,7 @@ async fn supervisor_loop(
             &sink,
             &respawn_tx,
             persist_tx.clone(),
+            pfm_cell.read().unwrap().clone(),
         ).await {
             warn!(id = %session_id, error = %e, "Respawn failed");
         } else {
@@ -689,6 +706,7 @@ async fn respawn_internal(
     sink: &Arc<dyn EventSink>,
     respawn_tx: &mpsc::Sender<RespawnCmd>,
     persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+    port_forward_manager: Option<Arc<PortForwardManager>>,
 ) -> Result<(), AppError> {
     let opts = &cmd.respawn_opts;
 
@@ -786,6 +804,7 @@ async fn respawn_internal(
     let sink_clone = Arc::clone(sink);
     let id_clone = session_id.to_string();
     let respawn_tx_clone = respawn_tx.clone();
+    let project_name = opts.project.clone();
 
     std::thread::Builder::new()
         .name(format!("pty-reader:{id_clone}"))
@@ -800,6 +819,8 @@ async fn respawn_internal(
                 inner_clone,
                 respawn_tx_clone,
                 persist_tx,
+                port_forward_manager,
+                project_name,
             );
         })
         .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
