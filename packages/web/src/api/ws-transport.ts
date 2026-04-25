@@ -263,6 +263,9 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
       return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/commit`, body: { message: d.message } };
     }
 
+    // Ports
+    case "port:list":     return { method: "GET",  url: "/api/ports" };
+
     // Tunnels
     case "tunnel:install:status": return { method: "GET", url: "/api/tunnels/install" };
     case "tunnel:install": return { method: "POST", url: "/api/tunnels/install" };

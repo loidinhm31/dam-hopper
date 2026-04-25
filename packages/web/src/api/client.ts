@@ -92,6 +92,18 @@ export interface TunnelInfo {
   pid?: number;
 }
 
+// ── Port Detection Types ──────────────────────────────────────────────────────
+
+export interface DetectedPort {
+  port: number;
+  session_id: string;
+  project: string | null;
+  detected_via: "stdout_regex" | "proc_net";
+  state: "provisional" | "listening" | "lost";
+  /** @deprecated vestigial — proxy route removed; ignored by UI */
+  proxy_url: string;
+}
+
 // ── Memory + Import Types ─────────────────────────────────────────────────────
 // NOTE: These mirror types from @dam-hopper/core. Duplication is intentional —
 // the web renderer runs in Chromium and cannot import Node.js core packages.
