@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::pty::EventSink;
+use crate::tunnel::TunnelSessionManager;
 
 use super::session::{DetectedPort, PortState};
 
@@ -17,6 +18,7 @@ const MAX_TRACKED_PORTS: usize = 100;
 pub struct PortForwardManager {
     ports: Arc<RwLock<HashMap<u16, DetectedPort>>>,
     sink: Arc<dyn EventSink>,
+    tunnel_manager: Option<TunnelSessionManager>,
 }
 
 impl PortForwardManager {
@@ -24,7 +26,13 @@ impl PortForwardManager {
         Self {
             ports: Arc::new(RwLock::new(HashMap::new())),
             sink,
+            tunnel_manager: None,
         }
+    }
+
+    pub fn with_tunnel_manager(mut self, tunnel_manager: TunnelSessionManager) -> Self {
+        self.tunnel_manager = Some(tunnel_manager);
+        self
     }
 
     /// Called when stdout regex fires: inserts Provisional entry and broadcasts
@@ -35,6 +43,7 @@ impl PortForwardManager {
         session_id: String,
         project: Option<String>,
     ) {
+        // ... (rest of method unchanged)
         // Capture broadcast payload while holding the write lock, then release
         // before broadcasting (I/O) to avoid blocking readers.
         let maybe_payload = {
@@ -52,7 +61,6 @@ impl PortForwardManager {
                 "session_id": &session_id,
                 "project": &project,
                 "detected_via": "stdout_regex",
-                "proxy_url": &entry.proxy_url,
                 "state": "provisional",
             });
             ports.insert(port, entry);
@@ -77,7 +85,6 @@ impl PortForwardManager {
                         "session_id": &entry.session_id,
                         "project": &entry.project,
                         "detected_via": "proc_net",
-                        "proxy_url": &entry.proxy_url,
                         "state": "listening",
                     });
                     Some(payload)
@@ -109,6 +116,11 @@ impl PortForwardManager {
 
         if let Some(payload) = maybe_payload {
             self.sink.broadcast("port:lost", payload);
+
+            // Auto-cleanup tunnel if it exists for this port
+            if let Some(tm) = &self.tunnel_manager {
+                tm.stop_by_port(port).await;
+            }
         }
     }
 

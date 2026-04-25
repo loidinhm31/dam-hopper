@@ -164,17 +164,30 @@ export function isCrossOriginServer(serverUrl: string): boolean {
 }
 
 /**
+ * Whether the hostname is a local loopback address.
+ */
+function isLoopback(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]" ||
+    hostname === "0.0.0.0"
+  );
+}
+
+/**
  * Whether the configured server is running on the same host as the browser.
  * When true, "Open localhost" shortcuts are shown in the Ports panel.
- *
- * Dev-mode caveat: in Vite dev mode, getServerUrl() returns location.origin,
- * so this always returns true. Correct behavior — server IS local in dev.
  */
 export function isLocalServer(): boolean {
   try {
-    return new URL(getServerUrl()).host === location.host;
+    const serverUrl = getServerUrl();
+    const serverHostname = new URL(serverUrl).hostname;
+    // Both page and backend must be on loopback for it to be considered local
+    return isLoopback(location.hostname) && isLoopback(serverHostname);
   } catch {
-    return true;
+    // If URL parsing fails, fallback to just checking location.hostname
+    return isLoopback(location.hostname);
   }
 }
 

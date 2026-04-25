@@ -100,8 +100,6 @@ export interface DetectedPort {
   project: string | null;
   detected_via: "stdout_regex" | "proc_net";
   state: "provisional" | "listening" | "lost";
-  /** @deprecated vestigial — proxy route removed; ignored by UI */
-  proxy_url: string;
 }
 
 // ── Memory + Import Types ─────────────────────────────────────────────────────

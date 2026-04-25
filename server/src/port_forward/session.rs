@@ -28,14 +28,11 @@ pub struct DetectedPort {
     pub project: Option<String>,
     pub detected_via: DetectedVia,
     pub state: PortState,
-    /// Relative path clients use to reach this port via the proxy route.
-    pub proxy_url: String,
 }
 
 impl DetectedPort {
     pub fn new_provisional(port: u16, session_id: String, project: Option<String>) -> Self {
         Self {
-            proxy_url: format!("/proxy/{port}/"),
             port,
             session_id,
             project,
