@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
+#[cfg(not(target_os = "linux"))]
 use tracing::warn;
 
 use super::manager::PortForwardManager;
@@ -82,12 +83,14 @@ pub fn strip_ansi(input: &str) -> String {
 /// Scan a raw PTY output chunk for port numbers; report first safe hit to manager.
 ///
 /// Non-blocking: regex on 4KB is ~µs. Called from reader_thread (OS thread, not Tokio).
-/// Spawns a single async task per unique port (early return prevents multiple spawns).
+/// `rt_handle` must be captured from the async context before the OS thread is spawned —
+/// std::thread::spawn does not inherit Tokio's thread-local runtime context.
 pub fn scan_chunk(
     data: &[u8],
     session_id: &str,
     project: Option<&str>,
     mgr: &Arc<PortForwardManager>,
+    rt_handle: &tokio::runtime::Handle,
 ) {
     let text = String::from_utf8_lossy(data);
     let clean = strip_ansi(&text);
@@ -102,13 +105,9 @@ pub fn scan_chunk(
                     let mgr = Arc::clone(mgr);
                     let session_id = session_id.to_owned();
                     let project = project.map(ToOwned::to_owned);
-                    // reader_thread is an OS thread spawned from within a Tokio context,
-                    // so Handle::current() is available. Use try_current() for safety.
-                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                        handle.spawn(async move {
-                            mgr.report_stdout_hit(port, session_id, project).await;
-                        });
-                    }
+                    rt_handle.spawn(async move {
+                        mgr.report_stdout_hit(port, session_id, project).await;
+                    });
                     // Only report the first match per chunk to avoid event spam.
                     return;
                 }
@@ -243,7 +242,7 @@ mod tests {
 
     #[test]
     fn scan_chunk_extracts_listening_on_port() {
-        let text = b"Server listening on port 8080\n";
+        let text = b"Server listening on localhost:8080\n";
         let clean = strip_ansi(&String::from_utf8_lossy(text));
         let found: Option<u16> = PORT_REGEXES.iter().find_map(|re| {
             re.captures(&clean)

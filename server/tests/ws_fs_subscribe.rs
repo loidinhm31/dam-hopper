@@ -77,6 +77,7 @@ fn make_test_state(tmp: &TempDir) -> AppState {
         None,
         false,
         tunnel_manager,
+        None,
     ).expect("make_test_state failed")
 }
 

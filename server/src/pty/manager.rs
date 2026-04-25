@@ -259,11 +259,12 @@ impl PtySessionManager {
         let respawn_tx = self.respawn_tx.clone();
         let persist_tx = self.persist_tx.clone();
         let port_forward_manager = self.port_forward_manager.read().unwrap().clone();
+        let rt_handle = tokio::runtime::Handle::try_current().ok();
 
         std::thread::Builder::new()
             .name(format!("pty-reader:{session_id}"))
             .spawn(move || {
-                reader_thread(session_id, reader, child, buffer, shutdown, sink, inner_ref, respawn_tx, persist_tx, port_forward_manager, project_name);
+                reader_thread(session_id, reader, child, buffer, shutdown, sink, inner_ref, respawn_tx, persist_tx, port_forward_manager, project_name, rt_handle);
             })
             .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
 
@@ -486,6 +487,7 @@ fn reader_thread(
     persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     port_forward_manager: Option<Arc<PortForwardManager>>,
     project: Option<String>,
+    rt_handle: Option<tokio::runtime::Handle>,
 ) {
     let mut chunk = vec![0u8; 4096];
     // Throttle buffer snapshots: only send to persist worker every 16KB to reduce memory churn.
@@ -532,8 +534,8 @@ fn reader_thread(
                 }
                 let data_str = String::from_utf8_lossy(data).into_owned();
                 // Port forward: scan chunk for service startup messages (sync, ~µs).
-                if let Some(pfm) = &port_forward_manager {
-                    crate::port_forward::scan_chunk(data, &session_id, project.as_deref(), pfm);
+                if let (Some(pfm), Some(handle)) = (&port_forward_manager, &rt_handle) {
+                    crate::port_forward::scan_chunk(data, &session_id, project.as_deref(), pfm, handle);
                 }
                 sink.send_terminal_data(&session_id, &data_str);
             }
@@ -681,6 +683,7 @@ async fn supervisor_loop(
             "Restarting session"
         );
 
+        let pfm = pfm_cell.read().unwrap().clone();
         if let Err(e) = respawn_internal(
             &session_id,
             cmd,
@@ -688,7 +691,7 @@ async fn supervisor_loop(
             &sink,
             &respawn_tx,
             persist_tx.clone(),
-            pfm_cell.read().unwrap().clone(),
+            pfm,
         ).await {
             warn!(id = %session_id, error = %e, "Respawn failed");
         } else {
@@ -805,6 +808,7 @@ async fn respawn_internal(
     let id_clone = session_id.to_string();
     let respawn_tx_clone = respawn_tx.clone();
     let project_name = opts.project.clone();
+    let rt_handle = tokio::runtime::Handle::try_current().ok();
 
     std::thread::Builder::new()
         .name(format!("pty-reader:{id_clone}"))
@@ -821,6 +825,7 @@ async fn respawn_internal(
                 persist_tx,
                 port_forward_manager,
                 project_name,
+                rt_handle,
             );
         })
         .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;

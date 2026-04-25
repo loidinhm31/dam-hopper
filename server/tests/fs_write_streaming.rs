@@ -54,7 +54,7 @@ fn make_state(tmp: &TempDir) -> AppState {
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(workspace_dir.clone());
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
-    AppState::new(workspace_dir, config, GlobalConfig::default(), pty, agent_store, event_sink, TEST_TOKEN.to_string(), fs, None, false, tunnel_manager).expect("make_state failed")
+    AppState::new(workspace_dir, config, GlobalConfig::default(), pty, agent_store, event_sink, TEST_TOKEN.to_string(), fs, None, false, tunnel_manager, None).expect("make_state failed")
 }
 
 async fn spawn_server(state: AppState) -> SocketAddr {

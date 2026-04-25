@@ -69,6 +69,7 @@ fn make_state(tmp: &TempDir) -> AppState {
         None,
         false,
         tunnel_manager,
+        None,
     ).expect("make_state failed")
 }
 
@@ -455,6 +456,7 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         None,
         false,
         tunnel_manager,
+        None,
     ).expect("make_state_with_project failed")
 }
 

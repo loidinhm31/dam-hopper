@@ -75,6 +75,7 @@ fn create_no_auth_state(workspace_root: PathBuf) -> AppState {
         None, // no MongoDB
         true, // no_auth = true
         tunnel_manager,
+        None,
     ).expect("Failed to create no-auth AppState in test");
     
     // Restore environment variables
@@ -124,6 +125,7 @@ fn create_normal_auth_state(workspace_root: PathBuf) -> AppState {
         None, // no MongoDB
         false, // no_auth = false
         tunnel_manager,
+        None,
     ).expect("Failed to create normal auth AppState in test")
 }
 
@@ -331,6 +333,7 @@ async fn test_no_auth_with_mongodb_fails() {
         mock_db,
         true, // no_auth = true + MongoDB = ERROR
         tunnel_manager,
+        None,
     );
     
     assert!(result.is_err(), "AppState::new() should fail with no_auth + MongoDB");
@@ -387,6 +390,7 @@ async fn test_no_auth_in_production_env_fails() {
         None,
         true, // no_auth = true in production = ERROR
         tunnel_manager,
+        None,
     );
 
     // Clean up environment variable
