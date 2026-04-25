@@ -163,6 +163,21 @@ export function isCrossOriginServer(serverUrl: string): boolean {
   }
 }
 
+/**
+ * Whether the configured server is running on the same host as the browser.
+ * When true, "Open localhost" shortcuts are shown in the Ports panel.
+ *
+ * Dev-mode caveat: in Vite dev mode, getServerUrl() returns location.origin,
+ * so this always returns true. Correct behavior — server IS local in dev.
+ */
+export function isLocalServer(): boolean {
+  try {
+    return new URL(getServerUrl()).host === location.host;
+  } catch {
+    return true;
+  }
+}
+
 /** Build auth headers for fetch calls. Returns empty object if no token set. */
 export function buildAuthHeaders(): Record<string, string> {
   const token = getAuthToken();

@@ -686,8 +686,170 @@ User drags tab by grip handle
 - **DragOverlay:** Only renders during active drag (no background cost)
 - **useDndMonitor:** Lightweight event listener (no polling)
 
+## Combined Ports & Tunnel Panel
+
+**Phases 02-04 Complete ** — Unified sidebar panel combining port detection and tunnel management.
+
+### PortsPanel
+
+**Location:** `packages/web/src/components/organisms/PortsPanel.tsx`
+
+**Purpose:** Single panel replacing both deprecated `TunnelPanel` and `PortsPanel`. Displays detected network ports with integrated tunnel creation/management UI.
+
+**Key Features:**
+- Merges detected ports (`DetectedPort[]` from `/api/ports`) with active tunnels (`TunnelInfo[]` from `/api/tunnels`)
+- Three row states per port:
+  - **State A:** No tunnel — shows "Open localhost" (if same-host) and "Start tunnel" button
+  - **State B:** Tunnel starting — spinner overlay on "☁" button
+  - **State C:** Tunnel ready — displays public URL, copy/QR buttons, "Stop" button
+- "Open localhost" button visible only when `isLocalServer()` returns true
+- Custom port form at bottom allows starting tunnels for specific ports
+- cloudflared installer row (missing binary state) preserved from TunnelPanel
+- Public URL warning banner (localStorage-gated, shown once)
+- Full state machine with error recovery
+
+**Props:**
+```ts
+interface PortsPanelProps {
+  // No props — uses hooks internally (usePorts, etc.)
+}
+```
+
+### usePorts Hook
+
+**Location:** `packages/web/src/hooks/usePorts.ts`
+
+**Purpose:** Merges port detection and tunnel state, manages tunnel operations.
+
+**Return Type:**
+```ts
+{
+  ports: PortEntry[];                                  // Merged ports + tunnels
+  isLoading: boolean;                                  // Query pending
+  isError: boolean;                                    // Query failed
+  createTunnel: (port: number, label: string) => Promise<void>;
+  stopTunnel: (id: string) => Promise<void>;
+  installCloudflared: () => Promise<void>;
+  installState: InstallState;
+}
+```
+
+**PortEntry Interface:**
+```ts
+interface PortEntry {
+  port: number;                                        // Port number
+  project: string | null;                              // Project name if detected
+  state: "provisional" | "listening" | "lost";         // Port state
+  tunnel: TunnelInfo | null;                           // Active tunnel or null
+}
+```
+
+**Data Flow:**
+1. Query `/api/ports` → `DetectedPort[]` (project, state, port)
+2. Query `/api/tunnels` → `TunnelInfo[]` (port, url, status, id)
+3. Merge by port number into `PortEntry[]`
+4. Subscribe to WS push events: `port:discovered`, `port:lost`, `tunnel:ready`, `tunnel:failed`, `tunnel:stopped`
+5. Invalidate queries on reconnect (via `useSSE` integration)
+
+### isLocalServer()
+
+**Location:** `packages/web/src/api/server-config.ts`
+
+**Purpose:** Determines if configured server is on same host as browser.
+
+**Signature & Behavior:**
+```ts
+export function isLocalServer(): boolean {
+  try {
+    return new URL(getServerUrl()).host === location.host;
+  } catch {
+    return true;  // Safe default for dev mode
+  }
+}
+```
+
+When true, "Open localhost" shortcuts appear in PortsPanel. In Vite dev mode, always returns true (server is local).
+
+### DetectedPort Type
+
+**Location:** `packages/web/src/api/client.ts`
+
+**Definition:**
+```ts
+export interface DetectedPort {
+  port: number;                      // Port number
+  project: string | null;            // Associated project, if known
+  state: "provisional" | "listening" | "lost";
+  proxy_url?: string;                // Vestigial, ignored (tunnels handled separately)
+}
+```
+
+### WebSocket Events (Port-Related)
+
+**port:discovered** — Fired when port first detected in `/proc/net/tcp` or stdout scanner
+```ts
+transport.onPortDiscovered((port: DetectedPort) => {
+  // Update ports list
+  queryClient.invalidateQueries({ queryKey: ["ports"] });
+});
+```
+
+**port:lost** — Fired when port closes and is no longer listening
+```ts
+transport.onPortLost((port: number) => {
+  // Remove from display
+  queryClient.invalidateQueries({ queryKey: ["ports"] });
+});
+```
+
+**tunnel:ready** — Fired when cloudflared establishes public URL
+```ts
+transport.onTunnelReady((info: TunnelInfo) => {
+  // Show URL, hide spinner
+  queryClient.invalidateQueries({ queryKey: ["tunnels"] });
+});
+```
+
+**tunnel:failed** — Fired when tunnel creation fails
+```ts
+transport.onTunnelFailed((id: string, reason: string) => {
+  // Show error, revert to State A
+  queryClient.invalidateQueries({ queryKey: ["tunnels"] });
+});
+```
+
+**tunnel:stopped** — Fired when user stops tunnel
+```ts
+transport.onTunnelStopped((id: string) => {
+  // Remove tunnel from list
+  queryClient.invalidateQueries({ queryKey: ["tunnels"] });
+});
+```
+
+### Component Deletion
+
+**TunnelPanel.tsx** — DELETED (functionality merged into PortsPanel)
+- Sub-components (WarningBanner, InstallerRow, QR display) now inlined in PortsPanel
+- `useTunnels.ts` kept for Phase 05 evaluation (not currently used by PortsPanel)
+
+### Sidebar Integration
+
+**Location:** `packages/web/src/components/organisms/Sidebar.tsx`
+
+Before Phase 04, panel stack was:
+```tsx
+{!collapsed && <TunnelPanel />}
+{!collapsed && <PortsPanel />}
+```
+
+Now (Phase 04+):
+```tsx
+{!collapsed && <PortsPanel />}  {/* Combined panel replaces both */}
+```
+
 ## Related Documentation
 
+- [Phase 02-04 Implementation Plans](../plans/20260425-port-detection-tunnel-combined/plan.md)
 - [Phase 02 Implementation Plan](../plans/20260424-terminal-split-and-port-forward/plan.md)
 - [Phase 06 Implementation Plan](../plans/20260415-terminal-enhancement/phase-06-frontend-lifecycle-ui.md)
 - [WebSocket Protocol](./ws-protocol-guide.md) — Event payload shapes

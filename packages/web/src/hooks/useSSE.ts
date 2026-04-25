@@ -36,6 +36,8 @@ const PUSH_EVENT_CHANNELS = [
   "config:changed",
   "workspace:changed",
   "terminal:changed",
+  "port:discovered",
+  "port:lost",
   "tunnel:created",
   "tunnel:ready",
   "tunnel:failed",
