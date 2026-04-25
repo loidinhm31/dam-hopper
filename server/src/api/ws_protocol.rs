@@ -306,7 +306,6 @@ pub enum ServerMsg {
         #[serde(skip_serializing_if = "Option::is_none")]
         project: Option<String>,
         detected_via: String,
-        proxy_url: String,
         state: String,
     },
 

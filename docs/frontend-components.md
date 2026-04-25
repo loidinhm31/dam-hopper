@@ -780,7 +780,6 @@ export interface DetectedPort {
   port: number;                      // Port number
   project: string | null;            // Associated project, if known
   state: "provisional" | "listening" | "lost";
-  proxy_url?: string;                // Vestigial, ignored (tunnels handled separately)
 }
 ```
 

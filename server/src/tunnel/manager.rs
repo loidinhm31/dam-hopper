@@ -178,6 +178,24 @@ impl TunnelSessionManager {
         Ok(())
     }
 
+    /// Stop all tunnels for a specific port.
+    pub async fn stop_by_port(&self, port: u16) {
+        let ids: Vec<Uuid> = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .values()
+                .filter(|s| s.port == port)
+                .map(|s| s.id)
+                .collect()
+        };
+
+        for id in ids {
+            if let Err(e) = self.stop(id).await {
+                tracing::warn!(error = %e, id = %id, port, "Failed to auto-stop tunnel for lost port");
+            }
+        }
+    }
+
     pub async fn list(&self) -> Vec<TunnelSession> {
         self.sessions.read().await.values().cloned().collect()
     }

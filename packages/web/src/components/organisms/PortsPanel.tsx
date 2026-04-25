@@ -253,14 +253,14 @@ function PortRow({
 
       {/* Action bar — visible on group-hover */}
       <div className="ml-3.5 flex items-center gap-0.5 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        {/* Open localhost — only when same-host and port not lost */}
+        {/* Open shortcut — only when same-host and port not lost */}
         {isLocal && entry.state !== "lost" && (
           <a
-            href={`http://localhost:${entry.port}`}
+            href={`http://${location.hostname}:${entry.port}`}
             target="_blank"
             rel="noopener noreferrer"
-            title={`Open localhost:${entry.port}`}
-            aria-label={`Open localhost:${entry.port}`}
+            title={`Open http://${location.hostname}:${entry.port}`}
+            aria-label={`Open http://${location.hostname}:${entry.port}`}
             className="rounded p-0.5 hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
           >
             <ExternalLink size={11} />

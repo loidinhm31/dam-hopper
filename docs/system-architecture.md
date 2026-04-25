@@ -361,7 +361,7 @@ Automatic detection and tracking of ports opened by running processes in PTY ses
 - `scan_chunk()` — called per PTY output chunk, ANSI-stripped, regex applied, returns first safe port match
 
 **session.rs** — Port state and metadata:
-- `DetectedPort` — port number, detection source (stdout_regex or proc_net), session_id, project, proxy_url, state
+- `DetectedPort` — port number, detection source (stdout_regex or proc_net), session_id, project, state
 - `PortState` enum — Provisional, Listening, Closed
 
 **mod.rs** — Poller integration:
@@ -429,7 +429,7 @@ HTTP request handlers + WebSocket upgrade.
 - `POST /api/git/:project/resolve` — resolve merge conflict
 
 **port_forward.rs** (Phase 03) — Port detection handler:
-- `GET /api/ports` — returns all detected ports: `{ "ports": [{ port, session_id, project, state, proxy_url }, ...] }`
+- `GET /api/ports` — returns all detected ports: `{ "ports": [{ port, session_id, project, state }, ...] }`
 - On non-Linux or when manager absent: returns empty ports array
 - Protected endpoint (requires auth token)
 
