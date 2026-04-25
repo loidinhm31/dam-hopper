@@ -48,6 +48,8 @@ pnpm format
 pnpm test
 # Or directly:
 cd server && cargo test
+# On Windows (page file limit): use single job to avoid rlib mmap exhaustion
+cd server && cargo test -j 1
 
 # Run specific Rust test
 cd server && cargo test test_name
@@ -109,10 +111,12 @@ dam-hopper-server (Rust, Axum, port 4800)
 ├── config/ — TOML parsing, workspace discovery, global config
 ├── pty/ — portable-pty session manager (Map<uuid, PtySession>)
 ├── tunnel/ — TunnelSessionManager + CloudflaredDriver (Map<uuid, TunnelSession>)
+├── port_forward/ — PortForwardManager: PTY stdout scan + /proc/net/tcp poll (Linux)
 ├── git/ — git2 + CLI fallback for operations
 ├── agent_store/ — symlink-based distribution of .claude/ items
 ├── api/ — Axum REST routes (/api/*) + WebSocket (/ws)
-│   └── tunnel.rs — POST/GET /api/tunnels, DELETE /api/tunnels/:id
+│   ├── tunnel.rs — POST/GET /api/tunnels, DELETE /api/tunnels/:id
+│   └── port_forward.rs — GET /api/ports
 └── tower-http::ServeDir serves packages/web/dist/
 
 Browser
@@ -120,6 +124,7 @@ Browser
 ├── WsTransport → fetch(/api/*) + WebSocket(/ws)
 │  └── WS envelope: {kind: "...", ...payload} (Phase 02+, no legacy {type:} support)
 ├── xterm.js terminal panels (per PTY session)
+├── PortsPanel (combined) — detected ports + per-port tunnel actions + custom port form
 └── TanStack Query (queries via WsTransport.invoke)
 ```
 

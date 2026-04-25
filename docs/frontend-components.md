@@ -830,7 +830,7 @@ transport.onTunnelStopped((id: string) => {
 
 **TunnelPanel.tsx** — DELETED (functionality merged into PortsPanel)
 - Sub-components (WarningBanner, InstallerRow, QR display) now inlined in PortsPanel
-- `useTunnels.ts` kept for Phase 05 evaluation (not currently used by PortsPanel)
+- `useTunnels.ts` deprecated (not used; consider removal in future refactor)
 
 ### Sidebar Integration
 
