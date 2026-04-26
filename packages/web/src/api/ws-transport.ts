@@ -283,6 +283,8 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
 
 const MAX_BACKOFF_MS = 30_000;
 const INITIAL_BACKOFF_MS = 1_000;
+// OPAQUE rounds involve Wasm crypto — longer timeout than FS ops to handle slow devices.
+const AUTH_TIMEOUT_MS = 30_000;
 
 export class WsTransport implements Transport {
   private ws: WebSocket | null = null;
@@ -375,6 +377,28 @@ export class WsTransport implements Transport {
     timer: ReturnType<typeof setTimeout>;
   }>();
 
+  // ── OPAQUE auth state ─────────────────────────────────────────────────────
+  private pendingOpaqueRegStart = new Map<number, {
+    resolve: (data: string) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  private pendingOpaqueRegFinish = new Map<number, {
+    resolve: () => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  private pendingOpaqueLoginStart = new Map<number, {
+    resolve: (v: { session_id: string; data: string }) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  private pendingOpaqueLoginFinish = new Map<number, {
+    resolve: () => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+
   constructor(private readonly baseUrl: string = getServerUrl()) {
     this.connect();
   }
@@ -452,6 +476,26 @@ export class WsTransport implements Transport {
       p.reject(new Error("transport destroyed"));
     }
     this.pendingUploadCommit.clear();
+    for (const p of this.pendingOpaqueRegStart.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingOpaqueRegStart.clear();
+    for (const p of this.pendingOpaqueRegFinish.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingOpaqueRegFinish.clear();
+    for (const p of this.pendingOpaqueLoginStart.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingOpaqueLoginStart.clear();
+    for (const p of this.pendingOpaqueLoginFinish.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingOpaqueLoginFinish.clear();
   }
 
   private connect(): void {
@@ -514,6 +558,8 @@ export class WsTransport implements Transport {
           new_mtime?: number;
           conflict?: boolean;
           error?: string;
+          // OPAQUE auth
+          session_id?: string;
         };
 
         switch (msg.kind) {
@@ -713,6 +759,57 @@ export class WsTransport implements Transport {
               newMtime: msg.new_mtime,
               error: msg.error,
             });
+            break;
+          }
+
+          case "auth:register_start_response": {
+            const reqId = msg.req_id;
+            if (reqId === undefined) break;
+            const p = this.pendingOpaqueRegStart.get(reqId);
+            if (!p) break;
+            clearTimeout(p.timer);
+            this.pendingOpaqueRegStart.delete(reqId);
+            if (msg.ok && msg.data) p.resolve(msg.data);
+            else p.reject(new Error(msg.error ?? "OPAQUE register_start failed"));
+            break;
+          }
+
+          case "auth:register_finish_response": {
+            const reqId = msg.req_id;
+            if (reqId === undefined) break;
+            const p = this.pendingOpaqueRegFinish.get(reqId);
+            if (!p) break;
+            clearTimeout(p.timer);
+            this.pendingOpaqueRegFinish.delete(reqId);
+            if (msg.ok) p.resolve();
+            else p.reject(new Error(msg.error ?? "OPAQUE register_finish failed"));
+            break;
+          }
+
+          case "auth:login_start_response": {
+            const reqId = msg.req_id;
+            if (reqId === undefined) break;
+            const p = this.pendingOpaqueLoginStart.get(reqId);
+            if (!p) break;
+            clearTimeout(p.timer);
+            this.pendingOpaqueLoginStart.delete(reqId);
+            if (msg.ok && msg.session_id && msg.data) {
+              p.resolve({ session_id: msg.session_id, data: msg.data });
+            } else {
+              p.reject(new Error(msg.error ?? "OPAQUE login_start failed"));
+            }
+            break;
+          }
+
+          case "auth:login_finish_response": {
+            const reqId = msg.req_id;
+            if (reqId === undefined) break;
+            const p = this.pendingOpaqueLoginFinish.get(reqId);
+            if (!p) break;
+            clearTimeout(p.timer);
+            this.pendingOpaqueLoginFinish.delete(reqId);
+            if (msg.ok) p.resolve();
+            else p.reject(new Error(msg.error ?? "OPAQUE login_finish failed"));
             break;
           }
 
@@ -1242,6 +1339,90 @@ export class WsTransport implements Transport {
       } else {
         clearTimeout(timer);
         this.pendingUploadCommit.delete(uploadId);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  // ── OPAQUE auth ───────────────────────────────────────────────────────────
+
+  /** Send auth:register_start and return the server's RegistrationResponse data (base64). */
+  authRegisterStart(identifier: string, data: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const req_id = this.nextReqId++;
+      const timer = setTimeout(() => {
+        this.pendingOpaqueRegStart.delete(req_id);
+        reject(new Error("auth:register_start timeout"));
+      }, AUTH_TIMEOUT_MS);
+      this.pendingOpaqueRegStart.set(req_id, { resolve, reject, timer });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ kind: "auth:register_start", req_id, identifier, data }));
+      } else {
+        clearTimeout(timer);
+        this.pendingOpaqueRegStart.delete(req_id);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  /** Send auth:register_finish to complete OPAQUE registration.
+   *  Pass overwrite=true to allow re-registration (in-memory ephemeral model). */
+  authRegisterFinish(identifier: string, data: string, overwrite = false): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const req_id = this.nextReqId++;
+      const timer = setTimeout(() => {
+        this.pendingOpaqueRegFinish.delete(req_id);
+        reject(new Error("auth:register_finish timeout"));
+      }, AUTH_TIMEOUT_MS);
+      this.pendingOpaqueRegFinish.set(req_id, { resolve, reject, timer });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ kind: "auth:register_finish", req_id, identifier, data, overwrite }));
+      } else {
+        clearTimeout(timer);
+        this.pendingOpaqueRegFinish.delete(req_id);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  /** Send auth:login_start and return { session_id, data } (CredentialResponse base64). */
+  authLoginStart(identifier: string, data: string): Promise<{ session_id: string; data: string }> {
+    return new Promise((resolve, reject) => {
+      const req_id = this.nextReqId++;
+      const timer = setTimeout(() => {
+        this.pendingOpaqueLoginStart.delete(req_id);
+        reject(new Error("auth:login_start timeout"));
+      }, AUTH_TIMEOUT_MS);
+      this.pendingOpaqueLoginStart.set(req_id, { resolve, reject, timer });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ kind: "auth:login_start", req_id, identifier, data }));
+      } else {
+        clearTimeout(timer);
+        this.pendingOpaqueLoginStart.delete(req_id);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  /**
+   * Send auth:login_finish to finalize OPAQUE login.
+   * session_id is the server-assigned login session (from auth:login_start_response),
+   * not a req_id — the server correlates login_finish via session_id, not req_id.
+   * req_id is still sent for client-side pending-map lookup only.
+   */
+  authLoginFinish(session_id: string, data: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const req_id = this.nextReqId++;
+      const timer = setTimeout(() => {
+        this.pendingOpaqueLoginFinish.delete(req_id);
+        reject(new Error("auth:login_finish timeout"));
+      }, AUTH_TIMEOUT_MS);
+      this.pendingOpaqueLoginFinish.set(req_id, { resolve, reject, timer });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ kind: "auth:login_finish", req_id, session_id, data }));
+      } else {
+        clearTimeout(timer);
+        this.pendingOpaqueLoginFinish.delete(req_id);
         reject(new Error("WebSocket not connected"));
       }
     });
