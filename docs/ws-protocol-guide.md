@@ -125,6 +125,48 @@ Binary streaming support added for large file handling.
 - On conflict: `conflict=true`, client must retry with fresh mtime.
 - Orphaned writes cleaned up after timeout.
 
+### OPAQUE Auth — Registration (Phase Stealth-01)
+
+Zero-knowledge passphrase registration via OPAQUE PAKE. Kind names are intentionally neutral.
+
+| Command | Payload | Response |
+|---------|---------|----------|
+| `auth:register_start` | `req_id, identifier, data` | `auth:register_start_response { req_id, ok, data?, error? }` |
+| `auth:register_finish` | `req_id, identifier, data, overwrite?` | `auth:register_finish_response { req_id, ok, error? }` |
+
+- `identifier` — alphanumeric + hyphens + underscores, max 128 chars
+- `data` — base64-encoded OPAQUE bytes (`RegistrationRequest` then `RegistrationUpload`)
+- `overwrite` — defaults to `false`; must be `true` to replace an existing registration
+
+### OPAQUE Auth — Login (Phase Stealth-01)
+
+| Command | Payload | Response |
+|---------|---------|----------|
+| `auth:login_start` | `req_id, identifier, data` | `auth:login_start_response { req_id, ok, session_id?, data?, error? }` |
+| `auth:login_finish` | `req_id, session_id, data` | `auth:login_finish_response { req_id, ok, session_id?, error? }` |
+
+- `session_id` — server-assigned UUID; client echoes it in `auth:login_finish` and subsequent `fs:put_*` calls
+- After successful login the server holds a derived 32-byte AES-256-GCM key in per-connection state, keyed by `session_id`
+- All OPAQUE ops run in `spawn_blocking`; per-connection cap: 16 concurrent login states + 16 active session keys
+
+### Encrypted File Put — Binary Upload (Phase Stealth-01 stubs / Phase Stealth-04 full)
+
+Chunked encrypted binary upload. Client AES-GCM encrypts before sending.
+
+| Command | Payload | Response |
+|---------|---------|----------|
+| `fs:put_begin` | `req_id, upload_id, session_id, project, dir, filename, len` | `fs:put_begin_ok { req_id, upload_id }` |
+| `fs:put_chunk` | `upload_id, seq` (JSON header, raw binary frame follows) | `fs:put_chunk_ack { upload_id, seq }` |
+| `fs:put_commit` | `req_id, upload_id` | `fs:put_result { req_id, upload_id, ok, new_mtime?, error? }` |
+
+### Encrypted File Put — Text Save (Phase Stealth-01 stubs / Phase Stealth-04 full)
+
+Single-blob encrypted save for editor text content.
+
+| Command | Payload | Response |
+|---------|---------|----------|
+| `fs:put_save` | `req_id, session_id, project, path` (binary frame follows) | `fs:put_save_result { req_id, ok, new_mtime?, error? }` |
+
 ## Server→Client Messages
 
 ### Terminal Output

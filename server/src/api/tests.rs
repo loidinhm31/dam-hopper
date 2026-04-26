@@ -8,11 +8,19 @@ use crate::{
     agent_store::AgentStoreService,
     api::build_router,
     config::{DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo},
+    crypto::DamHopperOpaqueSuite,
     fs::FsSubsystem,
     pty::{BroadcastEventSink, PtySessionManager, NoopEventSink},
     state::AppState,
     tunnel::{CloudflaredDriver, TunnelSessionManager},
 };
+
+use opaque_ke::ServerSetup;
+use rand::rngs::OsRng;
+
+fn test_opaque_setup() -> ServerSetup<DamHopperOpaqueSuite> {
+    ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng)
+}
 
 fn make_tunnel_manager(event_sink: &BroadcastEventSink) -> TunnelSessionManager {
     TunnelSessionManager::new(Arc::new(event_sink.clone()), Arc::new(CloudflaredDriver))
@@ -70,6 +78,7 @@ fn make_state(tmp: &TempDir) -> AppState {
         false,
         tunnel_manager,
         None,
+        test_opaque_setup(),
     ).expect("make_state failed")
 }
 
@@ -457,6 +466,7 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         false,
         tunnel_manager,
         None,
+        test_opaque_setup(),
     ).expect("make_state_with_project failed")
 }
 

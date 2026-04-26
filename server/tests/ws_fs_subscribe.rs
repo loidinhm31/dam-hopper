@@ -13,10 +13,13 @@ use dam_hopper_server::{
     agent_store::AgentStoreService,
     api::build_router,
     config::{DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo},
+    crypto::DamHopperOpaqueSuite,
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
 };
+use opaque_ke::ServerSetup;
+use rand::rngs::OsRng;
 
 mod common;
 use futures_util::{SinkExt, StreamExt};
@@ -78,6 +81,7 @@ fn make_test_state(tmp: &TempDir) -> AppState {
         false,
         tunnel_manager,
         None,
+        ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
     ).expect("make_test_state failed")
 }
 

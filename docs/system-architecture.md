@@ -23,6 +23,8 @@
 │  │  ├─ fs: FsSubsystem                                    │
 │  │  ├─ ssh_creds: Arc<RwLock<Option<...>>>               │
 │  │  ├─ auth_token: Arc<String>                            │
+│  ├─ opaque_server_setup: Arc<ServerSetup<...>>            │
+│  ├─ opaque_registrations: OpaqueRegistrations (in-mem)   │
 │  ├─ Router                                                 │
 │  │  ├─ /api/projects → ProjectList handler                │
 │  │  ├─ /api/pty/* → PTY spawn/send/kill                   │
@@ -379,6 +381,28 @@ Automatic detection and tracking of ports opened by running processes in PTY ses
 - Poller 2s latency before state confirmation
 - Port 0 (ephemeral) not tracked (not useful for proxying)
 
+### crypto/ (Phase Stealth-01: OPAQUE PAKE)
+
+Server-side OPAQUE password-authenticated key exchange for the encrypt-in-transit upload feature.
+
+**mod.rs** — Re-exports `DamHopperOpaqueSuite`, `OpaqueRegistrations`, `load_or_create_server_setup`, `validate_identifier`.
+
+**opaque.rs** — Core OPAQUE logic:
+- `DamHopperOpaqueSuite` — `CipherSuite` impl: Ristretto255 group, TripleDH key exchange, Identity KSF (no key stretching). Matches `@serenity-kit/opaque` client defaults.
+- `OpaqueRegistrations` — `Arc<RwLock<HashMap<String, ServerRegistration<...>>>>` type alias; in-memory only (ephemeral — lost on server restart, which is intentional for the encrypt-in-transit model).
+- `load_or_create_server_setup()` — loads `ServerSetup` from `~/.config/dam-hopper/opaque-server-setup` or generates a new one with 0o600 permissions (Unix).
+- `handle_register_start(setup, identifier, request_bytes) → Vec<u8>` — returns serialized `RegistrationResponse`.
+- `handle_register_finish(upload_bytes) → ServerRegistration` — deserializes `RegistrationUpload`; caller stores in `OpaqueRegistrations`.
+- `handle_login_start(setup, identifier, registration, request_bytes) → (ServerLogin, Vec<u8>)` — returns intermediate login state + serialized `CredentialResponse`; caller stores state in per-connection HashMap.
+- `handle_login_finish(login_state, finalization_bytes) → Zeroizing<Vec<u8>>` — completes handshake; derives 32-byte AES key via `HKDF-SHA256(session_key, label="dam-hopper-aes-256-gcm-v1")`; wrapped in `Zeroizing` (zeroed on drop).
+- `validate_identifier(id) → bool` — alphanumeric + `-` + `_`, max 128 chars.
+
+**Key security properties:**
+- Passphrase never crosses the wire (OPAQUE zero-knowledge property)
+- All group operations run in `tokio::task::spawn_blocking`
+- Per-connection caps: 16 in-flight `ServerLogin` states, 16 active AES session keys
+- `ServerSetup` private key never logged or exposed
+
 ### git/
 Git operations via `git2` library + CLI fallback.
 
@@ -435,6 +459,12 @@ HTTP request handlers + WebSocket upgrade.
 
 **error.rs** — Maps AppError to HTTP status codes.
 
+**ws_protocol.rs** — WS message envelopes. Phase Stealth-01 additions:
+- `ClientMsg`: `AuthRegisterStart`, `AuthRegisterFinish` (with `overwrite: bool`), `AuthLoginStart`, `AuthLoginFinish`, `FsPutBegin`, `FsPutChunk`, `FsPutCommit`, `FsPutSave`
+- `ServerMsg`: `AuthRegisterStartResponse`, `AuthRegisterFinishResponse`, `AuthLoginStartResponse`, `AuthLoginFinishResponse`, `FsPutBeginOk`, `FsPutChunkAck`, `FsPutResult`, `FsPutSaveResult`
+
+All `auth:*` and `fs:put_*` kind names are intentionally neutral (no `stealth:` prefix) to avoid IDS fingerprinting.
+
 ### state.rs
 
 `AppState` holds:
@@ -443,6 +473,8 @@ HTTP request handlers + WebSocket upgrade.
 - FS subsystem (cheap clone pattern)
 - Auth token (Arc<String>)
 - Feature flags (captured at startup)
+- `opaque_server_setup: Arc<ServerSetup<DamHopperOpaqueSuite>>` — long-term OPAQUE server keypair, loaded from disk at startup (Phase Stealth-01)
+- `opaque_registrations: OpaqueRegistrations` — in-memory OPAQUE credential store, shared across all WS connections (Phase Stealth-01)
 
 ### main.rs
 
@@ -450,7 +482,8 @@ Server bootstrap:
 - Config loading
 - PTY manager init
 - FS subsystem init
-- AppState construction
+- `load_or_create_server_setup()` — OPAQUE server keypair (Phase Stealth-01)
+- `AppState` construction
 - Router registration (ide_explorer routes conditional)
 - Port binding + graceful shutdown
 

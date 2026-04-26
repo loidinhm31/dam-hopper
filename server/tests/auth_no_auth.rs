@@ -10,10 +10,13 @@ use axum::{
 use dam_hopper_server::{
     agent_store::AgentStoreService,
     config::{DamHopperConfig, GlobalConfig, WorkspaceInfo, FeaturesConfig},
+    crypto::DamHopperOpaqueSuite,
     fs::FsSubsystem,
     pty::{BroadcastEventSink, PtySessionManager},
     state::AppState,
 };
+use opaque_ke::ServerSetup;
+use rand::rngs::OsRng;
 
 mod common;
 use serde_json::Value;
@@ -76,6 +79,7 @@ fn create_no_auth_state(workspace_root: PathBuf) -> AppState {
         true, // no_auth = true
         tunnel_manager,
         None,
+        ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
     ).expect("Failed to create no-auth AppState in test");
     
     // Restore environment variables
@@ -126,6 +130,7 @@ fn create_normal_auth_state(workspace_root: PathBuf) -> AppState {
         false, // no_auth = false
         tunnel_manager,
         None,
+        ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
     ).expect("Failed to create normal auth AppState in test")
 }
 
@@ -334,6 +339,7 @@ async fn test_no_auth_with_mongodb_fails() {
         true, // no_auth = true + MongoDB = ERROR
         tunnel_manager,
         None,
+        ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
     );
     
     assert!(result.is_err(), "AppState::new() should fail with no_auth + MongoDB");
@@ -391,6 +397,7 @@ async fn test_no_auth_in_production_env_fails() {
         true, // no_auth = true in production = ERROR
         tunnel_manager,
         None,
+        ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
     );
 
     // Clean up environment variable

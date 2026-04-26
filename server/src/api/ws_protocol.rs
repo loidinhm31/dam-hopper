@@ -116,6 +116,78 @@ pub enum ClientMsg {
         req_id: u64,
         upload_id: String,
     },
+
+    // Auth — OPAQUE PAKE registration (neutral kind names, no stealth prefix)
+    #[serde(rename = "auth:register_start")]
+    AuthRegisterStart {
+        req_id: u64,
+        identifier: String,
+        /// Base64-encoded RegistrationRequest bytes from OPAQUE client.
+        data: String,
+    },
+    #[serde(rename = "auth:register_finish")]
+    AuthRegisterFinish {
+        req_id: u64,
+        identifier: String,
+        /// Base64-encoded RegistrationUpload bytes from OPAQUE client.
+        data: String,
+        /// If true, allow overwriting an existing registration. Defaults to false.
+        #[serde(default)]
+        overwrite: bool,
+    },
+
+    // Auth — OPAQUE PAKE login
+    #[serde(rename = "auth:login_start")]
+    AuthLoginStart {
+        req_id: u64,
+        identifier: String,
+        /// Base64-encoded CredentialRequest bytes from OPAQUE client.
+        data: String,
+    },
+    #[serde(rename = "auth:login_finish")]
+    AuthLoginFinish {
+        req_id: u64,
+        /// session_id returned by server in auth:login_start_response.
+        session_id: String,
+        /// Base64-encoded CredentialFinalization bytes from OPAQUE client.
+        data: String,
+    },
+
+    // FS — encrypted put protocol (begin → chunk(binary)* → commit)
+    #[serde(rename = "fs:put_begin")]
+    FsPutBegin {
+        req_id: u64,
+        upload_id: String,
+        /// OPAQUE session_id — server looks up the derived AES key.
+        session_id: String,
+        project: String,
+        dir: String,
+        filename: String,
+        /// Total encrypted blob size in bytes.
+        len: u64,
+    },
+    /// JSON header for an encrypted chunk; raw bytes arrive in the NEXT binary WS frame.
+    #[serde(rename = "fs:put_chunk")]
+    FsPutChunk {
+        upload_id: String,
+        seq: u64,
+    },
+    #[serde(rename = "fs:put_commit")]
+    FsPutCommit {
+        req_id: u64,
+        upload_id: String,
+    },
+
+    // FS — encrypted put save (single blob for text editor saves)
+    #[serde(rename = "fs:put_save")]
+    FsPutSave {
+        req_id: u64,
+        /// OPAQUE session_id — server looks up the derived AES key.
+        session_id: String,
+        project: String,
+        /// File path relative to project root.
+        path: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -291,6 +363,74 @@ pub enum ServerMsg {
     FsUploadResult {
         req_id: u64,
         upload_id: String,
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        new_mtime: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+
+    // Auth — OPAQUE registration responses
+    #[serde(rename = "auth:register_start_response")]
+    AuthRegisterStartResponse {
+        req_id: u64,
+        ok: bool,
+        /// Base64-encoded RegistrationResponse for the client.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    #[serde(rename = "auth:register_finish_response")]
+    AuthRegisterFinishResponse {
+        req_id: u64,
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+
+    // Auth — OPAQUE login responses
+    #[serde(rename = "auth:login_start_response")]
+    AuthLoginStartResponse {
+        req_id: u64,
+        ok: bool,
+        /// Server-generated session_id; client echoes back in auth:login_finish.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        /// Base64-encoded CredentialResponse for the client.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    #[serde(rename = "auth:login_finish_response")]
+    AuthLoginFinishResponse {
+        req_id: u64,
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+
+    // FS — encrypted put results
+    #[serde(rename = "fs:put_begin_ok")]
+    FsPutBeginOk { req_id: u64, upload_id: String },
+    #[serde(rename = "fs:put_chunk_ack")]
+    FsPutChunkAck { upload_id: String, seq: u64 },
+    #[serde(rename = "fs:put_result")]
+    FsPutResult {
+        req_id: u64,
+        upload_id: String,
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        new_mtime: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    #[serde(rename = "fs:put_save_result")]
+    FsPutSaveResult {
+        req_id: u64,
         ok: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         new_mtime: Option<i64>,
