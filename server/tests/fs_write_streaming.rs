@@ -1,8 +1,10 @@
 /// WS write protocol (binary streaming) integration tests.
 use std::{net::SocketAddr, sync::Arc, time::Duration};
+use opaque_ke::ServerSetup;
 
 use base64::Engine;
 use dam_hopper_server::{
+    crypto::DamHopperOpaqueSuite,
     agent_store::AgentStoreService,
     api::build_router,
     config::{DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo},
@@ -54,7 +56,7 @@ fn make_state(tmp: &TempDir) -> AppState {
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(workspace_dir.clone());
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
-    AppState::new(workspace_dir, config, GlobalConfig::default(), pty, agent_store, event_sink, TEST_TOKEN.to_string(), fs, None, false, tunnel_manager, None).expect("make_state failed")
+    AppState::new(workspace_dir, config, GlobalConfig::default(), pty, agent_store, event_sink, TEST_TOKEN.to_string(), fs, None, false, tunnel_manager, None, ServerSetup::<DamHopperOpaqueSuite>::new(&mut rand::rngs::OsRng)).expect("make_state failed")
 }
 
 async fn spawn_server(state: AppState) -> SocketAddr {

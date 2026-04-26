@@ -16,8 +16,16 @@ use tracing::{debug, warn};
 
 use futures_util::SinkExt;
 
+use opaque_ke::ServerLogin;
+use uuid::Uuid;
+use zeroize::Zeroizing;
+
 use crate::api::auth::AUTH_COOKIE;
 use crate::api::ws_protocol::{ClientMsg, FsEventDto, ServerMsg, WireMsg};
+use crate::crypto::opaque::{
+    DamHopperOpaqueSuite, handle_login_finish, handle_login_start, handle_register_finish,
+    handle_register_start, validate_identifier,
+};
 use crate::fs::{
     atomic_persist_with_check, mutate, ops, tree_snapshot_sync, UploadState, MAX_UPLOAD_BYTES,
 };
@@ -142,9 +150,19 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     enum PendingBinary {
         Upload { upload_id: String, seq: u64 },
         Write { write_id: u64, seq: u32 },
+        /// Phase 04: encrypted binary upload chunk (fs:put_chunk)
+        EncPut { upload_id: String, seq: u64 },
+        /// Phase 04/06: encrypted text save blob (fs:put_save)
+        EncPutSave { req_id: u64, session_id: String },
     }
     // Pending binary frame correlation: set by fs:upload_chunk or fs:write_chunk_binary
     let mut pending_binary: Option<PendingBinary> = None;
+
+    // Per-connection OPAQUE login state (intermediate, consumed at login_finish)
+    let mut opaque_login_states: HashMap<String, ServerLogin<DamHopperOpaqueSuite>> =
+        HashMap::new();
+    // Per-connection AES keys derived from OPAQUE login (keyed by session_id)
+    let mut export_keys: HashMap<String, Zeroizing<Vec<u8>>> = HashMap::new();
 
     // Reader loop
     while let Some(msg) = ws_rx.next().await {
@@ -161,6 +179,14 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 }
                 Some(PendingBinary::Write { write_id, seq }) => {
                     handle_write_binary(write_id, seq, bytes.as_ref(), &mut writes, &pty_tx).await;
+                }
+                Some(PendingBinary::EncPut { upload_id, seq }) => {
+                    // Phase 04: encrypted binary upload chunk
+                    warn!(upload_id, seq, "fs:put_chunk binary (Phase 04 not yet implemented) — dropping");
+                }
+                Some(PendingBinary::EncPutSave { req_id, .. }) => {
+                    // Phase 04/06: encrypted text save blob
+                    warn!(req_id, "fs:put_save binary (Phase 04/06 not yet implemented) — dropping");
                 }
                 None => {
                     warn!("unexpected binary frame (no pending header) — dropping");
@@ -570,6 +596,292 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     let _ = pty_tx.send(WireMsg::Text(json)).await;
                 }
             }
+
+            // -----------------------------------------------------------
+            // Auth — OPAQUE registration (auth:register_start)
+            // -----------------------------------------------------------
+            ClientMsg::AuthRegisterStart { req_id, identifier, data } => {
+                if !validate_identifier(&identifier) {
+                    let msg = ServerMsg::AuthRegisterStartResponse {
+                        req_id, ok: false, data: None,
+                        error: Some("invalid identifier (alphanumeric + hyphens, max 128 chars)".into()),
+                    };
+                    send_json(&pty_tx, &msg).await;
+                    continue;
+                }
+
+                let decoded = match BASE64.decode(&data) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        let msg = ServerMsg::AuthRegisterStartResponse {
+                            req_id, ok: false, data: None,
+                            error: Some(format!("base64 decode failed: {e}")),
+                        };
+                        send_json(&pty_tx, &msg).await;
+                        continue;
+                    }
+                };
+
+                let setup = std::sync::Arc::clone(&state.opaque_server_setup);
+                let id = identifier.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    handle_register_start(&setup, &id, &decoded)
+                }).await;
+
+                let msg = match result {
+                    Ok(Ok(response_bytes)) => {
+                        debug!(req_id, identifier, "auth:register_start ok");
+                        ServerMsg::AuthRegisterStartResponse {
+                            req_id, ok: true,
+                            data: Some(BASE64.encode(&response_bytes)),
+                            error: None,
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        warn!(req_id, identifier, error = %e, "auth:register_start failed");
+                        ServerMsg::AuthRegisterStartResponse {
+                            req_id, ok: false, data: None, error: Some(e),
+                        }
+                    }
+                    Err(e) => {
+                        warn!(req_id, error = %e, "auth:register_start spawn_blocking error");
+                        ServerMsg::AuthRegisterStartResponse {
+                            req_id, ok: false, data: None,
+                            error: Some(format!("internal error: {e}")),
+                        }
+                    }
+                };
+                send_json(&pty_tx, &msg).await;
+            }
+
+            // -----------------------------------------------------------
+            // Auth — OPAQUE registration (auth:register_finish)
+            // -----------------------------------------------------------
+            ClientMsg::AuthRegisterFinish { req_id, identifier, data, overwrite } => {
+                if !validate_identifier(&identifier) {
+                    let msg = ServerMsg::AuthRegisterFinishResponse {
+                        req_id, ok: false,
+                        error: Some("invalid identifier".into()),
+                    };
+                    send_json(&pty_tx, &msg).await;
+                    continue;
+                }
+
+                // Reject silent overwrite of an existing registration (H1).
+                if !overwrite && state.opaque_registrations.read().await.contains_key(&identifier) {
+                    let msg = ServerMsg::AuthRegisterFinishResponse {
+                        req_id, ok: false,
+                        error: Some("identifier already registered — set overwrite:true to replace".into()),
+                    };
+                    send_json(&pty_tx, &msg).await;
+                    continue;
+                }
+
+                let decoded = match BASE64.decode(&data) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        let msg = ServerMsg::AuthRegisterFinishResponse {
+                            req_id, ok: false,
+                            error: Some(format!("base64 decode failed: {e}")),
+                        };
+                        send_json(&pty_tx, &msg).await;
+                        continue;
+                    }
+                };
+
+                let result = tokio::task::spawn_blocking(move || {
+                    handle_register_finish(&decoded)
+                }).await;
+
+                let msg = match result {
+                    Ok(Ok(registration)) => {
+                        state.opaque_registrations.write().await.insert(identifier.clone(), registration);
+                        debug!(req_id, identifier, overwrite, "auth:register_finish ok — credential stored");
+                        ServerMsg::AuthRegisterFinishResponse { req_id, ok: true, error: None }
+                    }
+                    Ok(Err(e)) => {
+                        warn!(req_id, identifier, error = %e, "auth:register_finish failed");
+                        ServerMsg::AuthRegisterFinishResponse { req_id, ok: false, error: Some(e) }
+                    }
+                    Err(e) => {
+                        warn!(req_id, error = %e, "auth:register_finish spawn_blocking error");
+                        ServerMsg::AuthRegisterFinishResponse {
+                            req_id, ok: false,
+                            error: Some(format!("internal error: {e}")),
+                        }
+                    }
+                };
+                send_json(&pty_tx, &msg).await;
+            }
+
+            // -----------------------------------------------------------
+            // Auth — OPAQUE login (auth:login_start)
+            // -----------------------------------------------------------
+            ClientMsg::AuthLoginStart { req_id, identifier, data } => {
+                if !validate_identifier(&identifier) {
+                    let msg = ServerMsg::AuthLoginStartResponse {
+                        req_id, ok: false, session_id: None, data: None,
+                        error: Some("invalid identifier".into()),
+                    };
+                    send_json(&pty_tx, &msg).await;
+                    continue;
+                }
+
+                // C2: cap in-flight login sessions per connection to prevent memory exhaustion.
+                if opaque_login_states.len() >= 16 {
+                    let msg = ServerMsg::AuthLoginStartResponse {
+                        req_id, ok: false, session_id: None, data: None,
+                        error: Some("too many pending login sessions — complete or abandon existing ones".into()),
+                    };
+                    send_json(&pty_tx, &msg).await;
+                    continue;
+                }
+
+                let decoded = match BASE64.decode(&data) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        let msg = ServerMsg::AuthLoginStartResponse {
+                            req_id, ok: false, session_id: None, data: None,
+                            error: Some(format!("base64 decode failed: {e}")),
+                        };
+                        send_json(&pty_tx, &msg).await;
+                        continue;
+                    }
+                };
+
+                let registration = state.opaque_registrations.read().await
+                    .get(&identifier)
+                    .cloned();
+                let setup = std::sync::Arc::clone(&state.opaque_server_setup);
+                let id = identifier.clone();
+                let session_id = Uuid::new_v4().to_string();
+                let sid_for_state = session_id.clone();
+
+                let result = tokio::task::spawn_blocking(move || {
+                    handle_login_start(&setup, &id, registration, &decoded)
+                }).await;
+
+                let msg = match result {
+                    Ok(Ok((login_state, response_bytes))) => {
+                        opaque_login_states.insert(sid_for_state, login_state);
+                        debug!(req_id, identifier, session_id, "auth:login_start ok");
+                        ServerMsg::AuthLoginStartResponse {
+                            req_id, ok: true,
+                            session_id: Some(session_id),
+                            data: Some(BASE64.encode(&response_bytes)),
+                            error: None,
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        warn!(req_id, identifier, error = %e, "auth:login_start failed");
+                        ServerMsg::AuthLoginStartResponse {
+                            req_id, ok: false, session_id: None, data: None, error: Some(e),
+                        }
+                    }
+                    Err(e) => {
+                        warn!(req_id, error = %e, "auth:login_start spawn_blocking error");
+                        ServerMsg::AuthLoginStartResponse {
+                            req_id, ok: false, session_id: None, data: None,
+                            error: Some(format!("internal error: {e}")),
+                        }
+                    }
+                };
+                send_json(&pty_tx, &msg).await;
+            }
+
+            // -----------------------------------------------------------
+            // Auth — OPAQUE login (auth:login_finish)
+            // -----------------------------------------------------------
+            ClientMsg::AuthLoginFinish { req_id, session_id, data } => {
+                // C3: check export_keys cap before consuming login_state so client can retry.
+                if export_keys.len() >= 16 {
+                    let msg = ServerMsg::AuthLoginFinishResponse {
+                        req_id, ok: false, session_id: None,
+                        error: Some("too many active sessions — remove unused sessions before logging in again".into()),
+                    };
+                    send_json(&pty_tx, &msg).await;
+                    continue;
+                }
+
+                let login_state = match opaque_login_states.remove(&session_id) {
+                    Some(s) => s,
+                    None => {
+                        let msg = ServerMsg::AuthLoginFinishResponse {
+                            req_id, ok: false, session_id: None,
+                            error: Some("login session not found — run auth:login_start first".into()),
+                        };
+                        send_json(&pty_tx, &msg).await;
+                        continue;
+                    }
+                };
+
+                let decoded = match BASE64.decode(&data) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        let msg = ServerMsg::AuthLoginFinishResponse {
+                            req_id, ok: false, session_id: None,
+                            error: Some(format!("base64 decode failed: {e}")),
+                        };
+                        send_json(&pty_tx, &msg).await;
+                        continue;
+                    }
+                };
+
+                let sid = session_id.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    handle_login_finish(login_state, &decoded)
+                }).await;
+
+                let msg = match result {
+                    Ok(Ok(aes_key)) => {
+                        export_keys.insert(session_id.clone(), aes_key);
+                        debug!(req_id, session_id, "auth:login_finish ok — AES key derived");
+                        ServerMsg::AuthLoginFinishResponse {
+                            req_id, ok: true, session_id: Some(sid), error: None,
+                        }
+                    }
+                    Ok(Err(_e)) => {
+                        warn!(req_id, session_id, "auth:login_finish failed (crypto error)");
+                        ServerMsg::AuthLoginFinishResponse {
+                            req_id, ok: false, session_id: None,
+                            error: Some("authentication failed".into()),
+                        }
+                    }
+                    Err(e) => {
+                        warn!(req_id, error = %e, "auth:login_finish spawn_blocking error");
+                        ServerMsg::AuthLoginFinishResponse {
+                            req_id, ok: false, session_id: None,
+                            error: Some(format!("internal error: {e}")),
+                        }
+                    }
+                };
+                send_json(&pty_tx, &msg).await;
+            }
+
+            // -----------------------------------------------------------
+            // FS — encrypted put (Phase 04/06 stubs — not yet implemented)
+            // -----------------------------------------------------------
+            ClientMsg::FsPutBegin { req_id, .. } => {
+                warn!(req_id, "fs:put_begin (Phase 04 not yet implemented)");
+                send_fs_error(&pty_tx, req_id, "NOT_IMPLEMENTED".into(),
+                    "fs:put_* requires Phase 04 implementation".into()).await;
+            }
+            ClientMsg::FsPutChunk { upload_id, seq } => {
+                warn!(upload_id, seq, "fs:put_chunk (Phase 04 not yet implemented) — absorbing binary frame");
+                pending_binary = Some(PendingBinary::EncPut { upload_id, seq });
+            }
+            ClientMsg::FsPutCommit { req_id, upload_id } => {
+                warn!(req_id, upload_id, "fs:put_commit (Phase 04 not yet implemented)");
+                let msg = ServerMsg::FsPutResult {
+                    req_id, upload_id, ok: false, new_mtime: None,
+                    error: Some("fs:put_* requires Phase 04 implementation".into()),
+                };
+                send_json(&pty_tx, &msg).await;
+            }
+            ClientMsg::FsPutSave { req_id, session_id, .. } => {
+                warn!(req_id, "fs:put_save (Phase 04/06 not yet implemented) — absorbing binary frame");
+                pending_binary = Some(PendingBinary::EncPutSave { req_id, session_id });
+            }
         }
     }
 
@@ -590,6 +902,12 @@ async fn send_fs_error(out_tx: &mpsc::Sender<WireMsg>, req_id: u64, code: String
     let err_msg = ServerMsg::FsError { req_id, code, message };
     if let Ok(json) = serde_json::to_string(&err_msg) {
         let _ = out_tx.send(WireMsg::Text(json)).await;
+    }
+}
+
+async fn send_json(tx: &mpsc::Sender<WireMsg>, msg: &ServerMsg) {
+    if let Ok(json) = serde_json::to_string(msg) {
+        let _ = tx.send(WireMsg::Text(json)).await;
     }
 }
 

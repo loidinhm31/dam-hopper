@@ -7,6 +7,7 @@ use dam_hopper_server::{
     agent_store::AgentStoreService,
     api::build_router,
     config::{global_config_path, load_workspace_config, read_global_config_at},
+    crypto::load_or_create_server_setup,
     fs::FsSubsystem,
     port_forward::{PortForwardManager, proc_poll_loop},
     probe_inotify_limit,
@@ -234,6 +235,10 @@ async fn main() -> anyhow::Result<()> {
         *cell = Some(std::sync::Arc::clone(&port_forward_manager));
     }
 
+    // Load (or generate) OPAQUE server keypair — persisted to ~/.config/dam-hopper/opaque-server-setup
+    let opaque_server_setup = load_or_create_server_setup()
+        .expect("Failed to load or create OPAQUE server setup");
+
     // AppState::new() performs production safety validation for no-auth mode
     let state = AppState::new(
         workspace_dir.clone(),
@@ -248,6 +253,7 @@ async fn main() -> anyhow::Result<()> {
         cli.no_auth,
         tunnel_manager,
         Some(port_forward_manager.clone()),
+        opaque_server_setup,
     )?;
 
     let tunnel_manager_shutdown = state.tunnel_manager.clone();

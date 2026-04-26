@@ -107,6 +107,24 @@ procfs = { version = "0.17", default-features = false }
 # Base64 encoding for WS binary content transfer
 base64 = "0.22"
 
+# OPAQUE PAKE — zero-knowledge passphrase auth + shared key derivation
+opaque-ke = "4"
+
+# HKDF for domain-separated AES key derivation from OPAQUE session_key
+hkdf = "0.12"
+
+# RNG for OPAQUE operations
+rand = { version = "0.8", features = ["getrandom"] }
+
+# AES-256-GCM authenticated encryption for encrypt-in-transit writes
+aes-gcm = "0.10"
+
+# SHA-512 for OPAQUE TripleDH key exchange type parameter
+sha2 = "0.10"
+
+# Zeroize — wipe key material from memory after use
+zeroize = "1"
+
 # Streaming body for download handler
 tokio-util = { version = "0.7", features = ["io"] }
 mongodb = "3.5.2"

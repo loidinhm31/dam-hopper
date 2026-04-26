@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use opaque_ke::ServerSetup;
 use tokio::sync::RwLock;
 
 use std::path::PathBuf as StdPathBuf;
@@ -8,6 +9,7 @@ use std::path::PathBuf as StdPathBuf;
 use crate::agent_store::AgentStoreService;
 use crate::commands::CommandRegistry;
 use crate::config::{DamHopperConfig, GlobalConfig};
+use crate::crypto::{DamHopperOpaqueSuite, OpaqueRegistrations};
 use crate::error::AppError;
 use crate::fs::FsSubsystem;
 use crate::port_forward::PortForwardManager;
@@ -55,6 +57,11 @@ pub struct AppState {
     /// Port forward manager — tracks PTY-detected ports. Arc-backed, Clone is cheap.
     /// `None` on non-Linux (proc poller disabled) but stdout scan still works.
     pub port_forward_manager: Option<Arc<PortForwardManager>>,
+    /// OPAQUE server keypair (long-term, persisted to disk). Shared across all connections.
+    pub opaque_server_setup: Arc<ServerSetup<DamHopperOpaqueSuite>>,
+    /// In-memory OPAQUE registration records (identifier → ServerRegistration).
+    /// Lost on server restart — acceptable for encrypt-in-transit model.
+    pub opaque_registrations: OpaqueRegistrations,
 }
 
 impl AppState {
@@ -87,6 +94,7 @@ impl AppState {
         no_auth: bool,
         tunnel_manager: TunnelSessionManager,
         port_forward_manager: Option<Arc<PortForwardManager>>,
+        opaque_server_setup: ServerSetup<DamHopperOpaqueSuite>,
     ) -> anyhow::Result<Self> {
         // Production safety guards for no-auth mode
         if no_auth {
@@ -135,6 +143,8 @@ impl AppState {
             no_auth,
             tunnel_manager,
             port_forward_manager,
+            opaque_server_setup: Arc::new(opaque_server_setup),
+            opaque_registrations: OpaqueRegistrations::default(),
         })
     }
 }
