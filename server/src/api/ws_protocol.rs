@@ -188,6 +188,12 @@ pub enum ClientMsg {
         /// File path relative to project root.
         path: String,
     },
+
+    // Auth — explicit key eviction (defense-in-depth; 16-entry cap is the primary guard)
+    #[serde(rename = "auth:session_remove")]
+    AuthSessionRemove {
+        session_id: String,
+    },
 }
 
 // ---------------------------------------------------------------------------

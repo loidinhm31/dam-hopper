@@ -866,6 +866,12 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 send_json(&pty_tx, &msg).await;
             }
 
+            ClientMsg::AuthSessionRemove { session_id } => {
+                if export_keys.remove(&session_id).is_some() {
+                    debug!(session_id, "auth:session_remove — key evicted");
+                }
+            }
+
             // -----------------------------------------------------------
             // FS — encrypted put (Phase 04 implementation)
             // -----------------------------------------------------------
