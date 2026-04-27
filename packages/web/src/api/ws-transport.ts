@@ -66,6 +66,13 @@ export interface FsWriteError {
 
 export type FsWriteResponse = FsWriteResult | FsWriteConflict | FsWriteError;
 
+/** Result type for encrypted put operations (fs:put_commit and fs:put_save). */
+export interface FsPutResult {
+  ok: boolean;
+  newMtime?: number;
+  error?: string;
+}
+
 /** IPC channel → REST endpoint mapping. */
 function channelToEndpoint(channel: string, data: unknown): { method: string; url: string; body?: unknown } {
   switch (channel) {
@@ -399,6 +406,27 @@ export class WsTransport implements Transport {
     timer: ReturnType<typeof setTimeout>;
   }>();
 
+  // ── Encrypted put state (fs:put_*) ────────────────────────────────────────
+  private pendingPutBegin = new Map<string, {
+    resolve: () => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  private pendingPutChunks = new Map<string, {
+    resolve: () => void;
+    reject: (e: Error) => void;
+  }>();
+  private pendingPutCommit = new Map<string, {
+    resolve: (v: FsPutResult) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  private pendingPutSave = new Map<number, {
+    resolve: (v: FsPutResult) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+
   constructor(private readonly baseUrl: string = getServerUrl()) {
     this.connect();
   }
@@ -496,6 +524,26 @@ export class WsTransport implements Transport {
       p.reject(new Error("transport destroyed"));
     }
     this.pendingOpaqueLoginFinish.clear();
+    // Encrypted put maps
+    for (const p of this.pendingPutBegin.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingPutBegin.clear();
+    for (const p of this.pendingPutChunks.values()) {
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingPutChunks.clear();
+    for (const p of this.pendingPutCommit.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingPutCommit.clear();
+    for (const p of this.pendingPutSave.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("transport destroyed"));
+    }
+    this.pendingPutSave.clear();
   }
 
   private connect(): void {
@@ -810,6 +858,56 @@ export class WsTransport implements Transport {
             this.pendingOpaqueLoginFinish.delete(reqId);
             if (msg.ok) p.resolve();
             else p.reject(new Error(msg.error ?? "OPAQUE login_finish failed"));
+            break;
+          }
+
+          case "fs:put_begin_ok": {
+            const uploadId = (msg as unknown as { upload_id: string }).upload_id;
+            const p = uploadId ? this.pendingPutBegin.get(uploadId) : undefined;
+            if (!p) break;
+            clearTimeout(p.timer);
+            this.pendingPutBegin.delete(uploadId);
+            p.resolve();
+            break;
+          }
+
+          case "fs:put_chunk_ack": {
+            const uploadId = (msg as unknown as { upload_id: string }).upload_id;
+            const seq = (msg as unknown as { seq: number }).seq;
+            const key = `${uploadId}:${seq}`;
+            const p = this.pendingPutChunks.get(key);
+            if (!p) break;
+            this.pendingPutChunks.delete(key);
+            p.resolve();
+            break;
+          }
+
+          case "fs:put_result": {
+            const uploadId = (msg as unknown as { upload_id: string }).upload_id;
+            const p = uploadId ? this.pendingPutCommit.get(uploadId) : undefined;
+            if (!p) break;
+            clearTimeout(p.timer);
+            this.pendingPutCommit.delete(uploadId);
+            p.resolve({
+              ok: msg.ok ?? false,
+              newMtime: msg.new_mtime,
+              error: msg.error,
+            });
+            break;
+          }
+
+          case "fs:put_save_result": {
+            const reqId = msg.req_id;
+            if (reqId === undefined) break;
+            const p = this.pendingPutSave.get(reqId);
+            if (!p) break;
+            clearTimeout(p.timer);
+            this.pendingPutSave.delete(reqId);
+            p.resolve({
+              ok: msg.ok ?? false,
+              newMtime: msg.new_mtime,
+              error: msg.error,
+            });
             break;
           }
 
@@ -1423,6 +1521,180 @@ export class WsTransport implements Transport {
       } else {
         clearTimeout(timer);
         this.pendingOpaqueLoginFinish.delete(req_id);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+  // ── FS Encrypted Put (fs:put_*) ───────────────────────────────────────────
+
+  /**
+   * Upload an encrypted File via WS binary frames.
+   *
+   * Protocol: fs:put_begin → (fs:put_chunk JSON + Binary frame)* → fs:put_commit
+   * In-flight window of 4 chunks with ack-based backpressure.
+   *
+   * @param project     Project name
+   * @param dir         Target directory (relative to project root)
+   * @param file        The File to upload (must already be encrypted as a Blob)
+   * @param sessionId   OPAQUE session_id from login flow
+   * @param uploadId    Unique upload ID (caller-generated with crypto.randomUUID())
+   * @param onProgress  Optional progress callback (0–100)
+   */
+  async fsPutFile(
+    project: string,
+    dir: string,
+    file: File,
+    sessionId: string,
+    uploadId: string,
+    onProgress?: (pct: number) => void,
+  ): Promise<FsPutResult> {
+    const CHUNK_SIZE = 128 * 1024;
+    const IN_FLIGHT = 4;
+
+    // 1. Begin
+    await this.sendPutBegin(uploadId, sessionId, project, dir, file.name, file.size);
+
+    // 2. Chunk loop — reads the already-encrypted Blob
+    const reader = file.stream().getReader();
+    let seq = 0;
+    let bytesSent = 0;
+    const inFlight: Array<Promise<void>> = [];
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      let offset = 0;
+      while (offset < value.byteLength) {
+        const slice = value.slice(offset, offset + CHUNK_SIZE);
+        offset += slice.byteLength;
+        const currentSeq = seq++;
+
+        const ack = this.sendPutChunk(uploadId, currentSeq, slice);
+        inFlight.push(ack);
+        bytesSent += slice.byteLength;
+        onProgress?.(file.size > 0 ? Math.min(99, Math.round((bytesSent / file.size) * 100)) : 50);
+
+        if (inFlight.length >= IN_FLIGHT) {
+          await inFlight.shift()!;
+        }
+      }
+    }
+
+    await Promise.all(inFlight);
+
+    // 3. Commit
+    const req_id = this.nextReqId++;
+    const result = await this.sendPutCommit(req_id, uploadId);
+    onProgress?.(100);
+    return result;
+  }
+
+  /**
+   * Send an encrypted text blob for fs:put_save (single binary frame).
+   *
+   * Protocol: fs:put_save (JSON) → Binary frame → fs:put_save_result
+   *
+   * @param project    Project name
+   * @param path       File path relative to project root
+   * @param blob       Encrypted blob from encryptText()
+   * @param sessionId  OPAQUE session_id from login flow
+   */
+  async fsPutSave(
+    project: string,
+    path: string,
+    blob: Blob,
+    sessionId: string,
+  ): Promise<FsPutResult> {
+    const req_id = this.nextReqId++;
+    const data = new Uint8Array(await blob.arrayBuffer());
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingPutSave.delete(req_id);
+        reject(new Error("fs:put_save timeout"));
+      }, 60_000);
+      this.pendingPutSave.set(req_id, { resolve, reject, timer });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        // JSON header first, then binary frame
+        this.ws.send(JSON.stringify({ kind: "fs:put_save", req_id, session_id: sessionId, project, path }));
+        this.ws.send(data.buffer);
+      } else {
+        clearTimeout(timer);
+        this.pendingPutSave.delete(req_id);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  private sendPutBegin(
+    uploadId: string,
+    sessionId: string,
+    project: string,
+    dir: string,
+    filename: string,
+    len: number,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const req_id = this.nextReqId++;
+      const timer = setTimeout(() => {
+        this.pendingPutBegin.delete(uploadId);
+        reject(new Error("fs:put_begin timeout"));
+      }, FS_REQ_TIMEOUT_MS);
+      this.pendingPutBegin.set(uploadId, { resolve, reject, timer });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({
+          kind: "fs:put_begin",
+          req_id,
+          upload_id: uploadId,
+          session_id: sessionId,
+          project,
+          dir,
+          filename,
+          len,
+        }));
+      } else {
+        clearTimeout(timer);
+        this.pendingPutBegin.delete(uploadId);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  private sendPutChunk(uploadId: string, seq: number, data: Uint8Array): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const key = `${uploadId}:${seq}`;
+      const timer = setTimeout(() => {
+        this.pendingPutChunks.delete(key);
+        reject(new Error(`enc put chunk ack timeout (upload_id=${uploadId}, seq=${seq})`));
+      }, 30_000);
+      this.pendingPutChunks.set(key, {
+        resolve: () => { clearTimeout(timer); resolve(); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ kind: "fs:put_chunk", upload_id: uploadId, seq }));
+        this.ws.send(data.buffer);
+      } else {
+        clearTimeout(timer);
+        this.pendingPutChunks.delete(key);
+        reject(new Error("WebSocket not connected"));
+      }
+    });
+  }
+
+  private sendPutCommit(req_id: number, uploadId: string): Promise<FsPutResult> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingPutCommit.delete(uploadId);
+        reject(new Error("fs:put_commit timeout"));
+      }, 60_000);
+      this.pendingPutCommit.set(uploadId, { resolve, reject, timer });
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ kind: "fs:put_commit", req_id, upload_id: uploadId }));
+      } else {
+        clearTimeout(timer);
+        this.pendingPutCommit.delete(uploadId);
         reject(new Error("WebSocket not connected"));
       }
     });

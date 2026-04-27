@@ -20,6 +20,8 @@ import {
 } from "@/api/server-config.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 import { WorkspaceSetupWizard } from "@/components/organisms/WorkspaceSetupWizard.js";
+import { EncryptProvider } from "@/contexts/EncryptContext.js";
+import { PassphrasePrompt } from "@/components/molecules/PassphrasePrompt.js";
 
 // Wire CSS var outside React so it updates synchronously with store changes
 useSettingsStore.subscribe((s) => {
@@ -222,33 +224,36 @@ export function App() {
   }, [qc]);
 
   return (
-    <BrowserRouter basename={import.meta.env.BASE_URL}>
-      <GlobalShortcuts />
-      <ServerProfileGuard>
-        <AuthGuard>
-          <WorkspaceGuard>
-            <Routes>
-            <Route path="/" element={<ErrorBoundary><DashboardPage /></ErrorBoundary>} />
-            <Route
-              path="/workspace"
-              element={
-                <ErrorBoundary>
-                  <Suspense fallback={LOADING_FALLBACK}>
-                    <WorkspacePage />
-                  </Suspense>
-                </ErrorBoundary>
-              }
-            />
-            {/* Backward-compat redirects — preserve search params for deep-links */}
-            <Route path="/terminals" element={<LegacyRedirect to="/workspace" />} />
-            <Route path="/ide" element={<LegacyRedirect to="/workspace" />} />
-            <Route path="/git" element={<ErrorBoundary><GitPage /></ErrorBoundary>} />
-            <Route path="/settings" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />
-            <Route path="/agent-store" element={<ErrorBoundary><AgentStorePage /></ErrorBoundary>} />
-            </Routes>
-          </WorkspaceGuard>
-        </AuthGuard>
-      </ServerProfileGuard>
-    </BrowserRouter>
+    <EncryptProvider>
+      <BrowserRouter basename={import.meta.env.BASE_URL}>
+        <GlobalShortcuts />
+        <PassphrasePrompt />
+        <ServerProfileGuard>
+          <AuthGuard>
+            <WorkspaceGuard>
+              <Routes>
+              <Route path="/" element={<ErrorBoundary><DashboardPage /></ErrorBoundary>} />
+              <Route
+                path="/workspace"
+                element={
+                  <ErrorBoundary>
+                    <Suspense fallback={LOADING_FALLBACK}>
+                      <WorkspacePage />
+                    </Suspense>
+                  </ErrorBoundary>
+                }
+              />
+              {/* Backward-compat redirects — preserve search params for deep-links */}
+              <Route path="/terminals" element={<LegacyRedirect to="/workspace" />} />
+              <Route path="/ide" element={<LegacyRedirect to="/workspace" />} />
+              <Route path="/git" element={<ErrorBoundary><GitPage /></ErrorBoundary>} />
+              <Route path="/settings" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />
+              <Route path="/agent-store" element={<ErrorBoundary><AgentStorePage /></ErrorBoundary>} />
+              </Routes>
+            </WorkspaceGuard>
+          </AuthGuard>
+        </ServerProfileGuard>
+      </BrowserRouter>
+    </EncryptProvider>
   );
 }

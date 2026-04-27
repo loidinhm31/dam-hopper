@@ -29,11 +29,18 @@ async function deriveAesKey(sessionKeyB64: string): Promise<Uint8Array> {
   return new Uint8Array(bits);
 }
 
+export interface OpaqueSessionResult {
+  /** 32-byte AES-256-GCM key derived via HKDF from the OPAQUE session_key. */
+  aesKey: Uint8Array;
+  /** Server-assigned session_id — pass to fs:put_begin / fs:put_save. */
+  sessionId: string;
+}
+
 /**
  * Perform OPAQUE register-then-login to derive a shared 32-byte AES key.
  *
  * Registers each session fresh (in-memory ephemeral on server, no persistence).
- * Returns the 32-byte AES-256-GCM key that matches the server's derived key.
+ * Returns both the 32-byte AES key and the session_id for subsequent fs:put_* calls.
  *
  * @param transport   Live WsTransport instance.
  * @param identifier  Alphanumeric session identifier (e.g. project-scoped string).
@@ -43,7 +50,7 @@ export async function opaqueRegisterAndLogin(
   transport: WsTransport,
   identifier: string,
   password: string,
-): Promise<Uint8Array> {
+): Promise<OpaqueSessionResult> {
   // ── 1. Registration round-trip ──────────────────────────────────────────────
   const reg = await opaqueRegisterStart(password);
 
@@ -70,5 +77,5 @@ export async function opaqueRegisterAndLogin(
   // ── 3. Key derivation ───────────────────────────────────────────────────────
   // sessionKey is the shared OPAQUE key (same on both sides); exportKey is client-only.
   const aesKey = await deriveAesKey(finished.sessionKey);
-  return aesKey;
+  return { aesKey, sessionId: session_id };
 }

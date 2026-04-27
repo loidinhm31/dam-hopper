@@ -1,4 +1,6 @@
 pub mod audit;
+pub mod decrypt;
+pub mod enc_upload;
 pub mod error;
 pub mod event;
 pub mod mutate;
@@ -7,6 +9,8 @@ pub mod sandbox;
 pub mod upload;
 pub mod watcher;
 
+pub use decrypt::{decrypt_and_write, decrypt_blob, DecryptResult};
+pub use enc_upload::EncUploadState;
 pub use error::FsError;
 pub use event::FsEvent;
 pub use mutate::{assert_safe_mutation, create_dir, create_file, delete, move_path, rename};
