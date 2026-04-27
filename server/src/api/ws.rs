@@ -27,7 +27,8 @@ use crate::crypto::opaque::{
     handle_register_start, validate_identifier,
 };
 use crate::fs::{
-    atomic_persist_with_check, mutate, ops, tree_snapshot_sync, UploadState, MAX_UPLOAD_BYTES,
+    atomic_persist_with_check, mutate, ops, tree_snapshot_sync, EncUploadState, UploadState,
+    MAX_UPLOAD_BYTES,
 };
 use crate::state::AppState;
 
@@ -146,14 +147,20 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
     // In-flight upload sessions: upload_id → UploadState
     let mut uploads: HashMap<String, UploadState> = HashMap::new();
+    // In-flight encrypted upload sessions: upload_id → EncUploadState
+    let mut enc_uploads: HashMap<String, EncUploadState> = HashMap::new();
 
     enum PendingBinary {
         Upload { upload_id: String, seq: u64 },
         Write { write_id: u64, seq: u32 },
         /// Phase 04: encrypted binary upload chunk (fs:put_chunk)
         EncPut { upload_id: String, seq: u64 },
-        /// Phase 04/06: encrypted text save blob (fs:put_save)
-        EncPutSave { req_id: u64, session_id: String },
+        /// Phase 04/06: encrypted text save — carries resolved paths for the binary handler
+        EncPutSave {
+            req_id: u64,
+            session_id: String,
+            path_abs: std::path::PathBuf,
+        },
     }
     // Pending binary frame correlation: set by fs:upload_chunk or fs:write_chunk_binary
     let mut pending_binary: Option<PendingBinary> = None;
@@ -181,12 +188,13 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     handle_write_binary(write_id, seq, bytes.as_ref(), &mut writes, &pty_tx).await;
                 }
                 Some(PendingBinary::EncPut { upload_id, seq }) => {
-                    // Phase 04: encrypted binary upload chunk
-                    warn!(upload_id, seq, "fs:put_chunk binary (Phase 04 not yet implemented) — dropping");
+                    handle_enc_put_binary(&upload_id, seq, bytes.as_ref(), &mut enc_uploads, &pty_tx).await;
                 }
-                Some(PendingBinary::EncPutSave { req_id, .. }) => {
-                    // Phase 04/06: encrypted text save blob
-                    warn!(req_id, "fs:put_save binary (Phase 04/06 not yet implemented) — dropping");
+                Some(PendingBinary::EncPutSave { req_id, session_id, path_abs }) => {
+                    handle_enc_put_save_binary(
+                        req_id, &session_id, &path_abs, bytes.as_ref(),
+                        &export_keys, &pty_tx,
+                    ).await;
                 }
                 None => {
                     warn!("unexpected binary frame (no pending header) — dropping");
@@ -859,28 +867,146 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             }
 
             // -----------------------------------------------------------
-            // FS — encrypted put (Phase 04/06 stubs — not yet implemented)
+            // FS — encrypted put (Phase 04 implementation)
             // -----------------------------------------------------------
-            ClientMsg::FsPutBegin { req_id, .. } => {
-                warn!(req_id, "fs:put_begin (Phase 04 not yet implemented)");
-                send_fs_error(&pty_tx, req_id, "NOT_IMPLEMENTED".into(),
-                    "fs:put_* requires Phase 04 implementation".into()).await;
+            ClientMsg::FsPutBegin {
+                req_id, upload_id, session_id, project, dir, filename, len,
+            } => {
+                if !export_keys.contains_key(&session_id) {
+                    send_fs_error(&pty_tx, req_id, "OPAQUE_LOGIN_REQUIRED".into(),
+                        "fs:put_begin requires OPAQUE login (auth:login_start + auth:login_finish)".into()).await;
+                } else {
+                    match do_enc_put_begin(
+                        req_id, &upload_id, &session_id, &project, &dir, &filename, len,
+                        &state, &mut enc_uploads,
+                    ).await {
+                        Ok(()) => {
+                            debug!(req_id, upload_id, len, project, "fs:put_begin accepted");
+                            let msg = ServerMsg::FsPutBeginOk {
+                                req_id, upload_id,
+                            };
+                            send_json(&pty_tx, &msg).await;
+                        }
+                        Err((code, message)) => {
+                            warn!(req_id, code, message, "fs:put_begin rejected");
+                            send_fs_error(&pty_tx, req_id, code, message).await;
+                        }
+                    }
+                }
             }
             ClientMsg::FsPutChunk { upload_id, seq } => {
-                warn!(upload_id, seq, "fs:put_chunk (Phase 04 not yet implemented) — absorbing binary frame");
+                // Set pending_binary — next binary frame is this chunk
                 pending_binary = Some(PendingBinary::EncPut { upload_id, seq });
             }
             ClientMsg::FsPutCommit { req_id, upload_id } => {
-                warn!(req_id, upload_id, "fs:put_commit (Phase 04 not yet implemented)");
-                let msg = ServerMsg::FsPutResult {
-                    req_id, upload_id, ok: false, new_mtime: None,
-                    error: Some("fs:put_* requires Phase 04 implementation".into()),
+                let enc_state = match enc_uploads.remove(&upload_id) {
+                    Some(s) => s,
+                    None => {
+                        let msg = ServerMsg::FsPutResult {
+                            req_id, upload_id, ok: false, new_mtime: None,
+                            error: Some("upload session not found — fs:put_begin first".into()),
+                        };
+                        send_json(&pty_tx, &msg).await;
+                        continue;
+                    }
+                };
+
+                let session_id = enc_state.session_id.clone();
+                let export_key = match export_keys.get(&session_id) {
+                    Some(k) => k.clone(),
+                    None => {
+                        let msg = ServerMsg::FsPutResult {
+                            req_id, upload_id, ok: false, new_mtime: None,
+                            error: Some("OPAQUE session not found — login may have expired".into()),
+                        };
+                        send_json(&pty_tx, &msg).await;
+                        continue;
+                    }
+                };
+
+                let target_abs = enc_state.inner.target_abs.clone();
+                let uid = upload_id.clone();
+
+                // Validate byte count matches what was declared at begin
+                let bytes_written = enc_state.inner.bytes_written;
+                let expected_len = enc_state.inner.expected_len;
+                if bytes_written != expected_len {
+                    let msg = ServerMsg::FsPutResult {
+                        req_id, upload_id: uid, ok: false, new_mtime: None,
+                        error: Some(format!(
+                            "size mismatch: wrote {bytes_written} bytes but declared {expected_len}"
+                        )),
+                    };
+                    send_json(&pty_tx, &msg).await;
+                    continue;
+                }
+
+                // Read ciphertext from temp file then decrypt+write plaintext atomically
+                let temp_path = enc_state.inner.temp.path().to_path_buf();
+                let result = tokio::task::spawn_blocking(move || -> Result<i64, String> {
+                    let encrypted_bytes = std::fs::read(&temp_path)
+                        .map_err(|e| format!("read encrypted temp failed: {e}"))?;
+
+                    // NamedTempFile will be auto-deleted when enc_state.inner.temp is dropped.
+                    // decrypt_and_write does an atomic tempfile+rename for plaintext.
+                    use crate::fs::decrypt::decrypt_and_write;
+                    let _dec = decrypt_and_write(
+                        &encrypted_bytes, &export_key, target_abs.clone(),
+                    ).map_err(|e| e.to_string())?;
+
+                    // Stat the written file for accurate mtime
+                    let mtime = std::fs::metadata(&target_abs)
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    Ok(mtime)
+                }).await;
+
+                let msg = match result {
+                    Ok(Ok(new_mtime)) => {
+                        debug!(req_id, new_mtime, upload_id, "fs:put_commit decrypt ok");
+                        ServerMsg::FsPutResult {
+                            req_id, upload_id: uid, ok: true,
+                            new_mtime: Some(new_mtime), error: None,
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        warn!(req_id, error = %e, "fs:put_commit decrypt failed");
+                        ServerMsg::FsPutResult {
+                            req_id, upload_id: uid, ok: false, new_mtime: None,
+                            error: Some(format!("decrypt failed: {e}")),
+                        }
+                    }
+                    Err(e) => {
+                        warn!(req_id, error = %e, "fs:put_commit spawn_blocking error");
+                        ServerMsg::FsPutResult {
+                            req_id, upload_id: uid, ok: false, new_mtime: None,
+                            error: Some(format!("internal error: {e}")),
+                        }
+                    }
                 };
                 send_json(&pty_tx, &msg).await;
             }
-            ClientMsg::FsPutSave { req_id, session_id, .. } => {
-                warn!(req_id, "fs:put_save (Phase 04/06 not yet implemented) — absorbing binary frame");
-                pending_binary = Some(PendingBinary::EncPutSave { req_id, session_id });
+            ClientMsg::FsPutSave { req_id, session_id, project, path } => {
+                // Validate session and resolve path first; binary frame will do the decrypt+write
+                if !export_keys.contains_key(&session_id) {
+                    send_fs_error(&pty_tx, req_id, "OPAQUE_LOGIN_REQUIRED".into(),
+                        "fs:put_save requires OPAQUE login".into()).await;
+                } else {
+                    match resolve_abs_path(&project, &path, &state).await {
+                        Ok(path_abs) => {
+                            pending_binary = Some(PendingBinary::EncPutSave {
+                                req_id, session_id, path_abs,
+                            });
+                        }
+                        Err((code, message)) => {
+                            warn!(req_id, code, message, "fs:put_save path rejected");
+                            send_fs_error(&pty_tx, req_id, code, message).await;
+                        }
+                    }
+                }
             }
         }
     }
@@ -1219,6 +1345,162 @@ async fn handle_write_binary(
         let _ = pty_tx.send(WireMsg::Text(json)).await;
     }
 }
+
+// ---------------------------------------------------------------------------
+// Encrypted put binary frame handler (fs:put_chunk)
+// ---------------------------------------------------------------------------
+
+async fn handle_enc_put_binary(
+    upload_id: &str,
+    seq: u64,
+    data: &[u8],
+    enc_uploads: &mut HashMap<String, EncUploadState>,
+    pty_tx: &mpsc::Sender<WireMsg>,
+) {
+    let state = match enc_uploads.get_mut(upload_id) {
+        Some(s) => s,
+        None => {
+            warn!(upload_id, seq, "enc put binary: upload session not found — dropping");
+            return;
+        }
+    };
+
+    match state.inner.append_chunk(data) {
+        Ok(()) => {
+            let ack = ServerMsg::FsPutChunkAck {
+                upload_id: upload_id.to_string(),
+                seq,
+            };
+            if let Ok(json) = serde_json::to_string(&ack) {
+                let _ = pty_tx.send(WireMsg::Text(json)).await;
+            }
+        }
+        Err(e) => {
+            warn!(upload_id, seq, error = %e, "enc put chunk rejected — aborting upload");
+            enc_uploads.remove(upload_id);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Encrypted text save binary frame handler (fs:put_save)
+// ---------------------------------------------------------------------------
+
+async fn handle_enc_put_save_binary(
+    req_id: u64,
+    session_id: &str,
+    path_abs: &std::path::Path,
+    data: &[u8],
+    export_keys: &HashMap<String, Zeroizing<Vec<u8>>>,
+    pty_tx: &mpsc::Sender<WireMsg>,
+) {
+    let export_key = match export_keys.get(session_id) {
+        Some(k) => k.clone(),
+        None => {
+            warn!(req_id, session_id, "enc put_save: no export_key for session");
+            let msg = ServerMsg::FsPutSaveResult {
+                req_id, ok: false, new_mtime: None,
+                error: Some("OPAQUE session not found — login may have expired".into()),
+            };
+            if let Ok(json) = serde_json::to_string(&msg) {
+                let _ = pty_tx.send(WireMsg::Text(json)).await;
+            }
+            return;
+        }
+    };
+
+    let encrypted_bytes = data.to_vec();
+    let target_abs = path_abs.to_path_buf();
+
+    let result = tokio::task::spawn_blocking(move || -> Result<i64, String> {
+        use crate::fs::decrypt::decrypt_and_write;
+        let _dec = decrypt_and_write(&encrypted_bytes, &export_key, target_abs.clone())
+            .map_err(|e| e.to_string())?;
+
+        let mtime = std::fs::metadata(&target_abs)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        Ok(mtime)
+    }).await;
+
+    let msg = match result {
+        Ok(Ok(new_mtime)) => {
+            debug!(req_id, new_mtime, "fs:put_save decrypt ok");
+            ServerMsg::FsPutSaveResult {
+                req_id, ok: true, new_mtime: Some(new_mtime), error: None,
+            }
+        }
+        Ok(Err(e)) => {
+            warn!(req_id, error = %e, "fs:put_save decrypt failed");
+            ServerMsg::FsPutSaveResult {
+                req_id, ok: false, new_mtime: None,
+                error: Some(format!("decrypt failed: {e}")),
+            }
+        }
+        Err(e) => {
+            warn!(req_id, error = %e, "fs:put_save spawn_blocking error");
+            ServerMsg::FsPutSaveResult {
+                req_id, ok: false, new_mtime: None,
+                error: Some(format!("internal error: {e}")),
+            }
+        }
+    };
+    if let Ok(json) = serde_json::to_string(&msg) {
+        let _ = pty_tx.send(WireMsg::Text(json)).await;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Encrypted upload begin helper (fs:put_begin)
+// ---------------------------------------------------------------------------
+
+async fn do_enc_put_begin(
+    _req_id: u64,
+    upload_id: &str,
+    session_id: &str,
+    project: &str,
+    dir: &str,
+    filename: &str,
+    len: u64,
+    state: &AppState,
+    enc_uploads: &mut HashMap<String, EncUploadState>,
+) -> Result<(), (String, String)> {
+    if len > MAX_UPLOAD_BYTES {
+        return Err(("TOO_LARGE".into(), format!(
+            "encrypted upload too large: {len} bytes (max {})", MAX_UPLOAD_BYTES,
+        )));
+    }
+
+    if enc_uploads.contains_key(upload_id) {
+        return Err(("DUPLICATE_UPLOAD_ID".into(), format!(
+            "upload_id already active: {upload_id}"
+        )));
+    }
+
+    let project_abs = state.project_path(project).await.map_err(|e| {
+        ("PROJECT_NOT_FOUND".into(), e.to_string())
+    })?;
+
+    let sandbox = state.fs.sandbox().map_err(|e| {
+        ("FS_UNAVAILABLE".into(), e.to_string())
+    })?;
+
+    let dir_abs = project_abs.join(dir.trim_start_matches('/'));
+    let target_abs = sandbox.validate_new_path(dir_abs, filename).await.map_err(|e| {
+        ("INVALID_PATH".into(), e.to_string())
+    })?;
+
+    let enc_state = EncUploadState::new(target_abs, len, session_id.to_string()).map_err(|e| {
+        ("UPLOAD_INIT_FAILED".into(), e.to_string())
+    })?;
+
+    enc_uploads.insert(upload_id.to_string(), enc_state);
+    Ok(())
+}
+
 
 // ---------------------------------------------------------------------------
 // PTY broadcast pump

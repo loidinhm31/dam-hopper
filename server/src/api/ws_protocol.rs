@@ -117,7 +117,7 @@ pub enum ClientMsg {
         upload_id: String,
     },
 
-    // Auth — OPAQUE PAKE registration (neutral kind names, no stealth prefix)
+    // Auth — OPAQUE PAKE registration (neutral kind names, no custom prefix)
     #[serde(rename = "auth:register_start")]
     AuthRegisterStart {
         req_id: u64,

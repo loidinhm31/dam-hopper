@@ -123,6 +123,8 @@ Browser
 ├── React 19 (packages/web/dist/, same build)
 ├── WsTransport → fetch(/api/*) + WebSocket(/ws)
 │  └── WS envelope: {kind: "...", ...payload} (Phase 02+, no legacy {type:} support)
+│  └── Encrypted put: fs:put_begin → fs:put_chunk(binary)* → fs:put_commit (Phase 04+)
+│  └── Encrypted save: fs:put_save (JSON) → binary frame → fs:put_save_result
 ├── xterm.js terminal panels (per PTY session)
 ├── PortsPanel (combined) — detected ports + per-port tunnel actions + custom port form
 └── TanStack Query (queries via WsTransport.invoke)
@@ -154,6 +156,16 @@ Browser
 
 **Tunnel sessions**: `TunnelSessionManager` in `AppState` manages in-memory `TunnelSession` entries (no disk persistence). Each session spawns a `cloudflared tunnel --url http://127.0.0.1:{port}` child process via `tokio::process::Command`. URL is parsed from child stdout via regex. WS push events (`tunnel:created`, `tunnel:ready`, `tunnel:failed`, `tunnel:stopped`) are broadcast to all connected clients. On server shutdown, `dispose_all()` reaps all child processes — no orphaned `cloudflared` processes.
 
+**Encrypted uploads with Lock mode** (Phase 04–07): Zero-knowledge encrypt-in-transit via `fs:put_*` WS protocol.
+- OPAQUE PAKE (`@serenity-kit/opaque`): passphrase never transmitted, derives shared AES key via HKDF-SHA256
+- Client: `src/lib/crypto.ts` (`encryptFile`, `encryptText`) — Web Crypto API only, AES-256-GCM, IV(12) || ciphertext+tag
+- Client hook: `src/hooks/useEncryptedWrite.ts` — orchestrates OPAQUE session + encrypt + upload
+- Client UI: `EncryptContext` + `LockToggle` + `PassphrasePrompt` + `EncryptedUploadDialog`
+- Server: `fs/decrypt.rs` (`decrypt_blob`, `decrypt_and_write`) — atomic plaintext write via tempfile+rename
+- Server: `fs/enc_upload.rs` (`EncUploadState`) — per-connection encrypted upload state
+- Server: `api/ws.rs` handles `FsPutBegin/Chunk/Commit/Save` — decrypts on commit, store is always plaintext
+- `export_key` zeroed immediately after AES key import (client) / Zeroizing<Vec<u8>> (server)
+
 
 
 ## Workspace Config (`dam-hopper.toml`)
@@ -183,6 +195,7 @@ health_check_url = "http://localhost:8080/health"  # optional: must be http:// o
 
 ## Testing
 
-Rust tests: `cd server && cargo test` (121 tests). Integration tests use real temp filesystems and git repos via `tempfile` crate. No mocking of filesystem or git.
+Rust tests: `cd server && cargo test` (266 tests). Integration tests use real temp filesystems and git repos via `tempfile` crate. No mocking of filesystem or git.
 
 Web: no automated tests currently. Manual verification against running Rust server.
+Client crypto module (`src/lib/crypto.ts`) has unit tests in `src/lib/crypto.test.ts` (vitest, run via `pnpm test` once vitest is added to web devDependencies).
