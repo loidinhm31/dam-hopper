@@ -445,6 +445,44 @@ export class WsTransport implements Transport {
     return () => this.statusListeners.delete(cb);
   }
 
+  private failAllPending(reason: string): void {
+    const err = new Error(reason);
+    for (const p of this.pendingFsReqs.values()) { clearTimeout(p.timer); p.reject(err); }
+    this.pendingFsReqs.clear();
+    for (const p of this.pendingFsReads.values()) { clearTimeout(p.timer); p.reject(err); }
+    this.pendingFsReads.clear();
+    for (const p of this.pendingWriteBegin.values()) { clearTimeout(p.timer); p.reject(err); }
+    this.pendingWriteBegin.clear();
+    for (const p of this.pendingWriteChunks.values()) { p.reject(err); }
+    this.pendingWriteChunks.clear();
+    for (const p of this.pendingWriteCommit.values()) { clearTimeout(p.timer); p.reject(err); }
+    this.pendingWriteCommit.clear();
+    for (const p of this.pendingFsOps.values()) { clearTimeout(p.timer); p.reject(err); }
+    this.pendingFsOps.clear();
+    for (const p of this.pendingUploadBegin.values()) { clearTimeout(p.timer); p.reject(err); }
+    this.pendingUploadBegin.clear();
+    for (const p of this.pendingUploadChunks.values()) { p.reject(err); }
+    this.pendingUploadChunks.clear();
+    for (const p of this.pendingUploadCommit.values()) { clearTimeout(p.timer); p.reject(err); }
+    this.pendingUploadCommit.clear();
+    for (const p of this.pendingOpaqueRegStart.values()) { clearTimeout(p.timer); p.reject(err); }
+    this.pendingOpaqueRegStart.clear();
+    for (const p of this.pendingOpaqueRegFinish.values()) { clearTimeout(p.timer); p.reject(err); }
+    this.pendingOpaqueRegFinish.clear();
+    for (const p of this.pendingOpaqueLoginStart.values()) { clearTimeout(p.timer); p.reject(err); }
+    this.pendingOpaqueLoginStart.clear();
+    for (const p of this.pendingOpaqueLoginFinish.values()) { clearTimeout(p.timer); p.reject(err); }
+    this.pendingOpaqueLoginFinish.clear();
+    for (const p of this.pendingPutBegin.values()) { clearTimeout(p.timer); p.reject(err); }
+    this.pendingPutBegin.clear();
+    for (const p of this.pendingPutChunks.values()) { p.reject(err); }
+    this.pendingPutChunks.clear();
+    for (const p of this.pendingPutCommit.values()) { clearTimeout(p.timer); p.reject(err); }
+    this.pendingPutCommit.clear();
+    for (const p of this.pendingPutSave.values()) { clearTimeout(p.timer); p.reject(err); }
+    this.pendingPutSave.clear();
+  }
+
   destroy(): void {
     this.closed = true;
     if (this.reconnectTimer) {
@@ -460,90 +498,8 @@ export class WsTransport implements Transport {
     this.exitEnhancedListeners.clear();
     this.restartListeners.clear();
     this.fsOverflowListeners.clear();
-    for (const p of this.pendingFsReqs.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingFsReqs.clear();
     this.fsEventListeners.clear();
-    for (const p of this.pendingFsReads.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingFsReads.clear();
-    for (const p of this.pendingWriteBegin.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingWriteBegin.clear();
-    for (const p of this.pendingWriteChunks.values()) {
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingWriteChunks.clear();
-    for (const p of this.pendingWriteCommit.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingWriteCommit.clear();
-    for (const p of this.pendingFsOps.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingFsOps.clear();
-    for (const p of this.pendingUploadBegin.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingUploadBegin.clear();
-    for (const p of this.pendingUploadChunks.values()) {
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingUploadChunks.clear();
-    for (const p of this.pendingUploadCommit.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingUploadCommit.clear();
-    for (const p of this.pendingOpaqueRegStart.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingOpaqueRegStart.clear();
-    for (const p of this.pendingOpaqueRegFinish.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingOpaqueRegFinish.clear();
-    for (const p of this.pendingOpaqueLoginStart.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingOpaqueLoginStart.clear();
-    for (const p of this.pendingOpaqueLoginFinish.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingOpaqueLoginFinish.clear();
-    // Encrypted put maps
-    for (const p of this.pendingPutBegin.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingPutBegin.clear();
-    for (const p of this.pendingPutChunks.values()) {
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingPutChunks.clear();
-    for (const p of this.pendingPutCommit.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingPutCommit.clear();
-    for (const p of this.pendingPutSave.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("transport destroyed"));
-    }
-    this.pendingPutSave.clear();
+    this.failAllPending("transport destroyed");
   }
 
   private connect(): void {
@@ -924,6 +880,10 @@ export class WsTransport implements Transport {
     ws.onclose = () => {
       if (this.closed) return;
       console.log(`[WsTransport] Disconnected — reconnecting in ${this.backoffMs}ms`);
+      // Reject all pending promises immediately on disconnect. Callers receive an error
+      // right away rather than waiting 15–60 s for timeouts. FS subscriptions (pendingFsReqs)
+      // are also rejected — callers must re-subscribe after reconnect via fsSubscribeTree().
+      this.failAllPending("WebSocket disconnected");
       this.setStatus("disconnected");
       this.scheduleReconnect();
     };

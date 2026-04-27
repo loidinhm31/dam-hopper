@@ -168,6 +168,7 @@ export async function encryptFile(
 
   // Encrypt
   const envelope = await encryptBytes(key, plaintext);
+  plaintext.fill(0);
 
   return {
     blob: new Blob([envelope], { type: "application/octet-stream" }),
@@ -208,9 +209,11 @@ export async function encryptText(
 
   // Build plaintext envelope
   const plaintext = buildPlaintext(metadata, contentBytes);
+  contentBytes.fill(0);
 
   // Encrypt
   const envelope = await encryptBytes(key, plaintext);
+  plaintext.fill(0);
 
   return {
     blob: new Blob([envelope], { type: "application/octet-stream" }),

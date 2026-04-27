@@ -1,9 +1,8 @@
 /**
- * EncryptedUploadDialog — drag-and-drop upload dialog for encrypted (Lock) mode.
+ * EncryptedUploadDialog — drag-and-drop upload dialog for Lock (encrypted) mode.
  *
- * Shows a file picker / drop zone. When encrypted mode is enabled, files are
- * encrypted client-side before upload. Falls back to normal upload if encrypted
- * mode is disabled.
+ * Always encrypts client-side via AES-256-GCM before upload. Caller must only
+ * render this dialog when Lock mode is ON for the given project.
  *
  * Props:
  *   project   — Target project name
@@ -36,10 +35,8 @@ export function EncryptedUploadDialog({
   onClose,
   onSuccess,
 }: EncryptedUploadDialogProps) {
-  const { isEncryptEnabled, getPassphrase, promptPassphrase, setPassphrase } = useEncryptMode();
-
-  const encrypted = isEncryptEnabled(project);
-
+  // Always encrypted — caller must only render this dialog when Lock mode is ON
+  const { getPassphrase, promptPassphrase, setPassphrase } = useEncryptMode();
   const { uploadFile } = useEncryptedWrite();
 
   const [files, setFiles] = useState<FileStatus[]>([]);
@@ -78,16 +75,13 @@ export function EncryptedUploadDialog({
   const handleUpload = useCallback(async () => {
     if (files.length === 0 || uploading) return;
 
-    let passphrase: string | null = null;
-    if (encrypted) {
-      passphrase = getPassphrase(project);
-      if (!passphrase) {
-        try {
-          passphrase = await promptPassphrase(project);
-          setPassphrase(project, passphrase);
-        } catch {
-          return; // User cancelled
-        }
+    let passphrase = getPassphrase(project);
+    if (!passphrase) {
+      try {
+        passphrase = await promptPassphrase(project);
+        setPassphrase(project, passphrase);
+      } catch {
+        return; // User cancelled
       }
     }
 
@@ -110,7 +104,7 @@ export function EncryptedUploadDialog({
           project,
           dir,
           file,
-          passphrase ?? "",
+          passphrase,
           (pct) =>
             setFiles((prev) =>
               prev.map((f, idx) =>
@@ -148,7 +142,7 @@ export function EncryptedUploadDialog({
 
     setUploading(false);
     if (!anyError) setAllDone(true);
-  }, [files, uploading, encrypted, project, dir, getPassphrase, promptPassphrase, setPassphrase, uploadFile, onSuccess]);
+  }, [files, uploading, project, dir, getPassphrase, promptPassphrase, setPassphrase, uploadFile, onSuccess]);
 
   const removeFile = (i: number) => {
     setFiles((prev) => prev.filter((_, idx) => idx !== i));
@@ -169,15 +163,9 @@ export function EncryptedUploadDialog({
         {/* Header */}
         <div className="eud-header">
           <div className="eud-title-wrap">
-            {encrypted ? (
-              <ShieldCheck size={18} className="eud-title-icon eud-title-icon--locked" />
-            ) : (
-              <Upload size={18} className="eud-title-icon" />
-            )}
-            <span className="eud-title">
-              {encrypted ? "Encrypted Upload" : "Upload Files"}
-            </span>
-            {encrypted && <span className="eud-badge">AES-256-GCM</span>}
+            <ShieldCheck size={18} className="eud-title-icon eud-title-icon--locked" />
+            <span className="eud-title">Encrypted Upload</span>
+            <span className="eud-badge">AES-256-GCM</span>
           </div>
           <button type="button" className="eud-close" onClick={onClose} aria-label="Close">
             <X size={18} />
@@ -253,7 +241,7 @@ export function EncryptedUploadDialog({
               onClick={handleUpload}
               disabled={files.length === 0 || uploading}
             >
-              {uploading ? "Uploading…" : encrypted ? "🔒 Encrypt & Upload" : "Upload"}
+              {uploading ? "Uploading…" : "🔒 Encrypt & Upload"}
             </button>
           )}
         </div>
