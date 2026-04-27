@@ -22,32 +22,32 @@ pub struct DecryptResult {
 // decrypt_blob — pure function, no I/O
 // ---------------------------------------------------------------------------
 
-/// Decrypt an encrypted blob using the OPAQUE export_key directly.
+/// Decrypt an encrypted blob using the HKDF-derived AES key.
 ///
 /// Envelope: `iv(12) || ciphertext+tag`.
 /// Plaintext: `metadata_json + 0x00 + content_bytes`.
 ///
-/// No PBKDF2 — export_key is used as AES-256-GCM key directly.
+/// No PBKDF2 — aes_key is used as AES-256-GCM key directly.
 /// AES-GCM tag verification is automatic via `decrypt()`.
 pub fn decrypt_blob(
     ciphertext_blob: &[u8],
-    export_key: &[u8],
+    aes_key: &[u8],
 ) -> Result<DecryptResult, FsError> {
     if ciphertext_blob.len() < IV_LEN + 16 {
         return Err(FsError::MutationRefused(
             "encrypted blob too short".into(),
         ));
     }
-    if export_key.len() != 32 {
+    if aes_key.len() != 32 {
         return Err(FsError::MutationRefused(
-            "export_key must be 32 bytes".into(),
+            "aes_key must be 32 bytes".into(),
         ));
     }
 
     let iv = &ciphertext_blob[..IV_LEN];
     let ct = &ciphertext_blob[IV_LEN..];
 
-    let cipher = Aes256Gcm::new(GenericArray::from_slice(export_key));
+    let cipher = Aes256Gcm::new(GenericArray::from_slice(aes_key));
     let nonce = GenericArray::from_slice(iv);
 
     // Decrypt and authenticate in one step; any bit-flip → Err
@@ -70,6 +70,14 @@ pub fn decrypt_blob(
                 "plaintext missing metadata separator (0x00)".into(),
             )
         })?;
+
+    // FIX-06: cap metadata size to prevent unbounded allocation before UTF-8 parse
+    const METADATA_MAX: usize = 4096;
+    if sep_idx > METADATA_MAX {
+        return Err(FsError::MutationRefused(format!(
+            "metadata section too large: {sep_idx} bytes (max {METADATA_MAX})"
+        )));
+    }
 
     let meta_json = std::str::from_utf8(&plaintext[..sep_idx]).map_err(|e| {
         FsError::MutationRefused(format!("metadata is not valid UTF-8: {e}"))
@@ -100,10 +108,10 @@ pub fn decrypt_blob(
 /// The same `DecryptResult` as `decrypt_blob` on success.
 pub fn decrypt_and_write(
     ciphertext_blob: &[u8],
-    export_key: &[u8],
+    aes_key: &[u8],
     output_abs: std::path::PathBuf,
 ) -> Result<DecryptResult, FsError> {
-    let result = decrypt_blob(ciphertext_blob, export_key)?;
+    let result = decrypt_blob(ciphertext_blob, aes_key)?;
 
     let parent = output_abs.parent().ok_or_else(|| {
         FsError::Io(std::io::Error::new(
@@ -138,7 +146,7 @@ mod tests {
     /// Encrypt plaintext using the same AES-256-GCM scheme as the client.
     /// Uses a fixed IV — acceptable in test code only.
     fn encrypt_for_test(
-        export_key: &[u8; 32],
+        aes_key: &[u8; 32],
         metadata: &str,
         content: &[u8],
     ) -> Vec<u8> {
@@ -150,7 +158,7 @@ mod tests {
         plaintext.extend_from_slice(content);
 
         let cipher =
-            Aes256Gcm::new(GenericArray::from_slice(export_key));
+            Aes256Gcm::new(GenericArray::from_slice(aes_key));
         let nonce = GenericArray::from_slice(&iv);
         let ct = cipher
             .encrypt(nonce, plaintext.as_slice())
@@ -240,5 +248,64 @@ mod tests {
         let result = decrypt_and_write(&blob, &wrong_key, out_path.clone());
         assert!(result.is_err());
         assert!(!out_path.exists(), "output file must not be created on failure");
+    }
+
+    // FIX-09 additional edge case tests
+
+    #[test]
+    fn test_empty_content() {
+        let metadata = r#"{"name":"empty.txt","size":0}"#;
+        let blob = encrypt_for_test(&TEST_KEY, metadata, b"");
+        let result = decrypt_blob(&blob, &TEST_KEY).unwrap();
+        assert_eq!(result.content, b"");
+        assert_eq!(result.metadata["name"], "empty.txt");
+    }
+
+    #[test]
+    fn test_metadata_cap_boundary() {
+        // Metadata of exactly 4096 bytes (sep_idx == 4096) — at cap, should pass
+        let base = r#"{"k":""}"#; // 8 bytes
+        let filler_ok: String = "x".repeat(4096 - base.len());
+        let meta_4096 = format!(r#"{{"k":"{filler_ok}"}}"#);
+        assert_eq!(meta_4096.len(), 4096, "fixture must be exactly 4096 bytes");
+        let blob_ok = encrypt_for_test(&TEST_KEY, &meta_4096, b"data");
+        assert!(decrypt_blob(&blob_ok, &TEST_KEY).is_ok(), "4096-byte metadata must pass");
+
+        // Metadata of 4097 bytes (sep_idx == 4097) — over cap, should fail
+        let filler_over: String = "x".repeat(4097 - base.len());
+        let meta_4097 = format!(r#"{{"k":"{filler_over}"}}"#);
+        assert_eq!(meta_4097.len(), 4097, "fixture must be exactly 4097 bytes");
+        let blob_over = encrypt_for_test(&TEST_KEY, &meta_4097, b"data");
+        assert!(decrypt_blob(&blob_over, &TEST_KEY).is_err(), "4097-byte metadata must fail");
+    }
+
+    #[test]
+    fn test_null_byte_in_content() {
+        let metadata = r#"{"name":"binary.bin"}"#;
+        // Content contains null bytes; only the first 0x00 (the separator) should be consumed
+        let content: &[u8] = b"\x00binary\x00data\x00";
+        let blob = encrypt_for_test(&TEST_KEY, metadata, content);
+        let result = decrypt_blob(&blob, &TEST_KEY).unwrap();
+        assert_eq!(result.content, content, "null bytes in content must be preserved");
+    }
+
+    #[test]
+    fn test_invalid_utf8_in_metadata() {
+        // Manually encrypt plaintext with invalid UTF-8 bytes before the 0x00 separator
+        let iv = [2u8; 12]; // distinct IV from other tests
+        let mut plaintext = Vec::new();
+        plaintext.extend_from_slice(&[0xFF, 0xFE]); // invalid UTF-8 bytes
+        plaintext.push(0x00); // separator
+        plaintext.extend_from_slice(b"content");
+
+        let cipher = Aes256Gcm::new(GenericArray::from_slice(&TEST_KEY));
+        let nonce = GenericArray::from_slice(&iv);
+        let ct = cipher.encrypt(nonce, plaintext.as_slice()).unwrap();
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&iv);
+        blob.extend_from_slice(&ct);
+
+        let result = decrypt_blob(&blob, &TEST_KEY);
+        assert!(result.is_err(), "invalid UTF-8 in metadata must return error");
     }
 }

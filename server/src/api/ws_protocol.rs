@@ -165,6 +165,10 @@ pub enum ClientMsg {
         filename: String,
         /// Total encrypted blob size in bytes.
         len: u64,
+        /// Optional: mtime (Unix seconds) the client observed at upload start.
+        /// Server rejects commit with CONFLICT if file was modified since then.
+        #[serde(default)]
+        expected_mtime: Option<i64>,
     },
     /// JSON header for an encrypted chunk; raw bytes arrive in the NEXT binary WS frame.
     #[serde(rename = "fs:put_chunk")]
@@ -429,6 +433,9 @@ pub enum ServerMsg {
         req_id: u64,
         upload_id: String,
         ok: bool,
+        /// True when the commit was rejected due to a mtime conflict (file modified since upload started).
+        #[serde(default)]
+        conflict: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         new_mtime: Option<i64>,
         #[serde(skip_serializing_if = "Option::is_none")]

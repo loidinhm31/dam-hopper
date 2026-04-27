@@ -169,7 +169,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let mut opaque_login_states: HashMap<String, ServerLogin<DamHopperOpaqueSuite>> =
         HashMap::new();
     // Per-connection AES keys derived from OPAQUE login (keyed by session_id)
-    let mut export_keys: HashMap<String, Zeroizing<Vec<u8>>> = HashMap::new();
+    let mut aes_keys: HashMap<String, Zeroizing<Vec<u8>>> = HashMap::new();
 
     // Reader loop
     while let Some(msg) = ws_rx.next().await {
@@ -193,7 +193,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 Some(PendingBinary::EncPutSave { req_id, session_id, path_abs }) => {
                     handle_enc_put_save_binary(
                         req_id, &session_id, &path_abs, bytes.as_ref(),
-                        &export_keys, &pty_tx,
+                        &aes_keys, &pty_tx,
                     ).await;
                 }
                 None => {
@@ -801,8 +801,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // Auth — OPAQUE login (auth:login_finish)
             // -----------------------------------------------------------
             ClientMsg::AuthLoginFinish { req_id, session_id, data } => {
-                // C3: check export_keys cap before consuming login_state so client can retry.
-                if export_keys.len() >= 16 {
+                // C3: check aes_keys cap before consuming login_state so client can retry.
+                if aes_keys.len() >= 16 {
                     let msg = ServerMsg::AuthLoginFinishResponse {
                         req_id, ok: false, session_id: None,
                         error: Some("too many active sessions — remove unused sessions before logging in again".into()),
@@ -842,7 +842,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
                 let msg = match result {
                     Ok(Ok(aes_key)) => {
-                        export_keys.insert(session_id.clone(), aes_key);
+                        aes_keys.insert(session_id.clone(), aes_key);
                         debug!(req_id, session_id, "auth:login_finish ok — AES key derived");
                         ServerMsg::AuthLoginFinishResponse {
                             req_id, ok: true, session_id: Some(sid), error: None,
@@ -867,7 +867,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             }
 
             ClientMsg::AuthSessionRemove { session_id } => {
-                if export_keys.remove(&session_id).is_some() {
+                if aes_keys.remove(&session_id).is_some() {
                     debug!(session_id, "auth:session_remove — key evicted");
                 }
             }
@@ -876,15 +876,15 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // FS — encrypted put (Phase 04 implementation)
             // -----------------------------------------------------------
             ClientMsg::FsPutBegin {
-                req_id, upload_id, session_id, project, dir, filename, len,
+                req_id, upload_id, session_id, project, dir, filename, len, expected_mtime,
             } => {
-                if !export_keys.contains_key(&session_id) {
+                if !aes_keys.contains_key(&session_id) {
                     send_fs_error(&pty_tx, req_id, "OPAQUE_LOGIN_REQUIRED".into(),
                         "fs:put_begin requires OPAQUE login (auth:login_start + auth:login_finish)".into()).await;
                 } else {
                     match do_enc_put_begin(
                         req_id, &upload_id, &session_id, &project, &dir, &filename, len,
-                        &state, &mut enc_uploads,
+                        expected_mtime, &state, &mut enc_uploads,
                     ).await {
                         Ok(()) => {
                             debug!(req_id, upload_id, len, project, "fs:put_begin accepted");
@@ -909,7 +909,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     Some(s) => s,
                     None => {
                         let msg = ServerMsg::FsPutResult {
-                            req_id, upload_id, ok: false, new_mtime: None,
+                            req_id, upload_id, ok: false, conflict: false, new_mtime: None,
                             error: Some("upload session not found — fs:put_begin first".into()),
                         };
                         send_json(&pty_tx, &msg).await;
@@ -918,11 +918,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 };
 
                 let session_id = enc_state.session_id.clone();
-                let export_key = match export_keys.get(&session_id) {
+                let aes_key = match aes_keys.get(&session_id) {
                     Some(k) => k.clone(),
                     None => {
                         let msg = ServerMsg::FsPutResult {
-                            req_id, upload_id, ok: false, new_mtime: None,
+                            req_id, upload_id, ok: false, conflict: false, new_mtime: None,
                             error: Some("OPAQUE session not found — login may have expired".into()),
                         };
                         send_json(&pty_tx, &msg).await;
@@ -931,6 +931,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 };
 
                 let target_abs = enc_state.inner.target_abs.clone();
+                let expected_mtime = enc_state.expected_mtime;
                 let uid = upload_id.clone();
 
                 // Validate byte count matches what was declared at begin
@@ -938,7 +939,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 let expected_len = enc_state.inner.expected_len;
                 if bytes_written != expected_len {
                     let msg = ServerMsg::FsPutResult {
-                        req_id, upload_id: uid, ok: false, new_mtime: None,
+                        req_id, upload_id: uid, ok: false, conflict: false, new_mtime: None,
                         error: Some(format!(
                             "size mismatch: wrote {bytes_written} bytes but declared {expected_len}"
                         )),
@@ -947,18 +948,48 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     continue;
                 }
 
-                // Read ciphertext from temp file then decrypt+write plaintext atomically
-                let temp_path = enc_state.inner.temp.path().to_path_buf();
-                let result = tokio::task::spawn_blocking(move || -> Result<i64, String> {
-                    let encrypted_bytes = std::fs::read(&temp_path)
-                        .map_err(|e| format!("read encrypted temp failed: {e}"))?;
+                // H2: move NamedTempFile into closure so it stays alive until the read completes
+                let temp_file = enc_state.inner.temp;
+                // H1: return (error_msg, is_conflict) from spawn_blocking for accurate client signaling
+                let result = tokio::task::spawn_blocking(move || -> Result<i64, (String, bool)> {
+                    // FIX-03: mtime conflict detection — check before writing
+                    if let Some(expected) = expected_mtime {
+                        let current = std::fs::metadata(&target_abs)
+                            .ok()
+                            .and_then(|m| m.modified().ok())
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs() as i64);
+                        if let Some(actual) = current {
+                            if actual != expected {
+                                return Err((format!(
+                                    "file modified since upload started (expected mtime {expected}, got {actual})"
+                                ), true));
+                            }
+                        }
+                    }
 
-                    // NamedTempFile will be auto-deleted when enc_state.inner.temp is dropped.
-                    // decrypt_and_write does an atomic tempfile+rename for plaintext.
-                    use crate::fs::decrypt::decrypt_and_write;
-                    let _dec = decrypt_and_write(
-                        &encrypted_bytes, &export_key, target_abs.clone(),
-                    ).map_err(|e| e.to_string())?;
+                    // Read from temp file — NamedTempFile kept alive in this closure (H2)
+                    let temp_path = temp_file.path().to_path_buf();
+                    let encrypted_bytes = std::fs::read(&temp_path)
+                        .map_err(|e| (format!("read encrypted temp failed: {e}"), false))?;
+                    drop(temp_file); // explicit: delete temp before decrypt (memory + hygiene)
+
+                    // FIX-05: decrypt first, then drop encrypted blob before writing (~2x peak vs ~3x)
+                    use crate::fs::decrypt::decrypt_blob;
+                    let dec = decrypt_blob(&encrypted_bytes, &aes_key)
+                        .map_err(|e| (e.to_string(), false))?;
+                    drop(encrypted_bytes);
+
+                    // Atomic write: tempfile in same dir + persist (rename)
+                    let parent = target_abs.parent()
+                        .ok_or_else(|| ("target path has no parent".to_string(), false))?;
+                    let mut tmp = tempfile::NamedTempFile::new_in(parent)
+                        .map_err(|e| (format!("tempfile create failed: {e}"), false))?;
+                    use std::io::Write as _;
+                    tmp.write_all(&dec.content)
+                        .map_err(|e| (format!("tempfile write failed: {e}"), false))?;
+                    tmp.persist(&target_abs)
+                        .map_err(|e| (format!("atomic rename failed: {e}"), false))?;
 
                     // Stat the written file for accurate mtime
                     let mtime = std::fs::metadata(&target_abs)
@@ -975,20 +1006,25 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         debug!(req_id, new_mtime, upload_id, "fs:put_commit decrypt ok");
                         ServerMsg::FsPutResult {
                             req_id, upload_id: uid, ok: true,
-                            new_mtime: Some(new_mtime), error: None,
+                            conflict: false, new_mtime: Some(new_mtime), error: None,
                         }
                     }
-                    Ok(Err(e)) => {
-                        warn!(req_id, error = %e, "fs:put_commit decrypt failed");
+                    Ok(Err((e, is_conflict))) => {
+                        if is_conflict {
+                            warn!(req_id, error = %e, "fs:put_commit conflict");
+                        } else {
+                            warn!(req_id, error = %e, "fs:put_commit decrypt failed");
+                        }
                         ServerMsg::FsPutResult {
-                            req_id, upload_id: uid, ok: false, new_mtime: None,
-                            error: Some(format!("decrypt failed: {e}")),
+                            req_id, upload_id: uid, ok: false,
+                            conflict: is_conflict, new_mtime: None, error: Some(e),
                         }
                     }
                     Err(e) => {
                         warn!(req_id, error = %e, "fs:put_commit spawn_blocking error");
                         ServerMsg::FsPutResult {
-                            req_id, upload_id: uid, ok: false, new_mtime: None,
+                            req_id, upload_id: uid, ok: false,
+                            conflict: false, new_mtime: None,
                             error: Some(format!("internal error: {e}")),
                         }
                     }
@@ -997,7 +1033,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             }
             ClientMsg::FsPutSave { req_id, session_id, project, path } => {
                 // Validate session and resolve path first; binary frame will do the decrypt+write
-                if !export_keys.contains_key(&session_id) {
+                if !aes_keys.contains_key(&session_id) {
                     send_fs_error(&pty_tx, req_id, "OPAQUE_LOGIN_REQUIRED".into(),
                         "fs:put_save requires OPAQUE login".into()).await;
                 } else {
@@ -1363,12 +1399,26 @@ async fn handle_enc_put_binary(
     enc_uploads: &mut HashMap<String, EncUploadState>,
     pty_tx: &mpsc::Sender<WireMsg>,
 ) {
-    let state = match enc_uploads.get_mut(upload_id) {
-        Some(s) => s,
+    // FIX-02: validate seq before appending; borrow dropped before potential remove
+    let expected_seq = match enc_uploads.get(upload_id) {
+        Some(s) => s.inner.next_seq,
         None => {
             warn!(upload_id, seq, "enc put binary: upload session not found — dropping");
             return;
         }
+    };
+
+    if seq != expected_seq {
+        warn!(upload_id, seq, expected = expected_seq,
+            "enc put chunk: seq out of order — aborting upload");
+        enc_uploads.remove(upload_id);
+        return;
+    }
+
+    // Invariant: entry was present at seq check above; this branch is unreachable in practice
+    let state = match enc_uploads.get_mut(upload_id) {
+        Some(s) => s,
+        None => return,
     };
 
     match state.inner.append_chunk(data) {
@@ -1397,13 +1447,13 @@ async fn handle_enc_put_save_binary(
     session_id: &str,
     path_abs: &std::path::Path,
     data: &[u8],
-    export_keys: &HashMap<String, Zeroizing<Vec<u8>>>,
+    aes_keys: &HashMap<String, Zeroizing<Vec<u8>>>,
     pty_tx: &mpsc::Sender<WireMsg>,
 ) {
-    let export_key = match export_keys.get(session_id) {
+    let aes_key = match aes_keys.get(session_id) {
         Some(k) => k.clone(),
         None => {
-            warn!(req_id, session_id, "enc put_save: no export_key for session");
+            warn!(req_id, session_id, "enc put_save: no aes_key for session");
             let msg = ServerMsg::FsPutSaveResult {
                 req_id, ok: false, new_mtime: None,
                 error: Some("OPAQUE session not found — login may have expired".into()),
@@ -1420,7 +1470,7 @@ async fn handle_enc_put_save_binary(
 
     let result = tokio::task::spawn_blocking(move || -> Result<i64, String> {
         use crate::fs::decrypt::decrypt_and_write;
-        let _dec = decrypt_and_write(&encrypted_bytes, &export_key, target_abs.clone())
+        let _dec = decrypt_and_write(&encrypted_bytes, &aes_key, target_abs.clone())
             .map_err(|e| e.to_string())?;
 
         let mtime = std::fs::metadata(&target_abs)
@@ -1471,9 +1521,16 @@ async fn do_enc_put_begin(
     dir: &str,
     filename: &str,
     len: u64,
+    expected_mtime: Option<i64>,
     state: &AppState,
     enc_uploads: &mut HashMap<String, EncUploadState>,
 ) -> Result<(), (String, String)> {
+    // FIX-04: cap concurrent encrypted uploads per connection
+    if enc_uploads.len() >= 8 {
+        return Err(("LIMIT_EXCEEDED".into(),
+            "too many concurrent encrypted uploads on this connection (max 8)".into()));
+    }
+
     if len > MAX_UPLOAD_BYTES {
         return Err(("TOO_LARGE".into(), format!(
             "encrypted upload too large: {len} bytes (max {})", MAX_UPLOAD_BYTES,
@@ -1495,11 +1552,52 @@ async fn do_enc_put_begin(
     })?;
 
     let dir_abs = project_abs.join(dir.trim_start_matches('/'));
-    let target_abs = sandbox.validate_new_path(dir_abs, filename).await.map_err(|e| {
+
+    // FIX-01: fast-path lexical traversal check before any filesystem I/O
+    if dir_abs.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err(("FORBIDDEN".into(), "path traversal in dir field".into()));
+    }
+
+    // FIX-01 + FIX-M2: validate nearest existing ancestor BEFORE creating dirs.
+    // This prevents create_dir_all from following a pre-existing symlink that escapes the sandbox.
+    {
+        let mut check = dir_abs.clone();
+        loop {
+            match sandbox.validate(check.clone()).await {
+                Ok(_) => break, // found an existing ancestor within sandbox
+                Err(crate::fs::FsError::NotFound) => {
+                    check = check.parent().map(|p| p.to_path_buf()).ok_or_else(|| {
+                        ("INVALID_PATH".into(), "dir has no valid parent within workspace".into())
+                    })?;
+                }
+                Err(e) => return Err(match e {
+                    crate::fs::FsError::PathEscape | crate::fs::FsError::PermissionDenied =>
+                        ("FORBIDDEN".into(), "dir resolves outside workspace".into()),
+                    _ => ("INVALID_PATH".into(), e.to_string()),
+                }),
+            }
+        }
+    }
+
+    // FIX-08: auto-create target directory (ancestor validated safe above)
+    tokio::fs::create_dir_all(&dir_abs).await.map_err(|e| {
+        ("UPLOAD_INIT_FAILED".into(), format!("failed to create target directory: {e}"))
+    })?;
+
+    // FIX-01: final canonicalize + sandbox check on now-existing dir
+    let dir_validated = sandbox.validate(dir_abs).await.map_err(|e| {
+        match e {
+            crate::fs::FsError::PathEscape | crate::fs::FsError::PermissionDenied =>
+                ("FORBIDDEN".into(), "dir resolves outside workspace".into()),
+            _ => ("INVALID_PATH".into(), e.to_string()),
+        }
+    })?;
+
+    let target_abs = sandbox.validate_new_path(dir_validated, filename).await.map_err(|e| {
         ("INVALID_PATH".into(), e.to_string())
     })?;
 
-    let enc_state = EncUploadState::new(target_abs, len, session_id.to_string()).map_err(|e| {
+    let enc_state = EncUploadState::new(target_abs, len, session_id.to_string(), expected_mtime).map_err(|e| {
         ("UPLOAD_INIT_FAILED".into(), e.to_string())
     })?;
 
