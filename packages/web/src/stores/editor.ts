@@ -63,6 +63,7 @@ interface EditorState {
   forceOverwrite: (key: string) => Promise<void>;
   reloadTab: (key: string) => Promise<void>;
   clearConflict: (key: string) => void;
+  markSaved: (key: string, mtime: number) => void;
   saveViewState: (key: string, vs: unknown) => void;
   getActiveTab: (project: string) => Tab | null;
   loadContent: (key: string) => Promise<void>;
@@ -439,6 +440,16 @@ export const useEditorStore = create<EditorState>()(
       clearConflict: (key: string) => {
         set((s) => ({
           tabs: s.tabs.map((t) => (t.key === key ? { ...t, conflicted: false } : t)),
+        }));
+      },
+
+      markSaved: (key: string, mtime: number) => {
+        set((s) => ({
+          tabs: s.tabs.map((t) =>
+            t.key === key
+              ? { ...t, saving: false, dirty: false, savedContent: t.content, mtime }
+              : t,
+          ),
         }));
       },
 

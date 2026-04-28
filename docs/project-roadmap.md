@@ -164,6 +164,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-04-25:** Completed IDE Tool Windows Refactoring.
+    - ✅ Flexible Tool Window system with Activity Bar (IntelliJ style)
+    - ✅ Extensible `ToolWindowDef` for new tool integrations
+    - ✅ Persisted layout state (sidebar width, active tool)
+    - ✅ Refactored `IdeShell` for better state management
+    - ✅ Migrated File Tree to the new system
+
 - **2026-04-17:** Completed Phase 05: Persist Worker (F-08 Terminal Session Persistence).
     - ✅ Background worker for async session snapshots
     - ✅ Buffer flushing to SQLite on configurable interval (default 5s)
