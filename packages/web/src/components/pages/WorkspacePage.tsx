@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { Terminal as TerminalIcon, Plus, Files, Search, Radio } from "lucide-react";
+import { Terminal as TerminalIcon, Plus, Files, Search, Radio, GitBranch } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { IdeShell } from "@/components/templates/IdeShell.js";
@@ -11,6 +11,7 @@ import { MultiTerminalDisplay } from "@/components/organisms/MultiTerminalDispla
 import { ProjectInfoPanel } from "@/components/organisms/ProjectInfoPanel.js";
 import { SearchPanel } from "@/components/organisms/SearchPanel.js";
 import { PortsPanel } from "@/components/organisms/PortsPanel.js";
+import { ChangedFilesList } from "@/components/organisms/ChangedFilesList.js";
 
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
@@ -62,7 +63,7 @@ export default function WorkspacePage() {
   const {
     handleSelectProject, handleSelectTerminal, handleLaunchTerminal, handleLaunchProfile,
     handleLaunchFormSubmit, handleDeleteProfile, handleSaveProfile, handleAddFreeTerminal,
-    handleLaunchFreeWithCommand, handleLaunchSuggestedCommand, handleAddShell, handleLaunchShell,
+    handleLaunchFreeWithCommand, handleLaunchSuggestedCommand, handleAddShell, handleAddShell: handleAddShellAction, handleLaunchShell,
     handleSelectTab, handleCloseTab, handleKillTerminal, handleRemoveFreeTerminal,
     handleOpenFreeTerminalSavePrompt, handleSaveFreeTerminalToProject, handleSessionExit,
     setSavePrompt, setFreeTerminalSavePrompt, setLaunchForm,
@@ -94,84 +95,114 @@ export default function WorkspacePage() {
     handleSelectProject(name);
   }
 
-  const leftTools = useMemo<ToolWindowDef[]>(() => [
-    {
-      id: "explorer",
-      label: "Explorer",
-      icon: Files,
-      content: (
-        <div className="flex flex-col h-full">
-          {projects.length > 1 && (
-            <div className="shrink-0 px-2 py-1.5 border-b border-[var(--color-border)]">
-              <Select value={projectName ?? ""} onValueChange={setActiveProject}>
-                <SelectTrigger className="text-xs h-7">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {projects.map((p) => (
-                    <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          {projectName ? (
-            <FileTree
-              key={projectName}
-              project={projectName}
-              path=""
-              onFileOpen={handleFileOpen}
-              onOpenTerminal={() => handleLaunchShell(projectName)}
-              className="flex-1"
-              onSelectDiffFile={(path, _isConflict) => {
-                if (projectName) openDiff(projectName, path, "modified", 0, 0);
-              }}
-            />
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-              No projects configured
-            </div>
-          )}
-        </div>
-      )
-    },
-    {
-      id: "search",
-      label: "Search",
-      icon: Search,
-      content: projectName ? (
-        <SearchPanel
-          project={projectName}
-          onResultClick={(match) => {
-            const targetProject = match.project ?? projectName;
-            if (match.project && match.project !== projectName) {
-              setActiveProject(match.project);
-            }
-            void openFile(targetProject, {
-              id: match.path,
-              name: match.path.split("/").pop()!,
-              kind: "file",
-              size: 0,
-              mtime: 0,
-              isSymlink: false,
-              children: null,
-            });
-          }}
-        />
-      ) : (
-        <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-          Select a project to search
-        </div>
-      )
-    },
-    {
-      id: "ports",
-      label: "Ports",
-      icon: Radio,
-      position: "bottom",
-      content: <PortsPanel />
-    }
-  ], [projects, projectName, handleFileOpen, handleLaunchShell, openDiff, openFile]);
+  const leftTools = useMemo<ToolWindowDef[]>(
+    () => [
+      {
+        id: "search",
+        label: "Search",
+        icon: Search,
+        content: projectName ? (
+          <SearchPanel
+            project={projectName}
+            onResultClick={(match) => {
+              const targetProject = match.project ?? projectName;
+              if (match.project && match.project !== projectName) {
+                setActiveProject(match.project);
+              }
+              void openFile(targetProject, {
+                id: match.path,
+                name: match.path.split("/").pop()!,
+                kind: "file",
+                size: 0,
+                mtime: 0,
+                isSymlink: false,
+                children: null,
+              });
+            }}
+          />
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+            Select a project to search
+          </div>
+        ),
+      },
+      {
+        id: "explorer",
+        label: "Explorer",
+        icon: Files,
+        content: (
+          <div className="flex flex-col h-full">
+            {projects.length > 1 && (
+              <div className="shrink-0 px-2 py-1.5 border-b border-[var(--color-border)]">
+                <Select
+                  value={projectName ?? ""}
+                  onValueChange={setActiveProject}
+                >
+                  <SelectTrigger className="text-xs h-7">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {projects.map((p) => (
+                      <SelectItem key={p.name} value={p.name}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            {projectName ? (
+              <FileTree
+                key={projectName}
+                project={projectName}
+                path=""
+                onFileOpen={handleFileOpen}
+                onOpenTerminal={() => handleLaunchShell(projectName)}
+                className="flex-1"
+              />
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+                No projects configured
+              </div>
+            )}
+          </div>
+        ),
+      },
+      {
+        id: "source-control",
+        label: "Source Control",
+        icon: GitBranch,
+        content: projectName ? (
+          <ChangedFilesList
+            project={projectName}
+            selectedFile={null}
+            onSelectFile={(path, isConflict) => {
+              if (projectName) openDiff(projectName, path, "modified", 0, 0);
+            }}
+          />
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+            Select a project to view changes
+          </div>
+        ),
+      },
+      {
+        id: "ports",
+        label: "Ports",
+        icon: Radio,
+        position: "bottom",
+        content: <PortsPanel />,
+      },
+    ],
+    [
+      projects,
+      projectName,
+      handleFileOpen,
+      handleLaunchShell,
+      openDiff,
+      openFile,
+    ],
+  );
 
   const rightTools = useMemo<ToolWindowDef[]>(() => [
     {
@@ -191,7 +222,7 @@ export default function WorkspacePage() {
           onSelectTerminal={handleSelectTerminal}
           onLaunchTerminal={handleLaunchTerminal}
           onKillTerminal={handleKillTerminal}
-          onAddShell={handleAddShell}
+          onAddShell={handleLaunchShell}
           onLaunchProfile={handleLaunchProfile}
           onDeleteProfile={handleDeleteProfile}
           onLaunchSuggestedCommand={handleLaunchSuggestedCommand}
@@ -204,7 +235,7 @@ export default function WorkspacePage() {
         />
       )
     }
-  ], [isLoading, tree, freeTerminals, selectedId, handleSelectProjectInTree, handleSelectTerminal, handleLaunchTerminal, handleKillTerminal, handleAddShell, handleLaunchProfile, handleDeleteProfile, handleLaunchSuggestedCommand, handleAddFreeTerminal, handleLaunchFreeWithCommand, handleOpenFreeTerminalSavePrompt, handleRemoveFreeTerminal]);
+  ], [isLoading, tree, freeTerminals, selectedId, handleSelectProjectInTree, handleSelectTerminal, handleLaunchTerminal, handleKillTerminal, handleLaunchShell, handleLaunchProfile, handleDeleteProfile, handleLaunchSuggestedCommand, handleAddFreeTerminal, handleLaunchFreeWithCommand, handleOpenFreeTerminalSavePrompt, handleRemoveFreeTerminal]);
 
   const terminalPanel = (
     <div className="flex flex-col h-full">
