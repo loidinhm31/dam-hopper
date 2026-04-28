@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { ChevronDown, Check, X, Plus, Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils.js";
 import {
   useWorkspace,
   useKnownWorkspaces,
@@ -14,7 +15,11 @@ function abbreviatePath(p: string) {
     .replace(/^\/root(\/|$)/, "~$1");
 }
 
-export function WorkspaceSwitcher() {
+interface WorkspaceSwitcherProps {
+  variant?: "default" | "compact";
+}
+
+export function WorkspaceSwitcher({ variant = "default" }: WorkspaceSwitcherProps) {
   const [open, setOpen] = useState(false);
   const [addPath, setAddPath] = useState("");
   const [removingPath, setRemovingPath] = useState<string | null>(null);
@@ -75,33 +80,49 @@ export function WorkspaceSwitcher() {
     addMutation.error?.message ??
     removeMutation.error?.message;
 
+  const isCompact = variant === "compact";
+
   return (
     <div ref={ref} className="relative">
       {/* Trigger — terminal prompt style */}
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full text-left group"
+        className={cn(
+          "text-left group transition-all",
+          isCompact ? "px-2 py-1 rounded-sm hover:bg-[var(--color-surface-2)]" : "w-full"
+        )}
       >
         <div className="flex items-center gap-1.5">
           <span className="text-[var(--color-primary)] text-xs font-bold select-none shrink-0">$</span>
           {isSwitching ? (
             <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[var(--color-primary)]" />
           ) : null}
-          <p className="flex-1 text-xs font-semibold text-[var(--color-text)] truncate tracking-wide">
+          <p className={cn(
+            "text-xs font-semibold text-[var(--color-text)] truncate tracking-wide",
+            isCompact ? "max-w-[120px]" : "flex-1"
+          )}>
             {workspace?.name ?? "dam-hopper"}
           </p>
           <ChevronDown
-            className={`h-3 w-3 shrink-0 text-[var(--color-text-muted)]/50 transition-transform ${open ? "rotate-180" : ""}`}
+            className={cn(
+              "h-3 w-3 shrink-0 text-[var(--color-text-muted)]/50 transition-transform",
+              open ? "rotate-180" : ""
+            )}
           />
         </div>
-        <p className="text-[10px] text-[var(--color-text-muted)]/40 truncate mt-0.5 pl-4">
-          {workspace?.root ? workspace.root.replace(/^\/(?:home|Users)\/[^/]+/, "~") : "~/workspace"}
-        </p>
+        {!isCompact && (
+          <p className="text-[10px] text-[var(--color-text-muted)]/40 truncate mt-0.5 pl-4">
+            {workspace?.root ? workspace.root.replace(/^\/(?:home|Users)\/[^/]+/, "~") : "~/workspace"}
+          </p>
+        )}
       </button>
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute left-0 right-0 top-full mt-1 z-50 rounded-sm glass-card-blur shadow-xl overflow-hidden">
+        <div className={cn(
+          "absolute top-full mt-1 z-50 rounded-sm glass-card-blur shadow-xl overflow-hidden",
+          isCompact ? "left-0 w-64" : "left-0 right-0"
+        )}>
           {/* Known workspaces */}
           {knownLoading ? (
             <div className="px-3 py-2 text-xs text-[var(--color-text-muted)]">

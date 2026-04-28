@@ -4,9 +4,9 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Status Overview
 
-- **Current Phase:** Phase 06: Startup Restore (F-08 Terminal Session Persistence)
-- **Last Milestone:** Phase 05: Persist Worker completed (F-08 Terminal Session Persistence)
-- **Total Phases Completed:** 13 phases (F-01 Terminal Enhancement 7/7, F-08 Terminal Session Persistence 5/6)
+- **Current Phase:** Phase 07: Compact Top Navigation (UI/UX Redesign)
+- **Last Milestone:** Compact Top Navigation feature completed
+- **Total Phases Completed:** 14 phases (F-01 7/7, F-08 5/6, UI/UX 1/1)
 - **Next Milestone:** Phase 06: Startup Restore — Load persisted sessions on server restart
 
 ## Roadmap Phases
@@ -17,6 +17,14 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [x] List/read/stat REST endpoints
 - [x] Binary detection
 - [x] Path validation and security checks
+
+### Phase 07: Compact Top Navigation (UI/UX Redesign)
+**Status: [COMPLETED 2026-04-29]**
+- [x] Replace vertical Sidebar with horizontal `TopNav`
+- [x] Inline menu toggle (Ctrl+B) with glassmorphism
+- [x] Adapted `WorkspaceSwitcher` for compact layout
+- [x] Vertical layout refactoring (`AppLayout`, `IdeShell`)
+- [x] Responsive design and accessibility polish
 
 ### Phase 02: File Watcher
 **Status: [COMPLETED]**
@@ -163,6 +171,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [ ] Multi-workspace management UI
 
 ## Recent Milestones
+
+- **2026-04-29:** Completed Compact Top Navigation Redesign.
+    - ✅ Replaced vertical sidebar with horizontal `TopNav`
+    - ✅ Maximized vertical space for terminal and editor
+    - ✅ Implemented glassmorphism and modern toggle menu
+    - ✅ Refactored `AppLayout` and `IdeShell` for vertical stacking
+    - ✅ Repurposed `Ctrl+B` for top menu visibility
 
 - **2026-04-25:** Completed IDE Tool Windows Refactoring.
     - ✅ Flexible Tool Window system with Activity Bar (IntelliJ style)
