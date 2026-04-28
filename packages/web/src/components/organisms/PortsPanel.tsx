@@ -441,19 +441,7 @@ export function PortsPanel() {
   }
 
   return (
-    <section className="border-t border-[var(--color-border)] pt-1">
-      {/* Header */}
-      <div className="flex items-center justify-between px-2 py-1">
-        <p className="text-[10px] text-[var(--color-text-muted)] font-semibold tracking-widest uppercase opacity-60">
-          └─ ports
-        </p>
-        {ports.length > 0 && (
-          <span className="text-[10px] text-[var(--color-text-muted)] opacity-40">
-            {ports.length}
-          </span>
-        )}
-      </div>
-
+    <section className="h-full flex flex-col">
       {/* Warning banner — shown once */}
       {!warned && <WarningBanner onDismiss={dismissWarning} />}
 
@@ -467,35 +455,39 @@ export function PortsPanel() {
       )}
 
       {/* Port list */}
-      {isLoading ? (
-        <div className="px-3 py-1 text-[10px] text-[var(--color-text-muted)] opacity-60">
-          Loading…
-        </div>
-      ) : isError ? (
-        <div className="px-3 py-1 text-[10px] text-red-500 opacity-80">
-          Failed to load ports
-        </div>
-      ) : (
-        <ul className="flex flex-col">
-          {ports.map((entry) => (
-            <PortRow
-              key={entry.port}
-              entry={entry}
-              isLocal={localServer}
-              onStartTunnel={handleStartTunnel}
-              onStopTunnel={stopTunnel}
-            />
-          ))}
-          {ports.length === 0 && (
-            <li className="px-3 py-1 text-[10px] text-[var(--color-text-muted)] opacity-50 italic">
-              No ports detected
-            </li>
-          )}
-        </ul>
-      )}
+      <div className="flex-1 overflow-y-auto">
+        {isLoading ? (
+          <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)] opacity-60">
+            Loading…
+          </div>
+        ) : isError ? (
+          <div className="px-3 py-2 text-[10px] text-red-500 opacity-80">
+            Failed to load ports
+          </div>
+        ) : (
+          <ul className="flex flex-col">
+            {ports.map((entry) => (
+              <PortRow
+                key={entry.port}
+                entry={entry}
+                isLocal={localServer}
+                onStartTunnel={handleStartTunnel}
+                onStopTunnel={stopTunnel}
+              />
+            ))}
+            {ports.length === 0 && (
+              <li className="px-3 py-2 text-[10px] text-[var(--color-text-muted)] opacity-50 italic">
+                No ports detected
+              </li>
+            )}
+          </ul>
+        )}
+      </div>
 
       {/* Custom port form */}
-      <AddPortForm onSubmit={(port) => handleStartTunnel(port, `port-${port}`)} />
+      <div className="mt-auto">
+        <AddPortForm onSubmit={(port) => handleStartTunnel(port, `port-${port}`)} />
+      </div>
     </section>
   );
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { Terminal as TerminalIcon, Plus, Files, Search } from "lucide-react";
+import { Terminal as TerminalIcon, Plus, Files, Search, Radio } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { IdeShell } from "@/components/templates/IdeShell.js";
@@ -10,6 +10,7 @@ import { TerminalTabBar } from "@/components/organisms/TerminalTabBar.js";
 import { MultiTerminalDisplay } from "@/components/organisms/MultiTerminalDisplay.js";
 import { ProjectInfoPanel } from "@/components/organisms/ProjectInfoPanel.js";
 import { SearchPanel } from "@/components/organisms/SearchPanel.js";
+import { PortsPanel } from "@/components/organisms/PortsPanel.js";
 
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
@@ -162,6 +163,13 @@ export default function WorkspacePage() {
           Select a project to search
         </div>
       )
+    },
+    {
+      id: "ports",
+      label: "Ports",
+      icon: Radio,
+      position: "bottom",
+      content: <PortsPanel />
     }
   ], [projects, projectName, handleFileOpen, handleLaunchShell, openDiff, openFile]);
 

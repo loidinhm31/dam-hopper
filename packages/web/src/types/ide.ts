@@ -9,4 +9,6 @@ export interface ToolWindowDef {
   content: ReactNode;
   /** Optional: Preferred side if not specified in layout */
   defaultSide?: 'left' | 'right';
+  /** Optional: Position in ActivityBar ('top' | 'bottom'), defaults to 'top' */
+  position?: 'top' | 'bottom';
 }
