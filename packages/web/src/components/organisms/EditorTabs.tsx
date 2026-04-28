@@ -7,7 +7,7 @@
  * - MonacoHost / MarkdownHost are lazy-loaded (dynamic import) to keep the main chunk clean.
  * - ConflictDialog is shown when save returns a conflict.
  */
-import { lazy, Suspense, useState, useEffect } from "react";
+import { lazy, Suspense, useState, useEffect, useCallback } from "react";
 import type * as monacoNs from "monaco-editor";
 import { FileCode, Loader2 } from "lucide-react";
 import { useEditorStore } from "@/stores/editor.js";
@@ -18,6 +18,9 @@ import { DiffViewer } from "@/components/organisms/DiffViewer.js";
 import { ConflictDialog } from "@/components/organisms/ConflictDialog.js";
 import { EditorStatusBar } from "@/components/organisms/EditorStatusBar.js";
 import { mimeToLanguage } from "@/lib/mime-to-language.js";
+import { useEncryptMode } from "@/contexts/EncryptContext.js";
+import { useEncryptedWrite } from "@/hooks/useEncryptedWrite.js";
+import { LockToggle } from "@/components/atoms/LockToggle.js";
 
 const MonacoHost = lazy(() =>
   import("@/components/organisms/MonacoHost.js").then((m) => ({ default: m.MonacoHost })),
@@ -39,12 +42,39 @@ export function EditorTabs({ project }: { project: string | null }) {
     forceOverwrite,
     reloadTab,
     clearConflict,
+    markSaved,
     loadContent,
   } = useEditorStore();
+
+  const { isEncryptEnabled, getPassphrase, promptPassphrase, setPassphrase } = useEncryptMode();
+  const encryptedWrite = useEncryptedWrite();
 
   const [activeEditor, setActiveEditor] = useState<monacoNs.editor.IStandaloneCodeEditor | null>(
     null,
   );
+
+  const handleSave = useCallback(async (key: string) => {
+    if (!project || !isEncryptEnabled(project)) {
+      return save(key);
+    }
+    const tab = tabs.find((t) => t.key === key);
+    if (!tab) return;
+
+    let passphrase = getPassphrase(project);
+    if (!passphrase) {
+      try {
+        passphrase = await promptPassphrase(project);
+        setPassphrase(project, passphrase);
+      } catch {
+        return;
+      }
+    }
+
+    const result = await encryptedWrite.saveText(project, tab.path, tab.content, passphrase);
+    if (result.ok) {
+      markSaved(key, result.newMtime ?? tab.mtime);
+    }
+  }, [project, isEncryptEnabled, getPassphrase, promptPassphrase, setPassphrase, encryptedWrite, save, tabs, markSaved]);
 
   const projectTabs = project ? tabs.filter((t) => t.project === project) : [];
   const activeKey = project ? activeKeys[project] : null;
@@ -69,21 +99,28 @@ export function EditorTabs({ project }: { project: string | null }) {
   return (
     <div className="h-full flex flex-col glass-card">
       {/* Tab bar */}
-      <div
-        role="tablist"
-        className="shrink-0 flex overflow-x-auto border-b border-[var(--color-border)] bg-[var(--color-surface-2)]"
-        style={{ scrollbarWidth: "none" }}
-      >
-        {projectTabs.map((tab) => (
-          <EditorTab
-            key={tab.key}
-            name={tab.name}
-            active={tab.key === activeKey}
-            dirty={tab.dirty}
-            onClick={() => project && setActive(project, tab.key)}
-            onClose={() => close(tab.key)}
-          />
-        ))}
+      <div className="shrink-0 flex items-stretch border-b border-[var(--color-border)] bg-[var(--color-surface-2)]">
+        <div
+          role="tablist"
+          className="flex-1 flex overflow-x-auto"
+          style={{ scrollbarWidth: "none" }}
+        >
+          {projectTabs.map((tab) => (
+            <EditorTab
+              key={tab.key}
+              name={tab.name}
+              active={tab.key === activeKey}
+              dirty={tab.dirty}
+              onClick={() => project && setActive(project, tab.key)}
+              onClose={() => close(tab.key)}
+            />
+          ))}
+        </div>
+        {project && (
+          <div className="shrink-0 flex items-center px-2 border-l border-[var(--color-border)]">
+            <LockToggle project={project} />
+          </div>
+        )}
       </div>
 
       {/* Editor area + status bar */}
@@ -140,7 +177,7 @@ export function EditorTabs({ project }: { project: string | null }) {
               mime={activeTab.mime}
               viewState={activeTab.viewState}
               onChange={(val) => setContent(activeTab.key, val)}
-              onSave={() => void save(activeTab.key)}
+              onSave={() => void handleSave(activeTab.key)}
               onViewStateChange={(vs) => saveViewState(activeTab.key, vs)}
             />
           </Suspense>
@@ -160,7 +197,7 @@ export function EditorTabs({ project }: { project: string | null }) {
               mime={activeTab.mime}
               viewState={activeTab.viewState}
               onChange={(val) => setContent(activeTab.key, val)}
-              onSave={() => void save(activeTab.key)}
+              onSave={() => void handleSave(activeTab.key)}
               onViewStateChange={(vs) => saveViewState(activeTab.key, vs)}
               onEditorReady={setActiveEditor}
             />

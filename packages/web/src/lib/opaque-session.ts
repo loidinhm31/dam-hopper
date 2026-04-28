@@ -2,8 +2,10 @@ import { opaqueRegisterStart, opaqueLoginStart } from "./opaque-client.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 
 // Decode a base64 string to Uint8Array (browser-native, no deps).
+// Normalizes URL-safe base64 (- and _) to standard base64 (+ and /) before atob().
 function base64ToBytes(b64: string): Uint8Array {
-  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const std = b64.replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(std), (c) => c.charCodeAt(0));
 }
 
 /**

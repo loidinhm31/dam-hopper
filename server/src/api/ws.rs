@@ -9,7 +9,7 @@ use axum::{
     response::Response,
 };
 use axum_extra::extract::CookieJar;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64, engine::general_purpose::URL_SAFE_NO_PAD as OPAQUE_B64};
 use futures_util::stream::StreamExt;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
@@ -618,7 +618,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     continue;
                 }
 
-                let decoded = match BASE64.decode(&data) {
+                let decoded = match OPAQUE_B64.decode(&data) {
                     Ok(b) => b,
                     Err(e) => {
                         let msg = ServerMsg::AuthRegisterStartResponse {
@@ -641,7 +641,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         debug!(req_id, identifier, "auth:register_start ok");
                         ServerMsg::AuthRegisterStartResponse {
                             req_id, ok: true,
-                            data: Some(BASE64.encode(&response_bytes)),
+                            data: Some(OPAQUE_B64.encode(&response_bytes)),
                             error: None,
                         }
                     }
@@ -685,7 +685,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     continue;
                 }
 
-                let decoded = match BASE64.decode(&data) {
+                let decoded = match OPAQUE_B64.decode(&data) {
                     Ok(b) => b,
                     Err(e) => {
                         let msg = ServerMsg::AuthRegisterFinishResponse {
@@ -745,7 +745,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     continue;
                 }
 
-                let decoded = match BASE64.decode(&data) {
+                let decoded = match OPAQUE_B64.decode(&data) {
                     Ok(b) => b,
                     Err(e) => {
                         let msg = ServerMsg::AuthLoginStartResponse {
@@ -776,7 +776,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         ServerMsg::AuthLoginStartResponse {
                             req_id, ok: true,
                             session_id: Some(session_id),
-                            data: Some(BASE64.encode(&response_bytes)),
+                            data: Some(OPAQUE_B64.encode(&response_bytes)),
                             error: None,
                         }
                     }
@@ -823,7 +823,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }
                 };
 
-                let decoded = match BASE64.decode(&data) {
+                let decoded = match OPAQUE_B64.decode(&data) {
                     Ok(b) => b,
                     Err(e) => {
                         let msg = ServerMsg::AuthLoginFinishResponse {

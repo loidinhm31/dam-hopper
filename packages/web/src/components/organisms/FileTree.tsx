@@ -32,6 +32,7 @@ import {
   AlertTriangle,
   RefreshCw,
   Check,
+  Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { useGitDiff, useGitUntracked, useGitStage, useGitUnstage, useGitDiscard, useGitCommit } from "@/api/queries.js";
@@ -44,6 +45,9 @@ import { TreeContextMenu } from "./TreeContextMenu.js";
 import { UploadDropzone } from "./UploadDropzone.js";
 import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog.js";
 import { NewItemDialog } from "./NewItemDialog.js";
+import { LockToggle } from "@/components/atoms/LockToggle.js";
+import { EncryptedUploadDialog } from "@/components/organisms/EncryptedUploadDialog.js";
+import { useEncryptMode } from "@/contexts/EncryptContext.js";
 
 // ---------------------------------------------------------------------------
 // File icon mapping (simple extension-based)
@@ -174,9 +178,11 @@ export function FileTree({
   onSelectDiffFile,
 }: FileTreeProps) {
   const [showHidden, setShowHidden] = useState(false);
+  const [encUploadOpen, setEncUploadOpen] = useState(false);
   const { data, isLoading, isError, error, loadChildren } = useFsSubscription(project, path);
   const ops = useFsOps(project, path);
   const { progress, upload, clearProgress } = useFsUpload(project, path);
+  const { isEncryptEnabled } = useEncryptMode();
 
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [newItemDialog, setNewItemDialog] = useState<{ open: boolean, type: 'file' | 'folder', parentPath: string } | null>(null);
@@ -424,6 +430,7 @@ export function FileTree({
   }, [onOpenTerminal]);
 
   return (
+    <>
     <UploadDropzone
       currentDir={path}
       onDrop={handleDropzoneDrop}
@@ -450,10 +457,23 @@ export function FileTree({
       </div>
 
       {/* Project label */}
-      <div className="px-2 py-1 shrink-0">
+      <div className="px-2 py-1 shrink-0 flex items-center justify-between gap-1">
         <span className="text-[11px] font-semibold text-[var(--color-text-muted)] tracking-wide uppercase truncate">
           {project}
         </span>
+        <div className="flex items-center gap-1 shrink-0">
+          {isEncryptEnabled(project) && (
+            <button
+              type="button"
+              onClick={() => setEncUploadOpen(true)}
+              title="Encrypted file upload"
+              className="p-1 rounded-sm text-[var(--color-accent,#7c6aff)] hover:bg-[var(--color-accent,#7c6aff)]/10 transition-colors"
+            >
+              <Upload size={13} />
+            </button>
+          )}
+          <LockToggle project={project} />
+        </div>
       </div>
 
       {/* Split container: tree body on top, changes panel on bottom */}
@@ -619,6 +639,15 @@ export function FileTree({
         />
       )}
     </UploadDropzone>
+
+    {encUploadOpen && (
+      <EncryptedUploadDialog
+        project={project}
+        dir={uploadDirRef.current || ""}
+        onClose={() => setEncUploadOpen(false)}
+      />
+    )}
+    </>
   );
 }
 
