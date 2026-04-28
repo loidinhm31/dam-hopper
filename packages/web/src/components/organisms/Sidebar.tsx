@@ -9,7 +9,6 @@ import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 import { ServerProfilesDialog } from "@/components/organisms/ServerProfilesDialog.js";
 import { getActiveProfile, getServerUrl, buildAuthHeaders, type ServerProfile } from "@/api/server-config.js";
-import { PortsPanel } from "@/components/organisms/PortsPanel.js";
 
 type NavEntry = { to: string; icon: ComponentType<{ className?: string }>; label: string };
 
@@ -152,9 +151,6 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
           </NavLink>
         ))}
       </nav>
-
-      {/* Ports panel */}
-      {!collapsed && <PortsPanel />}
 
       {/* Footer */}
       <div className="border-t border-[var(--color-border)] px-2 py-2 flex flex-col gap-1.5">
