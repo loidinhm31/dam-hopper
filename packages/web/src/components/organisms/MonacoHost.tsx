@@ -45,6 +45,12 @@ export function MonacoHost({
   const viewStateRef = useRef<unknown>(viewState);
   const wheelEnabledRef = useRef(useSettingsStore.getState().editorZoomWheelEnabled);
 
+  // Persist latest onSave ref so the Ctrl+S command always calls the current handler
+  const onSaveRef = useRef(onSave);
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  });
+
   // Persist latest viewState ref so blur handler always saves current state
   useEffect(() => {
     viewStateRef.current = viewState;
@@ -60,10 +66,10 @@ export function MonacoHost({
         editor.restoreViewState(viewState as monacoNs.editor.ICodeEditorViewState);
       }
 
-      // Ctrl+S / Cmd+S → save
+      // Ctrl+S / Cmd+S → save (use ref so the latest handleSave is always called)
       editor.addCommand(
         monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
-        () => onSave(),
+        () => onSaveRef.current(),
       );
 
       // Ctrl+Shift+F → open search panel with current selection as initial query
