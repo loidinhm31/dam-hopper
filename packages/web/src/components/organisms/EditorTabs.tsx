@@ -46,7 +46,7 @@ export function EditorTabs({ project }: { project: string | null }) {
     loadContent,
   } = useEditorStore();
 
-  const { isEncryptEnabled, getPassphrase, promptPassphrase, setPassphrase } = useEncryptMode();
+  const { isEncryptEnabled, getPassphrase, promptPassphrase, setPassphrase, getSession } = useEncryptMode();
   const encryptedWrite = useEncryptedWrite();
 
   const [activeEditor, setActiveEditor] = useState<monacoNs.editor.IStandaloneCodeEditor | null>(
@@ -60,8 +60,10 @@ export function EditorTabs({ project }: { project: string | null }) {
     const tab = tabs.find((t) => t.key === key);
     if (!tab) return;
 
-    let passphrase = getPassphrase(project);
-    if (!passphrase) {
+    // If a session is already cached the AES key is live — no passphrase needed
+    const sessionActive = !!getSession(project);
+    let passphrase = sessionActive ? "" : getPassphrase(project);
+    if (!sessionActive && !passphrase) {
       try {
         passphrase = await promptPassphrase(project);
         setPassphrase(project, passphrase);
@@ -74,7 +76,7 @@ export function EditorTabs({ project }: { project: string | null }) {
     if (result.ok) {
       markSaved(key, result.newMtime ?? tab.mtime);
     }
-  }, [project, isEncryptEnabled, getPassphrase, promptPassphrase, setPassphrase, encryptedWrite, save, tabs, markSaved]);
+  }, [project, isEncryptEnabled, getPassphrase, getSession, promptPassphrase, setPassphrase, encryptedWrite, save, tabs, markSaved]);
 
   const projectTabs = project ? tabs.filter((t) => t.project === project) : [];
   const activeKey = project ? activeKeys[project] : null;
