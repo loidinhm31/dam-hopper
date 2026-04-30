@@ -389,6 +389,10 @@ export const api = {
       getTransport().invoke<{ ok: boolean }>("git:resolve", { project, path, content }),
     commit: (project: string, message: string) =>
       getTransport().invoke<{ ok: boolean; hash: string }>("git:commit", { project, message }),
+    commitFiles: (project: string, hash: string) =>
+      getTransport().invoke<DiffFileEntry[]>("git:commitFiles", { project, hash }),
+    commitFileDiff: (project: string, hash: string, path: string) =>
+      getTransport().invoke<FileDiffContent>("git:commitFileDiff", { project, hash, path }),
   },
   config: {
     get: () => getTransport().invoke<DamHopperConfig>("config:get"),

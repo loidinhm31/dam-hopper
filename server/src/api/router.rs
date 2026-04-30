@@ -77,6 +77,8 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/git/{project}/conflicts", get(git_diff::list_conflicts))
         .route("/api/git/{project}/resolve", post(git_diff::resolve))
         .route("/api/git/{project}/commit", post(git_diff::commit))
+        .route("/api/git/{project}/commit/{hash}/files", get(git_diff::get_commit_files))
+        .route("/api/git/{project}/commit/{hash}/diff", get(git_diff::get_commit_file_diff))
         // Terminal — order matters: specific paths before parameterized
         .route("/api/terminal", post(terminal::create_session))
         .route("/api/terminal", get(terminal::list_sessions))

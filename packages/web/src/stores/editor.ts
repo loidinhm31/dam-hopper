@@ -39,6 +39,7 @@ export interface Tab {
   fileStatus?: string;
   additions?: number;
   deletions?: number;
+  commitHash?: string;
   /** Whether the tab metadata was restored but content still needs to be loaded from server. */
   hydrated?: boolean;
 }
@@ -55,6 +56,7 @@ interface EditorState {
     fileStatus: string,
     additions: number,
     deletions: number,
+    commitHash?: string,
   ) => void;
   close: (key: string) => void;
   setActive: (project: string, key: string | null) => void;
@@ -100,8 +102,10 @@ export const useEditorStore = create<EditorState>()(
         fileStatus: string,
         additions: number,
         deletions: number,
+        commitHash?: string,
       ) => {
-        const key = `diff::${project}::${path}`;
+        const prefix = commitHash ? `diff::${commitHash}` : "diff";
+        const key = `${prefix}::${project}::${path}`;
         const existing = get().tabs.find((t) => t.key === key);
         if (existing) {
           set((s) => ({
@@ -114,7 +118,9 @@ export const useEditorStore = create<EditorState>()(
           key,
           project,
           path,
-          name: `Diff: ${path.split("/").pop()}`,
+          name: commitHash 
+            ? `Diff[${commitHash.substring(0, 7)}]: ${path.split("/").pop()}`
+            : `Diff: ${path.split("/").pop()}`,
           mtime: 0,
           size: 0,
           tier: "diff",
@@ -127,6 +133,7 @@ export const useEditorStore = create<EditorState>()(
           fileStatus,
           additions,
           deletions,
+          commitHash,
         };
 
         set((s) => ({
@@ -567,6 +574,7 @@ export const useEditorStore = create<EditorState>()(
           fileStatus: t.fileStatus,
           additions: t.additions,
           deletions: t.deletions,
+          commitHash: t.commitHash,
           hydrated: true,
           loading: false,
           dirty: false,

@@ -1,13 +1,17 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { GitCommit, GitBranch, History } from "lucide-react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button } from "@/components/atoms/Button.js";
 import { ProgressList } from "@/components/organisms/ProgressList.js";
-import { useProjects, useGitFetch, useGitPull } from "@/api/queries.js";
-import type { GitOpResult } from "@/api/client.js";
+import { useProjects, useGitFetch, useGitPull, useProjectStatus } from "@/api/queries.js";
+import type { GitOpResult, GitLogEntry, DiffFileEntry } from "@/api/client.js";
 import { Badge } from "@/components/atoms/Badge.js";
 import { useGitWithSshRetry } from "@/hooks/useGitWithSshRetry.js";
 import { GitLogTree } from "@/components/organisms/GitLogTree.js";
 import { GitLocalChanges } from "@/components/organisms/GitLocalChanges.js";
+import { CommitDetailsPanel } from "@/components/organisms/CommitDetailsPanel.js";
+import { useEditorStore } from "@/stores/editor.js";
+import { cn } from "@/lib/utils.js";
 
 interface SectionResults {
   results: GitOpResult[];
@@ -41,6 +45,7 @@ function ResultsSummary({ results }: SectionResults) {
 export function GitPage() {
   const { data: projects = [] } = useProjects();
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectedCommit, setSelectedCommit] = useState<GitLogEntry | null>(null);
 
   const [fetchResults, setFetchResults] = useState<GitOpResult[] | null>(null);
   const [pullResults, setPullResults] = useState<GitOpResult[] | null>(null);
@@ -48,10 +53,18 @@ export function GitPage() {
   const gitFetch = useGitFetch();
   const gitPull = useGitPull();
   const { PassphraseDialogElement, executeWithRetry } = useGitWithSshRetry();
+  const openDiff = useEditorStore((s) => s.openDiff);
 
   const allSelected = selected.size === 0; // empty = all
   const selectedList = allSelected ? undefined : [...selected];
   const projectNames = projects.map((p) => p.name);
+
+  const selectedProjectName = selected.size === 1 ? [...selected][0] : null;
+  const { data: projectStatus } = useProjectStatus(selectedProjectName ?? "");
+
+  useEffect(() => {
+    setSelectedCommit(null);
+  }, [selectedProjectName]);
 
   function toggleProject(name: string) {
     setSelected((prev) => {
@@ -60,6 +73,19 @@ export function GitPage() {
       else next.add(name);
       return next;
     });
+  }
+
+  function handleFileDoubleClick(file: DiffFileEntry) {
+    if (selectedProjectName && selectedCommit) {
+      openDiff(
+        selectedProjectName,
+        file.path,
+        file.status,
+        file.additions,
+        file.deletions,
+        selectedCommit.hash
+      );
+    }
   }
 
   return (
@@ -157,42 +183,59 @@ export function GitPage() {
       </div>
 
       {/* Git Graph View */}
-      {selected.size === 1 ? (
+      {selectedProjectName ? (
         <div className="mt-8 space-y-4">
-          <h2 className="text-base font-semibold text-[var(--color-text)]">
-             Git Repository: {[...selected][0]}
+          <h2 className="text-base font-semibold text-[var(--color-text)] flex items-center gap-2">
+             Git Repository: {selectedProjectName}
+             {projectStatus?.branch && (
+               <Badge variant="outline" className="ml-1 text-[var(--color-primary)] bg-[var(--color-primary)]/5 border-[var(--color-primary)]/20">
+                 <GitBranch className="w-3 h-3 mr-1" />
+                 {projectStatus.branch}
+               </Badge>
+             )}
           </h2>
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 h-[700px]">
             {/* Sidebar: Commit / Local Changes */}
             <div className="lg:col-span-1 flex flex-col h-full overflow-hidden">
               <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] flex items-center gap-2">
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
+                <GitCommit className="w-3.5 h-3.5" />
                 Local Changes
               </div>
-              <GitLocalChanges project={[...selected][0]} />
+              <GitLocalChanges project={selectedProjectName} />
             </div>
 
-            {/* Main: Git Log Graph */}
-            <div className="lg:col-span-3 flex flex-col h-full overflow-hidden">
-              <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] flex items-center gap-2">
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16" />
-                </svg>
-                Commits
+            {/* Main: Git Log Graph + Details */}
+            <div className="lg:col-span-3 flex h-full overflow-hidden border border-[var(--color-border)] rounded-md bg-[var(--color-surface)]">
+              <div className={cn("flex flex-col min-w-0 flex-1", selectedCommit ? "w-[65%]" : "w-full")}>
+                <div className="shrink-0 mb-0 px-4 py-2 border-b border-[var(--color-border)] text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] flex items-center gap-2 bg-[var(--color-background)]">
+                  <History className="w-3.5 h-3.5" />
+                  Commits
+                </div>
+                <div className="flex-1 min-h-0 overflow-hidden">
+                  <GitLogTree 
+                    project={selectedProjectName} 
+                    selectedHash={selectedCommit?.hash}
+                    onSelectCommit={setSelectedCommit}
+                  />
+                </div>
               </div>
-              <div className="flex-1 min-h-0">
-                <GitLogTree project={[...selected][0]} />
-              </div>
+              
+              {selectedCommit && (
+                <div className="w-[35%] h-full shrink-0">
+                  <CommitDetailsPanel
+                    project={selectedProjectName}
+                    commit={selectedCommit}
+                    onClose={() => setSelectedCommit(null)}
+                    onFileDoubleClick={handleFileDoubleClick}
+                  />
+                </div>
+              )}
             </div>
           </div>
         </div>
       ) : (
         <div className="mt-8 p-8 flex flex-col items-center justify-center text-center border-2 border-dashed border-[var(--color-border)] rounded-lg bg-[var(--color-surface)]/50">
-           <svg className="w-12 h-12 text-[var(--color-text-muted)] mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
-           </svg>
+           <GitBranch className="w-12 h-12 text-[var(--color-text-muted)] mb-3" />
            <h3 className="font-medium text-[var(--color-text)]">No Project Selected</h3>
            <p className="mt-1 text-sm text-[var(--color-text-muted)]">
              Select exactly one project above to view its Git history graph, structured similarly to IDE tools.

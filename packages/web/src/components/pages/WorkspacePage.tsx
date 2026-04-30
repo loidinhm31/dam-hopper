@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { Terminal as TerminalIcon, Plus, Files, Search, Radio, GitBranch } from "lucide-react";
+import { Terminal as TerminalIcon, Plus, Files, Search, Radio, GitCommit, GitMerge, GitBranch, LayoutGrid } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { IdeShell } from "@/components/templates/IdeShell.js";
@@ -10,8 +10,10 @@ import { TerminalTabBar } from "@/components/organisms/TerminalTabBar.js";
 import { MultiTerminalDisplay } from "@/components/organisms/MultiTerminalDisplay.js";
 import { ProjectInfoPanel } from "@/components/organisms/ProjectInfoPanel.js";
 import { SearchPanel } from "@/components/organisms/SearchPanel.js";
-import { PortsPanel } from "@/components/organisms/PortsPanel.js";
 import { ChangedFilesList } from "@/components/organisms/ChangedFilesList.js";
+import { PortsPanel } from "@/components/organisms/PortsPanel.js";
+import { GitLogTree } from "@/components/organisms/GitLogTree.js";
+import { useProjectStatus } from "@/api/queries.js";
 
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
@@ -72,6 +74,8 @@ export default function WorkspacePage() {
   const projectName =
     activeProject ?? (projects.length > 0 ? projects[0].name : null);
 
+  const { data: projectStatus } = useProjectStatus(projectName ?? "");
+
   const { open: searchOpen, close: closeSearch, openWith: openSearch } = useSearchUiStore();
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -94,148 +98,6 @@ export default function WorkspacePage() {
     setActiveProject(name);
     handleSelectProject(name);
   }
-
-  const leftTools = useMemo<ToolWindowDef[]>(
-    () => [
-      {
-        id: "search",
-        label: "Search",
-        icon: Search,
-        content: projectName ? (
-          <SearchPanel
-            project={projectName}
-            onResultClick={(match) => {
-              const targetProject = match.project ?? projectName;
-              if (match.project && match.project !== projectName) {
-                setActiveProject(match.project);
-              }
-              void openFile(targetProject, {
-                id: match.path,
-                name: match.path.split("/").pop()!,
-                kind: "file",
-                size: 0,
-                mtime: 0,
-                isSymlink: false,
-                children: null,
-              });
-            }}
-          />
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-            Select a project to search
-          </div>
-        ),
-      },
-      {
-        id: "explorer",
-        label: "Explorer",
-        icon: Files,
-        content: (
-          <div className="flex flex-col h-full">
-            {projects.length > 1 && (
-              <div className="shrink-0 px-2 py-1.5 border-b border-[var(--color-border)]">
-                <Select
-                  value={projectName ?? ""}
-                  onValueChange={setActiveProject}
-                >
-                  <SelectTrigger className="text-xs h-7">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {projects.map((p) => (
-                      <SelectItem key={p.name} value={p.name}>
-                        {p.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            {projectName ? (
-              <FileTree
-                key={projectName}
-                project={projectName}
-                path=""
-                onFileOpen={handleFileOpen}
-                onOpenTerminal={() => handleLaunchShell(projectName)}
-                className="flex-1"
-              />
-            ) : (
-              <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-                No projects configured
-              </div>
-            )}
-          </div>
-        ),
-      },
-      {
-        id: "source-control",
-        label: "Source Control",
-        icon: GitBranch,
-        content: projectName ? (
-          <ChangedFilesList
-            project={projectName}
-            selectedFile={null}
-            onSelectFile={(path, isConflict) => {
-              if (projectName) openDiff(projectName, path, "modified", 0, 0);
-            }}
-          />
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-            Select a project to view changes
-          </div>
-        ),
-      },
-      {
-        id: "ports",
-        label: "Ports",
-        icon: Radio,
-        position: "bottom",
-        content: <PortsPanel />,
-      },
-    ],
-    [
-      projects,
-      projectName,
-      handleFileOpen,
-      handleLaunchShell,
-      openDiff,
-      openFile,
-    ],
-  );
-
-  const rightTools = useMemo<ToolWindowDef[]>(() => [
-    {
-      id: "terminals",
-      label: "Terminals",
-      icon: TerminalIcon,
-      content: isLoading ? (
-        <div className="flex items-center justify-center flex-1 h-full">
-          <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
-        </div>
-      ) : (
-        <TerminalTreeView
-          projects={tree}
-          freeTerminals={freeTerminals}
-          selectedId={selectedId}
-          onSelectProject={handleSelectProjectInTree}
-          onSelectTerminal={handleSelectTerminal}
-          onLaunchTerminal={handleLaunchTerminal}
-          onKillTerminal={handleKillTerminal}
-          onAddShell={handleLaunchShell}
-          onLaunchProfile={handleLaunchProfile}
-          onDeleteProfile={handleDeleteProfile}
-          onLaunchSuggestedCommand={handleLaunchSuggestedCommand}
-          onAddFreeTerminal={handleAddFreeTerminal}
-          onLaunchFreeWithCommand={handleLaunchFreeWithCommand}
-          onSelectFreeTerminal={handleSelectTerminal}
-          onKillFreeTerminal={handleKillTerminal}
-          onRemoveFreeTerminal={handleRemoveFreeTerminal}
-          onSaveFreeTerminal={handleOpenFreeTerminalSavePrompt}
-        />
-      )
-    }
-  ], [isLoading, tree, freeTerminals, selectedId, handleSelectProjectInTree, handleSelectTerminal, handleLaunchTerminal, handleKillTerminal, handleLaunchShell, handleLaunchProfile, handleDeleteProfile, handleLaunchSuggestedCommand, handleAddFreeTerminal, handleLaunchFreeWithCommand, handleOpenFreeTerminalSavePrompt, handleRemoveFreeTerminal]);
 
   const terminalPanel = (
     <div className="flex flex-col h-full">
@@ -367,14 +229,194 @@ export default function WorkspacePage() {
     </div>
   );
 
+  const leftTools = useMemo<ToolWindowDef[]>(
+    () => [
+      {
+        id: "search",
+        label: "Search",
+        icon: Search,
+        content: projectName ? (
+          <SearchPanel
+            project={projectName}
+            onResultClick={(match) => {
+              const targetProject = match.project ?? projectName;
+              if (match.project && match.project !== projectName) {
+                setActiveProject(match.project);
+              }
+              void openFile(targetProject, {
+                id: match.path,
+                name: match.path.split("/").pop()!,
+                kind: "file",
+                size: 0,
+                mtime: 0,
+                isSymlink: false,
+                children: null,
+              });
+            }}
+          />
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+            Select a project to search
+          </div>
+        ),
+      },
+      {
+        id: "explorer",
+        label: "Explorer",
+        icon: Files,
+        content: (
+          <div className="flex flex-col h-full">
+            {projects.length > 1 && (
+              <div className="shrink-0 px-2 py-1.5 border-b border-[var(--color-border)]">
+                <Select
+                  value={projectName ?? ""}
+                  onValueChange={setActiveProject}
+                >
+                  <SelectTrigger className="text-xs h-7">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {projects.map((p) => (
+                      <SelectItem key={p.name} value={p.name}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            {projectName ? (
+              <FileTree
+                key={projectName}
+                project={projectName}
+                path=""
+                onFileOpen={handleFileOpen}
+                onOpenTerminal={() => handleLaunchShell(projectName)}
+                className="flex-1"
+              />
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+                No projects configured
+              </div>
+            )}
+          </div>
+        ),
+      },
+      {
+        id: "source-control",
+        label: "Commit",
+        icon: GitCommit,
+        content: projectName ? (
+          <ChangedFilesList
+            project={projectName}
+            selectedFile={null}
+            onSelectFile={(path, isConflict) => {
+              if (projectName) openDiff(projectName, path, "modified", 0, 0);
+            }}
+          />
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+            Select a project to view changes
+          </div>
+        ),
+      },
+      {
+        id: "terminal",
+        label: "Terminal",
+        icon: TerminalIcon,
+        position: "bottom",
+        content: terminalPanel,
+      },
+      {
+        id: "git",
+        label: "Git",
+        icon: GitMerge,
+        position: "bottom",
+        content: projectName ? (
+          <div className="flex flex-col h-full overflow-hidden">
+            <div className="p-3 border-b border-[var(--color-border)]">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                  Current Branch
+                </span>
+              </div>
+              <div className="flex items-center gap-2 text-xs font-medium text-[var(--color-text)]">
+                <GitBranch className="w-3.5 h-3.5 text-[var(--color-primary)]" />
+                {projectStatus?.branch ?? "..."}
+              </div>
+            </div>
+            <div className="flex-1 min-h-0">
+              <div className="px-3 py-2 border-b border-[var(--color-border)] text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] bg-[var(--color-surface-2)]">
+                History
+              </div>
+              <GitLogTree project={projectName} />
+            </div>
+          </div>
+        ) : (
+          <div className="p-4 text-xs text-[var(--color-text-muted)] italic text-center">
+            Select a project to see Git status
+          </div>
+        ),
+      },
+      {
+        id: "ports",
+        label: "Ports",
+        icon: Radio,
+        position: "bottom",
+        content: <PortsPanel />,
+      },
+    ],
+    [
+      projects,
+      projectName,
+      projectStatus,
+      handleFileOpen,
+      handleLaunchShell,
+      openDiff,
+      openFile,
+      terminalPanel,
+    ],
+  );
+
+  const rightTools = useMemo<ToolWindowDef[]>(() => [
+    {
+      id: "terminals",
+      label: "Fleet Terminal",
+      icon: LayoutGrid,
+      content: isLoading ? (
+        <div className="flex items-center justify-center flex-1 h-full">
+          <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
+        </div>
+      ) : (
+        <TerminalTreeView
+          projects={tree}
+          freeTerminals={freeTerminals}
+          selectedId={selectedId}
+          onSelectProject={handleSelectProjectInTree}
+          onSelectTerminal={handleSelectTerminal}
+          onLaunchTerminal={handleLaunchTerminal}
+          onKillTerminal={handleKillTerminal}
+          onAddShell={handleLaunchShell}
+          onLaunchProfile={handleLaunchProfile}
+          onDeleteProfile={handleDeleteProfile}
+          onLaunchSuggestedCommand={handleLaunchSuggestedCommand}
+          onAddFreeTerminal={handleAddFreeTerminal}
+          onLaunchFreeWithCommand={handleLaunchFreeWithCommand}
+          onSelectFreeTerminal={handleSelectTerminal}
+          onKillFreeTerminal={handleKillTerminal}
+          onRemoveFreeTerminal={handleRemoveFreeTerminal}
+          onSaveFreeTerminal={handleOpenFreeTerminalSavePrompt}
+        />
+      )
+    }
+  ], [isLoading, tree, freeTerminals, selectedId, handleSelectProjectInTree, handleSelectTerminal, handleLaunchTerminal, handleKillTerminal, handleLaunchShell, handleLaunchProfile, handleDeleteProfile, handleLaunchSuggestedCommand, handleAddFreeTerminal, handleLaunchFreeWithCommand, handleOpenFreeTerminalSavePrompt, handleRemoveFreeTerminal]);
+
   return (
     <>
       <IdeShell
         leftTools={leftTools}
         rightTools={rightTools}
         editor={<EditorTabs project={projectName} />}
-        terminal={terminalPanel}
-        hideEditor={false}
       />
 
       {/* Floating search dialog */}

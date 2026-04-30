@@ -26,7 +26,7 @@ import {
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils.js";
-import { useGitFileDiff } from "@/api/queries.js";
+import { useGitFileDiff, useGitCommitFileDiff } from "@/api/queries.js";
 import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 
@@ -40,6 +40,7 @@ interface DiffViewerProps {
   fileStatus: string;
   additions: number;
   deletions: number;
+  commitHash?: string;
   onClose: () => void;
 }
 
@@ -71,9 +72,13 @@ export function DiffViewer({
   fileStatus,
   additions,
   deletions,
+  commitHash,
   onClose,
 }: DiffViewerProps) {
-  const { data, isLoading, isError } = useGitFileDiff(project, filePath);
+  const localDiff = useGitFileDiff(project, commitHash ? "" : filePath);
+  const commitDiff = useGitCommitFileDiff(project, commitHash ?? "", commitHash ? filePath : "");
+
+  const { data, isLoading, isError } = commitHash ? commitDiff : localDiff;
   const [sideBySide, setSideBySide] = useState(true);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -344,8 +349,8 @@ export function DiffViewer({
             )}
           </button>
 
-          {/* Save — hidden for deleted files (nothing to write) */}
-          {!isDeleted && (
+          {/* Save — hidden for deleted files or historical commits */}
+          {!isDeleted && !commitHash && (
             <button
               onClick={() => void handleSave()}
               disabled={!isDirty || saveState === "saving"}
@@ -403,8 +408,8 @@ export function DiffViewer({
           options={{
             renderSideBySide: sideBySide,
             originalEditable: false,
-            readOnly: isDeleted || isAdded,
-            renderMarginRevertIcon: true,
+            readOnly: isDeleted || isAdded || !!commitHash,
+            renderMarginRevertIcon: !commitHash,
             hideUnchangedRegions: { enabled: false },
             diffAlgorithm: "advanced",
             fontSize: 13,

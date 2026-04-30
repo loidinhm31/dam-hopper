@@ -269,6 +269,14 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
       const d = data as { project: string; message: string };
       return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/commit`, body: { message: d.message } };
     }
+    case "git:commitFiles": {
+      const d = data as { project: string; hash: string };
+      return { method: "GET", url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/files` };
+    }
+    case "git:commitFileDiff": {
+      const d = data as { project: string; hash: string; path: string };
+      return { method: "GET", url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/diff?path=${encodeURIComponent(d.path)}` };
+    }
 
     // Ports
     case "port:list":     return { method: "GET",  url: "/api/ports" };

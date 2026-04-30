@@ -2,32 +2,23 @@ import { useRef, useState, type ReactNode, useMemo, useEffect } from "react";
 import { TopNav } from "@/components/organisms/TopNav.js";
 import { useSidebarCollapse } from "@/hooks/useSidebarCollapse.js";
 import { useResizeHandle } from "@/hooks/useResizeHandle.js";
+import { useVerticalResizeHandle } from "@/hooks/useVerticalResizeHandle.js";
 import { cn } from "@/lib/utils.js";
 import type { ToolWindowDef } from "@/types/ide.js";
 import { ActivityBar } from "@/components/organisms/ActivityBar.js";
-import { SidebarSplitContainer } from "@/components/organisms/SidebarSplitContainer.js";
+import { SidebarTopGroup } from "@/components/organisms/SidebarTopGroup.js";
+import { SidebarBottomGroup } from "@/components/organisms/SidebarBottomGroup.js";
 
 const TREE_WIDTH_KEY = "dam-hopper:ide-tree-width";
 const TERMINAL_TREE_WIDTH_KEY = "dam-hopper:ide-terminal-tree-width";
-const EDITOR_HEIGHT_KEY = "dam-hopper:ide-editor-height-pct";
+const BOTTOM_HEIGHT_KEY = "dam-hopper:ide-bottom-height";
 
 const LEFT_TOP_KEY = "dam-hopper:ide-left-top";
 const LEFT_BOTTOM_KEY = "dam-hopper:ide-left-bottom";
 const RIGHT_TOP_KEY = "dam-hopper:ide-right-top";
 const RIGHT_BOTTOM_KEY = "dam-hopper:ide-right-bottom";
 
-const LEFT_SPLIT_KEY = "dam-hopper:ide-left-split";
-const RIGHT_SPLIT_KEY = "dam-hopper:ide-right-split";
-
-interface IdeShellProps {
-  leftTools: ToolWindowDef[];
-  rightTools: ToolWindowDef[];
-  editor: ReactNode;
-  terminal: ReactNode;
-  hideEditor?: boolean;
-}
-
-export function IdeShell({ leftTools, rightTools, editor, terminal, hideEditor = false }: IdeShellProps) {
+export function IdeShell({ leftTools, rightTools, editor }: { leftTools: ToolWindowDef[], rightTools: ToolWindowDef[], editor: ReactNode }) {
   const { collapsed, toggle } = useSidebarCollapse();
 
   // Left: tool panel width
@@ -43,6 +34,13 @@ export function IdeShell({ leftTools, rightTools, editor, terminal, hideEditor =
     handleProps: rightResizeProps,
     isDragging: isRightDragging,
   } = useResizeHandle({ min: 180, max: 480, defaultWidth: 260, storageKey: TERMINAL_TREE_WIDTH_KEY, reversed: true });
+
+  // Bottom: panel height
+  const {
+    height: bottomHeight,
+    handleProps: bottomResizeProps,
+    isDragging: isBottomDragging,
+  } = useVerticalResizeHandle({ min: 100, max: 600, defaultHeight: 300, storageKey: BOTTOM_HEIGHT_KEY, reversed: true });
 
   const [activeLeftTopId, setActiveLeftTopId] = useState<string | null>(() => {
     const stored = localStorage.getItem(LEFT_TOP_KEY);
@@ -99,52 +97,7 @@ export function IdeShell({ leftTools, rightTools, editor, terminal, hideEditor =
     else setActiveRightBottomId(curr => curr === id ? null : id);
   }
 
-  // Vertical: editor / terminal split
-  const [editorPct, setEditorPct] = useState<number>(() => {
-    const stored = localStorage.getItem(EDITOR_HEIGHT_KEY);
-    if (stored) {
-      const v = parseInt(stored, 10);
-      if (!isNaN(v)) return Math.min(Math.max(v, 20), 85);
-    }
-    return 70;
-  });
-  const [isVertDragging, setIsVertDragging] = useState(false);
-  const centerPanelRef = useRef<HTMLDivElement>(null);
-
-  function handleVertMouseDown(e: React.MouseEvent) {
-    e.preventDefault();
-    const panel = centerPanelRef.current;
-    if (!panel) return;
-    const startY = e.clientY;
-    const startPct = editorPct;
-    const totalH = panel.getBoundingClientRect().height;
-
-    setIsVertDragging(true);
-    document.body.style.cursor = "row-resize";
-    document.body.style.userSelect = "none";
-
-    function onMouseMove(ev: MouseEvent) {
-      const newPct = Math.min(Math.max(startPct + ((ev.clientY - startY) / totalH) * 100, 20), 85);
-      setEditorPct(newPct);
-    }
-
-    function onMouseUp() {
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      setIsVertDragging(false);
-      setEditorPct((pct) => {
-        localStorage.setItem(EDITOR_HEIGHT_KEY, String(Math.round(pct)));
-        return pct;
-      });
-    }
-
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-  }
-
-  const isDragging = isLeftDragging || isRightDragging || isVertDragging;
+  const isDragging = isLeftDragging || isRightDragging || isBottomDragging;
 
   return (
     <div className={cn("flex flex-col h-screen overflow-hidden gradient-bg", isDragging && "select-none")}>
@@ -152,7 +105,7 @@ export function IdeShell({ leftTools, rightTools, editor, terminal, hideEditor =
       <TopNav collapsed={collapsed} onToggle={toggle} />
 
       <div className="flex-1 flex min-w-0 overflow-hidden">
-        {/* ── Left Side ────────────────────────────────────────────────── */}
+        {/* ── Left Activity Bar ────────────────────────────────────────── */}
         <ActivityBar 
           side="left" 
           tools={leftTools} 
@@ -161,66 +114,89 @@ export function IdeShell({ leftTools, rightTools, editor, terminal, hideEditor =
           onToggle={handleToggleLeft} 
         />
         
-        {(activeLeftTopTool || activeLeftBottomTool) && (
-          <>
-            <SidebarSplitContainer
-              topTool={activeLeftTopTool ?? null}
-              bottomTool={activeLeftBottomTool ?? null}
-              width={leftWidth}
-              onCloseTop={() => setActiveLeftTopId(null)}
-              onCloseBottom={() => setActiveLeftBottomId(null)}
-              storageKey={LEFT_SPLIT_KEY}
-            />
-            <div
-              {...leftResizeProps}
-              className="w-1 shrink-0 cursor-col-resize group relative hover:bg-[var(--color-primary)]/20"
-            >
-              <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 bg-[var(--color-primary)]/50 opacity-0 group-hover:opacity-100 transition-opacity" />
-            </div>
-          </>
-        )}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          {/* ── Top area: Sidebars + Editor ───────────────────────────── */}
+          <div className="flex-1 flex min-w-0 overflow-hidden">
+            {activeLeftTopTool && (
+              <>
+                <div style={{ width: leftWidth }} className="shrink-0 flex flex-col">
+                  <SidebarTopGroup
+                    tool={activeLeftTopTool}
+                    onClose={() => setActiveLeftTopId(null)}
+                  />
+                </div>
+                <div
+                  {...leftResizeProps}
+                  className="w-1 shrink-0 cursor-col-resize group relative hover:bg-[var(--color-primary)]/20"
+                >
+                  <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 bg-[var(--color-primary)]/50 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+              </>
+            )}
 
-        {/* ── Center: editor + terminal (vertical split) ──────────────── */}
-        <div ref={centerPanelRef} className="flex-1 flex flex-col min-w-0 overflow-hidden">
-          {!hideEditor && (
-            <>
-              <div style={{ height: `${editorPct}%` }} className="overflow-hidden">
+            {/* ── Center Editor ────────────────── */}
+            <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+              <div className="flex-1 overflow-hidden">
                 {editor}
               </div>
+            </div>
+
+            {activeRightTopTool && (
+              <>
+                <div
+                  {...rightResizeProps}
+                  className="w-1 shrink-0 cursor-col-resize group relative hover:bg-[var(--color-primary)]/20"
+                >
+                  <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 bg-[var(--color-primary)]/50 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+                <div style={{ width: rightWidth }} className="shrink-0 flex flex-col">
+                  <SidebarTopGroup
+                    tool={activeRightTopTool}
+                    onClose={() => setActiveRightTopId(null)}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* ── Bottom Panel Area ────────────────────────────────────── */}
+          {(activeLeftBottomTool || activeRightBottomTool) && (
+            <div className="shrink-0 flex flex-col bg-[var(--color-surface)]">
               <div
-                onMouseDown={handleVertMouseDown}
-                className="h-1 shrink-0 cursor-row-resize group relative hover:bg-[var(--color-primary)]/20 border-t border-[var(--color-border)]"
+                {...bottomResizeProps}
+                className="h-1 shrink-0 cursor-row-resize group relative hover:bg-[var(--color-primary)]/20"
               >
                 <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-0.5 bg-[var(--color-primary)]/50 opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
-            </>
+              <div 
+                style={{ height: bottomHeight }} 
+                className="flex border-t border-[var(--color-border)] overflow-hidden"
+              >
+                {activeLeftBottomTool && (
+                  <div className="flex-1 min-w-0 flex flex-col">
+                    <SidebarBottomGroup
+                      tool={activeLeftBottomTool}
+                      onClose={() => setActiveLeftBottomId(null)}
+                    />
+                  </div>
+                )}
+                {activeLeftBottomTool && activeRightBottomTool && (
+                  <div className="w-px shrink-0 bg-[var(--color-border)]" />
+                )}
+                {activeRightBottomTool && (
+                  <div className="flex-1 min-w-0 flex flex-col">
+                    <SidebarBottomGroup
+                      tool={activeRightBottomTool}
+                      onClose={() => setActiveRightBottomId(null)}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
           )}
-          <div className="flex-1 min-h-0 overflow-hidden">
-            {terminal}
-          </div>
         </div>
 
-        {/* ── Right Side ───────────────────────────────────────────────── */}
-        {(activeRightTopTool || activeRightBottomTool) && (
-          <>
-            <div
-              {...rightResizeProps}
-              className="w-1 shrink-0 cursor-col-resize group relative hover:bg-[var(--color-primary)]/20"
-            >
-              <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 bg-[var(--color-primary)]/50 opacity-0 group-hover:opacity-100 transition-opacity" />
-            </div>
-
-            <SidebarSplitContainer
-              topTool={activeRightTopTool ?? null}
-              bottomTool={activeRightBottomTool ?? null}
-              width={rightWidth}
-              onCloseTop={() => setActiveRightTopId(null)}
-              onCloseBottom={() => setActiveRightBottomId(null)}
-              storageKey={RIGHT_SPLIT_KEY}
-            />
-          </>
-        )}
-
+        {/* ── Right Activity Bar ───────────────────────────────────────── */}
         {rightTools.length > 0 && (
           <ActivityBar 
             side="right" 
