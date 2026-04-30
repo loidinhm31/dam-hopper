@@ -698,3 +698,145 @@ pub fn commit_files(project_path: &Path, message: &str) -> Result<String, AppErr
         .map_err(|e| AppError::Git(e.message().to_string()))?;
     Ok(oid.to_string())
 }
+
+/// List all files changed in a specific commit.
+pub fn get_commit_files(project_path: &Path, hash: &str) -> Result<Vec<DiffFileEntry>, AppError> {
+    let repo = open_repo(project_path)?;
+    let oid = git2::Oid::from_str(hash).map_err(|e| AppError::InvalidInput(e.to_string()))?;
+    let commit = repo
+        .find_commit(oid)
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
+
+    let tree = commit.tree().map_err(|e| AppError::Git(e.message().to_string()))?;
+
+    // Diff against parent(s). For merges, we diff against the first parent.
+    // For root commits, we diff against an empty tree.
+    let parent_tree = if commit.parent_count() > 0 {
+        Some(
+            commit
+                .parent(0)
+                .map_err(|e| AppError::Git(e.message().to_string()))?
+                .tree()
+                .map_err(|e| AppError::Git(e.message().to_string()))?,
+        )
+    } else {
+        None
+    };
+
+    let mut opts = DiffOptions::new();
+    let diff = repo
+        .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), Some(&mut opts))
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
+
+    let mut entries = Vec::new();
+    collect_diff_entries(&diff, false, &mut entries)?;
+    Ok(entries)
+}
+
+/// Return original (parent) blob + commit blob for Monaco DiffEditor.
+pub fn get_commit_file_diff(
+    project_path: &Path,
+    rel_path: &str,
+    hash: &str,
+) -> Result<FileDiffContent, AppError> {
+    safe_join(project_path, rel_path)?;
+    let repo = open_repo(project_path)?;
+    let oid = git2::Oid::from_str(hash).map_err(|e| AppError::InvalidInput(e.to_string()))?;
+    let commit = repo
+        .find_commit(oid)
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
+
+    let tree = commit.tree().map_err(|e| AppError::Git(e.message().to_string()))?;
+
+    // Target blob: the file in the requested commit
+    let target_bytes = match tree.get_path(Path::new(rel_path)) {
+        Ok(entry) => {
+            let blob = repo
+                .find_blob(entry.id())
+                .map_err(|e| AppError::Git(e.message().to_string()))?;
+            Some(blob.content().to_vec())
+        }
+        Err(_) => None, // File doesn't exist in this commit
+    };
+
+    // Original blob: the file in the parent commit
+    let parent_tree = if commit.parent_count() > 0 {
+        commit
+            .parent(0)
+            .map_err(|e| AppError::Git(e.message().to_string()))?
+            .tree()
+            .ok()
+    } else {
+        None
+    };
+
+    let original_bytes = match parent_tree.and_then(|t| t.get_path(Path::new(rel_path)).ok()) {
+        Some(entry) => {
+            let blob = repo
+                .find_blob(entry.id())
+                .map_err(|e| AppError::Git(e.message().to_string()))?;
+            Some(blob.content().to_vec())
+        }
+        None => None,
+    };
+
+    let is_binary_original = original_bytes
+        .as_deref()
+        .map(is_binary_content)
+        .unwrap_or(false);
+    let is_binary_target = target_bytes
+        .as_deref()
+        .map(is_binary_content)
+        .unwrap_or(false);
+    let is_binary = is_binary_original || is_binary_target;
+
+    if is_binary {
+        return Ok(FileDiffContent {
+            path: rel_path.to_string(),
+            original: None,
+            modified: None,
+            language: detect_language(rel_path),
+            hunks: vec![],
+            is_binary: true,
+        });
+    }
+
+    let original = original_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
+    let modified = target_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
+
+    // Compute hunks for this commit
+    let mut opts = DiffOptions::new();
+    opts.pathspec(rel_path);
+    let diff = repo
+        .diff_tree_to_tree(
+            commit
+                .parent(0)
+                .ok()
+                .and_then(|p| p.tree().ok())
+                .as_ref(),
+            Some(&tree),
+            Some(&mut opts),
+        )
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
+
+    let hunks = if diff.deltas().count() > 0 {
+        if let Some(patch) = git2::Patch::from_diff(&diff, 0)
+            .map_err(|e| AppError::Git(e.message().to_string()))?
+        {
+            extract_hunks(&patch)?
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
+    };
+
+    Ok(FileDiffContent {
+        path: rel_path.to_string(),
+        original,
+        modified,
+        language: detect_language(rel_path),
+        hunks,
+        is_binary: false,
+    })
+}

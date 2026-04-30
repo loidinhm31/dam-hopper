@@ -244,3 +244,37 @@ pub async fn commit(
         .map_err(ApiError::from_app)?;
     Ok(Json(CommitResponse { ok: true, hash }))
 }
+
+// ---------------------------------------------------------------------------
+// GET /api/git/{project}/commit/{hash}/files  — list files in commit
+// ---------------------------------------------------------------------------
+
+pub async fn get_commit_files(
+    State(state): State<AppState>,
+    Path((project, hash)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = state.project_path(&project).await.map_err(ApiError::from_app)?;
+    let resp = tokio::task::spawn_blocking(move || git::get_commit_files(&path, &hash))
+        .await
+        .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+        .map_err(ApiError::from_app)?;
+    Ok(Json(resp))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/git/{project}/commit/{hash}/diff?path=<rel_path>  — file diff in commit
+// ---------------------------------------------------------------------------
+
+pub async fn get_commit_file_diff(
+    State(state): State<AppState>,
+    Path((project, hash)): Path<(String, String)>,
+    Query(q): Query<FilePathQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let proj_path = state.project_path(&project).await.map_err(ApiError::from_app)?;
+    let rel = q.path;
+    let content = tokio::task::spawn_blocking(move || git::get_commit_file_diff(&proj_path, &rel, &hash))
+        .await
+        .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+        .map_err(ApiError::from_app)?;
+    Ok(Json(content))
+}

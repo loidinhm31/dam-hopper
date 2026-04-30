@@ -4,17 +4,16 @@ import { cn } from "@/lib/utils.js";
 
 interface ToolPanelProps {
   tool: ToolWindowDef;
-  width: number;
   onClose: () => void;
   className?: string;
   style?: React.CSSProperties;
 }
 
-export function ToolPanel({ tool, width, onClose, className, style }: ToolPanelProps) {
+export function ToolPanel({ tool, onClose, className, style }: ToolPanelProps) {
   return (
     <div 
-      style={{ ...style, width }} 
-      className={cn("shrink-0 flex flex-col bg-[var(--color-surface)] overflow-hidden", className)}
+      style={style} 
+      className={cn("shrink-0 flex flex-col bg-[var(--color-surface)] overflow-hidden w-full", className)}
     >
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--color-border)]">
         <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-muted)]">

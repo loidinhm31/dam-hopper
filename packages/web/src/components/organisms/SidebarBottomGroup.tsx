@@ -3,16 +3,14 @@ import { ToolPanel } from "./ToolPanel.js";
 
 interface SidebarBottomGroupProps {
   tool: ToolWindowDef;
-  width: number;
   onClose: () => void;
   style?: React.CSSProperties;
 }
 
-export function SidebarBottomGroup({ tool, width, onClose, style }: SidebarBottomGroupProps) {
+export function SidebarBottomGroup({ tool, onClose, style }: SidebarBottomGroupProps) {
   return (
     <ToolPanel
       tool={tool}
-      width={width}
       onClose={onClose}
       style={style}
       className="flex-1"

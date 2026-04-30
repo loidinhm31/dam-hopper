@@ -232,6 +232,24 @@ export function useGitFileDiff(project: string, path: string) {
   });
 }
 
+export function useGitCommitFiles(project: string, hash: string) {
+  return useQuery<DiffFileEntry[]>({
+    queryKey: ["git-commit-files", project, hash],
+    queryFn: () => api.git.commitFiles(project, hash),
+    enabled: !!project && !!hash,
+    staleTime: 60_000,
+  });
+}
+
+export function useGitCommitFileDiff(project: string, hash: string, path: string) {
+  return useQuery<FileDiffContent>({
+    queryKey: ["git-commit-file-diff", project, hash, path],
+    queryFn: () => api.git.commitFileDiff(project, hash, path),
+    enabled: !!project && !!hash && !!path,
+    staleTime: Infinity, // historical diffs are immutable
+  });
+}
+
 export function useGitConflicts(project: string) {
   return useQuery<ConflictFile[]>({
     queryKey: ["git-conflicts", project],

@@ -154,10 +154,10 @@ export function EditorTabs({ project }: { project: string | null }) {
             fileStatus={activeTab.fileStatus ?? "modified"}
             additions={activeTab.additions ?? 0}
             deletions={activeTab.deletions ?? 0}
+            commitHash={activeTab.commitHash}
             onClose={() => close(activeTab.key)}
           />
-        ) : activeTab.tier === "large" ? (
-          <LargeFileViewer
+        ) : activeTab.tier === "large" ? (          <LargeFileViewer
             project={activeTab.project}
             path={activeTab.path}
             fileName={activeTab.name}

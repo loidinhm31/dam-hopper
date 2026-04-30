@@ -1,5 +1,6 @@
 import React, { useMemo } from "react";
 import { useGitLog } from "@/api/queries.js";
+import { cn } from "@/lib/utils.js";
 import type { GitLogEntry } from "@/api/client.js";
 
 const GRAPH_CELL_WIDTH = 14;
@@ -20,9 +21,11 @@ const COLORS = [
 
 interface GitLogTreeProps {
   project: string;
+  selectedHash?: string;
+  onSelectCommit?: (entry: GitLogEntry) => void;
 }
 
-export function GitLogTree({ project }: GitLogTreeProps) {
+export function GitLogTree({ project, selectedHash, onSelectCommit }: GitLogTreeProps) {
   const { data: logs = [], isLoading } = useGitLog(project, 200);
 
   const parsedGraph = useMemo(() => {
@@ -113,14 +116,22 @@ export function GitLogTree({ project }: GitLogTreeProps) {
           {parsedGraph.map((node, rowIndex) => {
             const maxTracks = Math.max(node.prevTracks.length, node.nextTracks.length, node.trackIndex + 1);
             const graphWidth = Math.max(1, maxTracks) * GRAPH_CELL_WIDTH + SVG_PADDING * 2;
+            const isSelected = selectedHash === node.entry.hash;
 
             return (
               <tr 
                 key={node.entry.hash} 
-                className="border-b border-[var(--color-border)] hover:bg-[var(--color-border)]/20 transition-colors"
+                onClick={() => onSelectCommit?.(node.entry)}
+                className={cn(
+                  "border-b border-[var(--color-border)] hover:bg-[var(--color-border)]/20 transition-colors cursor-pointer",
+                  isSelected && "bg-[var(--color-primary)]/10 hover:bg-[var(--color-primary)]/15"
+                )}
                 style={{ height: `${ROW_HEIGHT}px` }}
               >
-                <td className="px-4 py-1 flex items-center gap-2 group cursor-pointer sticky left-0 z-10 bg-[var(--color-surface)] group-hover:bg-[#f8f9fa] dark:group-hover:bg-[#1a1b1e]">
+                <td className={cn(
+                  "px-4 py-1 flex items-center gap-2 sticky left-0 z-10 bg-[var(--color-surface)]",
+                  isSelected ? "bg-[var(--color-primary)]/10" : "group-hover:bg-[#f8f9fa] dark:group-hover:bg-[#1a1b1e]"
+                )}>
                   <div className="relative shrink-0 flex items-center justify-center" style={{ width: graphWidth, height: ROW_HEIGHT }}>
                     <svg className="absolute inset-0" width={graphWidth} height={ROW_HEIGHT}>
                       {/* Draw lines from previous row */}
