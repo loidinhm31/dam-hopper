@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useMemo } from "react";
-import { Terminal as TerminalIcon, Plus, Files, Search, Radio, GitCommit, GitMerge, GitBranch, LayoutGrid } from "lucide-react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { Terminal as TerminalIcon, Plus, Files, Search, Radio, GitCommit, GitMerge, LayoutGrid } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { IdeShell } from "@/components/templates/IdeShell.js";
@@ -12,8 +12,7 @@ import { ProjectInfoPanel } from "@/components/organisms/ProjectInfoPanel.js";
 import { SearchPanel } from "@/components/organisms/SearchPanel.js";
 import { ChangedFilesList } from "@/components/organisms/ChangedFilesList.js";
 import { PortsPanel } from "@/components/organisms/PortsPanel.js";
-import { GitLogTree } from "@/components/organisms/GitLogTree.js";
-import { useProjectStatus } from "@/api/queries.js";
+import { WorkspaceGitPanel } from "@/components/organisms/WorkspaceGitPanel.js";
 
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
@@ -57,7 +56,7 @@ export default function WorkspacePage() {
         setActiveProject(null);
       }
     }
-  }, [projects]); // Only re-validate when projects list changes, not when activeProject changes
+  }, [projects, activeProject]); // Added activeProject to dependencies
 
   const { state, derived, actions } = useTerminalManager(searchParams, setSearchParams);
   const { openTabs, activeTab, mountedSessions, launchForm, savePrompt, freeTerminalSavePrompt, selection } = state;
@@ -65,7 +64,7 @@ export default function WorkspacePage() {
   const {
     handleSelectProject, handleSelectTerminal, handleLaunchTerminal, handleLaunchProfile,
     handleLaunchFormSubmit, handleDeleteProfile, handleSaveProfile, handleAddFreeTerminal,
-    handleLaunchFreeWithCommand, handleLaunchSuggestedCommand, handleAddShell, handleAddShell: handleAddShellAction, handleLaunchShell,
+    handleLaunchFreeWithCommand, handleLaunchSuggestedCommand, handleLaunchShell,
     handleSelectTab, handleCloseTab, handleKillTerminal, handleRemoveFreeTerminal,
     handleOpenFreeTerminalSavePrompt, handleSaveFreeTerminalToProject, handleSessionExit,
     setSavePrompt, setFreeTerminalSavePrompt, setLaunchForm,
@@ -73,8 +72,6 @@ export default function WorkspacePage() {
 
   const projectName =
     activeProject ?? (projects.length > 0 ? projects[0].name : null);
-
-  const { data: projectStatus } = useProjectStatus(projectName ?? "");
 
   const { open: searchOpen, close: closeSearch, openWith: openSearch } = useSearchUiStore();
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -90,16 +87,16 @@ export default function WorkspacePage() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [openSearch]);
 
-  function handleFileOpen(node: FsArborNode) {
+  const handleFileOpen = useCallback((node: FsArborNode) => {
     if (projectName) void openFile(projectName, node);
-  }
+  }, [projectName, openFile]);
 
-  function handleSelectProjectInTree(name: string) {
+  const handleSelectProjectInTree = useCallback((name: string) => {
     setActiveProject(name);
     handleSelectProject(name);
-  }
+  }, [handleSelectProject]);
 
-  const terminalPanel = (
+  const terminalPanel = useMemo(() => (
     <div className="flex flex-col h-full">
       {freeTerminalSavePrompt && projects.length > 0 && (
         <div className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
@@ -227,7 +224,7 @@ export default function WorkspacePage() {
         )}
       </div>
     </div>
-  );
+  ), [freeTerminalSavePrompt, projects, handleSaveFreeTerminalToProject, launchForm, handleLaunchFormSubmit, openTabs, tabsWithLiveSession, activeTab, handleSelectTab, handleCloseTab, savePrompt, handleSaveProfile, setSavePrompt, setFreeTerminalSavePrompt, setLaunchForm, selection, handleLaunchTerminal, mountedSessions, handleSessionExit, handleAddFreeTerminal, projectName, handleLaunchShell]);
 
   const leftTools = useMemo<ToolWindowDef[]>(
     () => [
@@ -310,7 +307,7 @@ export default function WorkspacePage() {
           <ChangedFilesList
             project={projectName}
             selectedFile={null}
-            onSelectFile={(path, isConflict) => {
+            onSelectFile={(path) => {
               if (projectName) openDiff(projectName, path, "modified", 0, 0);
             }}
           />
@@ -333,25 +330,7 @@ export default function WorkspacePage() {
         icon: GitMerge,
         position: "bottom",
         content: projectName ? (
-          <div className="flex flex-col h-full overflow-hidden">
-            <div className="p-3 border-b border-[var(--color-border)]">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-                  Current Branch
-                </span>
-              </div>
-              <div className="flex items-center gap-2 text-xs font-medium text-[var(--color-text)]">
-                <GitBranch className="w-3.5 h-3.5 text-[var(--color-primary)]" />
-                {projectStatus?.branch ?? "..."}
-              </div>
-            </div>
-            <div className="flex-1 min-h-0">
-              <div className="px-3 py-2 border-b border-[var(--color-border)] text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] bg-[var(--color-surface-2)]">
-                History
-              </div>
-              <GitLogTree project={projectName} />
-            </div>
-          </div>
+          <WorkspaceGitPanel key={projectName} project={projectName} />
         ) : (
           <div className="p-4 text-xs text-[var(--color-text-muted)] italic text-center">
             Select a project to see Git status
@@ -369,7 +348,6 @@ export default function WorkspacePage() {
     [
       projects,
       projectName,
-      projectStatus,
       handleFileOpen,
       handleLaunchShell,
       openDiff,
