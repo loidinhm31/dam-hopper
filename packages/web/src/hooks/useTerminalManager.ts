@@ -4,6 +4,7 @@ import { useTerminalTree, FREE_TERMINAL_PREFIX } from "@/hooks/useTerminalTree.j
 import { useTerminalSessions, useProjects } from "@/api/queries.js";
 import { api } from "@/api/client.js";
 import { generateUUID, sanitizeSessionSegment } from "@/lib/utils.js";
+import { recordCommand } from "@/lib/command-history.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TreeCommand, TreeProject } from "@/hooks/useTerminalTree.js";
@@ -359,6 +360,7 @@ export function useTerminalManager(
   }
 
   function handleLaunchFreeWithCommand(command: string) {
+    if (command.trim()) recordCommand(command);
     const sessionId = `${FREE_TERMINAL_PREFIX}${generateUUID()}`;
     api.terminal
       .create({ id: sessionId, command, cols: 120, rows: 30 })
@@ -370,6 +372,7 @@ export function useTerminalManager(
   }
 
   function handleLaunchSuggestedCommand(projectName: string, command: string) {
+    if (command.trim()) recordCommand(command, projectName);
     const sessionId = `terminal:${projectName}:_:${Date.now()}`;
     const projectPath = projects.find((p) => p.name === projectName)?.path;
     api.terminal

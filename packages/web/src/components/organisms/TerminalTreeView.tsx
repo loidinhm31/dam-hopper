@@ -776,6 +776,7 @@ export function TerminalTreeView({
                   <div className="px-2 py-1">
                     <CommandSuggestionInput
                       projectType={project.type as ProjectType}
+                      projectName={project.name}
                       autoFocus
                       placeholder="Search commands..."
                       onSelect={(cmd) => {

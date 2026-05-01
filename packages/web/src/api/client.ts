@@ -1,6 +1,7 @@
 // Transport-agnostic API client — delegates through the active Transport singleton.
 import { getTransport } from "./transport.js";
 import type { FsListResponse, HealthResponse } from "./fs-types.js";
+import type { CommandHistoryEntry } from "@/lib/command-history.js";
 
 export interface SessionInfo {
   id: string;
@@ -328,6 +329,14 @@ export interface SearchResult {
   command: CommandDefinition;
   score: number;
   projectType: string;
+}
+
+export interface CombinedSearchResult {
+  source: "history" | "catalog";
+  command: CommandDefinition;
+  score: number;
+  projectType?: string;
+  historyEntry?: CommandHistoryEntry;
 }
 
 export const api = {
