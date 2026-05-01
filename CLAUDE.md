@@ -54,6 +54,9 @@ cd server && cargo test -j 1
 # Run specific Rust test
 cd server && cargo test test_name
 
+# Run web unit tests (vitest)
+pnpm --filter @dam-hopper/web test
+
 # Full check
 pnpm check
 ```
@@ -197,5 +200,9 @@ health_check_url = "http://localhost:8080/health"  # optional: must be http:// o
 
 Rust tests: `cd server && cargo test` (266 tests). Integration tests use real temp filesystems and git repos via `tempfile` crate. No mocking of filesystem or git.
 
-Web: no automated tests currently. Manual verification against running Rust server.
-Client crypto module (`src/lib/crypto.ts`) has unit tests in `src/lib/crypto.test.ts` (vitest, run via `pnpm test` once vitest is added to web devDependencies).
+Web unit tests (vitest): run with `pnpm --filter @dam-hopper/web test`. Covered modules:
+- `src/lib/terminal-input-buffer.ts` — 14 tests
+- `src/lib/prompt-detector.ts` — 9 tests
+- `src/lib/crypto.ts` — unit tests in `src/lib/crypto.test.ts`
+
+Manual verification against a running Rust server is still required for integration behaviour.
