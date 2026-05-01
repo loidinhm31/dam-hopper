@@ -401,7 +401,7 @@ export function useTerminalManager(
         void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
         openTerminalTab(sessionId, projectName, command, projectPath);
       })
-      .catch((err: unknown) => console.error("[useTerminalManager] failed to launch shell", err));
+      .catch((err: unknown) => console.error("[useTerminalManager] failed to create suggested terminal", err));
   }
 
   function handleSelectTab(sessionId: string) {

@@ -1,7 +1,7 @@
 import { memo, useState, useEffect, useRef } from "react";
 import { useDroppable, useDndMonitor } from "@dnd-kit/core";
 import { cn } from "@/lib/utils.js";
-import { terminalRegistry } from "@/lib/terminal-registry.js";
+import { terminalRegistry, subscribeToRegistry } from "@/lib/terminal-registry.js";
 import type { PaneNode } from "@/types/terminal-layout.js";
 import type { UseTerminalLayoutResult } from "@/hooks/useTerminalLayout.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
@@ -76,7 +76,6 @@ export const PaneContainer = memo(function PaneContainer({
 }: PaneContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isFocused = layout.focusedPaneId === node.id;
 
   // Track drag state to show/hide drop zones
@@ -106,44 +105,37 @@ export const PaneContainer = memo(function PaneContainer({
         }
 
         // Show/hide via display toggling (keeps terminal alive while hidden)
-        el.style.display = isActive ? "flex" : "none";
+        el.style.display = isActive ? "block" : "none";
         el.style.width = "100%";
         el.style.height = "100%";
-        el.style.flexDirection = "column";
-      }
+        el.style.position = "absolute";
+        el.style.inset = "0";
 
-      // Fit the active terminal after reparent
-      if (node.activeSessionId) {
-        const entry = terminalRegistry.get(node.activeSessionId);
-        if (entry) {
+        if (isActive) {
           if (fitTimerRef.current) clearTimeout(fitTimerRef.current);
           fitTimerRef.current = setTimeout(() => {
             requestAnimationFrame(() => {
               entry.fitAddon.fit();
+              entry.terminal.focus();
             });
-          }, 100);
+          }, 150); // Increased delay for stability
         }
       }
     };
 
+    // Initial reparent attempt
     doReparent();
 
-    // Exponential backoff retries in case terminal registers after first render
-    const RETRY_DELAYS = [100, 250] as const;
-    let attempt = 0;
-    const scheduleRetry = () => {
-      if (attempt >= RETRY_DELAYS.length) return;
-      const delay = RETRY_DELAYS[attempt++];
-      retryTimerRef.current = setTimeout(() => {
+    // Subscribe to registry changes to handle terminals that initialize late
+    const unsubscribe = subscribeToRegistry((registeredId) => {
+      if (node.sessionIds.includes(registeredId)) {
         doReparent();
-        scheduleRetry();
-      }, delay);
-    };
-    scheduleRetry();
+      }
+    });
 
     return () => {
-      if (retryTimerRef.current) clearTimeout(retryTimerRef.current); // H1
-      if (fitTimerRef.current) clearTimeout(fitTimerRef.current); // H4: cancel pending fit
+      unsubscribe();
+      if (fitTimerRef.current) clearTimeout(fitTimerRef.current);
     };
   }, [node.sessionIds, node.activeSessionId]);
 

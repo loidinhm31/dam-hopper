@@ -110,13 +110,8 @@ export function TerminalPanel({
     registerTerminal(safeSessionId, term, fitAddon);
     onTerminalReady?.(safeSessionId);
 
-    // Initial fit — container may be hidden (display:none); FitAddon safely no-ops if dims=0
-    const mountRafId = requestAnimationFrame(() => {
-      fitAddon.fit();
-      term.focus();
-    });
-
-    const { cols, rows } = term;
+    // Flag to prevent double-output during initialization
+    let hasBufferBeenWritten = false;
 
     // Track all cleanups so the effect return can always run them
     let unsubData: (() => void) | null = null;
@@ -132,141 +127,143 @@ export function TerminalPanel({
     const transport = getTransport();
     transportRef.current = transport;
 
+    // ── Register all listeners immediately to avoid race conditions ──────────
+    // 1. Stream PTY output → xterm + notify suggestion detector
+    unsubData = transport.onTerminalData(safeSessionId, (data) => {
+      // Only write stream data if we've already handled the initial buffer
+      if (hasBufferBeenWritten) {
+        term.write(data);
+        suggestionsRef.current.notifyOutput();
+      }
+    });
+
+    // 2. Handle PTY buffer (response to terminal:attach)
+    if (transport.onTerminalBuffer) {
+      unsubBuffer = transport.onTerminalBuffer(safeSessionId, ({ data }) => {
+        // Clear terminal and write buffer
+        term.clear();
+        term.write(data);
+        hasBufferBeenWritten = true;
+        setAttachState("attached");
+        if (attachTimeout) {
+          clearTimeout(attachTimeout);
+          attachTimeout = null;
+        }
+      });
+    }
+
+    // 3. Handle PTY exit with enhanced restart metadata
+    unsubExit = transport.onTerminalExitEnhanced?.(safeSessionId, (exitEvent) => {
+      const { exitCode, willRestart, restartIn } = exitEvent;
+      const color = willRestart ? "\x1b[33m" : exitCode === 0 ? "\x1b[32m" : "\x1b[31m";
+      const text = willRestart
+        ? `[Process exited (code ${exitCode ?? "?"}), restarting in ${Math.round((restartIn ?? 0) / 1000)}s…]`
+        : `[Process exited with code ${exitCode ?? "?"}]`;
+      term.write(`\r\n${color}${text}\x1b[0m\r\n`);
+      onExit?.(exitCode);
+    }) ?? null;
+
+    // 4. Handle process restart event
+    unsubRestart = transport.onProcessRestarted?.(safeSessionId, (restartEvent) => {
+      const { restartCount } = restartEvent;
+      term.write(`\x1b[33m[Process restarted (#${restartCount})]\x1b[0m\r\n`);
+    }) ?? null;
+
+    // 5. Handle WebSocket connection status for reconnect banner
+    unsubStatus = transport.onStatusChange?.((status) => {
+      if (status === "disconnected") {
+        term.write(`\r\n\x1b[2m[Reconnecting…]\x1b[0m`);
+      } else if (status === "connected") {
+        term.write(`\x1b[2K\r\x1b[2m[Reconnected]\x1b[0m\r\n`);
+      }
+    }) ?? null;
+
+    // 6. Forward user input → PTY stdin, with suggestion interception
+    inputDisposable = term.onData((data) => {
+      const result = suggestionsRef.current.handleInput(data);
+      if (result.inject !== undefined) {
+        transport.terminalWrite(safeSessionId, result.inject);
+      } else if (result.forward) {
+        transport.terminalWrite(safeSessionId, data);
+      }
+      if (result.record) {
+        recordCommand(result.record, project);
+      }
+    });
+
+    // 7. PTY resize: fired by fitAddon.fit()
+    const resizeDisposable = term.onResize(({ cols: c, rows: r }) => {
+      transport.terminalResize(safeSessionId, c, r);
+    });
+
+    // 8. Custom keyboard shortcuts
+    term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.code === "KeyC" && e.type === "keydown") {
+        const sel = term.getSelection();
+        if (sel) void navigator.clipboard.writeText(sel);
+        return false;
+      }
+      if (e.ctrlKey && e.code === "Backquote") return false;
+      if (e.shiftKey && !e.ctrlKey && !e.altKey && e.code === "Enter" && e.type === "keydown") {
+        onNewTerminal?.();
+        return false;
+      }
+      return true;
+    });
+
+    // Initial fit — container may be hidden (display:none); FitAddon safely no-ops if dims=0
+    // Now safe because resize listener is already registered above.
+    const mountRafId = requestAnimationFrame(() => {
+      fitAddon.fit();
+      term.focus();
+    });
+
+    const { cols, rows } = term;
+    const finalCols = cols > 1 ? cols : 120;
+    const finalRows = rows > 1 ? rows : 30;
+
     // Helper: Create a new session
     const createSession = () => {
       setAttachState("creating");
       return transport
-        .invoke<string>("terminal:create", { id: safeSessionId, project, command, cwd, cols, rows })
+        .invoke<string>("terminal:create", { 
+          id: safeSessionId, 
+          project, 
+          command, 
+          cwd, 
+          cols: finalCols, 
+          rows: finalRows 
+        })
         .then(() => {
-          setAttachState("attached"); // treat created session as "attached" for consistency
+          setAttachState("attached");
         });
     };
 
     // Helper: Attach to existing session
     const attachToSession = () => {
       setAttachState("attaching");
-
-      // Set up buffer listener BEFORE sending attach
-      if (transport.onTerminalBuffer) {
-        unsubBuffer = transport.onTerminalBuffer(safeSessionId, ({ data }) => {
-          // Clear terminal and write buffer
-          term.clear();
-          term.write(data);
-          setAttachState("attached");
-
-          // Clear timeout since we got response
-          if (attachTimeout) {
-            clearTimeout(attachTimeout);
-            attachTimeout = null;
-          }
-        });
-      }
-
-      // Send attach message
       if (transport.terminalAttach) {
         transport.terminalAttach(safeSessionId);
       }
 
-      // Timeout fallback: if no buffer response within 3s, create new session
       attachTimeout = setTimeout(() => {
         console.warn(`[TerminalPanel] terminal:attach timeout for ${safeSessionId}, creating new session`);
-        unsubBuffer?.();
-        unsubBuffer = null;
         void createSession();
       }, 3000);
     };
 
-    // Create or attach to existing PTY session
+    // Start initialization flow
     api.workspace.status()
       .then(() => transport.invoke<Array<{ id: string }>>("terminal:list"))
       .then((alive) => {
         if (alive.some((s) => s.id === safeSessionId)) {
-          // Session exists — attach to it
           attachToSession();
         } else {
-          // Session doesn't exist — create new one
           return createSession();
         }
       })
       .then(() => {
-        // Stream PTY output → xterm + notify suggestion detector
-        unsubData = transport.onTerminalData(safeSessionId, (data) => {
-          term.write(data);
-          suggestionsRef.current.notifyOutput();
-        });
-
-        // Handle PTY exit with enhanced restart metadata
-        unsubExit = transport.onTerminalExitEnhanced?.(safeSessionId, (exitEvent) => {
-          const { exitCode, willRestart, restartIn } = exitEvent;
-          // Choose banner color and text based on restart intent
-          const color = willRestart ? "\x1b[33m" : exitCode === 0 ? "\x1b[32m" : "\x1b[31m";
-          const text = willRestart
-            ? `[Process exited (code ${exitCode ?? "?"}), restarting in ${Math.round((restartIn ?? 0) / 1000)}s…]`
-            : `[Process exited with code ${exitCode ?? "?"}]`;
-          term.write(`\r\n${color}${text}\x1b[0m\r\n`);
-          onExit?.(exitCode);
-        }) ?? null;
-
-        // Handle process restart event
-        unsubRestart = transport.onProcessRestarted?.(safeSessionId, (restartEvent) => {
-          const { restartCount } = restartEvent;
-          term.write(`\x1b[33m[Process restarted (#${restartCount})]\x1b[0m\r\n`);
-        }) ?? null;
-
-        // Handle WebSocket connection status for reconnect banner
-        unsubStatus = transport.onStatusChange?.((status) => {
-          if (status === "disconnected") {
-            term.write(`\r\n\x1b[2m[Reconnecting…]\x1b[0m`);
-          } else if (status === "connected") {
-            // Clear the reconnecting message by writing over it
-            term.write(`\x1b[2K\r\x1b[2m[Reconnected]\x1b[0m\r\n`);
-          }
-        }) ?? null;
-
-        // Forward user input → PTY stdin, with suggestion interception
-        inputDisposable = term.onData((data) => {
-          const result = suggestionsRef.current.handleInput(data);
-          if (result.inject !== undefined) {
-            transport.terminalWrite(safeSessionId, result.inject);
-          } else if (result.forward) {
-            transport.terminalWrite(safeSessionId, data);
-          }
-          if (result.record) {
-            recordCommand(result.record, project);
-          }
-        });
-
-        // Custom keyboard shortcuts:
-        // - Ctrl+Shift+C: copy selection
-        // - Ctrl+`: global shortcut (don't forward to PTY)
-        // - Shift+Enter: open new terminal
-        // Note: PaneContainer also installs a handler that supersedes this one;
-        //       kept here so shortcuts work before PaneContainer mounts.
-        term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
-          // Copy selection to clipboard
-          if (e.ctrlKey && e.shiftKey && e.code === "KeyC" && e.type === "keydown") {
-            const sel = term.getSelection();
-            if (sel) void navigator.clipboard.writeText(sel);
-            return false; // prevent sending to PTY
-          }
-          // Ctrl+` is a global shortcut — don't forward to PTY
-          if (e.ctrlKey && e.code === "Backquote") return false;
-          // Shift+Enter — open a new empty terminal
-          if (e.shiftKey && !e.ctrlKey && !e.altKey && e.code === "Enter" && e.type === "keydown") {
-            onNewTerminal?.();
-            return false;
-          }
-          return true;
-        });
-
-        // PTY resize: fired by fitAddon.fit() (called by PaneContainer on panel resize).
-        // Notifies the server of the new terminal dimensions.
-        const resizeDisposable = term.onResize(({ cols: c, rows: r }) => {
-          transport.terminalResize(safeSessionId, c, r);
-        });
-
         // Fallback ResizeObserver: fires when this hidden container changes size.
-        // No-op after the terminal element is reparented to PaneContainer, but harmless.
         observer = new ResizeObserver(() => {
           if (fitTimer) clearTimeout(fitTimer);
           fitTimer = setTimeout(() => {
@@ -274,6 +271,7 @@ export function TerminalPanel({
           }, 200);
         });
         observer.observe(container);
+        
         // Extend inputDisposable to also clean up the resize listener
         const _inputDisposable = inputDisposable;
         inputDisposable = {
@@ -290,8 +288,6 @@ export function TerminalPanel({
       });
 
     return () => {
-      // Unsubscribe listeners but do NOT kill the PTY session —
-      // it should persist across navigation so the user can return to it.
       cancelAnimationFrame(mountRafId);
       unsubData?.();
       unsubExit?.();
