@@ -38,16 +38,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
       - name: Build Web
-        # Dynamically set the base path to the repository name for github.io hosting
-        run: pnpm --filter @dam-hopper/web build --base=/${{ github.event.repository.name }}/
+        # Dynamically set the base path from GitHub Pages configuration
+        run: pnpm --filter @dam-hopper/web build --base=${{ steps.pages.outputs.base_path }}/
 
       - name: 404.html Trick
         # Copy index.html to 404.html to handle client-side routing refreshes on GitHub Pages
         run: cp packages/web/dist/index.html packages/web/dist/404.html
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
