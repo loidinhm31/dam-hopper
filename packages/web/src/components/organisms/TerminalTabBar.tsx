@@ -94,7 +94,7 @@ export function TerminalTabBar({
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); onCloseTab(tab.sessionId); }}
-                title="Close tab (does not kill session)"
+                title="Close terminal (terminates process)"
                 className={cn(
                   "rounded p-0.5 transition-colors shrink-0",
                   "opacity-0 group-hover:opacity-100",

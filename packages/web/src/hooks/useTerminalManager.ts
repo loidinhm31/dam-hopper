@@ -423,6 +423,9 @@ export function useTerminalManager(
   }
 
   function handleCloseTab(sessionId: string) {
+    // Terminate the terminal session when the tab is closed
+    handleKillTerminal(sessionId);
+
     setOpenTabs((prev) => {
       const remaining = prev.filter((t) => t.sessionId !== sessionId);
       if (activeTab === sessionId) {
