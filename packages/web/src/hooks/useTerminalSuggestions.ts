@@ -82,6 +82,8 @@ export function useTerminalSuggestions(
     isVisible: false,
     selectedIndex: 0,
     suggestions: [] as HistorySearchResult[],
+    lastTabTime: 0,
+    lastTabIntercepted: false,
   });
 
   // Pure logic objects — stable across renders
@@ -109,10 +111,30 @@ export function useTerminalSuggestions(
     (data: string): HandleInputResult => {
       const buffer = bufferRef.current;
       const detector = detectorRef.current;
+      const now = Date.now();
+
+      // Reset double-tab tracker for non-tab input
+      if (data !== "\t") {
+        m.current.lastTabTime = 0;
+        m.current.lastTabIntercepted = false;
+      }
 
       // ── Suggestion overlay interception ────────────────────────────────
       if (m.current.isVisible) {
         if (data === "\t") {
+          // Double-tab detection: if user taps Tab twice quickly while suggestions are visible,
+          // dismiss the overlay and let the terminal handle it (usually for shell completion).
+          if (now - m.current.lastTabTime < 500) {
+            const wasIntercepted = m.current.lastTabIntercepted;
+            dismiss();
+            m.current.lastTabTime = 0;
+            // If the previous tab was intercepted, we must send TWO tabs to ensure the shell
+            // sees the double-tab intent. If the previous was already forwarded, just one.
+            return { forward: false, inject: wasIntercepted ? "\t\t" : "\t" };
+          }
+          m.current.lastTabTime = now;
+          m.current.lastTabIntercepted = true;
+
           const len = Math.max(m.current.suggestions.length, 1);
           const next = (m.current.selectedIndex + 1) % len;
           m.current.selectedIndex = next;
@@ -158,6 +180,11 @@ export function useTerminalSuggestions(
 
       buffer.append(data);
       detector.notifyInput(data);
+
+      if (data === "\t") {
+        m.current.lastTabTime = now;
+        m.current.lastTabIntercepted = false;
+      }
 
       if (!buffer.isClean || detector.state !== "INPUT_ACTIVE") {
         if (debounceRef.current) clearTimeout(debounceRef.current);

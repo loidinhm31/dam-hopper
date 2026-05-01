@@ -87,7 +87,7 @@ export function TerminalSuggestionOverlay({
         ))}
       </ul>
       <div className="px-2.5 py-1 border-t border-slate-800 text-[10px] text-slate-600 flex gap-3">
-        <span>Tab cycle</span>
+        <span>Tab cycle (Double-Tab shell)</span>
         <span>Enter accept</span>
         <span>Esc dismiss</span>
         <button
