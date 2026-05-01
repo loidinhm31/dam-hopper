@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { cn } from "@/lib/utils.js";
 import { getTransport } from "@/api/transport.js";
 import { api } from "@/api/client.js";
 import { registerTerminal, removeTerminal } from "@/lib/terminal-registry.js";
+import { recordCommand } from "@/lib/command-history.js";
+import { useTerminalSuggestions } from "@/hooks/useTerminalSuggestions.js";
+import { TerminalSuggestionOverlay } from "@/components/atoms/TerminalSuggestionOverlay.js";
 
 interface TerminalPanelProps {
   /** Unique session ID (e.g. "build:api-server", "run:api-server") */
@@ -65,6 +69,18 @@ export function TerminalPanel({
   const [attachState, setAttachState] = useState<"idle" | "attaching" | "attached" | "creating">("idle");
   sessionIdRef.current = safeSessionId;
 
+  // Terminal instance ref — set after term.open(), used by useTerminalSuggestions
+  const termRef = useRef<Terminal | null>(null);
+  // Term element state — triggers re-render to mount portal after open()
+  const [termElement, setTermElement] = useState<HTMLElement | null>(null);
+  // Transport ref — needed by JSX-level onAccept without a closure over useEffect locals
+  const transportRef = useRef<ReturnType<typeof getTransport> | null>(null);
+
+  const suggestions = useTerminalSuggestions(termRef, safeSessionId, project);
+  // Keep a stable ref so closures inside the main useEffect always access the latest methods
+  const suggestionsRef = useRef(suggestions);
+  suggestionsRef.current = suggestions;
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -85,6 +101,10 @@ export function TerminalPanel({
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(container);
+
+    // Expose terminal instance and element for suggestions hook + portal
+    termRef.current = term;
+    setTermElement(term.element ?? null);
 
     // Register in global registry so PaneContainer can reparent the terminal element
     registerTerminal(safeSessionId, term, fitAddon);
@@ -110,6 +130,7 @@ export function TerminalPanel({
     let attachTimeout: ReturnType<typeof setTimeout> | null = null;
 
     const transport = getTransport();
+    transportRef.current = transport;
 
     // Helper: Create a new session
     const createSession = () => {
@@ -124,15 +145,15 @@ export function TerminalPanel({
     // Helper: Attach to existing session
     const attachToSession = () => {
       setAttachState("attaching");
-      
+
       // Set up buffer listener BEFORE sending attach
       if (transport.onTerminalBuffer) {
-        unsubBuffer = transport.onTerminalBuffer(safeSessionId, ({ data, offset }) => {
+        unsubBuffer = transport.onTerminalBuffer(safeSessionId, ({ data }) => {
           // Clear terminal and write buffer
           term.clear();
           term.write(data);
           setAttachState("attached");
-          
+
           // Clear timeout since we got response
           if (attachTimeout) {
             clearTimeout(attachTimeout);
@@ -168,9 +189,10 @@ export function TerminalPanel({
         }
       })
       .then(() => {
-        // Stream PTY output → xterm
+        // Stream PTY output → xterm + notify suggestion detector
         unsubData = transport.onTerminalData(safeSessionId, (data) => {
           term.write(data);
+          suggestionsRef.current.notifyOutput();
         });
 
         // Handle PTY exit with enhanced restart metadata
@@ -201,16 +223,25 @@ export function TerminalPanel({
           }
         }) ?? null;
 
-        // Forward user input → PTY stdin
+        // Forward user input → PTY stdin, with suggestion interception
         inputDisposable = term.onData((data) => {
-          transport.terminalWrite(safeSessionId, data);
+          const result = suggestionsRef.current.handleInput(data);
+          if (result.inject !== undefined) {
+            transport.terminalWrite(safeSessionId, result.inject);
+          } else if (result.forward) {
+            transport.terminalWrite(safeSessionId, data);
+          }
+          if (result.record) {
+            recordCommand(result.record, project);
+          }
         });
 
         // Custom keyboard shortcuts:
         // - Ctrl+Shift+C: copy selection
         // - Ctrl+`: global shortcut (don't forward to PTY)
         // - Shift+Enter: open new terminal
-        // Note: Ctrl+Shift+V paste is handled by xterm's native paste event (not here) to avoid duplication
+        // Note: PaneContainer also installs a handler that supersedes this one;
+        //       kept here so shortcuts work before PaneContainer mounts.
         term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
           // Copy selection to clipboard
           if (e.ctrlKey && e.shiftKey && e.code === "KeyC" && e.type === "keydown") {
@@ -272,11 +303,14 @@ export function TerminalPanel({
       if (attachTimeout) clearTimeout(attachTimeout);
       observer?.disconnect();
       removeTerminal(safeSessionId);
+      termRef.current = null;
       openedRef.current = false;
       term.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intentionally run once per mount — use key prop to force remount
+
+  const { state: suggestionsState, acceptSuggestion } = suggestions;
 
   return (
     <div className={cn("relative w-full h-full min-h-48", className)}>
@@ -296,6 +330,22 @@ export function TerminalPanel({
           </div>
         </div>
       )}
+      {termElement &&
+        suggestionsState.isVisible &&
+        suggestionsState.suggestions.length > 0 &&
+        createPortal(
+          <TerminalSuggestionOverlay
+            suggestions={suggestionsState.suggestions}
+            selectedIndex={suggestionsState.selectedIndex}
+            position={suggestionsState.position}
+            onAccept={(cmd) => {
+              const inject = acceptSuggestion(cmd);
+              transportRef.current?.terminalWrite(safeSessionId, inject);
+            }}
+            onDismiss={() => suggestionsRef.current.notifyOutput()}
+          />,
+          termElement,
+        )}
     </div>
   );
 }
