@@ -32,13 +32,15 @@ function computeDocFrequency(
   allTokenized: string[][],
 ): Map<string, number> {
   const df = new Map<string, number>();
-  const querySet = new Set(queryTokens);
   for (const docTokens of allTokenized) {
-    const seen = new Set<string>();
+    const counted = new Set<string>();
     for (const t of docTokens) {
-      if (querySet.has(t) && !seen.has(t)) {
-        df.set(t, (df.get(t) ?? 0) + 1);
-        seen.add(t);
+      for (const qt of queryTokens) {
+        // Count exact matches and prefix matches (e.g. "hel" matches "hello")
+        if ((t === qt || t.startsWith(qt)) && !counted.has(qt)) {
+          df.set(qt, (df.get(qt) ?? 0) + 1);
+          counted.add(qt);
+        }
       }
     }
   }
@@ -57,13 +59,22 @@ function bm25Score(
 
   let score = 0;
   for (const qt of queryTokens) {
-    const freq = tf.get(qt) ?? 0;
+    let freq = tf.get(qt) ?? 0;
+    let prefixOnly = false;
+    if (freq === 0) {
+      // Prefix match: "hel" matches doc tokens like "hello", "help"
+      for (const [token, count] of tf) {
+        if (token.startsWith(qt)) freq += count;
+      }
+      if (freq > 0) prefixOnly = true;
+    }
     if (freq === 0) continue;
     const n = df.get(qt) ?? 0;
     const idf = Math.log((N - n + 0.5) / (n + 0.5) + 1);
     const num = freq * (K1 + 1);
     const denom = freq + K1 * (1 - B + B * (docTokens.length / avgDocLen));
-    score += idf * (num / denom);
+    // Prefix matches score at 70% of an exact match
+    score += idf * (num / denom) * (prefixOnly ? 0.7 : 1.0);
   }
   return score;
 }

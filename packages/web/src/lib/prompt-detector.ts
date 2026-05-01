@@ -26,6 +26,9 @@ export class PromptDetector {
 
   /** Call whenever PTY output data arrives. */
   notifyOutput(): void {
+    // While the user is actively typing, PTY output is terminal echo —
+    // ignore it so echo doesn't reset the state machine on every keystroke.
+    if (this._state === "INPUT_ACTIVE") return;
     this._clearTimer();
     this._setState("RUNNING");
     this._timer = setTimeout(() => {
