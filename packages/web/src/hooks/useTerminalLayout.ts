@@ -163,8 +163,15 @@ function addSessionToPane(
 ): LayoutNode {
   if (tree.type === "pane") {
     if (tree.id !== paneId) return tree;
-    if (tree.sessionIds.includes(sessionId)) return { ...tree, activeSessionId: sessionId };
-    return { ...tree, sessionIds: [...tree.sessionIds, sessionId], activeSessionId: sessionId };
+    const alreadyPresent = tree.sessionIds.includes(sessionId);
+    const alreadyActive = tree.activeSessionId === sessionId;
+    if (alreadyPresent && alreadyActive) return tree;
+    
+    return { 
+      ...tree, 
+      sessionIds: alreadyPresent ? tree.sessionIds : [...tree.sessionIds, sessionId], 
+      activeSessionId: sessionId 
+    };
   }
   return {
     ...tree,
@@ -184,6 +191,8 @@ function removeSessionFromPane(
   if (tree.type === "pane") {
     if (tree.id !== paneId) return tree;
     const sessionIds = tree.sessionIds.filter((id) => id !== sessionId);
+    if (sessionIds.length === tree.sessionIds.length) return tree;
+
     const activeSessionId = sessionIds.includes(tree.activeSessionId ?? "")
       ? tree.activeSessionId
       : (sessionIds[0] ?? null);
@@ -217,6 +226,7 @@ function setActivePaneSession(
 ): LayoutNode {
   if (tree.type === "pane") {
     if (tree.id !== paneId) return tree;
+    if (tree.activeSessionId === sessionId) return tree;
     return { ...tree, activeSessionId: sessionId };
   }
   return {
@@ -254,16 +264,23 @@ export interface UseTerminalLayoutResult {
 }
 
 export function useTerminalLayout(): UseTerminalLayoutResult {
-  const [root, setRoot] = useState<LayoutNode>(() => loadLayout() ?? defaultLayout());
+  // ── Sync initialization: ensure root and focus use the SAME instance ────
+  const [initialData] = useState(() => {
+    const r = loadLayout() ?? defaultLayout();
+    return {
+      root: r,
+      focus: collectPanes(r)[0]?.id ?? null,
+    };
+  });
+
+  const [root, setRoot] = useState<LayoutNode>(initialData.root);
   // Always-current ref so getter callbacks never close over a stale root
   const rootRef = useRef<LayoutNode>(root);
-  useEffect(() => { rootRef.current = root; }, [root]);
+  useEffect(() => {
+    rootRef.current = root;
+  }, [root]);
 
-  const [focusedPaneId, setFocusedPaneId] = useState<string | null>(() => {
-    const loaded = loadLayout() ?? defaultLayout();
-    const panes = collectPanes(loaded);
-    return panes[0]?.id ?? null;
-  });
+  const [focusedPaneId, setFocusedPaneId] = useState<string | null>(initialData.focus);
 
   const splitPane = useCallback(
     (paneId: string, direction: SplitDirection): string => {

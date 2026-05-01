@@ -15,7 +15,7 @@ export function Logo({ className, size = "md" }: LogoProps) {
 
   return (
     <img
-      src="/favicon.svg"
+      src={`${(import.meta as any).env.BASE_URL}favicon.svg`}
       className={cn(sizeMap[size], "object-contain shrink-0", className)}
       style={{
         filter:

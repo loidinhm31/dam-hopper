@@ -34,7 +34,7 @@ export function MultiTerminalDisplay({
   const layout = useTerminalLayout();
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
 
-  // ── sync new sessions into the focused pane ──────────────────────────────
+  // ── sync new sessions into the split layout ──────────────────────────────
   useEffect(() => {
     const currentIds = new Set(mountedSessions.map((s) => s.sessionId));
     const newSessions = mountedSessions.filter(
@@ -49,15 +49,13 @@ export function MultiTerminalDisplay({
     }
 
     prevSessionIdsRef.current = currentIds;
+    
+    // Prune sessions evicted from mountedSessions
+    layout.pruneSessions(currentIds);
   }, [mountedSessions]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── prune sessions evicted from mountedSessions ───────────────────────────
-  useEffect(() => {
-    const liveIds = new Set(mountedSessions.map((s) => s.sessionId));
-    layout.pruneSessions(liveIds);
-  }, [mountedSessions]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── sync activeSessionId to focused pane ─────────────────────────────────
+  // ── sync activeSessionId to the correct pane ─────────────────────────────
+  // Depends on layout.root so it re-runs when addSessionToPane's state update settles
   useEffect(() => {
     if (!activeSessionId) return;
     const panes = layout.getPanes();
@@ -66,7 +64,7 @@ export function MultiTerminalDisplay({
       layout.setActiveSession(pane.id, activeSessionId);
       layout.setFocusedPaneId(pane.id);
     }
-  }, [activeSessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeSessionId, layout.root]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── called by TerminalPanel after term.open() + registerTerminal() ────────
   // PaneContainer has its own 150ms retry timer so no forced re-render needed.
@@ -90,7 +88,19 @@ export function MultiTerminalDisplay({
         into the visible PaneContainer divs by PaneContainer's useEffect.
         Rendered FIRST so their useEffects run before PaneContainer's.
       */}
-      <div aria-hidden="true" style={{ position: "absolute", visibility: "hidden", pointerEvents: "none", width: 1, height: 1, overflow: "hidden" }}>
+      <div 
+        aria-hidden="true" 
+        style={{ 
+          position: "absolute", 
+          visibility: "hidden", 
+          pointerEvents: "none", 
+          width: 1024, 
+          height: 768, 
+          overflow: "hidden",
+          top: -10000, // Move far off-screen instead of just 1x1
+          left: -10000 
+        }}
+      >
         {mountedSessions.map((s) => (
           <TerminalPanel
             key={s.sessionId}
