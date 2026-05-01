@@ -96,14 +96,6 @@ tempfile = "3"
 # Tunnel exposer: HTTP client for cloudflared binary download
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 
-[target.'cfg(unix)'.dependencies]
-# SIGTERM for graceful child process shutdown
-nix = { version = "0.29", features = ["signal", "process"] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-# /proc/net/tcp polling for port detection (Linux only)
-procfs = { version = "0.17", default-features = false }
-
 # Base64 encoding for WS binary content transfer
 base64 = "0.22"
 
@@ -127,10 +119,20 @@ zeroize = "1"
 
 # Streaming body for download handler
 tokio-util = { version = "0.7", features = ["io"] }
+
+# Database and authentication
 mongodb = "3.5.2"
 bson = "3.1.0"
 bcrypt = "0.19.0"
 jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
+
+[target.'cfg(unix)'.dependencies]
+# SIGTERM for graceful child process shutdown
+nix = { version = "0.29", features = ["signal", "process"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# /proc/net/tcp polling for port detection (Linux only)
+procfs = { version = "0.17", default-features = false }
 
 [dev-dependencies]
 tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
