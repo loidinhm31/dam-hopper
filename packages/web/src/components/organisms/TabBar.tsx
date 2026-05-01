@@ -63,7 +63,8 @@ function DraggableTab({ paneId, tab, isActive, onSelect, onClose }: DraggableTab
       {/* Close button */}
       <span
         role="button"
-        aria-label="Close tab"
+        aria-label="Close terminal"
+        title="Close terminal (terminates process)"
         tabIndex={0}
         className="pr-2 py-1.5 opacity-40 hover:opacity-100 rounded hover:bg-[var(--color-danger)]/20 transition-opacity"
         onClick={(e) => {
