@@ -46,12 +46,14 @@ function computePosition(term: Terminal): OverlayPosition {
   const cursorX = term.buffer.active.cursorX;
   const cursorY = term.buffer.active.cursorY;
 
-  const x = Math.min(cursorX * cellWidth, el.clientWidth - 240);
-  const below = (cursorY + 1) * cellHeight;
+  // Anchor x at the left edge of the terminal so the popup never covers typed text.
+  const x = 4;
+  const GAP = 4; // px gap between cursor row and popup edge
+  const below = (cursorY + 1) * cellHeight + GAP;
   const overlayHeight = 5 * OVERLAY_ITEM_HEIGHT + 28; // 5 items + hint bar
   const flipAbove = below + overlayHeight > el.clientHeight;
 
-  return { x, y: flipAbove ? cursorY * cellHeight : below, flipAbove };
+  return { x, y: flipAbove ? cursorY * cellHeight - GAP : below, flipAbove };
 }
 
 function searchWithProjectBoost(query: string, project: string): HistorySearchResult[] {
@@ -189,7 +191,10 @@ export function useTerminalSuggestions(
   );
 
   const notifyOutput = useCallback(() => {
+    const wasActive = detectorRef.current.state === "INPUT_ACTIVE";
     detectorRef.current.notifyOutput();
+    // While typing, PTY output is just echo — don't dismiss the overlay.
+    if (wasActive) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     m.current.isVisible = false;
     setRenderState((prev) => ({ ...prev, isVisible: false }));

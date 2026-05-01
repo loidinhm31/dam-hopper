@@ -75,18 +75,35 @@ describe("PromptDetector", () => {
     d.dispose();
   });
 
-  it("any PTY output resets state to RUNNING and restarts idle timer", () => {
+  it("notifyOutput is ignored while INPUT_ACTIVE (echo does not reset state)", () => {
     const d = new PromptDetector({ idleThresholdMs: 100 });
     d.notifyOutput();
     vi.advanceTimersByTime(100);
     d.notifyInput("l");
     expect(d.state).toBe("INPUT_ACTIVE");
 
-    // PTY output arrives (command executing)
+    // PTY echoes the character — must not reset state
+    d.notifyOutput();
+    expect(d.state).toBe("INPUT_ACTIVE");
+
+    d.dispose();
+  });
+
+  it("PTY output resets to RUNNING after Enter transitions out of INPUT_ACTIVE", () => {
+    const d = new PromptDetector({ idleThresholdMs: 100 });
+    d.notifyOutput();
+    vi.advanceTimersByTime(100);
+    d.notifyInput("l");
+    expect(d.state).toBe("INPUT_ACTIVE");
+
+    d.notifyInput("\r"); // Enter — user submitted command
+    expect(d.state).toBe("RUNNING");
+
+    // Command output arrives
     d.notifyOutput();
     expect(d.state).toBe("RUNNING");
 
-    // After another idle period, back to PROMPT_READY
+    // After idle, back to PROMPT_READY
     vi.advanceTimersByTime(100);
     expect(d.state).toBe("PROMPT_READY");
 
