@@ -162,20 +162,6 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      {openTabs.length > 0 && (
-        <TerminalTabBar
-          tabs={tabsWithLiveSession}
-          activeTab={activeTab}
-          onSelectTab={handleSelectTab}
-          onCloseTab={handleCloseTab}
-          savePrompt={savePrompt}
-          onSaveTab={(sessionId) => setSavePrompt({ sessionId, name: "" })}
-          onSavePromptChange={(name) => setSavePrompt((p) => p ? { ...p, name, error: undefined } : p)}
-          onSavePromptSubmit={handleSaveProfile}
-          onSavePromptCancel={() => setSavePrompt(null)}
-        />
-      )}
-
       <div className="flex-1 min-h-0">
         {selection?.type === "project" ? (
           <ProjectInfoPanel
@@ -190,7 +176,13 @@ export default function WorkspacePage() {
             mountedSessions={mountedSessions}
             openTabs={tabsWithLiveSession}
             onSessionExit={handleSessionExit}
-            onNewTerminal={handleAddFreeTerminal}
+            onNewTerminal={() => {
+              if (projectName) {
+                handleLaunchShell(projectName);
+              } else {
+                handleAddFreeTerminal();
+              }
+            }}
             onSelectTab={handleSelectTab}
             onCloseTab={handleCloseTab}
           />

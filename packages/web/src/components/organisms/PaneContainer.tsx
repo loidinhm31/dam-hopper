@@ -1,5 +1,6 @@
 import { memo, useState, useEffect, useRef } from "react";
 import { useDroppable, useDndMonitor } from "@dnd-kit/core";
+import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { terminalRegistry, subscribeToRegistry } from "@/lib/terminal-registry.js";
 import type { PaneNode } from "@/types/terminal-layout.js";
@@ -268,6 +269,7 @@ export const PaneContainer = memo(function PaneContainer({
     .filter((t): t is TabEntry => t !== undefined);
 
   const hasSplit = layout.getPanes().length > 1;
+  const isEmpty = paneTabs.length === 0;
 
   return (
     <div
@@ -293,7 +295,9 @@ export const PaneContainer = memo(function PaneContainer({
           layout.setFocusedPaneId(node.id);
         }}
         onCloseTab={onCloseTab}
-        onSplitPane={() => layout.splitPane(node.id, "vertical")}
+        onNewTerminal={onNewTerminal}
+        onSplitPaneHorizontal={() => layout.splitPane(node.id, "horizontal")}
+        onSplitPaneVertical={() => layout.splitPane(node.id, "vertical")}
         onClosePane={() => layout.closePane(node.id)}
       />
 
@@ -303,6 +307,32 @@ export const PaneContainer = memo(function PaneContainer({
         ref={containerRef}
         className="flex-1 min-h-0 overflow-hidden relative bg-[#0f172a]"
       >
+        {isEmpty && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-[var(--color-text-muted)] bg-[var(--color-background)]/50">
+            <TerminalIcon className="h-10 w-10 opacity-10" />
+            <div className="flex flex-col items-center gap-2">
+              <p className="text-xs font-medium">Empty Pane</p>
+              <div className="flex gap-2">
+                <button
+                  onClick={(e) => { e.stopPropagation(); onNewTerminal(); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium bg-[var(--color-primary)] text-white rounded hover:opacity-90 transition-opacity"
+                >
+                  <Plus className="h-3 w-3" />
+                  New Terminal
+                </button>
+                {hasSplit && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); layout.closePane(node.id); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium border border-[var(--color-border)] hover:bg-[var(--color-surface-2)] transition-colors rounded"
+                  >
+                    <X className="h-3 w-3" />
+                    Close Pane
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         {/* Drop zones — always in DOM so dnd-kit has them registered */}
         <PaneDropZones paneId={node.id} isDragging={isDragging} />
       </div>

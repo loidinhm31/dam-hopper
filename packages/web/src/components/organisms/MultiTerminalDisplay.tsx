@@ -44,7 +44,10 @@ export function MultiTerminalDisplay({
     for (const s of newSessions) {
       const targetPaneId = layout.focusedPaneId ?? layout.getFirstPaneId();
       if (targetPaneId) {
-        layout.addSessionToPane(targetPaneId, s.sessionId);
+        const pane = layout.getPaneById(targetPaneId);
+        if (pane && !pane.sessionIds.includes(s.sessionId)) {
+          layout.addSessionToPane(targetPaneId, s.sessionId);
+        }
       }
     }
 
