@@ -324,7 +324,13 @@ export function useTerminalLayout(): UseTerminalLayoutResult {
 
   const addSession = useCallback((paneId: string, sessionId: string) => {
     setRoot((prev) => {
+      const panes = collectPanes(prev);
+      const target = panes.find(p => p.id === paneId);
+      if (target && target.sessionIds.includes(sessionId) && target.activeSessionId === sessionId) {
+        return prev;
+      }
       const next = addSessionToPane(prev, paneId, sessionId);
+      if (next === prev) return prev;
       saveLayout(next);
       return next;
     });
@@ -333,6 +339,7 @@ export function useTerminalLayout(): UseTerminalLayoutResult {
   const removeSession = useCallback((paneId: string, sessionId: string) => {
     setRoot((prev) => {
       const next = removeSessionFromPane(prev, paneId, sessionId);
+      if (next === prev) return prev;
       saveLayout(next);
       return next;
     });
@@ -340,7 +347,13 @@ export function useTerminalLayout(): UseTerminalLayoutResult {
 
   const setActiveSession = useCallback((paneId: string, sessionId: string) => {
     setRoot((prev) => {
+      const panes = collectPanes(prev);
+      const target = panes.find(p => p.id === paneId);
+      if (target && target.activeSessionId === sessionId) {
+        return prev;
+      }
       const next = setActivePaneSession(prev, paneId, sessionId);
+      if (next === prev) return prev;
       saveLayout(next);
       return next;
     });

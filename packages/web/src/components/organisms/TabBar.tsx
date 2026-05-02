@@ -1,5 +1,5 @@
 import { useDraggable } from "@dnd-kit/core";
-import { GripVertical, SplitSquareHorizontal, X } from "lucide-react";
+import { GripVertical, SplitSquareHorizontal, SplitSquareVertical, X, Plus } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 
@@ -37,8 +37,8 @@ function DraggableTab({ paneId, tab, isActive, onSelect, onClose }: DraggableTab
       className={cn(
         "flex items-center shrink-0 border-b-2 transition-colors select-none",
         isActive
-          ? "border-[var(--color-primary)] text-[var(--color-text)]"
-          : "border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
+          ? "border-[var(--color-primary)] text-[var(--color-text)] bg-[var(--color-background)]"
+          : "border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)]",
         isDragging && "opacity-40",
       )}
     >
@@ -57,7 +57,7 @@ function DraggableTab({ paneId, tab, isActive, onSelect, onClose }: DraggableTab
         className="px-1.5 py-1.5 text-xs whitespace-nowrap"
         onClick={() => onSelect(tab.sessionId)}
       >
-        <span className="max-w-32 truncate block">{tab.label}</span>
+        <span className="max-w-32 truncate block font-mono">{tab.label}</span>
       </button>
 
       {/* Close button */}
@@ -66,7 +66,7 @@ function DraggableTab({ paneId, tab, isActive, onSelect, onClose }: DraggableTab
         aria-label="Close terminal"
         title="Close terminal (terminates process)"
         tabIndex={0}
-        className="pr-2 py-1.5 opacity-40 hover:opacity-100 rounded hover:bg-[var(--color-danger)]/20 transition-opacity"
+        className="pr-2 py-1.5 opacity-40 hover:opacity-100 rounded transition-opacity"
         onClick={(e) => {
           e.stopPropagation();
           onClose(tab.sessionId);
@@ -78,7 +78,7 @@ function DraggableTab({ paneId, tab, isActive, onSelect, onClose }: DraggableTab
           }
         }}
       >
-        <X className="h-2.5 w-2.5" />
+        <X className="h-2.5 w-2.5 hover:text-[var(--color-danger)]" />
       </span>
     </div>
   );
@@ -93,7 +93,9 @@ export interface TabBarProps {
   hasSplit: boolean;
   onSelectTab: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
-  onSplitPane: () => void;
+  onNewTerminal: () => void;
+  onSplitPaneHorizontal: () => void;
+  onSplitPaneVertical: () => void;
   onClosePane: () => void;
 }
 
@@ -104,15 +106,15 @@ export function TabBar({
   hasSplit,
   onSelectTab,
   onCloseTab,
-  onSplitPane,
+  onNewTerminal,
+  onSplitPaneHorizontal,
+  onSplitPaneVertical,
   onClosePane,
 }: TabBarProps) {
-  if (paneTabs.length === 0) return null;
-
   return (
-    <div className="flex items-center shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
+    <div className="flex items-center shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden h-8">
       {/* Scrollable tab strip */}
-      <div className="flex items-center overflow-x-auto min-w-0 flex-1">
+      <div className="flex items-center overflow-x-auto min-w-0 flex-1 scrollbar-hide h-full">
         {paneTabs.map((tab) => (
           <DraggableTab
             key={tab.sessionId}
@@ -123,35 +125,63 @@ export function TabBar({
             onClose={onCloseTab}
           />
         ))}
-      </div>
 
-      {/* Split pane button */}
-      <button
-        type="button"
-        title="Split pane (Ctrl+Shift+5)"
-        className="shrink-0 p-1.5 mr-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-elevated)] transition-colors"
-        onClick={(e) => {
-          e.stopPropagation();
-          onSplitPane();
-        }}
-      >
-        <SplitSquareHorizontal className="h-3.5 w-3.5" />
-      </button>
-
-      {/* Close pane button (only when multiple panes exist) */}
-      {hasSplit && (
+        {/* New Terminal Button in Tab Strip */}
         <button
           type="button"
-          title="Close pane"
-          className="shrink-0 p-1.5 mr-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 transition-colors"
+          title="New Terminal"
+          className="p-2 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors shrink-0 h-full flex items-center"
           onClick={(e) => {
             e.stopPropagation();
-            onClosePane();
+            onNewTerminal();
           }}
         >
-          <X className="h-3.5 w-3.5" />
+          <Plus className="h-3.5 w-3.5" />
         </button>
-      )}
+      </div>
+
+      <div className="flex items-center px-1 border-l border-[var(--color-border)] bg-[var(--color-surface)]">
+        {/* Split Horizontal Button */}
+        <button
+          type="button"
+          title="Split Right (Ctrl+Shift+5)"
+          className="p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSplitPaneVertical();
+          }}
+        >
+          <SplitSquareHorizontal className="h-3.5 w-3.5" />
+        </button>
+
+        {/* Split Vertical Button */}
+        <button
+          type="button"
+          title="Split Down"
+          className="p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSplitPaneHorizontal();
+          }}
+        >
+          <SplitSquareVertical className="h-3.5 w-3.5" />
+        </button>
+
+        {/* Close pane button (only when multiple panes exist) */}
+        {hasSplit && (
+          <button
+            type="button"
+            title="Close pane"
+            className="p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 transition-colors"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClosePane();
+            }}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
