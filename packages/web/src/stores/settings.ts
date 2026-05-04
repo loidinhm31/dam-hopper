@@ -18,11 +18,12 @@ interface SettingsState {
   systemFontSize: number;
   editorFontSize: number;
   editorZoomWheelEnabled: boolean;
+  terminalSuggestionsEnabled: boolean;
   hydrated: boolean;
 
   hydrate: () => Promise<void>;
-  set: (partial: Partial<Pick<SettingsState, "systemFontSize" | "editorFontSize" | "editorZoomWheelEnabled">>) => void;
-  saveDebounced: (partial: Partial<Pick<SettingsState, "systemFontSize" | "editorFontSize" | "editorZoomWheelEnabled">>) => void;
+  set: (partial: Partial<Pick<SettingsState, "systemFontSize" | "editorFontSize" | "editorZoomWheelEnabled" | "terminalSuggestionsEnabled">>) => void;
+  saveDebounced: (partial: Partial<Pick<SettingsState, "systemFontSize" | "editorFontSize" | "editorZoomWheelEnabled" | "terminalSuggestionsEnabled">>) => void;
 }
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -31,6 +32,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   systemFontSize: 14,
   editorFontSize: 14,
   editorZoomWheelEnabled: true,
+  terminalSuggestionsEnabled: true,
   hydrated: false,
 
   hydrate: async () => {
@@ -41,6 +43,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         systemFontSize: ui?.systemFontSize ?? 14,
         editorFontSize: ui?.editorFontSize ?? 14,
         editorZoomWheelEnabled: ui?.editorZoomWheelEnabled ?? true,
+        terminalSuggestionsEnabled: ui?.terminalSuggestionsEnabled ?? true,
         hydrated: true,
       });
     } catch {
@@ -54,6 +57,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (partial.systemFontSize !== undefined) clamped.systemFontSize = clampFont(partial.systemFontSize);
     if (partial.editorFontSize !== undefined) clamped.editorFontSize = clampFont(partial.editorFontSize);
     if (partial.editorZoomWheelEnabled !== undefined) clamped.editorZoomWheelEnabled = partial.editorZoomWheelEnabled;
+    if (partial.terminalSuggestionsEnabled !== undefined) clamped.terminalSuggestionsEnabled = partial.terminalSuggestionsEnabled;
     set(clamped);
   },
 
@@ -62,8 +66,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (debounceTimer !== null) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
-      const { systemFontSize, editorFontSize, editorZoomWheelEnabled } = get();
-      void api.globalConfig.updateUi({ systemFontSize, editorFontSize, editorZoomWheelEnabled });
+      const { systemFontSize, editorFontSize, editorZoomWheelEnabled, terminalSuggestionsEnabled } = get();
+      void api.globalConfig.updateUi({ systemFontSize, editorFontSize, editorZoomWheelEnabled, terminalSuggestionsEnabled });
     }, 500);
   },
 }));
