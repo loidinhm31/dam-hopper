@@ -55,7 +55,13 @@ function FontSizeInput({
 }
 
 export function SettingsAppearanceSection() {
-  const { systemFontSize, editorFontSize, editorZoomWheelEnabled, saveDebounced } = useSettingsStore();
+  const { 
+    systemFontSize, 
+    editorFontSize, 
+    editorZoomWheelEnabled, 
+    terminalSuggestionsEnabled,
+    saveDebounced 
+  } = useSettingsStore();
 
   return (
     <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-4">
@@ -97,6 +103,33 @@ export function SettingsAppearanceSection() {
           <span
             className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition duration-200 ${
               editorZoomWheelEnabled ? "translate-x-4" : "translate-x-0"
+            }`}
+          />
+        </button>
+      </div>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-[var(--color-text)]">
+            Inline Terminal Suggestions
+          </p>
+          <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
+            Show command suggestions based on history while typing in terminal
+          </p>
+        </div>
+        <button
+          role="switch"
+          aria-checked={terminalSuggestionsEnabled}
+          onClick={() => saveDebounced({ terminalSuggestionsEnabled: !terminalSuggestionsEnabled })}
+          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] ${
+            terminalSuggestionsEnabled ? "bg-[var(--color-primary)]" : "bg-[var(--color-border)]"
+          }`}
+        >
+          <span
+            className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition duration-200 ${
+              terminalSuggestionsEnabled ? "translate-x-4" : "translate-x-0"
             }`}
           />
         </button>

@@ -5,6 +5,7 @@ import { PromptDetector } from "@/lib/prompt-detector.js";
 import { searchHistory } from "@/lib/command-history.js";
 import type { HistorySearchResult } from "@/lib/command-history.js";
 import type { OverlayPosition } from "@/components/atoms/TerminalSuggestionOverlay.js";
+import { useSettingsStore } from "@/stores/settings.js";
 
 export interface HandleInputResult {
   /** Whether to forward the original data to the PTY. */
@@ -69,6 +70,8 @@ export function useTerminalSuggestions(
   sessionId: string,
   project: string,
 ): UseTerminalSuggestionsResult {
+  const settings = useSettingsStore();
+
   // React state for re-renders (read-only outside callbacks)
   const [renderState, setRenderState] = useState<TerminalSuggestionsState>({
     isVisible: false,
@@ -101,11 +104,12 @@ export function useTerminalSuggestions(
   }, []);
 
   const show = useCallback((results: HistorySearchResult[], pos: OverlayPosition) => {
+    if (!settings.terminalSuggestionsEnabled) return;
     m.current.isVisible = true;
     m.current.selectedIndex = 0;
     m.current.suggestions = results;
     setRenderState({ isVisible: true, suggestions: results, selectedIndex: 0, position: pos });
-  }, []);
+  }, [settings.terminalSuggestionsEnabled]);
 
   const handleInput = useCallback(
     (data: string): HandleInputResult => {
@@ -117,6 +121,17 @@ export function useTerminalSuggestions(
       if (data !== "\t") {
         m.current.lastTabTime = 0;
         m.current.lastTabIntercepted = false;
+      }
+
+      if (!settings.terminalSuggestionsEnabled) {
+        if (data === "\r" || data === "\x03") {
+          buffer.reset();
+          detector.notifyInput(data);
+        } else {
+          buffer.append(data);
+          detector.notifyInput(data);
+        }
+        return { forward: true };
       }
 
       // ── Suggestion overlay interception ────────────────────────────────
@@ -214,7 +229,7 @@ export function useTerminalSuggestions(
 
       return { forward: true };
     },
-    [termRef, show, dismiss],
+    [termRef, show, dismiss, settings.terminalSuggestionsEnabled],
   );
 
   const notifyOutput = useCallback(() => {

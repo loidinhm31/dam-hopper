@@ -327,6 +327,8 @@ pub struct UiConfig {
     pub editor_font_size: u16,
     #[serde(default = "default_editor_zoom_wheel_enabled", alias = "editor_zoom_wheel_enabled")]
     pub editor_zoom_wheel_enabled: bool,
+    #[serde(default = "default_true", alias = "terminal_suggestions_enabled")]
+    pub terminal_suggestions_enabled: bool,
     #[serde(default, alias = "terminal_order")]
     pub terminal_order: Vec<String>,
     #[serde(default, alias = "project_order")]
@@ -335,12 +337,15 @@ pub struct UiConfig {
     pub project_command_order: std::collections::HashMap<String, Vec<String>>,
 }
 
+fn default_true() -> bool { true }
+
 impl Default for UiConfig {
     fn default() -> Self {
         UiConfig {
             system_font_size: default_system_font_size(),
             editor_font_size: default_editor_font_size(),
             editor_zoom_wheel_enabled: default_editor_zoom_wheel_enabled(),
+            terminal_suggestions_enabled: true,
             terminal_order: vec![],
             project_order: vec![],
             project_command_order: std::collections::HashMap::new(),
