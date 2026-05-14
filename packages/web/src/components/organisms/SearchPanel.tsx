@@ -1,6 +1,7 @@
 import { useRef, useMemo, useEffect } from "react";
 import { Loader2, CaseSensitive, AlertTriangle, X } from "lucide-react";
 import { cn } from "@/lib/utils.js";
+import { FileDecorationIcon } from "@/lib/file-decoration-icon.js";
 import { useFileSearch } from "@/hooks/useFileSearch.js";
 import { useSearchUiStore } from "@/stores/searchUi.js";
 import type { SearchMatch } from "@/api/fs-types.js";
@@ -219,6 +220,10 @@ export function SearchPanel({
                         {projectBadge}
                       </span>
                     )}
+                    <FileDecorationIcon
+                      pathOrName={filePath}
+                      className="h-3.5 w-3.5"
+                    />
                     <span className="truncate">{filePath}</span>
                   </div>
                   {/* Match lines */}

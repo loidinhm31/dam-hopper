@@ -18,6 +18,7 @@ import { mimeToMonacoLanguage } from "@/lib/mime-to-language.js";
 
 interface MonacoHostProps {
   tabKey: string;
+  path?: string;
   content: string;
   tier: FileTier;
   mime?: string;
@@ -32,6 +33,7 @@ interface MonacoHostProps {
 
 export function MonacoHost({
   tabKey,
+  path,
   content,
   tier,
   mime,
@@ -156,7 +158,7 @@ export function MonacoHost({
   }, []);
 
   const isDegraded = tier === "degraded";
-  const language = mimeToMonacoLanguage(mime);
+  const language = mimeToMonacoLanguage(mime, path);
   const initialFontSize = useSettingsStore.getState().editorFontSize;
 
   return (

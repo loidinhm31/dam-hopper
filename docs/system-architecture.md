@@ -207,6 +207,7 @@ pub struct PersistedSession {
 - Lookup order: exact filename > extension > MIME fallback > neutral default.
 - `file-decoration-icon.tsx` is a thin rendering wrapper around the shared registry.
 - `mime-to-language.ts` remains as a compatibility wrapper for MIME-only callers.
+- Shared consumers include the file tree, editor tabs, search headers, and path labels, so file identity stays consistent across the IDE.
 
 **Design notes:**
 

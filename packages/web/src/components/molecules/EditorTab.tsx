@@ -1,8 +1,10 @@
-import { X, FileCode } from "lucide-react";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils.js";
+import { FileDecorationIcon } from "@/lib/file-decoration-icon.js";
 
 interface EditorTabProps {
   name: string;
+  path?: string;
   active: boolean;
   dirty: boolean;
   onClick: () => void;
@@ -11,6 +13,7 @@ interface EditorTabProps {
 
 export function EditorTab({
   name,
+  path,
   active,
   dirty,
   onClick,
@@ -29,7 +32,7 @@ export function EditorTab({
       )}
       onClick={onClick}
     >
-      <FileCode className="h-3.5 w-3.5 shrink-0" />
+      <FileDecorationIcon pathOrName={path ?? name} className="h-3.5 w-3.5" />
       <span className="max-w-[140px] truncate">{name}</span>
       {dirty && (
         <span

@@ -17,6 +17,7 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 - **File Decorations**: `packages/web/src/lib/file-decoration.ts` is the shared registry for file icon, badge, display-language, and Monaco-language lookup.
 - **Compatibility Layer**: `packages/web/src/lib/mime-to-language.ts` keeps MIME-only callers working while routing to the shared registry.
 - **Rendering Wrapper**: `packages/web/src/lib/file-decoration-icon.tsx` is a thin icon component over the registry.
+- **Shared Surfaces**: explorer tree, editor tabs, search headers, and path labels all read from the same lookup so file identity stays aligned across the UI.
 
 ## Key Features
 

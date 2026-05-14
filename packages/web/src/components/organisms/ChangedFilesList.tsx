@@ -17,6 +17,7 @@ import {
   useGitCommit,
 } from "@/api/queries.js";
 import type { DiffFileEntry } from "@/api/client.js";
+import { FilePathLabel } from "@/components/atoms/FilePathLabel.js";
 
 // ---------------------------------------------------------------------------
 // ChangedFilesList — IntelliJ-style local changes panel
@@ -129,9 +130,7 @@ function GitFileRow({
   onContextMenu: (e: React.MouseEvent) => void;
   onToggle: () => void;
 }) {
-  const parts = entry.path.split("/");
-  const filename = parts.pop()!;
-  const dir = parts.join("/");
+  const filename = entry.path.split("/").pop() ?? entry.path;
   const color = gitStatusColor(entry.status, checked);
   const badge = gitStatusBadge(entry.status, checked);
 
@@ -169,20 +168,16 @@ function GitFileRow({
       >
         {badge}
       </span>
-      <span
+      <FilePathLabel
+        path={entry.path}
         className={cn(
-          "text-[11px] truncate flex-1",
+          "text-[11px]",
           color,
           isSelected && "!text-[var(--color-primary)]",
         )}
-      >
-        {filename}
-      </span>
-      {dir && (
-        <span className="text-[9px] text-[var(--color-text-muted)]/60 truncate max-w-[45%] shrink-0 pl-1">
-          {dir}
-        </span>
-      )}
+        fileNameClassName="text-[11px] text-current font-normal"
+        dirClassName="text-[9px] text-[var(--color-text-muted)]/60"
+      />
     </div>
   );
 }

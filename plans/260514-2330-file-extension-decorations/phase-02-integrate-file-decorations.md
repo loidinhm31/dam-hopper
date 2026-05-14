@@ -10,8 +10,8 @@
 
 - Date: 2026-05-14
 - Priority: P2
-- Implementation status: Pending
-- Review status: Not reviewed
+- Implementation status: Completed
+- Review status: Reviewed
 - Description: Replace local/generic file presentation with shared decorations across IDE file surfaces.
 
 ## Key Insights
@@ -57,12 +57,12 @@
 
 ## Todo list
 
-- [ ] Integrate registry into Explorer.
-- [ ] Integrate registry into editor tabs.
-- [ ] Integrate registry into status bar and Monaco language fallback.
-- [ ] Integrate registry into search result headers.
-- [ ] Integrate registry into git change rows.
-- [ ] Run web tests and build.
+- [x] Integrate registry into Explorer.
+- [x] Integrate registry into editor tabs.
+- [x] Integrate registry into status bar and Monaco language fallback.
+- [x] Integrate registry into search result headers.
+- [x] Integrate registry into git change rows.
+- [x] Run web tests and build.
 - [ ] Perform manual UI smoke check.
 
 ## Success Criteria
