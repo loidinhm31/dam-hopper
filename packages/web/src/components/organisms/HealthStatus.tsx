@@ -14,15 +14,21 @@ export function HealthStatus() {
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-[var(--color-text)]">Health</span>
+          <span className="text-xs font-semibold text-[var(--color-text)]">
+            Health
+          </span>
           {isLoading ? (
             <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
           ) : totalIssues === 0 ? (
             <Badge variant="success">✓ Healthy</Badge>
           ) : (
             <>
-              {brokenCount > 0 && <Badge variant="danger">{brokenCount} broken links</Badge>}
-              {orphanCount > 0 && <Badge variant="warning">{orphanCount} orphaned</Badge>}
+              {brokenCount > 0 && (
+                <Badge variant="danger">{brokenCount} broken links</Badge>
+              )}
+              {orphanCount > 0 && (
+                <Badge variant="warning">{orphanCount} orphaned</Badge>
+              )}
             </>
           )}
         </div>
@@ -47,12 +53,18 @@ export function HealthStatus() {
       {expanded && totalIssues > 0 && (
         <div className="mt-2 space-y-1">
           {health?.brokenSymlinks?.map((b) => (
-            <div key={b.path} className="text-xs font-mono text-[var(--color-danger)]">
+            <div
+              key={b.path}
+              className="text-xs font-mono text-[var(--color-danger)]"
+            >
               ⚠ {b.project}: {b.path} → {b.target}
             </div>
           ))}
           {health?.orphanedItems?.map((o) => (
-            <div key={o.path} className="text-xs font-mono text-[var(--color-warning)]">
+            <div
+              key={o.path}
+              className="text-xs font-mono text-[var(--color-warning)]"
+            >
               ○ {o.project}: {o.path} ({o.reason})
             </div>
           ))}

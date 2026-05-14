@@ -15,7 +15,11 @@ export const terminalRegistry = new Map<string, TerminalEntry>();
 type RegistrySubscriber = (id: string) => void;
 const subscribers = new Set<RegistrySubscriber>();
 
-export function registerTerminal(id: string, terminal: Terminal, fitAddon: FitAddon): void {
+export function registerTerminal(
+  id: string,
+  terminal: Terminal,
+  fitAddon: FitAddon,
+): void {
   terminalRegistry.set(id, { terminal, fitAddon });
   // Notify subscribers that a new terminal is ready
   subscribers.forEach((cb) => cb(id));

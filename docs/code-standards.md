@@ -24,6 +24,11 @@ server/src/
 │   ├── error.rs
 │   ├── sandbox.rs    # Path validation
 │   └── ops.rs        # Directory/file operations
+├── web/              # Frontend shared logic
+│   └── lib/
+│       ├── file-decoration.ts       # Shared decoration registry + lookup helpers
+│       ├── file-decoration-icon.tsx # Thin icon wrapper around the shared registry
+│       └── mime-to-language.ts      # Compatibility wrapper for MIME-only callers
 ├── pty/              # Terminal sessions
 ├── git/              # Git operations
 ├── agent_store/      # Item distribution
@@ -65,12 +70,14 @@ API handlers map to HTTP status via `ApiError::from(AppError)`.
 **Never hold locks across `.await`:**
 
 ❌ Bad:
+
 ```rust
 let fs = state.fs.sandbox()?;  // holds lock
 let result = async_op(&fs).await;  // lock held!
 ```
 
 ✅ Good:
+
 ```rust
 let fs = state.fs.sandbox()?;  // clone fields out
 let sandbox_root = fs.root().to_path_buf();  // release lock
@@ -78,6 +85,7 @@ let result = async_op(&sandbox_root).await;  // safe
 ```
 
 **Clone-cheap types:**
+
 - Arc<T> (includes PtySessionManager, FsSubsystem, AgentStoreService)
 - Pass clones into async tasks
 
@@ -158,6 +166,7 @@ fn infer_exit_code(id: &str, inner: &Arc<Mutex<Inner>>) -> i32 {
 ```
 
 **Workaround:** OnFailure policy currently indistinguishable from Always. To fix:
+
 - Future work: wrap child in `std::process::Command`
 - Call `waitpid()` before EOF to capture actual status
 - Requires architecture change (not Phase 04 scope)
@@ -165,6 +174,7 @@ fn infer_exit_code(id: &str, inner: &Arc<Mutex<Inner>>) -> i32 {
 **Session ID Reuse** (Important):
 
 When respawning, the same session ID is used. Frontend **does not** need to navigate or reconnect:
+
 - Session ID remains stable across respawns
 - WebSocket subscribers notified via `send_terminal_change()`
 - Buffer optionally retained (clearing old content on restart optional)
@@ -202,13 +212,14 @@ DeadSession (will_restart=false) — restart_count reset to 0
 
 **Solution:** Three-phase killed set lifecycle ensures at most one winner:
 
-| Phase | Action | Killed Set State |
-|-------|--------|------------------|
-| Create pre-spawn | User calls `create()` | Insert ID |
-| Slow I/O | Lock released, openpty + spawn | Held in set |
-| Create post-spawn | Lock reacquired, session active | Remove ID |
+| Phase             | Action                          | Killed Set State |
+| ----------------- | ------------------------------- | ---------------- |
+| Create pre-spawn  | User calls `create()`           | Insert ID        |
+| Slow I/O          | Lock released, openpty + spawn  | Held in set      |
+| Create post-spawn | Lock reacquired, session active | Remove ID        |
 
 **Reader/Supervisor Interaction:**
+
 - Reader detects EOF, sends RespawnCmd, releases lock
 - Meanwhile, user calls `create()` — enters killed set
 - Supervisor wakes from backoff, checks killed set — ID is there → skip respawn
@@ -272,7 +283,7 @@ pub fn spawn_cleanup_task(&self) {
             // Prune orphaned killed set entries
             // (IDs no longer in live or dead maps)
             let orphaned: Vec<String> = guard.killed.iter()
-                .filter(|id| !guard.live.contains_key(*id) 
+                .filter(|id| !guard.live.contains_key(*id)
                          && !guard.dead.contains_key(*id))
                 .cloned()
                 .collect();
@@ -285,6 +296,7 @@ pub fn spawn_cleanup_task(&self) {
 ```
 
 **Why Killed Set Can Grow Unbounded (without cleanup):**
+
 - Session X exits while supervisor backoff is in progress
 - User calls `create(X)` → ID inserted into killed set
 - Create finishes, ID removed from killed set
@@ -299,14 +311,14 @@ fn create_during_backoff_cancels_pending_restart() {
     // Process exits with OnFailure policy, supervisor queues 1s backoff restart
     mgr.create(opts("test:id", "exit 1"))?;
     wait_for(Duration::from_secs(2), || !mgr.is_alive("test:id"));
-    
+
     // During backoff window (200ms later), user calls create again
     std::thread::sleep(Duration::from_millis(200));
     mgr.create(opts("test:id", "echo hello")).unwrap();
-    
+
     // Wait past original backoff window (1.2s total)
     std::thread::sleep(Duration::from_millis(1500));
-    
+
     // Verify only one session exists (not double-spawned)
     let sessions = mgr.list();
     let count = sessions.iter().filter(|s| s.id == "test:id").count();
@@ -356,12 +368,14 @@ restart_max_retries = 5              # Max consecutive restarts
 **Location**: `server/src/persistence/restore.rs`
 
 **Filter Logic** (non-fatal, logged):
+
 - Skip `RestartPolicy::Never` → DEBUG
 - Skip sessions for removed projects → WARN
 - Skip dead sessions (alive=false at persist) → DEBUG
 - Restore restartable sessions → INFO
 
 **Per-Session Error Handling**:
+
 ```rust
 for session in persisted {
     // Filter checks...
@@ -379,6 +393,7 @@ for session in persisted {
 ```
 
 **Config-Driven Retry Count** (no hardcoding):
+
 ```rust
 let restart_max_retries = session
     .meta
@@ -398,22 +413,22 @@ let restart_max_retries = session
 
 ```rust
 pub fn get_buffer_with_offset(
-    &self, 
-    id: &str, 
+    &self,
+    id: &str,
     from_offset: Option<u64>
 ) -> Result<(String, u64), AppError> {
     let inner = self.inner.lock().unwrap();
-    
+
     // Fast path: in-memory buffer (live sessions)
     if let Some(session) = inner.live.get(id) {
         let buf = session.buffer.lock().unwrap();
         let (data, offset) = buf.read_from(from_offset);
         return Ok((String::from_utf8_lossy(data).into_owned(), offset));
     }
-    
+
     // Release lock before slow I/O
     drop(inner);
-    
+
     // Slow path: SQLite load (dead sessions)
     if let Some(store) = &self.session_store {
         if let Some((data, total_written)) = store
@@ -423,12 +438,13 @@ pub fn get_buffer_with_offset(
             return Ok((String::from_utf8_lossy(&data).into_owned(), total_written));
         }
     }
-    
+
     Err(AppError::SessionNotFound(id.to_string()))
 }
 ```
 
 **Why This Works**:
+
 - Live sessions: in-memory ring buffer (fast, hot path ~100μs)
 - Dead sessions: lazy load on `terminal:attach` request (deferred I/O, no startup overhead)
 - Lock released before I/O (prevents blocking new session creation)
@@ -437,6 +453,7 @@ pub fn get_buffer_with_offset(
 ### Integration Points
 
 **Main.rs Startup** (after PtySessionManager::with_persist):
+
 ```rust
 if let Some(store) = &session_store {
     match persistence::restore_sessions(store, &pty_manager, &config).await {
@@ -451,6 +468,7 @@ if let Some(store) = &session_store {
 ```
 
 **PtySessionManager Constructor**:
+
 ```rust
 pub fn with_persist(
     sink: Arc<dyn EventSink>,
@@ -466,18 +484,19 @@ pub fn with_persist(
 ### Startup Performance
 
 **Typical Time Breakdown** (3 sessions, 500MB buffers):
+
 - Load from SQLite: ~150ms
 - Spawn 3 PTY processes: ~50ms
 - Cleanup expired buffers: ~10ms
 - **Total: ~210ms** (< 1s target) ✅
 
 **Scaling**:
+
 - 10 sessions: ~300ms
 - 50 sessions: ~1.2s (acceptable, rarely occurs)
 - With parallel spawning (future): could reduce further
 
 ## TypeScript Frontend (packages/web/)
-
 
 ### Profile Management Pattern
 
@@ -487,12 +506,12 @@ Multi-server profile management lives in `packages/web/src/api/server-config.ts`
 
 ```typescript
 export interface ServerProfile {
-  id: string;                    // UUID v4 via crypto.randomUUID()
-  name: string;                  // User-friendly name
-  url: string;                   // Server endpoint (auto-normalized: strip trailing slash, prepend http:// if no scheme)
-  authType: "basic" | "none";    // Authentication type
-  username?: string;             // Display name (password never stored)
-  createdAt: number;             // Unix timestamp from Date.now()
+  id: string; // UUID v4 via crypto.randomUUID()
+  name: string; // User-friendly name
+  url: string; // Server endpoint (auto-normalized: strip trailing slash, prepend http:// if no scheme)
+  authType: "basic" | "none"; // Authentication type
+  username?: string; // Display name (password never stored)
+  createdAt: number; // Unix timestamp from Date.now()
 }
 ```
 
@@ -500,16 +519,27 @@ export interface ServerProfile {
 
 ```typescript
 // Retrieval
-export function getProfiles(): ServerProfile[] { /* parse localStorage */ }
-export function getActiveProfileId(): string | null { /* from localStorage */ }
-export function getActiveProfile(): ServerProfile | null { /* find active */ }
+export function getProfiles(): ServerProfile[] {
+  /* parse localStorage */
+}
+export function getActiveProfileId(): string | null {
+  /* from localStorage */
+}
+export function getActiveProfile(): ServerProfile | null {
+  /* find active */
+}
 
 // Mutation
-export function createProfile(data: Omit<ServerProfile, "id" | "createdAt">): ServerProfile {
+export function createProfile(
+  data: Omit<ServerProfile, "id" | "createdAt">,
+): ServerProfile {
   // auto-generate id + timestamp, append to profiles list, persist
 }
 
-export function updateProfile(id: string, data: Partial<Omit<ServerProfile, "id" | "createdAt">>): void {
+export function updateProfile(
+  id: string,
+  data: Partial<Omit<ServerProfile, "id" | "createdAt">>,
+): void {
   // merge fields, persist
 }
 
@@ -517,7 +547,9 @@ export function deleteProfile(id: string): void {
   // remove from list, clear active if deleted profile is active, persist
 }
 
-export function setActiveProfile(id: string): void { /* localStorage.setItem(KEY_ACTIVE_PROFILE, id) */ }
+export function setActiveProfile(id: string): void {
+  /* localStorage.setItem(KEY_ACTIVE_PROFILE, id) */
+}
 
 // Persistence
 export function saveProfiles(profiles: ServerProfile[]): void {
@@ -534,11 +566,12 @@ export function migrateToProfiles(): void {
 ```
 
 **localStorage Keys:**
+
 - `damhopper_server_profiles` — JSON stringified array of `ServerProfile[]`
 - `damhopper_active_profile_id` — active profile UUID
-- `damhopper_server_url` — *(legacy, migrated away)* single server URL
-- `damhopper_auth_token` — *(sessionStorage, not localStorage)* Bearer token (cleared on tab close)
-- `damhopper_auth_username` — *(sessionStorage, not localStorage)* username (cleared on tab close)
+- `damhopper_server_url` — _(legacy, migrated away)_ single server URL
+- `damhopper_auth_token` — _(sessionStorage, not localStorage)_ Bearer token (cleared on tab close)
+- `damhopper_auth_username` — _(sessionStorage, not localStorage)_ username (cleared on tab close)
 
 **Error Handling:**
 
@@ -579,13 +612,13 @@ pnpm format      # Prettier
 
 ### Naming Conventions
 
-| Location | Convention | Example |
-|---|---|---|
-| React component files (`.tsx`) | **PascalCase** | `FileTree.tsx`, `SearchPanel.tsx` |
-| Hook files (`hooks/`) | **camelCase** | `useFileSearch.ts`, `useFsOps.ts` |
-| Non-component TS files | **kebab-case** | `ws-transport.ts`, `fs-types.ts`, `server-config.ts` |
-| Rust source files | **snake_case** | `fs_subsystem.rs`, `sandbox.rs` |
-| Docs / command `.md` files | **kebab-case** | `code-standards.md`, `api-reference.md` |
+| Location                       | Convention     | Example                                              |
+| ------------------------------ | -------------- | ---------------------------------------------------- |
+| React component files (`.tsx`) | **PascalCase** | `FileTree.tsx`, `SearchPanel.tsx`                    |
+| Hook files (`hooks/`)          | **camelCase**  | `useFileSearch.ts`, `useFsOps.ts`                    |
+| Non-component TS files         | **kebab-case** | `ws-transport.ts`, `fs-types.ts`, `server-config.ts` |
+| Rust source files              | **snake_case** | `fs_subsystem.rs`, `sandbox.rs`                      |
+| Docs / command `.md` files     | **kebab-case** | `code-standards.md`, `api-reference.md`              |
 
 > **Rule of thumb:** if the file exports a JSX component → PascalCase; if it exports a React hook → camelCase; everything else → kebab-case.
 
@@ -622,7 +655,7 @@ Update client types when API changes (camelCase on wire, snake_case in Rust):
 // Rest API
 export interface DirEntry {
   name: string;
-  kind: 'file' | 'dir';
+  kind: "file" | "dir";
   size: number;
   mtime: number;
   isSymlink: boolean;
@@ -635,7 +668,7 @@ export interface FsReadResponse {
   mime?: string;
   mtime?: number;
   size?: number;
-  data?: string;  // base64-encoded
+  data?: string; // base64-encoded
   code?: string;
 }
 
@@ -651,9 +684,9 @@ export interface FsWriteResponse {
 
 ```typescript
 // REST via fetch
-const entries = await transport.invoke('GET /api/fs/list', {
-  project: 'web',
-  path: 'src'
+const entries = await transport.invoke("GET /api/fs/list", {
+  project: "web",
+  path: "src",
 });
 
 // WS protocol (Phase 04+)
@@ -694,6 +727,7 @@ pub async fn require_auth(
 ```
 
 **Production Safety**:
+
 - Panics if MongoDB configured while no-auth enabled
 - Panics if RUST_ENV or ENVIRONMENT set to "production"
 - Multi-line warning banner on startup
@@ -765,21 +799,25 @@ Types: feat, fix, refactor, test, docs, perf, ci, chore.
 ## Build Artifacts
 
 **Rust:**
+
 - Release: `server/target/release/dam-hopper-server`
 - Binary includes all dependencies (musl-libc for portability)
 
 **Web:**
+
 - Vite output: `packages/web/dist/`
 - Served by Rust binary via `tower-http::ServeDir`
 
 ## Dependency Policy
 
 **Rust:**
+
 - Core: axum, tokio, serde
 - Optional: git2 (git ops), portable-pty (terminals), notify (file watching)
 - Security: subtle (constant-time comparison), walkdir (path safety)
 
 **Web:**
+
 - Core: react, vite, tailwind, typescript
 - API: TanStack Query (data fetching)
 - Terminal: xterm.js for PTY rendering

@@ -61,10 +61,7 @@ export function PassphraseDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/50"
-        onClick={onCancel}
-      />
+      <div className="absolute inset-0 bg-black/50" onClick={onCancel} />
 
       {/* Dialog */}
       <div className="relative z-10 w-full max-w-sm rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl p-5">
@@ -84,7 +81,8 @@ export function PassphraseDialog({
         </div>
 
         <p className="text-xs text-[var(--color-text-muted)] mb-4">
-          Git operation failed due to SSH authentication. Enter your SSH key passphrase and retry. Leave blank if the key has no passphrase.
+          Git operation failed due to SSH authentication. Enter your SSH key
+          passphrase and retry. Leave blank if the key has no passphrase.
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-3">
@@ -145,12 +143,7 @@ export function PassphraseDialog({
             >
               Cancel
             </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              size="sm"
-              loading={loading}
-            >
+            <Button type="submit" variant="primary" size="sm" loading={loading}>
               Load Key & Retry
             </Button>
           </div>

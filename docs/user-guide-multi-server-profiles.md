@@ -70,6 +70,7 @@ You can then edit this profile or create new ones.
 ### View Profile Details
 
 In the **Server Connections** dialog, each profile shows:
+
 - Profile name
 - Server URL
 - Auth type (Basic/None)
@@ -80,11 +81,11 @@ In the **Server Connections** dialog, each profile shows:
 
 **All profiles are saved in browser localStorage:**
 
-| Item | Storage | Persistence |
-|------|---------|-------------|
-| All profiles (JSON) | localStorage | Survives browser close, shared across tabs |
-| Active profile ID | localStorage | Survives browser close, shared across tabs |
-| Auth token | sessionStorage | Cleared on tab close, isolated per tab |
+| Item                | Storage        | Persistence                                |
+| ------------------- | -------------- | ------------------------------------------ |
+| All profiles (JSON) | localStorage   | Survives browser close, shared across tabs |
+| Active profile ID   | localStorage   | Survives browser close, shared across tabs |
+| Auth token          | sessionStorage | Cleared on tab close, isolated per tab     |
 
 **Browser Tabs:** All tabs in the same browser share the profiles list. Switching profiles in one tab shows the new active profile in all open tabs.
 
@@ -120,6 +121,7 @@ In the **Server Connections** dialog, each profile shows:
 ### Multi-Tab Setup
 
 Open multiple browser tabs with different profiles:
+
 - Tab 1: "Local Dev" (localhost:4800)
 - Tab 2: "Staging" (staging server)
 - Tab 3: "Production" (prod server)

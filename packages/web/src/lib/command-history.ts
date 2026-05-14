@@ -134,7 +134,12 @@ export function recordCommand(command: string, project?: string): void {
     existing.useCount += 1;
     if (project) existing.project = project;
   } else {
-    entries.push({ command: normalized, lastUsedAt: Date.now(), useCount: 1, project });
+    entries.push({
+      command: normalized,
+      lastUsedAt: Date.now(),
+      useCount: 1,
+      project,
+    });
   }
 
   if (entries.length > MAX_ENTRIES) {
@@ -168,7 +173,11 @@ export function searchHistory(query: string, limit = 5): HistorySearchResult[] {
     const docTokens = allTokenized[i]!;
     const bm25 = bm25Score(queryTokens, docTokens, avgDocLen, df, N);
     if (bm25 === 0) continue;
-    rawScored.push({ entry: entries[i]!, bm25, score: compositeScore(bm25, entries[i]!) });
+    rawScored.push({
+      entry: entries[i]!,
+      bm25,
+      score: compositeScore(bm25, entries[i]!),
+    });
   }
 
   rawScored.sort((a, b) => b.score - a.score);
@@ -176,7 +185,10 @@ export function searchHistory(query: string, limit = 5): HistorySearchResult[] {
 
   // Fallback: if all results are below threshold (matches are very old), re-score without
   // recency decay so old-but-relevant commands still surface. Reuses first-pass bm25.
-  if (topResults.length === 0 || topResults.every((r) => r.score < MIN_SCORE_THRESHOLD)) {
+  if (
+    topResults.length === 0 ||
+    topResults.every((r) => r.score < MIN_SCORE_THRESHOLD)
+  ) {
     const fallback: HistorySearchResult[] = rawScored.map((r) => ({
       entry: r.entry,
       score: compositeScore(r.bm25, r.entry, false),

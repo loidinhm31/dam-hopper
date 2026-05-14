@@ -56,7 +56,10 @@ export function useResizeHandle({
 
     function onMouseMove(ev: MouseEvent) {
       const delta = ev.clientX - startX.current;
-      const newWidth = Math.min(Math.max(startWidth.current + (reversed ? -delta : delta), min), max);
+      const newWidth = Math.min(
+        Math.max(startWidth.current + (reversed ? -delta : delta), min),
+        max,
+      );
       setWidth(newWidth);
     }
 

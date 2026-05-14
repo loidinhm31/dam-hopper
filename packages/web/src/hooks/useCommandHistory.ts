@@ -12,7 +12,8 @@ export function useCommandHistory() {
   );
 
   const search = useCallback(
-    (query: string, limit?: number): HistorySearchResult[] => searchHistory(query, limit),
+    (query: string, limit?: number): HistorySearchResult[] =>
+      searchHistory(query, limit),
     [],
   );
 

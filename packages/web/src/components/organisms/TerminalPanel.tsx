@@ -66,7 +66,9 @@ export function TerminalPanel({
   const safeSessionId = sessionId.replace(/[^a-zA-Z0-9:._-]/g, "-");
   const sessionIdRef = useRef(safeSessionId);
   const openedRef = useRef(false);
-  const [attachState, setAttachState] = useState<"idle" | "attaching" | "attached" | "creating">("idle");
+  const [attachState, setAttachState] = useState<
+    "idle" | "attaching" | "attached" | "creating"
+  >("idle");
   sessionIdRef.current = safeSessionId;
 
   // Terminal instance ref — set after term.open(), used by useTerminalSuggestions
@@ -117,7 +119,6 @@ export function TerminalPanel({
     let unsubData: (() => void) | null = null;
     let unsubExit: (() => void) | null = null;
     let unsubRestart: (() => void) | null = null;
-    let unsubStatus: (() => void) | null = null;
     let unsubBuffer: (() => void) | null = null;
     let inputDisposable: { dispose: () => void } | null = null;
     let observer: ResizeObserver | null = null;
@@ -153,32 +154,29 @@ export function TerminalPanel({
     }
 
     // 3. Handle PTY exit with enhanced restart metadata
-    unsubExit = transport.onTerminalExitEnhanced?.(safeSessionId, (exitEvent) => {
-      const { exitCode, willRestart, restartIn } = exitEvent;
-      const color = willRestart ? "\x1b[33m" : exitCode === 0 ? "\x1b[32m" : "\x1b[31m";
-      const text = willRestart
-        ? `[Process exited (code ${exitCode ?? "?"}), restarting in ${Math.round((restartIn ?? 0) / 1000)}s…]`
-        : `[Process exited with code ${exitCode ?? "?"}]`;
-      term.write(`\r\n${color}${text}\x1b[0m\r\n`);
-      onExit?.(exitCode);
-    }) ?? null;
+    unsubExit =
+      transport.onTerminalExitEnhanced?.(safeSessionId, (exitEvent) => {
+        const { exitCode, willRestart, restartIn } = exitEvent;
+        const color = willRestart
+          ? "\x1b[33m"
+          : exitCode === 0
+            ? "\x1b[32m"
+            : "\x1b[31m";
+        const text = willRestart
+          ? `[Process exited (code ${exitCode ?? "?"}), restarting in ${Math.round((restartIn ?? 0) / 1000)}s…]`
+          : `[Process exited with code ${exitCode ?? "?"}]`;
+        term.write(`\r\n${color}${text}\x1b[0m\r\n`);
+        onExit?.(exitCode);
+      }) ?? null;
 
     // 4. Handle process restart event
-    unsubRestart = transport.onProcessRestarted?.(safeSessionId, (restartEvent) => {
-      const { restartCount } = restartEvent;
-      term.write(`\x1b[33m[Process restarted (#${restartCount})]\x1b[0m\r\n`);
-    }) ?? null;
+    unsubRestart =
+      transport.onProcessRestarted?.(safeSessionId, (restartEvent) => {
+        const { restartCount } = restartEvent;
+        term.write(`\x1b[33m[Process restarted (#${restartCount})]\x1b[0m\r\n`);
+      }) ?? null;
 
-    // 5. Handle WebSocket connection status for reconnect banner
-    unsubStatus = transport.onStatusChange?.((status) => {
-      if (status === "disconnected") {
-        term.write(`\r\n\x1b[2m[Reconnecting…]\x1b[0m`);
-      } else if (status === "connected") {
-        term.write(`\x1b[2K\r\x1b[2m[Reconnected]\x1b[0m\r\n`);
-      }
-    }) ?? null;
-
-    // 6. Forward user input → PTY stdin, with suggestion interception
+    // 5. Forward user input → PTY stdin, with suggestion interception
     inputDisposable = term.onData((data) => {
       const result = suggestionsRef.current.handleInput(data);
       if (result.inject !== undefined) {
@@ -191,20 +189,31 @@ export function TerminalPanel({
       }
     });
 
-    // 7. PTY resize: fired by fitAddon.fit()
+    // 6. PTY resize: fired by fitAddon.fit()
     const resizeDisposable = term.onResize(({ cols: c, rows: r }) => {
       transport.terminalResize(safeSessionId, c, r);
     });
 
-    // 8. Custom keyboard shortcuts
+    // 7. Custom keyboard shortcuts
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && e.code === "KeyC" && e.type === "keydown") {
+      if (
+        e.ctrlKey &&
+        e.shiftKey &&
+        e.code === "KeyC" &&
+        e.type === "keydown"
+      ) {
         const sel = term.getSelection();
         if (sel) void navigator.clipboard.writeText(sel);
         return false;
       }
       if (e.ctrlKey && e.code === "Backquote") return false;
-      if (e.shiftKey && !e.ctrlKey && !e.altKey && e.code === "Enter" && e.type === "keydown") {
+      if (
+        e.shiftKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        e.code === "Enter" &&
+        e.type === "keydown"
+      ) {
         onNewTerminal?.();
         return false;
       }
@@ -226,13 +235,13 @@ export function TerminalPanel({
     const createSession = () => {
       setAttachState("creating");
       return transport
-        .invoke<string>("terminal:create", { 
-          id: safeSessionId, 
-          project, 
-          command, 
-          cwd, 
-          cols: finalCols, 
-          rows: finalRows 
+        .invoke<string>("terminal:create", {
+          id: safeSessionId,
+          project,
+          command,
+          cwd,
+          cols: finalCols,
+          rows: finalRows,
         })
         .then(() => {
           setAttachState("attached");
@@ -247,13 +256,16 @@ export function TerminalPanel({
       }
 
       attachTimeout = setTimeout(() => {
-        console.warn(`[TerminalPanel] terminal:attach timeout for ${safeSessionId}, creating new session`);
+        console.warn(
+          `[TerminalPanel] terminal:attach timeout for ${safeSessionId}, creating new session`,
+        );
         void createSession();
       }, 3000);
     };
 
     // Start initialization flow
-    api.workspace.status()
+    api.workspace
+      .status()
       .then(() => transport.invoke<Array<{ id: string }>>("terminal:list"))
       .then((alive) => {
         if (alive.some((s) => s.id === safeSessionId)) {
@@ -271,7 +283,7 @@ export function TerminalPanel({
           }, 200);
         });
         observer.observe(container);
-        
+
         // Extend inputDisposable to also clean up the resize listener
         const _inputDisposable = inputDisposable;
         inputDisposable = {
@@ -292,7 +304,6 @@ export function TerminalPanel({
       unsubData?.();
       unsubExit?.();
       unsubRestart?.();
-      unsubStatus?.();
       unsubBuffer?.();
       inputDisposable?.dispose();
       if (fitTimer) clearTimeout(fitTimer);
@@ -318,9 +329,25 @@ export function TerminalPanel({
       {attachState === "attaching" && (
         <div className="absolute inset-0 bg-slate-900/50 flex items-center justify-center backdrop-blur-sm">
           <div className="text-sm text-slate-300 flex items-center gap-2 animate-pulse">
-            <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            <svg
+              className="animate-spin h-4 w-4"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
+              ></circle>
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              ></path>
             </svg>
             Reconnecting...
           </div>

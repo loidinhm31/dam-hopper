@@ -8,13 +8,12 @@ interface SidebarTopGroupProps {
   style?: React.CSSProperties;
 }
 
-export function SidebarTopGroup({ tool, onClose, style }: SidebarTopGroupProps) {
+export function SidebarTopGroup({
+  tool,
+  onClose,
+  style,
+}: SidebarTopGroupProps) {
   return (
-    <ToolPanel
-      tool={tool}
-      onClose={onClose}
-      style={style}
-      className="flex-1"
-    />
+    <ToolPanel tool={tool} onClose={onClose} style={style} className="flex-1" />
   );
 }

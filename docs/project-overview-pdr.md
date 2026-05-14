@@ -11,24 +11,28 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 ### PR-001: Workspace Management
 
 **Functional Requirements:**
+
 - Support TOML-based workspace configuration (dam-hopper.toml)
 - Auto-discover projects by type (Maven, Gradle, npm, pnpm, Cargo, custom)
 - Hot-reload workspace config without restart
 - Store global defaults at ~/.config/dam-hopper/config.toml
 
 **Acceptance Criteria:**
+
 - ✓ Load and parse dam-hopper.toml
 - ✓ Resolve relative project paths to absolute
 - ✓ Support workspace:switch via API
 - ✓ Fallback to global config defaults
 
 **Technical Constraints:**
+
 - Serde for TOML deserialization with snake_case field mapping
 - Workspace resolver priority: CLI flag > ENV var > global config
 
 ### PR-002: Terminal Session Management
 
 **Functional Requirements:**
+
 - Create isolated PTY sessions per project
 - Run pre-configured build/run commands
 - Stream terminal output to connected WebSocket clients
@@ -37,6 +41,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Ensure idempotent session creation
 
 **Acceptance Criteria:**
+
 - ✓ Spawn new PTY session with UUID
 - ✓ Broadcast output to multiple subscribers
 - ✓ Retain buffer for live sessions only
@@ -47,6 +52,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Idempotent create: removes dead tombstones, cancels pending restarts, safe to retry (Phase 07 ✓)
 
 **Technical Constraints:**
+
 - portable-pty for cross-platform compatibility
 - Tokio broadcast channels for fan-out + separate PTY/FS channels
 - WebSocket for output streaming + lifecycle events
@@ -55,6 +61,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Cleanup task prunes dead tombstones (60s TTL) and orphaned killed entries (every 30s)
 
 **Phase-Based Implementation:**
+
 - Phase 02: Config extension — RestartPolicy enum per terminal
 - Phase 03: Session metadata — restart_count, last_exit_at fields
 - Phase 04: Restart engine — supervisor + exponential backoff
@@ -64,18 +71,21 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 ### PR-003: Git Operations
 
 **Functional Requirements:**
+
 - Clone repositories with optional recursion
 - Fetch, push, pull with progress reporting
 - Query repository status (branch, ahead/behind)
 - Support SSH key loading for authentication
 
 **Acceptance Criteria:**
+
 - ✓ Clone from any git URL
 - ✓ Detect SSH key requirement and prompt
 - ✓ Broadcast git progress to WebSocket
 - ✓ Handle merge conflicts gracefully
 
 **Technical Constraints:**
+
 - git2 library for operations, CLI fallback for advanced ops
 - SSH key storage in ~/.config/dam-hopper/credentials/
 - Constant-time comparison for auth tokens
@@ -83,28 +93,34 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 ### PR-004: IDE File Explorer (Phase 01)
 
 **Functional Requirements:**
+
 - List directory contents with metadata (size, mtime, symlink status)
 - Read file content (text with range support, binary detection)
 - Get file metadata (kind, size, mime type, binary flag)
 - Enforce sandbox: no traversal outside project bounds
 
 **Acceptance Criteria:**
+
 - ✓ GET /api/fs/list returns DirEntry array
 - ✓ GET /api/fs/read supports offset+len for large files (max 10MB per read)
 - ✓ GET /api/fs/stat includes mime type detection
 - ✓ Symlink validation prevents escape attempts
 - ✓ Binary files return { binary: true, mime: "..." }
+- ✓ Shared file decoration registry returns consistent icon, badge, display language, and Monaco language across file surfaces
 
 **Technical Constraints:**
+
 - Max read: 10MB per request (configurable)
 - MIME type detection via mime_guess crate
 - Async I/O via tokio::fs
+- Frontend file decoration data centralized in `packages/web/src/lib/file-decoration.ts`
 
 **Phase 02+:** File watcher, create/delete/move ops (see Roadmap below)
 
 ### PR-005: Agent Store Distribution
 
 **Functional Requirements:**
+
 - Distribute .claude/ items (skills, commands, hooks, MCP servers) across projects
 - Support symlink-based distribution (ship/unship)
 - Absorb project items into central store
@@ -112,6 +128,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Import items from remote repositories
 
 **Acceptance Criteria:**
+
 - ✓ ship() creates symlinks
 - ✓ unship() removes symlinks
 - ✓ absorb() copies file into store
@@ -119,6 +136,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Health check reports broken links
 
 **Technical Constraints:**
+
 - Store path: .dam-hopper/agent-store/
 - Symlinks relative to project root
 - Shallow clone for remote import (temp cleanup)
@@ -127,18 +145,21 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 ### PR-006: REST API & Authentication
 
 **Functional Requirements:**
+
 - Bearer token authentication (hex UUID)
 - Structured error responses
 - CORS configurable per deployment
 - Content negotiation for binary vs. text responses
 
 **Acceptance Criteria:**
+
 - ✓ All routes protected by token validation
 - ✓ Constant-time comparison prevents timing attacks
 - ✓ Errors return JSON with status code
 - ✓ Binary files detected, not force-decoded as text
 
 **Non-Functional Requirements:**
+
 - Token generation on first start
 - Store token securely (0600 file permissions)
 - Log auth failures without leaking tokens
@@ -146,6 +167,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 ### PR-007: Multi-Server Profile Management (Phase 2)
 
 **Functional Requirements:**
+
 - Manage multiple server connection profiles in browser (no backend involvement)
 - Switch between servers without page reload
 - Store profile metadata: name, URL, auth type, username
@@ -153,6 +175,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Display active profile in UI sidebar
 
 **Acceptance Criteria:**
+
 - ✓ Create/read/update/delete profiles via localStorage
 - ✓ `ServerProfile` model: { id (UUID v4), name, url, authType ("basic"|"none"), username?, createdAt (timestamp) }
 - ✓ Server profiles list via `ServerProfilesDialog.tsx` component
@@ -163,10 +186,12 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Delete active profile clears active ID
 
 **Storage:**
+
 - Profiles JSON: localStorage key `damhopper_server_profiles`
 - Active profile ID: localStorage key `damhopper_active_profile_id`
 
 **Non-Functional Requirements:**
+
 - Password never stored (only display username)
 - UUID v4 for profile IDs (browser crypto.randomUUID())
 - Storage quota: typical localStorage limit (5-10MB)
@@ -177,12 +202,14 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 ### Performance
 
 **Target Metrics:**
+
 - Workspace load: <200ms
 - PTY spawn: <500ms
 - File list (1000 items): <100ms
 - File read (10MB): <2s
 
 **Implementation:**
+
 - Arc<Mutex> for zero-copy clones
 - Tokio async I/O
 - Broadcast channels for fan-out (not polling)
@@ -242,22 +269,26 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 ## Roadmap
 
 ### Phase 01: IDE File Explorer (Complete)
+
 - ✓ Filesystem sandbox
 - ✓ List/read/stat REST endpoints
 - ✓ Binary detection
 
 ### Phase 02: File Watcher (Complete)
+
 - ✓ inotify integration (Linux), notify crate cross-platform
 - ✓ WebSocket subscription + fs:event push
 - ✓ Live tree sync on file changes
 
 ### Phase 03: IDE Shell (Complete)
+
 - ✓ react-resizable-panels layout (tree | editor | terminal)
 - ✓ react-arborist file tree with live sync
 - ✓ TanStack Query + useFsSubscription hook
 - ✓ /ide lazy route with feature gate
 
 ### Phase 04: Monaco Editor + Save (Complete)
+
 - ✓ Monaco integration with tab management
 - ✓ Ctrl+S save via 3-phase WS write protocol (begin → chunks → commit)
 - ✓ File tiering (normal <1MB, degraded 1-5MB, large ≥5MB, binary)
@@ -267,25 +298,27 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ **Binary Streaming Optimization for Large Files (2026-04-14)**
 
 ### Phase 05: Write Operations (In Progress)
+
 - [ ] Create file/directory
 - [ ] Delete file/directory
 - [ ] Move/rename operations
 - [ ] Undo/history tracking
 
 ### Phase 06+: Advanced Features (Future)
+
 - [ ] Advanced Terminal (split panes, session persistence, search)
 - [ ] Git integration UI (blame, diff)
 - [ ] AI assistant integration
 
 ## Success Metrics
 
-| Metric | Target | Tracking |
-|--------|--------|----------|
-| Workspace load time | <200ms | Benchmark tests |
-| File explorer response | <100ms (1k items) | API latency logging |
-| Zero workspace corruption | 100% | Integration tests |
-| Agent item distribution coverage | 100% of enabled projects | Health check |
-| Feature gate compliance | 0 disabled endpoints active | Route registration tests |
+| Metric                           | Target                      | Tracking                 |
+| -------------------------------- | --------------------------- | ------------------------ |
+| Workspace load time              | <200ms                      | Benchmark tests          |
+| File explorer response           | <100ms (1k items)           | API latency logging      |
+| Zero workspace corruption        | 100%                        | Integration tests        |
+| Agent item distribution coverage | 100% of enabled projects    | Health check             |
+| Feature gate compliance          | 0 disabled endpoints active | Route registration tests |
 
 ## Dependencies & Constraints
 
@@ -313,11 +346,11 @@ Workspace: toml
 
 ## Timeline
 
-| Phase | Scope | Status |
-|-------|-------|--------|
-| 01 | IDE File Explorer | ✓ Complete |
-| 02 | File Watcher + WS subscription | ✓ Complete |
-| 03 | IDE Shell (layout + tree) | ✓ Complete |
-| 04 | Monaco Editor + Save | ✓ Complete (2026-04-14) |
-| 05 | Create/delete/move/rename | In Progress |
-| 06+ | Advanced features (git UI, AI) | Future |
+| Phase | Scope                          | Status                  |
+| ----- | ------------------------------ | ----------------------- |
+| 01    | IDE File Explorer              | ✓ Complete              |
+| 02    | File Watcher + WS subscription | ✓ Complete              |
+| 03    | IDE Shell (layout + tree)      | ✓ Complete              |
+| 04    | Monaco Editor + Save           | ✓ Complete (2026-04-14) |
+| 05    | Create/delete/move/rename      | In Progress             |
+| 06+   | Advanced features (git UI, AI) | Future                  |

@@ -36,7 +36,10 @@ describe("encryptText", () => {
     expect((decMeta as Record<string, unknown>)["size"]).toBe(
       new TextEncoder().encode(text).byteLength,
     );
-    expect(metadata).toMatchObject({ path, size: 15 });
+    expect(metadata).toMatchObject({
+      path,
+      size: new TextEncoder().encode(text).byteLength,
+    });
   });
 
   it("produces different ciphertext on each call (random IV)", async () => {
@@ -54,9 +57,7 @@ describe("encryptText", () => {
     expect(ivMatch).toBe(false);
   });
 
-  it("rejects content exceeding 100 MB", async () => {
-    // We can't allocate 100MB in a test easily — just verify the text encoder path.
-    // A unit-level check: 0 bytes should be fine.
+  it("accepts empty input without tripping the size guard", async () => {
     const { blob } = await encryptText("", "empty.txt", testKey());
     expect(blob.size).toBeGreaterThan(12 + 16); // iv + tag minimum
   });
@@ -111,9 +112,9 @@ describe("encryptFile", () => {
 
 describe("decryptBlob", () => {
   it("returns error for short blob (< 28 bytes)", async () => {
-    await expect(
-      decryptBlob(new Uint8Array(10), testKey()),
-    ).rejects.toThrow("too short");
+    await expect(decryptBlob(new Uint8Array(10), testKey())).rejects.toThrow(
+      "too short",
+    );
   });
 
   it("returns error for wrong key", async () => {

@@ -9,11 +9,15 @@ interface Props {
 }
 
 export function ItemDetail({ item, onShip }: Props) {
-  const { data: content, isLoading } = useAgentStoreContent(item.name, item.category);
+  const { data: content, isLoading } = useAgentStoreContent(
+    item.name,
+    item.category,
+  );
   const remove = useRemoveFromStore();
 
   function handleRemove() {
-    if (!confirm(`Remove "${item.name}" from store? This cannot be undone.`)) return;
+    if (!confirm(`Remove "${item.name}" from store? This cannot be undone.`))
+      return;
     remove.mutate({ name: item.name, category: item.category });
   }
 
@@ -22,18 +26,28 @@ export function ItemDetail({ item, onShip }: Props) {
       {/* Header */}
       <div className="px-4 py-3 border-b border-[var(--color-border)]">
         <div className="flex items-start justify-between gap-2 mb-2">
-          <h2 className="text-sm font-semibold text-[var(--color-text)] truncate">{item.name}</h2>
-          <Badge variant="neutral" className="shrink-0">{item.category}</Badge>
+          <h2 className="text-sm font-semibold text-[var(--color-text)] truncate">
+            {item.name}
+          </h2>
+          <Badge variant="neutral" className="shrink-0">
+            {item.category}
+          </Badge>
         </div>
         {item.description && (
-          <p className="text-xs text-[var(--color-text-muted)] mb-2">{item.description}</p>
+          <p className="text-xs text-[var(--color-text-muted)] mb-2">
+            {item.description}
+          </p>
         )}
         <div className="flex flex-wrap gap-1">
           {item.compatibleAgents.map((a) => (
-            <Badge key={a} variant="primary">{a}</Badge>
+            <Badge key={a} variant="primary">
+              {a}
+            </Badge>
           ))}
           {item.sizeBytes != null && (
-            <Badge variant="neutral">{(item.sizeBytes / 1024).toFixed(1)}KB</Badge>
+            <Badge variant="neutral">
+              {(item.sizeBytes / 1024).toFixed(1)}KB
+            </Badge>
           )}
         </div>
       </div>
@@ -53,7 +67,9 @@ export function ItemDetail({ item, onShip }: Props) {
               {content}
             </pre>
           ) : (
-            <p className="px-4 py-6 text-xs text-[var(--color-text-muted)] text-center">No preview available</p>
+            <p className="px-4 py-6 text-xs text-[var(--color-text-muted)] text-center">
+              No preview available
+            </p>
           )}
         </div>
       </div>

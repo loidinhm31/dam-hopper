@@ -1,12 +1,21 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import type { LayoutNode, PaneNode, PersistedLayout, SplitDirection, SplitNode } from "@/types/terminal-layout.js";
+import type {
+  LayoutNode,
+  PaneNode,
+  PersistedLayout,
+  SplitDirection,
+  SplitNode,
+} from "@/types/terminal-layout.js";
 import { generateUUID } from "@/lib/utils.js";
 
 const STORAGE_KEY = "dam-hopper:terminal-layout";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-function newPaneNode(sessionIds: string[] = [], activeSessionId: string | null = null): PaneNode {
+function newPaneNode(
+  sessionIds: string[] = [],
+  activeSessionId: string | null = null,
+): PaneNode {
   return { type: "pane", id: generateUUID(), sessionIds, activeSessionId };
 }
 
@@ -74,11 +83,17 @@ function saveLayout(root: LayoutNode): void {
 /** Collect all pane node IDs from a tree. */
 function collectPaneIds(node: LayoutNode): string[] {
   if (node.type === "pane") return [node.id];
-  return [...collectPaneIds(node.children[0]), ...collectPaneIds(node.children[1])];
+  return [
+    ...collectPaneIds(node.children[0]),
+    ...collectPaneIds(node.children[1]),
+  ];
 }
 
 /** Prune dead sessionIds from all pane nodes. Returns mutated copy. */
-function pruneDeadSessions(node: LayoutNode, liveSessions: Set<string>): LayoutNode {
+function pruneDeadSessions(
+  node: LayoutNode,
+  liveSessions: Set<string>,
+): LayoutNode {
   if (node.type === "pane") {
     const sessionIds = node.sessionIds.filter((id) => liveSessions.has(id));
     const activeSessionId = sessionIds.includes(node.activeSessionId ?? "")
@@ -166,11 +181,13 @@ function addSessionToPane(
     const alreadyPresent = tree.sessionIds.includes(sessionId);
     const alreadyActive = tree.activeSessionId === sessionId;
     if (alreadyPresent && alreadyActive) return tree;
-    
-    return { 
-      ...tree, 
-      sessionIds: alreadyPresent ? tree.sessionIds : [...tree.sessionIds, sessionId], 
-      activeSessionId: sessionId 
+
+    return {
+      ...tree,
+      sessionIds: alreadyPresent
+        ? tree.sessionIds
+        : [...tree.sessionIds, sessionId],
+      activeSessionId: sessionId,
     };
   }
   return {
@@ -256,7 +273,11 @@ export interface UseTerminalLayoutResult {
   addSessionToPane: (paneId: string, sessionId: string) => void;
   removeSessionFromPane: (paneId: string, sessionId: string) => void;
   setActiveSession: (paneId: string, sessionId: string) => void;
-  moveTabToPane: (sessionId: string, fromPaneId: string, toPaneId: string) => void;
+  moveTabToPane: (
+    sessionId: string,
+    fromPaneId: string,
+    toPaneId: string,
+  ) => void;
   pruneSessions: (liveSessions: Set<string>) => void;
   getPanes: () => PaneNode[];
   getPaneById: (paneId: string) => PaneNode | undefined;
@@ -280,7 +301,9 @@ export function useTerminalLayout(): UseTerminalLayoutResult {
     rootRef.current = root;
   }, [root]);
 
-  const [focusedPaneId, setFocusedPaneId] = useState<string | null>(initialData.focus);
+  const [focusedPaneId, setFocusedPaneId] = useState<string | null>(
+    initialData.focus,
+  );
 
   const splitPane = useCallback(
     (paneId: string, direction: SplitDirection): string => {
@@ -314,19 +337,26 @@ export function useTerminalLayout(): UseTerminalLayoutResult {
     setFocusedPaneId((prev) => (prev === paneId ? null : prev));
   }, []);
 
-  const updateSizesFn = useCallback((nodeId: string, sizes: [number, number]) => {
-    setRoot((prev) => {
-      const next = updateSizesInTree(prev, nodeId, sizes);
-      saveLayout(next);
-      return next;
-    });
-  }, []);
+  const updateSizesFn = useCallback(
+    (nodeId: string, sizes: [number, number]) => {
+      setRoot((prev) => {
+        const next = updateSizesInTree(prev, nodeId, sizes);
+        saveLayout(next);
+        return next;
+      });
+    },
+    [],
+  );
 
   const addSession = useCallback((paneId: string, sessionId: string) => {
     setRoot((prev) => {
       const panes = collectPanes(prev);
-      const target = panes.find(p => p.id === paneId);
-      if (target && target.sessionIds.includes(sessionId) && target.activeSessionId === sessionId) {
+      const target = panes.find((p) => p.id === paneId);
+      if (
+        target &&
+        target.sessionIds.includes(sessionId) &&
+        target.activeSessionId === sessionId
+      ) {
         return prev;
       }
       const next = addSessionToPane(prev, paneId, sessionId);
@@ -348,7 +378,7 @@ export function useTerminalLayout(): UseTerminalLayoutResult {
   const setActiveSession = useCallback((paneId: string, sessionId: string) => {
     setRoot((prev) => {
       const panes = collectPanes(prev);
-      const target = panes.find(p => p.id === paneId);
+      const target = panes.find((p) => p.id === paneId);
       if (target && target.activeSessionId === sessionId) {
         return prev;
       }
@@ -359,13 +389,16 @@ export function useTerminalLayout(): UseTerminalLayoutResult {
     });
   }, []);
 
-  const moveTabToPane = useCallback((sessionId: string, fromPaneId: string, toPaneId: string) => {
-    setRoot((prev) => {
-      const next = moveTabBetweenPanes(prev, sessionId, fromPaneId, toPaneId);
-      saveLayout(next);
-      return next;
-    });
-  }, []);
+  const moveTabToPane = useCallback(
+    (sessionId: string, fromPaneId: string, toPaneId: string) => {
+      setRoot((prev) => {
+        const next = moveTabBetweenPanes(prev, sessionId, fromPaneId, toPaneId);
+        saveLayout(next);
+        return next;
+      });
+    },
+    [],
+  );
 
   const pruneSessions = useCallback((liveSessions: Set<string>) => {
     setRoot((prev) => {

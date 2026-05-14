@@ -15,12 +15,12 @@ const KEY_ACTIVE_PROFILE = "damhopper_active_profile_id";
 
 /** Server profile interface */
 export interface ServerProfile {
-  id: string;                    // UUID v4
-  name: string;                  // "Local Dev", "Production", etc.
-  url: string;                   // "http://localhost:4800"
-  authType: "basic" | "none";    // Authentication method
-  username?: string;             // For basic auth display (password never stored)
-  createdAt: number;             // Unix timestamp
+  id: string; // UUID v4
+  name: string; // "Local Dev", "Production", etc.
+  url: string; // "http://localhost:4800"
+  authType: "basic" | "none"; // Authentication method
+  username?: string; // For basic auth display (password never stored)
+  createdAt: number; // Unix timestamp
 }
 
 /** Returns the configured server URL, stripping trailing slash. */
@@ -30,7 +30,7 @@ export function getServerUrl(): string {
   if (activeProfile) {
     return activeProfile.url.replace(/\/$/, "");
   }
-  
+
   // Priority 2: Legacy localStorage (for migration period)
   try {
     const stored = localStorage.getItem(KEY_URL);
@@ -38,10 +38,12 @@ export function getServerUrl(): string {
   } catch {
     // localStorage may be unavailable in some environments
   }
-  
+
   // Priority 3: Env var
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const envUrl = (import.meta as any).env?.VITE_DAM_HOPPER_SERVER_URL as string | undefined;
+  const envUrl = (import.meta as any).env?.VITE_DAM_HOPPER_SERVER_URL as
+    | string
+    | undefined;
   if (envUrl) {
     // In dev mode, let Vite's proxy forward /api/* and /ws to the remote server.
     // This avoids cross-origin requests entirely — no CORS configuration needed on the server.
@@ -51,7 +53,7 @@ export function getServerUrl(): string {
     }
     return envUrl.replace(/\/$/, "");
   }
-  
+
   // Fallback: same origin
   return `${location.protocol}//${location.host}`;
 }
@@ -239,7 +241,7 @@ export function getActiveProfileId(): string | null {
 export function getActiveProfile(): ServerProfile | null {
   const id = getActiveProfileId();
   if (!id) return null;
-  return getProfiles().find(p => p.id === id) ?? null;
+  return getProfiles().find((p) => p.id === id) ?? null;
 }
 
 /** Set the active profile by ID */
@@ -252,7 +254,9 @@ export function setActiveProfile(id: string): void {
 }
 
 /** Create a new server profile */
-export function createProfile(data: Omit<ServerProfile, "id" | "createdAt">): ServerProfile {
+export function createProfile(
+  data: Omit<ServerProfile, "id" | "createdAt">,
+): ServerProfile {
   const profile: ServerProfile = {
     ...data,
     id: uuid(),
@@ -265,9 +269,12 @@ export function createProfile(data: Omit<ServerProfile, "id" | "createdAt">): Se
 }
 
 /** Update an existing profile by ID */
-export function updateProfile(id: string, data: Partial<Omit<ServerProfile, "id" | "createdAt">>): void {
+export function updateProfile(
+  id: string,
+  data: Partial<Omit<ServerProfile, "id" | "createdAt">>,
+): void {
   const profiles = getProfiles();
-  const idx = profiles.findIndex(p => p.id === id);
+  const idx = profiles.findIndex((p) => p.id === id);
   if (idx >= 0) {
     profiles[idx] = { ...profiles[idx], ...data };
     saveProfiles(profiles);
@@ -276,7 +283,7 @@ export function updateProfile(id: string, data: Partial<Omit<ServerProfile, "id"
 
 /** Delete a profile by ID */
 export function deleteProfile(id: string): void {
-  const profiles = getProfiles().filter(p => p.id !== id);
+  const profiles = getProfiles().filter((p) => p.id !== id);
   saveProfiles(profiles);
   // If deleted active profile, clear active
   if (getActiveProfileId() === id) {
@@ -291,10 +298,10 @@ export function deleteProfile(id: string): void {
 /** Migrate legacy single-server config to profile system */
 export function migrateToProfiles(): void {
   if (getProfiles().length > 0) return; // Already migrated
-  
+
   const existingUrl = localStorage.getItem(KEY_URL);
   const existingUsername = getAuthUsername();
-  
+
   if (existingUrl && existingUrl !== `${location.protocol}//${location.host}`) {
     const profile = createProfile({
       name: "Default Server",
@@ -305,4 +312,3 @@ export function migrateToProfiles(): void {
     setActiveProfile(profile.id);
   }
 }
-

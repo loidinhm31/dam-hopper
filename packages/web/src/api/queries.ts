@@ -125,7 +125,8 @@ export function useGlobalConfig() {
 export function useTerminalSessions() {
   return useQuery<SessionInfo[]>({
     queryKey: ["terminal-sessions"],
-    queryFn: () => getTransport().invoke<SessionInfo[]>("terminal:listDetailed"),
+    queryFn: () =>
+      getTransport().invoke<SessionInfo[]>("terminal:listDetailed"),
     staleTime: Infinity, // driven by terminal:changed push event invalidation
   });
 }
@@ -214,7 +215,12 @@ export function useGitDiff(project: string) {
   });
 }
 
-export function useGitUntracked(project: string, offset: number, limit: number, enabled: boolean) {
+export function useGitUntracked(
+  project: string,
+  offset: number,
+  limit: number,
+  enabled: boolean,
+) {
   return useQuery<DiffFileEntry[]>({
     queryKey: ["git-untracked", project, offset, limit],
     queryFn: () => api.git.untrackedFiles(project, offset, limit),
@@ -241,7 +247,11 @@ export function useGitCommitFiles(project: string, hash: string) {
   });
 }
 
-export function useGitCommitFileDiff(project: string, hash: string, path: string) {
+export function useGitCommitFileDiff(
+  project: string,
+  hash: string,
+  path: string,
+) {
   return useQuery<FileDiffContent>({
     queryKey: ["git-commit-file-diff", project, hash, path],
     queryFn: () => api.git.commitFileDiff(project, hash, path),
@@ -263,7 +273,8 @@ export function useGitStage(project: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (paths: string[]) => api.git.stage(project, paths),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["git-diff", project] }),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: ["git-diff", project] }),
   });
 }
 
@@ -271,7 +282,8 @@ export function useGitUnstage(project: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (paths: string[]) => api.git.unstage(project, paths),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["git-diff", project] }),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: ["git-diff", project] }),
   });
 }
 
@@ -314,7 +326,8 @@ export function useGitCommit(project: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (message: string) => api.git.commit(project, message),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["git-diff", project] }),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: ["git-diff", project] }),
   });
 }
 
@@ -372,14 +385,21 @@ export function useSshAddKey() {
     }: {
       passphrase: string;
       keyPath?: string;
-    }) => getTransport().invoke<{ success: boolean; error?: string }>("ssh:addKey", { passphrase, keyPath }),
+    }) =>
+      getTransport().invoke<{ success: boolean; error?: string }>(
+        "ssh:addKey",
+        { passphrase, keyPath },
+      ),
   });
 }
 
 export function useSshCheckAgent() {
   return useQuery({
     queryKey: ["ssh-agent"],
-    queryFn: () => getTransport().invoke<{ hasKeys: boolean; keyCount: number }>("ssh:checkAgent"),
+    queryFn: () =>
+      getTransport().invoke<{ hasKeys: boolean; keyCount: number }>(
+        "ssh:checkAgent",
+      ),
     staleTime: 60_000,
   });
 }
@@ -461,7 +481,10 @@ export function useAgentStoreItem(name: string, category: AgentItemCategory) {
   });
 }
 
-export function useAgentStoreContent(name: string, category: AgentItemCategory) {
+export function useAgentStoreContent(
+  name: string,
+  category: AgentItemCategory,
+) {
   return useQuery({
     queryKey: ["agent-store", "content", name, category],
     queryFn: () => api.agentStore.getContent(name, category),
@@ -514,7 +537,14 @@ export function useShipItem() {
       projectName: string;
       agent: AgentType;
       method?: DistributionMethod;
-    }) => api.agentStore.ship(opts.itemName, opts.category, opts.projectName, opts.agent, opts.method),
+    }) =>
+      api.agentStore.ship(
+        opts.itemName,
+        opts.category,
+        opts.projectName,
+        opts.agent,
+        opts.method,
+      ),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["agent-store", "matrix"] });
       void qc.invalidateQueries({ queryKey: ["agent-store", "scan"] });
@@ -530,7 +560,13 @@ export function useUnshipItem() {
       category: AgentItemCategory;
       projectName: string;
       agent: AgentType;
-    }) => api.agentStore.unship(opts.itemName, opts.category, opts.projectName, opts.agent),
+    }) =>
+      api.agentStore.unship(
+        opts.itemName,
+        opts.category,
+        opts.projectName,
+        opts.agent,
+      ),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["agent-store", "matrix"] });
       void qc.invalidateQueries({ queryKey: ["agent-store", "scan"] });
@@ -546,7 +582,13 @@ export function useAbsorbItem() {
       category: AgentItemCategory;
       projectName: string;
       agent: AgentType;
-    }) => api.agentStore.absorb(opts.itemName, opts.category, opts.projectName, opts.agent),
+    }) =>
+      api.agentStore.absorb(
+        opts.itemName,
+        opts.category,
+        opts.projectName,
+        opts.agent,
+      ),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["agent-store"] });
     },
@@ -589,8 +631,11 @@ export function useMemoryFile(projectName: string, agent: AgentType) {
 export function useUpdateMemoryFile() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (opts: { projectName: string; agent: AgentType; content: string }) =>
-      api.agentMemory.update(opts.projectName, opts.agent, opts.content),
+    mutationFn: (opts: {
+      projectName: string;
+      agent: AgentType;
+      content: string;
+    }) => api.agentMemory.update(opts.projectName, opts.agent, opts.content),
     onSuccess: (_data, vars) => {
       void qc.invalidateQueries({
         queryKey: ["agent-memory", "file", vars.projectName, vars.agent],
@@ -601,7 +646,11 @@ export function useUpdateMemoryFile() {
 
 export function useApplyMemoryTemplate() {
   return useMutation({
-    mutationFn: (opts: { templateName: string; projectName: string; agent: AgentType }) =>
+    mutationFn: (opts: {
+      templateName: string;
+      projectName: string;
+      agent: AgentType;
+    }) =>
       api.agentMemory.apply(opts.templateName, opts.projectName, opts.agent),
   });
 }
@@ -625,9 +674,18 @@ export function useImportConfirm() {
   return useMutation({
     mutationFn: (opts: {
       tmpDir: string;
-      selectedItems: Array<{ name: string; category: AgentItemCategory; relativePath: string }>;
+      selectedItems: Array<{
+        name: string;
+        category: AgentItemCategory;
+        relativePath: string;
+      }>;
       skipCleanup?: boolean;
-    }) => api.agentImport.confirm(opts.tmpDir, opts.selectedItems, opts.skipCleanup),
+    }) =>
+      api.agentImport.confirm(
+        opts.tmpDir,
+        opts.selectedItems,
+        opts.skipCleanup,
+      ),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["agent-store"] });
     },

@@ -15,8 +15,12 @@ export function EditorPlaceholder({ openFile }: EditorPlaceholderProps) {
       {openFile && (
         <div className="shrink-0 flex items-center gap-1 px-2 py-1 border-b border-[var(--color-border)] bg-[var(--color-surface-2)]">
           <FileCode className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
-          <span className="text-xs text-[var(--color-text)]">{openFile.name}</span>
-          <span className="ml-1 text-[10px] text-[var(--color-text-muted)]">(read-only preview — editor in Phase 04)</span>
+          <span className="text-xs text-[var(--color-text)]">
+            {openFile.name}
+          </span>
+          <span className="ml-1 text-[10px] text-[var(--color-text-muted)]">
+            (read-only preview — editor in Phase 04)
+          </span>
         </div>
       )}
 

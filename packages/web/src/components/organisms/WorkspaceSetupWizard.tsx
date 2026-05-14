@@ -1,14 +1,14 @@
 import { useState, useEffect } from "react";
-import { 
-  FolderOpen, 
-  ChevronRight, 
-  ChevronLeft, 
-  Loader2, 
-  CheckCircle2, 
-  Package, 
+import {
+  FolderOpen,
+  ChevronRight,
+  ChevronLeft,
+  Loader2,
+  CheckCircle2,
+  Package,
   FolderGit2,
   AlertCircle,
-  Server
+  Server,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDiscoverProjects, useInitWorkspace } from "@/api/queries.js";
@@ -38,11 +38,13 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
   const [workspaceName, setWorkspaceName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  
+
   const activeProfile = getActiveProfile();
-  const { data: discoverData, isLoading: discovering, error: discoverError } = useDiscoverProjects(
-    step === "projects" ? selectedPath : null
-  );
+  const {
+    data: discoverData,
+    isLoading: discovering,
+    error: discoverError,
+  } = useDiscoverProjects(step === "projects" ? selectedPath : null);
   const initMutation = useInitWorkspace();
 
   function handleInputPathSubmit() {
@@ -63,7 +65,7 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
 
   function toggleProject(path: string) {
     setSelectedProjects((prev) =>
-      prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path]
+      prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path],
     );
   }
 
@@ -85,7 +87,9 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
       void qc.invalidateQueries({ queryKey: ["projects"] });
       onComplete();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to initialize workspace");
+      setError(
+        err instanceof Error ? err.message : "Failed to initialize workspace",
+      );
     }
   }
 
@@ -104,7 +108,10 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
           </h1>
           {activeProfile && (
             <p className="text-sm text-[var(--color-text-muted)]">
-              Connected to <span className="text-[var(--color-primary)]">{activeProfile.name}</span>
+              Connected to{" "}
+              <span className="text-[var(--color-primary)]">
+                {activeProfile.name}
+              </span>
             </p>
           )}
         </div>
@@ -118,8 +125,8 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
                   step === s
                     ? "bg-[var(--color-primary)] text-white"
                     : i < ["path", "projects", "confirm"].indexOf(step)
-                    ? "bg-[var(--color-success)] text-white"
-                    : "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]"
+                      ? "bg-[var(--color-success)] text-white"
+                      : "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]"
                 }`}
               >
                 {i + 1}
@@ -151,7 +158,8 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
                 </div>
 
                 <p className="text-sm text-[var(--color-text-muted)]">
-                  Enter the path to your workspace directory on the server. This is the root folder containing your projects.
+                  Enter the path to your workspace directory on the server. This
+                  is the root folder containing your projects.
                 </p>
 
                 {/* Path Input */}
@@ -164,7 +172,9 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
                       type="text"
                       value={inputPath}
                       onChange={(e) => setInputPath(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleInputPathSubmit()}
+                      onKeyDown={(e) =>
+                        e.key === "Enter" && handleInputPathSubmit()
+                      }
                       placeholder="/home/user/projects"
                       className="flex-1 glass-input rounded-lg px-3 py-2.5 text-sm outline-none font-mono"
                     />
@@ -177,7 +187,14 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
                     Common locations
                   </label>
                   <div className="flex flex-wrap gap-2">
-                    {["/home", "/var/www", "/opt", "/srv", "/projects", "/workspace"].map((path) => (
+                    {[
+                      "/home",
+                      "/var/www",
+                      "/opt",
+                      "/srv",
+                      "/projects",
+                      "/workspace",
+                    ].map((path) => (
                       <button
                         key={path}
                         onClick={() => setInputPath(path)}
@@ -223,7 +240,9 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
                   <div className="flex flex-col items-center justify-center py-12 text-center">
                     <AlertCircle className="w-8 h-8 text-[var(--color-error)] mb-4" />
                     <p className="text-sm text-[var(--color-error)]">
-                      {discoverError instanceof Error ? discoverError.message : "Failed to discover projects"}
+                      {discoverError instanceof Error
+                        ? discoverError.message
+                        : "Failed to discover projects"}
                     </p>
                   </div>
                 ) : projects.length === 0 ? (
@@ -246,10 +265,12 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
                         onClick={toggleAll}
                         className="text-xs text-[var(--color-primary)] hover:underline"
                       >
-                        {selectedProjects.length === projects.length ? "Deselect all" : "Select all"}
+                        {selectedProjects.length === projects.length
+                          ? "Deselect all"
+                          : "Select all"}
                       </button>
                     </div>
-                    
+
                     <div className="border border-[var(--color-border)] rounded-lg overflow-hidden max-h-64 overflow-y-auto">
                       <ul className="divide-y divide-[var(--color-border)]">
                         {projects.map((project) => (
@@ -257,12 +278,18 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
                             <label className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-[var(--color-surface-2)] transition-colors">
                               <input
                                 type="checkbox"
-                                checked={selectedProjects.includes(project.path)}
+                                checked={selectedProjects.includes(
+                                  project.path,
+                                )}
                                 onChange={() => toggleProject(project.path)}
                                 className="w-4 h-4 rounded border-[var(--color-border)] text-[var(--color-primary)] focus:ring-[var(--color-primary)]"
                               />
-                              <span className="text-lg" title={project.projectType}>
-                                {PROJECT_TYPE_ICONS[project.projectType] || "📁"}
+                              <span
+                                className="text-lg"
+                                title={project.projectType}
+                              >
+                                {PROJECT_TYPE_ICONS[project.projectType] ||
+                                  "📁"}
                               </span>
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2">
@@ -314,16 +341,28 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
 
                 <div className="space-y-3 p-4 rounded-lg bg-[var(--color-surface-2)]">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-[var(--color-text-muted)]">Workspace</span>
-                    <span className="text-sm font-medium text-[var(--color-text)]">{workspaceName}</span>
+                    <span className="text-sm text-[var(--color-text-muted)]">
+                      Workspace
+                    </span>
+                    <span className="text-sm font-medium text-[var(--color-text)]">
+                      {workspaceName}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-[var(--color-text-muted)]">Path</span>
-                    <span className="text-sm font-mono text-[var(--color-text)] truncate max-w-[60%]">{selectedPath}</span>
+                    <span className="text-sm text-[var(--color-text-muted)]">
+                      Path
+                    </span>
+                    <span className="text-sm font-mono text-[var(--color-text)] truncate max-w-[60%]">
+                      {selectedPath}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-[var(--color-text-muted)]">Projects</span>
-                    <span className="text-sm text-[var(--color-text)]">{selectedProjects.length}</span>
+                    <span className="text-sm text-[var(--color-text-muted)]">
+                      Projects
+                    </span>
+                    <span className="text-sm text-[var(--color-text)]">
+                      {selectedProjects.length}
+                    </span>
                   </div>
                 </div>
 

@@ -12,11 +12,17 @@ interface SearchPanelProps {
   inputRef?: React.RefObject<HTMLInputElement | null>;
 }
 
-export function SearchPanel({ project, onResultClick, onClose, inputRef }: SearchPanelProps) {
+export function SearchPanel({
+  project,
+  onResultClick,
+  onClose,
+  inputRef,
+}: SearchPanelProps) {
   const localInputRef = useRef<HTMLInputElement>(null);
   const resolvedRef = inputRef ?? localInputRef;
 
-  const { scope, setScope, initialQuery, consumeInitialQuery } = useSearchUiStore();
+  const { scope, setScope, initialQuery, consumeInitialQuery } =
+    useSearchUiStore();
 
   useEffect(() => {
     if (!onClose) return;
@@ -27,8 +33,15 @@ export function SearchPanel({ project, onResultClick, onClose, inputRef }: Searc
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  const { query, setQuery, caseSensitive, setCaseSensitive, data, isLoading, isError } =
-    useFileSearch(project, scope);
+  const {
+    query,
+    setQuery,
+    caseSensitive,
+    setCaseSensitive,
+    data,
+    isLoading,
+    isError,
+  } = useFileSearch(project, scope);
 
   // One-shot seed from store initialQuery (set by Monaco Ctrl+Shift+F via openWith)
   const seededRef = useRef(false);
@@ -39,8 +52,8 @@ export function SearchPanel({ project, onResultClick, onClose, inputRef }: Searc
       consumeInitialQuery(); // clear store so re-open without selection doesn't re-seed
       setTimeout(() => resolvedRef.current?.select(), 20);
     }
-  // consumeInitialQuery is stable (Zustand action); resolvedRef intentionally omitted
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // consumeInitialQuery is stable (Zustand action); resolvedRef intentionally omitted
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialQuery, setQuery]);
 
   // Group matches by file path
@@ -66,9 +79,14 @@ export function SearchPanel({ project, onResultClick, onClose, inputRef }: Searc
     return (
       <>
         {parts.map((part, i) => {
-          const matches = isCaseSensitive ? part === q : part.toLowerCase() === q.toLowerCase();
+          const matches = isCaseSensitive
+            ? part === q
+            : part.toLowerCase() === q.toLowerCase();
           return matches ? (
-            <mark key={i} className="bg-[var(--color-primary)]/25 text-[var(--color-primary)] rounded-sm px-0.5">
+            <mark
+              key={i}
+              className="bg-[var(--color-primary)]/25 text-[var(--color-primary)] rounded-sm px-0.5"
+            >
               {part}
             </mark>
           ) : (
@@ -123,7 +141,9 @@ export function SearchPanel({ project, onResultClick, onClose, inputRef }: Searc
             ref={resolvedRef}
             autoFocus
             type="text"
-            placeholder={scope === "workspace" ? "Search all projects…" : "Search files…"}
+            placeholder={
+              scope === "workspace" ? "Search all projects…" : "Search files…"
+            }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="flex-1 text-xs px-2 py-1.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)] transition-colors"
@@ -171,57 +191,65 @@ export function SearchPanel({ project, onResultClick, onClose, inputRef }: Searc
           </div>
         )}
         {query.length > 0 && query.length < 2 && (
-          <p className="text-[10px] text-[var(--color-text-muted)]">Type at least 2 characters</p>
+          <p className="text-[10px] text-[var(--color-text-muted)]">
+            Type at least 2 characters
+          </p>
         )}
       </div>
 
       {/* Results */}
       <div className="flex-1 overflow-auto min-h-0">
-        {grouped.length > 0 ? (
-          grouped.map(([filePath, fileMatches]) => {
-            const projectBadge = scope === "workspace" ? fileMatches[0].project : undefined;
-            return (
-              <div key={`${projectBadge ?? ""}:${filePath}`} className="border-b border-[var(--color-border)]/40 last:border-0">
-                {/* File header */}
+        {grouped.length > 0
+          ? grouped.map(([filePath, fileMatches]) => {
+              const projectBadge =
+                scope === "workspace" ? fileMatches[0].project : undefined;
+              return (
                 <div
-                  className="sticky top-0 px-2 py-1 bg-[var(--color-surface-2)] text-[10px] font-semibold text-[var(--color-text-muted)] tracking-wide truncate cursor-pointer hover:text-[var(--color-text)] transition-colors flex items-center gap-1.5"
-                  title={filePath}
-                  onClick={() => onResultClick(fileMatches[0])}
+                  key={`${projectBadge ?? ""}:${filePath}`}
+                  className="border-b border-[var(--color-border)]/40 last:border-0"
                 >
-                  {projectBadge && (
-                    <span className="shrink-0 px-1.5 py-0.5 rounded-sm bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-mono text-[9px] tracking-normal">
-                      {projectBadge}
-                    </span>
-                  )}
-                  <span className="truncate">{filePath}</span>
-                </div>
-                {/* Match lines */}
-                {fileMatches.map((m, i) => (
-                  <button
-                    key={i}
-                    onClick={() => onResultClick(m)}
-                    className="w-full text-left flex items-start gap-2 px-3 py-1 hover:bg-[var(--color-surface-2)] transition-colors group"
+                  {/* File header */}
+                  <div
+                    className="sticky top-0 px-2 py-1 bg-[var(--color-surface-2)] text-[10px] font-semibold text-[var(--color-text-muted)] tracking-wide truncate cursor-pointer hover:text-[var(--color-text)] transition-colors flex items-center gap-1.5"
+                    title={filePath}
+                    onClick={() => onResultClick(fileMatches[0])}
                   >
-                    <span className="shrink-0 text-[10px] text-[var(--color-text-muted)] font-mono w-8 text-right mt-0.5">
-                      {m.line}
-                    </span>
-                    <span className="text-[11px] font-mono text-[var(--color-text)] truncate leading-5">
-                      {highlightMatch(m.text.trimStart(), query, caseSensitive)}
-                    </span>
-                  </button>
-                ))}
+                    {projectBadge && (
+                      <span className="shrink-0 px-1.5 py-0.5 rounded-sm bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-mono text-[9px] tracking-normal">
+                        {projectBadge}
+                      </span>
+                    )}
+                    <span className="truncate">{filePath}</span>
+                  </div>
+                  {/* Match lines */}
+                  {fileMatches.map((m, i) => (
+                    <button
+                      key={i}
+                      onClick={() => onResultClick(m)}
+                      className="w-full text-left flex items-start gap-2 px-3 py-1 hover:bg-[var(--color-surface-2)] transition-colors group"
+                    >
+                      <span className="shrink-0 text-[10px] text-[var(--color-text-muted)] font-mono w-8 text-right mt-0.5">
+                        {m.line}
+                      </span>
+                      <span className="text-[11px] font-mono text-[var(--color-text)] truncate leading-5">
+                        {highlightMatch(
+                          m.text.trimStart(),
+                          query,
+                          caseSensitive,
+                        )}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              );
+            })
+          : !isLoading &&
+            query.length >= 2 &&
+            data && (
+              <div className="flex items-center justify-center h-20 text-xs text-[var(--color-text-muted)]">
+                No results for &ldquo;{query}&rdquo;
               </div>
-            );
-          })
-        ) : (
-          !isLoading &&
-          query.length >= 2 &&
-          data && (
-            <div className="flex items-center justify-center h-20 text-xs text-[var(--color-text-muted)]">
-              No results for &ldquo;{query}&rdquo;
-            </div>
-          )
-        )}
+            )}
 
         {/* Empty state */}
         {query.length < 2 && (

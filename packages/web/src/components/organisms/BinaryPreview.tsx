@@ -41,7 +41,9 @@ export function BinaryPreview({ base64, fileName, mime }: BinaryPreviewProps) {
         <Binary className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
         <span className="text-xs text-[var(--color-text)]">{fileName}</span>
         {mime && (
-          <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">{mime}</span>
+          <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">
+            {mime}
+          </span>
         )}
       </div>
 
@@ -51,7 +53,11 @@ export function BinaryPreview({ base64, fileName, mime }: BinaryPreviewProps) {
           <tbody>
             {rows.map((row, rowIdx) => {
               const offset = rowIdx * BYTES_PER_ROW;
-              const ascii = row.map((b) => (b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ".")).join("");
+              const ascii = row
+                .map((b) =>
+                  b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ".",
+                )
+                .join("");
               return (
                 <tr key={rowIdx}>
                   <td className="pr-4 text-[var(--color-text-muted)] select-none whitespace-nowrap">
@@ -66,7 +72,10 @@ export function BinaryPreview({ base64, fileName, mime }: BinaryPreviewProps) {
                     ))}
                     {/* Pad short last row */}
                     {row.length < BYTES_PER_ROW &&
-                      " ".repeat((BYTES_PER_ROW - row.length) * 3 + (row.length <= 8 ? 3 : 0))}
+                      " ".repeat(
+                        (BYTES_PER_ROW - row.length) * 3 +
+                          (row.length <= 8 ? 3 : 0),
+                      )}
                   </td>
                   <td className="text-[var(--color-text-muted)] select-none whitespace-nowrap">
                     {ascii}

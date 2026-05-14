@@ -14,10 +14,10 @@
 export interface ConflictRegion {
   index: number;
   /** 1-based line numbers (Monaco API uses 1-based) */
-  startLine: number;    // line with <<<<<<<
+  startLine: number; // line with <<<<<<<
   separatorLine: number; // line with =======
-  endLine: number;      // line with >>>>>>>
-  oursContent: string;  // content between <<<< and ====  (HEAD side)
+  endLine: number; // line with >>>>>>>
+  oursContent: string; // content between <<<< and ====  (HEAD side)
   theirsContent: string; // content between ==== and >>>> (incoming side)
 }
 

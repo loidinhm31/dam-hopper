@@ -46,13 +46,16 @@
 ## Module Breakdown
 
 ### config/
+
 Handles TOML parsing, project discovery, feature flags.
 
 **Key types:**
+
 - `DamHopperConfig` — parsed workspace config
 - `ProjectConfig` — individual project settings
 
 **Path resolution priority:**
+
 1. `--workspace` CLI flag
 2. `DAM_HOPPER_WORKSPACE` env var
 3. `~/.config/dam-hopper/config.toml` default path
@@ -65,10 +68,10 @@ SQLite-backed session persistence infrastructure for surviving server restarts.
 
 **Schema (001_initial.sql):**
 
-| Table | Purpose |
-|-------|---------|
-| sessions | Session metadata: id, project, command, cwd, session_type, restart_policy, restart_max_retries, env_json, cols, rows, created_at, updated_at |
-| session_buffers | Scrollback buffers: session_id, data (BLOB), total_written, updated_at |
+| Table           | Purpose                                                                                                                                      |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| sessions        | Session metadata: id, project, command, cwd, session_type, restart_policy, restart_max_retries, env_json, cols, rows, created_at, updated_at |
+| session_buffers | Scrollback buffers: session_id, data (BLOB), total_written, updated_at                                                                       |
 
 Indexes on `project` and `updated_at` for efficient queries.
 
@@ -107,6 +110,7 @@ pub struct PersistedSession {
 **Purpose**: Async worker thread that batches terminal session buffers and persists them to SQLite without blocking the PTY hot path.
 
 **Architecture:**
+
 - **Dedicated thread**: `persist-worker` (std::thread, not tokio)
 - **Non-blocking design**: PTY threads use `try_send()` to send commands
 - **Bounded channel**: sync_channel(256) prevents unbounded memory growth
@@ -115,21 +119,23 @@ pub struct PersistedSession {
 
 **Worker Commands (PersistCmd enum):**
 
-| Command | Source | Trigger | Behavior |
-|---------|--------|---------|----------|
-| `BufferUpdate` | PTY reader | Every 16KB output | Batches per session, overwrites previous |
-| `SessionCreated` | PtySessionManager | On spawn | Records metadata to SQLite |
-| `SessionExited` | PTY reader | On EOF | Immediate flush (no 5s wait) |
-| `SessionRemoved` | PtySessionManager | On kill | Deletes from database |
-| `Shutdown` | main.rs | On drop(persist_tx) | Final flush and exit |
+| Command          | Source            | Trigger             | Behavior                                 |
+| ---------------- | ----------------- | ------------------- | ---------------------------------------- |
+| `BufferUpdate`   | PTY reader        | Every 16KB output   | Batches per session, overwrites previous |
+| `SessionCreated` | PtySessionManager | On spawn            | Records metadata to SQLite               |
+| `SessionExited`  | PTY reader        | On EOF              | Immediate flush (no 5s wait)             |
+| `SessionRemoved` | PtySessionManager | On kill             | Deletes from database                    |
+| `Shutdown`       | main.rs           | On drop(persist_tx) | Final flush and exit                     |
 
 **Main Loop** (`PersistWorker::run()`):
+
 1. `recv_timeout(1s)` with periodic 5s flush timer
 2. On command: batch into HashMap, update database
 3. On timeout: flush all pending buffers to SQLite
 4. On channel disconnect: call `flush_all()` and exit
 
 **Graceful Shutdown:**
+
 1. Server receives SIGTERM
 2. main.rs drops `persist_tx`
 3. Worker detects channel disconnect
@@ -138,12 +144,12 @@ pub struct PersistedSession {
 
 **Performance Characteristics:**
 
-| Metric | Value | Improvement |
-|--------|-------|------------|
+| Metric             | Value                  | Improvement                 |
+| ------------------ | ---------------------- | --------------------------- |
 | Snapshot frequency | ~6/sec (16KB throttle) | 94% reduction vs every-read |
-| Memory churn | 16MB/sec | 16× reduction vs 256MB/sec |
-| Worker CPU | <1% | Minimal overhead |
-| Non-blocking sends | 100% | PTY never waits on DB |
+| Memory churn       | 16MB/sec               | 16× reduction vs 256MB/sec  |
+| Worker CPU         | <1%                    | Minimal overhead            |
+| Non-blocking sends | 100%                   | PTY never waits on DB       |
 
 **Integration Points:**
 
@@ -163,6 +169,7 @@ pub struct PersistedSession {
    - No blocking on hot path (worker runs on dedicated thread)
 
 **Use Cases:**
+
 - Server restart recovery: restore active sessions + their scrollback on reboot
 - Long-running tasks: preserve build/run output across server updates
 - Debug experience: buffer history available immediately without re-running commands
@@ -170,13 +177,16 @@ pub struct PersistedSession {
 ### fs/ (Phase 01+: IDE File Explorer + Editor)
 
 **error.rs** — `FsError` enum (Unavailable, NotFound, PermissionDenied, TooLarge, Conflict).
+
 - `Conflict` variant (Phase 04): raised when write rejected due to mtime mismatch.
 
 **sandbox.rs** — `WorkspaceSandbox` validates paths stay within project bounds.
+
 - Cheap clone (PathBuf)
 - Never held across `.await`
 
 **ops.rs** — Filesystem operations:
+
 - `list_dir()` — directory contents with metadata
 - `read_file()` — text/binary detection, range reads (max 100MB, Phase 04: capped at 10MB per REST call, unlimited via WS)
 - `stat()` — file metadata (kind, size, mtime, mime, isBinary)
@@ -185,28 +195,48 @@ pub struct PersistedSession {
 - `search()` (Phase 07) — .gitignore-aware text search using `ignore` crate; returns file + match context; results capped at 1000
 
 **mod.rs** — `FsSubsystem` (Arc<Mutex<Inner>>):
+
 - Lazy init: sandbox stored as Option (Unavailable if init failed)
 - Cheap clone pattern
+
+### Web Frontend Shared File Decorations
+
+**Location:** `packages/web/src/lib/`
+
+- `file-decoration.ts` is the single lookup table for file icons, badge text, display language, and Monaco language.
+- Lookup order: exact filename > extension > MIME fallback > neutral default.
+- `file-decoration-icon.tsx` is a thin rendering wrapper around the shared registry.
+- `mime-to-language.ts` remains as a compatibility wrapper for MIME-only callers.
+
+**Design notes:**
+
+- Exact-name matches cover dotfiles and toolchain files like `.env`, `.gitignore`, `Dockerfile`, `Makefile`, and lockfiles.
+- Registry returns safe defaults for unknown files, no throw path.
+- UI components should consume the shared helpers instead of re-implementing filename parsing.
 
 ### Multi-Server Profile Management (Phase 2)
 
 **Client-side only** — no backend involvement. React component integration:
 
 **File:** `packages/web/src/api/server-config.ts`
+
 - `ServerProfile` interface: { id (UUID), name, url, authType, username?, createdAt (timestamp) }
 - Functions: `getProfiles()`, `saveProfiles()`, `createProfile()`, `updateProfile()`, `deleteProfile()`, `setActiveProfile()`, `getActiveProfile()`, `migrateToProfiles()`
 - Storage: localStorage with keys `damhopper_server_profiles` (all profiles) + `damhopper_active_profile_id` (current)
 
 **Components:**
+
 - `ServerSettingsDialog.tsx` (organisms/) — create/edit profile form with URL + auth type selector
 - `ServerProfilesDialog.tsx` (organisms/) — list profiles, switch active, delete, edit (calls callbacks to parent)
 - `Sidebar.tsx` — displays active profile name; "Change Server" button opens `ServerProfilesDialog`
 
 **Integration in App.tsx:**
+
 - Calls `migrateToProfiles()` at startup to convert legacy config
 - Sidebar triggers profile switcher dialog (with callback for page reload if needed)
 
 **Data Persistence:**
+
 - Profiles: localStorage (survives browser close, shared across tabs)
 - Active profile ID: localStorage (survives browser close, shared across tabs)
 - Auth token: sessionStorage (cleared on tab close, isolated per tab) — password never stored
@@ -216,6 +246,7 @@ pub struct PersistedSession {
 Manages portable terminal sessions with automatic restart capabilities and idempotent creation.
 
 **manager.rs** — `PtySessionManager` (Arc<Mutex<Inner>>):
+
 - Map<id, LiveSession> for active sessions
 - Map<id, DeadSession> tombstones (60s TTL; auto-evicted by cleanup task)
 - Set<id, String> killed tracks manually terminated sessions (used to prevent supervisor respawn race)
@@ -226,6 +257,7 @@ Manages portable terminal sessions with automatic restart capabilities and idemp
 - Bounded respawn channel (256 slots) prevents DoS
 
 **session.rs** — Session state management:
+
 - `SessionMeta` — public status (id, alive, exit_code, restart_count)
 - `LiveSession` — owns master PTY + writer, reader thread reference
 - `DeadSession` — tombstone with exit code, restart decision, backoff delay
@@ -234,6 +266,7 @@ Manages portable terminal sessions with automatic restart capabilities and idemp
 **Restart Engine (Phase 04):**
 
 **Supervisor Pattern** — decouples blocking I/O from async restart logic:
+
 1. Reader thread (std::thread) reads PTY output blocking
 2. On EOF: infer exit code → decide restart → send RespawnCmd
 3. Supervisor task (tokio) receives cmd, waits backoff, calls create()
@@ -243,27 +276,31 @@ Manages portable terminal sessions with automatic restart capabilities and idemp
 | Policy | Exit=0 | Exit≠0 | Killed |
 |--------|--------|--------|---------|
 | Never | ✗ | ✗ | ✗ |
-| OnFailure* | ✗ | ✓ | ✗ |
+| OnFailure\* | ✗ | ✓ | ✗ |
 | Always | ✓ | ✓ | ✗ |
 
-*OnFailure currently acts like Always due to portable-pty API limitation
+\*OnFailure currently acts like Always due to portable-pty API limitation
 
 **Exponential Backoff:**
+
 - 1s, 2s, 4s, 8s, 16s, 30s (max)
 - Cap at `MAX_RESTART_DELAY_MS` (30s)
 - Resets to 1s on clean exit (exit_code == 0)
 
 **Exit Code Inference** (Limitation):
+
 - portable-pty API only signals EOF (no waitpid equivalent)
 - Inferred as: process in live map → exit 0; not found → exit -1
 - Cannot distinguish exit 0 from exit 1 (architectural limitation)
 - Upstream issue filed: requires std::process wrapper as future work
 
 **Known Issues (Phase 04 Review):** Both fixed before merge:
+
 1. Bounded channel prevents unbounded respawn queue growth (DoS vector) — ✓ Fixed
 2. Exit code always 0 for natural exits (OnFailure policy broken) — ✓ Fixed
 
 **Phase 07 Improvements:**
+
 - Killed set prevents double-spawn on concurrent create (50-100ms lock contention reduction)
 - Idempotent create eliminates client need for alive status filtering
 - Cleanup task prevents killed set from accumulating orphaned entries (was potential memory leak)
@@ -278,6 +315,7 @@ Prevents supervisor from restarting a session during the kill window and enables
 4. **Cleanup task**: Every 30s, removes orphaned IDs (not in live or dead maps)
 
 Example race sequence (create during backoff):
+
 - T0: Process exits, reader sends RespawnCmd with 1s backoff
 - T200ms: User calls `terminal:create` with same ID
 - T200ms: Create inserts ID into killed set (cancels pending respawn)
@@ -290,12 +328,14 @@ Example race sequence (create during backoff):
 Enables efficient delta replay for WebSocket reconnections. ScrollbackBuffer tracks monotonic byte counter and provides differential read API.
 
 **buffer.rs** — `ScrollbackBuffer` enhancements:
+
 - `total_written: u64` — monotonic counter tracking all bytes ever written (survives eviction)
 - `current_offset() → u64` — returns total bytes written, used for client checkpoint
 - `read_from(Option<u64>) → (&[u8], u64)` — returns (delta bytes or full buffer if unavailable, current offset)
 - Ring buffer algorithm unchanged; offset tracking has zero performance cost
 
 **Delta Replay Logic**:
+
 1. Client requests bytes from stored offset
 2. Server calculates buffer start offset: `total_written - buffer.len()`
 3. If requested offset within buffer: return delta (new bytes since offset)
@@ -307,11 +347,13 @@ Enables efficient delta replay for WebSocket reconnections. ScrollbackBuffer tra
 New WebSocket protocol messages enable explicit buffer attachment:
 
 **manager.rs** — `PtySessionManager` enhancements:
+
 - `get_buffer_with_offset(id: &str, from_offset: Option<u64>) → Result<(String, u64), AppError>` — returns (utf8-lossy buffer data, current offset)
 - Error handling: returns `SessionNotFound` if session not in live map
 - Integration with existing session lifecycle: returned data respects current buffer state
 
 **ws.rs** — WebSocket handler:
+
 - `ClientMsg::TermAttach { id, from_offset }` — client requests buffer replay
 - Handler calls `get_buffer_with_offset()` → sends `ServerMsg::TermBuffer`
 - Error behavior: session not found → logs warning, no response (client creates new session via `terminal:spawn`)
@@ -320,25 +362,29 @@ New WebSocket protocol messages enable explicit buffer attachment:
 **Use Case (Phase 02+)**: On WebSocket reconnect, client sends `terminal:attach` with last stored offset instead of requesting full buffer, reducing data transfer by ~90% in typical scenarios.
 
 **Error Handling:**
+
 - Silent failure (no response) on session-not-found enables graceful client fallback: interpret timeout as session dead, re-create via `terminal:spawn`
 - No error response required; client implements timeout-based detection
 - Server logs warning for diagnostics
 
 **Buffer States:**
+
 - Empty buffer (no writes yet) → offset = 0, data = ""
 - Old offset (evicted from ring buffer) → fallback to full buffer
 - Current offset → data = "" (no new content)
 - Mid-range offset → data = delta (new bytes since offset)
 
 **Tests (Phase 02)**: 4 Unix integration tests + 2 Windows unit tests (6/6 passing)
+
 - `get_buffer_with_offset_returns_full_buffer_when_no_offset` — returns full buffer when from_offset=None
 - `get_buffer_with_offset_returns_delta_when_offset_provided` — returns delta between two offsets
 - `get_buffer_with_offset_returns_full_buffer_when_offset_too_old` — fallback to full buffer when offset evicted
 - `get_buffer_with_offset_returns_error_for_nonexistent_session` — error handling for dead sessions
-- Unit test (manager.rs): `get_buffer_with_offset_session_not_found` 
+- Unit test (manager.rs): `get_buffer_with_offset_session_not_found`
 - Unit test (manager.rs): `get_buffer_with_offset_with_some_offset_session_not_found`
 
 **Tests (Phase 04-07):**
+
 - 8 decision matrix rows (all 8/8 passing)
 - 5 base integration tests (Phase 04, all passing)
 - 1 race condition test: `create_during_backoff_cancels_pending_restart` (Phase 07, validates idempotency)
@@ -349,6 +395,7 @@ New WebSocket protocol messages enable explicit buffer attachment:
 Automatic detection and tracking of ports opened by running processes in PTY sessions.
 
 **manager.rs** — `PortForwardManager` (Arc<RwLock<HashMap<u16, DetectedPort>>>):
+
 - In-memory registry tracking up to 100 detected ports (prevents unbounded memory growth)
 - Port states: `Provisional` (from stdout regex), `Listening` (confirmed via /proc/net/tcp), `Closed` (detected lost)
 - `report_stdout_hit()` — PTY scanner fires on regex match, inserts Provisional entry, broadcasts `port:discovered`
@@ -357,26 +404,31 @@ Automatic detection and tracking of ports opened by running processes in PTY ses
 - Non-blocking design: write lock released before broadcasting (I/O)
 
 **detector.rs** — Port detection logic:
+
 - `strip_ansi()` — removes ANSI CSI (`\x1b[...m`) and OSC (`\x1b]...\x07`) sequences from stdout
 - `PORT_REGEXES` (lazy via `once_cell`) — 7-pattern bank: listening on, localhost:port, http://localhost:port, etc.
 - `port_is_safe()` — safety filter: blocks system ports (<1024) + danger list (22, 25, 110, 143, 3306, 5432, 6379, 27017)
 - `scan_chunk()` — called per PTY output chunk, ANSI-stripped, regex applied, returns first safe port match
 
 **session.rs** — Port state and metadata:
+
 - `DetectedPort` — port number, detection source (stdout_regex or proc_net), session_id, project, state
 - `PortState` enum — Provisional, Listening, Closed
 
 **mod.rs** — Poller integration:
+
 - Linux-only /proc/net/tcp poller (2s interval via `procfs` crate)
 - Confirms provisional ports by checking /proc state, detects lost ports (no longer in /proc)
 - Cross-references session IDs to label port origin (which project/session discovered it)
 
 **Integration:**
+
 - PtySessionManager reader thread calls `detector::scan_chunk()` for each stdout chunk
 - PortForwardManager methods called from detector + poller
 - EventSink broadcasts port events to all connected WebSocket clients
 
 **Limitations:**
+
 - Linux-only poller (Windows/macOS no /proc/net/tcp, fallback: stdout-only detection)
 - Poller 2s latency before state confirmation
 - Port 0 (ephemeral) not tracked (not useful for proxying)
@@ -388,6 +440,7 @@ Server-side OPAQUE password-authenticated key exchange for the encrypt-in-transi
 **mod.rs** — Re-exports `DamHopperOpaqueSuite`, `OpaqueRegistrations`, `load_or_create_server_setup`, `validate_identifier`.
 
 **opaque.rs** — Core OPAQUE logic:
+
 - `DamHopperOpaqueSuite` — `CipherSuite` impl: Ristretto255 group, TripleDH key exchange, Identity KSF (no key stretching). Matches `@serenity-kit/opaque` client defaults.
 - `OpaqueRegistrations` — `Arc<RwLock<HashMap<String, ServerRegistration<...>>>>` type alias; in-memory only (ephemeral — lost on server restart, which is intentional for the encrypt-in-transit model).
 - `load_or_create_server_setup()` — loads `ServerSetup` from `~/.config/dam-hopper/opaque-server-setup` or generates a new one with 0o600 permissions (Unix).
@@ -398,23 +451,27 @@ Server-side OPAQUE password-authenticated key exchange for the encrypt-in-transi
 - `validate_identifier(id) → bool` — alphanumeric + `-` + `_`, max 128 chars.
 
 **Key security properties:**
+
 - Passphrase never crosses the wire (OPAQUE zero-knowledge property)
 - All group operations run in `tokio::task::spawn_blocking`
 - Per-connection caps: 16 in-flight `ServerLogin` states, 16 active AES session keys
 - `ServerSetup` private key never logged or exposed
 
 ### git/
+
 Git operations via `git2` library + CLI fallback.
 
 **repository.rs** — Clone, push, pull, status.
 
 **types.rs** — Shared data types:
+
 - `DiffFileEntry` — file status, staged flag, additions/deletions
 - `FileDiffContent` — hunks, original+modified content, language detection, binary flag
 - `HunkInfo` — hunk position + header for unified diff display
 - `ConflictFile` — 3-way merge content (ancestor, ours, theirs)
 
 **diff.rs** (Phase 01) — Diff and conflict operations:
+
 - `get_diff_files()` — list changed files (staged + unstaged)
 - `get_file_diff()` — hunked diff for single file
 - `stage_files()` — stage paths for commit
@@ -425,6 +482,7 @@ Git operations via `git2` library + CLI fallback.
 - `resolve_conflict()` — write resolved content, mark resolved
 
 ### agent_store/
+
 Distributes `.claude/` items across projects.
 
 **distributor.rs** — Ship/unship/absorb operations.
@@ -432,17 +490,20 @@ Distributes `.claude/` items across projects.
 **health_check.rs** — Detects broken symlinks.
 
 ### api/
+
 HTTP request handlers + WebSocket upgrade.
 
 **router.rs** — Route definitions (ide_explorer routes are feature-gated).
 
 **fs.rs** — File explorer handlers:
+
 - `GET /api/fs/list` — directory contents with metadata
 - `GET /api/fs/read` — file text/binary content
 - `GET /api/fs/stat` — file metadata
 - `GET /api/fs/search` (Phase 07) — global file content search, .gitignore-aware, results capped at 1000
 
 **git_diff.rs** (Phase 01) — Git diff/staging/conflict handlers:
+
 - `GET /api/git/:project/diff` — list changed files
 - `GET /api/git/:project/diff/file?path=REL` — file diff with hunks
 - `POST /api/git/:project/stage` — stage files
@@ -453,6 +514,7 @@ HTTP request handlers + WebSocket upgrade.
 - `POST /api/git/:project/resolve` — resolve merge conflict
 
 **port_forward.rs** (Phase 03) — Port detection handler:
+
 - `GET /api/ports` — returns all detected ports: `{ "ports": [{ port, session_id, project, state }, ...] }`
 - On non-Linux or when manager absent: returns empty ports array
 - Protected endpoint (requires auth token)
@@ -460,6 +522,7 @@ HTTP request handlers + WebSocket upgrade.
 **error.rs** — Maps AppError to HTTP status codes.
 
 **ws_protocol.rs** — WS message envelopes. Phase Stealth-01 additions:
+
 - `ClientMsg`: `AuthRegisterStart`, `AuthRegisterFinish` (with `overwrite: bool`), `AuthLoginStart`, `AuthLoginFinish`, `FsPutBegin`, `FsPutChunk`, `FsPutCommit`, `FsPutSave`
 - `ServerMsg`: `AuthRegisterStartResponse`, `AuthRegisterFinishResponse`, `AuthLoginStartResponse`, `AuthLoginFinishResponse`, `FsPutBeginOk`, `FsPutChunkAck`, `FsPutResult`, `FsPutSaveResult`
 
@@ -468,6 +531,7 @@ All `auth:*` and `fs:put_*` kind names are intentionally neutral (no `stealth:` 
 ### state.rs
 
 `AppState` holds:
+
 - Workspace config (Arc<RwLock>)
 - PTY manager (cheap clone pattern)
 - FS subsystem (cheap clone pattern)
@@ -479,6 +543,7 @@ All `auth:*` and `fs:put_*` kind names are intentionally neutral (no `stealth:` 
 ### main.rs
 
 Server bootstrap:
+
 - Config loading
 - PTY manager init
 - FS subsystem init
@@ -535,6 +600,7 @@ React 19 single-page application at `packages/web/` using Vite + Tailwind CSS.
 ### Component Architecture
 
 **TerminalPanel** (`packages/web/src/components/organisms/TerminalPanel.tsx`)
+
 - Renders single terminal session using xterm.js
 - Subscribes to Transport events: `onTerminalExit`, `onProcessRestarted`, `onTransportStatus`
 - Writes ANSI banners for lifecycle events:
@@ -544,6 +610,7 @@ React 19 single-page application at `packages/web/` using Vite + Tailwind CSS.
 - Creates/reconnects to PTY session on mount via `terminal:spawn` command
 
 **TerminalTreeView** (`packages/web/src/components/organisms/TerminalTreeView.tsx`)
+
 - Sidebar tree displaying projects + commands + sessions
 - Renders `StatusDot` component (NEW: Phase 6) for each session
 - Status dots reflect session lifecycle via `getSessionStatus()` helper
@@ -555,6 +622,7 @@ React 19 single-page application at `packages/web/` using Vite + Tailwind CSS.
 - Expandable profile nodes show instance children + alive count badge
 
 **DashboardPage** (`packages/web/src/components/pages/DashboardPage.tsx`)
+
 - Main view: all sessions with metadata (uptime, exit code)
 - **SessionRow** renders:
   - Status dot (via `getSessionStatus`)
@@ -565,12 +633,14 @@ React 19 single-page application at `packages/web/` using Vite + Tailwind CSS.
 ### Session Lifecycle Helpers (Phase 06)
 
 **session-status.ts** (`packages/web/src/lib/session-status.ts`)
+
 - `getSessionStatus(sess: SessionInfo): "alive" | "restarting" | "crashed" | "exited"` — determines UI status
 - `getStatusDotColor(status): string` — maps status to Tailwind class
 - `getStatusGlowClass(status): string` — optional glow effect for active states
 - Centralized logic prevents UI inconsistencies across components
 
 **session-status.test.ts**
+
 - Unit tests for all status transitions
 - Color mapping validation
 - Edge cases (null exit code, missing fields)
@@ -578,6 +648,7 @@ React 19 single-page application at `packages/web/` using Vite + Tailwind CSS.
 ### Transport Events (Phase 06)
 
 **WebSocket Transport** (`packages/web/src/api/ws-transport.ts`)
+
 - New event listeners (Phase 5 contract):
   - `onTerminalExit(id, callback)` — trigger exit banner, call onExit
   - `onProcessRestarted(id, callback)` — trigger restart banner, invalidate queries
@@ -600,8 +671,8 @@ export interface SessionInfo {
   restartCount?: number;
   lastExitAt?: number;
   // Phase 5 exit event fields
-  willRestart?: boolean;       // Indicates if process will auto-restart
-  restartInMs?: number;        // Milliseconds until restart attempt
+  willRestart?: boolean; // Indicates if process will auto-restart
+  restartInMs?: number; // Milliseconds until restart attempt
 }
 ```
 
@@ -632,6 +703,7 @@ xterm resumes streaming (same session ID, new PTY)
 ```
 
 **FileTree.tsx (react-arborist)**
+
 - `onMove` callback enabled for drag-and-drop
 - Drop on directory → move file/folder into directory
 - Drop on file → move into file's parent directory
@@ -642,6 +714,7 @@ xterm resumes streaming (same session ID, new PTY)
 **Tokio async:** All I/O non-blocking.
 
 **Mutexes:**
+
 - AppState.workspace_dir, config, global_config: RwLock<T>
 - PtySessionManager.inner: Mutex<Map<...>>
 - FsSubsystem.inner: Mutex<Option<Sandbox>>
@@ -654,11 +727,13 @@ xterm resumes streaming (same session ID, new PTY)
 ## Authentication & Security
 
 **Bearer token:**
+
 - Hex UUID stored in `~/.config/dam-hopper/server-token`
 - Validated via `subtle::constant_time_compare()`
 - All routes protected via middleware
 
 **Filesystem sandbox:**
+
 - Projects cannot traverse above their root
 - Symbolic links are allowed but validated
 - Binary file detection prevents accidental text parsing
@@ -668,6 +743,7 @@ xterm resumes streaming (same session ID, new PTY)
 ## Feature Gating: IDE Explorer
 
 Routes `/api/fs/*` (list, read, stat) only registered when:
+
 - OR env: `DAM_HOPPER_IDE=1`
 
 If disabled, requests return 404.
@@ -677,42 +753,46 @@ FsSubsystem still initializes (needed for future phases), but routes are gated a
 ## Error Handling Strategy
 
 Each module defines error enum:
+
 - `FsError` — sandbox/ops errors
 - `AppError` — top-level (Fs, Git, NotFound, etc.)
 - `ApiError` — HTTP mapping
 
 API layer (handlers) catch AppError → HTTP status:
+
 - 400 Bad Request (validation)
 - 404 Not Found
 - 503 Service Unavailable (feature disabled)
 
 ## Phase Progression
 
-**Phase 01 (Complete):** 
-  - File explorer foundation—sandbox, list/read/stat REST endpoints.
-  - Git diff/staging/conflict API—8 endpoints for change management. `DiffFileEntry`, `FileDiffContent`, `HunkInfo`, `ConflictFile` types. `git::diff` module with hunked diff parsing, hunk-level discard, 3-way merge visualization.
+**Phase 01 (Complete):**
+
+- File explorer foundation—sandbox, list/read/stat REST endpoints.
+- Git diff/staging/conflict API—8 endpoints for change management. `DiffFileEntry`, `FileDiffContent`, `HunkInfo`, `ConflictFile` types. `git::diff` module with hunked diff parsing, hunk-level discard, 3-way merge visualization.
 
 **Phase 02 (Complete):** Watcher subsystem via inotify/notify; WebSocket subscription protocol `{kind:}` envelope (hard cut from legacy `{type:}`); fs:subscribe_tree/fs:unsubscribe_tree/fs:event channels; health endpoint with feature flags.
 
 **Phase 03 (Complete):** Web IDE shell—react-resizable-panels layout (file tree | editor | terminal); react-arborist tree component; TanStack Query + useFsSubscription hook for live tree sync; applyFsDelta merges server events into client cache; feature flag `ide_explorer` gates routes and sidebar link; /ide lazy route with fallback placeholder.
 
-**Phase 04 (Complete):** Monaco editor with tab mgmt + save. WS write protocol (fs:write_begin → fs:write_chunk* → fs:write_commit). File tiering (normal <1MB, degraded 1-5MB, large ≥5MB, binary). Conflict detection via mtime. Ctrl+S save, MonacoHost, EditorTabs, LargeFileViewer, BinaryPreview, ConflictDialog components.
+**Phase 04 (Complete):** Monaco editor with tab mgmt + save. WS write protocol (fs:write_begin → fs:write_chunk\* → fs:write_commit). File tiering (normal <1MB, degraded 1-5MB, large ≥5MB, binary). Conflict detection via mtime. Ctrl+S save, MonacoHost, EditorTabs, LargeFileViewer, BinaryPreview, ConflictDialog components.
 
 **Phase 05 (Complete):** CRUD + WS-chunked upload + streaming download.
 
 **Phase 06 (Complete):** Unified workspace—merge IdePage + TerminalsPage into single WorkspacePage. Tabbed left sidebar (Files/Terminals), multi-terminal bottom panel with TerminalTabBar + MultiTerminalDisplay. Terminal state extracted to `useTerminalManager` hook. Single `/workspace` route; `/terminals` and `/ide` redirect. Feature flag `ide_explorer` controls editor/file-tree visibility within page (not route access).
 
 **Phase 07 (Complete):** IDE explorer enhancements:
-  - **Markdown split-view preview:** `MarkdownHost` + `MarkdownPreview` components in packages/web/src/components/organisms/. EditorTabs routes .md/.mdx files to MarkdownHost. Toggle modes: Edit | Split | Preview-only.
-  - **Drag-and-drop file move:** FileTree.tsx DnD via react-arborist's built-in `onMove`. Drop on dir → move into dir. Drop on file → move to file's parent. Calls existing `ops.move()` with server-side sandbox validation.
-  - **Backend search API:** `GET /api/fs/search?project=X&q=QUERY[&case=bool&max=N]` in server/src/api/fs.rs. Uses `ignore` crate v0.4 for .gitignore-aware directory walking. Plain text search (regex-escaped server-side). Results capped at 1000, default 200.
-  - **Frontend search panel:** New "SEARCH" tab in SidebarTabSwitcher. SearchPanel component with debounced input (useDeferredValue), results grouped by file with match highlighting. `useFileSearch` hook in packages/web/src/hooks/. Ctrl+Shift+F keyboard shortcut to focus search. Gated behind ide_explorer feature flag.
+
+- **Markdown split-view preview:** `MarkdownHost` + `MarkdownPreview` components in packages/web/src/components/organisms/. EditorTabs routes .md/.mdx files to MarkdownHost. Toggle modes: Edit | Split | Preview-only.
+- **Drag-and-drop file move:** FileTree.tsx DnD via react-arborist's built-in `onMove`. Drop on dir → move into dir. Drop on file → move to file's parent. Calls existing `ops.move()` with server-side sandbox validation.
+- **Backend search API:** `GET /api/fs/search?project=X&q=QUERY[&case=bool&max=N]` in server/src/api/fs.rs. Uses `ignore` crate v0.4 for .gitignore-aware directory walking. Plain text search (regex-escaped server-side). Results capped at 1000, default 200.
+- **Frontend search panel:** New "SEARCH" tab in SidebarTabSwitcher. SearchPanel component with debounced input (useDeferredValue), results grouped by file with match highlighting. `useFileSearch` hook in packages/web/src/hooks/. Ctrl+Shift+F keyboard shortcut to focus search. Gated behind ide_explorer feature flag.
 
 **Phase 08 (Complete):** IDE Tool Windows Refactoring.
 Refactored `IdeShell.tsx` into a flexible, extensible "Tool Window" system.
+
 - **ActivityBar:** A thin vertical strip for switching between tool windows (Explorer, Terminals, Search).
 - **ToolPanel:** A generic container for active tool content with resizable handles and a consistent header.
 - **ToolWindowDef:** Standardized interface for defining tools (id, label, icon, content).
 - **Persistence:** Active tool IDs are persisted in `localStorage`.
 - **Extensibility:** Enables easy addition of new side panels without modifying `IdeShell` layout logic.
-

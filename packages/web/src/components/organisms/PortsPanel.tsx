@@ -12,7 +12,11 @@ import {
 } from "lucide-react";
 import QRCode from "react-qr-code";
 import { cn } from "@/lib/utils.js";
-import { usePorts, type PortEntry, type InstallState } from "@/hooks/usePorts.js";
+import {
+  usePorts,
+  type PortEntry,
+  type InstallState,
+} from "@/hooks/usePorts.js";
 import { useCopyToClipboard } from "@/hooks/useClipboard.js";
 import { isLocalServer } from "@/api/server-config.js";
 
@@ -54,11 +58,17 @@ function InstallerRow({
   return (
     <div className="mx-2 mb-2 p-2 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded text-xs flex items-start gap-2">
       {status === "installing" ? (
-        <Loader2 size={12} className="shrink-0 mt-0.5 text-[var(--color-text-muted)] animate-spin" />
+        <Loader2
+          size={12}
+          className="shrink-0 mt-0.5 text-[var(--color-text-muted)] animate-spin"
+        />
       ) : status === "done" ? (
         <Check size={12} className="shrink-0 mt-0.5 text-green-500" />
       ) : (
-        <Download size={12} className="shrink-0 mt-0.5 text-[var(--color-text-muted)]" />
+        <Download
+          size={12}
+          className="shrink-0 mt-0.5 text-[var(--color-text-muted)]"
+        />
       )}
       <div className="flex-1 min-w-0">
         {status === "idle" || status === "error" ? (
@@ -90,9 +100,7 @@ function InstallerRow({
                 downloads page
               </a>
             </p>
-            {error && (
-              <p className="text-red-500 leading-relaxed">{error}</p>
-            )}
+            {error && <p className="text-red-500 leading-relaxed">{error}</p>}
             <button
               onClick={onInstall}
               className="mt-0.5 px-2 py-0.5 bg-[var(--color-accent)] text-white rounded hover:opacity-80 transition-opacity font-medium"
@@ -185,7 +193,9 @@ function PortRow({
     try {
       await onStartTunnel(entry.port, entry.project ?? `port-${entry.port}`);
     } catch (err) {
-      setLaunchError(err instanceof Error ? err.message : "Failed to start tunnel");
+      setLaunchError(
+        err instanceof Error ? err.message : "Failed to start tunnel",
+      );
     }
   }
 
@@ -194,9 +204,13 @@ function PortRow({
       {/* Port info row */}
       <div className="flex items-center gap-1.5 min-w-0">
         <span className={cn("h-2 w-2 rounded-full shrink-0", dotColor)} />
-        <span className="font-mono text-[var(--color-text-muted)] shrink-0">:{entry.port}</span>
+        <span className="font-mono text-[var(--color-text-muted)] shrink-0">
+          :{entry.port}
+        </span>
         {entry.project && (
-          <span className="truncate text-[var(--color-text)]">{entry.project}</span>
+          <span className="truncate text-[var(--color-text)]">
+            {entry.project}
+          </span>
         )}
         {entry.state === "provisional" && (
           <span className="text-[10px] bg-amber-500/15 text-amber-600 dark:text-amber-400 px-1 rounded shrink-0">
@@ -230,7 +244,9 @@ function PortRow({
 
       {/* State B: starting */}
       {isStarting && (
-        <span className="ml-3.5 text-[var(--color-text-muted)] italic text-[11px]">Starting…</span>
+        <span className="ml-3.5 text-[var(--color-text-muted)] italic text-[11px]">
+          Starting…
+        </span>
       )}
 
       {/* State B-failed: error message */}
@@ -295,7 +311,11 @@ function PortRow({
                   aria-label="Copy URL"
                   className="rounded p-0.5 hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
                 >
-                  {copied ? <Check size={11} className="text-green-500" /> : <Copy size={11} />}
+                  {copied ? (
+                    <Check size={11} className="text-green-500" />
+                  ) : (
+                    <Copy size={11} />
+                  )}
                 </button>
 
                 <div className="relative" ref={qrRef}>
@@ -346,7 +366,11 @@ function PortRow({
 
 // ── Add port form ─────────────────────────────────────────────────────────────
 
-function AddPortForm({ onSubmit }: { onSubmit: (port: number) => Promise<void> }) {
+function AddPortForm({
+  onSubmit,
+}: {
+  onSubmit: (port: number) => Promise<void>;
+}) {
   const [port, setPort] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -408,10 +432,19 @@ function AddPortForm({ onSubmit }: { onSubmit: (port: number) => Promise<void> }
 // ── Main panel ────────────────────────────────────────────────────────────────
 
 export function PortsPanel() {
-  const { ports, isLoading, isError, createTunnel, stopTunnel, installCloudflared, installState } =
-    usePorts();
+  const {
+    ports,
+    isLoading,
+    isError,
+    createTunnel,
+    stopTunnel,
+    installCloudflared,
+    installState,
+  } = usePorts();
   const [binaryMissing, setBinaryMissing] = useState(false);
-  const [warned, setWarned] = useState(() => !!localStorage.getItem(WARNED_KEY));
+  const [warned, setWarned] = useState(
+    () => !!localStorage.getItem(WARNED_KEY),
+  );
   const localServer = isLocalServer();
 
   // Auto-dismiss installer row 1.5s after successful install
@@ -486,7 +519,9 @@ export function PortsPanel() {
 
       {/* Custom port form */}
       <div className="mt-auto">
-        <AddPortForm onSubmit={(port) => handleStartTunnel(port, `port-${port}`)} />
+        <AddPortForm
+          onSubmit={(port) => handleStartTunnel(port, `port-${port}`)}
+        />
       </div>
     </section>
   );

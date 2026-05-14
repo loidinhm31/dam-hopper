@@ -19,7 +19,10 @@
 import { useCallback, useRef, useState } from "react";
 import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
-import { opaqueRegisterAndLogin, type OpaqueSessionResult } from "@/lib/opaque-session.js";
+import {
+  opaqueRegisterAndLogin,
+  type OpaqueSessionResult,
+} from "@/lib/opaque-session.js";
 import { encryptFile, encryptText } from "@/lib/crypto.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 
@@ -74,13 +77,19 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
   const [error, setError] = useState<string | null>(null);
 
   // Session cache lives in EncryptContext so disable-Lock evicts it atomically
-  const { getSession, setSession, clearSession, clearPassphrase } = useEncryptMode();
+  const { getSession, setSession, clearSession, clearPassphrase } =
+    useEncryptMode();
 
   // In-flight dedup: if an OPAQUE handshake is already running for this project, join it
-  const sessionInflightRef = useRef<Map<string, Promise<OpaqueSessionResult>>>(new Map());
+  const sessionInflightRef = useRef<Map<string, Promise<OpaqueSessionResult>>>(
+    new Map(),
+  );
 
   const getOrCreateSession = useCallback(
-    async (project: string, passphrase: string): Promise<OpaqueSessionResult> => {
+    async (
+      project: string,
+      passphrase: string,
+    ): Promise<OpaqueSessionResult> => {
       const cached = getSession(project);
       if (cached) return cached;
 
@@ -121,14 +130,19 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
 
         setStatus("encrypting");
         // encryptFile zeroes the exportKey — we must clone for each call
-        const { blob } = await encryptFile(file, new Uint8Array(session.aesKey));
+        const { blob } = await encryptFile(
+          file,
+          new Uint8Array(session.aesKey),
+        );
 
         setStatus("uploading");
         const transport = getTransport() as WsTransport;
         const uploadId = crypto.randomUUID();
 
         // fsPutFile expects a File, but we have a Blob — wrap it
-        const encFile = new File([blob], file.name, { type: "application/octet-stream" });
+        const encFile = new File([blob], file.name, {
+          type: "application/octet-stream",
+        });
 
         const result = await transport.fsPutFile(
           project,
@@ -171,12 +185,21 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
 
         setStatus("encrypting");
         // encryptText zeroes the exportKey — clone for each call
-        const { blob } = await encryptText(text, path, new Uint8Array(session.aesKey));
+        const { blob } = await encryptText(
+          text,
+          path,
+          new Uint8Array(session.aesKey),
+        );
 
         setStatus("uploading");
         const transport = getTransport() as WsTransport;
 
-        const result = await transport.fsPutSave(project, path, blob, session.sessionId);
+        const result = await transport.fsPutSave(
+          project,
+          path,
+          blob,
+          session.sessionId,
+        );
 
         setStatus(result.ok ? "done" : "error");
         if (!result.ok) {

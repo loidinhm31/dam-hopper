@@ -23,11 +23,15 @@ import { useEncryptedWrite } from "@/hooks/useEncryptedWrite.js";
 import { LockToggle } from "@/components/atoms/LockToggle.js";
 
 const MonacoHost = lazy(() =>
-  import("@/components/organisms/MonacoHost.js").then((m) => ({ default: m.MonacoHost })),
+  import("@/components/organisms/MonacoHost.js").then((m) => ({
+    default: m.MonacoHost,
+  })),
 );
 
 const MarkdownHost = lazy(() =>
-  import("@/components/organisms/MarkdownHost.js").then((m) => ({ default: m.MarkdownHost })),
+  import("@/components/organisms/MarkdownHost.js").then((m) => ({
+    default: m.MarkdownHost,
+  })),
 );
 
 export function EditorTabs({ project }: { project: string | null }) {
@@ -46,37 +50,61 @@ export function EditorTabs({ project }: { project: string | null }) {
     loadContent,
   } = useEditorStore();
 
-  const { isEncryptEnabled, getPassphrase, promptPassphrase, setPassphrase, getSession } = useEncryptMode();
+  const {
+    isEncryptEnabled,
+    getPassphrase,
+    promptPassphrase,
+    setPassphrase,
+    getSession,
+  } = useEncryptMode();
   const encryptedWrite = useEncryptedWrite();
 
-  const [activeEditor, setActiveEditor] = useState<monacoNs.editor.IStandaloneCodeEditor | null>(
-    null,
-  );
+  const [activeEditor, setActiveEditor] =
+    useState<monacoNs.editor.IStandaloneCodeEditor | null>(null);
 
-  const handleSave = useCallback(async (key: string) => {
-    if (!project || !isEncryptEnabled(project)) {
-      return save(key);
-    }
-    const tab = tabs.find((t) => t.key === key);
-    if (!tab) return;
-
-    // If a session is already cached the AES key is live — no passphrase needed
-    const sessionActive = !!getSession(project);
-    let passphrase = sessionActive ? "" : getPassphrase(project);
-    if (!sessionActive && !passphrase) {
-      try {
-        passphrase = await promptPassphrase(project);
-        setPassphrase(project, passphrase);
-      } catch {
-        return;
+  const handleSave = useCallback(
+    async (key: string) => {
+      if (!project || !isEncryptEnabled(project)) {
+        return save(key);
       }
-    }
+      const tab = tabs.find((t) => t.key === key);
+      if (!tab) return;
 
-    const result = await encryptedWrite.saveText(project, tab.path, tab.content, passphrase);
-    if (result.ok) {
-      markSaved(key, result.newMtime ?? tab.mtime);
-    }
-  }, [project, isEncryptEnabled, getPassphrase, getSession, promptPassphrase, setPassphrase, encryptedWrite, save, tabs, markSaved]);
+      // If a session is already cached the AES key is live — no passphrase needed
+      const sessionActive = !!getSession(project);
+      let passphrase = sessionActive ? "" : getPassphrase(project);
+      if (!sessionActive && !passphrase) {
+        try {
+          passphrase = await promptPassphrase(project);
+          setPassphrase(project, passphrase);
+        } catch {
+          return;
+        }
+      }
+
+      const result = await encryptedWrite.saveText(
+        project,
+        tab.path,
+        tab.content,
+        passphrase,
+      );
+      if (result.ok) {
+        markSaved(key, result.newMtime ?? tab.mtime);
+      }
+    },
+    [
+      project,
+      isEncryptEnabled,
+      getPassphrase,
+      getSession,
+      promptPassphrase,
+      setPassphrase,
+      encryptedWrite,
+      save,
+      tabs,
+      markSaved,
+    ],
+  );
 
   const projectTabs = project ? tabs.filter((t) => t.project === project) : [];
   const activeKey = project ? activeKeys[project] : null;
@@ -93,7 +121,9 @@ export function EditorTabs({ project }: { project: string | null }) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 text-[var(--color-text-muted)] glass-card">
         <FileCode className="h-10 w-10 opacity-20" />
-        <p className="text-sm opacity-40">Select a file from {project ?? "a project"} to open</p>
+        <p className="text-sm opacity-40">
+          Select a file from {project ?? "a project"} to open
+        </p>
       </div>
     );
   }
@@ -128,97 +158,104 @@ export function EditorTabs({ project }: { project: string | null }) {
       {/* Editor area + status bar */}
       <div className="flex-1 overflow-hidden flex flex-col min-h-0">
         <div className="flex-1 overflow-hidden relative">
-        {activeTab === null ? (
-          <div className="h-full flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-            No file open
-          </div>
-        ) : activeTab.loading ? (
-          <div className="h-full flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)]">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading…
-          </div>
-        ) : activeTab.error ? (
-          <div className="h-full flex items-center justify-center text-xs text-red-400 px-4 text-center">
-            {activeTab.error}
-          </div>
-        ) : activeTab.tier === "binary" ? (
-          <BinaryPreview
-            base64={activeTab.binaryBase64 ?? ""}
-            fileName={activeTab.name}
-            mime={activeTab.mime}
-          />
-        ) : activeTab.tier === "diff" ? (
-          <DiffViewer
-            project={activeTab.project}
-            filePath={activeTab.path}
-            fileStatus={activeTab.fileStatus ?? "modified"}
-            additions={activeTab.additions ?? 0}
-            deletions={activeTab.deletions ?? 0}
-            commitHash={activeTab.commitHash}
-            onClose={() => close(activeTab.key)}
-          />
-        ) : activeTab.tier === "large" ? (          <LargeFileViewer
-            project={activeTab.project}
-            path={activeTab.path}
-            fileName={activeTab.name}
-            size={activeTab.size}
-          />
-        ) : /\.mdx?$/i.test(activeTab.name) ? (
-          <Suspense
-            fallback={
-              <div className="h-full flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)]">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Loading editor…
-              </div>
-            }
-          >
-            <MarkdownHost
-              tabKey={activeTab.key}
-              content={activeTab.content}
-              tier={activeTab.tier}
+          {activeTab === null ? (
+            <div className="h-full flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+              No file open
+            </div>
+          ) : activeTab.loading ? (
+            <div className="h-full flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)]">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading…
+            </div>
+          ) : activeTab.error ? (
+            <div className="h-full flex items-center justify-center text-xs text-red-400 px-4 text-center">
+              {activeTab.error}
+            </div>
+          ) : activeTab.tier === "binary" ? (
+            <BinaryPreview
+              base64={activeTab.binaryBase64 ?? ""}
+              fileName={activeTab.name}
               mime={activeTab.mime}
-              viewState={activeTab.viewState}
-              onChange={(val) => setContent(activeTab.key, val)}
-              onSave={() => void handleSave(activeTab.key)}
-              onViewStateChange={(vs) => saveViewState(activeTab.key, vs)}
             />
-          </Suspense>
-        ) : (
-          <Suspense
-            fallback={
-              <div className="h-full flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)]">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Loading editor…
-              </div>
-            }
-          >
-            <MonacoHost
-              tabKey={activeTab.key}
-              content={activeTab.content}
-              tier={activeTab.tier}
-              mime={activeTab.mime}
-              viewState={activeTab.viewState}
-              onChange={(val) => setContent(activeTab.key, val)}
-              onSave={() => void handleSave(activeTab.key)}
-              onViewStateChange={(vs) => saveViewState(activeTab.key, vs)}
-              onEditorReady={setActiveEditor}
+          ) : activeTab.tier === "diff" ? (
+            <DiffViewer
+              project={activeTab.project}
+              filePath={activeTab.path}
+              fileStatus={activeTab.fileStatus ?? "modified"}
+              additions={activeTab.additions ?? 0}
+              deletions={activeTab.deletions ?? 0}
+              commitHash={activeTab.commitHash}
+              onClose={() => close(activeTab.key)}
             />
-          </Suspense>
-        )}
+          ) : activeTab.tier === "large" ? (
+            <LargeFileViewer
+              project={activeTab.project}
+              path={activeTab.path}
+              fileName={activeTab.name}
+              size={activeTab.size}
+            />
+          ) : /\.mdx?$/i.test(activeTab.name) ? (
+            <Suspense
+              fallback={
+                <div className="h-full flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)]">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading editor…
+                </div>
+              }
+            >
+              <MarkdownHost
+                tabKey={activeTab.key}
+                content={activeTab.content}
+                tier={activeTab.tier}
+                mime={activeTab.mime}
+                viewState={activeTab.viewState}
+                onChange={(val) => setContent(activeTab.key, val)}
+                onSave={() => void handleSave(activeTab.key)}
+                onViewStateChange={(vs) => saveViewState(activeTab.key, vs)}
+              />
+            </Suspense>
+          ) : (
+            <Suspense
+              fallback={
+                <div className="h-full flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)]">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading editor…
+                </div>
+              }
+            >
+              <MonacoHost
+                tabKey={activeTab.key}
+                content={activeTab.content}
+                tier={activeTab.tier}
+                mime={activeTab.mime}
+                viewState={activeTab.viewState}
+                onChange={(val) => setContent(activeTab.key, val)}
+                onSave={() => void handleSave(activeTab.key)}
+                onViewStateChange={(vs) => saveViewState(activeTab.key, vs)}
+                onEditorReady={setActiveEditor}
+              />
+            </Suspense>
+          )}
 
-        {/* Saving overlay */}
-        {activeTab?.saving && (
-          <div className="absolute top-2 right-3 flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)]">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Saving…
-          </div>
-        )}
-      </div>
+          {/* Saving overlay */}
+          {activeTab?.saving && (
+            <div className="absolute top-2 right-3 flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)]">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Saving…
+            </div>
+          )}
+        </div>
 
         {/* Status bar — only for Monaco-hosted tabs */}
-        {activeTab && activeTab.tier !== "binary" && activeTab.tier !== "large" && !/\.mdx?$/i.test(activeTab.name) && (
-          <EditorStatusBar editor={activeEditor} language={mimeToLanguage(activeTab.mime)} />
-        )}
+        {activeTab &&
+          activeTab.tier !== "binary" &&
+          activeTab.tier !== "large" &&
+          !/\.mdx?$/i.test(activeTab.name) && (
+            <EditorStatusBar
+              editor={activeEditor}
+              language={mimeToLanguage(activeTab.mime)}
+            />
+          )}
       </div>
 
       {/* Conflict dialog */}

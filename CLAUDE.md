@@ -79,6 +79,7 @@ DAM_HOPPER_NO_AUTH=1 cargo run -- --workspace /path/to/workspace
 ### Behavior
 
 When `--no-auth` is enabled:
+
 - ⚠️ Startup warning banner printed to stderr
 - `/api/auth/login` returns a dev token immediately (no credentials required)
 - `/api/auth/status` returns `{ authenticated: true, dev_mode: true, user: "dev-user" }`
@@ -97,7 +98,6 @@ Auth bypass **cannot be used in production** due to multiple failsafe mechanisms
 The server exits immediately if both `--no-auth` and a production environment are detected, ensuring safe local-only usage.
 
 **See** [Phase 01 Documentation](./docs/phase-01-server-auth-bypass/) for technical details, security considerations, and comprehensive test coverage.
-
 
 ## Architecture
 
@@ -133,7 +133,6 @@ Browser
 └── TanStack Query (queries via WsTransport.invoke)
 ```
 
-
 ## Key Design Decisions
 
 **Auth**: Bearer token in `Authorization` header. Token stored in `~/.config/dam-hopper/server-token`. Constant-time comparison via `subtle` crate. CORS configurable via `--cors-origins`.
@@ -143,6 +142,7 @@ Browser
 **Config format**: `dam-hopper.toml` uses snake_case on disk (`build_command`, `run_command`, `env_file`). Serde handles field mapping. No migration needed from prior Node server.
 
 **Workspace resolution**: Priority order:
+
 1. `--workspace` CLI flag
 2. `DAM_HOPPER_WORKSPACE` env var
 3. Global config default path (`~/.config/dam-hopper/config.toml`)
@@ -160,6 +160,7 @@ Browser
 **Tunnel sessions**: `TunnelSessionManager` in `AppState` manages in-memory `TunnelSession` entries (no disk persistence). Each session spawns a `cloudflared tunnel --url http://127.0.0.1:{port}` child process via `tokio::process::Command`. URL is parsed from child stdout via regex. WS push events (`tunnel:created`, `tunnel:ready`, `tunnel:failed`, `tunnel:stopped`) are broadcast to all connected clients. On server shutdown, `dispose_all()` reaps all child processes — no orphaned `cloudflared` processes.
 
 **Encrypted uploads with Lock mode** (Phase 04–07): Zero-knowledge encrypt-in-transit via `fs:put_*` WS protocol.
+
 - OPAQUE PAKE (`@serenity-kit/opaque`): passphrase never transmitted, derives shared AES key via HKDF-SHA256
 - Client: `src/lib/crypto.ts` (`encryptFile`, `encryptText`) — Web Crypto API only, AES-256-GCM, IV(12) || ciphertext+tag
 - Client hook: `src/hooks/useEncryptedWrite.ts` — orchestrates OPAQUE session + encrypt + upload
@@ -168,8 +169,6 @@ Browser
 - Server: `fs/enc_upload.rs` (`EncUploadState`) — per-connection encrypted upload state
 - Server: `api/ws.rs` handles `FsPutBegin/Chunk/Commit/Save` — decrypts on commit, store is always plaintext
 - `export_key` zeroed immediately after AES key import (client) / Zeroizing<Vec<u8>> (server)
-
-
 
 ## Workspace Config (`dam-hopper.toml`)
 
@@ -190,17 +189,16 @@ restart_max_retries = 5  # optional: default 5; only written to TOML when non-de
 health_check_url = "http://localhost:8080/health"  # optional: must be http:// or https://
 ```
 
-
 ## TypeScript (packages/web)
 
 `strict: true`, `target: ES2022`, `moduleResolution: bundler`, `verbatimModuleSyntax: true`. Built with Vite. Types in `src/api/client.ts` mirror Rust API shapes — duplication is intentional to keep web package independent.
-
 
 ## Testing
 
 Rust tests: `cd server && cargo test` (266 tests). Integration tests use real temp filesystems and git repos via `tempfile` crate. No mocking of filesystem or git.
 
 Web unit tests (vitest): run with `pnpm --filter @dam-hopper/web test`. Covered modules:
+
 - `src/lib/terminal-input-buffer.ts` — 14 tests
 - `src/lib/prompt-detector.ts` — 9 tests
 - `src/lib/crypto.ts` — unit tests in `src/lib/crypto.test.ts`

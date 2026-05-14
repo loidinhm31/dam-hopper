@@ -23,13 +23,19 @@ interface Props {
   open: boolean;
   onClose: () => void;
   closable?: boolean;
-  profile?: ServerProfile | null;  // null = new profile, undefined = legacy mode
+  profile?: ServerProfile | null; // null = new profile, undefined = legacy mode
   onSaved?: (profile: ServerProfile) => void;
 }
 
 type TestState = "idle" | "testing" | "ok" | "fail";
 
-export function ServerSettingsDialog({ open, onClose, closable = true, profile, onSaved }: Props) {
+export function ServerSettingsDialog({
+  open,
+  onClose,
+  closable = true,
+  profile,
+  onSaved,
+}: Props) {
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [authType, setAuthType] = useState<"basic" | "none">("basic");
@@ -77,13 +83,15 @@ export function ServerSettingsDialog({ open, onClose, closable = true, profile, 
 
   const rawUrl = url.trim();
   // Auto-prepend protocol for display normalization (matches setServerUrl behavior)
-  const normalized = rawUrl && !/^https?:\/\//i.test(rawUrl)
-    ? `http://${rawUrl}`.replace(/\/$/, "")
-    : rawUrl.replace(/\/$/, "");
+  const normalized =
+    rawUrl && !/^https?:\/\//i.test(rawUrl)
+      ? `http://${rawUrl}`.replace(/\/$/, "")
+      : rawUrl.replace(/\/$/, "");
 
   /** Reject non-http(s) schemes to prevent javascript:, data:, etc. */
   const urlSchemeValid = !normalized || /^https?:\/\/.+/i.test(normalized);
-  const crossOrigin = urlSchemeValid && normalized ? isCrossOriginServer(normalized) : false;
+  const crossOrigin =
+    urlSchemeValid && normalized ? isCrossOriginServer(normalized) : false;
 
   async function testConnection() {
     if (!normalized || !urlSchemeValid) return;
@@ -93,23 +101,24 @@ export function ServerSettingsDialog({ open, onClose, closable = true, profile, 
       // Different body based on auth type
       const u = username.trim();
       const p = password.trim();
-      const bodyContent = authType === "none" ? {} : { username: u, password: p };
+      const bodyContent =
+        authType === "none" ? {} : { username: u, password: p };
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
       try {
         const res = await fetch(`${normalized}/api/auth/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(bodyContent),
-          signal: controller.signal
+          signal: controller.signal,
         });
         const data = await res.json().catch(() => null);
 
         if (res.ok && data?.token) {
           setToken(data.token);
           setTestState("ok");
-          
+
           // Show dev mode indicator if applicable
           if (data.dev_mode) {
             setTestError("✓ Dev mode active");
@@ -131,16 +140,17 @@ export function ServerSettingsDialog({ open, onClose, closable = true, profile, 
     if (!urlSchemeValid) return;
 
     const t = token.trim();
-    
+
     if (isEditMode) {
       // Profile mode: create or update profile
       const profileData = {
         name: name.trim() || "Unnamed Server",
         url: normalized,
         authType,
-        username: authType === "basic" ? username.trim() || undefined : undefined,
+        username:
+          authType === "basic" ? username.trim() || undefined : undefined,
       };
-      
+
       let savedProfile: ServerProfile;
       if (profile) {
         // Update existing profile
@@ -151,22 +161,23 @@ export function ServerSettingsDialog({ open, onClose, closable = true, profile, 
         savedProfile = createProfile(profileData);
         setActiveProfile(savedProfile.id);
       }
-      
+
       // Store token for this profile
       if (t) {
         setAuthToken(t);
       }
-      
+
       setSaved(true);
-      
+
       // Notify parent and close
       onSaved?.(savedProfile);
-      
+
       // Reload for clean reconnect
       setTimeout(() => window.location.reload(), 800);
     } else {
       // Legacy mode: direct URL/token storage
-      const isSameOrigin = !normalized || normalized === `${location.protocol}//${location.host}`;
+      const isSameOrigin =
+        !normalized || normalized === `${location.protocol}//${location.host}`;
 
       if (isSameOrigin) {
         clearServerUrl();
@@ -205,7 +216,7 @@ export function ServerSettingsDialog({ open, onClose, closable = true, profile, 
       await fetch(`${getServerUrl()}/api/auth/logout`, {
         method: "POST",
         headers: buildAuthHeaders(),
-        signal: controller.signal
+        signal: controller.signal,
       });
     } catch {
       // ignore network errors on logout
@@ -227,7 +238,9 @@ export function ServerSettingsDialog({ open, onClose, closable = true, profile, 
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
       style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}
-      onClick={(e) => { if (closable && e.target === e.currentTarget) onClose(); }}
+      onClick={(e) => {
+        if (closable && e.target === e.currentTarget) onClose();
+      }}
     >
       <div
         className="w-full max-w-md rounded-2xl border border-[var(--color-border)] shadow-2xl"
@@ -273,7 +286,7 @@ export function ServerSettingsDialog({ open, onClose, closable = true, profile, 
               />
             </div>
           )}
-          
+
           <div>
             <label className="mb-1.5 block text-xs font-medium text-[var(--color-text)]">
               Server URL
@@ -281,12 +294,17 @@ export function ServerSettingsDialog({ open, onClose, closable = true, profile, 
             <input
               type="text"
               value={url}
-              onChange={(e) => { setUrl(e.target.value); setTestState("idle"); }}
+              onChange={(e) => {
+                setUrl(e.target.value);
+                setTestState("idle");
+              }}
               placeholder="http://localhost:4800"
               className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2"
               style={{
                 background: "var(--color-background)",
-                borderColor: !urlSchemeValid ? "var(--color-error, #ef4444)" : "var(--color-border)",
+                borderColor: !urlSchemeValid
+                  ? "var(--color-error, #ef4444)"
+                  : "var(--color-border)",
                 color: "var(--color-text)",
                 caretColor: "var(--color-primary)",
               }}
@@ -364,7 +382,7 @@ export function ServerSettingsDialog({ open, onClose, closable = true, profile, 
                   type="password"
                   value={password}
                   onChange={(e) => {
-                     setPassword(e.target.value);
+                    setPassword(e.target.value);
                   }}
                   placeholder="Password"
                   className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2 mb-2"
@@ -383,15 +401,22 @@ export function ServerSettingsDialog({ open, onClose, closable = true, profile, 
           <div className="flex items-center gap-3">
             <button
               onClick={testConnection}
-              disabled={!normalized || !urlSchemeValid || testState === "testing"}
+              disabled={
+                !normalized || !urlSchemeValid || testState === "testing"
+              }
               className="rounded-lg px-3.5 py-2 text-xs font-semibold transition-opacity disabled:opacity-40"
-              style={{ background: "var(--color-surface-2)", color: "var(--color-text)" }}
+              style={{
+                background: "var(--color-surface-2)",
+                color: "var(--color-text)",
+              }}
             >
               {testState === "testing" ? (
                 <span className="flex items-center gap-1.5">
                   <Loader2 size={12} className="animate-spin" /> Testing…
                 </span>
-              ) : "Test connection"}
+              ) : (
+                "Test connection"
+              )}
             </button>
 
             {testState === "ok" && (
@@ -437,15 +462,23 @@ export function ServerSettingsDialog({ open, onClose, closable = true, profile, 
             <button
               onClick={handleSave}
               disabled={
-                saved || 
-                !urlSchemeValid || 
+                saved ||
+                !urlSchemeValid ||
                 testState !== "ok" ||
                 (authType === "basic" && (!username || !password))
               }
               className="rounded-lg px-4 py-2 text-xs font-semibold text-white transition-opacity disabled:opacity-60"
-              style={{ background: saved ? "var(--color-success)" : "var(--color-primary)" }}
+              style={{
+                background: saved
+                  ? "var(--color-success)"
+                  : "var(--color-primary)",
+              }}
             >
-              {saved ? "Saved!" : (isEditMode ? "Save profile" : "Save & reconnect")}
+              {saved
+                ? "Saved!"
+                : isEditMode
+                  ? "Save profile"
+                  : "Save & reconnect"}
             </button>
           </div>
         </div>

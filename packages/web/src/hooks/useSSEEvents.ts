@@ -3,7 +3,7 @@ import { subscribeIpc, type IpcEvent } from "./useSSE.js";
 
 export function useIpcEvent(type: string, handler: (event: IpcEvent) => void) {
   const handlerRef = useRef(handler);
-  
+
   useEffect(() => {
     handlerRef.current = handler;
   });

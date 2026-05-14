@@ -78,7 +78,12 @@ export interface HasWsStatus {
 }
 
 export function hasWsStatus(t: unknown): t is HasWsStatus {
-  return typeof t === "object" && t !== null && "getStatus" in t && "onStatusChange" in t;
+  return (
+    typeof t === "object" &&
+    t !== null &&
+    "getStatus" in t &&
+    "onStatusChange" in t
+  );
 }
 
 export function useIpc(): { status: IpcStatus } {
@@ -100,7 +105,9 @@ export function useIpc(): { status: IpcStatus } {
       subscribeIpc("status:changed", (e) => {
         try {
           const { projectName } = e.data as { projectName: string };
-          void qc.invalidateQueries({ queryKey: ["project-status", projectName] });
+          void qc.invalidateQueries({
+            queryKey: ["project-status", projectName],
+          });
           void qc.invalidateQueries({ queryKey: ["projects"] });
         } catch {
           void qc.invalidateQueries({ queryKey: ["projects"] });

@@ -31,15 +31,27 @@ interface Props {
 
 function TabStatusDot({ session }: { session?: SessionInfo }) {
   if (!session) {
-    return <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-text-muted)]/30 shrink-0" />;
+    return (
+      <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-text-muted)]/30 shrink-0" />
+    );
   }
   if (session.alive) {
-    return <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-success)] status-glow-green shrink-0" />;
+    return (
+      <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-success)] status-glow-green shrink-0" />
+    );
   }
-  if (session.exitCode !== 0 && session.exitCode !== null && session.exitCode !== undefined) {
-    return <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-danger)] status-glow-red shrink-0" />;
+  if (
+    session.exitCode !== 0 &&
+    session.exitCode !== null &&
+    session.exitCode !== undefined
+  ) {
+    return (
+      <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-danger)] status-glow-red shrink-0" />
+    );
   }
-  return <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-warning)] status-glow-orange shrink-0" />;
+  return (
+    <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-warning)] status-glow-orange shrink-0" />
+  );
 }
 
 export function TerminalTabBar({
@@ -74,7 +86,9 @@ export function TerminalTabBar({
       <div className="flex items-center overflow-x-auto">
         {tabs.map((tab) => {
           const isActive = tab.sessionId === activeTab;
-          const cwdTooltip = tab.session?.cwd ? `cwd: ${tab.session.cwd}` : undefined;
+          const cwdTooltip = tab.session?.cwd
+            ? `cwd: ${tab.session.cwd}`
+            : undefined;
           return (
             <div
               key={tab.sessionId}
@@ -93,7 +107,10 @@ export function TerminalTabBar({
               <span className="truncate flex-1 font-mono">{tab.label}</span>
               <button
                 type="button"
-                onClick={(e) => { e.stopPropagation(); onCloseTab(tab.sessionId); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCloseTab(tab.sessionId);
+                }}
                 title="Close terminal (terminates process)"
                 className={cn(
                   "rounded p-0.5 transition-colors shrink-0",
@@ -128,7 +145,9 @@ export function TerminalTabBar({
       {/* Inline save-as-profile prompt */}
       {savePrompt && (
         <div className="flex items-center gap-2 px-3 py-1.5 border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
-          <span className="text-xs text-[var(--color-text-muted)] shrink-0">Save as:</span>
+          <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+            Save as:
+          </span>
           <div className="flex-1 min-w-0">
             <input
               ref={saveInputRef}
@@ -148,7 +167,9 @@ export function TerminalTabBar({
               )}
             />
             {savePrompt.error && (
-              <p className="text-[10px] text-[var(--color-danger)] mt-0.5">{savePrompt.error}</p>
+              <p className="text-[10px] text-[var(--color-danger)] mt-0.5">
+                {savePrompt.error}
+              </p>
             )}
           </div>
           <button

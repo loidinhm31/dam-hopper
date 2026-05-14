@@ -43,7 +43,9 @@ export function useCommandSearch(projectType?: string, projectName?: string) {
       api.commands
         .search(query, projectType, 8)
         .then((catalogRaw) => {
-          const histCommands = new Set(histResults.map((r) => r.command.command));
+          const histCommands = new Set(
+            histResults.map((r) => r.command.command),
+          );
           const catResults: CombinedSearchResult[] = catalogRaw
             .filter((r) => !histCommands.has(r.command.command))
             .map((r) => ({

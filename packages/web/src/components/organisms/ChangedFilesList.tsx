@@ -8,13 +8,13 @@ import {
   Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
-import { 
-  useGitDiff, 
-  useGitUntracked, 
-  useGitStage, 
-  useGitUnstage, 
-  useGitDiscard, 
-  useGitCommit 
+import {
+  useGitDiff,
+  useGitUntracked,
+  useGitStage,
+  useGitUnstage,
+  useGitDiscard,
+  useGitCommit,
 } from "@/api/queries.js";
 import type { DiffFileEntry } from "@/api/client.js";
 
@@ -85,9 +85,11 @@ function GitSectionHeader({
         onClick={onToggle}
         className="flex items-center gap-1 flex-1 min-w-0 text-left"
       >
-        {open
-          ? <ChevronDown className="h-3 w-3 shrink-0 text-[var(--color-text-muted)]" />
-          : <ChevronRight className="h-3 w-3 shrink-0 text-[var(--color-text-muted)]" />}
+        {open ? (
+          <ChevronDown className="h-3 w-3 shrink-0 text-[var(--color-text-muted)]" />
+        ) : (
+          <ChevronRight className="h-3 w-3 shrink-0 text-[var(--color-text-muted)]" />
+        )}
         <span className="text-[10px] font-semibold text-[var(--color-text)] truncate">
           {label}
         </span>
@@ -151,15 +153,29 @@ function GitFileRow({
           type="checkbox"
           checked={checked}
           readOnly
-          onClick={(e) => { e.stopPropagation(); onToggle(); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle();
+          }}
           className="h-3 w-3 shrink-0 cursor-pointer accent-[var(--color-primary)]"
           aria-label={checked ? `Unstage ${filename}` : `Stage ${filename}`}
         />
       )}
-      <span className={cn("text-[9px] font-bold w-3 shrink-0 text-center leading-none", color)}>
+      <span
+        className={cn(
+          "text-[9px] font-bold w-3 shrink-0 text-center leading-none",
+          color,
+        )}
+      >
         {badge}
       </span>
-      <span className={cn("text-[11px] truncate flex-1", color, isSelected && "!text-[var(--color-primary)]")}>
+      <span
+        className={cn(
+          "text-[11px] truncate flex-1",
+          color,
+          isSelected && "!text-[var(--color-primary)]",
+        )}
+      >
         {filename}
       </span>
       {dir && (
@@ -172,7 +188,8 @@ function GitFileRow({
 }
 
 function GitContextMenuPopover({
-  x, y,
+  x,
+  y,
   entry,
   section,
   onStage,
@@ -216,7 +233,11 @@ function GitContextMenuPopover({
     actions.push({ label: "Remove from commit", onClick: onUnstage });
   }
   if (section !== "unversioned" && entry.status !== "conflicted") {
-    actions.push({ label: "Discard changes", onClick: onDiscard, danger: true });
+    actions.push({
+      label: "Discard changes",
+      onClick: onDiscard,
+      danger: true,
+    });
   }
 
   const style: React.CSSProperties = {
@@ -235,7 +256,10 @@ function GitContextMenuPopover({
       {actions.map((a) => (
         <button
           key={a.label}
-          onClick={() => { a.onClick(); onClose(); }}
+          onClick={() => {
+            a.onClick();
+            onClose();
+          }}
           className={cn(
             "w-full flex items-center px-3 py-1.5 text-xs text-left transition-colors",
             a.danger
@@ -252,11 +276,17 @@ function GitContextMenuPopover({
 
 const UNTRACKED_PAGE_SIZE = 500;
 
-export function ChangedFilesList({ project, selectedFile, onSelectFile }: ChangedFilesListProps) {
+export function ChangedFilesList({
+  project,
+  selectedFile,
+  onSelectFile,
+}: ChangedFilesListProps) {
   const [commitMsg, setCommitMsg] = useState("");
   const [mutatingPaths, setMutatingPaths] = useState<Set<string>>(new Set());
   const [mutationError, setMutationError] = useState<string | null>(null);
-  const [contextMenu, setContextMenu] = useState<GitContextMenuState | null>(null);
+  const [contextMenu, setContextMenu] = useState<GitContextMenuState | null>(
+    null,
+  );
   const [discardConfirm, setDiscardConfirm] = useState<string | null>(null);
   const [changesOpen, setChangesOpen] = useState(true);
   const [unversionedOpen, setUnversionedOpen] = useState(true);
@@ -272,8 +302,12 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
 
   // Guard against stale cache holding old DiffFileEntry[] shape before response format changed
   const isLegacyShape = Array.isArray(data);
-  const entries = isLegacyShape ? (data as unknown as DiffFileEntry[]) : (data?.entries ?? []);
-  const untrackedTruncated = isLegacyShape ? false : (data?.untrackedTruncated ?? false);
+  const entries = isLegacyShape
+    ? (data as unknown as DiffFileEntry[])
+    : (data?.entries ?? []);
+  const untrackedTruncated = isLegacyShape
+    ? false
+    : (data?.untrackedTruncated ?? false);
   const untrackedTotal = isLegacyShape ? 0 : (data?.untrackedTotal ?? 0);
 
   // Fetch next page of untracked files when user clicks "Load more"
@@ -300,13 +334,16 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
     }
   }, [nextPageData, untrackedPage]);
 
-  const changedFiles = entries.filter((f) => !(f.status === "added" && !f.staged));
+  const changedFiles = entries.filter(
+    (f) => !(f.status === "added" && !f.staged),
+  );
   const unversionedFiles = [
     ...entries.filter((f) => f.status === "added" && !f.staged),
     ...extraUntracked,
   ];
   const stagedCount = entries.filter((f) => f.staged).length;
-  const hasMoreUntracked = untrackedTruncated && unversionedFiles.length < untrackedTotal;
+  const hasMoreUntracked =
+    untrackedTruncated && unversionedFiles.length < untrackedTotal;
 
   function handleLoadMoreUntracked() {
     setUntrackedPage((p) => p + 1);
@@ -314,7 +351,12 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
 
   const trackMutating = useCallback((path: string) => {
     setMutatingPaths((p) => new Set([...p, path]));
-    return () => setMutatingPaths((p) => { const n = new Set(p); n.delete(path); return n; });
+    return () =>
+      setMutatingPaths((p) => {
+        const n = new Set(p);
+        n.delete(path);
+        return n;
+      });
   }, []);
 
   async function handleStage(path: string) {
@@ -387,7 +429,9 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
     }
   }
 
-  const changedStageable = changedFiles.filter((f) => f.status !== "conflicted");
+  const changedStageable = changedFiles.filter(
+    (f) => f.status !== "conflicted",
+  );
   const changedStagedCount = changedStageable.filter((f) => f.staged).length;
   const changedCheckState: "all" | "some" | "none" =
     changedStageable.length === 0
@@ -402,7 +446,9 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
     if (changedCheckState === "all") {
       void handleUnstageAll(changedStageable.map((f) => f.path));
     } else {
-      void handleStageAll(changedStageable.filter((f) => !f.staged).map((f) => f.path));
+      void handleStageAll(
+        changedStageable.filter((f) => !f.staged).map((f) => f.path),
+      );
     }
   }
 
@@ -420,7 +466,10 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
       <div className="flex flex-col items-center justify-center gap-2 p-4 text-xs text-[var(--color-danger)]">
         <AlertTriangle className="h-5 w-5" />
         <span>Failed to load changes</span>
-        <button onClick={() => void refetch()} className="text-[10px] text-[var(--color-primary)] hover:underline">
+        <button
+          onClick={() => void refetch()}
+          className="text-[10px] text-[var(--color-primary)] hover:underline"
+        >
           Retry
         </button>
       </div>
@@ -449,7 +498,9 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
           role="alert"
           className="shrink-0 px-3 py-1.5 bg-[var(--color-danger)]/10 border-b border-[var(--color-danger)]/20 flex items-center justify-between gap-2"
         >
-          <span className="text-[var(--color-danger)] text-[10px] truncate">{mutationError}</span>
+          <span className="text-[var(--color-danger)] text-[10px] truncate">
+            {mutationError}
+          </span>
           <button
             onClick={() => setMutationError(null)}
             aria-label="Dismiss error"
@@ -474,7 +525,9 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
           className="shrink-0 px-3 py-2 bg-[var(--color-danger)]/10 border-b border-[var(--color-danger)]/20 text-[var(--color-danger)]"
         >
           <p className="text-[10px] font-medium mb-1">Discard changes to:</p>
-          <p className="font-mono text-[9px] mb-2 truncate opacity-80">{discardConfirm}</p>
+          <p className="font-mono text-[9px] mb-2 truncate opacity-80">
+            {discardConfirm}
+          </p>
           <div className="flex gap-1.5">
             <button
               onClick={() => void handleDiscard(discardConfirm)}
@@ -512,21 +565,33 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
                   checkState={changedCheckState}
                   onCheckAll={handleChangesCheckAll}
                 />
-                {changesOpen && changedFiles.map((f) => (
-                  <GitFileRow
-                    key={f.path}
-                    entry={f}
-                    isSelected={selectedFile === f.path}
-                    checked={f.staged}
-                    isMutating={mutatingPaths.has(f.path)}
-                    onSelect={() => onSelectFile(f.path, f.status === "conflicted")}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      setContextMenu({ x: e.clientX, y: e.clientY, entry: f, section: "changes" });
-                    }}
-                    onToggle={() => void (f.staged ? handleUnstage(f.path) : handleStage(f.path))}
-                  />
-                ))}
+                {changesOpen &&
+                  changedFiles.map((f) => (
+                    <GitFileRow
+                      key={f.path}
+                      entry={f}
+                      isSelected={selectedFile === f.path}
+                      checked={f.staged}
+                      isMutating={mutatingPaths.has(f.path)}
+                      onSelect={() =>
+                        onSelectFile(f.path, f.status === "conflicted")
+                      }
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setContextMenu({
+                          x: e.clientX,
+                          y: e.clientY,
+                          entry: f,
+                          section: "changes",
+                        });
+                      }}
+                      onToggle={() =>
+                        void (f.staged
+                          ? handleUnstage(f.path)
+                          : handleStage(f.path))
+                      }
+                    />
+                  ))}
               </>
             )}
 
@@ -534,17 +599,24 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
               <>
                 <GitSectionHeader
                   label="Unversioned Files"
-                  count={untrackedTruncated ? untrackedTotal : unversionedFiles.length}
+                  count={
+                    untrackedTruncated
+                      ? untrackedTotal
+                      : unversionedFiles.length
+                  }
                   open={unversionedOpen}
                   onToggle={() => setUnversionedOpen((v) => !v)}
                   checkState="none"
-                  onCheckAll={() => void handleStageAll(unversionedFiles.map((f) => f.path))}
+                  onCheckAll={() =>
+                    void handleStageAll(unversionedFiles.map((f) => f.path))
+                  }
                 />
                 {unversionedOpen && (
                   <>
                     {untrackedTruncated && (
                       <div className="px-2 py-1.5 text-[10px] text-[var(--color-text-muted)] bg-[var(--color-surface-2)]/50 border-b border-[var(--color-border)]/40">
-                        Showing {unversionedFiles.length} of {untrackedTotal.toLocaleString()} unversioned files
+                        Showing {unversionedFiles.length} of{" "}
+                        {untrackedTotal.toLocaleString()} unversioned files
                       </div>
                     )}
                     {unversionedFiles.map((f) => (
@@ -557,7 +629,12 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
                         onSelect={() => onSelectFile(f.path, false)}
                         onContextMenu={(e) => {
                           e.preventDefault();
-                          setContextMenu({ x: e.clientX, y: e.clientY, entry: f, section: "unversioned" });
+                          setContextMenu({
+                            x: e.clientX,
+                            y: e.clientY,
+                            entry: f,
+                            section: "unversioned",
+                          });
                         }}
                         onToggle={() => void handleStage(f.path)}
                       />
@@ -568,9 +645,14 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
                         disabled={isLoadingMore}
                         className="w-full flex items-center justify-center gap-1.5 px-2 py-2 text-[10px] text-[var(--color-primary)] hover:bg-[var(--color-surface-2)] disabled:opacity-50 border-t border-[var(--color-border)]/40"
                       >
-                        {isLoadingMore
-                          ? <><Loader2 className="h-3 w-3 animate-spin" /> Loading…</>
-                          : `Load ${Math.min(UNTRACKED_PAGE_SIZE, untrackedTotal - unversionedFiles.length).toLocaleString()} more`}
+                        {isLoadingMore ? (
+                          <>
+                            <Loader2 className="h-3 w-3 animate-spin" />{" "}
+                            Loading…
+                          </>
+                        ) : (
+                          `Load ${Math.min(UNTRACKED_PAGE_SIZE, untrackedTotal - unversionedFiles.length).toLocaleString()} more`
+                        )}
                       </button>
                     )}
                   </>
@@ -587,7 +669,8 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
           value={commitMsg}
           onChange={(e) => setCommitMsg(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void handleCommit();
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey))
+              void handleCommit();
           }}
           placeholder="Commit message…"
           rows={2}
@@ -595,13 +678,20 @@ export function ChangedFilesList({ project, selectedFile, onSelectFile }: Change
         />
         <button
           onClick={() => void handleCommit()}
-          disabled={!commitMsg.trim() || stagedCount === 0 || commitMutation.isPending}
+          disabled={
+            !commitMsg.trim() || stagedCount === 0 || commitMutation.isPending
+          }
           className="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 text-[11px] font-medium rounded-sm bg-[var(--color-primary)] text-white disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
         >
-          {commitMutation.isPending
-            ? <Loader2 className="h-3 w-3 animate-spin" />
-            : <Check className="h-3 w-3" />}
-          Commit{stagedCount > 0 ? ` ${stagedCount} file${stagedCount !== 1 ? "s" : ""}` : ""}
+          {commitMutation.isPending ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Check className="h-3 w-3" />
+          )}
+          Commit
+          {stagedCount > 0
+            ? ` ${stagedCount} file${stagedCount !== 1 ? "s" : ""}`
+            : ""}
         </button>
       </div>
 

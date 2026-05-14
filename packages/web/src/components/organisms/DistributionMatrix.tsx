@@ -89,7 +89,9 @@ export function DistributionMatrix({ items, projects, matrix }: Props) {
                   className="px-2 py-2 text-center whitespace-nowrap border-b border-[var(--color-border)] font-medium"
                 >
                   <div className="text-[var(--color-text)]">{p.name}</div>
-                  <div className="text-[var(--color-text-muted)] opacity-60 text-[10px]">{a}</div>
+                  <div className="text-[var(--color-text-muted)] opacity-60 text-[10px]">
+                    {a}
+                  </div>
                 </th>
               )),
             )}
@@ -114,8 +116,14 @@ export function DistributionMatrix({ items, projects, matrix }: Props) {
                     const projectKey = `${p.name}:${a}`;
                     const mutKey = `${itemKey}__${projectKey}`;
                     const isPending =
-                      (ship.isPending && ship.variables?.itemName === item.name && ship.variables?.projectName === p.name && ship.variables?.agent === a) ||
-                      (unship.isPending && unship.variables?.itemName === item.name && unship.variables?.projectName === p.name && unship.variables?.agent === a);
+                      (ship.isPending &&
+                        ship.variables?.itemName === item.name &&
+                        ship.variables?.projectName === p.name &&
+                        ship.variables?.agent === a) ||
+                      (unship.isPending &&
+                        unship.variables?.itemName === item.name &&
+                        unship.variables?.projectName === p.name &&
+                        unship.variables?.agent === a);
 
                     return (
                       <td key={mutKey} className="px-2 py-2 text-center">

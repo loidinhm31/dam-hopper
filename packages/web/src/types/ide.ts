@@ -8,7 +8,7 @@ export interface ToolWindowDef {
   /** The content to render inside the tool panel */
   content: ReactNode;
   /** Optional: Preferred side if not specified in layout */
-  defaultSide?: 'left' | 'right';
+  defaultSide?: "left" | "right";
   /** Optional: Position in ActivityBar ('top' | 'bottom'), defaults to 'top' */
-  position?: 'top' | 'bottom';
+  position?: "top" | "bottom";
 }

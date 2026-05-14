@@ -29,7 +29,12 @@ function b64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
-export function LargeFileViewer({ project, path, fileName, size }: LargeFileViewerProps) {
+export function LargeFileViewer({
+  project,
+  path,
+  fileName,
+  size,
+}: LargeFileViewerProps) {
   const [lines, setLines] = useState<string[]>([]);
   const [loadedBytes, setLoadedBytes] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -37,31 +42,39 @@ export function LargeFileViewer({ project, path, fileName, size }: LargeFileView
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const fetchingRef = useRef(false);
 
-  const fetchChunk = useCallback(async (offset: number) => {
-    if (fetchingRef.current || offset >= size) return;
-    fetchingRef.current = true;
-    setLoading(true);
-    try {
-      const t = getTransport() as WsTransport;
-      const result = await t.fsRead(project, path, { offset, len: CHUNK_BYTES });
-      if (!result.ok) {
-        setError(`Read error: ${result.code}`);
-        return;
+  const fetchChunk = useCallback(
+    async (offset: number) => {
+      if (fetchingRef.current || offset >= size) return;
+      fetchingRef.current = true;
+      setLoading(true);
+      try {
+        const t = getTransport() as WsTransport;
+        const result = await t.fsRead(project, path, {
+          offset,
+          len: CHUNK_BYTES,
+        });
+        if (!result.ok) {
+          setError(`Read error: ${result.code}`);
+          return;
+        }
+        const newOffset = offset + result.size;
+        const isLastChunk = newOffset >= size;
+        // stream:true buffers incomplete multi-byte chars across 64KB chunk boundaries
+        const text = streamDecoder.decode(b64ToBytes(result.content), {
+          stream: !isLastChunk,
+        });
+        const newLines = text.split("\n");
+        setLines((prev) => [...prev, ...newLines]);
+        setLoadedBytes(newOffset);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Fetch error");
+      } finally {
+        fetchingRef.current = false;
+        setLoading(false);
       }
-      const newOffset = offset + result.size;
-      const isLastChunk = newOffset >= size;
-      // stream:true buffers incomplete multi-byte chars across 64KB chunk boundaries
-      const text = streamDecoder.decode(b64ToBytes(result.content), { stream: !isLastChunk });
-      const newLines = text.split("\n");
-      setLines((prev) => [...prev, ...newLines]);
-      setLoadedBytes(newOffset);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Fetch error");
-    } finally {
-      fetchingRef.current = false;
-      setLoading(false);
-    }
-  }, [project, path, size]);
+    },
+    [project, path, size],
+  );
 
   // Load first chunk on mount / path change
   useEffect(() => {
@@ -69,7 +82,7 @@ export function LargeFileViewer({ project, path, fileName, size }: LargeFileView
     setLoadedBytes(0);
     setError(null);
     void fetchChunk(0);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, path]);
 
   // IntersectionObserver: fetch next chunk when sentinel enters viewport
@@ -98,9 +111,7 @@ export function LargeFileViewer({ project, path, fileName, size }: LargeFileView
         </span>
       </div>
 
-      {error && (
-        <div className="px-3 py-2 text-xs text-red-400">{error}</div>
-      )}
+      {error && <div className="px-3 py-2 text-xs text-red-400">{error}</div>}
 
       <div className="flex-1 overflow-auto font-mono text-[11px] text-[var(--color-text)]">
         {lines.map((line, i) => (

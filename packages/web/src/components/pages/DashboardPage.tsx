@@ -1,4 +1,15 @@
-import { FolderGit2, CheckCircle2, AlertCircle, Activity, Hammer, Play, Terminal, Wrench, Square, RotateCw } from "lucide-react";
+import {
+  FolderGit2,
+  CheckCircle2,
+  AlertCircle,
+  Activity,
+  Hammer,
+  Play,
+  Terminal,
+  Wrench,
+  Square,
+  RotateCw,
+} from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/atoms/Button.js";
 import { useQueryClient } from "@tanstack/react-query";
@@ -10,7 +21,11 @@ import { useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import type { SessionInfo } from "@/api/client.js";
 import { api } from "@/api/client.js";
-import { getSessionStatus, getStatusDotColor, getStatusGlowClass } from "@/lib/session-status.js";
+import {
+  getSessionStatus,
+  getStatusDotColor,
+  getStatusGlowClass,
+} from "@/lib/session-status.js";
 
 interface ActivityEntry {
   id: number;
@@ -36,7 +51,11 @@ function formatUptime(startedAt: number): string {
   return rem > 0 ? `${hours}h ${rem}m` : `${hours}h`;
 }
 
-function SessionRow({ session, onNavigate, onKill }: {
+function SessionRow({
+  session,
+  onNavigate,
+  onKill,
+}: {
   session: SessionInfo;
   onNavigate: (id: string) => void;
   onKill: (id: string) => void;
@@ -50,10 +69,13 @@ function SessionRow({ session, onNavigate, onKill }: {
   const statusTooltip = (() => {
     if (status === "alive") return "Running";
     if (status === "restarting") {
-      const restartInSec = session.restartInMs ? Math.round(session.restartInMs / 1000) : 0;
+      const restartInSec = session.restartInMs
+        ? Math.round(session.restartInMs / 1000)
+        : 0;
       return `Restarting in ${restartInSec}s`;
     }
-    if (status === "crashed") return `Crashed (exit code ${session.exitCode ?? "?"})`;
+    if (status === "crashed")
+      return `Crashed (exit code ${session.exitCode ?? "?"})`;
     return `Exited (code ${session.exitCode ?? 0})`;
   })();
 
@@ -66,7 +88,9 @@ function SessionRow({ session, onNavigate, onKill }: {
       tabIndex={0}
       className="flex items-center gap-3 px-3 py-2 rounded cursor-pointer hover:bg-[var(--color-surface-2)] transition-colors group"
       onClick={() => onNavigate(session.id)}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onNavigate(session.id); }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") onNavigate(session.id);
+      }}
     >
       <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--color-primary)]/60" />
       <span className="text-xs font-medium text-[var(--color-text)] truncate shrink-0 max-w-[25%]">
@@ -93,7 +117,10 @@ function SessionRow({ session, onNavigate, onKill }: {
       />
       <button
         className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-danger)]/60 hover:text-[var(--color-danger)]"
-        onClick={(e) => { e.stopPropagation(); onKill(session.id); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onKill(session.id);
+        }}
         title="Kill session"
       >
         <Square className="h-3 w-3" />
@@ -151,7 +178,10 @@ export function DashboardPage() {
     <AppLayout title="Dashboard">
       {/* Overview cards */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 mb-5">
-        <Link to="/terminals" className="block hover:opacity-90 transition-opacity">
+        <Link
+          to="/terminals"
+          className="block hover:opacity-90 transition-opacity"
+        >
           <OverviewCard
             icon={FolderGit2}
             label="Total Projects"
@@ -171,7 +201,10 @@ export function DashboardPage() {
           value={dirty}
           color="var(--color-warning)"
         />
-        <Link to="/terminals" className="block hover:opacity-90 transition-opacity">
+        <Link
+          to="/terminals"
+          className="block hover:opacity-90 transition-opacity"
+        >
           <OverviewCard
             icon={Activity}
             label="Active Terminals"
@@ -214,7 +247,10 @@ export function DashboardPage() {
             </span>
             <span className="flex items-center gap-1.5">
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-border)]" />
-              <span className="text-[var(--color-text-muted)]">{projects.length - clean - dirty}</span> unknown
+              <span className="text-[var(--color-text-muted)]">
+                {projects.length - clean - dirty}
+              </span>{" "}
+              unknown
             </span>
           </div>
         </div>
@@ -227,7 +263,8 @@ export function DashboardPage() {
         </p>
         {aliveSessions.length === 0 ? (
           <p className="text-xs text-[var(--color-text-muted)]/60 italic">
-            <span className="text-[var(--color-primary)]/40">$</span> no active terminals
+            <span className="text-[var(--color-primary)]/40">$</span> no active
+            terminals
           </p>
         ) : (
           <ul className="space-y-0.5">
@@ -257,7 +294,9 @@ export function DashboardPage() {
             <Terminal className="h-3.5 w-3.5" />
             New Terminal
           </Button>
-          <kbd className="text-[10px] text-[var(--color-text-muted)]/50 font-mono">Ctrl+`</kbd>
+          <kbd className="text-[10px] text-[var(--color-text-muted)]/50 font-mono">
+            Ctrl+`
+          </kbd>
         </div>
       </div>
 
@@ -268,7 +307,8 @@ export function DashboardPage() {
         </p>
         {activity.length === 0 ? (
           <p className="text-xs text-[var(--color-text-muted)]/60 italic">
-            <span className="text-[var(--color-primary)]/40">$</span> waiting for events...
+            <span className="text-[var(--color-primary)]/40">$</span> waiting
+            for events...
           </p>
         ) : (
           <ul className="space-y-1">
@@ -277,7 +317,9 @@ export function DashboardPage() {
                 <span className="shrink-0 text-[var(--color-text-muted)]/40 tabular-nums text-[10px] mt-0.5">
                   {a.time.toLocaleTimeString()}
                 </span>
-                <span className="text-[var(--color-primary)]/40 shrink-0">›</span>
+                <span className="text-[var(--color-primary)]/40 shrink-0">
+                  ›
+                </span>
                 <span className="text-[var(--color-text)]/80 group-hover:text-[var(--color-text)] transition-colors">
                   {a.message}
                 </span>

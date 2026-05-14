@@ -48,21 +48,31 @@ type SaveState = "idle" | "saving" | "error";
 
 function statusLabel(status: string): string {
   switch (status) {
-    case "added": return "A";
-    case "deleted": return "D";
-    case "renamed": return "R";
-    case "copied": return "C";
-    case "conflicted": return "!";
-    default: return "M";
+    case "added":
+      return "A";
+    case "deleted":
+      return "D";
+    case "renamed":
+      return "R";
+    case "copied":
+      return "C";
+    case "conflicted":
+      return "!";
+    default:
+      return "M";
   }
 }
 
 function statusColor(status: string): string {
   switch (status) {
-    case "added": return "text-[var(--color-success,#4caf50)]";
-    case "deleted": return "text-[var(--color-danger)]";
-    case "conflicted": return "text-amber-400";
-    default: return "text-[var(--color-primary)]";
+    case "added":
+      return "text-[var(--color-success,#4caf50)]";
+    case "deleted":
+      return "text-[var(--color-danger)]";
+    case "conflicted":
+      return "text-amber-400";
+    default:
+      return "text-[var(--color-primary)]";
   }
 }
 
@@ -76,14 +86,20 @@ export function DiffViewer({
   onClose,
 }: DiffViewerProps) {
   const localDiff = useGitFileDiff(project, commitHash ? "" : filePath);
-  const commitDiff = useGitCommitFileDiff(project, commitHash ?? "", commitHash ? filePath : "");
+  const commitDiff = useGitCommitFileDiff(
+    project,
+    commitHash ?? "",
+    commitHash ? filePath : "",
+  );
 
   const { data, isLoading, isError } = commitHash ? commitDiff : localDiff;
   const [sideBySide, setSideBySide] = useState(true);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
-  const diffEditorRef = useRef<monacoNs.editor.IStandaloneDiffEditor | null>(null);
+  const diffEditorRef = useRef<monacoNs.editor.IStandaloneDiffEditor | null>(
+    null,
+  );
   const editorContainerRef = useRef<HTMLDivElement>(null);
   // Saved model refs so we can dispose them ourselves (keepCurrentModels=true).
   const modelsRef = useRef<{
@@ -184,9 +200,12 @@ export function DiffViewer({
       // Manual ResizeObserver layout instead of automaticLayout polling.
       const container = editorContainerRef.current;
       if (container) {
-        const ro = new ResizeObserver(() => { editor.layout(); });
+        const ro = new ResizeObserver(() => {
+          editor.layout();
+        });
         ro.observe(container);
-        (editor as unknown as { _roCleanup?: () => void })._roCleanup = () => ro.disconnect();
+        (editor as unknown as { _roCleanup?: () => void })._roCleanup = () =>
+          ro.disconnect();
       }
     },
     [],
@@ -232,24 +251,39 @@ export function DiffViewer({
     setSaveError(null);
     try {
       // Stat the file to get current mtime — server rejects stale writes
-      const readResult = await transport().fsRead(project, filePath, { offset: 0, len: 0 });
+      const readResult = await transport().fsRead(project, filePath, {
+        offset: 0,
+        len: 0,
+      });
       if (!readResult.ok && readResult.code !== "TOO_LARGE") {
-        throw new Error((readResult as { message?: string }).message ?? "Failed to read file");
+        throw new Error(
+          (readResult as { message?: string }).message ?? "Failed to read file",
+        );
       }
       const mtime = (readResult as { mtime: number }).mtime;
-      const writeResult = await transport().fsWriteFile(project, filePath, content, mtime);
+      const writeResult = await transport().fsWriteFile(
+        project,
+        filePath,
+        content,
+        mtime,
+      );
       if (!writeResult.ok) {
         if ("conflict" in writeResult && writeResult.conflict) {
           throw new Error("File modified externally — reload the diff");
         }
-        throw new Error(("error" in writeResult ? writeResult.error : undefined) ?? "Write failed");
+        throw new Error(
+          ("error" in writeResult ? writeResult.error : undefined) ??
+            "Write failed",
+        );
       }
       // Update snapshot so dirty state resets correctly
       savedContentRef.current = content;
       setSaveState("idle");
       setIsDirty(false);
       void qc.invalidateQueries({ queryKey: ["git-diff", project] });
-      void qc.invalidateQueries({ queryKey: ["git-file-diff", project, filePath] });
+      void qc.invalidateQueries({
+        queryKey: ["git-file-diff", project, filePath],
+      });
     } catch (e) {
       setSaveState("error");
       setSaveError(e instanceof Error ? e.message : String(e));
@@ -257,7 +291,9 @@ export function DiffViewer({
   }
 
   const fileName = filePath.split("/").pop() ?? filePath;
-  const dirPath = filePath.includes("/") ? filePath.slice(0, filePath.lastIndexOf("/")) : "";
+  const dirPath = filePath.includes("/")
+    ? filePath.slice(0, filePath.lastIndexOf("/"))
+    : "";
 
   if (isLoading) {
     return (
@@ -290,23 +326,34 @@ export function DiffViewer({
       {/* Toolbar */}
       <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-2)]">
         {/* File status badge */}
-        <span className={cn("text-[11px] font-bold shrink-0", statusColor(fileStatus))}>
+        <span
+          className={cn(
+            "text-[11px] font-bold shrink-0",
+            statusColor(fileStatus),
+          )}
+        >
           {statusLabel(fileStatus)}
         </span>
 
         {/* File path */}
         <div className="flex items-baseline gap-1 min-w-0 flex-1">
           {dirPath && (
-            <span className="text-[11px] text-[var(--color-text-muted)] truncate">{dirPath}/</span>
+            <span className="text-[11px] text-[var(--color-text-muted)] truncate">
+              {dirPath}/
+            </span>
           )}
-          <span className="text-[11px] font-semibold text-[var(--color-text)] truncate">{fileName}</span>
+          <span className="text-[11px] font-semibold text-[var(--color-text)] truncate">
+            {fileName}
+          </span>
         </div>
 
         {/* Diff stats */}
         {(additions > 0 || deletions > 0) && (
           <div className="shrink-0 flex items-center gap-1.5 text-[10px] font-mono">
             {additions > 0 && (
-              <span className="text-[var(--color-success,#4caf50)]">+{additions}</span>
+              <span className="text-[var(--color-success,#4caf50)]">
+                +{additions}
+              </span>
             )}
             {deletions > 0 && (
               <span className="text-[var(--color-danger)]">-{deletions}</span>
@@ -334,7 +381,9 @@ export function DiffViewer({
           {/* View toggle */}
           <button
             onClick={() => setSideBySide((v) => !v)}
-            title={sideBySide ? "Switch to inline view" : "Switch to side-by-side"}
+            title={
+              sideBySide ? "Switch to inline view" : "Switch to side-by-side"
+            }
             className={cn(
               "p-1 rounded transition-colors",
               sideBySide
@@ -386,7 +435,10 @@ export function DiffViewer({
         <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-1.5 bg-[var(--color-danger)]/10 border-b border-[var(--color-danger)]/20 text-[var(--color-danger)] text-[11px]">
           <span>{saveError}</span>
           <button
-            onClick={() => { setSaveState("idle"); setSaveError(null); }}
+            onClick={() => {
+              setSaveState("idle");
+              setSaveError(null);
+            }}
             className="opacity-60 hover:opacity-100"
           >
             <X className="h-3 w-3" />

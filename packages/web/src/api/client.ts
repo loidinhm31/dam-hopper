@@ -58,14 +58,19 @@ export interface ShipResult {
 export interface ProjectAgentScanResult {
   projectName: string;
   projectPath: string;
-  agents: Partial<Record<AgentType, {
-    hasConfig: boolean;
-    skills: string[];
-    commands: string[];
-    hooks: string[];
-    hasMemoryFile: boolean;
-    hasMcpConfig: boolean;
-  }>>;
+  agents: Partial<
+    Record<
+      AgentType,
+      {
+        hasConfig: boolean;
+        skills: string[];
+        commands: string[];
+        hooks: string[];
+        hasMemoryFile: boolean;
+        hasMcpConfig: boolean;
+      }
+    >
+  >;
 }
 
 export interface HealthCheckResult {
@@ -342,46 +347,76 @@ export interface CombinedSearchResult {
 export const api = {
   workspace: {
     get: () => getTransport().invoke<WorkspaceInfo>("workspace:get"),
-    switch: (path: string) => getTransport().invoke<WorkspaceInfo>("workspace:switch", path),
-    known: () => getTransport().invoke<KnownWorkspacesResponse>("workspace:known"),
-    addKnown: (path: string) => getTransport().invoke<KnownWorkspace>("workspace:addKnown", path),
-    removeKnown: (path: string) => getTransport().invoke<{ removed: boolean }>("workspace:removeKnown", path),
+    switch: (path: string) =>
+      getTransport().invoke<WorkspaceInfo>("workspace:switch", path),
+    known: () =>
+      getTransport().invoke<KnownWorkspacesResponse>("workspace:known"),
+    addKnown: (path: string) =>
+      getTransport().invoke<KnownWorkspace>("workspace:addKnown", path),
+    removeKnown: (path: string) =>
+      getTransport().invoke<{ removed: boolean }>(
+        "workspace:removeKnown",
+        path,
+      ),
     status: () => getTransport().invoke<WorkspaceStatus>("workspace:status"),
-    init: (path: string) => getTransport().invoke<{ name: string; root: string }>("workspace:init", path),
-    discover: (path: string) => getTransport().invoke<DiscoverResponse>("workspace:discover", path),
+    init: (path: string) =>
+      getTransport().invoke<{ name: string; root: string }>(
+        "workspace:init",
+        path,
+      ),
+    discover: (path: string) =>
+      getTransport().invoke<DiscoverResponse>("workspace:discover", path),
   },
   globalConfig: {
     get: () => getTransport().invoke<GlobalConfig>("globalConfig:get"),
     updateDefaults: (defaults: { workspace?: string }) =>
-      getTransport().invoke<{ updated: true }>("globalConfig:updateDefaults", defaults),
+      getTransport().invoke<{ updated: true }>(
+        "globalConfig:updateDefaults",
+        defaults,
+      ),
     updateUi: (ui: UiConfig) =>
       getTransport().invoke<{ updated: true }>("globalConfig:updateUi", ui),
   },
   projects: {
     list: () => getTransport().invoke<ProjectWithStatus[]>("projects:list"),
-    get: (name: string) => getTransport().invoke<ProjectWithStatus>("projects:get", name),
-    status: (name: string) => getTransport().invoke<GitStatus | null>("projects:status", name),
+    get: (name: string) =>
+      getTransport().invoke<ProjectWithStatus>("projects:get", name),
+    status: (name: string) =>
+      getTransport().invoke<GitStatus | null>("projects:status", name),
   },
   git: {
-    fetch: (projects?: string[]) => getTransport().invoke<GitOpResult[]>("git:fetch", projects),
-    pull: (projects?: string[]) => getTransport().invoke<GitOpResult[]>("git:pull", projects),
-    push: (project: string) => getTransport().invoke<GitOpResult>("git:push", project),
-    worktrees: (project: string) => getTransport().invoke<Worktree[]>("git:worktrees", project),
+    fetch: (projects?: string[]) =>
+      getTransport().invoke<GitOpResult[]>("git:fetch", projects),
+    pull: (projects?: string[]) =>
+      getTransport().invoke<GitOpResult[]>("git:pull", projects),
+    push: (project: string) =>
+      getTransport().invoke<GitOpResult>("git:push", project),
+    worktrees: (project: string) =>
+      getTransport().invoke<Worktree[]>("git:worktrees", project),
     addWorktree: (
       project: string,
       options: { path: string; branch: string; createBranch?: boolean },
-    ) => getTransport().invoke<Worktree>("git:addWorktree", { project, options }),
+    ) =>
+      getTransport().invoke<Worktree>("git:addWorktree", { project, options }),
     removeWorktree: (project: string, path: string) =>
       getTransport().invoke<void>("git:removeWorktree", { project, path }),
-    branches: (project: string) => getTransport().invoke<Branch[]>("git:branches", project),
+    branches: (project: string) =>
+      getTransport().invoke<Branch[]>("git:branches", project),
     updateBranch: (project: string, branch?: string) =>
-      getTransport().invoke<GitOpResult[]>("git:updateBranch", { project, branch }),
-    log: (project: string, limit?: number) => 
+      getTransport().invoke<GitOpResult[]>("git:updateBranch", {
+        project,
+        branch,
+      }),
+    log: (project: string, limit?: number) =>
       getTransport().invoke<GitLogEntry[]>("git:log", { project, limit }),
     diff: (project: string) =>
       getTransport().invoke<DiffResponse>("git:diff", { project }),
     untrackedFiles: (project: string, offset: number, limit: number) =>
-      getTransport().invoke<DiffFileEntry[]>("git:untrackedFiles", { project, offset, limit }),
+      getTransport().invoke<DiffFileEntry[]>("git:untrackedFiles", {
+        project,
+        offset,
+        limit,
+      }),
     fileDiff: (project: string, path: string) =>
       getTransport().invoke<FileDiffContent>("git:fileDiff", { project, path }),
     stage: (project: string, paths: string[]) =>
@@ -391,85 +426,197 @@ export const api = {
     discard: (project: string, path: string) =>
       getTransport().invoke<{ ok: boolean }>("git:discard", { project, path }),
     discardHunk: (project: string, path: string, hunkIndex: number) =>
-      getTransport().invoke<{ ok: boolean }>("git:discardHunk", { project, path, hunkIndex }),
+      getTransport().invoke<{ ok: boolean }>("git:discardHunk", {
+        project,
+        path,
+        hunkIndex,
+      }),
     conflicts: (project: string) =>
       getTransport().invoke<ConflictFile[]>("git:conflicts", { project }),
     resolve: (project: string, path: string, content: string) =>
-      getTransport().invoke<{ ok: boolean }>("git:resolve", { project, path, content }),
+      getTransport().invoke<{ ok: boolean }>("git:resolve", {
+        project,
+        path,
+        content,
+      }),
     commit: (project: string, message: string) =>
-      getTransport().invoke<{ ok: boolean; hash: string }>("git:commit", { project, message }),
+      getTransport().invoke<{ ok: boolean; hash: string }>("git:commit", {
+        project,
+        message,
+      }),
     commitFiles: (project: string, hash: string) =>
-      getTransport().invoke<DiffFileEntry[]>("git:commitFiles", { project, hash }),
+      getTransport().invoke<DiffFileEntry[]>("git:commitFiles", {
+        project,
+        hash,
+      }),
     commitFileDiff: (project: string, hash: string, path: string) =>
-      getTransport().invoke<FileDiffContent>("git:commitFileDiff", { project, hash, path }),
+      getTransport().invoke<FileDiffContent>("git:commitFileDiff", {
+        project,
+        hash,
+        path,
+      }),
   },
   config: {
     get: () => getTransport().invoke<DamHopperConfig>("config:get"),
-    update: (config: DamHopperConfig) => getTransport().invoke<DamHopperConfig>("config:update", config),
+    update: (config: DamHopperConfig) =>
+      getTransport().invoke<DamHopperConfig>("config:update", config),
     updateProject: (name: string, data: Partial<ProjectConfig>) =>
-      getTransport().invoke<ProjectConfig>("config:updateProject", { name, patch: data }),
+      getTransport().invoke<ProjectConfig>("config:updateProject", {
+        name,
+        patch: data,
+      }),
   },
   settings: {
-    clearCache: () => getTransport().invoke<{ cleared: boolean }>("cache:clear"),
+    clearCache: () =>
+      getTransport().invoke<{ cleared: boolean }>("cache:clear"),
     reset: () => getTransport().invoke<{ reset: boolean }>("workspace:reset"),
-    exportConfig: () => getTransport().invoke<{ exported: boolean; path?: string }>("settings:export"),
-    importConfig: () => getTransport().invoke<{ imported: boolean }>("settings:import"),
+    exportConfig: () =>
+      getTransport().invoke<{ exported: boolean; path?: string }>(
+        "settings:export",
+      ),
+    importConfig: () =>
+      getTransport().invoke<{ imported: boolean }>("settings:import"),
   },
   commands: {
     search: (query: string, projectType?: string, limit?: number) =>
-      getTransport().invoke<SearchResult[]>("commands:search", { query, projectType, limit }),
+      getTransport().invoke<SearchResult[]>("commands:search", {
+        query,
+        projectType,
+        limit,
+      }),
     list: (projectType: string) =>
       getTransport().invoke<SearchResult[]>("commands:list", { projectType }),
   },
   agentStore: {
     list: (category?: AgentItemCategory) =>
-      getTransport().invoke<AgentStoreItem[]>("agent-store:list", category ? { category } : undefined),
+      getTransport().invoke<AgentStoreItem[]>(
+        "agent-store:list",
+        category ? { category } : undefined,
+      ),
     get: (name: string, category: AgentItemCategory) =>
-      getTransport().invoke<AgentStoreItem | null>("agent-store:get", { name, category }),
-    getContent: (name: string, category: AgentItemCategory, fileName?: string) =>
-      getTransport().invoke<string>("agent-store:getContent", { name, category, fileName }),
+      getTransport().invoke<AgentStoreItem | null>("agent-store:get", {
+        name,
+        category,
+      }),
+    getContent: (
+      name: string,
+      category: AgentItemCategory,
+      fileName?: string,
+    ) =>
+      getTransport().invoke<string>("agent-store:getContent", {
+        name,
+        category,
+        fileName,
+      }),
     remove: (name: string, category: AgentItemCategory) =>
-      getTransport().invoke<{ removed: boolean }>("agent-store:remove", { name, category }),
+      getTransport().invoke<{ removed: boolean }>("agent-store:remove", {
+        name,
+        category,
+      }),
     ship: (
-      itemName: string, category: AgentItemCategory,
-      projectName: string, agent: AgentType,
+      itemName: string,
+      category: AgentItemCategory,
+      projectName: string,
+      agent: AgentType,
       method?: DistributionMethod,
-    ) => getTransport().invoke<ShipResult>("agent-store:ship", { itemName, category, projectName, agent, method }),
+    ) =>
+      getTransport().invoke<ShipResult>("agent-store:ship", {
+        itemName,
+        category,
+        projectName,
+        agent,
+        method,
+      }),
     unship: (
-      itemName: string, category: AgentItemCategory,
-      projectName: string, agent: AgentType,
-    ) => getTransport().invoke<ShipResult>("agent-store:unship", { itemName, category, projectName, agent }),
+      itemName: string,
+      category: AgentItemCategory,
+      projectName: string,
+      agent: AgentType,
+    ) =>
+      getTransport().invoke<ShipResult>("agent-store:unship", {
+        itemName,
+        category,
+        projectName,
+        agent,
+      }),
     absorb: (
-      itemName: string, category: AgentItemCategory,
-      projectName: string, agent: AgentType,
-    ) => getTransport().invoke<ShipResult>("agent-store:absorb", { itemName, category, projectName, agent }),
+      itemName: string,
+      category: AgentItemCategory,
+      projectName: string,
+      agent: AgentType,
+    ) =>
+      getTransport().invoke<ShipResult>("agent-store:absorb", {
+        itemName,
+        category,
+        projectName,
+        agent,
+      }),
     bulkShip: (
       items: Array<{ name: string; category: AgentItemCategory }>,
       targets: Array<{ projectName: string; agent: AgentType }>,
       method?: DistributionMethod,
-    ) => getTransport().invoke<ShipResult[]>("agent-store:bulkShip", { items, targets, method }),
-    matrix: () => getTransport().invoke<DistributionMatrix>("agent-store:matrix"),
-    scan: () => getTransport().invoke<ProjectAgentScanResult[]>("agent-store:scan"),
-    health: () => getTransport().invoke<HealthCheckResult>("agent-store:health"),
+    ) =>
+      getTransport().invoke<ShipResult[]>("agent-store:bulkShip", {
+        items,
+        targets,
+        method,
+      }),
+    matrix: () =>
+      getTransport().invoke<DistributionMatrix>("agent-store:matrix"),
+    scan: () =>
+      getTransport().invoke<ProjectAgentScanResult[]>("agent-store:scan"),
+    health: () =>
+      getTransport().invoke<HealthCheckResult>("agent-store:health"),
   },
   agentMemory: {
-    list: (projectName: string) => getTransport().invoke<Record<AgentType, string | null>>("agent-memory:list", { projectName }),
+    list: (projectName: string) =>
+      getTransport().invoke<Record<AgentType, string | null>>(
+        "agent-memory:list",
+        { projectName },
+      ),
     get: (projectName: string, agent: AgentType) =>
-      getTransport().invoke<string | null>("agent-memory:get", { projectName, agent }),
+      getTransport().invoke<string | null>("agent-memory:get", {
+        projectName,
+        agent,
+      }),
     update: (projectName: string, agent: AgentType, content: string) =>
-      getTransport().invoke<{ updated: boolean }>("agent-memory:update", { projectName, agent, content }),
-    templates: () => getTransport().invoke<MemoryTemplateInfo[]>("agent-memory:templates"),
+      getTransport().invoke<{ updated: boolean }>("agent-memory:update", {
+        projectName,
+        agent,
+        content,
+      }),
+    templates: () =>
+      getTransport().invoke<MemoryTemplateInfo[]>("agent-memory:templates"),
     apply: (templateName: string, projectName: string, agent: AgentType) =>
-      getTransport().invoke<{ content: string }>("agent-memory:apply", { templateName, projectName, agent }),
+      getTransport().invoke<{ content: string }>("agent-memory:apply", {
+        templateName,
+        projectName,
+        agent,
+      }),
   },
   agentImport: {
-    scan: (repoUrl: string) => getTransport().invoke<RepoScanResult>("agent-store:importScan", { repoUrl }),
-    scanLocal: (dirPath: string) => getTransport().invoke<LocalScanResult>("agent-store:importScanLocal", { dirPath }),
+    scan: (repoUrl: string) =>
+      getTransport().invoke<RepoScanResult>("agent-store:importScan", {
+        repoUrl,
+      }),
+    scanLocal: (dirPath: string) =>
+      getTransport().invoke<LocalScanResult>("agent-store:importScanLocal", {
+        dirPath,
+      }),
     confirm: (
       tmpDir: string,
-      selectedItems: Array<{ name: string; category: AgentItemCategory; relativePath: string }>,
+      selectedItems: Array<{
+        name: string;
+        category: AgentItemCategory;
+        relativePath: string;
+      }>,
       skipCleanup?: boolean,
-    ) => getTransport().invoke<ImportResult[]>("agent-store:importConfirm", { tmpDir, selectedItems, skipCleanup }),
+    ) =>
+      getTransport().invoke<ImportResult[]>("agent-store:importConfirm", {
+        tmpDir,
+        selectedItems,
+        skipCleanup,
+      }),
   },
   terminal: {
     create: (opts: {
@@ -483,8 +630,10 @@ export const api = {
     kill: (id: string) => getTransport().invoke<void>("terminal:kill", id),
     remove: (id: string) => getTransport().invoke<void>("terminal:remove", id),
     list: () => getTransport().invoke<SessionInfo[]>("terminal:list"),
-    listDetailed: () => getTransport().invoke<SessionInfo[]>("terminal:listDetailed"),
-    getBuffer: (id: string) => getTransport().invoke<string>("terminal:buffer", id),
+    listDetailed: () =>
+      getTransport().invoke<SessionInfo[]>("terminal:listDetailed"),
+    getBuffer: (id: string) =>
+      getTransport().invoke<string>("terminal:buffer", id),
   },
   health: {
     get: () => getTransport().invoke<HealthResponse>("health:get"),

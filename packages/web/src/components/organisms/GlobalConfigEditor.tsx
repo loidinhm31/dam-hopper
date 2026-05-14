@@ -77,8 +77,8 @@ function DefaultWorkspaceSection() {
           )}
         </div>
         <p className="text-xs text-[var(--color-text-muted)]">
-          Bare <code className="font-mono">dam-hopper</code> invocations will use
-          this workspace when no config is found in CWD.
+          Bare <code className="font-mono">dam-hopper</code> invocations will
+          use this workspace when no config is found in CWD.
         </p>
       </div>
       {saved && !updateDefaults.error && (

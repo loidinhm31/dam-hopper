@@ -129,13 +129,19 @@ export function EncryptProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const getSession = useCallback((project: string): OpaqueSessionResult | null => {
-    return sessionRef.current.get(project) ?? null;
-  }, []);
+  const getSession = useCallback(
+    (project: string): OpaqueSessionResult | null => {
+      return sessionRef.current.get(project) ?? null;
+    },
+    [],
+  );
 
-  const setSession = useCallback((project: string, session: OpaqueSessionResult) => {
-    sessionRef.current.set(project, session);
-  }, []);
+  const setSession = useCallback(
+    (project: string, session: OpaqueSessionResult) => {
+      sessionRef.current.set(project, session);
+    },
+    [],
+  );
 
   const clearSession = useCallback((project: string) => {
     sessionRef.current.delete(project);

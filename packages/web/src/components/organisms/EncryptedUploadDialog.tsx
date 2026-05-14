@@ -11,7 +11,14 @@
  *   onSuccess — Called when upload completes with new mtime
  */
 import { useCallback, useRef, useState } from "react";
-import { Upload, ShieldCheck, FileUp, X, CheckCircle, AlertCircle } from "lucide-react";
+import {
+  Upload,
+  ShieldCheck,
+  FileUp,
+  X,
+  CheckCircle,
+  AlertCircle,
+} from "lucide-react";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useEncryptedWrite } from "@/hooks/useEncryptedWrite.js";
 
@@ -48,7 +55,11 @@ export function EncryptedUploadDialog({
   const addFiles = (newFiles: File[]) => {
     setFiles((prev) => [
       ...prev,
-      ...newFiles.map((f) => ({ file: f, state: "pending" as const, progress: 0 })),
+      ...newFiles.map((f) => ({
+        file: f,
+        state: "pending" as const,
+        progress: 0,
+      })),
     ]);
     setAllDone(false);
   };
@@ -67,10 +78,13 @@ export function EncryptedUploadDialog({
 
   const handleDragLeave = useCallback(() => setDragging(false), []);
 
-  const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const picked = Array.from(e.target.files ?? []);
-    if (picked.length > 0) addFiles(picked);
-  }, []);
+  const handleFileInput = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const picked = Array.from(e.target.files ?? []);
+      if (picked.length > 0) addFiles(picked);
+    },
+    [],
+  );
 
   const handleUpload = useCallback(async () => {
     if (files.length === 0 || uploading) return;
@@ -100,17 +114,12 @@ export function EncryptedUploadDialog({
       );
 
       try {
-        const result = await uploadFile(
-          project,
-          dir,
-          file,
-          passphrase,
-          (pct) =>
-            setFiles((prev) =>
-              prev.map((f, idx) =>
-                idx === i ? { ...f, state: "uploading", progress: pct } : f,
-              ),
+        const result = await uploadFile(project, dir, file, passphrase, (pct) =>
+          setFiles((prev) =>
+            prev.map((f, idx) =>
+              idx === i ? { ...f, state: "uploading", progress: pct } : f,
             ),
+          ),
         );
 
         if (result.ok) {
@@ -133,7 +142,11 @@ export function EncryptedUploadDialog({
         setFiles((prev) =>
           prev.map((f, idx) =>
             idx === i
-              ? { ...f, state: "error", error: e instanceof Error ? e.message : "Unknown error" }
+              ? {
+                  ...f,
+                  state: "error",
+                  error: e instanceof Error ? e.message : "Unknown error",
+                }
               : f,
           ),
         );
@@ -142,7 +155,17 @@ export function EncryptedUploadDialog({
 
     setUploading(false);
     if (!anyError) setAllDone(true);
-  }, [files, uploading, project, dir, getPassphrase, promptPassphrase, setPassphrase, uploadFile, onSuccess]);
+  }, [
+    files,
+    uploading,
+    project,
+    dir,
+    getPassphrase,
+    promptPassphrase,
+    setPassphrase,
+    uploadFile,
+    onSuccess,
+  ]);
 
   const removeFile = (i: number) => {
     setFiles((prev) => prev.filter((_, idx) => idx !== i));
@@ -150,29 +173,57 @@ export function EncryptedUploadDialog({
 
   const stateIcon = (s: FileStatus) => {
     switch (s.state) {
-      case "done": return <CheckCircle size={14} className="eud-file-icon eud-file-icon--done" />;
-      case "error": return <AlertCircle size={14} className="eud-file-icon eud-file-icon--error" />;
-      default: return <FileUp size={14} className="eud-file-icon" />;
+      case "done":
+        return (
+          <CheckCircle
+            size={14}
+            className="eud-file-icon eud-file-icon--done"
+          />
+        );
+      case "error":
+        return (
+          <AlertCircle
+            size={14}
+            className="eud-file-icon eud-file-icon--error"
+          />
+        );
+      default:
+        return <FileUp size={14} className="eud-file-icon" />;
     }
   };
 
   return (
-    <div className="eud-overlay" role="dialog" aria-modal="true" aria-label="Upload files">
+    <div
+      className="eud-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Upload files"
+    >
       <div className="eud-backdrop" onClick={onClose} />
       <div className="eud-card">
         {/* Header */}
         <div className="eud-header">
           <div className="eud-title-wrap">
-            <ShieldCheck size={18} className="eud-title-icon eud-title-icon--locked" />
+            <ShieldCheck
+              size={18}
+              className="eud-title-icon eud-title-icon--locked"
+            />
             <span className="eud-title">Encrypted Upload</span>
             <span className="eud-badge">AES-256-GCM</span>
           </div>
-          <button type="button" className="eud-close" onClick={onClose} aria-label="Close">
+          <button
+            type="button"
+            className="eud-close"
+            onClick={onClose}
+            aria-label="Close"
+          >
             <X size={18} />
           </button>
         </div>
 
-        <p className="eud-dir">To: <code>{dir || "/"}</code></p>
+        <p className="eud-dir">
+          To: <code>{dir || "/"}</code>
+        </p>
 
         {/* Drop zone */}
         <div
@@ -186,7 +237,9 @@ export function EncryptedUploadDialog({
           aria-label="Drop files here or click to select"
         >
           <Upload size={28} className="eud-drop-icon" />
-          <span className="eud-drop-text">Drop files here or click to browse</span>
+          <span className="eud-drop-text">
+            Drop files here or click to browse
+          </span>
           <span className="eud-drop-hint">Max 100 MB per file</span>
           <input
             ref={inputRef}
@@ -204,14 +257,21 @@ export function EncryptedUploadDialog({
               <li key={i} className={`eud-file-item eud-file-item--${f.state}`}>
                 {stateIcon(f)}
                 <span className="eud-file-name">{f.file.name}</span>
-                <span className="eud-file-size">{(f.file.size / 1024).toFixed(1)} KB</span>
+                <span className="eud-file-size">
+                  {(f.file.size / 1024).toFixed(1)} KB
+                </span>
                 {f.state === "uploading" && (
                   <div className="eud-progress">
-                    <div className="eud-progress-bar" style={{ width: `${f.progress}%` }} />
+                    <div
+                      className="eud-progress-bar"
+                      style={{ width: `${f.progress}%` }}
+                    />
                   </div>
                 )}
                 {f.state === "error" && (
-                  <span className="eud-file-error" title={f.error}>{f.error?.slice(0, 40)}</span>
+                  <span className="eud-file-error" title={f.error}>
+                    {f.error?.slice(0, 40)}
+                  </span>
                 )}
                 {f.state === "pending" && !uploading && (
                   <button
@@ -231,7 +291,11 @@ export function EncryptedUploadDialog({
         {/* Footer */}
         <div className="eud-footer">
           {allDone ? (
-            <button type="button" className="eud-btn eud-btn--done" onClick={onClose}>
+            <button
+              type="button"
+              className="eud-btn eud-btn--done"
+              onClick={onClose}
+            >
               <CheckCircle size={14} /> Done
             </button>
           ) : (

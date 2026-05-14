@@ -8,10 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+- **Phase 01: Shared File Decoration Registry.** Complete ✓ 2026-05-15. Centralized frontend file metadata lookup in `packages/web/src/lib/file-decoration.ts`: (1) one registry now drives icon, badge, display-language, and Monaco-language selection; (2) exact filename matches cover dotfiles and toolchain files like `.env`, `.gitignore`, `Dockerfile`, `Makefile`, and lockfiles; (3) extension lookup covers code, docs, data, images, archives, fonts, and common config files; (4) MIME fallback handles generic or missing file types; (5) `file-decoration-icon.tsx` is a thin render wrapper; (6) `mime-to-language.ts` stays as a compatibility wrapper for MIME-only callers; (7) unit tests cover exact-name priority, extension fallback, MIME fallback, and neutral defaults. [See plan](../plans/260514-2330-file-extension-decorations/phase-01-shared-file-decoration-registry.md).
+
 - **IDE Tool Windows Refactoring.** Complete ✓ 2026-04-25. Refactored `IdeShell.tsx` to support a flexible, extensible Tool Window system with an Activity Bar, similar to IntelliJ IDEA: (1) New `ActivityBar` component for switching between tool windows (Files, Terminals, etc.); (2) Extensible `ToolWindowDef` interface for defining tool name, icon, and component; (3) `ToolPanel` container with header, actions, and auto-focusing behavior; (4) Persisted layout state in `IdeShell` (active tool ID, sidebar width); (5) Refactored `IdeShell` to use a cleaner tool window state management pattern; (6) Migrated `FileTree` to the new system as the default 'files' tool; (7) Seamless integration with existing `react-resizable-panels` layout; (8) Full TypeScript coverage and logic verification. [See plan](../plans/20260425-ide-tool-windows/plan.md).
 
 - **Phase 01: OPAQUE PAKE Server Integration (Stealth Encrypted Upload).** Complete ✓ 2026-04-27.
- Server-side OPAQUE password-authenticated key exchange for the encrypt-in-transit file upload feature: (1) New `server/src/crypto/` module — `DamHopperOpaqueSuite` implementing `CipherSuite` (Ristretto255 + TripleDH + Identity KSF, matching `@serenity-kit/opaque` client defaults); (2) `load_or_create_server_setup()` generates or loads the server long-term keypair at `~/.config/dam-hopper/opaque-server-setup` with 0o600 permissions; (3) Registration handlers: `handle_register_start()` / `handle_register_finish()` — stateless two-message flow, returning `RegistrationResponse` and `ServerRegistration`; (4) Login handlers: `handle_login_start()` / `handle_login_finish()` — two-message flow, returning intermediate `ServerLogin` state and final AES key derived via HKDF-SHA256 with label `"dam-hopper-aes-256-gcm-v1"`; (5) `export_key` wrapped in `Zeroizing<Vec<u8>>`, zeroed on drop; (6) New `AppState` fields: `opaque_server_setup: Arc<ServerSetup<DamHopperOpaqueSuite>>` (shared) and `opaque_registrations: OpaqueRegistrations` (in-memory HashMap, ephemeral by design — no disk persistence); (7) 8 new `ClientMsg` WS variants (`auth:register_start/finish`, `auth:login_start/finish`, `fs:put_begin/chunk/commit/save`) and 8 new `ServerMsg` response variants with neutral `auth:*` / `fs:put_*` kind names to avoid IDS/DLP fingerprinting; (8) Full WS dispatch in `ws.rs` with all OPAQUE ops in `spawn_blocking`; per-connection caps: 16 in-flight login states, 16 active session keys; `overwrite: bool` on `auth:register_finish` prevents silent credential overwrite; (9) Phase 04 `fs:put_*` handlers stubbed (return not-implemented error); (10) Identifier validation: alphanumeric + hyphens + underscores, max 128 chars. New Cargo dependencies: `opaque-ke = "4"`, `hkdf = "0.12"`, `rand`, `aes-gcm = "0.10"`, `sha2 = "0.10"`, `zeroize = "1"`. [See plan](../plans/20260425-stealth-encrypted-upload/phase-01-opaque-server.md).
+  Server-side OPAQUE password-authenticated key exchange for the encrypt-in-transit file upload feature: (1) New `server/src/crypto/` module — `DamHopperOpaqueSuite` implementing `CipherSuite` (Ristretto255 + TripleDH + Identity KSF, matching `@serenity-kit/opaque` client defaults); (2) `load_or_create_server_setup()` generates or loads the server long-term keypair at `~/.config/dam-hopper/opaque-server-setup` with 0o600 permissions; (3) Registration handlers: `handle_register_start()` / `handle_register_finish()` — stateless two-message flow, returning `RegistrationResponse` and `ServerRegistration`; (4) Login handlers: `handle_login_start()` / `handle_login_finish()` — two-message flow, returning intermediate `ServerLogin` state and final AES key derived via HKDF-SHA256 with label `"dam-hopper-aes-256-gcm-v1"`; (5) `export_key` wrapped in `Zeroizing<Vec<u8>>`, zeroed on drop; (6) New `AppState` fields: `opaque_server_setup: Arc<ServerSetup<DamHopperOpaqueSuite>>` (shared) and `opaque_registrations: OpaqueRegistrations` (in-memory HashMap, ephemeral by design — no disk persistence); (7) 8 new `ClientMsg` WS variants (`auth:register_start/finish`, `auth:login_start/finish`, `fs:put_begin/chunk/commit/save`) and 8 new `ServerMsg` response variants with neutral `auth:*` / `fs:put_*` kind names to avoid IDS/DLP fingerprinting; (8) Full WS dispatch in `ws.rs` with all OPAQUE ops in `spawn_blocking`; per-connection caps: 16 in-flight login states, 16 active session keys; `overwrite: bool` on `auth:register_finish` prevents silent credential overwrite; (9) Phase 04 `fs:put_*` handlers stubbed (return not-implemented error); (10) Identifier validation: alphanumeric + hyphens + underscores, max 128 chars. New Cargo dependencies: `opaque-ke = "4"`, `hkdf = "0.12"`, `rand`, `aes-gcm = "0.10"`, `sha2 = "0.10"`, `zeroize = "1"`. [See plan](../plans/20260425-stealth-encrypted-upload/phase-01-opaque-server.md).
 
 - **Phases 02-04: Combined Ports & Tunnel Panel (F-09 Auto Port Forwarding).** Complete ✓ 2026-04-25. Unified sidebar panel merging port detection and tunnel management into single component: (1) `PortsPanel.tsx` replaces deprecated `TunnelPanel` + `PortsPanel`, deletes former; (2) `usePorts` hook merges `DetectedPort[]` (from `/api/ports` via WS `port:list` channel) with `TunnelInfo[]` (from `/api/tunnels`) by port number into single `PortEntry[]`; (3) Three port row states: A (no tunnel, "Open localhost" button if same-host + "Start tunnel"), B (tunnel starting with spinner), C (tunnel ready with public URL + copy/QR/stop buttons); (4) `isLocalServer()` helper determines if browser and server on same host — gates "Open localhost" button visibility; (5) WS event subscriptions: `port:discovered`, `port:lost`, `tunnel:ready`, `tunnel:failed`, `tunnel:stopped` invalidate queries in real-time; (6) Custom port form allows starting tunnels for specific ports not yet detected; (7) cloudflared installer row preserved (shows missing binary state); (8) Public URL warning banner localStorage-gated, shown once per browser; (9) Sidebar integration: single `{!collapsed && <PortsPanel />}` replaces both former panels; (10) `useTunnels.ts` kept for Phase 05 evaluation. Zero breaking changes, full backward compatibility with existing port/tunnel infrastructure. [See documentation](./frontend-components.md#combined-ports--tunnel-panel).
 
@@ -44,20 +47,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Unreleased (before Phase 01)
 
 ### Added
+
 - **Binary streaming for FsWriteFile protocol.** This feature allows for more efficient writing of large files (>5MB) by using binary frames instead of base64 encoded text frames, reducing bandwidth overhead by ~33%.
 - **Disk-backed buffering on the server.** The server now uses `NamedTempFile` for buffering `fsWriteFile` chunks, preventing memory spikes for large saves.
 - **Client-side binary transport.** Updated `ws-transport.ts` to support the hybrid JSON+Binary frame protocol.
 - **Improved Optimistic Concurrency Control (OCC).** mtime and size enforcement are now more robust and verified with extensive tests.
 
 ### Fixed
+
 - **Large file RAM spike during saves.** Previously, the server buffered all chunks in RAM, leading to potential OOM for large files.
 
 ### Changed
+
 - **Default encoding for large file writes.** Switched from base64 text frames to binary WebSocket frames for better efficiency.
 
 ## [1.0.4] - 2026-04-09
 
 ### Added
+
 - **Monaco Editor integration.** Full-featured editor with syntax highlighting and tab management.
 - **3-phase WebSocket write protocol.** Robust `begin -> chunks -> commit` flow for file saving.
 - **File tiering.** Automatic handling of different file types and sizes (normal, degraded, large, binary).
@@ -69,6 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.3] - 2026-03-25
 
 ### Added
+
 - **IDE Shell layout.** Responsive layout using `react-resizable-panels`.
 - **Live file tree.** Syncs in real-time with filesystem changes.
 - **TanStack Query hooks.** Robust data fetching and FS subscription management.
@@ -77,6 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.2] - 2026-03-10
 
 ### Added
+
 - **File watcher.** notify-based real-time notifications for file system events.
 - **WebSocket event push.** Efficiently pushes FS events to connected clients.
 - **inotify-based debouncing.** Prevents event storms on large file changes.
@@ -84,6 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.1] - 2026-02-28
 
 ### Added
+
 - **IDE File Explorer REST API.** Endpoints for listing, reading, and stating files.
 - **Filesystem sandbox.** Secure path validation to prevent traversal.
 - **Binary file detection.** Automatic identification of binary files using MIME guessing.
@@ -91,6 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.0] - 2026-02-15
 
 ### Added
+
 - Initial release of DamHopper.
 - Workspace management and project auto-discovery.
 - PTY terminal session management.

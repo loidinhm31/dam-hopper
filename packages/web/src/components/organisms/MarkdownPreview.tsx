@@ -29,19 +29,29 @@ export function MarkdownPreview({ content, className }: MarkdownPreviewProps) {
             </h2>
           ),
           h3: ({ children }) => (
-            <h3 className="text-lg font-semibold mb-2 mt-4 text-[var(--color-text)]">{children}</h3>
+            <h3 className="text-lg font-semibold mb-2 mt-4 text-[var(--color-text)]">
+              {children}
+            </h3>
           ),
           h4: ({ children }) => (
-            <h4 className="text-base font-semibold mb-2 mt-3 text-[var(--color-text)]">{children}</h4>
+            <h4 className="text-base font-semibold mb-2 mt-3 text-[var(--color-text)]">
+              {children}
+            </h4>
           ),
           h5: ({ children }) => (
-            <h5 className="text-sm font-semibold mb-1 mt-2 text-[var(--color-text)]">{children}</h5>
+            <h5 className="text-sm font-semibold mb-1 mt-2 text-[var(--color-text)]">
+              {children}
+            </h5>
           ),
           h6: ({ children }) => (
-            <h6 className="text-xs font-semibold mb-1 mt-2 text-[var(--color-text-muted)]">{children}</h6>
+            <h6 className="text-xs font-semibold mb-1 mt-2 text-[var(--color-text-muted)]">
+              {children}
+            </h6>
           ),
           p: ({ children }) => (
-            <p className="mb-3 text-[var(--color-text)] leading-6">{children}</p>
+            <p className="mb-3 text-[var(--color-text)] leading-6">
+              {children}
+            </p>
           ),
           a: ({ href, children }) => (
             <a
@@ -54,19 +64,29 @@ export function MarkdownPreview({ content, className }: MarkdownPreviewProps) {
             </a>
           ),
           strong: ({ children }) => (
-            <strong className="font-semibold text-[var(--color-text)]">{children}</strong>
+            <strong className="font-semibold text-[var(--color-text)]">
+              {children}
+            </strong>
           ),
           em: ({ children }) => (
-            <em className="italic text-[var(--color-text-muted)]">{children}</em>
+            <em className="italic text-[var(--color-text-muted)]">
+              {children}
+            </em>
           ),
           del: ({ children }) => (
-            <del className="line-through text-[var(--color-text-muted)] opacity-70">{children}</del>
+            <del className="line-through text-[var(--color-text-muted)] opacity-70">
+              {children}
+            </del>
           ),
           ul: ({ children }) => (
-            <ul className="list-disc list-inside mb-3 space-y-1 pl-4">{children}</ul>
+            <ul className="list-disc list-inside mb-3 space-y-1 pl-4">
+              {children}
+            </ul>
           ),
           ol: ({ children }) => (
-            <ol className="list-decimal list-inside mb-3 space-y-1 pl-4">{children}</ol>
+            <ol className="list-decimal list-inside mb-3 space-y-1 pl-4">
+              {children}
+            </ol>
           ),
           li: ({ children }) => (
             <li className="text-[var(--color-text)] leading-6">{children}</li>
@@ -105,7 +125,9 @@ export function MarkdownPreview({ content, className }: MarkdownPreviewProps) {
           pre: ({ children }) => <>{children}</>,
           table: ({ children }) => (
             <div className="overflow-x-auto mb-3">
-              <table className="w-full border-collapse text-xs">{children}</table>
+              <table className="w-full border-collapse text-xs">
+                {children}
+              </table>
             </div>
           ),
           thead: ({ children }) => (
@@ -119,7 +141,9 @@ export function MarkdownPreview({ content, className }: MarkdownPreviewProps) {
             </tr>
           ),
           th: ({ children }) => (
-            <th className="px-3 py-2 text-left font-semibold text-[var(--color-text)]">{children}</th>
+            <th className="px-3 py-2 text-left font-semibold text-[var(--color-text)]">
+              {children}
+            </th>
           ),
           td: ({ children }) => (
             <td className="px-3 py-2 text-[var(--color-text)]">{children}</td>
@@ -132,7 +156,13 @@ export function MarkdownPreview({ content, className }: MarkdownPreviewProps) {
               !src.trimStart().toLowerCase().startsWith("data:")
                 ? src
                 : undefined;
-            return <img src={safeSrc} alt={alt ?? ""} className="max-w-full h-auto rounded my-2" />;
+            return (
+              <img
+                src={safeSrc}
+                alt={alt ?? ""}
+                className="max-w-full h-auto rounded my-2"
+              />
+            );
           },
           input: ({ type, checked }) => {
             // GFM task list checkboxes

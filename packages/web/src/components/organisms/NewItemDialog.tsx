@@ -38,7 +38,9 @@ export function NewItemDialog({ open, type, onConfirm, onCancel }: Props) {
     <Dialog open={open} onOpenChange={(v) => !v && onCancel()}>
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>Create New {type === "file" ? "File" : "Folder"}</DialogTitle>
+          <DialogTitle>
+            Create New {type === "file" ? "File" : "Folder"}
+          </DialogTitle>
           <DialogDescription>
             Enter a name for the new {type === "file" ? "file" : "folder"}.
           </DialogDescription>

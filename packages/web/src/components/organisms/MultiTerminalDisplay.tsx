@@ -52,7 +52,7 @@ export function MultiTerminalDisplay({
     }
 
     prevSessionIdsRef.current = currentIds;
-    
+
     // Prune sessions evicted from mountedSessions
     layout.pruneSessions(currentIds);
   }, [mountedSessions]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -91,17 +91,17 @@ export function MultiTerminalDisplay({
         into the visible PaneContainer divs by PaneContainer's useEffect.
         Rendered FIRST so their useEffects run before PaneContainer's.
       */}
-      <div 
-        aria-hidden="true" 
-        style={{ 
-          position: "absolute", 
-          visibility: "hidden", 
-          pointerEvents: "none", 
-          width: 1024, 
-          height: 768, 
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          visibility: "hidden",
+          pointerEvents: "none",
+          width: 1024,
+          height: 768,
           overflow: "hidden",
           top: -10000, // Move far off-screen instead of just 1x1
-          left: -10000 
+          left: -10000,
         }}
       >
         {mountedSessions.map((s) => (

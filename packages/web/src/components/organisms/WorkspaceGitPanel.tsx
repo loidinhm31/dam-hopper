@@ -12,7 +12,9 @@ interface WorkspaceGitPanelProps {
 }
 
 export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
-  const [selectedCommit, setSelectedCommit] = useState<GitLogEntry | null>(null);
+  const [selectedCommit, setSelectedCommit] = useState<GitLogEntry | null>(
+    null,
+  );
   const openDiff = useEditorStore((s) => s.openDiff);
   const { data: projectStatus } = useProjectStatus(project);
 
@@ -24,17 +26,21 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
         file.status,
         file.additions,
         file.deletions,
-        selectedCommit.hash
+        selectedCommit.hash,
       );
     }
   };
 
   return (
     <div className="flex h-full overflow-hidden bg-[var(--color-surface)]">
-      <div className={cn(
-        "flex flex-col min-w-0 transition-all duration-200",
-        selectedCommit ? "w-0 md:w-[60%] lg:w-[65%] border-r border-[var(--color-border)]" : "w-full"
-      )}>
+      <div
+        className={cn(
+          "flex flex-col min-w-0 transition-all duration-200",
+          selectedCommit
+            ? "w-0 md:w-[60%] lg:w-[65%] border-r border-[var(--color-border)]"
+            : "w-full",
+        )}
+      >
         <div className="p-3 border-b border-[var(--color-border)]">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
@@ -50,8 +56,8 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
           <div className="px-3 py-2 border-b border-[var(--color-border)] text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] bg-[var(--color-surface-2)]">
             History
           </div>
-          <GitLogTree 
-            project={project} 
+          <GitLogTree
+            project={project}
             selectedHash={selectedCommit?.hash}
             onSelectCommit={setSelectedCommit}
           />

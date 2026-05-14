@@ -14,7 +14,9 @@ export function useFsOps(project: string, subscribedPath: string) {
   const qc = useQueryClient();
 
   function invalidateTree() {
-    void qc.invalidateQueries({ queryKey: ["fs-tree", project, subscribedPath] });
+    void qc.invalidateQueries({
+      queryKey: ["fs-tree", project, subscribedPath],
+    });
   }
 
   function transport(): WsTransport {
@@ -39,8 +41,15 @@ export function useFsOps(project: string, subscribedPath: string) {
     return result;
   }
 
-  async function deleteEntry(path: string, forceGit = false): Promise<FsOpResult> {
-    const result = await transport().fsOp("delete", { project, path, forceGit });
+  async function deleteEntry(
+    path: string,
+    forceGit = false,
+  ): Promise<FsOpResult> {
+    const result = await transport().fsOp("delete", {
+      project,
+      path,
+      forceGit,
+    });
     if (result.ok) invalidateTree();
     return result;
   }
@@ -60,7 +69,10 @@ export function useFsOps(project: string, subscribedPath: string) {
     }
 
     try {
-      const response = await fetch(`${getServerUrl()}/api/fs/download?${params}`, { headers });
+      const response = await fetch(
+        `${getServerUrl()}/api/fs/download?${params}`,
+        { headers },
+      );
       if (!response.ok) {
         throw new Error(`Download failed: ${response.statusText}`);
       }

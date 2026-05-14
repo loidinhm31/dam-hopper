@@ -12,8 +12,17 @@
  */
 
 import type { Transport } from "./transport.js";
-import { buildAuthHeaders, getAuthToken, getServerUrl } from "./server-config.js";
-import type { FsOpResult, FsUploadResult, ServerTreeNode, FsEventDto } from "./fs-types.js";
+import {
+  buildAuthHeaders,
+  getAuthToken,
+  getServerUrl,
+} from "./server-config.js";
+import type {
+  FsOpResult,
+  FsUploadResult,
+  ServerTreeNode,
+  FsEventDto,
+} from "./fs-types.js";
 
 type Callback = (...args: unknown[]) => void;
 
@@ -24,7 +33,7 @@ const WRITE_CHUNK_SIZE = 128 * 1024; // 128 KB per chunk
 
 export interface FsReadResult {
   ok: true;
-  content: string;       // base64-encoded
+  content: string; // base64-encoded
   binary: boolean;
   mime?: string;
   mtime: number;
@@ -74,64 +83,154 @@ export interface FsPutResult {
 }
 
 /** IPC channel → REST endpoint mapping. */
-function channelToEndpoint(channel: string, data: unknown): { method: string; url: string; body?: unknown } {
+function channelToEndpoint(
+  channel: string,
+  data: unknown,
+): { method: string; url: string; body?: unknown } {
   switch (channel) {
     // Workspace
-    case "workspace:status":   return { method: "GET", url: "/api/workspace/status" };
-    case "workspace:get":      return { method: "GET", url: "/api/workspace" };
-    case "workspace:init":     return { method: "POST", url: "/api/workspace/init", body: { path: data } };
-    case "workspace:switch":   return { method: "POST", url: "/api/workspace/switch", body: { path: data } };
-    case "workspace:discover": return { method: "GET", url: `/api/workspace/discover?path=${encodeURIComponent(data as string)}` };
-    case "workspace:known":    return { method: "GET", url: "/api/workspace/known" };
-    case "workspace:addKnown": return { method: "POST", url: "/api/workspace/known", body: { path: data } };
-    case "workspace:removeKnown": return { method: "DELETE", url: "/api/workspace/known", body: { path: data } };
+    case "workspace:status":
+      return { method: "GET", url: "/api/workspace/status" };
+    case "workspace:get":
+      return { method: "GET", url: "/api/workspace" };
+    case "workspace:init":
+      return {
+        method: "POST",
+        url: "/api/workspace/init",
+        body: { path: data },
+      };
+    case "workspace:switch":
+      return {
+        method: "POST",
+        url: "/api/workspace/switch",
+        body: { path: data },
+      };
+    case "workspace:discover":
+      return {
+        method: "GET",
+        url: `/api/workspace/discover?path=${encodeURIComponent(data as string)}`,
+      };
+    case "workspace:known":
+      return { method: "GET", url: "/api/workspace/known" };
+    case "workspace:addKnown":
+      return {
+        method: "POST",
+        url: "/api/workspace/known",
+        body: { path: data },
+      };
+    case "workspace:removeKnown":
+      return {
+        method: "DELETE",
+        url: "/api/workspace/known",
+        body: { path: data },
+      };
     // Global config
-    case "globalConfig:get": return { method: "GET", url: "/api/global-config" };
-    case "globalConfig:updateDefaults": return { method: "POST", url: "/api/global-config/defaults", body: { defaults: data } };
-    case "globalConfig:updateUi": return { method: "POST", url: "/api/global-config/ui", body: { ui: data } };
+    case "globalConfig:get":
+      return { method: "GET", url: "/api/global-config" };
+    case "globalConfig:updateDefaults":
+      return {
+        method: "POST",
+        url: "/api/global-config/defaults",
+        body: { defaults: data },
+      };
+    case "globalConfig:updateUi":
+      return {
+        method: "POST",
+        url: "/api/global-config/ui",
+        body: { ui: data },
+      };
 
     // Projects
-    case "projects:list": return { method: "GET", url: "/api/projects" };
-    case "projects:get":    return { method: "GET", url: `/api/projects/${encodeURIComponent(data as string)}` };
-    case "projects:status": return { method: "GET", url: `/api/projects/${encodeURIComponent(data as string)}/status` };
+    case "projects:list":
+      return { method: "GET", url: "/api/projects" };
+    case "projects:get":
+      return {
+        method: "GET",
+        url: `/api/projects/${encodeURIComponent(data as string)}`,
+      };
+    case "projects:status":
+      return {
+        method: "GET",
+        url: `/api/projects/${encodeURIComponent(data as string)}/status`,
+      };
 
     // Git
-    case "git:fetch": return { method: "POST", url: "/api/git/fetch", body: { projects: data } };
-    case "git:pull":  return { method: "POST", url: "/api/git/pull", body: { projects: data } };
-    case "git:push":  return { method: "POST", url: "/api/git/push", body: { project: data } };
-    case "git:worktrees": return { method: "GET", url: `/api/git/${encodeURIComponent(data as string)}/worktrees` };
+    case "git:fetch":
+      return {
+        method: "POST",
+        url: "/api/git/fetch",
+        body: { projects: data },
+      };
+    case "git:pull":
+      return { method: "POST", url: "/api/git/pull", body: { projects: data } };
+    case "git:push":
+      return { method: "POST", url: "/api/git/push", body: { project: data } };
+    case "git:worktrees":
+      return {
+        method: "GET",
+        url: `/api/git/${encodeURIComponent(data as string)}/worktrees`,
+      };
     case "git:addWorktree": {
       const d = data as { project: string; options: unknown };
-      return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/worktrees`, body: d.options };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/worktrees`,
+        body: d.options,
+      };
     }
     case "git:removeWorktree": {
       const d = data as { project: string; path: string };
-      return { method: "DELETE", url: `/api/git/${encodeURIComponent(d.project)}/worktrees`, body: { path: d.path } };
+      return {
+        method: "DELETE",
+        url: `/api/git/${encodeURIComponent(d.project)}/worktrees`,
+        body: { path: d.path },
+      };
     }
-    case "git:branches": return { method: "GET", url: `/api/git/${encodeURIComponent(data as string)}/branches` };
+    case "git:branches":
+      return {
+        method: "GET",
+        url: `/api/git/${encodeURIComponent(data as string)}/branches`,
+      };
     case "git:updateBranch": {
       const d = data as { project: string; branch?: string };
-      return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/branches/update`, body: { branch: d.branch } };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/branches/update`,
+        body: { branch: d.branch },
+      };
     }
     case "git:log": {
       const d = data as { project: string; limit?: number };
       const qs = d.limit ? `?limit=${d.limit}` : "";
-      return { method: "GET", url: `/api/git/${encodeURIComponent(d.project)}/log${qs}` };
+      return {
+        method: "GET",
+        url: `/api/git/${encodeURIComponent(d.project)}/log${qs}`,
+      };
     }
 
     // Config
-    case "config:get":    return { method: "GET", url: "/api/config" };
-    case "config:update": return { method: "PUT", url: "/api/config", body: data };
+    case "config:get":
+      return { method: "GET", url: "/api/config" };
+    case "config:update":
+      return { method: "PUT", url: "/api/config", body: data };
     case "config:updateProject": {
       const d = data as { name: string; patch: unknown };
-      return { method: "PATCH", url: `/api/config/projects/${encodeURIComponent(d.name)}`, body: d.patch };
+      return {
+        method: "PATCH",
+        url: `/api/config/projects/${encodeURIComponent(d.name)}`,
+        body: d.patch,
+      };
     }
 
     // Settings
-    case "cache:clear":     return { method: "POST", url: "/api/settings/cache-clear" };
-    case "workspace:reset": return { method: "POST", url: "/api/settings/reset" };
-    case "settings:export": return { method: "GET", url: "/api/settings/export" };
-    case "settings:import": return { method: "POST", url: "/api/settings/import", body: data };
+    case "cache:clear":
+      return { method: "POST", url: "/api/settings/cache-clear" };
+    case "workspace:reset":
+      return { method: "POST", url: "/api/settings/reset" };
+    case "settings:export":
+      return { method: "GET", url: "/api/settings/export" };
+    case "settings:import":
+      return { method: "POST", url: "/api/settings/import", body: data };
 
     // Commands
     case "commands:search": {
@@ -143,19 +242,38 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
     }
     case "commands:list": {
       const d = data as { projectType: string };
-      return { method: "GET", url: `/api/commands?projectType=${encodeURIComponent(d.projectType)}` };
+      return {
+        method: "GET",
+        url: `/api/commands?projectType=${encodeURIComponent(d.projectType)}`,
+      };
     }
 
     // Terminal
-    case "terminal:create": return { method: "POST", url: "/api/terminal", body: data };
-    case "terminal:list": return { method: "GET", url: "/api/terminal" };
-    case "terminal:listDetailed": return { method: "GET", url: "/api/terminal/detailed" };
-    case "terminal:buffer": return { method: "GET", url: `/api/terminal/${encodeURIComponent(data as string)}/buffer` };
-    case "terminal:kill": return { method: "DELETE", url: `/api/terminal/${encodeURIComponent(data as string)}` };
-    case "terminal:remove": return { method: "DELETE", url: `/api/terminal/${encodeURIComponent(data as string)}/remove` };
+    case "terminal:create":
+      return { method: "POST", url: "/api/terminal", body: data };
+    case "terminal:list":
+      return { method: "GET", url: "/api/terminal" };
+    case "terminal:listDetailed":
+      return { method: "GET", url: "/api/terminal/detailed" };
+    case "terminal:buffer":
+      return {
+        method: "GET",
+        url: `/api/terminal/${encodeURIComponent(data as string)}/buffer`,
+      };
+    case "terminal:kill":
+      return {
+        method: "DELETE",
+        url: `/api/terminal/${encodeURIComponent(data as string)}`,
+      };
+    case "terminal:remove":
+      return {
+        method: "DELETE",
+        url: `/api/terminal/${encodeURIComponent(data as string)}/remove`,
+      };
 
     // Health
-    case "health:get": return { method: "GET", url: "/api/health" };
+    case "health:get":
+      return { method: "GET", url: "/api/health" };
 
     // FS (REST for list/stat; subscribe/unsubscribe go over WS)
     case "fs:list": {
@@ -164,7 +282,13 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
       return { method: "GET", url: `/api/fs/list?${params}` };
     }
     case "fs:search": {
-      const d = data as { project?: string; q: string; case?: boolean; max?: number; scope?: "project" | "workspace" };
+      const d = data as {
+        project?: string;
+        q: string;
+        case?: boolean;
+        max?: number;
+        scope?: "project" | "workspace";
+      };
       const params = new URLSearchParams({ q: d.q });
       if (d.project) params.set("project", d.project);
       if (d.case) params.set("case", "true");
@@ -176,119 +300,214 @@ function channelToEndpoint(channel: string, data: unknown): { method: string; ur
     // Agent Store
     case "agent-store:list": {
       const d = data as { category?: string } | undefined;
-      const url = d?.category ? `/api/agent-store?category=${encodeURIComponent(d.category)}` : "/api/agent-store";
+      const url = d?.category
+        ? `/api/agent-store?category=${encodeURIComponent(d.category)}`
+        : "/api/agent-store";
       return { method: "GET", url };
     }
     case "agent-store:get": {
       const d = data as { name: string; category: string };
-      return { method: "GET", url: `/api/agent-store/${d.category}/${encodeURIComponent(d.name)}` };
+      return {
+        method: "GET",
+        url: `/api/agent-store/${d.category}/${encodeURIComponent(d.name)}`,
+      };
     }
     case "agent-store:getContent": {
       const d = data as { name: string; category: string; fileName?: string };
-      const qs = d.fileName ? `?fileName=${encodeURIComponent(d.fileName)}` : "";
-      return { method: "GET", url: `/api/agent-store/${d.category}/${encodeURIComponent(d.name)}/content${qs}` };
+      const qs = d.fileName
+        ? `?fileName=${encodeURIComponent(d.fileName)}`
+        : "";
+      return {
+        method: "GET",
+        url: `/api/agent-store/${d.category}/${encodeURIComponent(d.name)}/content${qs}`,
+      };
     }
     case "agent-store:remove": {
       const d = data as { name: string; category: string };
-      return { method: "DELETE", url: `/api/agent-store/${d.category}/${encodeURIComponent(d.name)}` };
+      return {
+        method: "DELETE",
+        url: `/api/agent-store/${d.category}/${encodeURIComponent(d.name)}`,
+      };
     }
-    case "agent-store:ship":     return { method: "POST", url: "/api/agent-store/ship", body: data };
-    case "agent-store:unship":   return { method: "POST", url: "/api/agent-store/unship", body: data };
-    case "agent-store:absorb":   return { method: "POST", url: "/api/agent-store/absorb", body: data };
-    case "agent-store:bulkShip": return { method: "POST", url: "/api/agent-store/bulk-ship", body: data };
-    case "agent-store:matrix":   return { method: "GET", url: "/api/agent-store/matrix" };
-    case "agent-store:scan":     return { method: "GET", url: "/api/agent-store/scan" };
-    case "agent-store:health":   return { method: "GET", url: "/api/agent-store/health" };
+    case "agent-store:ship":
+      return { method: "POST", url: "/api/agent-store/ship", body: data };
+    case "agent-store:unship":
+      return { method: "POST", url: "/api/agent-store/unship", body: data };
+    case "agent-store:absorb":
+      return { method: "POST", url: "/api/agent-store/absorb", body: data };
+    case "agent-store:bulkShip":
+      return { method: "POST", url: "/api/agent-store/bulk-ship", body: data };
+    case "agent-store:matrix":
+      return { method: "GET", url: "/api/agent-store/matrix" };
+    case "agent-store:scan":
+      return { method: "GET", url: "/api/agent-store/scan" };
+    case "agent-store:health":
+      return { method: "GET", url: "/api/agent-store/health" };
 
     // Agent Memory
     case "agent-memory:list": {
       const d = data as { projectName: string };
-      return { method: "GET", url: `/api/agent-memory/${encodeURIComponent(d.projectName)}` };
+      return {
+        method: "GET",
+        url: `/api/agent-memory/${encodeURIComponent(d.projectName)}`,
+      };
     }
     case "agent-memory:get": {
       const d = data as { projectName: string; agent: string };
-      return { method: "GET", url: `/api/agent-memory/${encodeURIComponent(d.projectName)}/${d.agent}` };
+      return {
+        method: "GET",
+        url: `/api/agent-memory/${encodeURIComponent(d.projectName)}/${d.agent}`,
+      };
     }
     case "agent-memory:update": {
       const d = data as { projectName: string; agent: string; content: string };
-      return { method: "PUT", url: `/api/agent-memory/${encodeURIComponent(d.projectName)}/${d.agent}`, body: { content: d.content } };
+      return {
+        method: "PUT",
+        url: `/api/agent-memory/${encodeURIComponent(d.projectName)}/${d.agent}`,
+        body: { content: d.content },
+      };
     }
-    case "agent-memory:templates": return { method: "GET", url: "/api/agent-memory/templates" };
-    case "agent-memory:apply":     return { method: "POST", url: "/api/agent-memory/apply", body: data };
+    case "agent-memory:templates":
+      return { method: "GET", url: "/api/agent-memory/templates" };
+    case "agent-memory:apply":
+      return { method: "POST", url: "/api/agent-memory/apply", body: data };
 
     // Agent Import
-    case "agent-store:importScan":      return { method: "POST", url: "/api/agent-import/scan", body: data };
-    case "agent-store:importScanLocal": return { method: "POST", url: "/api/agent-import/scan-local", body: data };
-    case "agent-store:importConfirm":   return { method: "POST", url: "/api/agent-import/confirm", body: data };
+    case "agent-store:importScan":
+      return { method: "POST", url: "/api/agent-import/scan", body: data };
+    case "agent-store:importScanLocal":
+      return {
+        method: "POST",
+        url: "/api/agent-import/scan-local",
+        body: data,
+      };
+    case "agent-store:importConfirm":
+      return { method: "POST", url: "/api/agent-import/confirm", body: data };
 
     // SSH credentials
-    case "ssh:listKeys":  return { method: "GET", url: "/api/ssh/keys" };
-    case "ssh:checkAgent": return { method: "GET", url: "/api/ssh/agent" };
-    case "ssh:addKey":    return { method: "POST", url: "/api/ssh/keys/load", body: data };
+    case "ssh:listKeys":
+      return { method: "GET", url: "/api/ssh/keys" };
+    case "ssh:checkAgent":
+      return { method: "GET", url: "/api/ssh/agent" };
+    case "ssh:addKey":
+      return { method: "POST", url: "/api/ssh/keys/load", body: data };
 
     // Git diff / change management
     case "git:diff": {
       const d = data as { project: string };
-      return { method: "GET", url: `/api/git/${encodeURIComponent(d.project)}/diff` };
+      return {
+        method: "GET",
+        url: `/api/git/${encodeURIComponent(d.project)}/diff`,
+      };
     }
     case "git:untrackedFiles": {
       const d = data as { project: string; offset: number; limit: number };
-      const params = new URLSearchParams({ offset: String(d.offset), limit: String(d.limit) });
-      return { method: "GET", url: `/api/git/${encodeURIComponent(d.project)}/untracked?${params}` };
+      const params = new URLSearchParams({
+        offset: String(d.offset),
+        limit: String(d.limit),
+      });
+      return {
+        method: "GET",
+        url: `/api/git/${encodeURIComponent(d.project)}/untracked?${params}`,
+      };
     }
     case "git:fileDiff": {
       const d = data as { project: string; path: string };
       const params = new URLSearchParams({ path: d.path });
-      return { method: "GET", url: `/api/git/${encodeURIComponent(d.project)}/diff/file?${params}` };
+      return {
+        method: "GET",
+        url: `/api/git/${encodeURIComponent(d.project)}/diff/file?${params}`,
+      };
     }
     case "git:stage": {
       const d = data as { project: string; paths: string[] };
-      return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/stage`, body: { paths: d.paths } };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/stage`,
+        body: { paths: d.paths },
+      };
     }
     case "git:unstage": {
       const d = data as { project: string; paths: string[] };
-      return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/unstage`, body: { paths: d.paths } };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/unstage`,
+        body: { paths: d.paths },
+      };
     }
     case "git:discard": {
       const d = data as { project: string; path: string };
-      return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/discard`, body: { path: d.path } };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/discard`,
+        body: { path: d.path },
+      };
     }
     case "git:discardHunk": {
       const d = data as { project: string; path: string; hunkIndex: number };
-      return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/discard-hunk`, body: { path: d.path, hunkIndex: d.hunkIndex } };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/discard-hunk`,
+        body: { path: d.path, hunkIndex: d.hunkIndex },
+      };
     }
     case "git:conflicts": {
       const d = data as { project: string };
-      return { method: "GET", url: `/api/git/${encodeURIComponent(d.project)}/conflicts` };
+      return {
+        method: "GET",
+        url: `/api/git/${encodeURIComponent(d.project)}/conflicts`,
+      };
     }
     case "git:resolve": {
       const d = data as { project: string; path: string; content: string };
-      return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/resolve`, body: { path: d.path, content: d.content } };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/resolve`,
+        body: { path: d.path, content: d.content },
+      };
     }
     case "git:commit": {
       const d = data as { project: string; message: string };
-      return { method: "POST", url: `/api/git/${encodeURIComponent(d.project)}/commit`, body: { message: d.message } };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/commit`,
+        body: { message: d.message },
+      };
     }
     case "git:commitFiles": {
       const d = data as { project: string; hash: string };
-      return { method: "GET", url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/files` };
+      return {
+        method: "GET",
+        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/files`,
+      };
     }
     case "git:commitFileDiff": {
       const d = data as { project: string; hash: string; path: string };
-      return { method: "GET", url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/diff?path=${encodeURIComponent(d.path)}` };
+      return {
+        method: "GET",
+        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/diff?path=${encodeURIComponent(d.path)}`,
+      };
     }
 
     // Ports
-    case "port:list":     return { method: "GET",  url: "/api/ports" };
+    case "port:list":
+      return { method: "GET", url: "/api/ports" };
 
     // Tunnels
-    case "tunnel:install:status": return { method: "GET", url: "/api/tunnels/install" };
-    case "tunnel:install": return { method: "POST", url: "/api/tunnels/install" };
-    case "tunnel:create": return { method: "POST", url: "/api/tunnels", body: data };
-    case "tunnel:list":   return { method: "GET",  url: "/api/tunnels" };
+    case "tunnel:install:status":
+      return { method: "GET", url: "/api/tunnels/install" };
+    case "tunnel:install":
+      return { method: "POST", url: "/api/tunnels/install" };
+    case "tunnel:create":
+      return { method: "POST", url: "/api/tunnels", body: data };
+    case "tunnel:list":
+      return { method: "GET", url: "/api/tunnels" };
     case "tunnel:stop": {
       const d = data as { id: string };
-      return { method: "DELETE", url: `/api/tunnels/${encodeURIComponent(d.id)}` };
+      return {
+        method: "DELETE",
+        url: `/api/tunnels/${encodeURIComponent(d.id)}`,
+      };
     }
 
     default:
@@ -315,125 +534,192 @@ export class WsTransport implements Transport {
   /** sessionId → data callbacks */
   private dataListeners = new Map<string, Set<(data: string) => void>>();
   /** sessionId → exit callbacks (basic: exitCode only) */
-  private exitListeners = new Map<string, Set<(exitCode: number | null) => void>>();
+  private exitListeners = new Map<
+    string,
+    Set<(exitCode: number | null) => void>
+  >();
   /** sessionId → enhanced exit callbacks (includes restart metadata) */
-  private exitEnhancedListeners = new Map<string, Set<(exit: {
-    exitCode: number | null;
-    willRestart: boolean;
-    restartIn?: number;
-    restartCount?: number;
-  }) => void>>();
+  private exitEnhancedListeners = new Map<
+    string,
+    Set<
+      (exit: {
+        exitCode: number | null;
+        willRestart: boolean;
+        restartIn?: number;
+        restartCount?: number;
+      }) => void
+    >
+  >();
   /** sessionId → restart callbacks */
-  private restartListeners = new Map<string, Set<(restart: {
-    restartCount: number;
-    previousExitCode: number | null;
-  }) => void>>();
+  private restartListeners = new Map<
+    string,
+    Set<
+      (restart: {
+        restartCount: number;
+        previousExitCode: number | null;
+      }) => void
+    >
+  >();
   /** sessionId → buffer callbacks (for terminal:attach response) */
-  private bufferListeners = new Map<string, Set<(buffer: {
-    data: string;
-    offset: number;
-  }) => void>>();
+  private bufferListeners = new Map<
+    string,
+    Set<(buffer: { data: string; offset: number }) => void>
+  >();
   /** sub_id → overflow callbacks */
-  private fsOverflowListeners = new Map<number, Set<(message: string) => void>>();
+  private fsOverflowListeners = new Map<
+    number,
+    Set<(message: string) => void>
+  >();
 
   // ── FS subscription state ─────────────────────────────────────────────────
   private nextReqId = 1;
-  private pendingFsReqs = new Map<number, {
-    resolve: (v: { sub_id: number; nodes: ServerTreeNode[] }) => void;
-    reject: (e: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
+  private pendingFsReqs = new Map<
+    number,
+    {
+      resolve: (v: { sub_id: number; nodes: ServerTreeNode[] }) => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   /** sub_id → set of event callbacks */
   private fsEventListeners = new Map<number, Set<(ev: FsEventDto) => void>>();
 
   // ── FS read state ─────────────────────────────────────────────────────────
-  private pendingFsReads = new Map<number, {
-    resolve: (v: FsReadResponse) => void;
-    reject: (e: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
+  private pendingFsReads = new Map<
+    number,
+    {
+      resolve: (v: FsReadResponse) => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   // ── FS write state ────────────────────────────────────────────────────────
   /** write_id → resolve/reject for write_begin response */
-  private pendingWriteBegin = new Map<number, {
-    resolve: (writeId: number) => void;
-    reject: (e: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
+  private pendingWriteBegin = new Map<
+    number,
+    {
+      resolve: (writeId: number) => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   /** `${write_id}:${seq}` → resolve for chunk ack */
-  private pendingWriteChunks = new Map<string, { resolve: () => void; reject: (e: Error) => void }>();
+  private pendingWriteChunks = new Map<
+    string,
+    { resolve: () => void; reject: (e: Error) => void }
+  >();
   /** write_id → resolve/reject for commit result */
-  private pendingWriteCommit = new Map<number, {
-    resolve: (v: FsWriteResponse) => void;
-    reject: (e: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
+  private pendingWriteCommit = new Map<
+    number,
+    {
+      resolve: (v: FsWriteResponse) => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   // ── FS op state ───────────────────────────────────────────────────────────
-  private pendingFsOps = new Map<number, {
-    resolve: (v: FsOpResult) => void;
-    reject: (e: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
+  private pendingFsOps = new Map<
+    number,
+    {
+      resolve: (v: FsOpResult) => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   // ── FS upload state ───────────────────────────────────────────────────────
-  private pendingUploadBegin = new Map<string, {
-    resolve: () => void;
-    reject: (e: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
-  private pendingUploadChunks = new Map<string, {
-    resolve: () => void;
-    reject: (e: Error) => void;
-  }>();
-  private pendingUploadCommit = new Map<string, {
-    resolve: (v: FsUploadResult) => void;
-    reject: (e: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
+  private pendingUploadBegin = new Map<
+    string,
+    {
+      resolve: () => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private pendingUploadChunks = new Map<
+    string,
+    {
+      resolve: () => void;
+      reject: (e: Error) => void;
+    }
+  >();
+  private pendingUploadCommit = new Map<
+    string,
+    {
+      resolve: (v: FsUploadResult) => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   // ── OPAQUE auth state ─────────────────────────────────────────────────────
-  private pendingOpaqueRegStart = new Map<number, {
-    resolve: (data: string) => void;
-    reject: (e: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
-  private pendingOpaqueRegFinish = new Map<number, {
-    resolve: () => void;
-    reject: (e: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
-  private pendingOpaqueLoginStart = new Map<number, {
-    resolve: (v: { session_id: string; data: string }) => void;
-    reject: (e: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
-  private pendingOpaqueLoginFinish = new Map<number, {
-    resolve: () => void;
-    reject: (e: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
+  private pendingOpaqueRegStart = new Map<
+    number,
+    {
+      resolve: (data: string) => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private pendingOpaqueRegFinish = new Map<
+    number,
+    {
+      resolve: () => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private pendingOpaqueLoginStart = new Map<
+    number,
+    {
+      resolve: (v: { session_id: string; data: string }) => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private pendingOpaqueLoginFinish = new Map<
+    number,
+    {
+      resolve: () => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   // ── Encrypted put state (fs:put_*) ────────────────────────────────────────
-  private pendingPutBegin = new Map<string, {
-    resolve: () => void;
-    reject: (e: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
-  private pendingPutChunks = new Map<string, {
-    resolve: () => void;
-    reject: (e: Error) => void;
-  }>();
-  private pendingPutCommit = new Map<string, {
-    resolve: (v: FsPutResult) => void;
-    reject: (e: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
-  private pendingPutSave = new Map<number, {
-    resolve: (v: FsPutResult) => void;
-    reject: (e: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
+  private pendingPutBegin = new Map<
+    string,
+    {
+      resolve: () => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private pendingPutChunks = new Map<
+    string,
+    {
+      resolve: () => void;
+      reject: (e: Error) => void;
+    }
+  >();
+  private pendingPutCommit = new Map<
+    string,
+    {
+      resolve: (v: FsPutResult) => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private pendingPutSave = new Map<
+    number,
+    {
+      resolve: (v: FsPutResult) => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   constructor(private readonly baseUrl: string = getServerUrl()) {
     this.connect();
@@ -455,39 +741,87 @@ export class WsTransport implements Transport {
 
   private failAllPending(reason: string): void {
     const err = new Error(reason);
-    for (const p of this.pendingFsReqs.values()) { clearTimeout(p.timer); p.reject(err); }
+    for (const p of this.pendingFsReqs.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
     this.pendingFsReqs.clear();
-    for (const p of this.pendingFsReads.values()) { clearTimeout(p.timer); p.reject(err); }
+    for (const p of this.pendingFsReads.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
     this.pendingFsReads.clear();
-    for (const p of this.pendingWriteBegin.values()) { clearTimeout(p.timer); p.reject(err); }
+    for (const p of this.pendingWriteBegin.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
     this.pendingWriteBegin.clear();
-    for (const p of this.pendingWriteChunks.values()) { p.reject(err); }
+    for (const p of this.pendingWriteChunks.values()) {
+      p.reject(err);
+    }
     this.pendingWriteChunks.clear();
-    for (const p of this.pendingWriteCommit.values()) { clearTimeout(p.timer); p.reject(err); }
+    for (const p of this.pendingWriteCommit.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
     this.pendingWriteCommit.clear();
-    for (const p of this.pendingFsOps.values()) { clearTimeout(p.timer); p.reject(err); }
+    for (const p of this.pendingFsOps.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
     this.pendingFsOps.clear();
-    for (const p of this.pendingUploadBegin.values()) { clearTimeout(p.timer); p.reject(err); }
+    for (const p of this.pendingUploadBegin.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
     this.pendingUploadBegin.clear();
-    for (const p of this.pendingUploadChunks.values()) { p.reject(err); }
+    for (const p of this.pendingUploadChunks.values()) {
+      p.reject(err);
+    }
     this.pendingUploadChunks.clear();
-    for (const p of this.pendingUploadCommit.values()) { clearTimeout(p.timer); p.reject(err); }
+    for (const p of this.pendingUploadCommit.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
     this.pendingUploadCommit.clear();
-    for (const p of this.pendingOpaqueRegStart.values()) { clearTimeout(p.timer); p.reject(err); }
+    for (const p of this.pendingOpaqueRegStart.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
     this.pendingOpaqueRegStart.clear();
-    for (const p of this.pendingOpaqueRegFinish.values()) { clearTimeout(p.timer); p.reject(err); }
+    for (const p of this.pendingOpaqueRegFinish.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
     this.pendingOpaqueRegFinish.clear();
-    for (const p of this.pendingOpaqueLoginStart.values()) { clearTimeout(p.timer); p.reject(err); }
+    for (const p of this.pendingOpaqueLoginStart.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
     this.pendingOpaqueLoginStart.clear();
-    for (const p of this.pendingOpaqueLoginFinish.values()) { clearTimeout(p.timer); p.reject(err); }
+    for (const p of this.pendingOpaqueLoginFinish.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
     this.pendingOpaqueLoginFinish.clear();
-    for (const p of this.pendingPutBegin.values()) { clearTimeout(p.timer); p.reject(err); }
+    for (const p of this.pendingPutBegin.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
     this.pendingPutBegin.clear();
-    for (const p of this.pendingPutChunks.values()) { p.reject(err); }
+    for (const p of this.pendingPutChunks.values()) {
+      p.reject(err);
+    }
     this.pendingPutChunks.clear();
-    for (const p of this.pendingPutCommit.values()) { clearTimeout(p.timer); p.reject(err); }
+    for (const p of this.pendingPutCommit.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
     this.pendingPutCommit.clear();
-    for (const p of this.pendingPutSave.values()) { clearTimeout(p.timer); p.reject(err); }
+    for (const p of this.pendingPutSave.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
     this.pendingPutSave.clear();
   }
 
@@ -576,15 +910,20 @@ export class WsTransport implements Transport {
 
         switch (msg.kind) {
           case "terminal:output":
-            if (msg.id) this.dataListeners.get(msg.id)?.forEach((cb) => cb(msg.data ?? ""));
+            if (msg.id)
+              this.dataListeners
+                .get(msg.id)
+                ?.forEach((cb) => cb(msg.data ?? ""));
             break;
 
           case "terminal:buffer":
             if (msg.id) {
-              this.bufferListeners.get(msg.id)?.forEach((cb) => cb({
-                data: msg.data ?? "",
-                offset: msg.offset ?? 0,
-              }));
+              this.bufferListeners.get(msg.id)?.forEach((cb) =>
+                cb({
+                  data: msg.data ?? "",
+                  offset: msg.offset ?? 0,
+                }),
+              );
             }
             break;
 
@@ -594,38 +933,57 @@ export class WsTransport implements Transport {
               // Basic exit listener (backward-compatible)
               this.exitListeners.get(msg.id)?.forEach((cb) => cb(code));
               // Enhanced exit listener (includes restart metadata)
-              this.exitEnhancedListeners.get(msg.id)?.forEach((cb) => cb({
-                exitCode: code,
-                willRestart: msg.willRestart ?? false,
-                restartIn: msg.restartIn,
-                restartCount: msg.restartCount,
-              }));
+              this.exitEnhancedListeners.get(msg.id)?.forEach((cb) =>
+                cb({
+                  exitCode: code,
+                  willRestart: msg.willRestart ?? false,
+                  restartIn: msg.restartIn,
+                  restartCount: msg.restartCount,
+                }),
+              );
             }
             break;
 
           case "process:restarted":
             if (msg.id) {
-              this.restartListeners.get(msg.id)?.forEach((cb) => cb({
-                restartCount: msg.restartCount ?? 0,
-                previousExitCode: msg.previousExitCode !== undefined ? msg.previousExitCode : null,
-              }));
+              this.restartListeners.get(msg.id)?.forEach((cb) =>
+                cb({
+                  restartCount: msg.restartCount ?? 0,
+                  previousExitCode:
+                    msg.previousExitCode !== undefined
+                      ? msg.previousExitCode
+                      : null,
+                }),
+              );
             }
             // Fire generic terminal:changed for dashboard refresh
-            this.eventListeners.get("terminal:changed")?.forEach((cb) => cb({}));
+            this.eventListeners
+              .get("terminal:changed")
+              ?.forEach((cb) => cb({}));
             break;
 
           case "fs:overflow":
             if (msg.sub_id !== undefined) {
-              this.fsOverflowListeners.get(msg.sub_id)?.forEach((cb) => cb(msg.message ?? "FS event buffer overflow"));
+              this.fsOverflowListeners
+                .get(msg.sub_id)
+                ?.forEach((cb) =>
+                  cb(msg.message ?? "FS event buffer overflow"),
+                );
             }
             break;
 
           case "fs:tree_snapshot": {
-            const p = msg.req_id !== undefined ? this.pendingFsReqs.get(msg.req_id) : undefined;
+            const p =
+              msg.req_id !== undefined
+                ? this.pendingFsReqs.get(msg.req_id)
+                : undefined;
             if (p) {
               clearTimeout(p.timer);
               this.pendingFsReqs.delete(msg.req_id!);
-              p.resolve({ sub_id: msg.sub_id!, nodes: (msg.nodes ?? []) as ServerTreeNode[] });
+              p.resolve({
+                sub_id: msg.sub_id!,
+                nodes: (msg.nodes ?? []) as ServerTreeNode[],
+              });
             }
             break;
           }
@@ -638,14 +996,22 @@ export class WsTransport implements Transport {
               if (subscribeP) {
                 clearTimeout(subscribeP.timer);
                 this.pendingFsReqs.delete(reqId);
-                subscribeP.reject(new Error(`${msg.code ?? "FS_ERROR"}: ${msg.message ?? "unknown"}`));
+                subscribeP.reject(
+                  new Error(
+                    `${msg.code ?? "FS_ERROR"}: ${msg.message ?? "unknown"}`,
+                  ),
+                );
                 break;
               }
               const readP = this.pendingFsReads.get(reqId);
               if (readP) {
                 clearTimeout(readP.timer);
                 this.pendingFsReads.delete(reqId);
-                readP.resolve({ ok: false, code: msg.code ?? "FS_ERROR", message: msg.message });
+                readP.resolve({
+                  ok: false,
+                  code: msg.code ?? "FS_ERROR",
+                  message: msg.message,
+                });
                 break;
               }
             }
@@ -654,7 +1020,9 @@ export class WsTransport implements Transport {
 
           case "fs:event":
             if (msg.sub_id !== undefined && msg.event) {
-              this.fsEventListeners.get(msg.sub_id)?.forEach((cb) => cb(msg.event!));
+              this.fsEventListeners
+                .get(msg.sub_id)
+                ?.forEach((cb) => cb(msg.event!));
             }
             break;
 
@@ -685,7 +1053,11 @@ export class WsTransport implements Transport {
                 size: msg.size ?? 0,
               });
             } else {
-              p.resolve({ ok: false, code: msg.code ?? "FS_ERROR", message: msg.message });
+              p.resolve({
+                ok: false,
+                code: msg.code ?? "FS_ERROR",
+                message: msg.message,
+              });
             }
             break;
           }
@@ -723,7 +1095,11 @@ export class WsTransport implements Transport {
             } else if (msg.conflict) {
               p.resolve({ ok: false, conflict: true });
             } else {
-              p.resolve({ ok: false, conflict: false, error: msg.error ?? "write failed" });
+              p.resolve({
+                ok: false,
+                conflict: false,
+                error: msg.error ?? "write failed",
+              });
             }
             break;
           }
@@ -740,8 +1116,11 @@ export class WsTransport implements Transport {
           }
 
           case "fs:upload_begin_ok": {
-            const uploadId = (msg as unknown as { upload_id: string }).upload_id;
-            const p = uploadId ? this.pendingUploadBegin.get(uploadId) : undefined;
+            const uploadId = (msg as unknown as { upload_id: string })
+              .upload_id;
+            const p = uploadId
+              ? this.pendingUploadBegin.get(uploadId)
+              : undefined;
             if (!p) break;
             clearTimeout(p.timer);
             this.pendingUploadBegin.delete(uploadId);
@@ -750,7 +1129,8 @@ export class WsTransport implements Transport {
           }
 
           case "fs:upload_chunk_ack": {
-            const uploadId = (msg as unknown as { upload_id: string }).upload_id;
+            const uploadId = (msg as unknown as { upload_id: string })
+              .upload_id;
             const seq = (msg as unknown as { seq: number }).seq;
             const key = `${uploadId}:${seq}`;
             const p = this.pendingUploadChunks.get(key);
@@ -761,8 +1141,11 @@ export class WsTransport implements Transport {
           }
 
           case "fs:upload_result": {
-            const uploadId = (msg as unknown as { upload_id: string }).upload_id;
-            const p = uploadId ? this.pendingUploadCommit.get(uploadId) : undefined;
+            const uploadId = (msg as unknown as { upload_id: string })
+              .upload_id;
+            const p = uploadId
+              ? this.pendingUploadCommit.get(uploadId)
+              : undefined;
             if (!p) break;
             clearTimeout(p.timer);
             this.pendingUploadCommit.delete(uploadId);
@@ -782,7 +1165,8 @@ export class WsTransport implements Transport {
             clearTimeout(p.timer);
             this.pendingOpaqueRegStart.delete(reqId);
             if (msg.ok && msg.data) p.resolve(msg.data);
-            else p.reject(new Error(msg.error ?? "OPAQUE register_start failed"));
+            else
+              p.reject(new Error(msg.error ?? "OPAQUE register_start failed"));
             break;
           }
 
@@ -794,7 +1178,8 @@ export class WsTransport implements Transport {
             clearTimeout(p.timer);
             this.pendingOpaqueRegFinish.delete(reqId);
             if (msg.ok) p.resolve();
-            else p.reject(new Error(msg.error ?? "OPAQUE register_finish failed"));
+            else
+              p.reject(new Error(msg.error ?? "OPAQUE register_finish failed"));
             break;
           }
 
@@ -826,7 +1211,8 @@ export class WsTransport implements Transport {
           }
 
           case "fs:put_begin_ok": {
-            const uploadId = (msg as unknown as { upload_id: string }).upload_id;
+            const uploadId = (msg as unknown as { upload_id: string })
+              .upload_id;
             const p = uploadId ? this.pendingPutBegin.get(uploadId) : undefined;
             if (!p) break;
             clearTimeout(p.timer);
@@ -836,7 +1222,8 @@ export class WsTransport implements Transport {
           }
 
           case "fs:put_chunk_ack": {
-            const uploadId = (msg as unknown as { upload_id: string }).upload_id;
+            const uploadId = (msg as unknown as { upload_id: string })
+              .upload_id;
             const seq = (msg as unknown as { seq: number }).seq;
             const key = `${uploadId}:${seq}`;
             const p = this.pendingPutChunks.get(key);
@@ -847,8 +1234,11 @@ export class WsTransport implements Transport {
           }
 
           case "fs:put_result": {
-            const uploadId = (msg as unknown as { upload_id: string }).upload_id;
-            const p = uploadId ? this.pendingPutCommit.get(uploadId) : undefined;
+            const uploadId = (msg as unknown as { upload_id: string })
+              .upload_id;
+            const p = uploadId
+              ? this.pendingPutCommit.get(uploadId)
+              : undefined;
             if (!p) break;
             clearTimeout(p.timer);
             this.pendingPutCommit.delete(uploadId);
@@ -887,7 +1277,9 @@ export class WsTransport implements Transport {
 
     ws.onclose = () => {
       if (this.closed) return;
-      console.log(`[WsTransport] Disconnected — reconnecting in ${this.backoffMs}ms`);
+      console.log(
+        `[WsTransport] Disconnected — reconnecting in ${this.backoffMs}ms`,
+      );
       // Reject all pending promises immediately on disconnect. Callers receive an error
       // right away rather than waiting 15–60 s for timeouts. FS subscriptions (pendingFsReqs)
       // are also rejected — callers must re-subscribe after reconnect via fsSubscribeTree().
@@ -911,7 +1303,11 @@ export class WsTransport implements Transport {
     }, this.backoffMs);
   }
 
-  async invoke<T>(channel: string, data?: unknown, timeoutMs = 30000): Promise<T> {
+  async invoke<T>(
+    channel: string,
+    data?: unknown,
+    timeoutMs = 30000,
+  ): Promise<T> {
     const { method, url: relativeUrl, body } = channelToEndpoint(channel, data);
 
     const fullUrl = relativeUrl.startsWith("/")
@@ -942,7 +1338,9 @@ export class WsTransport implements Transport {
       const response = await fetch(fullUrl, init);
       clearTimeout(timeout);
       if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
+        const err = (await response
+          .json()
+          .catch(() => ({ error: response.statusText }))) as { error?: string };
         throw new Error(err.error ?? `HTTP ${response.status}`);
       }
       const ct = response.headers.get("content-type") ?? "";
@@ -952,7 +1350,7 @@ export class WsTransport implements Transport {
       return response.text() as unknown as T;
     } catch (error) {
       clearTimeout(timeout);
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (error instanceof Error && error.name === "AbortError") {
         throw new Error(`Request timeout after ${timeoutMs}ms`);
       }
       throw error;
@@ -965,40 +1363,53 @@ export class WsTransport implements Transport {
     return () => this.dataListeners.get(id)?.delete(cb);
   }
 
-  onTerminalExit(id: string, cb: (exitCode: number | null) => void): () => void {
+  onTerminalExit(
+    id: string,
+    cb: (exitCode: number | null) => void,
+  ): () => void {
     if (!this.exitListeners.has(id)) this.exitListeners.set(id, new Set());
     this.exitListeners.get(id)!.add(cb);
     return () => this.exitListeners.get(id)?.delete(cb);
   }
 
-  onTerminalExitEnhanced(id: string, cb: (exit: {
-    exitCode: number | null;
-    willRestart: boolean;
-    restartIn?: number;
-    restartCount?: number;
-  }) => void): () => void {
-    if (!this.exitEnhancedListeners.has(id)) this.exitEnhancedListeners.set(id, new Set());
+  onTerminalExitEnhanced(
+    id: string,
+    cb: (exit: {
+      exitCode: number | null;
+      willRestart: boolean;
+      restartIn?: number;
+      restartCount?: number;
+    }) => void,
+  ): () => void {
+    if (!this.exitEnhancedListeners.has(id))
+      this.exitEnhancedListeners.set(id, new Set());
     this.exitEnhancedListeners.get(id)!.add(cb);
     return () => this.exitEnhancedListeners.get(id)?.delete(cb);
   }
 
-  onProcessRestarted(id: string, cb: (restart: {
-    restartCount: number;
-    previousExitCode: number | null;
-  }) => void): () => void {
-    if (!this.restartListeners.has(id)) this.restartListeners.set(id, new Set());
+  onProcessRestarted(
+    id: string,
+    cb: (restart: {
+      restartCount: number;
+      previousExitCode: number | null;
+    }) => void,
+  ): () => void {
+    if (!this.restartListeners.has(id))
+      this.restartListeners.set(id, new Set());
     this.restartListeners.get(id)!.add(cb);
     return () => this.restartListeners.get(id)?.delete(cb);
   }
 
   onFsOverflow(sub_id: number, cb: (message: string) => void): () => void {
-    if (!this.fsOverflowListeners.has(sub_id)) this.fsOverflowListeners.set(sub_id, new Set());
+    if (!this.fsOverflowListeners.has(sub_id))
+      this.fsOverflowListeners.set(sub_id, new Set());
     this.fsOverflowListeners.get(sub_id)!.add(cb);
     return () => this.fsOverflowListeners.get(sub_id)?.delete(cb);
   }
 
   onEvent(channel: string, cb: (payload: unknown) => void): () => void {
-    if (!this.eventListeners.has(channel)) this.eventListeners.set(channel, new Set());
+    if (!this.eventListeners.has(channel))
+      this.eventListeners.set(channel, new Set());
     this.eventListeners.get(channel)!.add(cb as Callback);
     return () => this.eventListeners.get(channel)?.delete(cb as Callback);
   }
@@ -1017,15 +1428,20 @@ export class WsTransport implements Transport {
 
   terminalAttach(id: string, fromOffset?: number): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({
-        kind: "terminal:attach",
-        id,
-        from_offset: fromOffset ?? null,
-      }));
+      this.ws.send(
+        JSON.stringify({
+          kind: "terminal:attach",
+          id,
+          from_offset: fromOffset ?? null,
+        }),
+      );
     }
   }
 
-  onTerminalBuffer(id: string, cb: (buffer: { data: string; offset: number }) => void): () => void {
+  onTerminalBuffer(
+    id: string,
+    cb: (buffer: { data: string; offset: number }) => void,
+  ): () => void {
     if (!this.bufferListeners.has(id)) this.bufferListeners.set(id, new Set());
     this.bufferListeners.get(id)!.add(cb);
     return () => this.bufferListeners.get(id)?.delete(cb);
@@ -1033,7 +1449,10 @@ export class WsTransport implements Transport {
 
   // ── FS subscription methods ───────────────────────────────────────────────
 
-  fsSubscribeTree(project: string, path: string): Promise<{ sub_id: number; nodes: ServerTreeNode[] }> {
+  fsSubscribeTree(
+    project: string,
+    path: string,
+  ): Promise<{ sub_id: number; nodes: ServerTreeNode[] }> {
     return new Promise((resolve, reject) => {
       const req_id = this.nextReqId++;
       const timer = setTimeout(() => {
@@ -1042,7 +1461,9 @@ export class WsTransport implements Transport {
       }, FS_REQ_TIMEOUT_MS);
       this.pendingFsReqs.set(req_id, { resolve, reject, timer });
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ kind: "fs:subscribe_tree", req_id, project, path }));
+        this.ws.send(
+          JSON.stringify({ kind: "fs:subscribe_tree", req_id, project, path }),
+        );
       } else {
         clearTimeout(timer);
         this.pendingFsReqs.delete(req_id);
@@ -1059,7 +1480,8 @@ export class WsTransport implements Transport {
   }
 
   onFsEvent(sub_id: number, cb: (ev: FsEventDto) => void): () => void {
-    if (!this.fsEventListeners.has(sub_id)) this.fsEventListeners.set(sub_id, new Set());
+    if (!this.fsEventListeners.has(sub_id))
+      this.fsEventListeners.set(sub_id, new Set());
     this.fsEventListeners.get(sub_id)!.add(cb);
     return () => this.fsEventListeners.get(sub_id)?.delete(cb);
   }
@@ -1079,14 +1501,16 @@ export class WsTransport implements Transport {
       }, FS_REQ_TIMEOUT_MS);
       this.pendingFsReads.set(req_id, { resolve, reject, timer });
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({
-          kind: "fs:read",
-          req_id,
-          project,
-          path,
-          offset: opts?.offset,
-          len: opts?.len,
-        }));
+        this.ws.send(
+          JSON.stringify({
+            kind: "fs:read",
+            req_id,
+            project,
+            path,
+            offset: opts?.offset,
+            len: opts?.len,
+          }),
+        );
       } else {
         clearTimeout(timer);
         this.pendingFsReads.delete(req_id);
@@ -1115,7 +1539,13 @@ export class WsTransport implements Transport {
     const size = bytes.length;
 
     // 1. write_begin → get write_id (using binary encoding)
-    const writeId = await this.sendWriteBegin(project, path, expectedMtime, size, "binary");
+    const writeId = await this.sendWriteBegin(
+      project,
+      path,
+      expectedMtime,
+      size,
+      "binary",
+    );
 
     // 2. Chunk the content and send each chunk as binary
     let seq = 0;
@@ -1162,15 +1592,17 @@ export class WsTransport implements Transport {
       }, FS_REQ_TIMEOUT_MS);
       this.pendingWriteBegin.set(req_id, { resolve, reject, timer });
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({
-          kind: "fs:write_begin",
-          req_id,
-          project,
-          path,
-          expected_mtime: expectedMtime,
-          size,
-          encoding,
-        }));
+        this.ws.send(
+          JSON.stringify({
+            kind: "fs:write_begin",
+            req_id,
+            project,
+            path,
+            expected_mtime: expectedMtime,
+            size,
+            encoding,
+          }),
+        );
       } else {
         clearTimeout(timer);
         this.pendingWriteBegin.delete(req_id);
@@ -1189,14 +1621,30 @@ export class WsTransport implements Transport {
       const key = `${writeId}:${seq}`;
       const timer = setTimeout(() => {
         this.pendingWriteChunks.delete(key);
-        reject(new Error(`chunk ack timeout (write_id=${writeId}, seq=${seq})`));
+        reject(
+          new Error(`chunk ack timeout (write_id=${writeId}, seq=${seq})`),
+        );
       }, 30_000);
       this.pendingWriteChunks.set(key, {
-        resolve: () => { clearTimeout(timer); resolve(); },
-        reject: (e) => { clearTimeout(timer); reject(e); },
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
       });
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ kind: "fs:write_chunk", write_id: writeId, seq, eof, data }));
+        this.ws.send(
+          JSON.stringify({
+            kind: "fs:write_chunk",
+            write_id: writeId,
+            seq,
+            eof,
+            data,
+          }),
+        );
       } else {
         clearTimeout(timer);
         this.pendingWriteChunks.delete(key);
@@ -1214,15 +1662,31 @@ export class WsTransport implements Transport {
       const key = `${writeId}:${seq}`;
       const timer = setTimeout(() => {
         this.pendingWriteChunks.delete(key);
-        reject(new Error(`binary chunk ack timeout (write_id=${writeId}, seq=${seq})`));
+        reject(
+          new Error(
+            `binary chunk ack timeout (write_id=${writeId}, seq=${seq})`,
+          ),
+        );
       }, 30_000);
       this.pendingWriteChunks.set(key, {
-        resolve: () => { clearTimeout(timer); resolve(); },
-        reject: (e) => { clearTimeout(timer); reject(e); },
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
       });
       if (this.ws?.readyState === WebSocket.OPEN) {
         // JSON header first, then binary frame
-        this.ws.send(JSON.stringify({ kind: "fs:write_chunk_binary", write_id: writeId, seq }));
+        this.ws.send(
+          JSON.stringify({
+            kind: "fs:write_chunk_binary",
+            write_id: writeId,
+            seq,
+          }),
+        );
         this.ws.send(data.buffer);
       } else {
         clearTimeout(timer);
@@ -1240,7 +1704,9 @@ export class WsTransport implements Transport {
       }, 30_000); // longer timeout for commit (fsync may be slow)
       this.pendingWriteCommit.set(writeId, { resolve, reject, timer });
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ kind: "fs:write_commit", write_id: writeId }));
+        this.ws.send(
+          JSON.stringify({ kind: "fs:write_commit", write_id: writeId }),
+        );
       } else {
         clearTimeout(timer);
         this.pendingWriteCommit.delete(writeId);
@@ -1253,7 +1719,12 @@ export class WsTransport implements Transport {
 
   fsOp(
     op: "create_file" | "create_dir" | "rename" | "delete" | "move",
-    params: { project: string; path: string; newPath?: string; forceGit?: boolean },
+    params: {
+      project: string;
+      path: string;
+      newPath?: string;
+      forceGit?: boolean;
+    },
   ): Promise<FsOpResult> {
     return new Promise((resolve, reject) => {
       const req_id = this.nextReqId++;
@@ -1263,15 +1734,17 @@ export class WsTransport implements Transport {
       }, FS_REQ_TIMEOUT_MS);
       this.pendingFsOps.set(req_id, { resolve, reject, timer });
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({
-          kind: "fs:op",
-          req_id,
-          op,
-          project: params.project,
-          path: params.path,
-          new_path: params.newPath,
-          force_git: params.forceGit ?? false,
-        }));
+        this.ws.send(
+          JSON.stringify({
+            kind: "fs:op",
+            req_id,
+            op,
+            project: params.project,
+            path: params.path,
+            new_path: params.newPath,
+            force_git: params.forceGit ?? false,
+          }),
+        );
       } else {
         clearTimeout(timer);
         this.pendingFsOps.delete(req_id);
@@ -1321,7 +1794,11 @@ export class WsTransport implements Transport {
         const ack = this.sendUploadChunk(uploadId, currentSeq, slice);
         inFlight.push(ack);
         bytesSent += slice.byteLength;
-        onProgress?.(file.size > 0 ? Math.min(99, Math.round((bytesSent / file.size) * 100)) : 50);
+        onProgress?.(
+          file.size > 0
+            ? Math.min(99, Math.round((bytesSent / file.size) * 100))
+            : 50,
+        );
 
         if (inFlight.length >= IN_FLIGHT) {
           await inFlight.shift()!;
@@ -1353,15 +1830,17 @@ export class WsTransport implements Transport {
       }, FS_REQ_TIMEOUT_MS);
       this.pendingUploadBegin.set(uploadId, { resolve, reject, timer });
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({
-          kind: "fs:upload_begin",
-          req_id,
-          upload_id: uploadId,
-          project,
-          dir,
-          filename,
-          len,
-        }));
+        this.ws.send(
+          JSON.stringify({
+            kind: "fs:upload_begin",
+            req_id,
+            upload_id: uploadId,
+            project,
+            dir,
+            filename,
+            len,
+          }),
+        );
       } else {
         clearTimeout(timer);
         this.pendingUploadBegin.delete(uploadId);
@@ -1370,20 +1849,36 @@ export class WsTransport implements Transport {
     });
   }
 
-  private sendUploadChunk(uploadId: string, seq: number, data: Uint8Array): Promise<void> {
+  private sendUploadChunk(
+    uploadId: string,
+    seq: number,
+    data: Uint8Array,
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       const key = `${uploadId}:${seq}`;
       const timer = setTimeout(() => {
         this.pendingUploadChunks.delete(key);
-        reject(new Error(`upload chunk ack timeout (upload_id=${uploadId}, seq=${seq})`));
+        reject(
+          new Error(
+            `upload chunk ack timeout (upload_id=${uploadId}, seq=${seq})`,
+          ),
+        );
       }, 30_000);
       this.pendingUploadChunks.set(key, {
-        resolve: () => { clearTimeout(timer); resolve(); },
-        reject: (e) => { clearTimeout(timer); reject(e); },
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
       });
       if (this.ws?.readyState === WebSocket.OPEN) {
         // JSON header first, then binary frame
-        this.ws.send(JSON.stringify({ kind: "fs:upload_chunk", upload_id: uploadId, seq }));
+        this.ws.send(
+          JSON.stringify({ kind: "fs:upload_chunk", upload_id: uploadId, seq }),
+        );
         this.ws.send(data.buffer);
       } else {
         clearTimeout(timer);
@@ -1393,7 +1888,10 @@ export class WsTransport implements Transport {
     });
   }
 
-  private sendUploadCommit(req_id: number, uploadId: string): Promise<FsUploadResult> {
+  private sendUploadCommit(
+    req_id: number,
+    uploadId: string,
+  ): Promise<FsUploadResult> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingUploadCommit.delete(uploadId);
@@ -1401,7 +1899,13 @@ export class WsTransport implements Transport {
       }, 60_000);
       this.pendingUploadCommit.set(uploadId, { resolve, reject, timer });
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ kind: "fs:upload_commit", req_id, upload_id: uploadId }));
+        this.ws.send(
+          JSON.stringify({
+            kind: "fs:upload_commit",
+            req_id,
+            upload_id: uploadId,
+          }),
+        );
       } else {
         clearTimeout(timer);
         this.pendingUploadCommit.delete(uploadId);
@@ -1422,7 +1926,14 @@ export class WsTransport implements Transport {
       }, AUTH_TIMEOUT_MS);
       this.pendingOpaqueRegStart.set(req_id, { resolve, reject, timer });
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ kind: "auth:register_start", req_id, identifier, data }));
+        this.ws.send(
+          JSON.stringify({
+            kind: "auth:register_start",
+            req_id,
+            identifier,
+            data,
+          }),
+        );
       } else {
         clearTimeout(timer);
         this.pendingOpaqueRegStart.delete(req_id);
@@ -1433,7 +1944,11 @@ export class WsTransport implements Transport {
 
   /** Send auth:register_finish to complete OPAQUE registration.
    *  Pass overwrite=true to allow re-registration (in-memory ephemeral model). */
-  authRegisterFinish(identifier: string, data: string, overwrite = false): Promise<void> {
+  authRegisterFinish(
+    identifier: string,
+    data: string,
+    overwrite = false,
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       const req_id = this.nextReqId++;
       const timer = setTimeout(() => {
@@ -1442,7 +1957,15 @@ export class WsTransport implements Transport {
       }, AUTH_TIMEOUT_MS);
       this.pendingOpaqueRegFinish.set(req_id, { resolve, reject, timer });
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ kind: "auth:register_finish", req_id, identifier, data, overwrite }));
+        this.ws.send(
+          JSON.stringify({
+            kind: "auth:register_finish",
+            req_id,
+            identifier,
+            data,
+            overwrite,
+          }),
+        );
       } else {
         clearTimeout(timer);
         this.pendingOpaqueRegFinish.delete(req_id);
@@ -1452,7 +1975,10 @@ export class WsTransport implements Transport {
   }
 
   /** Send auth:login_start and return { session_id, data } (CredentialResponse base64). */
-  authLoginStart(identifier: string, data: string): Promise<{ session_id: string; data: string }> {
+  authLoginStart(
+    identifier: string,
+    data: string,
+  ): Promise<{ session_id: string; data: string }> {
     return new Promise((resolve, reject) => {
       const req_id = this.nextReqId++;
       const timer = setTimeout(() => {
@@ -1461,7 +1987,14 @@ export class WsTransport implements Transport {
       }, AUTH_TIMEOUT_MS);
       this.pendingOpaqueLoginStart.set(req_id, { resolve, reject, timer });
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ kind: "auth:login_start", req_id, identifier, data }));
+        this.ws.send(
+          JSON.stringify({
+            kind: "auth:login_start",
+            req_id,
+            identifier,
+            data,
+          }),
+        );
       } else {
         clearTimeout(timer);
         this.pendingOpaqueLoginStart.delete(req_id);
@@ -1485,7 +2018,14 @@ export class WsTransport implements Transport {
       }, AUTH_TIMEOUT_MS);
       this.pendingOpaqueLoginFinish.set(req_id, { resolve, reject, timer });
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ kind: "auth:login_finish", req_id, session_id, data }));
+        this.ws.send(
+          JSON.stringify({
+            kind: "auth:login_finish",
+            req_id,
+            session_id,
+            data,
+          }),
+        );
       } else {
         clearTimeout(timer);
         this.pendingOpaqueLoginFinish.delete(req_id);
@@ -1520,7 +2060,14 @@ export class WsTransport implements Transport {
     const IN_FLIGHT = 4;
 
     // 1. Begin
-    await this.sendPutBegin(uploadId, sessionId, project, dir, file.name, file.size);
+    await this.sendPutBegin(
+      uploadId,
+      sessionId,
+      project,
+      dir,
+      file.name,
+      file.size,
+    );
 
     // 2. Chunk loop — reads the already-encrypted Blob
     const reader = file.stream().getReader();
@@ -1541,7 +2088,11 @@ export class WsTransport implements Transport {
         const ack = this.sendPutChunk(uploadId, currentSeq, slice);
         inFlight.push(ack);
         bytesSent += slice.byteLength;
-        onProgress?.(file.size > 0 ? Math.min(99, Math.round((bytesSent / file.size) * 100)) : 50);
+        onProgress?.(
+          file.size > 0
+            ? Math.min(99, Math.round((bytesSent / file.size) * 100))
+            : 50,
+        );
 
         if (inFlight.length >= IN_FLIGHT) {
           await inFlight.shift()!;
@@ -1585,7 +2136,15 @@ export class WsTransport implements Transport {
       this.pendingPutSave.set(req_id, { resolve, reject, timer });
       if (this.ws?.readyState === WebSocket.OPEN) {
         // JSON header first, then binary frame
-        this.ws.send(JSON.stringify({ kind: "fs:put_save", req_id, session_id: sessionId, project, path }));
+        this.ws.send(
+          JSON.stringify({
+            kind: "fs:put_save",
+            req_id,
+            session_id: sessionId,
+            project,
+            path,
+          }),
+        );
         this.ws.send(data.buffer);
       } else {
         clearTimeout(timer);
@@ -1611,16 +2170,18 @@ export class WsTransport implements Transport {
       }, FS_REQ_TIMEOUT_MS);
       this.pendingPutBegin.set(uploadId, { resolve, reject, timer });
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({
-          kind: "fs:put_begin",
-          req_id,
-          upload_id: uploadId,
-          session_id: sessionId,
-          project,
-          dir,
-          filename,
-          len,
-        }));
+        this.ws.send(
+          JSON.stringify({
+            kind: "fs:put_begin",
+            req_id,
+            upload_id: uploadId,
+            session_id: sessionId,
+            project,
+            dir,
+            filename,
+            len,
+          }),
+        );
       } else {
         clearTimeout(timer);
         this.pendingPutBegin.delete(uploadId);
@@ -1629,19 +2190,35 @@ export class WsTransport implements Transport {
     });
   }
 
-  private sendPutChunk(uploadId: string, seq: number, data: Uint8Array): Promise<void> {
+  private sendPutChunk(
+    uploadId: string,
+    seq: number,
+    data: Uint8Array,
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       const key = `${uploadId}:${seq}`;
       const timer = setTimeout(() => {
         this.pendingPutChunks.delete(key);
-        reject(new Error(`enc put chunk ack timeout (upload_id=${uploadId}, seq=${seq})`));
+        reject(
+          new Error(
+            `enc put chunk ack timeout (upload_id=${uploadId}, seq=${seq})`,
+          ),
+        );
       }, 30_000);
       this.pendingPutChunks.set(key, {
-        resolve: () => { clearTimeout(timer); resolve(); },
-        reject: (e) => { clearTimeout(timer); reject(e); },
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
       });
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ kind: "fs:put_chunk", upload_id: uploadId, seq }));
+        this.ws.send(
+          JSON.stringify({ kind: "fs:put_chunk", upload_id: uploadId, seq }),
+        );
         this.ws.send(data.buffer);
       } else {
         clearTimeout(timer);
@@ -1651,7 +2228,10 @@ export class WsTransport implements Transport {
     });
   }
 
-  private sendPutCommit(req_id: number, uploadId: string): Promise<FsPutResult> {
+  private sendPutCommit(
+    req_id: number,
+    uploadId: string,
+  ): Promise<FsPutResult> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingPutCommit.delete(uploadId);
@@ -1659,7 +2239,13 @@ export class WsTransport implements Transport {
       }, 60_000);
       this.pendingPutCommit.set(uploadId, { resolve, reject, timer });
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ kind: "fs:put_commit", req_id, upload_id: uploadId }));
+        this.ws.send(
+          JSON.stringify({
+            kind: "fs:put_commit",
+            req_id,
+            upload_id: uploadId,
+          }),
+        );
       } else {
         clearTimeout(timer);
         this.pendingPutCommit.delete(uploadId);

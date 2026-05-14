@@ -42,7 +42,10 @@ export function SettingsPage() {
     } catch (err) {
       setClearErr(err instanceof Error ? err.message : String(err));
     }
-    setTimeout(() => { setClearMsg(null); setClearErr(null); }, 4000);
+    setTimeout(() => {
+      setClearMsg(null);
+      setClearErr(null);
+    }, 4000);
   }
 
   async function handleNuclearReset() {
@@ -64,11 +67,18 @@ export function SettingsPage() {
     setExportErr(null);
     try {
       const result = await exportSettings.mutateAsync();
-      setExportMsg(result.exported ? `Exported → ${result.path ?? "saved"}` : "Export cancelled.");
+      setExportMsg(
+        result.exported
+          ? `Exported → ${result.path ?? "saved"}`
+          : "Export cancelled.",
+      );
     } catch (err) {
       setExportErr(err instanceof Error ? err.message : String(err));
     }
-    setTimeout(() => { setExportMsg(null); setExportErr(null); }, 5000);
+    setTimeout(() => {
+      setExportMsg(null);
+      setExportErr(null);
+    }, 5000);
   }
 
   async function handleImport() {

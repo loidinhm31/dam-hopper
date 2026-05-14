@@ -7,13 +7,12 @@ interface SidebarBottomGroupProps {
   style?: React.CSSProperties;
 }
 
-export function SidebarBottomGroup({ tool, onClose, style }: SidebarBottomGroupProps) {
+export function SidebarBottomGroup({
+  tool,
+  onClose,
+  style,
+}: SidebarBottomGroupProps) {
   return (
-    <ToolPanel
-      tool={tool}
-      onClose={onClose}
-      style={style}
-      className="flex-1"
-    />
+    <ToolPanel tool={tool} onClose={onClose} style={style} className="flex-1" />
   );
 }

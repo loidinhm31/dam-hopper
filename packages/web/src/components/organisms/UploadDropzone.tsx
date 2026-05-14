@@ -16,7 +16,13 @@ interface Props {
  * Wraps the file tree panel with drag-and-drop upload support.
  * A hidden file input enables click-triggered upload from the context menu.
  */
-export function UploadDropzone({ children, onDrop, currentDir, progress, className }: Props) {
+export function UploadDropzone({
+  children,
+  onDrop,
+  currentDir,
+  progress,
+  className,
+}: Props) {
   const [dragging, setDragging] = useState(false);
 
   const handleDragOver = useCallback((e: DragEvent) => {
@@ -52,7 +58,9 @@ export function UploadDropzone({ children, onDrop, currentDir, progress, classNa
       {dragging && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 rounded-sm border-2 border-dashed border-[var(--color-primary)] bg-[var(--color-primary)]/10 pointer-events-none">
           <Upload className="h-6 w-6 text-[var(--color-primary)]" />
-          <span className="text-xs text-[var(--color-primary)] font-medium">Drop to upload</span>
+          <span className="text-xs text-[var(--color-primary)] font-medium">
+            Drop to upload
+          </span>
         </div>
       )}
 
@@ -63,7 +71,9 @@ export function UploadDropzone({ children, onDrop, currentDir, progress, classNa
             <span className="text-[10px] text-[var(--color-text-muted)] truncate max-w-[140px]">
               {progress.filename}
             </span>
-            <span className="text-[10px] text-[var(--color-text-muted)]">{progress.pct}%</span>
+            <span className="text-[10px] text-[var(--color-text-muted)]">
+              {progress.pct}%
+            </span>
           </div>
           <div className="h-1 bg-[var(--color-surface-2)] rounded-full overflow-hidden">
             <div

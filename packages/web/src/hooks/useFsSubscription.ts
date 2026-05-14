@@ -2,7 +2,12 @@ import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
-import type { FsArborNode, ServerTreeNode, FsEventDto, FsTreeData } from "@/api/fs-types.js";
+import type {
+  FsArborNode,
+  ServerTreeNode,
+  FsEventDto,
+  FsTreeData,
+} from "@/api/fs-types.js";
 import { api } from "@/api/client.js";
 
 // ---------------------------------------------------------------------------
@@ -30,12 +35,18 @@ export function applyFsDelta(
     case "remove": {
       const idx = data.nodes.findIndex((n) => n.name === basename);
       if (idx === -1) return data; // already gone, no-op
-      return { ...data, nodes: [...data.nodes.slice(0, idx), ...data.nodes.slice(idx + 1)] };
+      return {
+        ...data,
+        nodes: [...data.nodes.slice(0, idx), ...data.nodes.slice(idx + 1)],
+      };
     }
     case "modify": {
       const idx = data.nodes.findIndex((n) => n.name === basename);
       if (idx === -1) return data;
-      const updated: FsArborNode = { ...data.nodes[idx], mtime: Math.floor(Date.now() / 1000) };
+      const updated: FsArborNode = {
+        ...data.nodes[idx],
+        mtime: Math.floor(Date.now() / 1000),
+      };
       const nodes = [...data.nodes];
       nodes[idx] = updated;
       return { ...data, nodes };
@@ -77,7 +88,10 @@ export function useFsSubscription(project: string, path: string) {
         return { sub_id, nodes: result.nodes.map(serverNodeToArbor) };
       } catch (e) {
         // Clean up server-side subscription on any failure after subscribe succeeded.
-        if (sub_id !== undefined && !(e instanceof DOMException && e.name === "AbortError")) {
+        if (
+          sub_id !== undefined &&
+          !(e instanceof DOMException && e.name === "AbortError")
+        ) {
           t.fsUnsubscribeTree(sub_id);
         }
         throw e;
@@ -108,21 +122,24 @@ export function useFsSubscription(project: string, path: string) {
       off();
       (getTransport() as WsTransport).fsUnsubscribeTree(subId);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subId, project, path, qc]);
 
   /** Load children for a dir node and splice them into the cached tree. */
   async function loadChildren(nodeId: string) {
     const resp = await api.fs.list(project, nodeId);
-    const children = resp.entries.map((e) => ({
-      id: nodeId + "/" + e.name,
-      name: e.name,
-      kind: e.kind,
-      size: e.size,
-      mtime: e.mtime,
-      isSymlink: e.isSymlink,
-      children: e.kind === "dir" ? null : undefined,
-    } as FsArborNode));
+    const children = resp.entries.map(
+      (e) =>
+        ({
+          id: nodeId + "/" + e.name,
+          name: e.name,
+          kind: e.kind,
+          size: e.size,
+          mtime: e.mtime,
+          isSymlink: e.isSymlink,
+          children: e.kind === "dir" ? null : undefined,
+        }) as FsArborNode,
+    );
 
     qc.setQueryData<FsTreeData>(["fs-tree", project, path], (prev) => {
       if (!prev) return prev;
@@ -145,7 +162,7 @@ function serverNodeToArbor(n: ServerTreeNode): FsArborNode {
     size: n.size,
     mtime: n.mtime,
     isSymlink: n.isSymlink,
-    children: n.kind === "dir" ? null : undefined as unknown as null,
+    children: n.kind === "dir" ? null : (undefined as unknown as null),
   };
 }
 
