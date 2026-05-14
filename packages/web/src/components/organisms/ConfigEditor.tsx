@@ -40,6 +40,49 @@ const PROJECT_TYPES = [
   "custom",
 ] as const;
 
+interface CommandRowIdState {
+  ids: Record<string, string>;
+  nextId: number;
+}
+
+export function createCommandRowIdState(): CommandRowIdState {
+  return { ids: {}, nextId: 0 };
+}
+
+export function ensureCommandRowId(state: CommandRowIdState, key: string) {
+  const existingId = state.ids[key];
+  if (existingId) {
+    return { id: existingId, state };
+  }
+
+  const nextId = `command-row-${state.nextId}`;
+  return {
+    id: nextId,
+    state: {
+      ids: { ...state.ids, [key]: nextId },
+      nextId: state.nextId + 1,
+    },
+  };
+}
+
+export function renameCommandRowId(
+  state: CommandRowIdState,
+  oldKey: string,
+  newKey: string,
+) {
+  const ensured = ensureCommandRowId(state, oldKey);
+  const nextIds = { ...ensured.state.ids };
+  delete nextIds[oldKey];
+  nextIds[newKey] = ensured.id;
+  return { ids: nextIds, nextId: ensured.state.nextId };
+}
+
+export function removeCommandRowId(state: CommandRowIdState, key: string) {
+  const nextIds = { ...state.ids };
+  delete nextIds[key];
+  return { ids: nextIds, nextId: state.nextId };
+}
+
 // ── ServiceForm ──────────────────────────────────────────────────────────
 
 function ServiceForm({
@@ -110,7 +153,7 @@ function ServiceForm({
 
 // ── CommandsForm ─────────────────────────────────────────────────────────
 
-function CommandsForm({
+export function CommandsForm({
   commands,
   onChange,
   disabled,
@@ -120,8 +163,20 @@ function CommandsForm({
   disabled?: boolean;
 }) {
   const entries = Object.entries(commands);
+  const commandRowIdsRef = useRef(createCommandRowIdState());
+
+  function getCommandRowId(key: string) {
+    const ensured = ensureCommandRowId(commandRowIdsRef.current, key);
+    commandRowIdsRef.current = ensured.state;
+    return ensured.id;
+  }
 
   function updateKey(oldKey: string, newKey: string) {
+    commandRowIdsRef.current = renameCommandRowId(
+      commandRowIdsRef.current,
+      oldKey,
+      newKey,
+    );
     const next: Record<string, string> = {};
     for (const [k, v] of Object.entries(commands)) {
       next[k === oldKey ? newKey : k] = v;
@@ -134,6 +189,7 @@ function CommandsForm({
   }
 
   function remove(key: string) {
+    commandRowIdsRef.current = removeCommandRowId(commandRowIdsRef.current, key);
     const next = { ...commands };
     delete next[key];
     onChange(next);
@@ -143,13 +199,15 @@ function CommandsForm({
     // Generate a unique key that doesn't already exist
     let i = entries.length + 1;
     while (`cmd${i}` in commands) i++;
-    onChange({ ...commands, [`cmd${i}`]: "" });
+    const newKey = `cmd${i}`;
+    getCommandRowId(newKey);
+    onChange({ ...commands, [newKey]: "" });
   }
 
   return (
     <div className="space-y-2">
       {entries.map(([key, value]) => (
-        <div key={key} className="flex items-center gap-2">
+        <div key={getCommandRowId(key)} className="flex items-center gap-2">
           <input
             className={inputClass}
             value={key}
