@@ -23,9 +23,13 @@ export function OverviewCard({
         >
           <Icon className="h-3.5 w-3.5" style={{ color }} />
         </div>
-        <span className="text-[10px] text-[var(--color-text-muted)]/50 tracking-widest">{"{}"}</span>
+        <span className="text-[10px] text-[var(--color-text-muted)]/50 tracking-widest">
+          {"{}"}
+        </span>
       </div>
-      <p className="text-2xl font-bold tabular-nums" style={{ color }}>{value}</p>
+      <p className="text-2xl font-bold tabular-nums" style={{ color }}>
+        {value}
+      </p>
       <p className="text-[10px] text-[var(--color-text-muted)] tracking-widest uppercase mt-0.5">
         // {slug}
       </p>

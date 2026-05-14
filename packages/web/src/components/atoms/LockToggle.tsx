@@ -16,8 +16,13 @@ interface LockToggleProps {
 }
 
 export function LockToggle({ project, className = "" }: LockToggleProps) {
-  const { isEncryptEnabled, setEncryptEnabled, getPassphrase, promptPassphrase, setPassphrase } =
-    useEncryptMode();
+  const {
+    isEncryptEnabled,
+    setEncryptEnabled,
+    getPassphrase,
+    promptPassphrase,
+    setPassphrase,
+  } = useEncryptMode();
 
   const enabled = isEncryptEnabled(project);
 
@@ -41,20 +46,34 @@ export function LockToggle({ project, className = "" }: LockToggleProps) {
     } catch {
       // User cancelled prompt — don't enable
     }
-  }, [enabled, project, setEncryptEnabled, getPassphrase, promptPassphrase, setPassphrase]);
+  }, [
+    enabled,
+    project,
+    setEncryptEnabled,
+    getPassphrase,
+    promptPassphrase,
+    setPassphrase,
+  ]);
 
   return (
     <button
       id={`lock-toggle-${project}`}
       type="button"
       onClick={handleToggle}
-      title={enabled ? "Encrypted mode ON — click to disable" : "Enable encrypted uploads (Lock mode)"}
+      title={
+        enabled
+          ? "Encrypted mode ON — click to disable"
+          : "Enable encrypted uploads (Lock mode)"
+      }
       aria-pressed={enabled}
       aria-label={enabled ? "Disable encrypted mode" : "Enable encrypted mode"}
       className={`lock-toggle ${enabled ? "lock-toggle--active" : ""} ${className}`}
     >
       {enabled ? (
-        <Shield size={16} className="lock-toggle__icon lock-toggle__icon--active" />
+        <Shield
+          size={16}
+          className="lock-toggle__icon lock-toggle__icon--active"
+        />
       ) : (
         <ShieldOff size={16} className="lock-toggle__icon" />
       )}

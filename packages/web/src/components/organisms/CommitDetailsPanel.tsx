@@ -10,31 +10,44 @@ interface CommitDetailsPanelProps {
   onFileDoubleClick: (file: DiffFileEntry) => void;
 }
 
-export function CommitDetailsPanel({ project, commit, onClose, onFileDoubleClick }: CommitDetailsPanelProps) {
+export function CommitDetailsPanel({
+  project,
+  commit,
+  onClose,
+  onFileDoubleClick,
+}: CommitDetailsPanelProps) {
   const { data: files, isLoading } = useGitCommitFiles(project, commit.hash);
 
   return (
     <div className="flex flex-col h-full bg-[var(--color-surface)] border-l border-[var(--color-border)] overflow-hidden animate-in slide-in-from-right duration-200">
       <div className="shrink-0 flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-2)]">
         <div className="flex flex-col min-w-0">
-          <span className="text-[11px] font-bold text-[var(--color-text)] truncate pr-2" title={commit.message}>
+          <span
+            className="text-[11px] font-bold text-[var(--color-text)] truncate pr-2"
+            title={commit.message}
+          >
             {commit.message}
           </span>
           <div className="flex items-center gap-1.5 mt-0.5">
             <span className="text-[10px] text-[var(--color-text-muted)] truncate">
               {commit.authorName}
             </span>
-            <span className="text-[10px] text-[var(--color-text-muted)]/40">•</span>
+            <span className="text-[10px] text-[var(--color-text-muted)]/40">
+              •
+            </span>
             <span className="text-[10px] text-[var(--color-text-muted)]">
-              {new Date(commit.timestamp * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+              {new Date(commit.timestamp * 1000).toLocaleString(undefined, {
+                dateStyle: "medium",
+                timeStyle: "short",
+              })}
             </span>
             <span className="text-[10px] font-mono text-[var(--color-text-muted)] bg-[var(--color-background)] px-1 rounded ml-1">
               {commit.hash.substring(0, 7)}
             </span>
           </div>
         </div>
-        <button 
-          onClick={onClose} 
+        <button
+          onClick={onClose}
           className="shrink-0 p-1 hover:bg-[var(--color-surface)] rounded transition-colors text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
         >
           <X className="w-3.5 h-3.5" />
@@ -66,8 +79,12 @@ export function CommitDetailsPanel({ project, commit, onClose, onFileDoubleClick
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5 text-[10px] font-mono shrink-0 opacity-80 group-hover:opacity-100">
-                  {file.additions > 0 && <span className="text-emerald-500">+{file.additions}</span>}
-                  {file.deletions > 0 && <span className="text-rose-500">-{file.deletions}</span>}
+                  {file.additions > 0 && (
+                    <span className="text-emerald-500">+{file.additions}</span>
+                  )}
+                  {file.deletions > 0 && (
+                    <span className="text-rose-500">-{file.deletions}</span>
+                  )}
                 </div>
               </div>
             ))}
@@ -84,20 +101,31 @@ export function CommitDetailsPanel({ project, commit, onClose, onFileDoubleClick
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const color = 
-    status === "added" ? "text-emerald-500" : 
-    status === "deleted" ? "text-rose-500" : 
-    status === "renamed" ? "text-blue-500" : 
-    "text-amber-500";
-    
-  const char = 
-    status === "added" ? "A" : 
-    status === "deleted" ? "D" : 
-    status === "renamed" ? "R" : 
-    "M";
+  const color =
+    status === "added"
+      ? "text-emerald-500"
+      : status === "deleted"
+        ? "text-rose-500"
+        : status === "renamed"
+          ? "text-blue-500"
+          : "text-amber-500";
+
+  const char =
+    status === "added"
+      ? "A"
+      : status === "deleted"
+        ? "D"
+        : status === "renamed"
+          ? "R"
+          : "M";
 
   return (
-    <span className={cn("w-3.5 h-3.5 flex items-center justify-center text-[9px] font-black rounded-[2px] border border-current opacity-70", color)}>
+    <span
+      className={cn(
+        "w-3.5 h-3.5 flex items-center justify-center text-[9px] font-black rounded-[2px] border border-current opacity-70",
+        color,
+      )}
+    >
       {char}
     </span>
   );

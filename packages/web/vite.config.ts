@@ -4,7 +4,9 @@ import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const backend = env.VITE_DAM_HOPPER_SERVER_URL?.replace(/\/$/, "") || "http://127.0.0.1:4800";
+  const backend =
+    env.VITE_DAM_HOPPER_SERVER_URL?.replace(/\/$/, "") ||
+    "http://127.0.0.1:4800";
 
   return {
     base: "./",

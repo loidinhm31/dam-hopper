@@ -67,8 +67,7 @@ export interface ServerTreeNode {
 export interface HealthResponse {
   status: string;
   version: string;
-  features: {
-  };
+  features: {};
 }
 
 export interface FsOpResult {

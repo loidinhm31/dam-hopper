@@ -56,7 +56,10 @@ export function useVerticalResizeHandle({
 
     function onMouseMove(ev: MouseEvent) {
       const delta = ev.clientY - startY.current;
-      const newHeight = Math.min(Math.max(startHeight.current + (reversed ? -delta : delta), min), max);
+      const newHeight = Math.min(
+        Math.max(startHeight.current + (reversed ? -delta : delta), min),
+        max,
+      );
       setHeight(newHeight);
     }
 

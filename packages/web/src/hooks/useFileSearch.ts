@@ -7,7 +7,10 @@ import type { SearchScope } from "@/stores/searchUi.js";
 const DEBOUNCE_MS = 350;
 const MAX_QUERY_LEN = 200;
 
-export function useFileSearch(project: string | null, scope: SearchScope = "project") {
+export function useFileSearch(
+  project: string | null,
+  scope: SearchScope = "project",
+) {
   const [query, setQuery] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -21,7 +24,13 @@ export function useFileSearch(project: string | null, scope: SearchScope = "proj
   const isWorkspace = scope === "workspace";
 
   const { data, isLoading, isError } = useQuery<SearchResponse>({
-    queryKey: ["fs-search", isWorkspace ? "__workspace__" : project, trimmedQuery, caseSensitive, scope],
+    queryKey: [
+      "fs-search",
+      isWorkspace ? "__workspace__" : project,
+      trimmedQuery,
+      caseSensitive,
+      scope,
+    ],
     queryFn: () =>
       getTransport().invoke("fs:search", {
         ...(isWorkspace ? {} : { project }),
@@ -34,5 +43,13 @@ export function useFileSearch(project: string | null, scope: SearchScope = "proj
     placeholderData: (prev) => prev,
   });
 
-  return { query, setQuery, caseSensitive, setCaseSensitive, data, isLoading, isError };
+  return {
+    query,
+    setQuery,
+    caseSensitive,
+    setCaseSensitive,
+    data,
+    isLoading,
+    isError,
+  };
 }

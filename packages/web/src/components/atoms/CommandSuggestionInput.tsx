@@ -37,9 +37,13 @@ function SectionHeader({ label }: { label: string }) {
 function HistoryItem({ result }: { result: CombinedSearchResult }) {
   return (
     <div className="flex items-center justify-between gap-2">
-      <span className="font-mono text-xs truncate">{result.command.command}</span>
+      <span className="font-mono text-xs truncate">
+        {result.command.command}
+      </span>
       {result.historyEntry?.project && (
-        <span className="text-[10px] shrink-0 opacity-40">{result.historyEntry.project}</span>
+        <span className="text-[10px] shrink-0 opacity-40">
+          {result.historyEntry.project}
+        </span>
       )}
     </div>
   );
@@ -49,13 +53,19 @@ function CatalogItem({ result }: { result: CombinedSearchResult }) {
   return (
     <>
       <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-xs truncate">{result.command.command}</span>
+        <span className="font-mono text-xs truncate">
+          {result.command.command}
+        </span>
         {result.projectType && (
-          <span className="text-[10px] shrink-0 opacity-40">{result.projectType}</span>
+          <span className="text-[10px] shrink-0 opacity-40">
+            {result.projectType}
+          </span>
         )}
       </div>
       {result.command.description && (
-        <span className="text-[10px] opacity-60 truncate">{result.command.description}</span>
+        <span className="text-[10px] opacity-60 truncate">
+          {result.command.description}
+        </span>
       )}
     </>
   );
@@ -70,7 +80,10 @@ export function CommandSuggestionInput({
   autoFocus,
   className,
 }: Props) {
-  const { query, setQuery, results } = useCommandSearch(projectType, projectName);
+  const { query, setQuery, results } = useCommandSearch(
+    projectType,
+    projectName,
+  );
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [openState, setOpenState] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -126,7 +139,8 @@ export function CommandSuggestionInput({
   useEffect(() => {
     if (highlightedIndex >= 0 && listRef.current) {
       // querySelectorAll skips non-interactive section header <li>s so index maps correctly
-      const items = listRef.current.querySelectorAll<HTMLElement>("[data-result-item]");
+      const items =
+        listRef.current.querySelectorAll<HTMLElement>("[data-result-item]");
       items[highlightedIndex]?.scrollIntoView({ block: "nearest" });
     }
   }, [highlightedIndex]);

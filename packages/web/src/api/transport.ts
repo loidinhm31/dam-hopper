@@ -16,18 +16,24 @@ export interface Transport {
   onTerminalExit(id: string, cb: (exitCode: number | null) => void): () => void;
 
   /** Terminal exit subscription with restart metadata (optional, not all transports support). */
-  onTerminalExitEnhanced?(id: string, cb: (exit: {
-    exitCode: number | null;
-    willRestart: boolean;
-    restartIn?: number;
-    restartCount?: number;
-  }) => void): () => void;
+  onTerminalExitEnhanced?(
+    id: string,
+    cb: (exit: {
+      exitCode: number | null;
+      willRestart: boolean;
+      restartIn?: number;
+      restartCount?: number;
+    }) => void,
+  ): () => void;
 
   /** Process restart subscription (optional, not all transports support). */
-  onProcessRestarted?(id: string, cb: (restart: {
-    restartCount: number;
-    previousExitCode: number | null;
-  }) => void): () => void;
+  onProcessRestarted?(
+    id: string,
+    cb: (restart: {
+      restartCount: number;
+      previousExitCode: number | null;
+    }) => void,
+  ): () => void;
 
   /** FS overflow subscription (optional, not all transports support). */
   onFsOverflow?(sub_id: number, cb: (message: string) => void): () => void;
@@ -45,7 +51,10 @@ export interface Transport {
   terminalAttach?(id: string, fromOffset?: number): void;
 
   /** Terminal buffer subscription (response to terminal:attach). Returns unsubscribe fn. */
-  onTerminalBuffer?(id: string, cb: (buffer: { data: string; offset: number }) => void): () => void;
+  onTerminalBuffer?(
+    id: string,
+    cb: (buffer: { data: string; offset: number }) => void,
+  ): () => void;
 
   /** Connection status subscription. Returns unsubscribe fn. */
   onStatusChange?(cb: (status: string) => void): () => void;
@@ -58,7 +67,8 @@ export function initTransport(transport: Transport): void {
 }
 
 export function getTransport(): Transport {
-  if (!_transport) throw new Error("Transport not initialized. Call initTransport() first.");
+  if (!_transport)
+    throw new Error("Transport not initialized. Call initTransport() first.");
   return _transport;
 }
 

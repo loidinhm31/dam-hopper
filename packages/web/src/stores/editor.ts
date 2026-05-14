@@ -15,11 +15,11 @@ import type { FsArborNode } from "@/api/fs-types.js";
 export type FileTier = FT | "diff";
 
 export interface Tab {
-  key: string;       // `${project}::${path}`
+  key: string; // `${project}::${path}`
   project: string;
   path: string;
   name: string;
-  mtime: number;     // Unix seconds; used for conflict detection
+  mtime: number; // Unix seconds; used for conflict detection
   size: number;
   tier: FileTier;
   mime?: string;
@@ -30,7 +30,7 @@ export interface Tab {
   /** Raw base64 content for BinaryPreview (binary tier only). */
   binaryBase64?: string;
   dirty: boolean;
-  viewState?: unknown;   // monaco ICodeEditorViewState
+  viewState?: unknown; // monaco ICodeEditorViewState
   loading: boolean;
   saving: boolean;
   conflicted: boolean;
@@ -43,7 +43,6 @@ export interface Tab {
   /** Whether the tab metadata was restored but content still needs to be loaded from server. */
   hydrated?: boolean;
 }
-
 
 interface EditorState {
   tabs: Tab[];
@@ -118,7 +117,7 @@ export const useEditorStore = create<EditorState>()(
           key,
           project,
           path,
-          name: commitHash 
+          name: commitHash
             ? `Diff[${commitHash.substring(0, 7)}]: ${path.split("/").pop()}`
             : `Diff: ${path.split("/").pop()}`,
           mtime: 0,
@@ -181,7 +180,9 @@ export const useEditorStore = create<EditorState>()(
         // Skip network fetch for large files — LargeFileViewer handles chunked range reads.
         if (optimisticTier === "large") {
           set((s) => ({
-            tabs: s.tabs.map((t) => (t.key === key ? { ...t, loading: false } : t)),
+            tabs: s.tabs.map((t) =>
+              t.key === key ? { ...t, loading: false } : t,
+            ),
           }));
           return;
         }
@@ -218,7 +219,13 @@ export const useEditorStore = create<EditorState>()(
           if (!result.ok) {
             set((s) => ({
               tabs: s.tabs.map((t) =>
-                t.key === key ? { ...t, loading: false, error: `Read error: ${result.code}` } : t,
+                t.key === key
+                  ? {
+                      ...t,
+                      loading: false,
+                      error: `Read error: ${result.code}`,
+                    }
+                  : t,
               ),
             }));
             return;
@@ -249,7 +256,11 @@ export const useEditorStore = create<EditorState>()(
           set((s) => ({
             tabs: s.tabs.map((t) =>
               t.key === key
-                ? { ...t, loading: false, error: e instanceof Error ? e.message : "Unknown error" }
+                ? {
+                    ...t,
+                    loading: false,
+                    error: e instanceof Error ? e.message : "Unknown error",
+                  }
                 : t,
             ),
           }));
@@ -270,7 +281,8 @@ export const useEditorStore = create<EditorState>()(
           const nextTabs = s.tabs.filter((t) => t.key !== key);
           let nextActive = s.activeKeys[project];
           if (s.activeKeys[project] === key) {
-            nextActive = projectTabs[idx - 1]?.key ?? projectTabs[idx + 1]?.key ?? null;
+            nextActive =
+              projectTabs[idx - 1]?.key ?? projectTabs[idx + 1]?.key ?? null;
           }
           return {
             tabs: nextTabs,
@@ -287,7 +299,9 @@ export const useEditorStore = create<EditorState>()(
       setContent: (key: string, content: string) => {
         set((s) => ({
           tabs: s.tabs.map((t) =>
-            t.key === key ? { ...t, content, dirty: content !== t.savedContent } : t,
+            t.key === key
+              ? { ...t, content, dirty: content !== t.savedContent }
+              : t,
           ),
         }));
       },
@@ -297,7 +311,13 @@ export const useEditorStore = create<EditorState>()(
       // ---------------------------------------------------------------------------
       save: async (key: string) => {
         const tab = get().tabs.find((t) => t.key === key);
-        if (!tab || tab.saving || !tab.dirty || tab.tier === "binary" || tab.tier === "large")
+        if (
+          !tab ||
+          tab.saving ||
+          !tab.dirty ||
+          tab.tier === "binary" ||
+          tab.tier === "large"
+        )
           return;
 
         set((s) => ({
@@ -328,13 +348,18 @@ export const useEditorStore = create<EditorState>()(
             }));
           } else if (!result.ok && result.conflict) {
             set((s) => ({
-              tabs: s.tabs.map((t) => (t.key === key ? { ...t, saving: false, conflicted: true } : t)),
+              tabs: s.tabs.map((t) =>
+                t.key === key ? { ...t, saving: false, conflicted: true } : t,
+              ),
             }));
           } else {
-            const errMsg = !result.ok && !result.conflict ? result.error : "unknown error";
+            const errMsg =
+              !result.ok && !result.conflict ? result.error : "unknown error";
             set((s) => ({
               tabs: s.tabs.map((t) =>
-                t.key === key ? { ...t, saving: false, error: `Save failed: ${errMsg}` } : t,
+                t.key === key
+                  ? { ...t, saving: false, error: `Save failed: ${errMsg}` }
+                  : t,
               ),
             }));
           }
@@ -361,7 +386,10 @@ export const useEditorStore = create<EditorState>()(
         if (!tab) return;
 
         // Fetch current server mtime (0-byte range read just to get mtime)
-        const stat = await transport().fsRead(tab.project, tab.path, { offset: 0, len: 0 });
+        const stat = await transport().fsRead(tab.project, tab.path, {
+          offset: 0,
+          len: 0,
+        });
         const currentMtime = stat.ok
           ? stat.mtime
           : "mtime" in stat
@@ -369,11 +397,18 @@ export const useEditorStore = create<EditorState>()(
             : tab.mtime;
 
         set((s) => ({
-          tabs: s.tabs.map((t) => (t.key === key ? { ...t, saving: true, conflicted: false } : t)),
+          tabs: s.tabs.map((t) =>
+            t.key === key ? { ...t, saving: true, conflicted: false } : t,
+          ),
         }));
 
         try {
-          const result = await transport().fsWriteFile(tab.project, tab.path, tab.content, currentMtime);
+          const result = await transport().fsWriteFile(
+            tab.project,
+            tab.path,
+            tab.content,
+            currentMtime,
+          );
           if (result.ok) {
             set((s) => ({
               tabs: s.tabs.map((t) =>
@@ -391,13 +426,17 @@ export const useEditorStore = create<EditorState>()(
           } else {
             set((s) => ({
               tabs: s.tabs.map((t) =>
-                t.key === key ? { ...t, saving: false, error: "Force overwrite failed" } : t,
+                t.key === key
+                  ? { ...t, saving: false, error: "Force overwrite failed" }
+                  : t,
               ),
             }));
           }
         } catch {
           set((s) => ({
-            tabs: s.tabs.map((t) => (t.key === key ? { ...t, saving: false } : t)),
+            tabs: s.tabs.map((t) =>
+              t.key === key ? { ...t, saving: false } : t,
+            ),
           }));
         }
       },
@@ -410,14 +449,18 @@ export const useEditorStore = create<EditorState>()(
         if (!tab) return;
 
         set((s) => ({
-          tabs: s.tabs.map((t) => (t.key === key ? { ...t, loading: true, conflicted: false } : t)),
+          tabs: s.tabs.map((t) =>
+            t.key === key ? { ...t, loading: true, conflicted: false } : t,
+          ),
         }));
 
         try {
           const result = await transport().fsRead(tab.project, tab.path);
           if (!result.ok) {
             set((s) => ({
-              tabs: s.tabs.map((t) => (t.key === key ? { ...t, loading: false } : t)),
+              tabs: s.tabs.map((t) =>
+                t.key === key ? { ...t, loading: false } : t,
+              ),
             }));
             return;
           }
@@ -439,14 +482,18 @@ export const useEditorStore = create<EditorState>()(
           }));
         } catch {
           set((s) => ({
-            tabs: s.tabs.map((t) => (t.key === key ? { ...t, loading: false } : t)),
+            tabs: s.tabs.map((t) =>
+              t.key === key ? { ...t, loading: false } : t,
+            ),
           }));
         }
       },
 
       clearConflict: (key: string) => {
         set((s) => ({
-          tabs: s.tabs.map((t) => (t.key === key ? { ...t, conflicted: false } : t)),
+          tabs: s.tabs.map((t) =>
+            t.key === key ? { ...t, conflicted: false } : t,
+          ),
         }));
       },
 
@@ -454,7 +501,13 @@ export const useEditorStore = create<EditorState>()(
         set((s) => ({
           tabs: s.tabs.map((t) =>
             t.key === key
-              ? { ...t, saving: false, dirty: false, savedContent: t.content, mtime }
+              ? {
+                  ...t,
+                  saving: false,
+                  dirty: false,
+                  savedContent: t.content,
+                  mtime,
+                }
               : t,
           ),
         }));
@@ -462,7 +515,9 @@ export const useEditorStore = create<EditorState>()(
 
       saveViewState: (key: string, vs: unknown) => {
         set((s) => ({
-          tabs: s.tabs.map((t) => (t.key === key ? { ...t, viewState: vs } : t)),
+          tabs: s.tabs.map((t) =>
+            t.key === key ? { ...t, viewState: vs } : t,
+          ),
         }));
       },
 
@@ -477,7 +532,9 @@ export const useEditorStore = create<EditorState>()(
         if (!tab || !tab.hydrated || tab.loading) return;
 
         set((s) => ({
-          tabs: s.tabs.map((t) => (t.key === key ? { ...t, loading: true } : t)),
+          tabs: s.tabs.map((t) =>
+            t.key === key ? { ...t, loading: true } : t,
+          ),
         }));
 
         try {
@@ -514,7 +571,12 @@ export const useEditorStore = create<EditorState>()(
             set((s) => ({
               tabs: s.tabs.map((t) =>
                 t.key === key
-                  ? { ...t, loading: false, error: `Read error: ${result.code}`, hydrated: false }
+                  ? {
+                      ...t,
+                      loading: false,
+                      error: `Read error: ${result.code}`,
+                      hydrated: false,
+                    }
                   : t,
               ),
             }));

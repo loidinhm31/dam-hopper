@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { getSessionStatus, getStatusDotColor, getStatusGlowClass } from "./session-status.js";
+import {
+  getSessionStatus,
+  getStatusDotColor,
+  getStatusGlowClass,
+} from "./session-status.js";
 import type { SessionInfo } from "@/api/client.js";
 
 describe("getSessionStatus", () => {

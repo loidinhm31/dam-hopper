@@ -114,9 +114,13 @@ export function useTerminalTree() {
 
       // Saved terminal profiles
       for (const terminal of p.terminals ?? []) {
-        const sanitizedName = sanitizeSessionSegment(terminal.name.replace(/ /g, "_"));
+        const sanitizedName = sanitizeSessionSegment(
+          terminal.name.replace(/ /g, "_"),
+        );
         const prefix = `terminal:${p.name}:${sanitizedName}:`;
-        const matchingSessions = sessions.filter((s) => s.id?.startsWith(prefix));
+        const matchingSessions = sessions.filter((s) =>
+          s.id?.startsWith(prefix),
+        );
         commands.push({
           key: `terminal:${terminal.name}`,
           label: terminal.name,

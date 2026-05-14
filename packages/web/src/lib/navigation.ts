@@ -1,9 +1,16 @@
-import { LayoutDashboard, GitMerge, Settings, Package, Code2, type LucideIcon } from "lucide-react";
+import {
+  LayoutDashboard,
+  GitMerge,
+  Settings,
+  Package,
+  Code2,
+  type LucideIcon,
+} from "lucide-react";
 
-export type NavEntry = { 
-  to: string; 
-  icon: LucideIcon; 
-  label: string 
+export type NavEntry = {
+  to: string;
+  icon: LucideIcon;
+  label: string;
 };
 
 export const BASE_NAV: NavEntry[] = [

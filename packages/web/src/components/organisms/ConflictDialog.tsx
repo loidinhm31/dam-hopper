@@ -38,8 +38,11 @@ export function ConflictDialog({
         </div>
 
         <p className="text-xs text-[var(--color-text-muted)] mb-5">
-          <span className="font-medium text-[var(--color-text)]">{fileName}</span> was modified
-          on disk since you last loaded it. Your local changes will be lost if you reload.
+          <span className="font-medium text-[var(--color-text)]">
+            {fileName}
+          </span>{" "}
+          was modified on disk since you last loaded it. Your local changes will
+          be lost if you reload.
         </p>
 
         <div className="flex gap-2 justify-end">
@@ -49,7 +52,12 @@ export function ConflictDialog({
           <Button type="button" variant="ghost" size="sm" onClick={onReload}>
             Reload from disk
           </Button>
-          <Button type="button" variant="primary" size="sm" onClick={onOverwrite}>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            onClick={onOverwrite}
+          >
             Overwrite
           </Button>
         </div>

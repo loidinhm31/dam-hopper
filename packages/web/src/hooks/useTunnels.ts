@@ -38,13 +38,17 @@ export function useTunnels() {
       subscribeIpc("tunnel:ready", ({ data }) => {
         const { id, url } = data as { id: string; url: string };
         qc.setQueryData<TunnelInfo[]>(["tunnels"], (prev = []) =>
-          prev.map((t) => (t.id === id ? { ...t, status: "ready" as const, url } : t)),
+          prev.map((t) =>
+            t.id === id ? { ...t, status: "ready" as const, url } : t,
+          ),
         );
       }),
       subscribeIpc("tunnel:failed", ({ data }) => {
         const { id, error } = data as { id: string; error: string };
         qc.setQueryData<TunnelInfo[]>(["tunnels"], (prev = []) =>
-          prev.map((t) => (t.id === id ? { ...t, status: "failed" as const, error } : t)),
+          prev.map((t) =>
+            t.id === id ? { ...t, status: "failed" as const, error } : t,
+          ),
         );
       }),
       subscribeIpc("tunnel:stopped", ({ data }) => {
@@ -61,7 +65,10 @@ export function useTunnels() {
   useEffect(() => {
     const unsubs = [
       subscribeIpc("install:progress", ({ data }) => {
-        const { downloaded, total } = data as { downloaded: number; total: number };
+        const { downloaded, total } = data as {
+          downloaded: number;
+          total: number;
+        };
         setInstallState({ status: "installing", downloaded, total });
       }),
       subscribeIpc("install:done", () => {
@@ -87,19 +94,25 @@ export function useTunnels() {
           void qc.invalidateQueries({ queryKey: ["tunnels"] });
           // Reconcile install state — events sent while disconnected are lost.
           void t
-            .invoke<{ installing: boolean; installed: boolean }>("tunnel:install:status")
+            .invoke<{ installing: boolean; installed: boolean }>(
+              "tunnel:install:status",
+            )
             .then(({ installed, installing: stillInstalling }) => {
               setInstallState((s) => {
                 if (s.status !== "installing") return s;
-                if (installed) return { status: "done", downloaded: 0, total: 0 };
-                if (!stillInstalling) return { status: "idle", downloaded: 0, total: 0 };
+                if (installed)
+                  return { status: "done", downloaded: 0, total: 0 };
+                if (!stillInstalling)
+                  return { status: "idle", downloaded: 0, total: 0 };
                 return s;
               });
             })
             .catch(() => {
               // best-effort; if endpoint unavailable just reset to idle
               setInstallState((s) =>
-                s.status === "installing" ? { status: "idle", downloaded: 0, total: 0 } : s,
+                s.status === "installing"
+                  ? { status: "idle", downloaded: 0, total: 0 }
+                  : s,
               );
             });
         }

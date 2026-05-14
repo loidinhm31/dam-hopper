@@ -37,7 +37,12 @@ export function CollapsibleSection({
   }
 
   return (
-    <div className={cn("border-b border-[var(--color-border)] last:border-0", className)}>
+    <div
+      className={cn(
+        "border-b border-[var(--color-border)] last:border-0",
+        className,
+      )}
+    >
       <button
         type="button"
         onClick={handleToggle}
@@ -48,8 +53,12 @@ export function CollapsibleSection({
           headerClassName,
         )}
       >
-        <span className="text-[var(--color-primary)]/60 font-bold">{isOpen ? "▼" : "▶"}</span>
-        {Icon && <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--color-primary)]/50" />}
+        <span className="text-[var(--color-primary)]/60 font-bold">
+          {isOpen ? "▼" : "▶"}
+        </span>
+        {Icon && (
+          <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--color-primary)]/50" />
+        )}
         <span className="flex-1 text-left">{title}</span>
         {badge !== undefined && (
           <span className="rounded-sm bg-[var(--color-primary)]/10 border border-[var(--color-primary)]/20 px-1.5 py-0.5 text-[10px] text-[var(--color-primary)]/70">
@@ -63,9 +72,7 @@ export function CollapsibleSection({
         className="grid transition-[grid-template-rows] duration-200"
         style={{ gridTemplateRows: isOpen ? "1fr" : "0fr" }}
       >
-        <div className="overflow-hidden">
-          {children}
-        </div>
+        <div className="overflow-hidden">{children}</div>
       </div>
     </div>
   );

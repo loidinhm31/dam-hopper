@@ -23,16 +23,16 @@
 
 **What DamHopper already does well:**
 
-| Feature | Status | Quality |
-|---------|--------|---------|
-| Workspace TOML config | ✅ Complete | Solid — auto-discovery, hot-reload |
-| PTY terminal sessions | ✅ Complete | Good — per-project, stdin/stdout, kill |
-| Git operations | ✅ Complete | Comprehensive — clone/push/pull/diff/stage/conflicts/merge |
-| File explorer + tree | ✅ Complete | Good — live sync via file watcher |
-| Monaco editor + save | ✅ Complete | Excellent — tabs, mtime OCC, binary streaming |
-| Text search | ✅ Complete | Good — .gitignore-aware, workspace-wide, ignore crate |
-| Agent store | ✅ Complete | Unique — symlink distribution, health checks, import |
-| Auth | ✅ Complete | Secure — bearer token, constant-time comparison |
+| Feature               | Status      | Quality                                                    |
+| --------------------- | ----------- | ---------------------------------------------------------- |
+| Workspace TOML config | ✅ Complete | Solid — auto-discovery, hot-reload                         |
+| PTY terminal sessions | ✅ Complete | Good — per-project, stdin/stdout, kill                     |
+| Git operations        | ✅ Complete | Comprehensive — clone/push/pull/diff/stage/conflicts/merge |
+| File explorer + tree  | ✅ Complete | Good — live sync via file watcher                          |
+| Monaco editor + save  | ✅ Complete | Excellent — tabs, mtime OCC, binary streaming              |
+| Text search           | ✅ Complete | Good — .gitignore-aware, workspace-wide, ignore crate      |
+| Agent store           | ✅ Complete | Unique — symlink distribution, health checks, import       |
+| Auth                  | ✅ Complete | Secure — bearer token, constant-time comparison            |
 
 **What Phase 05 is adding:** Create/delete/move/rename file operations.
 
@@ -49,6 +49,7 @@ These features save 10-20 min/day and remove friction that makes users fall back
 **Problem:** PTY sessions crash silently. No visibility into which services are running. Developer must manually notice, navigate to terminal tab, restart. This is the #1 annoyance when running multiple services.
 
 **What to build:**
+
 - `process:status` API — enumerate running PTY sessions with PID, CPU, memory, uptime
 - Exit code tracking — when a PTY exits, record code + timestamp
 - Auto-restart policy per project — `restart = "on-failure"` or `restart = "always"` in TOML
@@ -61,6 +62,7 @@ These features save 10-20 min/day and remove friction that makes users fall back
 **Evidence:** Docker, systemd, PM2, Kubernetes — every process manager has this. DevPod and Gitpod both surface service health prominently.
 
 **TOML config:**
+
 ```toml
 [[projects]]
 name = "api"
@@ -78,6 +80,7 @@ health_check_url = "http://localhost:8080/actuator/health"
 **Problem:** With 5-10 projects, starting/stopping each service individually is tedious. Developer wants "start the whole stack" in one click.
 
 **What to build:**
+
 - `POST /api/workspace/start` — spawn run_command for all (or tagged) projects, respecting dependency order
 - `POST /api/workspace/stop` — graceful stop all running PTY sessions
 - `POST /api/workspace/build` — concurrent build of all (or tagged) projects
@@ -91,6 +94,7 @@ health_check_url = "http://localhost:8080/actuator/health"
 **Evidence:** docker-compose up/down is the gold standard. Every developer expects this for multi-service setups.
 
 **TOML config:**
+
 ```toml
 [[projects]]
 name = "database"
@@ -112,6 +116,7 @@ tags = ["backend"]
 **Problem:** `.env` files are scattered, hard to compare across projects, easy to misconfigure. DamHopper already parses `env_file` in TOML but doesn't expose the values in any useful way.
 
 **What to build:**
+
 - `GET /api/projects/:name/env` — parse and return env vars (keys only by default, values with `?reveal=true`)
 - `PUT /api/projects/:name/env` — update env file atomically (mtime-guarded like file writes)
 - UI: table view of env vars per project with edit-in-place
@@ -130,6 +135,7 @@ tags = ["backend"]
 **Problem:** Navigating between features (terminal, files, git, search) requires mouse clicks through the sidebar. Power users want keyboard shortcuts and a command palette like VS Code's `Ctrl+Shift+P`.
 
 **What to build:**
+
 - `Ctrl+Shift+P` command palette (modal with fuzzy search)
 - Register all actions: open file, switch project, start terminal, git status, search, etc.
 - BM25-scored command registry already exists server-side (`commands/registry.rs`) — expose to UI
@@ -151,6 +157,7 @@ These features don't block daily work but significantly improve the experience a
 **Problem:** AI agents (Claude, Gemini) running inside the workspace need to execute commands and get results. Currently they'd have to go through terminal:spawn + terminal:write + parse output, which is fragile.
 
 **What to build:**
+
 - `POST /api/pty/exec` — fire-and-forget or wait-for-exit command execution
 - Request: `{ project, command, timeout_ms?, env? }`
 - Response (sync): `{ exitCode, stdout, stderr, durationMs }`
@@ -170,6 +177,7 @@ These features don't block daily work but significantly improve the experience a
 **Problem:** The current DashboardPage exists but needs to surface operational state at a glance — which projects are running, last build status, git branch, uncommitted changes.
 
 **What to build:**
+
 - Per-project card showing:
   - Service status: running/stopped/crashed (from F-01)
   - Current git branch + dirty/clean indicator
@@ -190,6 +198,7 @@ These features don't block daily work but significantly improve the experience a
 **Problem:** UploadDropzone.tsx exists but may not be wired to the full write pipeline. Uploading config files, assets, or patches into projects is common.
 
 **What to build (verify existing state first):**
+
 - Drag file from OS → drop on file tree → upload to project directory
 - Progress bar for large files (reuse binary streaming protocol)
 - Multi-file upload
@@ -204,6 +213,7 @@ These features don't block daily work but significantly improve the experience a
 **Problem:** If WebSocket disconnects (network hiccup, laptop sleep), terminal sessions survive server-side but UI loses scrollback. Reconnection requires re-reading the buffer.
 
 **What to build:**
+
 - Server: retain N bytes of scrollback per session (configurable, default 100KB)
 - On WS reconnect: client sends `terminal:attach { id }` → server replays buffer
 - UI: auto-reconnect with "Reconnecting..." indicator
@@ -220,6 +230,7 @@ These features don't block daily work but significantly improve the experience a
 **Problem:** DamHopper has diff/stage/unstage/discard API but no commit creation endpoint or branch management UI. Developer still needs external git client for committing.
 
 **What to build:**
+
 - `POST /api/git/:project/commit` — `{ message, amend? }`
 - `GET /api/git/:project/branches` — local + remote branches
 - `POST /api/git/:project/checkout` — switch branch (with stash option)
@@ -238,6 +249,7 @@ These features don't block daily work but significantly improve the experience a
 **Problem:** With multiple services running, logs are scattered across terminal tabs. Debugging cross-service issues means switching between tabs.
 
 **What to build:**
+
 - Unified log stream: merge output from all running PTY sessions with project-name prefix and color coding
 - Filter by project, severity (if logs follow a pattern), text search
 - Timestamp injection (optional, configurable)
@@ -257,6 +269,7 @@ These features don't block daily work but significantly improve the experience a
 **Problem:** AI agents (Claude, Cursor, Windsurf) use MCP to discover and call tools. If DamHopper exposes its capabilities as an MCP server, any AI agent can operate the workspace: read files, run commands, check git status, search code.
 
 **What to build:**
+
 - MCP server endpoint (stdio or HTTP transport)
 - Expose tools: `workspace.list_projects`, `fs.read`, `fs.search`, `git.status`, `pty.exec`, `git.diff`
 - Expose resources: workspace config, project list, running sessions
@@ -273,6 +286,7 @@ These features don't block daily work but significantly improve the experience a
 **Problem:** Setting up a new developer or a new feature branch involves: clone repos, configure env files, install dependencies, start services. This can take 30-60 minutes.
 
 **What to build:**
+
 - `POST /api/workspace/snapshot` — capture current workspace state (config + env vars + git branches)
 - `POST /api/workspace/restore` — apply snapshot to set up fresh environment
 - Template library: save named snapshots ("sprint-42-setup", "clean-slate")
@@ -287,6 +301,7 @@ These features don't block daily work but significantly improve the experience a
 **Problem:** Background events (build finished, git push failed, PTY crashed) go unnoticed unless user happens to be looking at the right tab.
 
 **What to build:**
+
 - In-app notification toast system
 - Events: build success/failure, PTY exit, git operation complete, file conflict
 - Notification center: history of recent events
@@ -302,6 +317,7 @@ These features don't block daily work but significantly improve the experience a
 **Problem:** Current terminal panel shows one terminal at a time with tab switching. Developers often want to see 2-3 terminals side-by-side (e.g., server output + build + test runner).
 
 **What to build:**
+
 - Split terminal view: horizontal/vertical splits
 - Drag-and-drop tabs to create splits
 - Configurable layout persistence (saved in localStorage)
@@ -318,6 +334,7 @@ These features don't block daily work but significantly improve the experience a
 **Problem:** Running services expose ports locally on the server machine. When accessing DamHopper remotely, those ports aren't directly reachable from the browser.
 
 **What to build:**
+
 - Auto-detect listening ports from running PTY sessions (parse output for common patterns: "Listening on :8080")
 - `GET /api/ports` — list detected ports with associated project
 - Reverse proxy: `/proxy/:port/*` → forward to localhost:port (Axum middleware)
@@ -331,15 +348,15 @@ These features don't block daily work but significantly improve the experience a
 
 ## Tier 4: Low Priority — Defer
 
-| Feature | Why Defer | Revisit When |
-|---------|-----------|-------------|
-| LSP integration | 4-8 weeks for marginal gain; Monaco has basic syntax highlighting | Users complain about autocomplete |
-| Extensions marketplace | Can't compete with VS Code ecosystem | Never (let VS Code do this) |
-| Desktop app (Electron) | Browser-first is fine; Electron adds maintenance | Market feedback demands it |
-| Multi-tenant / RBAC | Only if enterprise SaaS | Enterprise customers appear |
-| Kubernetes integration | Overkill for target user | Enterprise/cloud deployment needed |
-| Database browser | Separate concern; use pgAdmin/DBeaver | Users explicitly request |
-| Code review / PR UI | GitHub + GitLab do this well | Tight SCM integration planned |
+| Feature                | Why Defer                                                         | Revisit When                       |
+| ---------------------- | ----------------------------------------------------------------- | ---------------------------------- |
+| LSP integration        | 4-8 weeks for marginal gain; Monaco has basic syntax highlighting | Users complain about autocomplete  |
+| Extensions marketplace | Can't compete with VS Code ecosystem                              | Never (let VS Code do this)        |
+| Desktop app (Electron) | Browser-first is fine; Electron adds maintenance                  | Market feedback demands it         |
+| Multi-tenant / RBAC    | Only if enterprise SaaS                                           | Enterprise customers appear        |
+| Kubernetes integration | Overkill for target user                                          | Enterprise/cloud deployment needed |
+| Database browser       | Separate concern; use pgAdmin/DBeaver                             | Users explicitly request           |
+| Code review / PR UI    | GitHub + GitLab do this well                                      | Tight SCM integration planned      |
 
 ---
 
@@ -357,41 +374,41 @@ These features don't block daily work but significantly improve the experience a
 
 ### Sprint A (Weeks 1-3): Foundation Features
 
-| Feature | Days | Dependencies |
-|---------|------|--------------|
-| F-01: Process lifecycle management | 3 | None |
-| F-02: Bulk start/stop/build | 4 | F-01 (status) |
-| F-13: Notification toasts | 2 | None |
-| F-04: Command palette | 3 | None |
-| **Total** | **12 days** | |
+| Feature                            | Days        | Dependencies  |
+| ---------------------------------- | ----------- | ------------- |
+| F-01: Process lifecycle management | 3           | None          |
+| F-02: Bulk start/stop/build        | 4           | F-01 (status) |
+| F-13: Notification toasts          | 2           | None          |
+| F-04: Command palette              | 3           | None          |
+| **Total**                          | **12 days** |               |
 
 ### Sprint B (Weeks 4-6): Complete Git + Environment
 
-| Feature | Days | Dependencies |
-|---------|------|--------------|
-| F-09: Git commit + branch UI | 5 | None |
-| F-03: Env var viewer/editor | 3 | None |
-| F-05: Agent exec API | 2 | None |
-| F-08: Terminal reconnect | 3 | None |
-| **Total** | **13 days** | |
+| Feature                      | Days        | Dependencies |
+| ---------------------------- | ----------- | ------------ |
+| F-09: Git commit + branch UI | 5           | None         |
+| F-03: Env var viewer/editor  | 3           | None         |
+| F-05: Agent exec API         | 2           | None         |
+| F-08: Terminal reconnect     | 3           | None         |
+| **Total**                    | **13 days** |              |
 
 ### Sprint C (Weeks 7-10): Multipliers
 
-| Feature | Days | Dependencies |
-|---------|------|--------------|
-| F-06: Project dashboard | 5 | F-01 |
-| F-10: Log aggregation | 5 | F-01 |
-| F-15: Port forwarding | 6 | None |
-| **Total** | **16 days** | |
+| Feature                 | Days        | Dependencies |
+| ----------------------- | ----------- | ------------ |
+| F-06: Project dashboard | 5           | F-01         |
+| F-10: Log aggregation   | 5           | F-01         |
+| F-15: Port forwarding   | 6           | None         |
+| **Total**               | **16 days** |              |
 
 ### Sprint D (Weeks 11-14): Differentiation
 
-| Feature | Days | Dependencies |
-|---------|------|--------------|
-| F-11: MCP server | 7 | F-05 |
-| F-14: Split terminal panes | 4 | None |
-| F-12: Workspace snapshots | 4 | F-03 |
-| **Total** | **15 days** | |
+| Feature                    | Days        | Dependencies |
+| -------------------------- | ----------- | ------------ |
+| F-11: MCP server           | 7           | F-05         |
+| F-14: Split terminal panes | 4           | None         |
+| F-12: Workspace snapshots  | 4           | F-03         |
+| **Total**                  | **15 days** |              |
 
 ---
 

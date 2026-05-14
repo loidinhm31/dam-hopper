@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { Button, inputClass } from "@/components/atoms/Button.js";
-import { useScanRepo, useScanLocalDir, useImportConfirm } from "@/api/queries.js";
+import {
+  useScanRepo,
+  useScanLocalDir,
+  useImportConfirm,
+} from "@/api/queries.js";
 import type { RepoScanItem, AgentItemCategory } from "@/api/client.js";
 
 type ImportSource = "repo" | "local";
@@ -16,7 +20,11 @@ export function ImportDialog({ onClose }: Props) {
   const [tmpDir, setTmpDir] = useState<string | null>(null);
   const [foundItems, setFoundItems] = useState<RepoScanItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [results, setResults] = useState<Array<{ name: string; success: boolean; error?: string }> | null>(null);
+  const [results, setResults] = useState<Array<{
+    name: string;
+    success: boolean;
+    error?: string;
+  }> | null>(null);
 
   const scanRepo = useScanRepo();
   const scanLocalDir = useScanLocalDir();
@@ -91,18 +99,26 @@ export function ImportDialog({ onClose }: Props) {
 
   const isScanning = activeScan.isPending;
   const isImporting = importConfirm.isPending;
-  const scanError = activeScan.isError ? (activeScan.error as Error).message : null;
+  const scanError = activeScan.isError
+    ? (activeScan.error as Error).message
+    : null;
   const scanSuccess = activeScan.isSuccess;
 
-  const headerText = source === "repo" ? "Import from Git Repository" : "Import from Local Directory";
-  const inputPlaceholder = source === "repo" ? "https://github.com/org/repo" : "/home/user/devkit";
+  const headerText =
+    source === "repo"
+      ? "Import from Git Repository"
+      : "Import from Local Directory";
+  const inputPlaceholder =
+    source === "repo" ? "https://github.com/org/repo" : "/home/user/devkit";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="w-[520px] max-h-[80vh] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] flex flex-col shadow-xl">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] shrink-0">
-          <p className="text-sm font-semibold text-[var(--color-text)]">{headerText}</p>
+          <p className="text-sm font-semibold text-[var(--color-text)]">
+            {headerText}
+          </p>
           <button
             onClick={onClose}
             className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] cursor-pointer"
@@ -140,16 +156,23 @@ export function ImportDialog({ onClose }: Props) {
               placeholder={inputPlaceholder}
               value={source === "repo" ? repoUrl : dirPath}
               onChange={(e) =>
-                source === "repo" ? setRepoUrl(e.target.value) : setDirPath(e.target.value)
+                source === "repo"
+                  ? setRepoUrl(e.target.value)
+                  : setDirPath(e.target.value)
               }
-              onKeyDown={(e) => { if (e.key === "Enter") void handleScan(); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void handleScan();
+              }}
               disabled={isScanning || isImporting}
             />
             <Button
               variant="secondary"
               size="sm"
               loading={isScanning}
-              disabled={!(source === "repo" ? repoUrl.trim() : dirPath.trim()) || isImporting}
+              disabled={
+                !(source === "repo" ? repoUrl.trim() : dirPath.trim()) ||
+                isImporting
+              }
               onClick={handleScan}
             >
               Scan
@@ -167,13 +190,16 @@ export function ImportDialog({ onClose }: Props) {
             <>
               <div className="flex items-center justify-between">
                 <p className="text-xs text-[var(--color-text-muted)]">
-                  Found {foundItems.length} item{foundItems.length !== 1 ? "s" : ""}
+                  Found {foundItems.length} item
+                  {foundItems.length !== 1 ? "s" : ""}
                 </p>
                 <button
                   onClick={toggleAll}
                   className="text-xs text-[var(--color-primary)] hover:underline cursor-pointer"
                 >
-                  {selected.size === foundItems.length ? "Deselect All" : "Select All"}
+                  {selected.size === foundItems.length
+                    ? "Deselect All"
+                    : "Select All"}
                 </button>
               </div>
 
@@ -193,7 +219,9 @@ export function ImportDialog({ onClose }: Props) {
                       />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-medium text-[var(--color-text)]">{item.name}</span>
+                          <span className="text-xs font-medium text-[var(--color-text)]">
+                            {item.name}
+                          </span>
                           <CategoryBadge category={item.category} />
                         </div>
                         {item.description && (
@@ -218,7 +246,9 @@ export function ImportDialog({ onClose }: Props) {
           {/* Import results */}
           {results && (
             <div className="flex flex-col gap-1">
-              <p className="text-xs font-semibold text-[var(--color-text)]">Import results</p>
+              <p className="text-xs font-semibold text-[var(--color-text)]">
+                Import results
+              </p>
               {results.map((r) => (
                 <div
                   key={r.name}
@@ -231,7 +261,9 @@ export function ImportDialog({ onClose }: Props) {
                 >
                   <span>{r.success ? "✓" : "✗"}</span>
                   <span className="font-medium">{r.name}</span>
-                  {r.error && <span className="text-[10px] opacity-70">— {r.error}</span>}
+                  {r.error && (
+                    <span className="text-[10px] opacity-70">— {r.error}</span>
+                  )}
                 </div>
               ))}
             </div>
@@ -246,7 +278,12 @@ export function ImportDialog({ onClose }: Props) {
             </Button>
           ) : (
             <>
-              <Button variant="ghost" size="sm" onClick={onClose} disabled={isImporting}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onClose}
+                disabled={isImporting}
+              >
                 Cancel
               </Button>
               <Button
@@ -272,7 +309,9 @@ function CategoryBadge({ category }: { category: AgentItemCategory }) {
     command: "bg-[var(--color-success)]/15 text-[var(--color-success)]",
   };
   return (
-    <span className={`rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide ${colors[category] ?? "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]"}`}>
+    <span
+      className={`rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide ${colors[category] ?? "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]"}`}
+    >
       {category}
     </span>
   );

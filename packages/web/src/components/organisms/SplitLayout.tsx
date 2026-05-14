@@ -145,7 +145,12 @@ export function SplitLayout({
 
   // ── timer ref for post-drag fit() — cleaned up on unmount ───────────────
   const fitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (fitTimerRef.current) clearTimeout(fitTimerRef.current); }, []);
+  useEffect(
+    () => () => {
+      if (fitTimerRef.current) clearTimeout(fitTimerRef.current);
+    },
+    [],
+  );
 
   // ── active drag state for DragOverlay label ──────────────────────────────
   const [activeTabLabel, setActiveTabLabel] = useState<string | null>(null);
@@ -189,7 +194,8 @@ export function SplitLayout({
 
       // Dragging only tab to own pane's edge: no meaningful split (would
       // create a split then immediately collapse it). Skip.
-      if (edge !== "center" && targetPaneId === sourcePaneId && willBecomeEmpty) return;
+      if (edge !== "center" && targetPaneId === sourcePaneId && willBecomeEmpty)
+        return;
 
       if (edge === "center") {
         layout.moveTabToPane(sessionId, sourcePaneId, targetPaneId);
@@ -207,7 +213,11 @@ export function SplitLayout({
       if (fitTimerRef.current) clearTimeout(fitTimerRef.current);
       fitTimerRef.current = setTimeout(() => {
         for (const [, entry] of terminalRegistry) {
-          try { entry.fitAddon.fit(); } catch { /* terminal may be disposed */ }
+          try {
+            entry.fitAddon.fit();
+          } catch {
+            /* terminal may be disposed */
+          }
         }
       }, 150);
     },

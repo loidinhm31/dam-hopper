@@ -12,7 +12,14 @@
 import "@/lib/monaco-setup.js";
 import { Editor, type OnMount } from "@monaco-editor/react";
 import type * as monacoNs from "monaco-editor";
-import { useCallback, useEffect, useRef, useState, useMemo, useInsertionEffect } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useMemo,
+  useInsertionEffect,
+} from "react";
 import {
   X,
   Loader2,
@@ -23,7 +30,11 @@ import {
   GitMerge,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
-import { useGitConflicts, useGitFileDiff, useGitResolve } from "@/api/queries.js";
+import {
+  useGitConflicts,
+  useGitFileDiff,
+  useGitResolve,
+} from "@/api/queries.js";
 import {
   parseConflictRegions,
   acceptConflict,
@@ -69,31 +80,51 @@ function buildDecorations(
     // <<<<<< marker line
     dec.push({
       range: new monaco.Range(r.startLine, 1, r.startLine, 1),
-      options: { isWholeLine: true, className: "mc-conflict-marker", stickiness: 1 },
+      options: {
+        isWholeLine: true,
+        className: "mc-conflict-marker",
+        stickiness: 1,
+      },
     });
     // ours lines
     if (r.separatorLine > r.startLine + 1) {
       dec.push({
         range: new monaco.Range(r.startLine + 1, 1, r.separatorLine - 1, 1),
-        options: { isWholeLine: true, className: "mc-conflict-ours", stickiness: 1 },
+        options: {
+          isWholeLine: true,
+          className: "mc-conflict-ours",
+          stickiness: 1,
+        },
       });
     }
     // ======= separator
     dec.push({
       range: new monaco.Range(r.separatorLine, 1, r.separatorLine, 1),
-      options: { isWholeLine: true, className: "mc-conflict-sep", stickiness: 1 },
+      options: {
+        isWholeLine: true,
+        className: "mc-conflict-sep",
+        stickiness: 1,
+      },
     });
     // theirs lines
     if (r.endLine > r.separatorLine + 1) {
       dec.push({
         range: new monaco.Range(r.separatorLine + 1, 1, r.endLine - 1, 1),
-        options: { isWholeLine: true, className: "mc-conflict-theirs", stickiness: 1 },
+        options: {
+          isWholeLine: true,
+          className: "mc-conflict-theirs",
+          stickiness: 1,
+        },
       });
     }
     // >>>>>>> marker line
     dec.push({
       range: new monaco.Range(r.endLine, 1, r.endLine, 1),
-      options: { isWholeLine: true, className: "mc-conflict-marker", stickiness: 1 },
+      options: {
+        isWholeLine: true,
+        className: "mc-conflict-marker",
+        stickiness: 1,
+      },
     });
   }
 
@@ -109,8 +140,12 @@ export function MergeConflictEditor({
 }: Props) {
   useConflictStyles();
 
-  const { data: conflicts, isLoading: conflictsLoading } = useGitConflicts(project);
-  const { data: fileDiff, isLoading: diffLoading } = useGitFileDiff(project, filePath);
+  const { data: conflicts, isLoading: conflictsLoading } =
+    useGitConflicts(project);
+  const { data: fileDiff, isLoading: diffLoading } = useGitFileDiff(
+    project,
+    filePath,
+  );
   const resolveMutation = useGitResolve(project);
 
   const conflictFile = conflicts?.find((c) => c.path === filePath);
@@ -151,14 +186,22 @@ export function MergeConflictEditor({
     [resultContent],
   );
 
-  const allResolved = resultContent !== "" && !hasRemainingConflicts(resultContent);
-  const isMalformed = resultContent !== "" && hasMalformedConflicts(resultContent);
+  const allResolved =
+    resultContent !== "" && !hasRemainingConflicts(resultContent);
+  const isMalformed =
+    resultContent !== "" && hasMalformedConflicts(resultContent);
 
   // ── Editor refs ──────────────────────────────────────────────────────────────
 
-  const theirsEditorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null);
-  const resultEditorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null);
-  const oursEditorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null);
+  const theirsEditorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(
+    null,
+  );
+  const resultEditorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(
+    null,
+  );
+  const oursEditorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(
+    null,
+  );
   const modelsRef = useRef<{
     theirs: monacoNs.editor.ITextModel | null;
     result: monacoNs.editor.ITextModel | null;
@@ -166,7 +209,8 @@ export function MergeConflictEditor({
   }>({ theirs: null, result: null, ours: null });
   const monacoRef = useRef<typeof monacoNs | null>(null);
   const isSyncing = useRef(false);
-  const decorationCollection = useRef<monacoNs.editor.IEditorDecorationsCollection | null>(null);
+  const decorationCollection =
+    useRef<monacoNs.editor.IEditorDecorationsCollection | null>(null);
 
   const syncScroll = useCallback((scrollTop: number) => {
     if (isSyncing.current) return;
@@ -180,15 +224,20 @@ export function MergeConflictEditor({
   function attachResizeObserver(editor: monacoNs.editor.IStandaloneCodeEditor) {
     const container = editor.getDomNode()?.parentElement;
     if (!container) return;
-    const ro = new ResizeObserver(() => { editor.layout(); });
+    const ro = new ResizeObserver(() => {
+      editor.layout();
+    });
     ro.observe(container);
-    (editor as unknown as { _roCleanup?: () => void })._roCleanup = () => ro.disconnect();
+    (editor as unknown as { _roCleanup?: () => void })._roCleanup = () =>
+      ro.disconnect();
   }
 
   useEffect(() => {
     return () => {
       for (const ref of [theirsEditorRef, resultEditorRef, oursEditorRef]) {
-        (ref.current as unknown as { _roCleanup?: () => void } | null)?._roCleanup?.();
+        (
+          ref.current as unknown as { _roCleanup?: () => void } | null
+        )?._roCleanup?.();
       }
       // Defer model disposal so Monaco's own editor cleanup runs first.
       const { theirs, result, ours } = modelsRef.current;
@@ -200,49 +249,64 @@ export function MergeConflictEditor({
     };
   }, []);
 
-  const handleTheirsMount: OnMount = useCallback((editor, monaco) => {
-    theirsEditorRef.current = editor;
-    modelsRef.current.theirs = editor.getModel();
-    editor.onDidChangeModel(() => { modelsRef.current.theirs = editor.getModel(); });
+  const handleTheirsMount: OnMount = useCallback(
+    (editor, monaco) => {
+      theirsEditorRef.current = editor;
+      modelsRef.current.theirs = editor.getModel();
+      editor.onDidChangeModel(() => {
+        modelsRef.current.theirs = editor.getModel();
+      });
 
-    if (!monacoRef.current) monacoRef.current = monaco;
-    editor.onDidScrollChange((e) => {
-      if (!isSyncing.current) syncScroll(e.scrollTop);
-    });
-    attachResizeObserver(editor);
-  }, [syncScroll]);
+      if (!monacoRef.current) monacoRef.current = monaco;
+      editor.onDidScrollChange((e) => {
+        if (!isSyncing.current) syncScroll(e.scrollTop);
+      });
+      attachResizeObserver(editor);
+    },
+    [syncScroll],
+  );
 
-  const handleResultMount: OnMount = useCallback((editor, monaco) => {
-    resultEditorRef.current = editor;
-    modelsRef.current.result = editor.getModel();
-    editor.onDidChangeModel(() => { modelsRef.current.result = editor.getModel(); });
+  const handleResultMount: OnMount = useCallback(
+    (editor, monaco) => {
+      resultEditorRef.current = editor;
+      modelsRef.current.result = editor.getModel();
+      editor.onDidChangeModel(() => {
+        modelsRef.current.result = editor.getModel();
+      });
 
-    if (!monacoRef.current) monacoRef.current = monaco;
+      if (!monacoRef.current) monacoRef.current = monaco;
 
-    // Track content changes
-    editor.onDidChangeModelContent(() => {
-      const value = editor.getValue();
-      resultContentRef.current = value;
-      setResultContent(value);
-    });
+      // Track content changes
+      editor.onDidChangeModelContent(() => {
+        const value = editor.getValue();
+        resultContentRef.current = value;
+        setResultContent(value);
+      });
 
-    editor.onDidScrollChange((e) => {
-      if (!isSyncing.current) syncScroll(e.scrollTop);
-    });
-    attachResizeObserver(editor);
-  }, [syncScroll]);
+      editor.onDidScrollChange((e) => {
+        if (!isSyncing.current) syncScroll(e.scrollTop);
+      });
+      attachResizeObserver(editor);
+    },
+    [syncScroll],
+  );
 
-  const handleOursMount: OnMount = useCallback((editor, monaco) => {
-    oursEditorRef.current = editor;
-    modelsRef.current.ours = editor.getModel();
-    editor.onDidChangeModel(() => { modelsRef.current.ours = editor.getModel(); });
+  const handleOursMount: OnMount = useCallback(
+    (editor, monaco) => {
+      oursEditorRef.current = editor;
+      modelsRef.current.ours = editor.getModel();
+      editor.onDidChangeModel(() => {
+        modelsRef.current.ours = editor.getModel();
+      });
 
-    if (!monacoRef.current) monacoRef.current = monaco;
-    editor.onDidScrollChange((e) => {
-      if (!isSyncing.current) syncScroll(e.scrollTop);
-    });
-    attachResizeObserver(editor);
-  }, [syncScroll]);
+      if (!monacoRef.current) monacoRef.current = monaco;
+      editor.onDidScrollChange((e) => {
+        if (!isSyncing.current) syncScroll(e.scrollTop);
+      });
+      attachResizeObserver(editor);
+    },
+    [syncScroll],
+  );
 
   // Apply decorations to result editor when conflict regions change
   useEffect(() => {
@@ -278,7 +342,10 @@ export function MergeConflictEditor({
     if (!region) return;
     setSelectedConflict(index);
     resultEditorRef.current?.revealLineInCenter(region.startLine);
-    resultEditorRef.current?.setPosition({ lineNumber: region.startLine, column: 1 });
+    resultEditorRef.current?.setPosition({
+      lineNumber: region.startLine,
+      column: 1,
+    });
     resultEditorRef.current?.focus();
   }
 
@@ -300,7 +367,8 @@ export function MergeConflictEditor({
         model.applyEdits([{ range: model.getFullModelRange(), text: next }]);
         // Navigate to the next unresolved conflict
         const newRegions = parseConflictRegions(next);
-        const nextConflict = newRegions[regionIndex] ?? newRegions[regionIndex - 1];
+        const nextConflict =
+          newRegions[regionIndex] ?? newRegions[regionIndex - 1];
         if (nextConflict) {
           editor.revealLineInCenter(nextConflict.startLine);
           setSelectedConflict(Math.min(regionIndex, newRegions.length - 1));
@@ -335,7 +403,10 @@ export function MergeConflictEditor({
     setIsResolving(true);
     setResolveError(null);
     try {
-      await resolveMutation.mutateAsync({ path: filePath, content: resultContentRef.current });
+      await resolveMutation.mutateAsync({
+        path: filePath,
+        content: resultContentRef.current,
+      });
       onResolved();
     } catch (e) {
       setResolveError(e instanceof Error ? e.message : "Resolve failed");
@@ -367,7 +438,9 @@ export function MergeConflictEditor({
   }
 
   const fileName = filePath.split("/").pop() ?? filePath;
-  const dirPath = filePath.includes("/") ? filePath.slice(0, filePath.lastIndexOf("/")) : "";
+  const dirPath = filePath.includes("/")
+    ? filePath.slice(0, filePath.lastIndexOf("/"))
+    : "";
 
   const editorOptions: monacoNs.editor.IStandaloneEditorConstructionOptions = {
     fontSize: 12,
@@ -390,15 +463,19 @@ export function MergeConflictEditor({
 
         <div className="flex items-baseline gap-1 min-w-0 flex-1">
           {dirPath && (
-            <span className="text-[11px] text-[var(--color-text-muted)] truncate">{dirPath}/</span>
+            <span className="text-[11px] text-[var(--color-text-muted)] truncate">
+              {dirPath}/
+            </span>
           )}
-          <span className="text-[11px] font-semibold text-[var(--color-text)] truncate">{fileName}</span>
+          <span className="text-[11px] font-semibold text-[var(--color-text)] truncate">
+            {fileName}
+          </span>
           <span className="text-[10px] text-amber-400 shrink-0 ml-1">
             {conflictRegions.length > 0
               ? `${conflictRegions.length} conflict${conflictRegions.length > 1 ? "s" : ""}`
               : allResolved
-              ? "resolved"
-              : ""}
+                ? "resolved"
+                : ""}
           </span>
         </div>
 
@@ -423,7 +500,11 @@ export function MergeConflictEditor({
           <button
             onClick={() => void handleMarkResolved()}
             disabled={!allResolved || isResolving}
-            title={allResolved ? "Write resolved content and stage file" : "Resolve all conflicts first"}
+            title={
+              allResolved
+                ? "Write resolved content and stage file"
+                : "Resolve all conflicts first"
+            }
             className={cn(
               "text-[10px] px-1.5 py-0.5 rounded border transition-colors flex items-center gap-1",
               allResolved && !isResolving
@@ -462,7 +543,8 @@ export function MergeConflictEditor({
       {isMalformed && (
         <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 bg-amber-400/10 border-b border-amber-400/20 text-amber-400 text-[11px]">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-          Malformed conflict markers detected — some conflict blocks may not display correctly. Manual editing recommended.
+          Malformed conflict markers detected — some conflict blocks may not
+          display correctly. Manual editing recommended.
         </div>
       )}
 
@@ -536,14 +618,20 @@ export function MergeConflictEditor({
 
             <div className="ml-auto shrink-0 flex items-center gap-1">
               <button
-                onClick={() => navigateToConflict(Math.max(0, selectedConflict - 1))}
+                onClick={() =>
+                  navigateToConflict(Math.max(0, selectedConflict - 1))
+                }
                 disabled={selectedConflict === 0}
                 className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-30"
               >
                 <ChevronUp className="h-3.5 w-3.5" />
               </button>
               <button
-                onClick={() => navigateToConflict(Math.min(conflictRegions.length - 1, selectedConflict + 1))}
+                onClick={() =>
+                  navigateToConflict(
+                    Math.min(conflictRegions.length - 1, selectedConflict + 1),
+                  )
+                }
                 disabled={selectedConflict >= conflictRegions.length - 1}
                 className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-30"
               >
@@ -558,7 +646,8 @@ export function MergeConflictEditor({
       {allResolved && (
         <div className="shrink-0 flex items-center justify-center gap-2 px-3 py-1.5 bg-[var(--color-success,#4caf50)]/10 border-t border-[var(--color-success,#4caf50)]/20 text-[var(--color-success,#4caf50)] text-[11px]">
           <CheckCircle2 className="h-3.5 w-3.5" />
-          All conflicts resolved — click <strong className="mx-1">Mark Resolved</strong> to stage
+          All conflicts resolved — click{" "}
+          <strong className="mx-1">Mark Resolved</strong> to stage
         </div>
       )}
     </div>
@@ -591,16 +680,24 @@ function ConflictBlock({
       onClick={onNavigate}
       title={`Jump to conflict ${index + 1}`}
     >
-      <span className="font-mono font-semibold w-4 text-center">{index + 1}</span>
+      <span className="font-mono font-semibold w-4 text-center">
+        {index + 1}
+      </span>
       <button
-        onClick={(e) => { e.stopPropagation(); onAcceptTheirs(); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onAcceptTheirs();
+        }}
         title="Accept theirs (incoming)"
         className="px-1 rounded text-blue-400 hover:bg-blue-400/10 transition-colors"
       >
         ←T
       </button>
       <button
-        onClick={(e) => { e.stopPropagation(); onAcceptOurs(); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onAcceptOurs();
+        }}
         title="Accept ours (current HEAD)"
         className="px-1 rounded text-green-400 hover:bg-green-400/10 transition-colors"
       >

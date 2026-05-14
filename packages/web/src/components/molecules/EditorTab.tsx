@@ -9,7 +9,13 @@ interface EditorTabProps {
   onClose: () => void;
 }
 
-export function EditorTab({ name, active, dirty, onClick, onClose }: EditorTabProps) {
+export function EditorTab({
+  name,
+  active,
+  dirty,
+  onClick,
+  onClose,
+}: EditorTabProps) {
   return (
     <div
       role="tab"

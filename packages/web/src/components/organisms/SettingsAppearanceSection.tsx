@@ -55,17 +55,19 @@ function FontSizeInput({
 }
 
 export function SettingsAppearanceSection() {
-  const { 
-    systemFontSize, 
-    editorFontSize, 
-    editorZoomWheelEnabled, 
+  const {
+    systemFontSize,
+    editorFontSize,
+    editorZoomWheelEnabled,
     terminalSuggestionsEnabled,
-    saveDebounced 
+    saveDebounced,
   } = useSettingsStore();
 
   return (
     <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-4">
-      <h3 className="text-sm font-medium text-[var(--color-text)]">Appearance</h3>
+      <h3 className="text-sm font-medium text-[var(--color-text)]">
+        Appearance
+      </h3>
 
       <FontSizeInput
         label="System font size"
@@ -95,9 +97,13 @@ export function SettingsAppearanceSection() {
         <button
           role="switch"
           aria-checked={editorZoomWheelEnabled}
-          onClick={() => saveDebounced({ editorZoomWheelEnabled: !editorZoomWheelEnabled })}
+          onClick={() =>
+            saveDebounced({ editorZoomWheelEnabled: !editorZoomWheelEnabled })
+          }
           className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] ${
-            editorZoomWheelEnabled ? "bg-[var(--color-primary)]" : "bg-[var(--color-border)]"
+            editorZoomWheelEnabled
+              ? "bg-[var(--color-primary)]"
+              : "bg-[var(--color-border)]"
           }`}
         >
           <span
@@ -122,9 +128,15 @@ export function SettingsAppearanceSection() {
         <button
           role="switch"
           aria-checked={terminalSuggestionsEnabled}
-          onClick={() => saveDebounced({ terminalSuggestionsEnabled: !terminalSuggestionsEnabled })}
+          onClick={() =>
+            saveDebounced({
+              terminalSuggestionsEnabled: !terminalSuggestionsEnabled,
+            })
+          }
           className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] ${
-            terminalSuggestionsEnabled ? "bg-[var(--color-primary)]" : "bg-[var(--color-border)]"
+            terminalSuggestionsEnabled
+              ? "bg-[var(--color-primary)]"
+              : "bg-[var(--color-border)]"
           }`}
         >
           <span

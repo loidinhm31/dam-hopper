@@ -11,7 +11,9 @@ import type { FileTier } from "@/lib/file-tier.js";
 import { MarkdownPreview } from "./MarkdownPreview.js";
 
 const MonacoHost = lazy(() =>
-  import("@/components/organisms/MonacoHost.js").then((m) => ({ default: m.MonacoHost })),
+  import("@/components/organisms/MonacoHost.js").then((m) => ({
+    default: m.MonacoHost,
+  })),
 );
 
 type MarkdownMode = "edit" | "split" | "preview";
@@ -76,7 +78,14 @@ export function MarkdownHost({
       <div className="flex-1 overflow-hidden flex">
         {/* Monaco pane */}
         {(mode === "edit" || mode === "split") && (
-          <div className={cn("overflow-hidden", mode === "split" ? "w-1/2 border-r border-[var(--color-border)]" : "w-full")}>
+          <div
+            className={cn(
+              "overflow-hidden",
+              mode === "split"
+                ? "w-1/2 border-r border-[var(--color-border)]"
+                : "w-full",
+            )}
+          >
             <Suspense fallback={editorFallback}>
               <MonacoHost
                 tabKey={tabKey}

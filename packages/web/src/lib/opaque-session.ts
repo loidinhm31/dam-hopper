@@ -21,7 +21,9 @@ async function deriveAesKey(sessionKeyB64: string): Promise<Uint8Array> {
   const salt = new Uint8Array(32); // 32 zero bytes = Rust `None` default for SHA-256
   const info = new TextEncoder().encode("dam-hopper-aes-256-gcm-v1");
 
-  const baseKey = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
+  const baseKey = await crypto.subtle.importKey("raw", ikm, "HKDF", false, [
+    "deriveBits",
+  ]);
   const bits = await crypto.subtle.deriveBits(
     { name: "HKDF", hash: "SHA-256", salt, info },
     baseKey,
@@ -56,7 +58,10 @@ export async function opaqueRegisterAndLogin(
   // ── 1. Registration round-trip ──────────────────────────────────────────────
   const reg = await opaqueRegisterStart(password);
 
-  const regResponseData = await transport.authRegisterStart(identifier, reg.requestBytes);
+  const regResponseData = await transport.authRegisterStart(
+    identifier,
+    reg.requestBytes,
+  );
   const regUpload = reg.finishRegistration(regResponseData);
   // overwrite=true: re-register each session (in-memory ephemeral server store).
   await transport.authRegisterFinish(identifier, regUpload, true);
@@ -64,14 +69,14 @@ export async function opaqueRegisterAndLogin(
   // ── 2. Login round-trip ─────────────────────────────────────────────────────
   const login = await opaqueLoginStart(password);
 
-  const { session_id, data: loginResponseData } = await transport.authLoginStart(
-    identifier,
-    login.requestBytes,
-  );
+  const { session_id, data: loginResponseData } =
+    await transport.authLoginStart(identifier, login.requestBytes);
 
   const finished = login.finishLogin(loginResponseData);
   if (!finished) {
-    throw new Error("OPAQUE login failed — passphrase mismatch or server error");
+    throw new Error(
+      "OPAQUE login failed — passphrase mismatch or server error",
+    );
   }
 
   await transport.authLoginFinish(session_id, finished.finalizationBytes);

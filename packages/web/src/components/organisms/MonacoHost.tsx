@@ -25,9 +25,10 @@ interface MonacoHostProps {
   onChange: (value: string) => void;
   onSave: () => void;
   onViewStateChange: (vs: unknown) => void;
-  onEditorReady?: (editor: monacoNs.editor.IStandaloneCodeEditor | null) => void;
+  onEditorReady?: (
+    editor: monacoNs.editor.IStandaloneCodeEditor | null,
+  ) => void;
 }
-
 
 export function MonacoHost({
   tabKey,
@@ -43,7 +44,9 @@ export function MonacoHost({
   const editorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof monacoNs | null>(null);
   const viewStateRef = useRef<unknown>(viewState);
-  const wheelEnabledRef = useRef(useSettingsStore.getState().editorZoomWheelEnabled);
+  const wheelEnabledRef = useRef(
+    useSettingsStore.getState().editorZoomWheelEnabled,
+  );
 
   // Persist latest onSave ref so the Ctrl+S command always calls the current handler
   const onSaveRef = useRef(onSave);
@@ -63,13 +66,14 @@ export function MonacoHost({
 
       // Restore view state (cursor pos, folds, scroll)
       if (viewState) {
-        editor.restoreViewState(viewState as monacoNs.editor.ICodeEditorViewState);
+        editor.restoreViewState(
+          viewState as monacoNs.editor.ICodeEditorViewState,
+        );
       }
 
       // Ctrl+S / Cmd+S → save (use ref so the latest handleSave is always called)
-      editor.addCommand(
-        monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
-        () => onSaveRef.current(),
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
+        onSaveRef.current(),
       );
 
       // Ctrl+Shift+F → open search panel with current selection as initial query
@@ -77,7 +81,9 @@ export function MonacoHost({
         monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF,
         () => {
           const sel = editor.getSelection();
-          const text = sel ? (editor.getModel()?.getValueInRange(sel) ?? "") : "";
+          const text = sel
+            ? (editor.getModel()?.getValueInRange(sel) ?? "")
+            : "";
           useSearchUiStore.getState().openWith(text.trim());
         },
       );
@@ -94,9 +100,12 @@ export function MonacoHost({
       const editorDomNode = editor.getDomNode();
       const layoutContainer = editorDomNode?.parentElement;
       if (layoutContainer) {
-        const ro = new ResizeObserver(() => { editor.layout(); });
+        const ro = new ResizeObserver(() => {
+          editor.layout();
+        });
         ro.observe(layoutContainer);
-        (editor as unknown as { _roCleanup?: () => void })._roCleanup = () => ro.disconnect();
+        (editor as unknown as { _roCleanup?: () => void })._roCleanup = () =>
+          ro.disconnect();
       }
 
       // Ctrl+Shift+Wheel → zoom editor font (custom handler; Monaco's mouseWheelZoom only handles Ctrl)
@@ -107,12 +116,14 @@ export function MonacoHost({
           e.preventDefault();
           const delta = e.deltaY < 0 ? 1 : -1;
           const store = useSettingsStore.getState();
-          store.saveDebounced({ editorFontSize: clampFont(store.editorFontSize + delta) });
+          store.saveDebounced({
+            editorFontSize: clampFont(store.editorFontSize + delta),
+          });
         };
         domNode.addEventListener("wheel", handleWheel, { passive: false });
         // Cleanup stored on the editor instance for the unmount effect
-        (editor as unknown as { _wheelCleanup?: () => void })._wheelCleanup = () =>
-          domNode.removeEventListener("wheel", handleWheel);
+        (editor as unknown as { _wheelCleanup?: () => void })._wheelCleanup =
+          () => domNode.removeEventListener("wheel", handleWheel);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -141,7 +152,7 @@ export function MonacoHost({
         (ed as unknown as { _wheelCleanup?: () => void })._wheelCleanup?.();
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const isDegraded = tier === "degraded";

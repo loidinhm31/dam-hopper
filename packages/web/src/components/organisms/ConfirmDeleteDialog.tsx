@@ -11,7 +11,14 @@ interface Props {
   loading?: boolean;
 }
 
-export function ConfirmDeleteDialog({ open, path, isDir, onConfirm, onCancel, loading = false }: Props) {
+export function ConfirmDeleteDialog({
+  open,
+  path,
+  isDir,
+  onConfirm,
+  onCancel,
+  loading = false,
+}: Props) {
   useEffect(() => {
     if (!open) return;
     function handleKey(e: KeyboardEvent) {
@@ -54,7 +61,13 @@ export function ConfirmDeleteDialog({ open, path, isDir, onConfirm, onCancel, lo
         </p>
 
         <div className="flex gap-2 justify-end">
-          <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={loading}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onCancel}
+            disabled={loading}
+          >
             Cancel
           </Button>
           <Button

@@ -6,14 +6,22 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 
 **DamHopper** is a workspace management system for agent-based development. It combines a Rust backend server with a React web frontend to provide an integrated development environment for managing workspaces, agents, terminals, and file operations.
 
-**Repository Structure**: 
+**Repository Structure**:
+
 - 274 total files
 - ~564K tokens
 - Predominantly Rust (server) and TypeScript/React (web)
 
+## Current Frontend Shared Logic
+
+- **File Decorations**: `packages/web/src/lib/file-decoration.ts` is the shared registry for file icon, badge, display-language, and Monaco-language lookup.
+- **Compatibility Layer**: `packages/web/src/lib/mime-to-language.ts` keeps MIME-only callers working while routing to the shared registry.
+- **Rendering Wrapper**: `packages/web/src/lib/file-decoration-icon.tsx` is a thin icon component over the registry.
+
 ## Key Features
 
 ### Backend (Rust Server)
+
 - **File System Operations**: Streaming upload/download, directory traversal, conflict handling
 - **Terminal Management**: PTY session manager with WebSocket streaming
 - **Agent Store**: Version-controlled agent configurations, skills, and templates
@@ -21,6 +29,7 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 - **WebSocket Transport**: Bi-directional communication for real-time updates
 
 ### Frontend (React + Vite)
+
 - **IDE Interface**: File tree, editor tabs, code highlighting (Monaco)
 - **Terminal Emulator**: Multi-session terminal management with color support
 - **Workspace Navigation**: Multi-workspace switching, project discovery
@@ -28,6 +37,7 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 - **Git Integration**: Diff viewer, commit history, merge conflict handling
 
 ### Development Features
+
 - **Dev Mode**: `--no-auth` flag bypasses authentication for local development
 - **Agent Store Inventory**: Browse, ship, and manage agent templates
 - **Configuration Management**: Workspace and global configuration editors
@@ -67,6 +77,7 @@ Infrastructure
 ## Technology Stack
 
 ### Backend
+
 - **Language**: Rust 1.79+
 - **Runtime**: Tokio (async/await)
 - **Web Framework**: Axum 0.7
@@ -77,6 +88,7 @@ Infrastructure
 - **Testing**: tokio::test, tower, tempfile
 
 ### Frontend
+
 - **Language**: TypeScript 5.3+
 - **Framework**: React 18.2
 - **Build Tool**: Vite 5.1.3
@@ -91,6 +103,7 @@ Infrastructure
 ## Recent Phases
 
 ### Phase 01: Server-Side Auth Bypass ✅ Complete
+
 - **Status**: Fully implemented and tested (7/7 tests passing)
 - **Feature**: `--no-auth` CLI flag for local dev mode
 - **Safety**: Production guards prevent unsafe configurations
@@ -98,6 +111,7 @@ Infrastructure
 - **Documentation**: [phase-01-server-auth-bypass/](./phase-01-server-auth-bypass/)
 
 ### Phase 04: SQLite Session Persistence ✅ Complete
+
 - **Status**: Session persistence infrastructure with CRUD operations
 - **Features**:
   - SQLite-backed `SessionStore` for session metadata and scrollback buffers
@@ -113,13 +127,15 @@ Infrastructure
 - **Documentation**: [Configuration Guide - Server Configuration](./configuration-guide.md#server-configuration), [System Architecture - persistence/ module](./system-architecture.md#persistence-phase-04)
 
 ### Phase 04: Monaco Editor ✅ Complete
+
 - **Status**: Advanced editor integration
 - **Features**: Syntax highlighting, multi-tab support, git integration
 - **Documentation**: [phase-04-monaco-editor.md](./phase-04-monaco-editor.md)
 
 ### Phase 04: PTY Restart Engine ✅ Complete
+
 - **Status**: Auto-restart for terminal sessions with exponential backoff
-- **Features**: 
+- **Features**:
   - Supervisor pattern for async/blocking I/O separation
   - Restart policies: Never, OnFailure, Always
   - Exponential backoff (1s → 30s)
@@ -129,6 +145,7 @@ Infrastructure
 - **Known Limitation**: Exit code inference (portable-pty API) — cannot distinguish exit 0 from exit 1
 
 ### Phase 06: Startup Restore ✅ Complete
+
 - **Status**: Session restoration from SQLite on server startup
 - **Features**:
   - `restore_sessions()` function loads and respawns sessions
@@ -145,6 +162,7 @@ Infrastructure
 ## Critical Components
 
 ### Authentication Module (`server/src/api/auth.rs`)
+
 - JWT creation and validation
 - Cookie-based sessions (httpOnly, Secure, SameSite)
 - MongoDB-backed user management
@@ -152,6 +170,7 @@ Infrastructure
 - Token expiry: 30 days (dev mode), configurable production
 
 ### File System Subsystem (`server/src/fs/`)
+
 - Sandboxed path validation
 - Streaming upload/download (chunked transfers)
 - Directory watching with inotify
@@ -159,6 +178,7 @@ Infrastructure
 - Permission preservation
 
 ### PTY Session Manager (`server/src/pty/`)
+
 - Tokio-based PTY management
 - WebSocket streaming for terminal output
 - Session persistence across reconnects
@@ -166,6 +186,7 @@ Infrastructure
 - Binary and UTF-8 support
 
 ### Agent Store (`server/src/agent_store/`)
+
 - Git-backed agent storage
 - Worktree management for parallel editing
 - Skill distribution and merging
@@ -175,6 +196,7 @@ Infrastructure
 ## Configuration
 
 ### Environment Variables
+
 ```bash
 DAM_HOPPER_WORKSPACE     # Workspace root directory
 DAM_HOPPER_PORT          # Server port (default: 4800)
@@ -187,6 +209,7 @@ RUST_ENV                 # Runtime environment (blocks if "production")
 ```
 
 ### Configuration Files
+
 ```
 ~/.config/dam-hopper/
   ├── server-token         # JWT signing secret (hex UUID)
@@ -202,6 +225,7 @@ workspace-root/
 ## Development Commands
 
 ### Server Development
+
 ```bash
 cd server
 
@@ -220,6 +244,7 @@ cargo build --release
 ```
 
 ### Web Development
+
 ```bash
 cd packages/web
 
@@ -240,6 +265,7 @@ pnpm coverage
 ```
 
 ### Full Stack
+
 ```bash
 # From root
 pnpm install
@@ -296,10 +322,12 @@ dam-hopper/
 ## Test Coverage
 
 ### Passing Tests
+
 - **Server**: 111 unit tests, 7 integration tests (auth)
 - **Web**: Component tests with Vitest, 80% coverage target
 
 ### Known Limitations (Pre-existing)
+
 - 8 platform-specific failures (Windows symlink privileges, path format)
 - Git worktree edge cases
 - Not phase-01-related
@@ -315,35 +343,38 @@ dam-hopper/
 ## Security Considerations
 
 ### Authentication
+
 - **JWT Signing**: Uses server-token (hex UUID) stored at `~/.config/dam-hopper/server-token`
 - **Cookie Security**: HttpOnly, Secure, SameSite=Strict
 - **Dev Mode Safety**: Production guards prevent unsafe configurations with `--no-auth`
 
 ### File System
+
 - **Sandbox**: All paths validated relative to workspace root
 - **Symlinks**: Allowed but cannot escape sandbox
 - **Permissions**: Preserved from filesystem
 
 ### MongoDB (Optional)
+
 - **Bcrypt Hashing**: Password hashed with DEFAULT_COST (12 rounds)
 - **Account Status**: Supports enabled/disabled flag
 - **Connection**: Pooled, support for MongoDB Atlas
 
 ## Documentation Library
 
-| Document | Purpose |
-|----------|---------|
-| [system-architecture.md](./system-architecture.md) | Component interactions, data flow |
-| [api-reference.md](./api-reference.md) | HTTP endpoints, request/response schemas |
-| [code-standards.md](./code-standards.md) | Naming conventions, patterns, best practices |
-| [configuration-guide.md](./configuration-guide.md) | Setup, environment variables, config files |
+| Document                                                       | Purpose                                       |
+| -------------------------------------------------------------- | --------------------------------------------- |
+| [system-architecture.md](./system-architecture.md)             | Component interactions, data flow             |
+| [api-reference.md](./api-reference.md)                         | HTTP endpoints, request/response schemas      |
+| [code-standards.md](./code-standards.md)                       | Naming conventions, patterns, best practices  |
+| [configuration-guide.md](./configuration-guide.md)             | Setup, environment variables, config files    |
 | [phase-01-server-auth-bypass/](./phase-01-server-auth-bypass/) | Dev mode authentication bypass implementation |
-| [ws-protocol-guide.md](./ws-protocol-guide.md) | WebSocket message types, terminal protocol |
-| [project-roadmap.md](./project-roadmap.md) | Planned features and phases |
+| [ws-protocol-guide.md](./ws-protocol-guide.md)                 | WebSocket message types, terminal protocol    |
+| [project-roadmap.md](./project-roadmap.md)                     | Planned features and phases                   |
 
 ---
 
 **Last Updated**: April 16, 2026  
 **Phase Status**: Phase 01 (Server-Side Auth Bypass) Complete  
 **Generated by**: Automated codebase compaction (repomix) + manual documentation  
-*For latest phase documentation, see [phase-01-server-auth-bypass/index.md](./phase-01-server-auth-bypass/index.md)*
+_For latest phase documentation, see [phase-01-server-auth-bypass/index.md](./phase-01-server-auth-bypass/index.md)_

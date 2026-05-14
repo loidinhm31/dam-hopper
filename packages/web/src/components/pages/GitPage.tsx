@@ -3,7 +3,12 @@ import { GitCommit, GitBranch, History } from "lucide-react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button } from "@/components/atoms/Button.js";
 import { ProgressList } from "@/components/organisms/ProgressList.js";
-import { useProjects, useGitFetch, useGitPull, useProjectStatus } from "@/api/queries.js";
+import {
+  useProjects,
+  useGitFetch,
+  useGitPull,
+  useProjectStatus,
+} from "@/api/queries.js";
 import type { GitOpResult, GitLogEntry, DiffFileEntry } from "@/api/client.js";
 import { Badge } from "@/components/atoms/Badge.js";
 import { useGitWithSshRetry } from "@/hooks/useGitWithSshRetry.js";
@@ -35,7 +40,11 @@ function ResultsSummary({ results }: SectionResults) {
           key={r.projectName}
           className="text-[var(--color-danger)] font-mono text-xs"
         >
-          {r.projectName}: {typeof r.error === "string" ? r.error : (r.error as unknown as { message?: string })?.message ?? String(r.error)}
+          {r.projectName}:{" "}
+          {typeof r.error === "string"
+            ? r.error
+            : ((r.error as unknown as { message?: string })?.message ??
+              String(r.error))}
         </div>
       ))}
     </div>
@@ -45,7 +54,9 @@ function ResultsSummary({ results }: SectionResults) {
 export function GitPage() {
   const { data: projects = [] } = useProjects();
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [selectedCommit, setSelectedCommit] = useState<GitLogEntry | null>(null);
+  const [selectedCommit, setSelectedCommit] = useState<GitLogEntry | null>(
+    null,
+  );
 
   const [fetchResults, setFetchResults] = useState<GitOpResult[] | null>(null);
   const [pullResults, setPullResults] = useState<GitOpResult[] | null>(null);
@@ -83,7 +94,7 @@ export function GitPage() {
         file.status,
         file.additions,
         file.deletions,
-        selectedCommit.hash
+        selectedCommit.hash,
       );
     }
   }
@@ -137,9 +148,9 @@ export function GitPage() {
               loading={gitFetch.isPending}
               onClick={() => {
                 setFetchResults(null);
-                void executeWithRetry(() =>
-                  gitFetch.mutateAsync(selectedList),
-                ).then((r) => setFetchResults(r)).catch(() => {});
+                void executeWithRetry(() => gitFetch.mutateAsync(selectedList))
+                  .then((r) => setFetchResults(r))
+                  .catch(() => {});
               }}
             >
               Start Fetch
@@ -165,9 +176,9 @@ export function GitPage() {
               loading={gitPull.isPending}
               onClick={() => {
                 setPullResults(null);
-                void executeWithRetry(() =>
-                  gitPull.mutateAsync(selectedList),
-                ).then((r) => setPullResults(r)).catch(() => {});
+                void executeWithRetry(() => gitPull.mutateAsync(selectedList))
+                  .then((r) => setPullResults(r))
+                  .catch(() => {});
               }}
             >
               Start Pull
@@ -186,13 +197,16 @@ export function GitPage() {
       {selectedProjectName ? (
         <div className="mt-8 space-y-4">
           <h2 className="text-base font-semibold text-[var(--color-text)] flex items-center gap-2">
-             Git Repository: {selectedProjectName}
-             {projectStatus?.branch && (
-               <Badge variant="outline" className="ml-1 text-[var(--color-primary)] bg-[var(--color-primary)]/5 border-[var(--color-primary)]/20">
-                 <GitBranch className="w-3 h-3 mr-1" />
-                 {projectStatus.branch}
-               </Badge>
-             )}
+            Git Repository: {selectedProjectName}
+            {projectStatus?.branch && (
+              <Badge
+                variant="outline"
+                className="ml-1 text-[var(--color-primary)] bg-[var(--color-primary)]/5 border-[var(--color-primary)]/20"
+              >
+                <GitBranch className="w-3 h-3 mr-1" />
+                {projectStatus.branch}
+              </Badge>
+            )}
           </h2>
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 h-[700px]">
             {/* Sidebar: Commit / Local Changes */}
@@ -206,20 +220,25 @@ export function GitPage() {
 
             {/* Main: Git Log Graph + Details */}
             <div className="lg:col-span-3 flex h-full overflow-hidden border border-[var(--color-border)] rounded-md bg-[var(--color-surface)]">
-              <div className={cn("flex flex-col min-w-0 flex-1", selectedCommit ? "w-[65%]" : "w-full")}>
+              <div
+                className={cn(
+                  "flex flex-col min-w-0 flex-1",
+                  selectedCommit ? "w-[65%]" : "w-full",
+                )}
+              >
                 <div className="shrink-0 mb-0 px-4 py-2 border-b border-[var(--color-border)] text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] flex items-center gap-2 bg-[var(--color-background)]">
                   <History className="w-3.5 h-3.5" />
                   Commits
                 </div>
                 <div className="flex-1 min-h-0 overflow-hidden">
-                  <GitLogTree 
-                    project={selectedProjectName} 
+                  <GitLogTree
+                    project={selectedProjectName}
                     selectedHash={selectedCommit?.hash}
                     onSelectCommit={setSelectedCommit}
                   />
                 </div>
               </div>
-              
+
               {selectedCommit && (
                 <div className="w-[35%] h-full shrink-0">
                   <CommitDetailsPanel
@@ -235,11 +254,14 @@ export function GitPage() {
         </div>
       ) : (
         <div className="mt-8 p-8 flex flex-col items-center justify-center text-center border-2 border-dashed border-[var(--color-border)] rounded-lg bg-[var(--color-surface)]/50">
-           <GitBranch className="w-12 h-12 text-[var(--color-text-muted)] mb-3" />
-           <h3 className="font-medium text-[var(--color-text)]">No Project Selected</h3>
-           <p className="mt-1 text-sm text-[var(--color-text-muted)]">
-             Select exactly one project above to view its Git history graph, structured similarly to IDE tools.
-           </p>
+          <GitBranch className="w-12 h-12 text-[var(--color-text-muted)] mb-3" />
+          <h3 className="font-medium text-[var(--color-text)]">
+            No Project Selected
+          </h3>
+          <p className="mt-1 text-sm text-[var(--color-text-muted)]">
+            Select exactly one project above to view its Git history graph,
+            structured similarly to IDE tools.
+          </p>
         </div>
       )}
     </AppLayout>

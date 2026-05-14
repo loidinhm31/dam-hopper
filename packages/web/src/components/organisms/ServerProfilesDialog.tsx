@@ -17,7 +17,12 @@ interface Props {
   onSwitchProfile: (profile: ServerProfile) => void;
 }
 
-export function ServerProfilesDialog({ open, onClose, onEditProfile, onSwitchProfile }: Props) {
+export function ServerProfilesDialog({
+  open,
+  onClose,
+  onEditProfile,
+  onSwitchProfile,
+}: Props) {
   const [profiles, setProfiles] = useState<ServerProfile[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const queryClient = useQueryClient();
@@ -35,10 +40,10 @@ export function ServerProfilesDialog({ open, onClose, onEditProfile, onSwitchPro
     setActiveProfile(profile.id);
     onSwitchProfile(profile);
     onClose();
-    
+
     // Reinitialize transport with new server URL (without page reload)
     reinitializeTransport(profile.url);
-    
+
     // Invalidate all queries to refetch data from the new server
     void queryClient.invalidateQueries();
     void queryClient.resetQueries();
@@ -55,7 +60,9 @@ export function ServerProfilesDialog({ open, onClose, onEditProfile, onSwitchPro
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
       style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <div
         className="w-full max-w-md rounded-2xl border border-[var(--color-border)] shadow-2xl"
@@ -92,7 +99,12 @@ export function ServerProfilesDialog({ open, onClose, onEditProfile, onSwitchPro
                     ? "border-[var(--color-success)] bg-[var(--color-success)]/10"
                     : "border-[var(--color-border)] hover:border-[var(--color-primary)]"
                 }`}
-                style={{ background: profile.id === activeId ? undefined : "var(--color-surface-2)" }}
+                style={{
+                  background:
+                    profile.id === activeId
+                      ? undefined
+                      : "var(--color-surface-2)",
+                }}
               >
                 <Server size={18} className="text-[var(--color-text-muted)]" />
                 <div className="flex-1 min-w-0">
@@ -103,7 +115,9 @@ export function ServerProfilesDialog({ open, onClose, onEditProfile, onSwitchPro
                     {profile.url}
                   </div>
                   <div className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                    {profile.authType === "none" ? "No auth" : `Basic (${profile.username || "—"})`}
+                    {profile.authType === "none"
+                      ? "No auth"
+                      : `Basic (${profile.username || "—"})`}
                   </div>
                 </div>
                 <div className="flex gap-1">

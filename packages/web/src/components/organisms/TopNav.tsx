@@ -8,7 +8,12 @@ import { useIpc } from "@/hooks/useSSE.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 import { ServerProfilesDialog } from "@/components/organisms/ServerProfilesDialog.js";
-import { getActiveProfile, getServerUrl, buildAuthHeaders, type ServerProfile } from "@/api/server-config.js";
+import {
+  getActiveProfile,
+  getServerUrl,
+  buildAuthHeaders,
+  type ServerProfile,
+} from "@/api/server-config.js";
 import { BASE_NAV } from "@/lib/navigation.js";
 
 interface TopNavProps {
@@ -20,9 +25,11 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
   const { status } = useIpc();
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [profilesDialogOpen, setProfilesDialogOpen] = useState(false);
-  const [editingProfile, setEditingProfile] = useState<ServerProfile | null | undefined>(undefined);
+  const [editingProfile, setEditingProfile] = useState<
+    ServerProfile | null | undefined
+  >(undefined);
   const [isDevMode, setIsDevMode] = useState(false);
-  
+
   const activeProfile = getActiveProfile();
 
   useEffect(() => {
@@ -33,13 +40,13 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
     const checkDevMode = async () => {
       try {
         const res = await fetch(`${getServerUrl()}/api/auth/status`, {
-          headers: buildAuthHeaders()
+          headers: buildAuthHeaders(),
         });
         if (res.ok) {
           const data = await res.json();
           setIsDevMode(!!data.dev_mode);
         }
-      } catch { }
+      } catch {}
     };
     void checkDevMode();
   }, [status]);
@@ -53,7 +60,7 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
             DAM-HOPPER
           </span>
         </div>
-        
+
         <button
           onClick={onToggle}
           className="p-1.5 hover:bg-[var(--color-surface-2)] rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
@@ -63,10 +70,14 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
         </button>
 
         {/* Inline Menu */}
-        <nav className={cn(
-          "flex items-center gap-1 overflow-hidden transition-all duration-300 ease-in-out",
-          collapsed ? "max-w-0 opacity-0 pointer-events-none" : "max-w-[1000px] opacity-100 ml-2"
-        )}>
+        <nav
+          className={cn(
+            "flex items-center gap-1 overflow-hidden transition-all duration-300 ease-in-out",
+            collapsed
+              ? "max-w-0 opacity-0 pointer-events-none"
+              : "max-w-[1000px] opacity-100 ml-2",
+          )}
+        >
           {BASE_NAV.map(({ to, icon: Icon, label }) => (
             <NavLink
               key={to}
@@ -90,22 +101,26 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
 
       <div className="flex items-center gap-3">
         <WorkspaceSwitcher variant="compact" />
-        
+
         <div className="h-4 w-[1px] bg-[var(--color-border)]" />
-        
+
         <button
           onClick={() => setProfilesDialogOpen(true)}
           className="flex items-center gap-2 px-2 py-1 rounded-sm hover:bg-[var(--color-surface-2)] transition-colors"
           title={activeProfile?.name || "Server connection"}
         >
-          <ConnectionDot status={status} collapsed={false} devMode={isDevMode} />
+          <ConnectionDot
+            status={status}
+            collapsed={false}
+            devMode={isDevMode}
+          />
           {activeProfile && (
             <span className="text-[10px] font-bold text-[var(--color-text-muted)] tracking-wider uppercase hidden md:inline">
               {activeProfile.name}
             </span>
           )}
         </button>
-        
+
         <button
           onClick={() => setProfilesDialogOpen(true)}
           className="p-1.5 hover:bg-[var(--color-surface-2)] rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
@@ -115,16 +130,26 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
         </button>
       </div>
 
-      <ServerSettingsDialog 
-        open={serverSettingsOpen} 
-        onClose={() => { setServerSettingsOpen(false); setEditingProfile(undefined); }}
+      <ServerSettingsDialog
+        open={serverSettingsOpen}
+        onClose={() => {
+          setServerSettingsOpen(false);
+          setEditingProfile(undefined);
+        }}
         profile={editingProfile}
-        onSaved={() => { setServerSettingsOpen(false); setEditingProfile(undefined); }}
+        onSaved={() => {
+          setServerSettingsOpen(false);
+          setEditingProfile(undefined);
+        }}
       />
       <ServerProfilesDialog
         open={profilesDialogOpen}
         onClose={() => setProfilesDialogOpen(false)}
-        onEditProfile={(p) => { setProfilesDialogOpen(false); setEditingProfile(p); setServerSettingsOpen(true); }}
+        onEditProfile={(p) => {
+          setProfilesDialogOpen(false);
+          setEditingProfile(p);
+          setServerSettingsOpen(true);
+        }}
         onSwitchProfile={() => {}}
       />
     </header>

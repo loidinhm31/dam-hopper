@@ -43,44 +43,50 @@ run_command = "bash scripts/run.sh"
 
 ### Project Fields
 
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| name | string | ✓ | Unique within workspace |
-| path | string | ✓ | Relative to workspace root |
-| type | enum | ✓ | npm \| pnpm \| cargo \| maven \| gradle \| custom |
-| build_command | string | | Overrides preset for type |
-| run_command | string | | Overrides preset for type |
-| env_file | string | | Path to .env (relative to project) |
-| tags | array | | Arbitrary tags for filtering |
+| Field         | Type   | Required | Notes                                             |
+| ------------- | ------ | -------- | ------------------------------------------------- |
+| name          | string | ✓        | Unique within workspace                           |
+| path          | string | ✓        | Relative to workspace root                        |
+| type          | enum   | ✓        | npm \| pnpm \| cargo \| maven \| gradle \| custom |
+| build_command | string |          | Overrides preset for type                         |
+| run_command   | string |          | Overrides preset for type                         |
+| env_file      | string |          | Path to .env (relative to project)                |
+| tags          | array  |          | Arbitrary tags for filtering                      |
 
 ### Project Type Presets
 
 #### npm
+
 - Build: `npm run build`
 - Run: `npm start`
 - Dev: `npm run dev`
 
 #### pnpm
+
 - Build: `pnpm build`
 - Run: `pnpm start`
 - Dev: `pnpm dev`
 
 #### cargo
+
 - Build: `cargo build --release`
 - Run: `cargo run --release`
 - Dev: `cargo run`
 
 #### maven
+
 - Build: `mvn clean package`
 - Run: `java -jar target/*.jar`
 - Dev: `mvn spring-boot:run` (if Spring Boot)
 
 #### gradle
+
 - Build: `gradle build`
 - Run: `gradle run`
 - Dev: `gradle bootRun` (if Spring Boot)
 
 #### custom
+
 - Requires explicit build_command and run_command
 
 ### Agent Store Configuration
@@ -111,11 +117,11 @@ session_buffer_ttl_hours = 24  # TTL for dead session buffers in hours (default:
 
 **Fields:**
 
-| Field | Type | Default | Notes |
-|-------|------|---------|-------|
-| session_persistence | bool | false | Enable to persist session metadata + scrollback buffers across server restarts |
-| session_db_path | string | ~/.config/dam-hopper/sessions.db | SQLite database path (supports ~ expansion); must be on local filesystem |
-| session_buffer_ttl_hours | u64 | 24 | Hours before dead session buffers are auto-deleted; prevents unbounded database growth |
+| Field                    | Type   | Default                          | Notes                                                                                  |
+| ------------------------ | ------ | -------------------------------- | -------------------------------------------------------------------------------------- |
+| session_persistence      | bool   | false                            | Enable to persist session metadata + scrollback buffers across server restarts         |
+| session_db_path          | string | ~/.config/dam-hopper/sessions.db | SQLite database path (supports ~ expansion); must be on local filesystem               |
+| session_buffer_ttl_hours | u64    | 24                               | Hours before dead session buffers are auto-deleted; prevents unbounded database growth |
 
 **Security Note:** On Unix systems, database files are created with 0o600 permissions (user-only access). Ensure the directory containing `session_db_path` is not world-readable.
 
@@ -129,11 +135,11 @@ session_buffer_ttl_hours = 48
 ```
 
 When enabled:
+
 - Session metadata (id, project, command, cwd, restart_policy, etc.) is saved to SQLite
 - Session scrollback buffers (PTY output) are persisted with the session
 - On server restart, sessions can be restored from the database
 - Dead sessions are kept for 60 seconds to allow reconnection; buffers are cleaned up per TTL
-
 
 ## Global Configuration (~/.config/dam-hopper/config.toml)
 
@@ -160,10 +166,10 @@ path = "/tmp/test-workspace"
 
 ## Environment Variables
 
-| Var | Type | Purpose |
-|-----|------|---------|
-| `DAM_HOPPER_WORKSPACE` | path | Override workspace path (takes priority over global config default) |
-| `RUST_LOG` | string | Logging level (e.g., `dam_hopper=debug,axum=info`) |
+| Var                    | Type   | Purpose                                                             |
+| ---------------------- | ------ | ------------------------------------------------------------------- |
+| `DAM_HOPPER_WORKSPACE` | path   | Override workspace path (takes priority over global config default) |
+| `RUST_LOG`             | string | Logging level (e.g., `dam_hopper=debug,axum=info`)                  |
 
 ## Authentication Token
 
@@ -224,6 +230,7 @@ sudo systemctl start dam-hopper
 ```
 
 Edit `/etc/systemd/system/dam-hopper.service` to set:
+
 - `--workspace` path
 - `--port`
 - `--cors-origins` (if needed)
@@ -262,6 +269,7 @@ Keys are stored in-memory per session (not persisted to disk).
 Error: `Workspace directory does not exist`
 
 Check:
+
 1. Path in dam-hopper.toml exists: `ls /path/to/workspace`
 2. Path is absolute or relative to CWD
 3. User has read permissions
@@ -271,6 +279,7 @@ Check:
 Error: `Project not found: {name}`
 
 Verify in dam-hopper.toml:
+
 1. Project name is correct
 2. Project path exists relative to workspace root
 3. Project type matches actual structure

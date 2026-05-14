@@ -1,4 +1,10 @@
-import { useState, useRef, useCallback, useEffect, type RefObject } from "react";
+import {
+  useState,
+  useRef,
+  useCallback,
+  useEffect,
+  type RefObject,
+} from "react";
 import type { Terminal } from "@xterm/xterm";
 import { TerminalInputBuffer } from "@/lib/terminal-input-buffer.js";
 import { PromptDetector } from "@/lib/prompt-detector.js";
@@ -57,11 +63,17 @@ function computePosition(term: Terminal): OverlayPosition {
   return { x, y: flipAbove ? cursorY * cellHeight - GAP : below, flipAbove };
 }
 
-function searchWithProjectBoost(query: string, project: string): HistorySearchResult[] {
+function searchWithProjectBoost(
+  query: string,
+  project: string,
+): HistorySearchResult[] {
   const results = searchHistory(query);
   if (!project) return results;
   return results
-    .map((r) => ({ ...r, score: r.score * (r.entry.project === project ? PROJECT_BOOST : 1) }))
+    .map((r) => ({
+      ...r,
+      score: r.score * (r.entry.project === project ? PROJECT_BOOST : 1),
+    }))
     .sort((a, b) => b.score - a.score);
 }
 
@@ -103,13 +115,21 @@ export function useTerminalSuggestions(
     setRenderState((prev) => ({ ...prev, isVisible: false }));
   }, []);
 
-  const show = useCallback((results: HistorySearchResult[], pos: OverlayPosition) => {
-    if (!settings.terminalSuggestionsEnabled) return;
-    m.current.isVisible = true;
-    m.current.selectedIndex = 0;
-    m.current.suggestions = results;
-    setRenderState({ isVisible: true, suggestions: results, selectedIndex: 0, position: pos });
-  }, [settings.terminalSuggestionsEnabled]);
+  const show = useCallback(
+    (results: HistorySearchResult[], pos: OverlayPosition) => {
+      if (!settings.terminalSuggestionsEnabled) return;
+      m.current.isVisible = true;
+      m.current.selectedIndex = 0;
+      m.current.suggestions = results;
+      setRenderState({
+        isVisible: true,
+        suggestions: results,
+        selectedIndex: 0,
+        position: pos,
+      });
+    },
+    [settings.terminalSuggestionsEnabled],
+  );
 
   const handleInput = useCallback(
     (data: string): HandleInputResult => {

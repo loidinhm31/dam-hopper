@@ -31,25 +31,25 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 
 ### Understanding the System
 
-| Document | Purpose |
-|----------|---------|
-| Project Overview & PDR | Product requirements, non-functional targets, roadmap |
-| System Architecture | Module breakdown, data flow, concurrency model, error handling |
-| Codebase Summary | Quick reference to architecture, services, patterns |
+| Document               | Purpose                                                        |
+| ---------------------- | -------------------------------------------------------------- |
+| Project Overview & PDR | Product requirements, non-functional targets, roadmap          |
+| System Architecture    | Module breakdown, data flow, concurrency model, error handling |
+| Codebase Summary       | Quick reference to architecture, services, patterns            |
 
 ### Building & Configuring
 
-| Document | Purpose |
-|----------|---------|
+| Document            | Purpose                                                           |
+| ------------------- | ----------------------------------------------------------------- |
 | Configuration Guide | dam-hopper.toml syntax, env vars, feature flags, token generation |
-| API Reference | All REST/WebSocket endpoints, authentication, examples |
-| Code Standards | Coding patterns, testing, structure, security checklist |
+| API Reference       | All REST/WebSocket endpoints, authentication, examples            |
+| Code Standards      | Coding patterns, testing, structure, security checklist           |
 
 ### Frontend Development
 
-| Document | Purpose |
-|----------|---------|
-| Frontend Components | React component architecture, lifecycle management, event handling |
+| Document                 | Purpose                                                               |
+| ------------------------ | --------------------------------------------------------------------- |
+| Frontend Components      | React component architecture, lifecycle management, event handling    |
 | WebSocket Protocol Guide | Real-time message formats, Phase 5+ events (exit, restart, reconnect) |
 
 ## Core Concepts
@@ -60,13 +60,16 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 
 - Endpoints: GET /api/fs/list, /api/fs/read, /api/fs/stat
 - Sandbox: Path validation prevents escape attempts
+- Frontend: shared file decoration registry powers icon, badge, display-language, and Monaco-language lookup
 
 **Workspace Management** — TOML-based config, project discovery, hot-reload.
+
 - Config: dam-hopper.toml at workspace root
 - Support types: npm, pnpm, cargo, maven, gradle, custom
 - See: [Configuration Guide](./configuration-guide.md)
 
 **Terminal Sessions** — Isolated PTY per project, output streaming.
+
 - API: /api/pty/spawn, /api/pty/{id}/send
 - WebSocket: Real-time output + events
 - **Phase 04:** Auto-restart with exponential backoff, policy-driven (never/on-failure/always)
@@ -75,11 +78,13 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - See: [API Reference](./api-reference.md#terminals)
 
 **Git Operations** — Clone, push, pull, status with progress.
+
 - API: /api/git/{project}/clone, /push, /status
 - SSH support: Load keys via /api/ssh/keys/load
 - See: [API Reference](./api-reference.md#git-operations)
 
 **Agent Store** — Distribute .claude/ items (skills, commands, hooks) via symlinks.
+
 - API: /api/agent-store/distribution, /import, /ship
 - Health checks for broken symlinks
 - See: [System Architecture](./system-architecture.md#module-breakdown)
@@ -105,6 +110,7 @@ See token at `~/.config/dam-hopper/server-token`.
 ### Debug Session Lifecycle
 
 Terminal lifecycle follows six main states:
+
 - **alive** — Process running (🟢 green dot)
 - **restarting** — Exited, will restart after backoff (🟡 yellow dot)
 - **crashed** — Exited non-zero, no restart (🔴 red dot)
@@ -115,6 +121,7 @@ See [Frontend Components](./frontend-components.md#data-flow-terminal-lifecycle)
 ## Recent Changes
 
 **Phase 06 (Complete ✓):**
+
 - ✓ Added session lifecycle status helpers (`session-status.ts`)
 - ✓ Implemented status dots in TerminalTreeView (color-coded by state)
 - ✓ Added restart badge in DashboardPage (shows count when > 0)
@@ -123,12 +130,14 @@ See [Frontend Components](./frontend-components.md#data-flow-terminal-lifecycle)
 - ✓ Added query invalidation on process restart
 
 **Phase 05 (Complete ✓):**
+
 - ✓ Backend: Enhanced `terminal:exit` with willRestart/restartInMs/restartCount
 - ✓ Backend: New `process:restarted` event
 - ✓ Backend: Separated PTY and FS channels to prevent FS overflow from killing connection
 - ✓ Frontend: Transport listeners for new events
 
 **Phase 04 (Complete ✓):**
+
 - ✓ Auto-restart engine with exponential backoff
 - ✓ Configurable restart policy per terminal (never/on-failure/always)
 - ✓ Restart count tracking
@@ -169,8 +178,6 @@ curl -H "Authorization: Bearer $TOKEN" \
   'http://localhost:4800/api/fs/stat?project=backend&path=src'
 ```
 
-
-
 ### Run Tests
 
 ```bash
@@ -193,6 +200,7 @@ Rust Server (Axum)
 ```
 
 Key patterns:
+
 - Arc<Mutex<T>> for cheap-clone shared state
 - Never hold locks across `.await`
 - Feature gating at route registration time
@@ -218,6 +226,7 @@ Each file is self-contained but linked for cross-reference.
 ## Maintenance
 
 Docs are updated when:
+
 - New API endpoints are added (update api-reference.md)
 - Architecture changes (update system-architecture.md + code-standards.md)
 - Config schema changes (update configuration-guide.md)

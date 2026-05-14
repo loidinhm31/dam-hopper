@@ -46,7 +46,9 @@ interface UseGitWithSshRetryResult {
    * Wraps a git operation. If it returns auth-error results,
    * opens the passphrase dialog, loads key, then retries once.
    */
-  executeWithRetry: (fn: () => Promise<GitOpResult[]>) => Promise<GitOpResult[]>;
+  executeWithRetry: (
+    fn: () => Promise<GitOpResult[]>,
+  ) => Promise<GitOpResult[]>;
 }
 
 export function useGitWithSshRetry(): UseGitWithSshRetryResult {
@@ -141,14 +143,18 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
     reject?.(new Error("SSH_CANCELLED"));
   }, []);
 
-  const PassphraseDialogElement = useMemo(() => createElement(PassphraseDialog, {
-    open: state.open,
-    onSubmit: handleSubmit,
-    onCancel: handleCancel,
-    loading: state.loading,
-    error: state.error,
-    availableKeys,
-  }), [state, handleSubmit, handleCancel, availableKeys]);
+  const PassphraseDialogElement = useMemo(
+    () =>
+      createElement(PassphraseDialog, {
+        open: state.open,
+        onSubmit: handleSubmit,
+        onCancel: handleCancel,
+        loading: state.loading,
+        error: state.error,
+        availableKeys,
+      }),
+    [state, handleSubmit, handleCancel, availableKeys],
+  );
 
   return { PassphraseDialogElement, executeWithRetry };
 }

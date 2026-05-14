@@ -34,7 +34,8 @@ export function ChangedFileEntry({
       className={cn(
         "group flex items-center gap-1.5 px-3 py-1 cursor-pointer select-none text-xs",
         "hover:bg-[var(--color-surface-2)] transition-colors",
-        isSelected && "bg-[var(--color-primary)]/10 hover:bg-[var(--color-primary)]/15",
+        isSelected &&
+          "bg-[var(--color-primary)]/10 hover:bg-[var(--color-primary)]/15",
       )}
       onClick={() => onSelect(entry.path)}
       onMouseEnter={() => setHovered(true)}
@@ -43,22 +44,32 @@ export function ChangedFileEntry({
       <FileStatusBadge status={entry.status} />
 
       <span className="flex-1 min-w-0">
-        <span className="truncate text-[var(--color-text)] font-medium">{fileName}</span>
+        <span className="truncate text-[var(--color-text)] font-medium">
+          {fileName}
+        </span>
         {dirPath && (
-          <span className="ml-1.5 truncate text-[var(--color-text-muted)] text-[10px]">{dirPath}</span>
+          <span className="ml-1.5 truncate text-[var(--color-text-muted)] text-[10px]">
+            {dirPath}
+          </span>
         )}
         {entry.oldPath && (
-          <span className="ml-1.5 text-[var(--color-text-muted)] text-[10px]">← {entry.oldPath}</span>
+          <span className="ml-1.5 text-[var(--color-text-muted)] text-[10px]">
+            ← {entry.oldPath}
+          </span>
         )}
       </span>
 
       {(entry.additions > 0 || entry.deletions > 0) && (
         <span className="flex items-center gap-1 shrink-0 text-[10px] font-mono">
           {entry.additions > 0 && (
-            <span className="text-[var(--color-success)]">+{entry.additions}</span>
+            <span className="text-[var(--color-success)]">
+              +{entry.additions}
+            </span>
           )}
           {entry.deletions > 0 && (
-            <span className="text-[var(--color-danger)]">-{entry.deletions}</span>
+            <span className="text-[var(--color-danger)]">
+              -{entry.deletions}
+            </span>
           )}
         </span>
       )}
@@ -66,7 +77,10 @@ export function ChangedFileEntry({
       {isMutating ? (
         <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[var(--color-text-muted)]" />
       ) : hovered ? (
-        <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="flex items-center gap-0.5 shrink-0"
+          onClick={(e) => e.stopPropagation()}
+        >
           {entry.staged && onUnstage && (
             <button
               title="Unstage"

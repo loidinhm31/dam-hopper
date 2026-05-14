@@ -5,6 +5,7 @@ Base URL: `http://localhost:4800`
 ## Authentication
 
 All requests require Bearer token in Authorization header:
+
 ```
 Authorization: Bearer {token}
 ```
@@ -14,6 +15,7 @@ Token stored at `~/.config/dam-hopper/server-token`.
 ### Dev Mode (--no-auth)
 
 The server supports a `--no-auth` authentication bypass mode for local development (Phase 01). When enabled:
+
 - All protected routes bypass authentication checks
 - Login endpoint returns dev tokens without credential verification
 - Status endpoint returns `dev_mode: true`
@@ -27,16 +29,19 @@ The server supports a `--no-auth` authentication bypass mode for local developme
 Authenticate and receive auth token.
 
 Body (normal mode):
+
 ```json
 { "username": "user", "password": "pass" }
 ```
 
 Body (--no-auth mode):
+
 ```json
 {}
 ```
 
 Response:
+
 ```json
 {
   "ok": true,
@@ -49,6 +54,7 @@ Response:
 Check authentication status.
 
 Response (authenticated):
+
 ```json
 {
   "authenticated": true,
@@ -58,6 +64,7 @@ Response (authenticated):
 ```
 
 Response (--no-auth mode):
+
 ```json
 {
   "authenticated": true,
@@ -95,6 +102,7 @@ session_buffer_ttl_hours = 720                       # 30-day retention (default
 ### Affected Endpoints
 
 **GET /api/terminal/list** — Returns:
+
 ```json
 [
   {
@@ -105,7 +113,7 @@ session_buffer_ttl_hours = 720                       # 30-day retention (default
     "alive": true,
     "exit_code": null,
     "buffer_bytes": 1048576,
-    "persisted": true,        // Phase 05: new field
+    "persisted": true, // Phase 05: new field
     "started_at": 1234567890
   }
 ]
@@ -114,10 +122,12 @@ session_buffer_ttl_hours = 720                       # 30-day retention (default
 ### Storage Details
 
 **Database Schema** (Phase 05):
+
 - `sessions` table — session metadata (id, project, command, env, cols, rows, restart_max_retries, created_at)
 - `session_buffers` table — binary buffer data (session_id, data BLOB, total_written, updated_at)
 
 **Storage Efficiency**:
+
 - Batching: Only latest buffer per session written (intermediates discarded)
 - Throttling: Every 16KB, not every read (99% fewer allocations)
 - Memory: 16MB/sec churn (vs. 256MB/sec unoptimized)
@@ -162,13 +172,14 @@ The `Transport` interface abstracts WebSocket and REST communication. All fronte
 Request/response messaging mapped to REST endpoints.
 
 Example:
+
 ```ts
 const sessions = await transport.invoke<Array<{ id: string }>>("terminal:list");
-const newSession = await transport.invoke<{ id: string }>("terminal:create", { 
-  project: "api-server", 
+const newSession = await transport.invoke<{ id: string }>("terminal:create", {
+  project: "api-server",
   command: "npm run dev",
   cols: 80,
-  rows: 24
+  rows: 24,
 });
 ```
 
@@ -188,6 +199,7 @@ Returns unsubscribe function.
 Subscribe to enhanced exit event with restart metadata.
 
 Callback receives:
+
 ```ts
 {
   exitCode: number | null;
@@ -203,6 +215,7 @@ Returns unsubscribe function.
 Subscribe to process restart event.
 
 Callback receives:
+
 ```ts
 {
   restartCount: number;
@@ -223,11 +236,12 @@ Fire-and-forget message to request buffer replay from server.
 Must call `onTerminalBuffer()` listener BEFORE sending attach request to receive response.
 
 Example:
+
 ```ts
 // Setup listener first
 transport.onTerminalBuffer(sessionId, ({ data, offset }) => {
-  term.write(data);  // Replay buffered content
-  storeOffset(offset);  // Save offset for next attach
+  term.write(data); // Replay buffered content
+  storeOffset(offset); // Save offset for next attach
 });
 
 // Then send attach
@@ -238,10 +252,11 @@ transport.terminalAttach(sessionId, lastKnownOffset);
 Subscribe to buffer replay response from `terminal:attach` request.
 
 Callback receives:
+
 ```ts
 {
-  data: string;       // Base64-encoded terminal content
-  offset: number;     // Current byte offset (incremental counter)
+  data: string; // Base64-encoded terminal content
+  offset: number; // Current byte offset (incremental counter)
 }
 ```
 
@@ -290,6 +305,7 @@ Body: `{ project, profile, env_overrides? }`
 Response: `{ sessionId: uuid }`
 
 **Idempotency Guarantees (Phase 07):**
+
 - Calling create with the same `sessionId` during restart backoff will immediately spawn a fresh session
 - Any pending supervisor respawn for that ID is automatically cancelled (killed set flag)
 - Dead session tombstones are cleaned up automatically
@@ -342,6 +358,7 @@ Body: `{ branch?: string, force?: bool }`
 List changed files (staged + unstaged).
 
 Response:
+
 ```json
 {
   "entries": [
@@ -361,6 +378,7 @@ Response:
 File diff content with hunks (HEAD vs working directory).
 
 Response:
+
 ```json
 {
   "path": "src/main.rs",
@@ -389,12 +407,12 @@ Profile management lives entirely in the browser via **localStorage** — no ser
 
 ```typescript
 export interface ServerProfile {
-  id: string;                    // UUID v4
-  name: string;                  // "Local Dev", "Production", etc.
-  url: string;                   // "http://localhost:4800"
-  authType: "basic" | "none";    // Authentication method
-  username?: string;             // For basic auth display (password never stored)
-  createdAt: number;             // Unix timestamp
+  id: string; // UUID v4
+  name: string; // "Local Dev", "Production", etc.
+  url: string; // "http://localhost:4800"
+  authType: "basic" | "none"; // Authentication method
+  username?: string; // For basic auth display (password never stored)
+  createdAt: number; // Unix timestamp
 }
 ```
 
@@ -403,33 +421,37 @@ export interface ServerProfile {
 All functions in `packages/web/src/api/server-config.ts`.
 
 **Profile Getters:**
+
 - `getProfiles(): ServerProfile[]` — fetch all profiles
 - `getActiveProfileId(): string | null` — currently selected profile ID
 - `getActiveProfile(): ServerProfile | null` — currently selected profile object
 
 **Profile Management:**
+
 - `createProfile(data: Omit<ServerProfile, "id" | "createdAt">): ServerProfile` — add new profile, auto-generates UUID and timestamp
 - `updateProfile(id: string, data: Partial<...>): void` — modify profile fields
 - `deleteProfile(id: string): void` — remove profile (clears active if deleted)
 - `setActiveProfile(id: string): void` — switch active profile
 
 **Persistence:**
+
 - `getProfiles() / saveProfiles(profiles: ServerProfile[]): void` — localStorage key: `damhopper_server_profiles`
 - Active profile ID stored in `damhopper_active_profile_id`
 
 **Migration:**
+
 - `migrateToProfiles(): void` — (called in `App.tsx`) converts legacy single-server config to profile system on first app load
   - if profiles already exist → no-op
   - if legacy `damhopper_server_url` exists → creates "Default Server" profile and sets active
 
 ### Storage Breakdown
 
-| Key | Storage | Scope | Persistence |
-|-----|---------|-------|-------------|
-| `damhopper_server_profiles` | localStorage | Shared (all tabs) | Survives browser close |
-| `damhopper_active_profile_id` | localStorage | Shared (all tabs) | Survives browser close |
-| `damhopper_auth_token` | sessionStorage | Per-tab | Cleared on tab close |
-| `damhopper_auth_username` | sessionStorage | Per-tab | Cleared on tab close |
+| Key                           | Storage        | Scope             | Persistence            |
+| ----------------------------- | -------------- | ----------------- | ---------------------- |
+| `damhopper_server_profiles`   | localStorage   | Shared (all tabs) | Survives browser close |
+| `damhopper_active_profile_id` | localStorage   | Shared (all tabs) | Survives browser close |
+| `damhopper_auth_token`        | sessionStorage | Per-tab           | Cleared on tab close   |
+| `damhopper_auth_username`     | sessionStorage | Per-tab           | Cleared on tab close   |
 
 **POST /api/git/:project/stage**
 Stage files for commit.
@@ -455,6 +477,7 @@ Body: `{ path: string, hunkIndex: number }`
 List conflicted files with 3-way merge content.
 
 Response:
+
 ```json
 {
   "conflicts": [
@@ -479,6 +502,7 @@ Body: `{ path: string, content: string }`
 List directory contents.
 
 Response:
+
 ```json
 {
   "entries": [
@@ -496,7 +520,7 @@ Response:
 **GET /api/fs/read?project=NAME&path=REL[&offset=N&len=M]**
 Read file content (text or binary detection).
 
-- Text: returns body with Content-Type: text/*
+- Text: returns body with Content-Type: text/\*
 - Binary: returns `{ binary: true, mime: "..." }`
 - Max 10MB per read
 
@@ -504,6 +528,7 @@ Read file content (text or binary detection).
 File metadata.
 
 Response:
+
 ```json
 {
   "kind": "file",
@@ -515,6 +540,7 @@ Response:
 ```
 
 **Error Responses:**
+
 - 400: Invalid path (outside sandbox)
 - 404: Project/path not found
 
@@ -549,6 +575,7 @@ Current workspace configuration.
 Server health + feature flags.
 
 Response:
+
 ```json
 {
   "status": "ok",
@@ -566,11 +593,13 @@ Auth: append `?token={bearer_token}` to URL.
 Protocol: JSON frames. Client sends commands via `{kind:}` envelope, server broadcasts events.
 
 **Message Format (all client→server or server→client):**
+
 ```json
 { "kind": "terminal:write", "id": "uuid", "data": "..." }
 ```
 
 **Terminal Messages:**
+
 - `{ kind: "terminal:spawn", project, profile, env_overrides? }` → server responds with `{ kind: "terminal:spawned", id, ... }`
 - `{ kind: "terminal:write", id, data }` — send input
 - `{ kind: "terminal:attach", id, from_offset? }` — request buffer replay (Phase 02+); server responds with `{ kind: "terminal:buffer", id, data, offset }`
@@ -584,11 +613,13 @@ Protocol: JSON frames. Client sends commands via `{kind:}` envelope, server broa
 - `{ kind: "terminal:exited", id, code }` — session ended
 
 **File Tree Subscription (Phase 03):**
+
 - `{ kind: "fs:subscribe_tree", req_id, project, path }` — start watching directory tree; server responds with `{ kind: "fs:tree_snapshot", sub_id, nodes: [...] }`
 - `{ kind: "fs:unsubscribe_tree", sub_id }` — stop watching
 - `{ kind: "fs:event", sub_id, event: { kind, path, from? } }` — server pushes FS changes (created|modified|deleted|renamed)
 
 **File Read (Phase 04):**
+
 - `{ kind: "fs:read", req_id, project, path, offset?, len? }` — read file content with optional range
   - Supports large files via offset+len (range reads)
   - Server responds: `{ kind: "fs:read_result", req_id, ok, binary, mime?, mtime?, size?, data?, code? }`
@@ -596,6 +627,7 @@ Protocol: JSON frames. Client sends commands via `{kind:}` envelope, server broa
   - If `ok=false` and `code="TOO_LARGE"`: file exceeds cap; use range reads (LargeFileViewer)
 
 **File Write (Phase 04):**
+
 - `{ kind: "fs:write_begin", req_id, project, path, expected_mtime, size }` — initiate write
   - Server responds: `{ kind: "fs:write_ack", req_id, write_id }`
   - `expected_mtime` (Unix seconds) guards against concurrent modification; server rejects if stale
@@ -607,6 +639,7 @@ Protocol: JSON frames. Client sends commands via `{kind:}` envelope, server broa
   - `new_mtime` sent on success for next save guard
 
 **Git Events:**
+
 - Server broadcasts `{ kind: "git:progress", project, step, percent }` during clone/push/pull
 
 All responses include context fields matching the request (e.g., `req_id` echoed back for fs:subscribe_tree).

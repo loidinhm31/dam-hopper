@@ -2,7 +2,7 @@ import type { SessionInfo } from "@/api/client.js";
 
 /**
  * Session lifecycle status for UI rendering.
- * 
+ *
  * - alive: process is running
  * - restarting: process exited but will restart (within backoff window)
  * - crashed: process exited with non-zero code and won't restart
@@ -12,7 +12,7 @@ export type SessionStatus = "alive" | "restarting" | "crashed" | "exited";
 
 /**
  * Determine UI status from session metadata.
- * 
+ *
  * Status dot colors:
  * - 🟢 alive
  * - 🟡 restarting (dead with willRestart=true, within backoff window)
@@ -22,7 +22,11 @@ export type SessionStatus = "alive" | "restarting" | "crashed" | "exited";
 export function getSessionStatus(sess: SessionInfo): SessionStatus {
   if (sess.alive) return "alive";
   if (sess.willRestart) return "restarting";
-  if (sess.exitCode !== 0 && sess.exitCode !== null && sess.exitCode !== undefined) {
+  if (
+    sess.exitCode !== 0 &&
+    sess.exitCode !== null &&
+    sess.exitCode !== undefined
+  ) {
     return "crashed";
   }
   return "exited";

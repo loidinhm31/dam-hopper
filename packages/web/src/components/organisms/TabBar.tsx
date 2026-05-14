@@ -1,5 +1,11 @@
 import { useDraggable } from "@dnd-kit/core";
-import { GripVertical, SplitSquareHorizontal, SplitSquareVertical, X, Plus } from "lucide-react";
+import {
+  GripVertical,
+  SplitSquareHorizontal,
+  SplitSquareVertical,
+  X,
+  Plus,
+} from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 
@@ -21,7 +27,13 @@ interface DraggableTabProps {
   onClose: (sessionId: string) => void;
 }
 
-function DraggableTab({ paneId, tab, isActive, onSelect, onClose }: DraggableTabProps) {
+function DraggableTab({
+  paneId,
+  tab,
+  isActive,
+  onSelect,
+  onClose,
+}: DraggableTabProps) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `tab:${paneId}:${tab.sessionId}`,
     data: {

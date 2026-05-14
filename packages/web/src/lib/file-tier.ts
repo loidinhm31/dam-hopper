@@ -2,7 +2,7 @@
 
 export type FileTier = "normal" | "degraded" | "large" | "binary";
 
-const NORMAL_MAX = 1 * 1024 * 1024;   // 1 MB
+const NORMAL_MAX = 1 * 1024 * 1024; // 1 MB
 const DEGRADED_MAX = 5 * 1024 * 1024; // 5 MB
 
 /**

@@ -71,16 +71,43 @@ export function TreeContextMenu({
   const items: ContextMenuAction[] = [
     ...(isDir
       ? [
-          { label: "New File", icon: <FilePlus className="h-3.5 w-3.5" />, onClick: onNewFile },
-          { label: "New Folder", icon: <FolderPlus className="h-3.5 w-3.5" />, onClick: onNewFolder },
-          { label: "Upload Here", icon: <Upload className="h-3.5 w-3.5" />, onClick: onUpload },
+          {
+            label: "New File",
+            icon: <FilePlus className="h-3.5 w-3.5" />,
+            onClick: onNewFile,
+          },
+          {
+            label: "New Folder",
+            icon: <FolderPlus className="h-3.5 w-3.5" />,
+            onClick: onNewFolder,
+          },
+          {
+            label: "Upload Here",
+            icon: <Upload className="h-3.5 w-3.5" />,
+            onClick: onUpload,
+          },
         ]
       : []),
-    { label: "Rename", icon: <Pencil className="h-3.5 w-3.5" />, onClick: onRename },
+    {
+      label: "Rename",
+      icon: <Pencil className="h-3.5 w-3.5" />,
+      onClick: onRename,
+    },
     ...(!isDir
-      ? [{ label: "Download", icon: <Download className="h-3.5 w-3.5" />, onClick: onDownload }]
+      ? [
+          {
+            label: "Download",
+            icon: <Download className="h-3.5 w-3.5" />,
+            onClick: onDownload,
+          },
+        ]
       : []),
-    { label: "Delete", icon: <Trash2 className="h-3.5 w-3.5" />, onClick: onDelete, danger: true },
+    {
+      label: "Delete",
+      icon: <Trash2 className="h-3.5 w-3.5" />,
+      onClick: onDelete,
+      danger: true,
+    },
   ];
 
   return (
@@ -92,7 +119,10 @@ export function TreeContextMenu({
       {items.map((item) => (
         <button
           key={item.label}
-          onClick={() => { item.onClick(); onClose(); }}
+          onClick={() => {
+            item.onClick();
+            onClose();
+          }}
           className={cn(
             "w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors",
             item.danger

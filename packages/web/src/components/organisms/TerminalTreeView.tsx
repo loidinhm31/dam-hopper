@@ -42,7 +42,9 @@ interface Props {
 
 function StatusDot({ session }: { session?: SessionInfo | null }) {
   if (!session) {
-    return <span className="h-2 w-2 rounded-full bg-[var(--color-text-muted)]/30 shrink-0" />;
+    return (
+      <span className="h-2 w-2 rounded-full bg-[var(--color-text-muted)]/30 shrink-0" />
+    );
   }
   const status = getSessionStatus(session);
   const dotColor = getStatusDotColor(status);
@@ -89,7 +91,8 @@ function CommandRow({
         "group flex items-center gap-1.5 pl-2 pr-2 py-1 text-xs cursor-pointer",
         "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
         "hover:bg-[var(--color-surface-2)] transition-colors",
-        isSelected && "bg-[var(--color-primary)]/10 text-[var(--color-primary)]",
+        isSelected &&
+          "bg-[var(--color-primary)]/10 text-[var(--color-primary)]",
         !hasSession && "cursor-default",
         isDragged && "opacity-40",
         isOver && "border-t-2 border-[var(--color-primary)]",
@@ -105,7 +108,10 @@ function CommandRow({
         {!isAlive && (
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); onLaunch(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onLaunch();
+            }}
             title={`Launch ${cmd.key}`}
             className="rounded p-0.5 hover:bg-green-500/20 hover:text-green-500 transition-colors"
           >
@@ -115,7 +121,10 @@ function CommandRow({
         {isAlive && (
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); onKill(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onKill();
+            }}
             title={`Kill ${cmd.key}`}
             className="rounded p-0.5 hover:bg-red-500/20 hover:text-red-500 transition-colors"
           >
@@ -148,15 +157,21 @@ function InstanceRow({
         "group flex items-center gap-1.5 pl-14 pr-2 py-1 text-xs cursor-pointer",
         "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
         "hover:bg-[var(--color-surface-2)] transition-colors",
-        isSelected && "bg-[var(--color-primary)]/10 text-[var(--color-primary)]",
+        isSelected &&
+          "bg-[var(--color-primary)]/10 text-[var(--color-primary)]",
       )}
     >
       <StatusDot session={session} />
-      <span className="flex-1 truncate font-mono opacity-70">instance #{index + 1}</span>
+      <span className="flex-1 truncate font-mono opacity-70">
+        instance #{index + 1}
+      </span>
       {session.alive && (
         <button
           type="button"
-          onClick={(e) => { e.stopPropagation(); onKill(); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onKill();
+          }}
           title="Kill instance"
           className="rounded p-0.5 opacity-0 group-hover:opacity-100 hover:bg-red-500/20 hover:text-red-500 transition-colors"
         >
@@ -209,7 +224,8 @@ function FreeTerminalRow({
         "group flex items-center gap-1.5 pl-2 pr-2 py-1 text-xs cursor-pointer",
         "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
         "hover:bg-[var(--color-surface-2)] transition-colors",
-        isSelected && "bg-[var(--color-primary)]/10 text-[var(--color-primary)]",
+        isSelected &&
+          "bg-[var(--color-primary)]/10 text-[var(--color-primary)]",
         isDragged && "opacity-40",
         isOver && "border-t-2 border-[var(--color-primary)]",
       )}
@@ -222,7 +238,10 @@ function FreeTerminalRow({
         {session.command && (
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); onSave(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSave();
+            }}
             title="Save to project profile"
             className="rounded p-0.5 hover:bg-[var(--color-primary)]/20 hover:text-[var(--color-primary)] transition-colors"
           >
@@ -232,7 +251,10 @@ function FreeTerminalRow({
         {session.alive && (
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); onKill(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onKill();
+            }}
             title="Kill terminal"
             className="rounded p-0.5 hover:bg-amber-500/20 hover:text-amber-500 transition-colors"
           >
@@ -241,7 +263,10 @@ function FreeTerminalRow({
         )}
         <button
           type="button"
-          onClick={(e) => { e.stopPropagation(); onRemove(); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
           title="Remove terminal"
           className="rounded p-0.5 hover:bg-red-500/20 hover:text-red-500 transition-colors"
         >
@@ -322,7 +347,10 @@ function ProfileRow({
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); onLaunchInstance(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onLaunchInstance();
+            }}
             title="Launch new instance"
             className="rounded p-0.5 hover:bg-green-500/20 hover:text-green-500 transition-colors"
           >
@@ -330,7 +358,10 @@ function ProfileRow({
           </button>
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
             title="Delete profile"
             className="rounded p-0.5 hover:bg-red-500/20 hover:text-red-500 transition-colors"
           >
@@ -385,7 +416,9 @@ export function TerminalTreeView({
   const { data: globalConfig } = useGlobalConfig();
   const updateUi = useUpdateUiConfig();
 
-  const [activeSuggestionProject, setActiveSuggestionProject] = useState<string | null>(null);
+  const [activeSuggestionProject, setActiveSuggestionProject] = useState<
+    string | null
+  >(null);
   const [showFreeSuggestion, setShowFreeSuggestion] = useState(false);
   const [terminalsExpanded, setTerminalsExpanded] = useState<boolean>(() => {
     const stored = localStorage.getItem("dam-hopper:expanded-free-terminals");
@@ -416,17 +449,21 @@ export function TerminalTreeView({
 
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
-  const [dragType, setDragType] = useState<"free" | "project" | "command" | null>(null);
+  const [dragType, setDragType] = useState<
+    "free" | "project" | "command" | null
+  >(null);
   const [dragProject, setDragProject] = useState<string | null>(null);
 
   // Keep track of which projects we've automatically expanded to avoid infinite updates
-  const autoExpandedRef = useRef<Set<string>>(new Set(projects.map(p => p.name)));
+  const autoExpandedRef = useRef<Set<string>>(
+    new Set(projects.map((p) => p.name)),
+  );
 
   // Auto-expand projects that are newly added
   useEffect(() => {
     let changed = false;
     const next = new Set(expandedProjects);
-    
+
     for (const p of projects) {
       if (!autoExpandedRef.current.has(p.name)) {
         next.add(p.name);
@@ -434,7 +471,7 @@ export function TerminalTreeView({
         changed = true;
       }
     }
-    
+
     if (changed) {
       setExpandedProjects(next);
     }
@@ -452,7 +489,10 @@ export function TerminalTreeView({
       const next = new Set(prev);
       if (next.has(name)) next.delete(name);
       else next.add(name);
-      localStorage.setItem("dam-hopper:expanded-projects", JSON.stringify([...next]));
+      localStorage.setItem(
+        "dam-hopper:expanded-projects",
+        JSON.stringify([...next]),
+      );
       return next;
     });
   }
@@ -462,12 +502,20 @@ export function TerminalTreeView({
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
-      localStorage.setItem("dam-hopper:expanded-profiles", JSON.stringify([...next]));
+      localStorage.setItem(
+        "dam-hopper:expanded-profiles",
+        JSON.stringify([...next]),
+      );
       return next;
     });
   }
 
-  function handleDragStart(e: React.DragEvent, type: "free" | "project" | "command", id: string, projectName?: string) {
+  function handleDragStart(
+    e: React.DragEvent,
+    type: "free" | "project" | "command",
+    id: string,
+    projectName?: string,
+  ) {
     setDragType(type);
     setDraggedId(id);
     setDragProject(projectName || null);
@@ -483,17 +531,27 @@ export function TerminalTreeView({
     setDragProject(null);
   }
 
-  function handleDragOver(e: React.DragEvent, type: "free" | "project" | "command", id: string, projectName?: string) {
+  function handleDragOver(
+    e: React.DragEvent,
+    type: "free" | "project" | "command",
+    id: string,
+    projectName?: string,
+  ) {
     e.preventDefault();
     if (draggedId === id) return;
     if (dragType !== type) return;
     if (type === "command" && dragProject !== projectName) return;
-    
+
     e.dataTransfer.dropEffect = "move";
     setDragOverId(id);
   }
 
-  function handleDrop(e: React.DragEvent, type: "free" | "project" | "command", targetId: string, projectName?: string) {
+  function handleDrop(
+    e: React.DragEvent,
+    type: "free" | "project" | "command",
+    targetId: string,
+    projectName?: string,
+  ) {
     e.preventDefault();
     if (!draggedId || draggedId === targetId || dragType !== type) {
       setDraggedId(null);
@@ -518,7 +576,7 @@ export function TerminalTreeView({
           editorFontSize: 14,
           editorZoomWheelEnabled: true,
         };
-        
+
         updateUi.mutate({
           ...baseUi,
           terminalOrder: newOrder,
@@ -546,9 +604,9 @@ export function TerminalTreeView({
         });
       }
     } else if (type === "command" && dragProject === projectName) {
-      const project = projects.find(p => p.name === projectName);
+      const project = projects.find((p) => p.name === projectName);
       if (project) {
-        const currentOrder = project.commands.map(c => c.key);
+        const currentOrder = project.commands.map((c) => c.key);
         const fromIndex = currentOrder.indexOf(draggedId);
         const toIndex = currentOrder.indexOf(targetId);
 
@@ -565,7 +623,7 @@ export function TerminalTreeView({
 
           const commandOrderMap = { ...(baseUi.projectCommandOrder || {}) };
           commandOrderMap[projectName] = newOrder;
-          
+
           updateUi.mutate({
             ...baseUi,
             projectCommandOrder: commandOrderMap,
@@ -615,7 +673,10 @@ export function TerminalTreeView({
           })()}
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); setShowFreeSuggestion((v) => !v); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowFreeSuggestion((v) => !v);
+            }}
             title="New terminal"
             className="rounded p-0.5 hover:bg-[var(--color-primary)]/20 hover:text-[var(--color-primary)] transition-colors"
           >
@@ -675,7 +736,9 @@ export function TerminalTreeView({
       {/* Projects section header */}
       {projects.length > 0 && (
         <div className="px-2 py-1.5 mt-1 border-t border-[var(--color-border)]">
-          <span className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Projects</span>
+          <span className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+            Projects
+          </span>
         </div>
       )}
 
@@ -700,9 +763,14 @@ export function TerminalTreeView({
               className={cn(
                 "group flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium cursor-pointer",
                 "text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors",
-                isProjectSelected && "bg-[var(--color-primary)]/10 text-[var(--color-primary)]",
-                dragType === "project" && draggedId === project.name && "opacity-40",
-                dragType === "project" && dragOverId === project.name && "border-t-2 border-[var(--color-primary)]",
+                isProjectSelected &&
+                  "bg-[var(--color-primary)]/10 text-[var(--color-primary)]",
+                dragType === "project" &&
+                  draggedId === project.name &&
+                  "opacity-40",
+                dragType === "project" &&
+                  dragOverId === project.name &&
+                  "border-t-2 border-[var(--color-primary)]",
               )}
             >
               <GripVertical className="h-3 w-3 shrink-0 opacity-0 group-hover:opacity-40 cursor-grab active:cursor-grabbing mr-0.5" />
@@ -739,16 +807,34 @@ export function TerminalTreeView({
                         isExpanded={expandedProfiles.has(profileKey)}
                         onToggle={() => toggleProfile(profileKey)}
                         onSelectInstance={(sid) => onSelectTerminal(sid)}
-                        onLaunchInstance={() => onLaunchProfile(project.name, cmd)}
+                        onLaunchInstance={() =>
+                          onLaunchProfile(project.name, cmd)
+                        }
                         onKillInstance={(sid) => onKillTerminal(sid)}
-                        onDelete={() => onDeleteProfile(project.name, cmd.profileName!)}
-                        onDragStart={(e) => handleDragStart(e, "command", cmd.key, project.name)}
+                        onDelete={() =>
+                          onDeleteProfile(project.name, cmd.profileName!)
+                        }
+                        onDragStart={(e) =>
+                          handleDragStart(e, "command", cmd.key, project.name)
+                        }
                         onDragEnd={handleDragEnd}
-                        onDragOver={(e) => handleDragOver(e, "command", cmd.key, project.name)}
+                        onDragOver={(e) =>
+                          handleDragOver(e, "command", cmd.key, project.name)
+                        }
                         onDragEnter={() => setDragOverId(cmd.key)}
-                        onDrop={(e) => handleDrop(e, "command", cmd.key, project.name)}
-                        isDragged={dragType === "command" && draggedId === cmd.key && dragProject === project.name}
-                        isOver={dragType === "command" && dragOverId === cmd.key && dragProject === project.name}
+                        onDrop={(e) =>
+                          handleDrop(e, "command", cmd.key, project.name)
+                        }
+                        isDragged={
+                          dragType === "command" &&
+                          draggedId === cmd.key &&
+                          dragProject === project.name
+                        }
+                        isOver={
+                          dragType === "command" &&
+                          dragOverId === cmd.key &&
+                          dragProject === project.name
+                        }
                       />
                     );
                   }
@@ -760,13 +846,27 @@ export function TerminalTreeView({
                       onSelect={() => onSelectTerminal(cmd.sessionId)}
                       onLaunch={() => onLaunchTerminal(project.name, cmd)}
                       onKill={() => onKillTerminal(cmd.sessionId)}
-                      onDragStart={(e) => handleDragStart(e, "command", cmd.key, project.name)}
+                      onDragStart={(e) =>
+                        handleDragStart(e, "command", cmd.key, project.name)
+                      }
                       onDragEnd={handleDragEnd}
-                      onDragOver={(e) => handleDragOver(e, "command", cmd.key, project.name)}
+                      onDragOver={(e) =>
+                        handleDragOver(e, "command", cmd.key, project.name)
+                      }
                       onDragEnter={() => setDragOverId(cmd.key)}
-                      onDrop={(e) => handleDrop(e, "command", cmd.key, project.name)}
-                      isDragged={dragType === "command" && draggedId === cmd.key && dragProject === project.name}
-                      isOver={dragType === "command" && dragOverId === cmd.key && dragProject === project.name}
+                      onDrop={(e) =>
+                        handleDrop(e, "command", cmd.key, project.name)
+                      }
+                      isDragged={
+                        dragType === "command" &&
+                        draggedId === cmd.key &&
+                        dragProject === project.name
+                      }
+                      isOver={
+                        dragType === "command" &&
+                        dragOverId === cmd.key &&
+                        dragProject === project.name
+                      }
                     />
                   );
                 })}

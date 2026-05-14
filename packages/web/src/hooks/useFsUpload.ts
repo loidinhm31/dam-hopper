@@ -23,7 +23,12 @@ export function useFsUpload(project: string, subscribedPath: string) {
   const upload = useCallback(
     async (dir: string, file: File): Promise<void> => {
       if (typeof file.stream !== "function") {
-        setProgress({ filename: file.name, pct: 0, done: true, error: "File.stream() not supported in this browser" });
+        setProgress({
+          filename: file.name,
+          pct: 0,
+          done: true,
+          error: "File.stream() not supported in this browser",
+        });
         return;
       }
 
@@ -37,9 +42,16 @@ export function useFsUpload(project: string, subscribedPath: string) {
 
         if (result.ok) {
           setProgress({ filename: file.name, pct: 100, done: true });
-          void qc.invalidateQueries({ queryKey: ["fs-tree", project, subscribedPath] });
+          void qc.invalidateQueries({
+            queryKey: ["fs-tree", project, subscribedPath],
+          });
         } else {
-          setProgress({ filename: file.name, pct: 0, done: true, error: result.error ?? "Upload failed" });
+          setProgress({
+            filename: file.name,
+            pct: 0,
+            done: true,
+            error: result.error ?? "Upload failed",
+          });
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);

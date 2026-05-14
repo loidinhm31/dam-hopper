@@ -189,7 +189,10 @@ export function CommandsForm({
   }
 
   function remove(key: string) {
-    commandRowIdsRef.current = removeCommandRowId(commandRowIdsRef.current, key);
+    commandRowIdsRef.current = removeCommandRowId(
+      commandRowIdsRef.current,
+      key,
+    );
     const next = { ...commands };
     delete next[key];
     onChange(next);
@@ -275,9 +278,18 @@ function TerminalProfilesForm({
         >
           <div className="flex items-center justify-between mb-1">
             <span className="text-xs font-medium text-[var(--color-text)]">
-              {profile.name || <span className="italic text-[var(--color-text-muted)]">unnamed</span>}
+              {profile.name || (
+                <span className="italic text-[var(--color-text-muted)]">
+                  unnamed
+                </span>
+              )}
             </span>
-            <Button size="sm" variant="danger" onClick={() => remove(i)} disabled={disabled}>
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={() => remove(i)}
+              disabled={disabled}
+            >
               Remove
             </Button>
           </div>

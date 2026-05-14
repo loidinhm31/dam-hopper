@@ -11,9 +11,12 @@ export interface OpaqueRegisterResult {
   finishRegistration: (responseBytes: string) => string;
 }
 
-export async function opaqueRegisterStart(password: string): Promise<OpaqueRegisterResult> {
+export async function opaqueRegisterStart(
+  password: string,
+): Promise<OpaqueRegisterResult> {
   await ensureReady();
-  const { clientRegistrationState, registrationRequest } = client.startRegistration({ password });
+  const { clientRegistrationState, registrationRequest } =
+    client.startRegistration({ password });
   return {
     requestBytes: registrationRequest,
     finishRegistration: (registrationResponse: string): string => {
@@ -39,13 +42,21 @@ export interface OpaqueLoginResult {
   finishLogin: (responseBytes: string) => OpaqueLoginFinishResult | null;
 }
 
-export async function opaqueLoginStart(password: string): Promise<OpaqueLoginResult> {
+export async function opaqueLoginStart(
+  password: string,
+): Promise<OpaqueLoginResult> {
   await ensureReady();
-  const { clientLoginState, startLoginRequest } = client.startLogin({ password });
+  const { clientLoginState, startLoginRequest } = client.startLogin({
+    password,
+  });
   return {
     requestBytes: startLoginRequest,
     finishLogin: (loginResponse: string): OpaqueLoginFinishResult | null => {
-      const result = client.finishLogin({ clientLoginState, loginResponse, password });
+      const result = client.finishLogin({
+        clientLoginState,
+        loginResponse,
+        password,
+      });
       if (!result) return null;
       return {
         finalizationBytes: result.finishLoginRequest,

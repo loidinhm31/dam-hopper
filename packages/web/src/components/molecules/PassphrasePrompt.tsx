@@ -14,7 +14,8 @@ interface PassphrasePromptProps {
 }
 
 export function PassphrasePrompt({ project }: PassphrasePromptProps) {
-  const { isPrompting, promptingProject, resolvePrompt, rejectPrompt } = useEncryptMode();
+  const { isPrompting, promptingProject, resolvePrompt, rejectPrompt } =
+    useEncryptMode();
 
   const [passphrase, setPassphrase] = useState("");
   const [showPassphrase, setShowPassphrase] = useState(false);
@@ -63,7 +64,12 @@ export function PassphrasePrompt({ project }: PassphrasePromptProps) {
   if (!isPrompting) return null;
 
   return (
-    <div className="pp-overlay" role="dialog" aria-modal="true" aria-labelledby="pp-title">
+    <div
+      className="pp-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="pp-title"
+    >
       <div className="pp-backdrop" onClick={rejectPrompt} />
 
       <div className="pp-card">
@@ -73,10 +79,11 @@ export function PassphrasePrompt({ project }: PassphrasePromptProps) {
             <Lock size={20} className="pp-icon" />
           </div>
           <div>
-            <h2 id="pp-title" className="pp-title">Encrypted Mode Passphrase</h2>
+            <h2 id="pp-title" className="pp-title">
+              Encrypted Mode Passphrase
+            </h2>
             <p className="pp-subtitle">
-              for{" "}
-              <span className="pp-project">{displayProject}</span>
+              for <span className="pp-project">{displayProject}</span>
             </p>
           </div>
           <button
@@ -91,14 +98,16 @@ export function PassphrasePrompt({ project }: PassphrasePromptProps) {
 
         {/* Description */}
         <p className="pp-desc">
-          Your passphrase encrypts files client-side before upload.
-          It is <strong>never transmitted</strong> to the server.
+          Your passphrase encrypts files client-side before upload. It is{" "}
+          <strong>never transmitted</strong> to the server.
         </p>
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="pp-form">
           <div className="pp-field">
-            <label htmlFor="pp-input" className="pp-label">Passphrase</label>
+            <label htmlFor="pp-input" className="pp-label">
+              Passphrase
+            </label>
             <div className="pp-input-wrap">
               <input
                 ref={inputRef}
@@ -117,16 +126,26 @@ export function PassphrasePrompt({ project }: PassphrasePromptProps) {
                 type="button"
                 className="pp-eye"
                 onClick={() => setShowPassphrase((v) => !v)}
-                aria-label={showPassphrase ? "Hide passphrase" : "Show passphrase"}
+                aria-label={
+                  showPassphrase ? "Hide passphrase" : "Show passphrase"
+                }
               >
                 {showPassphrase ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
-            {error && <span className="pp-error-msg" role="alert">{error}</span>}
+            {error && (
+              <span className="pp-error-msg" role="alert">
+                {error}
+              </span>
+            )}
           </div>
 
           <div className="pp-actions">
-            <button type="button" className="pp-btn pp-btn--cancel" onClick={rejectPrompt}>
+            <button
+              type="button"
+              className="pp-btn pp-btn--cancel"
+              onClick={rejectPrompt}
+            >
               Cancel
             </button>
             <button type="submit" className="pp-btn pp-btn--submit">

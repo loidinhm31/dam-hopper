@@ -110,7 +110,9 @@ function GitSection({ projectName }: { projectName: string }) {
       {/* Branch list */}
       {branches.length > 0 && (
         <div className="space-y-0.5">
-          <p className="text-xs text-[var(--color-text-muted)] font-medium">Branches</p>
+          <p className="text-xs text-[var(--color-text-muted)] font-medium">
+            Branches
+          </p>
           <div className="max-h-32 overflow-y-auto space-y-0.5">
             {branches.map((b) => (
               <div
@@ -124,7 +126,11 @@ function GitSection({ projectName }: { projectName: string }) {
               >
                 <GitBranch className="h-3 w-3 shrink-0" />
                 <span className="truncate">{b.name}</span>
-                {b.isCurrent && <span className="ml-auto text-[10px] opacity-60">current</span>}
+                {b.isCurrent && (
+                  <span className="ml-auto text-[10px] opacity-60">
+                    current
+                  </span>
+                )}
               </div>
             ))}
           </div>
@@ -171,7 +177,9 @@ function WorktreesSection({ projectName }: { projectName: string }) {
             >
               <GitMerge className="h-3 w-3 shrink-0" />
               <div className="flex-1 min-w-0">
-                <p className="truncate font-mono text-[var(--color-text)]">{wt.branch}</p>
+                <p className="truncate font-mono text-[var(--color-text)]">
+                  {wt.branch}
+                </p>
                 <p className="truncate opacity-60">{wt.path}</p>
               </div>
               {!wt.isMain && (
@@ -247,13 +255,25 @@ function CommandsSection({
 }) {
   const { data: project } = useProject(projectName);
 
-  const allCommands: Array<{ key: string; command: string; type: "build" | "run" | "custom" }> = [];
+  const allCommands: Array<{
+    key: string;
+    command: string;
+    type: "build" | "run" | "custom";
+  }> = [];
 
   if (project?.services?.[0]?.buildCommand) {
-    allCommands.push({ key: "build", command: project.services[0].buildCommand, type: "build" });
+    allCommands.push({
+      key: "build",
+      command: project.services[0].buildCommand,
+      type: "build",
+    });
   }
   if (project?.services?.[0]?.runCommand) {
-    allCommands.push({ key: "run", command: project.services[0].runCommand, type: "run" });
+    allCommands.push({
+      key: "run",
+      command: project.services[0].runCommand,
+      type: "run",
+    });
   }
   for (const [key, cmd] of Object.entries(project?.commands ?? {})) {
     allCommands.push({ key, command: cmd, type: "custom" });
@@ -262,7 +282,9 @@ function CommandsSection({
   if (allCommands.length === 0) {
     return (
       <div className="px-3 py-2">
-        <p className="text-xs text-[var(--color-text-muted)]">No commands configured</p>
+        <p className="text-xs text-[var(--color-text-muted)]">
+          No commands configured
+        </p>
       </div>
     );
   }
@@ -272,8 +294,12 @@ function CommandsSection({
       {allCommands.map(({ key, command, type }) => (
         <div key={key} className="flex items-center gap-2 group">
           <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium text-[var(--color-text)] truncate">{key}</p>
-            <p className="text-xs font-mono text-[var(--color-text-muted)] truncate opacity-70">{command}</p>
+            <p className="text-xs font-medium text-[var(--color-text)] truncate">
+              {key}
+            </p>
+            <p className="text-xs font-mono text-[var(--color-text-muted)] truncate opacity-70">
+              {command}
+            </p>
           </div>
           {onLaunchCommand && (
             <button
@@ -328,7 +354,9 @@ export function ProjectInfoPanel({ projectName, onLaunchCommand }: Props) {
       <div className="px-4 py-3 border-b border-[var(--color-border)]">
         <div className="flex items-center gap-2 flex-wrap">
           <Folder className="h-4 w-4 text-[var(--color-primary)] shrink-0" />
-          <h2 className="text-sm font-semibold text-[var(--color-text)]">{project.name}</h2>
+          <h2 className="text-sm font-semibold text-[var(--color-text)]">
+            {project.name}
+          </h2>
           <TypeBadge type={project.type} />
           {project.status && (
             <>
@@ -360,11 +388,7 @@ export function ProjectInfoPanel({ projectName, onLaunchCommand }: Props) {
           <WorktreesSection projectName={projectName} />
         </CollapsibleSection>
 
-        <CollapsibleSection
-          title="Commands"
-          icon={Terminal}
-          defaultOpen={true}
-        >
+        <CollapsibleSection title="Commands" icon={Terminal} defaultOpen={true}>
           <CommandsSection
             projectName={projectName}
             onLaunchCommand={onLaunchCommand}
