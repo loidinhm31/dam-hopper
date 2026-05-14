@@ -6,7 +6,9 @@ import {
   useGitDiscard,
   useGitCommit,
 } from "@/api/queries.js";
+import type { DiffFileEntry } from "@/api/client.js";
 import { Button } from "@/components/atoms/Button.js";
+import { FilePathLabel } from "@/components/atoms/FilePathLabel.js";
 
 interface GitLocalChangesProps {
   project: string;
@@ -105,9 +107,7 @@ export function GitLocalChanges({ project }: GitLocalChangesProps) {
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <StatusIcon status={file.status} />
-                    <span className="text-xs truncate text-[var(--color-text)]">
-                      {file.path}
-                    </span>
+                    <FilePathLabel path={file.path} />
                   </div>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
@@ -190,14 +190,22 @@ export function GitLocalChanges({ project }: GitLocalChangesProps) {
   );
 }
 
-function FileItem({ file, onAction, actionLabel, actionClass }: any) {
+function FileItem({
+  file,
+  onAction,
+  actionLabel,
+  actionClass,
+}: {
+  file: DiffFileEntry;
+  onAction: () => void;
+  actionLabel: string;
+  actionClass: string;
+}) {
   return (
     <div className="group flex items-center justify-between px-2 py-1 hover:bg-[var(--color-border)]/20 rounded cursor-default">
       <div className="flex items-center gap-2 min-w-0">
         <StatusIcon status={file.status} />
-        <span className="text-xs truncate text-[var(--color-text)]">
-          {file.path}
-        </span>
+        <FilePathLabel path={file.path} />
       </div>
       <button
         onClick={onAction}

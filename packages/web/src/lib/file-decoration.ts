@@ -112,6 +112,9 @@ function normalizeMime(mime?: string): string {
 
 function getExactNameDecoration(baseName: string): FileDecoration | null {
   const exactName = baseName.toLowerCase();
+  if (exactName.startsWith(`${ENV_FILE_NAME}.`)) {
+    return EXACT_FILE_DECORATIONS[ENV_FILE_NAME];
+  }
   if (exactName.startsWith("dockerfile.")) {
     return EXACT_FILE_DECORATIONS.dockerfile;
   }

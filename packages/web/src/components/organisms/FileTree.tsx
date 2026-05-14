@@ -23,16 +23,13 @@ function isLoadingSentinel(id: string) {
 import {
   ChevronRight,
   ChevronDown,
-  File,
   Folder,
   FolderOpen,
-  FileCode,
-  FileText,
-  ImageIcon,
   Loader2,
   Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
+import { FileDecorationIcon } from "@/lib/file-decoration-icon.js";
 import { useFsSubscription } from "@/hooks/useFsSubscription.js";
 import { useFsOps } from "@/hooks/useFsOps.js";
 import { useFsUpload } from "@/hooks/useFsUpload.js";
@@ -46,15 +43,15 @@ import { EncryptedUploadDialog } from "@/components/organisms/EncryptedUploadDia
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 
 // ---------------------------------------------------------------------------
-// File icon mapping (simple extension-based)
+// File icon mapping
 // ---------------------------------------------------------------------------
 
-function FileIcon({
-  name,
+function TreeNodeIcon({
+  path,
   isDir,
   isOpen,
 }: {
-  name: string;
+  path: string;
   isDir: boolean;
   isOpen?: boolean;
 }) {
@@ -65,34 +62,20 @@ function FileIcon({
       <Folder className="h-4 w-4 shrink-0 text-yellow-400" />
     );
   }
-  const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
-  const codeExts = new Set([
-    "ts",
-    "tsx",
-    "js",
-    "jsx",
-    "rs",
-    "py",
-    "go",
-    "java",
-    "c",
-    "cpp",
-    "h",
-    "toml",
-    "yaml",
-    "yml",
-    "json",
-  ]);
-  const textExts = new Set(["md", "txt", "log", "env", "gitignore", "sh"]);
-  const imgExts = new Set(["png", "jpg", "jpeg", "gif", "svg", "webp", "ico"]);
+  return <FileDecorationIcon pathOrName={path} className="h-4 w-4" />;
+}
 
-  if (codeExts.has(ext))
-    return <FileCode className="h-4 w-4 shrink-0 text-blue-400" />;
-  if (imgExts.has(ext))
-    return <ImageIcon className="h-4 w-4 shrink-0 text-green-400" />;
-  if (textExts.has(ext))
-    return <FileText className="h-4 w-4 shrink-0 text-gray-400" />;
-  return <File className="h-4 w-4 shrink-0 text-gray-400" />;
+function getNodeDecorationPath(node: FsArborNode): string {
+  // Prefer the relative path id when it still points at the visible entry.
+  // If tree ids ever become synthetic/opaque, fall back to the display name.
+  if (
+    node.id === node.name ||
+    node.id.endsWith(`/${node.name}`) ||
+    node.id.endsWith(`\\${node.name}`)
+  ) {
+    return node.id;
+  }
+  return node.name;
 }
 
 // ---------------------------------------------------------------------------
@@ -156,7 +139,11 @@ function NodeRenderer({
         ) : null}
       </span>
 
-      <FileIcon name={node.data.name} isDir={isDir} isOpen={node.isOpen} />
+      <TreeNodeIcon
+        path={getNodeDecorationPath(node.data)}
+        isDir={isDir}
+        isOpen={node.isOpen}
+      />
 
       <span
         className="truncate"

@@ -12,6 +12,25 @@ The frontend is a React 19 SPA (packages/web/) using:
 - **Tailwind CSS** for styling
 - **xterm.js** for terminal rendering
 
+## Shared File Decorations
+
+**Location:** `packages/web/src/lib/file-decoration.ts`
+
+**Purpose:** Central source of truth for file icons, badge text, display language, and Monaco language.
+
+**Visible consumers:**
+
+- `FileTree`
+- `EditorTab`
+- `SearchPanel`
+- `FilePathLabel`
+
+**Notes:**
+
+- Exact filename lookup takes priority, then extension, then MIME, then neutral fallback.
+- `file-decoration-icon.tsx` only renders the shared lookup result.
+- Git change rows can reuse the same lookup for file identity while keeping VCS badges separate.
+
 ## IDE Tool Window System
 
 Dam Hopper uses an extensible IDE-style Tool Window system, inspired by IntelliJ IDEA.

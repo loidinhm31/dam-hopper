@@ -141,6 +141,7 @@ export function EditorTabs({ project }: { project: string | null }) {
             <EditorTab
               key={tab.key}
               name={tab.name}
+              path={tab.path}
               active={tab.key === activeKey}
               dirty={tab.dirty}
               onClick={() => project && setActive(project, tab.key)}
@@ -225,6 +226,7 @@ export function EditorTabs({ project }: { project: string | null }) {
             >
               <MonacoHost
                 tabKey={activeTab.key}
+                path={activeTab.path}
                 content={activeTab.content}
                 tier={activeTab.tier}
                 mime={activeTab.mime}
@@ -253,7 +255,7 @@ export function EditorTabs({ project }: { project: string | null }) {
           !/\.mdx?$/i.test(activeTab.name) && (
             <EditorStatusBar
               editor={activeEditor}
-              language={mimeToLanguage(activeTab.mime)}
+              language={mimeToLanguage(activeTab.mime, activeTab.path)}
             />
           )}
       </div>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Minus, Plus, RotateCcw, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
+import { FilePathLabel } from "@/components/atoms/FilePathLabel.js";
 import { FileStatusBadge } from "@/components/atoms/FileStatusBadge.js";
 import type { DiffFileEntry } from "@/api/client.js";
 
@@ -25,9 +26,6 @@ export function ChangedFileEntry({
 }: Props) {
   const [hovered, setHovered] = useState(false);
   const fileName = entry.path.split("/").pop() ?? entry.path;
-  const dirPath = entry.path.includes("/")
-    ? entry.path.slice(0, entry.path.lastIndexOf("/"))
-    : null;
 
   return (
     <div
@@ -42,22 +40,18 @@ export function ChangedFileEntry({
       onMouseLeave={() => setHovered(false)}
     >
       <FileStatusBadge status={entry.status} />
-
-      <span className="flex-1 min-w-0">
-        <span className="truncate text-[var(--color-text)] font-medium">
-          {fileName}
-        </span>
-        {dirPath && (
-          <span className="ml-1.5 truncate text-[var(--color-text-muted)] text-[10px]">
-            {dirPath}
-          </span>
-        )}
+      <div className="flex-1 min-w-0">
+        <FilePathLabel
+          path={entry.path}
+          fileNameClassName="text-[var(--color-text)] font-medium"
+          dirClassName="text-[var(--color-text-muted)] text-[10px]"
+        />
         {entry.oldPath && (
-          <span className="ml-1.5 text-[var(--color-text-muted)] text-[10px]">
+          <span className="ml-[1.875rem] truncate text-[var(--color-text-muted)] text-[10px] block">
             ← {entry.oldPath}
           </span>
         )}
-      </span>
+      </div>
 
       {(entry.additions > 0 || entry.deletions > 0) && (
         <span className="flex items-center gap-1 shrink-0 text-[10px] font-mono">

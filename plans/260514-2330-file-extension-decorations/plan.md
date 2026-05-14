@@ -27,7 +27,7 @@ Add a frontend-only file decoration system for Dam Hopper's IDE UI. Use one shar
 | Phase | Status | Effort | Description |
 | --- | --- | ---: | --- |
 | [Phase 01](./phase-01-shared-file-decoration-registry.md) | Completed 2026-05-15 | 2h | Create shared registry, helpers, and unit coverage. |
-| [Phase 02](./phase-02-integrate-file-decorations.md) | Pending | 3h | Replace duplicated UI mappings across file surfaces and verify build/tests. |
+| [Phase 02](./phase-02-integrate-file-decorations.md) | Completed 2026-05-15 | 3h | Replace duplicated UI mappings across file surfaces and verify build/tests. |
 
 ## Validation
 
