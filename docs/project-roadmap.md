@@ -197,6 +197,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-05-15:** Completed Control Running Ports Phase 02.
+  - ✅ `PortsPanel` now exposes a confirmed kill action for detected ports with owner sessions
+  - ✅ `usePorts()` kill mutation revalidates ports and terminal session data
+  - ✅ Validation passed: web build + web tests
+
 - **2026-05-15:** Completed File Extension Decorations Phase 01.
   - ✅ Shared file decoration registry added in `packages/web/src/lib`
   - ✅ MIME fallback compatibility kept in `mime-to-language.ts`

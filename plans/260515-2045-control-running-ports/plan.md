@@ -1,7 +1,7 @@
 ---
 title: "Control Running Ports"
 description: "Add a kill control to PortsPanel for terminating terminal sessions that own detected ports."
-status: in-progress
+status: completed
 priority: P1
 effort: 4h
 branch: main
@@ -28,7 +28,7 @@ Add a kill action to the existing `PortsPanel` so users can stop a detected port
 | Phase | Status | Effort | Description |
 | --- | --- | ---: | --- |
 | [Phase 01](./phase-01-port-session-control-data-flow.md) | Done | 1.5h | Add session kill capability to the ports hook and cache behavior. |
-| [Phase 02](./phase-02-ports-panel-kill-action.md) | Planned | 2.5h | Add confirmed kill UI in `PortsPanel` and verify behavior. |
+| [Phase 02](./phase-02-ports-panel-kill-action.md) | Done | 2.5h | Add confirmed kill UI in `PortsPanel` and verify behavior. |
 
 ## Validation
 
