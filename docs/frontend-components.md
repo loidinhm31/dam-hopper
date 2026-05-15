@@ -107,7 +107,9 @@ interface TerminalPanelProps {
 
 **Location:** `packages/web/src/components/organisms/PortsPanel.tsx`
 
-**Purpose:** Combined panel for port detection and tunnel management.
+**Purpose:** Combined panel for port detection, tunnel management, and session kill control for detected ports.
+
+**Data flow:** `usePorts()` preserves `sessionId` on detected rows and exposes `killPortSession(sessionId)` so the panel can terminate the owning terminal session without direct process handling.
 
 ---
 
