@@ -541,6 +541,8 @@ fn ui_config_serde_roundtrip() {
             system_font_size: 16,
             editor_font_size: 12,
             editor_zoom_wheel_enabled: false,
+            terminal_suggestions_enabled: true,
+            explorer_show_hidden: false,
             terminal_order: vec!["term1".to_string(), "term2".to_string()],
             project_order: vec!["proj1".to_string()],
             project_command_order: {
@@ -590,30 +592,21 @@ fn ui_config_validate_font_sizes_checks_both_fields() {
     let valid = UiConfig {
         system_font_size: 14,
         editor_font_size: 16,
-        editor_zoom_wheel_enabled: true,
-        terminal_order: vec![],
-        project_order: vec![],
-        project_command_order: std::collections::HashMap::new(),
+        ..UiConfig::default()
     };
     assert!(valid.validate_font_sizes().is_ok());
 
     let bad_system = UiConfig {
         system_font_size: 5,
         editor_font_size: 14,
-        editor_zoom_wheel_enabled: true,
-        terminal_order: vec![],
-        project_order: vec![],
-        project_command_order: std::collections::HashMap::new(),
+        ..UiConfig::default()
     };
     assert!(bad_system.validate_font_sizes().is_err());
 
     let bad_editor = UiConfig {
         system_font_size: 14,
         editor_font_size: 99,
-        editor_zoom_wheel_enabled: false,
-        terminal_order: vec![],
-        project_order: vec![],
-        project_command_order: std::collections::HashMap::new(),
+        ..UiConfig::default()
     };
     assert!(bad_editor.validate_font_sizes().is_err());
 }

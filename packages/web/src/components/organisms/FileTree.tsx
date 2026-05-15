@@ -41,6 +41,7 @@ import { NewItemDialog } from "./NewItemDialog.js";
 import { LockToggle } from "@/components/atoms/LockToggle.js";
 import { EncryptedUploadDialog } from "@/components/organisms/EncryptedUploadDialog.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
+import { useSettingsStore } from "@/stores/settings.js";
 
 // ---------------------------------------------------------------------------
 // File icon mapping
@@ -201,7 +202,7 @@ export function FileTree({
   onOpenTerminal,
   className,
 }: FileTreeProps) {
-  const [showHidden, setShowHidden] = useState(false);
+  const { explorerShowHidden: showHidden, saveDebounced } = useSettingsStore();
   const [encUploadOpen, setEncUploadOpen] = useState(false);
   const { data, isLoading, isError, error, loadChildren } = useFsSubscription(
     project,
@@ -446,7 +447,7 @@ export function FileTree({
             Explorer
           </span>
           <button
-            onClick={() => setShowHidden((v) => !v)}
+            onClick={() => saveDebounced({ explorerShowHidden: !showHidden })}
             title={showHidden ? "Hide dotfiles" : "Show dotfiles"}
             className={cn(
               "text-[10px] px-1.5 py-0.5 rounded-sm transition-colors",

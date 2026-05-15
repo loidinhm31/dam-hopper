@@ -11,4 +11,6 @@ export interface ToolWindowDef {
   defaultSide?: "left" | "right";
   /** Optional: Position in ActivityBar ('top' | 'bottom'), defaults to 'top' */
   position?: "top" | "bottom";
+  /** Optional: If true, this tool will be active by default if no layout is persisted */
+  defaultActive?: boolean;
 }
