@@ -244,15 +244,11 @@ export function usePorts(): {
 
   const killPortSession = useCallback(
     async (sessionId: string) => {
-      try {
-        await transport.invoke("terminal:kill", sessionId);
-      } finally {
-        await Promise.all([
-          qc.invalidateQueries({ queryKey: ["ports"] }),
-          qc.invalidateQueries({ queryKey: ["tunnels"] }),
-          qc.invalidateQueries({ queryKey: ["terminal-sessions"] }),
-        ]);
-      }
+      await transport.invoke("terminal:kill", sessionId);
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["ports"] }),
+        qc.invalidateQueries({ queryKey: ["terminal-sessions"] }),
+      ]);
     },
     [qc, transport],
   );

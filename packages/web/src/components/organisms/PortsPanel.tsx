@@ -4,6 +4,7 @@ import {
   Check,
   QrCode,
   X,
+  CircleStop,
   Cloud,
   Loader2,
   Download,
@@ -11,6 +12,15 @@ import {
   ExternalLink,
 } from "lucide-react";
 import QRCode from "react-qr-code";
+import { Button } from "@/components/atoms/Button.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/Dialog.js";
 import { cn } from "@/lib/utils.js";
 import {
   usePorts,
@@ -150,21 +160,27 @@ function PortRow({
   isLocal,
   onStartTunnel,
   onStopTunnel,
+  onKillSession,
 }: {
   entry: PortEntry;
   isLocal: boolean;
   onStartTunnel: (port: number, label: string) => Promise<void>;
   onStopTunnel: (id: string) => Promise<void>;
+  onKillSession: (sessionId: string) => Promise<void>;
 }) {
   const [showQr, setShowQr] = useState(false);
   const { copied, copy } = useCopyToClipboard();
   const qrRef = useRef<HTMLDivElement>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
+  const [isKilling, setIsKilling] = useState(false);
+  const [killError, setKillError] = useState<string | null>(null);
+  const [killConfirmOpen, setKillConfirmOpen] = useState(false);
 
   const tunnelStatus = entry.tunnel?.status ?? null;
   const isStarting = tunnelStatus === "starting";
   const isReady = tunnelStatus === "ready";
   const isFailed = tunnelStatus === "failed";
+  const canKillSession = entry.sessionId !== null && entry.state !== "lost";
 
   // Close QR popover on outside click
   useEffect(() => {
@@ -199,168 +215,263 @@ function PortRow({
     }
   }
 
+  async function handleKillSession() {
+    if (!entry.sessionId) return;
+    setIsKilling(true);
+    try {
+      await onKillSession(entry.sessionId);
+      setKillConfirmOpen(false);
+    } catch (err) {
+      setKillError(
+        err instanceof Error ? err.message : "Failed to kill terminal session",
+      );
+    } finally {
+      setIsKilling(false);
+    }
+  }
+
   return (
-    <li className="group flex flex-col pl-2 pr-2 py-1 text-xs hover:bg-[var(--color-surface-2)] transition-colors">
-      {/* Port info row */}
-      <div className="flex items-center gap-1.5 min-w-0">
-        <span className={cn("h-2 w-2 rounded-full shrink-0", dotColor)} />
-        <span className="font-mono text-[var(--color-text-muted)] shrink-0">
-          :{entry.port}
-        </span>
-        {entry.project && (
-          <span className="truncate text-[var(--color-text)]">
-            {entry.project}
+    <>
+      <li className="group flex flex-col pl-2 pr-2 py-1 text-xs hover:bg-[var(--color-surface-2)] transition-colors">
+        {/* Port info row */}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className={cn("h-2 w-2 rounded-full shrink-0", dotColor)} />
+          <span className="font-mono text-[var(--color-text-muted)] shrink-0">
+            :{entry.port}
           </span>
-        )}
-        {entry.state === "provisional" && (
-          <span className="text-[10px] bg-amber-500/15 text-amber-600 dark:text-amber-400 px-1 rounded shrink-0">
-            provisional
-          </span>
-        )}
-        {entry.state === "lost" && (
-          <span className="text-[10px] bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)] px-1 rounded shrink-0">
-            lost
-          </span>
-        )}
-        {isReady && (
-          <span className="shrink-0 text-[10px] bg-amber-500/20 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-semibold">
-            PUBLIC
-          </span>
-        )}
-      </div>
-
-      {/* Tunnel URL (State C) */}
-      {isReady && entry.tunnel?.url && (
-        <a
-          href={entry.tunnel.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={entry.tunnel.url}
-          className="ml-3.5 block truncate max-w-[180px] text-[var(--color-primary)] hover:underline text-[11px]"
-        >
-          {entry.tunnel.url.replace(/^https?:\/\//, "")}
-        </a>
-      )}
-
-      {/* State B: starting */}
-      {isStarting && (
-        <span className="ml-3.5 text-[var(--color-text-muted)] italic text-[11px]">
-          Starting…
-        </span>
-      )}
-
-      {/* State B-failed: error message */}
-      {isFailed && entry.tunnel?.error && (
-        <span
-          className="ml-3.5 text-red-500 text-[11px] truncate"
-          title={entry.tunnel.error}
-        >
-          {entry.tunnel.error}
-        </span>
-      )}
-
-      {/* Error from start attempt */}
-      {launchError && (
-        <div className="ml-3.5 flex items-center gap-1 text-red-500 text-[11px]">
-          <AlertCircle size={10} />
-          <span className="truncate">{launchError}</span>
+          {entry.project && (
+            <span className="truncate text-[var(--color-text)]">
+              {entry.project}
+            </span>
+          )}
+          {entry.state === "provisional" && (
+            <span className="text-[10px] bg-amber-500/15 text-amber-600 dark:text-amber-400 px-1 rounded shrink-0">
+              provisional
+            </span>
+          )}
+          {entry.state === "lost" && (
+            <span className="text-[10px] bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)] px-1 rounded shrink-0">
+              lost
+            </span>
+          )}
+          {isReady && (
+            <span className="shrink-0 text-[10px] bg-amber-500/20 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-semibold">
+              PUBLIC
+            </span>
+          )}
         </div>
-      )}
 
-      {/* Action bar — visible on group-hover */}
-      <div className="ml-3.5 flex items-center gap-0.5 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        {/* Open shortcut — only when same-host and port not lost */}
-        {isLocal && entry.state !== "lost" && (
+        {/* Tunnel URL (State C) */}
+        {isReady && entry.tunnel?.url && (
           <a
-            href={`http://${location.hostname}:${entry.port}`}
+            href={entry.tunnel.url}
             target="_blank"
             rel="noopener noreferrer"
-            title={`Open http://${location.hostname}:${entry.port}`}
-            aria-label={`Open http://${location.hostname}:${entry.port}`}
-            className="rounded p-0.5 hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            title={entry.tunnel.url}
+            className="ml-3.5 block truncate max-w-[180px] text-[var(--color-primary)] hover:underline text-[11px]"
           >
-            <ExternalLink size={11} />
+            {entry.tunnel.url.replace(/^https?:\/\//, "")}
           </a>
         )}
 
-        {/* State A: no tunnel or failed — start/retry */}
-        {(tunnelStatus === null || isFailed) && (
-          <button
-            onClick={() => void handleStartTunnel()}
-            title={isFailed ? "Retry tunnel" : "Start tunnel"}
-            aria-label={isFailed ? "Retry tunnel" : "Start tunnel"}
-            className="rounded p-0.5 hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-          >
-            <Cloud size={11} />
-          </button>
-        )}
-
-        {/* State B: starting — spinner (not interactive) */}
+        {/* State B: starting */}
         {isStarting && (
-          <Loader2 size={11} className="text-amber-400 animate-spin" />
+          <span className="ml-3.5 text-[var(--color-text-muted)] italic text-[11px]">
+            Starting…
+          </span>
         )}
 
-        {/* State C: ready — copy + QR + stop */}
-        {isReady && (
-          <>
-            {entry.tunnel?.url && (
-              <>
-                <button
-                  onClick={() => void copy(entry.tunnel!.url!)}
-                  title="Copy URL"
-                  aria-label="Copy URL"
-                  className="rounded p-0.5 hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-                >
-                  {copied ? (
-                    <Check size={11} className="text-green-500" />
-                  ) : (
-                    <Copy size={11} />
-                  )}
-                </button>
+        {/* State B-failed: error message */}
+        {isFailed && entry.tunnel?.error && (
+          <span
+            className="ml-3.5 text-red-500 text-[11px] truncate"
+            title={entry.tunnel.error}
+          >
+            {entry.tunnel.error}
+          </span>
+        )}
 
-                <div className="relative" ref={qrRef}>
+        {/* Error from start attempt */}
+        {launchError && (
+          <div className="ml-3.5 flex items-center gap-1 text-red-500 text-[11px]">
+            <AlertCircle size={10} />
+            <span className="truncate">{launchError}</span>
+          </div>
+        )}
+
+        {killError && (
+          <div className="ml-3.5 flex items-center gap-1 text-red-500 text-[11px]">
+            <AlertCircle size={10} />
+            <span className="truncate">{killError}</span>
+            <button
+              onClick={() => setKillError(null)}
+              title="Dismiss terminal error"
+              aria-label="Dismiss terminal error"
+              className="rounded p-0.5 text-red-500/80 transition-colors hover:bg-red-500/10 hover:text-red-500"
+            >
+              <X size={10} />
+            </button>
+          </div>
+        )}
+
+        {/* Action bar — visible on group-hover */}
+        <div
+          className={cn(
+            "ml-3.5 mt-0.5 flex items-center gap-0.5 transition-opacity",
+            launchError || isKilling || killConfirmOpen
+              ? "opacity-100"
+              : "opacity-0 group-hover:opacity-100",
+          )}
+        >
+          {/* Open shortcut — only when same-host and port not lost */}
+          {isLocal && entry.state !== "lost" && (
+            <a
+              href={`http://${location.hostname}:${entry.port}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`Open http://${location.hostname}:${entry.port}`}
+              aria-label={`Open http://${location.hostname}:${entry.port}`}
+              className="rounded p-0.5 hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            >
+              <ExternalLink size={11} />
+            </a>
+          )}
+
+          {/* State A: no tunnel or failed — start/retry */}
+          {(tunnelStatus === null || isFailed) && (
+            <button
+              onClick={() => void handleStartTunnel()}
+              title={isFailed ? "Retry tunnel" : "Start tunnel"}
+              aria-label={isFailed ? "Retry tunnel" : "Start tunnel"}
+              className="rounded p-0.5 hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            >
+              <Cloud size={11} />
+            </button>
+          )}
+
+          {/* State B: starting — spinner (not interactive) */}
+          {isStarting && (
+            <Loader2 size={11} className="text-amber-400 animate-spin" />
+          )}
+
+          {/* State C: ready — copy + QR + stop */}
+          {isReady && (
+            <>
+              {entry.tunnel?.url && (
+                <>
                   <button
-                    onClick={() => setShowQr((v) => !v)}
-                    title="Show QR code"
-                    aria-label="Show QR code"
+                    onClick={() => void copy(entry.tunnel!.url!)}
+                    title="Copy URL"
+                    aria-label="Copy URL"
                     className="rounded p-0.5 hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
                   >
-                    <QrCode size={11} />
+                    {copied ? (
+                      <Check size={11} className="text-green-500" />
+                    ) : (
+                      <Copy size={11} />
+                    )}
                   </button>
-                  {showQr && (
-                    <div className="absolute z-50 right-0 top-6 bg-white border border-[var(--color-border)] rounded p-2 shadow-lg">
-                      <QRCode
-                        value={entry.tunnel.url}
-                        size={160}
-                        bgColor="#ffffff"
-                        fgColor="#000000"
-                      />
-                      <button
-                        onClick={() => setShowQr(false)}
-                        title="Close QR"
-                        aria-label="Close QR code"
-                        className="absolute top-1 right-1 rounded p-0.5 hover:bg-gray-100 text-gray-500"
-                      >
-                        <X size={10} />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
 
+                  <div className="relative" ref={qrRef}>
+                    <button
+                      onClick={() => setShowQr((v) => !v)}
+                      title="Show QR code"
+                      aria-label="Show QR code"
+                      className="rounded p-0.5 hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+                    >
+                      <QrCode size={11} />
+                    </button>
+                    {showQr && (
+                      <div className="absolute z-50 right-0 top-6 bg-white border border-[var(--color-border)] rounded p-2 shadow-lg">
+                        <QRCode
+                          value={entry.tunnel.url}
+                          size={160}
+                          bgColor="#ffffff"
+                          fgColor="#000000"
+                        />
+                        <button
+                          onClick={() => setShowQr(false)}
+                          title="Close QR"
+                          aria-label="Close QR code"
+                          className="absolute top-1 right-1 rounded p-0.5 hover:bg-gray-100 text-gray-500"
+                        >
+                          <X size={10} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              <button
+                onClick={() => void onStopTunnel(entry.tunnel!.id)}
+                title="Stop tunnel"
+                aria-label="Stop tunnel"
+                className="rounded p-0.5 hover:bg-red-500/20 hover:text-red-500 text-[var(--color-text-muted)] transition-colors"
+              >
+                <X size={11} />
+              </button>
+            </>
+          )}
+
+          {canKillSession && (
             <button
-              onClick={() => void onStopTunnel(entry.tunnel!.id)}
-              title="Stop tunnel"
-              aria-label="Stop tunnel"
-              className="rounded p-0.5 hover:bg-red-500/20 hover:text-red-500 text-[var(--color-text-muted)] transition-colors"
+              onClick={() => {
+                setKillError(null);
+                setKillConfirmOpen(true);
+              }}
+              disabled={isKilling}
+              title={`Kill terminal session for :${entry.port}`}
+              aria-label={`Kill terminal session for :${entry.port}`}
+              className="rounded p-0.5 text-[var(--color-text-muted)] transition-colors hover:bg-red-500/20 hover:text-red-500 disabled:cursor-wait disabled:opacity-60"
             >
-              <X size={11} />
+              {isKilling ? (
+                <Loader2 size={11} className="animate-spin" />
+              ) : (
+                <CircleStop size={11} />
+              )}
             </button>
-          </>
-        )}
-      </div>
-    </li>
+          )}
+        </div>
+      </li>
+
+      <Dialog
+        open={killConfirmOpen}
+        onOpenChange={(open) => {
+          if (!isKilling) setKillConfirmOpen(open);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Kill terminal session</DialogTitle>
+            <DialogDescription>
+              Stop the terminal session for port <span className="font-mono text-[var(--color-text)]">:{entry.port}</span>
+              {entry.project ? ` in ${entry.project}` : ""}. This stops the terminal and its running process.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setKillConfirmOpen(false)}
+              disabled={isKilling}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              loading={isKilling}
+              onClick={() => void handleKillSession()}
+            >
+              Kill session
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -438,6 +549,7 @@ export function PortsPanel() {
     isError,
     createTunnel,
     stopTunnel,
+    killPortSession,
     installCloudflared,
     installState,
   } = usePorts();
@@ -506,6 +618,7 @@ export function PortsPanel() {
                 isLocal={localServer}
                 onStartTunnel={handleStartTunnel}
                 onStopTunnel={stopTunnel}
+                onKillSession={killPortSession}
               />
             ))}
             {ports.length === 0 && (

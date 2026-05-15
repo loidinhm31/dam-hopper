@@ -7,3 +7,5 @@ server/target/
 /.claude/
 repomix-output.xml
 /.codex/
+output.log
+server/.fuse_hidden*
