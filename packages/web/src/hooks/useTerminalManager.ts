@@ -78,6 +78,16 @@ export interface TerminalManagerActions {
   handleRemoveFreeTerminal: (sessionId: string) => void;
   handleOpenFreeTerminalSavePrompt: (sessionId: string) => void;
   handleSaveFreeTerminalToProject: () => void;
+  handleUpdateProfile: (
+    projectName: string,
+    originalName: string,
+    next: { name: string; command: string; cwd: string },
+  ) => Promise<void>;
+  handleUpdateCustomCommand: (
+    projectName: string,
+    originalKey: string,
+    next: { key: string; command: string },
+  ) => Promise<void>;
   handleSessionExit: (sessionId: string) => void;
   setSavePrompt: React.Dispatch<React.SetStateAction<SavePromptState | null>>;
   setFreeTerminalSavePrompt: React.Dispatch<
@@ -111,6 +121,15 @@ function validateProfileName(name: string, existing: string[]): string | null {
   if (INVALID_PROFILE_NAME_RE.test(name)) return "Name must not contain ':'";
   if (existing.includes(name.trim()))
     return "A profile with this name already exists";
+  return null;
+}
+
+function validateCustomCommandKey(
+  key: string,
+  existing: string[],
+): string | null {
+  if (!key.trim()) return "Command key is required";
+  if (existing.includes(key.trim())) return "A command with this key already exists";
   return null;
 }
 
@@ -231,6 +250,33 @@ export function useTerminalManager(
 
     setActiveTab(sessionId);
     setSelection({ type: "terminal", sessionId });
+  }
+
+  function removeSessionsFromUi(sessionIds: string[]) {
+    if (sessionIds.length === 0) return;
+
+    setOpenTabs((prev) => {
+      const remaining = prev.filter((t) => !sessionIds.includes(t.sessionId));
+      if (activeTab && sessionIds.includes(activeTab)) {
+        setActiveTab(
+          remaining.length > 0 ? remaining[remaining.length - 1].sessionId : null,
+        );
+      }
+      return remaining;
+    });
+    setMountedSessions((prev) =>
+      prev.filter((session) => !sessionIds.includes(session.sessionId)),
+    );
+    setSelection((prev) =>
+      prev?.type === "terminal" && sessionIds.includes(prev.sessionId) ? null : prev,
+    );
+  }
+
+  async function invalidateProjectConfig() {
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ["projects"] }),
+      qc.invalidateQueries({ queryKey: ["config"] }),
+    ]);
   }
 
   useEffect(() => {
@@ -360,24 +406,7 @@ export function useTerminalManager(
       if (s?.alive) void api.terminal.kill(id);
     }
 
-    if (instanceIds.length > 0) {
-      setOpenTabs((prev) => {
-        const remaining = prev.filter(
-          (t) => !instanceIds.includes(t.sessionId),
-        );
-        if (activeTab && instanceIds.includes(activeTab)) {
-          setActiveTab(
-            remaining.length > 0
-              ? remaining[remaining.length - 1].sessionId
-              : null,
-          );
-        }
-        return remaining;
-      });
-      setMountedSessions((prev) =>
-        prev.filter((s) => !instanceIds.includes(s.sessionId)),
-      );
-    }
+    removeSessionsFromUi(instanceIds);
 
     const updated = (project.terminals ?? []).filter(
       (t) => t.name !== profileName,
@@ -388,6 +417,101 @@ export function useTerminalManager(
         void qc.invalidateQueries({ queryKey: ["projects"] });
         void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
       });
+  }
+
+  async function handleUpdateProfile(
+    projectName: string,
+    originalName: string,
+    next: { name: string; command: string; cwd: string },
+  ) {
+    const project = projects.find((p) => p.name === projectName);
+    if (!project) throw new Error("Project not found");
+
+    const terminals = project.terminals ?? [];
+    const existing = terminals
+      .map((terminal) => terminal.name)
+      .filter((name) => name !== originalName);
+    const trimmedName = next.name.trim();
+    const trimmedCommand = next.command.trim();
+    const normalizedCwd = next.cwd.trim() || ".";
+
+    const nameError = validateProfileName(trimmedName, existing);
+    if (nameError) throw new Error(nameError);
+    if (!trimmedCommand) throw new Error("Command is required");
+
+    const updated = terminals.map((terminal) =>
+      terminal.name === originalName
+        ? {
+            name: trimmedName,
+            command: trimmedCommand,
+            cwd: normalizedCwd,
+          }
+        : terminal,
+    );
+    if (!updated.some((terminal) => terminal.name === trimmedName)) {
+      throw new Error("Profile not found");
+    }
+
+    await api.config.updateProject(projectName, { terminals: updated });
+    await invalidateProjectConfig();
+
+    if (originalName === trimmedName) return;
+
+    const prefix = `terminal:${projectName}:${sanitizeSessionSegment(originalName.replace(/ /g, "_"))}:`;
+    const instanceIds = sessions
+      .filter((session) => session.id.startsWith(prefix))
+      .map((session) => session.id);
+
+    for (const id of instanceIds) {
+      if (sessionMap.get(id)?.alive) {
+        void api.terminal.kill(id);
+      }
+    }
+    removeSessionsFromUi(instanceIds);
+    await qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+  }
+
+  async function handleUpdateCustomCommand(
+    projectName: string,
+    originalKey: string,
+    next: { key: string; command: string },
+  ) {
+    const project = projects.find((p) => p.name === projectName);
+    if (!project) throw new Error("Project not found");
+
+    const commands = project.commands ?? {};
+    if (!(originalKey in commands)) throw new Error("Command not found");
+
+    const trimmedKey = next.key.trim();
+    const trimmedCommand = next.command.trim();
+    const existing = Object.keys(commands).filter((key) => key !== originalKey);
+
+    const keyError = validateCustomCommandKey(trimmedKey, existing);
+    if (keyError) throw new Error(keyError);
+    if (!trimmedCommand) throw new Error("Command is required");
+
+    const updated: Record<string, string> = {};
+    for (const [key, value] of Object.entries(commands)) {
+      if (key === originalKey) {
+        updated[trimmedKey] = trimmedCommand;
+      } else {
+        updated[key] = value;
+      }
+    }
+
+    await api.config.updateProject(projectName, {
+      commands: Object.keys(updated).length > 0 ? updated : undefined,
+    });
+    await invalidateProjectConfig();
+
+    if (originalKey === trimmedKey) return;
+
+    const oldSessionId = `custom:${projectName}:${originalKey.replace(/[^a-zA-Z0-9:._-]/g, "-")}`;
+    if (sessionMap.get(oldSessionId)?.alive) {
+      void api.terminal.kill(oldSessionId);
+    }
+    removeSessionsFromUi([oldSessionId]);
+    await qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
   }
 
   function handleSaveProfile() {
@@ -689,6 +813,8 @@ export function useTerminalManager(
       handleRemoveFreeTerminal,
       handleOpenFreeTerminalSavePrompt,
       handleSaveFreeTerminalToProject,
+      handleUpdateProfile,
+      handleUpdateCustomCommand,
       handleSessionExit,
       setSavePrompt,
       setFreeTerminalSavePrompt,
