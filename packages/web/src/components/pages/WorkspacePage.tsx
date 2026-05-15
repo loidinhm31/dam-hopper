@@ -15,7 +15,6 @@ import { IdeShell } from "@/components/templates/IdeShell.js";
 import { FileTree } from "@/components/organisms/FileTree.js";
 import { EditorTabs } from "@/components/organisms/EditorTabs.js";
 import { TerminalTreeView } from "@/components/organisms/TerminalTreeView.js";
-import { TerminalTabBar } from "@/components/organisms/TerminalTabBar.js";
 import { MultiTerminalDisplay } from "@/components/organisms/MultiTerminalDisplay.js";
 import { ProjectInfoPanel } from "@/components/organisms/ProjectInfoPanel.js";
 import { SearchPanel } from "@/components/organisms/SearchPanel.js";
@@ -72,11 +71,9 @@ export default function WorkspacePage() {
     setSearchParams,
   );
   const {
-    openTabs,
     activeTab,
     mountedSessions,
     launchForm,
-    savePrompt,
     freeTerminalSavePrompt,
     selection,
   } = state;
@@ -89,7 +86,6 @@ export default function WorkspacePage() {
     handleLaunchProfile,
     handleLaunchFormSubmit,
     handleDeleteProfile,
-    handleSaveProfile,
     handleAddFreeTerminal,
     handleLaunchFreeWithCommand,
     handleLaunchSuggestedCommand,
@@ -100,8 +96,9 @@ export default function WorkspacePage() {
     handleRemoveFreeTerminal,
     handleOpenFreeTerminalSavePrompt,
     handleSaveFreeTerminalToProject,
+    handleUpdateProfile,
+    handleUpdateCustomCommand,
     handleSessionExit,
-    setSavePrompt,
     setFreeTerminalSavePrompt,
     setLaunchForm,
   } = actions;
@@ -347,14 +344,10 @@ export default function WorkspacePage() {
       handleSaveFreeTerminalToProject,
       launchForm,
       handleLaunchFormSubmit,
-      openTabs,
       tabsWithLiveSession,
       activeTab,
       handleSelectTab,
       handleCloseTab,
-      savePrompt,
-      handleSaveProfile,
-      setSavePrompt,
       setFreeTerminalSavePrompt,
       setLaunchForm,
       selection,
@@ -526,6 +519,8 @@ export default function WorkspacePage() {
             onKillFreeTerminal={handleKillTerminal}
             onRemoveFreeTerminal={handleRemoveFreeTerminal}
             onSaveFreeTerminal={handleOpenFreeTerminalSavePrompt}
+            onUpdateProfile={handleUpdateProfile}
+            onUpdateCustomCommand={handleUpdateCustomCommand}
           />
         ),
       },
@@ -546,6 +541,8 @@ export default function WorkspacePage() {
       handleAddFreeTerminal,
       handleLaunchFreeWithCommand,
       handleOpenFreeTerminalSavePrompt,
+      handleUpdateProfile,
+      handleUpdateCustomCommand,
       handleRemoveFreeTerminal,
     ],
   );

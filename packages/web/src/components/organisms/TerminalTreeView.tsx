@@ -11,12 +11,13 @@ import {
   Save,
   X,
   GripVertical,
+  Pencil,
 } from "lucide-react";
-import { cn } from "@/lib/utils.js";
+import { inputClass } from "@/components/atoms/Button.js";
 import { CommandSuggestionInput } from "@/components/atoms/CommandSuggestionInput.js";
+import { cn } from "@/lib/utils.js";
 import type { TreeProject, TreeCommand } from "@/hooks/useTerminalTree.js";
-import type { SessionInfo } from "@/api/client.js";
-import type { ProjectType } from "@/api/client.js";
+import type { SessionInfo, ProjectType } from "@/api/client.js";
 import { getSessionStatus, getStatusDotColor } from "@/lib/session-status.js";
 import { useGlobalConfig, useUpdateUiConfig } from "@/api/queries.js";
 
@@ -38,7 +39,39 @@ interface Props {
   onKillFreeTerminal: (sessionId: string) => void;
   onRemoveFreeTerminal: (sessionId: string) => void;
   onSaveFreeTerminal: (sessionId: string) => void;
+  onUpdateProfile: (
+    projectName: string,
+    originalName: string,
+    next: { name: string; command: string; cwd: string },
+  ) => Promise<void>;
+  onUpdateCustomCommand: (
+    projectName: string,
+    originalKey: string,
+    next: { key: string; command: string },
+  ) => Promise<void>;
 }
+
+type EditState =
+  | {
+      kind: "profile";
+      projectName: string;
+      originalName: string;
+      name: string;
+      command: string;
+      cwd: string;
+      saving: boolean;
+      error?: string;
+    }
+  | {
+      kind: "command";
+      projectName: string;
+      originalKey: string;
+      key: string;
+      command: string;
+      saving: boolean;
+      error?: string;
+    }
+  | null;
 
 function StatusDot({ session }: { session?: SessionInfo | null }) {
   if (!session) {
@@ -51,13 +84,31 @@ function StatusDot({ session }: { session?: SessionInfo | null }) {
   return <span className={`h-2 w-2 rounded-full ${dotColor} shrink-0`} />;
 }
 
+function getProfileEditorKey(projectName: string, profileName: string) {
+  return `${projectName}:terminal:${profileName}`;
+}
+
+function handleEditorKeyDown(
+  e: React.KeyboardEvent<HTMLInputElement>,
+  onCancel: () => void,
+) {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    onCancel();
+  }
+}
+
 function CommandRow({
   cmd,
   isSelected,
+  isEditing,
+  canEdit,
   onSelect,
   onLaunch,
   onKill,
+  onEdit,
   onDragStart,
+  onDragEnd,
   onDragOver,
   onDragEnter,
   onDrop,
@@ -66,10 +117,14 @@ function CommandRow({
 }: {
   cmd: TreeCommand;
   isSelected: boolean;
+  isEditing: boolean;
+  canEdit: boolean;
   onSelect: () => void;
   onLaunch: () => void;
   onKill: () => void;
+  onEdit?: () => void;
   onDragStart: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
   onDragOver: (e: React.DragEvent) => void;
   onDragEnter: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
@@ -81,9 +136,10 @@ function CommandRow({
 
   return (
     <div
-      onClick={hasSession ? onSelect : undefined}
-      draggable
+      onClick={!isEditing && hasSession ? onSelect : undefined}
+      draggable={!isEditing}
       onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
       onDragOver={onDragOver}
       onDragEnter={onDragEnter}
       onDrop={onDrop}
@@ -94,6 +150,7 @@ function CommandRow({
         isSelected &&
           "bg-[var(--color-primary)]/10 text-[var(--color-primary)]",
         !hasSession && "cursor-default",
+        isEditing && "bg-[var(--color-primary)]/8",
         isDragged && "opacity-40",
         isOver && "border-t-2 border-[var(--color-primary)]",
       )}
@@ -103,8 +160,25 @@ function CommandRow({
       <Terminal className="h-3 w-3 shrink-0 opacity-60" />
       <span className="flex-1 truncate font-mono">{cmd.label ?? cmd.key}</span>
 
-      {/* Action buttons */}
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+        {canEdit && onEdit && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit();
+            }}
+            title="Edit command"
+            className={cn(
+              "rounded p-0.5 transition-colors",
+              isEditing
+                ? "bg-[var(--color-primary)]/20 text-[var(--color-primary)] opacity-100"
+                : "hover:bg-[var(--color-primary)]/20 hover:text-[var(--color-primary)]",
+            )}
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+        )}
         {!isAlive && (
           <button
             type="button"
@@ -133,6 +207,70 @@ function CommandRow({
         )}
       </div>
     </div>
+  );
+}
+
+function CommandEditorRow({
+  value,
+  onKeyChange,
+  onCommandChange,
+  onSave,
+  onCancel,
+}: {
+  value: Extract<EditState, { kind: "command" }>;
+  onKeyChange: (key: string) => void;
+  onCommandChange: (command: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        void onSave();
+      }}
+      className="mx-2 mb-2 mt-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3"
+    >
+      <div className="grid gap-2">
+        <input
+          autoFocus
+          className={inputClass}
+          value={value.key}
+          onChange={(e) => onKeyChange(e.target.value)}
+          onKeyDown={(e) => handleEditorKeyDown(e, onCancel)}
+          placeholder="Command key"
+          disabled={value.saving}
+        />
+        <input
+          className={inputClass}
+          value={value.command}
+          onChange={(e) => onCommandChange(e.target.value)}
+          onKeyDown={(e) => handleEditorKeyDown(e, onCancel)}
+          placeholder="pnpm test"
+          disabled={value.saving}
+        />
+        {value.error && (
+          <p className="text-[10px] text-[var(--color-danger)]">{value.error}</p>
+        )}
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={value.saving}
+            className="rounded px-2 py-1 text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={value.saving}
+            className="rounded bg-[var(--color-primary)] px-2 py-1 text-xs text-white hover:opacity-90 disabled:opacity-60 transition-opacity"
+          >
+            {value.saving ? "Saving..." : "Save"}
+          </button>
+        </div>
+      </div>
+    </form>
   );
 }
 
@@ -192,6 +330,7 @@ function FreeTerminalRow({
   onRemove,
   onSave,
   onDragStart,
+  onDragEnd,
   onDragOver,
   onDragEnter,
   onDrop,
@@ -206,6 +345,7 @@ function FreeTerminalRow({
   onRemove: () => void;
   onSave: () => void;
   onDragStart: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
   onDragOver: (e: React.DragEvent) => void;
   onDragEnter: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
@@ -217,6 +357,7 @@ function FreeTerminalRow({
       onClick={onSelect}
       draggable
       onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
       onDragOver={onDragOver}
       onDragEnter={onDragEnter}
       onDrop={onDrop}
@@ -277,17 +418,95 @@ function FreeTerminalRow({
   );
 }
 
+function ProfileEditorRow({
+  value,
+  onNameChange,
+  onCommandChange,
+  onCwdChange,
+  onSave,
+  onCancel,
+}: {
+  value: Extract<EditState, { kind: "profile" }>;
+  onNameChange: (name: string) => void;
+  onCommandChange: (command: string) => void;
+  onCwdChange: (cwd: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        void onSave();
+      }}
+      className="mx-2 mb-2 mt-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3"
+    >
+      <div className="grid gap-2">
+        <input
+          autoFocus
+          className={inputClass}
+          value={value.name}
+          onChange={(e) => onNameChange(e.target.value)}
+          onKeyDown={(e) => handleEditorKeyDown(e, onCancel)}
+          placeholder="Profile name"
+          disabled={value.saving}
+        />
+        <input
+          className={inputClass}
+          value={value.command}
+          onChange={(e) => onCommandChange(e.target.value)}
+          onKeyDown={(e) => handleEditorKeyDown(e, onCancel)}
+          placeholder="bash"
+          disabled={value.saving}
+        />
+        <input
+          className={inputClass}
+          value={value.cwd}
+          onChange={(e) => onCwdChange(e.target.value)}
+          onKeyDown={(e) => handleEditorKeyDown(e, onCancel)}
+          placeholder="."
+          disabled={value.saving}
+        />
+        {value.error && (
+          <p className="text-[10px] text-[var(--color-danger)]">{value.error}</p>
+        )}
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={value.saving}
+            className="rounded px-2 py-1 text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={value.saving}
+            className="rounded bg-[var(--color-primary)] px-2 py-1 text-xs text-white hover:opacity-90 disabled:opacity-60 transition-opacity"
+          >
+            {value.saving ? "Saving..." : "Save"}
+          </button>
+        </div>
+      </div>
+    </form>
+  );
+}
+
 /** Expandable profile node with instance children */
 function ProfileRow({
   cmd,
   selectedId,
   isExpanded,
+  isEditing,
+  editor,
   onToggle,
   onSelectInstance,
   onLaunchInstance,
   onKillInstance,
+  onEdit,
   onDelete,
   onDragStart,
+  onDragEnd,
   onDragOver,
   onDragEnter,
   onDrop,
@@ -297,12 +516,16 @@ function ProfileRow({
   cmd: TreeCommand;
   selectedId: string | null;
   isExpanded: boolean;
+  isEditing: boolean;
+  editor?: React.ReactNode;
   onToggle: () => void;
   onSelectInstance: (sessionId: string) => void;
   onLaunchInstance: () => void;
   onKillInstance: (sessionId: string) => void;
+  onEdit: () => void;
   onDelete: () => void;
   onDragStart: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
   onDragOver: (e: React.DragEvent) => void;
   onDragEnter: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
@@ -310,15 +533,15 @@ function ProfileRow({
   isOver: boolean;
 }) {
   const sessions = cmd.sessions ?? [];
-  const aliveCount = sessions.filter((s) => s.alive).length;
+  const aliveCount = sessions.filter((session) => session.alive).length;
 
   return (
     <>
-      {/* Profile header row */}
       <div
         onClick={onToggle}
-        draggable
+        draggable={!isEditing}
         onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
         onDragOver={onDragOver}
         onDragEnter={onDragEnter}
         onDrop={onDrop}
@@ -326,6 +549,7 @@ function ProfileRow({
           "group flex items-center gap-1.5 pl-2 pr-2 py-1 text-xs cursor-pointer",
           "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
           "hover:bg-[var(--color-surface-2)] transition-colors",
+          isEditing && "bg-[var(--color-primary)]/8",
           isDragged && "opacity-40",
           isOver && "border-t-2 border-[var(--color-primary)]",
         )}
@@ -345,6 +569,22 @@ function ProfileRow({
           </span>
         )}
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit();
+            }}
+            title="Edit profile"
+            className={cn(
+              "rounded p-0.5 transition-colors",
+              isEditing
+                ? "bg-[var(--color-primary)]/20 text-[var(--color-primary)] opacity-100"
+                : "hover:bg-[var(--color-primary)]/20 hover:text-[var(--color-primary)]",
+            )}
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
           <button
             type="button"
             onClick={(e) => {
@@ -370,7 +610,8 @@ function ProfileRow({
         </div>
       </div>
 
-      {/* Instance children */}
+      {isEditing && editor}
+
       {isExpanded && (
         <>
           {sessions.map((session, i) => (
@@ -412,6 +653,8 @@ export function TerminalTreeView({
   onKillFreeTerminal,
   onRemoveFreeTerminal,
   onSaveFreeTerminal,
+  onUpdateProfile,
+  onUpdateCustomCommand,
 }: Props) {
   const { data: globalConfig } = useGlobalConfig();
   const updateUi = useUpdateUiConfig();
@@ -420,6 +663,7 @@ export function TerminalTreeView({
     string | null
   >(null);
   const [showFreeSuggestion, setShowFreeSuggestion] = useState(false);
+  const [editState, setEditState] = useState<EditState>(null);
   const [terminalsExpanded, setTerminalsExpanded] = useState<boolean>(() => {
     const stored = localStorage.getItem("dam-hopper:expanded-free-terminals");
     return stored === null ? true : stored === "true";
@@ -433,7 +677,7 @@ export function TerminalTreeView({
         // ignore malformed storage
       }
     }
-    return new Set(projects.map((p) => p.name));
+    return new Set(projects.map((project) => project.name));
   });
   const [expandedProfiles, setExpandedProfiles] = useState<Set<string>>(() => {
     const stored = localStorage.getItem("dam-hopper:expanded-profiles");
@@ -454,20 +698,18 @@ export function TerminalTreeView({
   >(null);
   const [dragProject, setDragProject] = useState<string | null>(null);
 
-  // Keep track of which projects we've automatically expanded to avoid infinite updates
   const autoExpandedRef = useRef<Set<string>>(
-    new Set(projects.map((p) => p.name)),
+    new Set(projects.map((project) => project.name)),
   );
 
-  // Auto-expand projects that are newly added
   useEffect(() => {
     let changed = false;
     const next = new Set(expandedProjects);
 
-    for (const p of projects) {
-      if (!autoExpandedRef.current.has(p.name)) {
-        next.add(p.name);
-        autoExpandedRef.current.add(p.name);
+    for (const project of projects) {
+      if (!autoExpandedRef.current.has(project.name)) {
+        next.add(project.name);
+        autoExpandedRef.current.add(project.name);
         changed = true;
       }
     }
@@ -476,6 +718,23 @@ export function TerminalTreeView({
       setExpandedProjects(next);
     }
   }, [projects, expandedProjects]);
+
+  function persistExpandedProfiles(next: Set<string>) {
+    localStorage.setItem(
+      "dam-hopper:expanded-profiles",
+      JSON.stringify([...next]),
+    );
+  }
+
+  function ensureProfileExpanded(key: string) {
+    setExpandedProfiles((prev) => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      persistExpandedProfiles(next);
+      return next;
+    });
+  }
 
   function toggleTerminals() {
     setTerminalsExpanded((prev) => {
@@ -502,10 +761,7 @@ export function TerminalTreeView({
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
-      localStorage.setItem(
-        "dam-hopper:expanded-profiles",
-        JSON.stringify([...next]),
-      );
+      persistExpandedProfiles(next);
       return next;
     });
   }
@@ -520,7 +776,6 @@ export function TerminalTreeView({
     setDraggedId(id);
     setDragProject(projectName || null);
     e.dataTransfer.effectAllowed = "move";
-    // Required for some browsers to initiate drag
     e.dataTransfer.setData("text/plain", id);
   }
 
@@ -554,15 +809,12 @@ export function TerminalTreeView({
   ) {
     e.preventDefault();
     if (!draggedId || draggedId === targetId || dragType !== type) {
-      setDraggedId(null);
-      setDragOverId(null);
-      setDragType(null);
-      setDragProject(null);
+      handleDragEnd();
       return;
     }
 
     if (type === "free") {
-      const currentOrder = freeTerminals.map((s) => s.id);
+      const currentOrder = freeTerminals.map((session) => session.id);
       const fromIndex = currentOrder.indexOf(draggedId);
       const toIndex = currentOrder.indexOf(targetId);
 
@@ -583,7 +835,7 @@ export function TerminalTreeView({
         });
       }
     } else if (type === "project") {
-      const currentOrder = projects.map((p) => p.name);
+      const currentOrder = projects.map((project) => project.name);
       const fromIndex = currentOrder.indexOf(draggedId);
       const toIndex = currentOrder.indexOf(targetId);
 
@@ -604,9 +856,9 @@ export function TerminalTreeView({
         });
       }
     } else if (type === "command" && dragProject === projectName) {
-      const project = projects.find((p) => p.name === projectName);
+      const project = projects.find((candidate) => candidate.name === projectName);
       if (project) {
-        const currentOrder = project.commands.map((c) => c.key);
+        const currentOrder = project.commands.map((command) => command.key);
         const fromIndex = currentOrder.indexOf(draggedId);
         const toIndex = currentOrder.indexOf(targetId);
 
@@ -632,10 +884,89 @@ export function TerminalTreeView({
       }
     }
 
-    setDraggedId(null);
-    setDragOverId(null);
-    setDragType(null);
-    setDragProject(null);
+    handleDragEnd();
+  }
+
+  function startProfileEdit(projectName: string, cmd: TreeCommand) {
+    if (!cmd.profileName) return;
+    setActiveSuggestionProject(null);
+    ensureProfileExpanded(getProfileEditorKey(projectName, cmd.profileName));
+    setEditState({
+      kind: "profile",
+      projectName,
+      originalName: cmd.profileName,
+      name: cmd.profileName,
+      command: cmd.command,
+      cwd: cmd.cwd ?? ".",
+      saving: false,
+    });
+  }
+
+  function startCommandEdit(projectName: string, cmd: TreeCommand) {
+    if (cmd.type !== "custom") return;
+    setActiveSuggestionProject(null);
+    setEditState({
+      kind: "command",
+      projectName,
+      originalKey: cmd.key,
+      key: cmd.key,
+      command: cmd.command,
+      saving: false,
+    });
+  }
+
+  async function saveProfileEdit() {
+    if (!editState || editState.kind !== "profile") return;
+
+    setEditState((prev) =>
+      prev?.kind === "profile" ? { ...prev, saving: true, error: undefined } : prev,
+    );
+
+    try {
+      await onUpdateProfile(editState.projectName, editState.originalName, {
+        name: editState.name,
+        command: editState.command,
+        cwd: editState.cwd,
+      });
+      setEditState(null);
+    } catch (error) {
+      setEditState((prev) =>
+        prev?.kind === "profile"
+          ? {
+              ...prev,
+              saving: false,
+              error: error instanceof Error ? error.message : "Failed to save profile",
+            }
+          : prev,
+      );
+    }
+  }
+
+  async function saveCommandEdit() {
+    if (!editState || editState.kind !== "command") return;
+
+    setEditState((prev) =>
+      prev?.kind === "command" ? { ...prev, saving: true, error: undefined } : prev,
+    );
+
+    try {
+      await onUpdateCustomCommand(editState.projectName, editState.originalKey, {
+        key: editState.key,
+        command: editState.command,
+      });
+      setEditState(null);
+    } catch (error) {
+      setEditState((prev) =>
+        prev?.kind === "command"
+          ? {
+              ...prev,
+              saving: false,
+              error:
+                error instanceof Error ? error.message : "Failed to save command",
+            }
+          : prev,
+      );
+    }
   }
 
   if (projects.length === 0 && freeTerminals.length === 0) {
@@ -649,7 +980,6 @@ export function TerminalTreeView({
 
   return (
     <div className="flex flex-col overflow-y-auto h-full py-1">
-      {/* Terminals section */}
       <div>
         <div
           onClick={toggleTerminals}
@@ -664,7 +994,7 @@ export function TerminalTreeView({
           <Terminal className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)]" />
           <span className="flex-1">Terminals</span>
           {(() => {
-            const aliveCount = freeTerminals.filter((s) => s.alive).length;
+            const aliveCount = freeTerminals.filter((session) => session.alive).length;
             return aliveCount > 0 ? (
               <span className="rounded-full bg-green-500/20 px-1.5 text-green-600 text-[10px] font-medium">
                 {aliveCount}
@@ -675,7 +1005,7 @@ export function TerminalTreeView({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              setShowFreeSuggestion((v) => !v);
+              setShowFreeSuggestion((value) => !value);
             }}
             title="New terminal"
             className="rounded p-0.5 hover:bg-[var(--color-primary)]/20 hover:text-[var(--color-primary)] transition-colors"
@@ -690,13 +1020,13 @@ export function TerminalTreeView({
                 <CommandSuggestionInput
                   autoFocus
                   placeholder="Command or press Enter for shell..."
-                  onSelect={(cmd) => {
-                    onLaunchFreeWithCommand(cmd.command);
+                  onSelect={(command) => {
+                    onLaunchFreeWithCommand(command.command);
                     setShowFreeSuggestion(false);
                   }}
-                  onSubmitCustom={(cmd) => {
-                    if (cmd.trim()) {
-                      onLaunchFreeWithCommand(cmd);
+                  onSubmitCustom={(command) => {
+                    if (command.trim()) {
+                      onLaunchFreeWithCommand(command);
                     } else {
                       onAddFreeTerminal();
                     }
@@ -705,11 +1035,11 @@ export function TerminalTreeView({
                 />
               </div>
             )}
-            {freeTerminals.map((session, i) => (
+            {freeTerminals.map((session, index) => (
               <FreeTerminalRow
                 key={session.id}
                 session={session}
-                label={session.label || `Terminal ${i + 1}`}
+                label={`Terminal ${index + 1}`}
                 isSelected={selectedId === `terminal:${session.id}`}
                 onSelect={() => onSelectFreeTerminal(session.id)}
                 onKill={() => onKillFreeTerminal(session.id)}
@@ -726,14 +1056,13 @@ export function TerminalTreeView({
             ))}
             {freeTerminals.length === 0 && !showFreeSuggestion && (
               <div className="pl-8 pr-2 py-1 text-xs text-[var(--color-text-muted)]/50 italic">
-                No terminals — press + to create one
+                No terminals - press + to create one
               </div>
             )}
           </div>
         )}
       </div>
 
-      {/* Projects section header */}
       {projects.length > 0 && (
         <div className="px-2 py-1.5 mt-1 border-t border-[var(--color-border)]">
           <span className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
@@ -748,7 +1077,6 @@ export function TerminalTreeView({
 
         return (
           <div key={project.name}>
-            {/* Project header */}
             <div
               onClick={() => {
                 toggleProject(project.name);
@@ -793,24 +1121,60 @@ export function TerminalTreeView({
               )}
             </div>
 
-            {/* Commands + profiles */}
             {isExpanded && (
               <div>
                 {project.commands.map((cmd) => {
                   if (cmd.type === "terminal") {
-                    const profileKey = `${project.name}:${cmd.key}`;
+                    const profileKey = getProfileEditorKey(
+                      project.name,
+                      cmd.profileName ?? "",
+                    );
+                    const isEditing =
+                      editState?.kind === "profile" &&
+                      editState.projectName === project.name &&
+                      editState.originalName === cmd.profileName;
                     return (
                       <ProfileRow
                         key={cmd.key}
                         cmd={cmd}
                         selectedId={selectedId}
                         isExpanded={expandedProfiles.has(profileKey)}
-                        onToggle={() => toggleProfile(profileKey)}
-                        onSelectInstance={(sid) => onSelectTerminal(sid)}
-                        onLaunchInstance={() =>
-                          onLaunchProfile(project.name, cmd)
+                        isEditing={!!isEditing}
+                        editor={
+                          isEditing && editState?.kind === "profile" ? (
+                            <ProfileEditorRow
+                              value={editState}
+                              onNameChange={(name) =>
+                                setEditState((prev) =>
+                                  prev?.kind === "profile"
+                                    ? { ...prev, name, error: undefined }
+                                    : prev,
+                                )
+                              }
+                              onCommandChange={(command) =>
+                                setEditState((prev) =>
+                                  prev?.kind === "profile"
+                                    ? { ...prev, command, error: undefined }
+                                    : prev,
+                                )
+                              }
+                              onCwdChange={(cwd) =>
+                                setEditState((prev) =>
+                                  prev?.kind === "profile"
+                                    ? { ...prev, cwd, error: undefined }
+                                    : prev,
+                                )
+                              }
+                              onSave={saveProfileEdit}
+                              onCancel={() => setEditState(null)}
+                            />
+                          ) : null
                         }
-                        onKillInstance={(sid) => onKillTerminal(sid)}
+                        onToggle={() => toggleProfile(profileKey)}
+                        onSelectInstance={(sessionId) => onSelectTerminal(sessionId)}
+                        onLaunchInstance={() => onLaunchProfile(project.name, cmd)}
+                        onKillInstance={(sessionId) => onKillTerminal(sessionId)}
+                        onEdit={() => startProfileEdit(project.name, cmd)}
                         onDelete={() =>
                           onDeleteProfile(project.name, cmd.profileName!)
                         }
@@ -838,40 +1202,73 @@ export function TerminalTreeView({
                       />
                     );
                   }
+
+                  const isEditing =
+                    editState?.kind === "command" &&
+                    editState.projectName === project.name &&
+                    editState.originalKey === cmd.key;
+                  const canEdit = cmd.type === "custom";
+
                   return (
-                    <CommandRow
-                      key={cmd.sessionId}
-                      cmd={cmd}
-                      isSelected={selectedId === `terminal:${cmd.sessionId}`}
-                      onSelect={() => onSelectTerminal(cmd.sessionId)}
-                      onLaunch={() => onLaunchTerminal(project.name, cmd)}
-                      onKill={() => onKillTerminal(cmd.sessionId)}
-                      onDragStart={(e) =>
-                        handleDragStart(e, "command", cmd.key, project.name)
-                      }
-                      onDragEnd={handleDragEnd}
-                      onDragOver={(e) =>
-                        handleDragOver(e, "command", cmd.key, project.name)
-                      }
-                      onDragEnter={() => setDragOverId(cmd.key)}
-                      onDrop={(e) =>
-                        handleDrop(e, "command", cmd.key, project.name)
-                      }
-                      isDragged={
-                        dragType === "command" &&
-                        draggedId === cmd.key &&
-                        dragProject === project.name
-                      }
-                      isOver={
-                        dragType === "command" &&
-                        dragOverId === cmd.key &&
-                        dragProject === project.name
-                      }
-                    />
+                    <div key={cmd.sessionId}>
+                      <CommandRow
+                        cmd={cmd}
+                        isSelected={selectedId === `terminal:${cmd.sessionId}`}
+                        isEditing={!!isEditing}
+                        canEdit={canEdit}
+                        onSelect={() => onSelectTerminal(cmd.sessionId)}
+                        onLaunch={() => onLaunchTerminal(project.name, cmd)}
+                        onKill={() => onKillTerminal(cmd.sessionId)}
+                        onEdit={
+                          canEdit ? () => startCommandEdit(project.name, cmd) : undefined
+                        }
+                        onDragStart={(e) =>
+                          handleDragStart(e, "command", cmd.key, project.name)
+                        }
+                        onDragEnd={handleDragEnd}
+                        onDragOver={(e) =>
+                          handleDragOver(e, "command", cmd.key, project.name)
+                        }
+                        onDragEnter={() => setDragOverId(cmd.key)}
+                        onDrop={(e) =>
+                          handleDrop(e, "command", cmd.key, project.name)
+                        }
+                        isDragged={
+                          dragType === "command" &&
+                          draggedId === cmd.key &&
+                          dragProject === project.name
+                        }
+                        isOver={
+                          dragType === "command" &&
+                          dragOverId === cmd.key &&
+                          dragProject === project.name
+                        }
+                      />
+                      {isEditing && editState?.kind === "command" && (
+                        <CommandEditorRow
+                          value={editState}
+                          onKeyChange={(key) =>
+                            setEditState((prev) =>
+                              prev?.kind === "command"
+                                ? { ...prev, key, error: undefined }
+                                : prev,
+                            )
+                          }
+                          onCommandChange={(command) =>
+                            setEditState((prev) =>
+                              prev?.kind === "command"
+                                ? { ...prev, command, error: undefined }
+                                : prev,
+                            )
+                          }
+                          onSave={saveCommandEdit}
+                          onCancel={() => setEditState(null)}
+                        />
+                      )}
+                    </div>
                   );
                 })}
 
-                {/* + Shell button / inline suggestion input */}
                 {activeSuggestionProject === project.name ? (
                   <div className="px-2 py-1">
                     <CommandSuggestionInput
@@ -879,13 +1276,13 @@ export function TerminalTreeView({
                       projectName={project.name}
                       autoFocus
                       placeholder="Search commands..."
-                      onSelect={(cmd) => {
-                        onLaunchSuggestedCommand(project.name, cmd.command);
+                      onSelect={(command) => {
+                        onLaunchSuggestedCommand(project.name, command.command);
                         setActiveSuggestionProject(null);
                       }}
-                      onSubmitCustom={(cmd) => {
-                        if (cmd.trim()) {
-                          onLaunchSuggestedCommand(project.name, cmd);
+                      onSubmitCustom={(command) => {
+                        if (command.trim()) {
+                          onLaunchSuggestedCommand(project.name, command);
                         } else {
                           onAddShell(project.name);
                         }
@@ -896,7 +1293,10 @@ export function TerminalTreeView({
                 ) : (
                   <button
                     type="button"
-                    onClick={() => setActiveSuggestionProject(project.name)}
+                    onClick={() => {
+                      setEditState(null);
+                      setActiveSuggestionProject(project.name);
+                    }}
                     className={cn(
                       "flex items-center gap-1.5 pl-8 pr-2 py-1 w-full text-xs",
                       "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
