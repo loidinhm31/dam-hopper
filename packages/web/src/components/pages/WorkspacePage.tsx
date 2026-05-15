@@ -395,6 +395,7 @@ export default function WorkspacePage() {
         id: "explorer",
         label: "Explorer",
         icon: Files,
+        defaultActive: true,
         content: (
           <div className="flex flex-col h-full">
             {projects.length > 1 && (

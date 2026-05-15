@@ -19,6 +19,7 @@ interface SettingsState {
   editorFontSize: number;
   editorZoomWheelEnabled: boolean;
   terminalSuggestionsEnabled: boolean;
+  explorerShowHidden: boolean;
   hydrated: boolean;
 
   hydrate: () => Promise<void>;
@@ -30,6 +31,7 @@ interface SettingsState {
         | "editorFontSize"
         | "editorZoomWheelEnabled"
         | "terminalSuggestionsEnabled"
+        | "explorerShowHidden"
       >
     >,
   ) => void;
@@ -41,6 +43,7 @@ interface SettingsState {
         | "editorFontSize"
         | "editorZoomWheelEnabled"
         | "terminalSuggestionsEnabled"
+        | "explorerShowHidden"
       >
     >,
   ) => void;
@@ -53,6 +56,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   editorFontSize: 14,
   editorZoomWheelEnabled: true,
   terminalSuggestionsEnabled: true,
+  explorerShowHidden: false,
   hydrated: false,
 
   hydrate: async () => {
@@ -64,6 +68,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         editorFontSize: ui?.editorFontSize ?? 14,
         editorZoomWheelEnabled: ui?.editorZoomWheelEnabled ?? true,
         terminalSuggestionsEnabled: ui?.terminalSuggestionsEnabled ?? true,
+        explorerShowHidden: ui?.explorerShowHidden ?? false,
         hydrated: true,
       });
     } catch {
@@ -82,6 +87,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.editorZoomWheelEnabled = partial.editorZoomWheelEnabled;
     if (partial.terminalSuggestionsEnabled !== undefined)
       clamped.terminalSuggestionsEnabled = partial.terminalSuggestionsEnabled;
+    if (partial.explorerShowHidden !== undefined)
+      clamped.explorerShowHidden = partial.explorerShowHidden;
     set(clamped);
   },
 
@@ -95,12 +102,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         editorFontSize,
         editorZoomWheelEnabled,
         terminalSuggestionsEnabled,
+        explorerShowHidden,
       } = get();
       void api.globalConfig.updateUi({
         systemFontSize,
         editorFontSize,
         editorZoomWheelEnabled,
         terminalSuggestionsEnabled,
+        explorerShowHidden,
       });
     }, 500);
   },

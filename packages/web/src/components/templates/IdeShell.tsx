@@ -69,36 +69,56 @@ export function IdeShell({
 
   const [activeLeftTopId, setActiveLeftTopId] = useState<string | null>(() => {
     const stored = localStorage.getItem(LEFT_TOP_KEY);
-    if (stored === null)
+    if (stored === null) {
+      const def = leftTools.find(
+        (t) => (!t.position || t.position === "top") && t.defaultActive,
+      );
+      if (def) return def.id;
       return (
         leftTools.find((t) => !t.position || t.position === "top")?.id || null
       );
+    }
     return stored === "null" ? null : stored;
   });
   const [activeLeftBottomId, setActiveLeftBottomId] = useState<string | null>(
     () => {
       const stored = localStorage.getItem(LEFT_BOTTOM_KEY);
-      if (stored === null)
+      if (stored === null) {
+        const def = leftTools.find(
+          (t) => t.position === "bottom" && t.defaultActive,
+        );
+        if (def) return def.id;
         return leftTools.find((t) => t.position === "bottom")?.id || null;
+      }
       return stored === "null" ? null : stored;
     },
   );
   const [activeRightTopId, setActiveRightTopId] = useState<string | null>(
     () => {
       const stored = localStorage.getItem(RIGHT_TOP_KEY);
-      if (stored === null)
+      if (stored === null) {
+        const def = rightTools.find(
+          (t) => (!t.position || t.position === "top") && t.defaultActive,
+        );
+        if (def) return def.id;
         return (
           rightTools.find((t) => !t.position || t.position === "top")?.id ||
           null
         );
+      }
       return stored === "null" ? null : stored;
     },
   );
   const [activeRightBottomId, setActiveRightBottomId] = useState<string | null>(
     () => {
       const stored = localStorage.getItem(RIGHT_BOTTOM_KEY);
-      if (stored === null)
+      if (stored === null) {
+        const def = rightTools.find(
+          (t) => t.position === "bottom" && t.defaultActive,
+        );
+        if (def) return def.id;
         return rightTools.find((t) => t.position === "bottom")?.id || null;
+      }
       return stored === "null" ? null : stored;
     },
   );
