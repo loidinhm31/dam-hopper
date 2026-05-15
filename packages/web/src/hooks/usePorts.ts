@@ -15,6 +15,7 @@ export interface PortEntry {
   port: number;
   project: string | null;
   state: "provisional" | "listening" | "lost";
+  sessionId: string | null;
   /** Active tunnel for this port, or null if none. */
   tunnel: TunnelInfo | null;
 }
@@ -25,6 +26,7 @@ export function usePorts(): {
   isError: boolean;
   createTunnel: (port: number, label: string) => Promise<void>;
   stopTunnel: (id: string) => Promise<void>;
+  killPortSession: (sessionId: string) => Promise<void>;
   installCloudflared: () => Promise<void>;
   installState: InstallState;
 } {
@@ -62,6 +64,7 @@ export function usePorts(): {
       port: p.port,
       project: p.project,
       state: p.state,
+      sessionId: p.session_id,
       tunnel: tunnelByPort.get(p.port) ?? null,
     }));
 
@@ -73,6 +76,7 @@ export function usePorts(): {
           port: t.port,
           project: t.label,
           state: "listening",
+          sessionId: null,
           tunnel: t,
         });
       }
@@ -238,12 +242,28 @@ export function usePorts(): {
     [qc, transport],
   );
 
+  const killPortSession = useCallback(
+    async (sessionId: string) => {
+      try {
+        await transport.invoke("terminal:kill", sessionId);
+      } finally {
+        await Promise.all([
+          qc.invalidateQueries({ queryKey: ["ports"] }),
+          qc.invalidateQueries({ queryKey: ["tunnels"] }),
+          qc.invalidateQueries({ queryKey: ["terminal-sessions"] }),
+        ]);
+      }
+    },
+    [qc, transport],
+  );
+
   return {
     ports,
     isLoading: portsQuery.isLoading || tunnelsQuery.isLoading,
     isError: portsQuery.isError || tunnelsQuery.isError,
     createTunnel,
     stopTunnel,
+    killPortSession,
     installCloudflared,
     installState,
   };
