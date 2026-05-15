@@ -4,19 +4,19 @@
 /// Network operations (fetch) use SSH agent + credential helper callbacks.
 /// Push and pull delegate to cli_fallback for credential reliability.
 use std::path::Path;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use std::sync::Arc;
 use std::time::Instant;
 
 use git2::{BranchType, Repository, StatusOptions};
 
 use crate::error::AppError;
 use crate::git::cli_fallback;
-use crate::git::progress::{emit_completed, emit_failed, emit_progress, emit_started, ProgressSender};
+use crate::git::progress::{
+    emit_completed, emit_failed, emit_progress, emit_started, ProgressSender,
+};
 use crate::git::types::{
-    BranchInfo, BranchUpdateResult, GitOperation, GitOperationResult, GitStatus, LastCommit,
+    BranchInfo, BranchUpdateResult, CheckoutStrategy, GitActionResult, GitOperation,
+    GitOperationResult, GitStatus, LastCommit, ResetMode,
 };
 use crate::ssh::SshCredStore;
 
@@ -35,7 +35,7 @@ fn format_commit_time(time: &git2::Time) -> String {
     let offset_mins = time.offset_minutes();
 
     // Use chrono for reliable ISO formatting
-    use chrono::{TimeZone, FixedOffset};
+    use chrono::{FixedOffset, TimeZone};
     let offset_secs = offset_mins * 60;
     match FixedOffset::east_opt(offset_secs) {
         Some(tz) => match tz.timestamp_opt(secs, 0) {
@@ -58,11 +58,7 @@ fn get_last_commit(repo: &Repository) -> LastCommit {
 
     LastCommit {
         hash: commit.id().to_string(),
-        message: commit
-            .summary()
-            .unwrap_or("")
-            .trim()
-            .to_string(),
+        message: commit.summary().unwrap_or("").trim().to_string(),
         date: format_commit_time(&commit.time()),
     }
 }
@@ -117,13 +113,50 @@ fn get_ahead_behind(repo: &Repository) -> (usize, usize) {
 }
 
 fn count_stash(repo: &mut Repository) -> usize {
-    let count = Arc::new(AtomicUsize::new(0));
-    let count_clone = Arc::clone(&count);
-    let _ = repo.stash_foreach(move |_, _, _| {
-        count_clone.fetch_add(1, Ordering::Relaxed);
+    let mut count = 0usize;
+    let _ = repo.stash_foreach(|_, _, _| {
+        count += 1;
         true
     });
-    count.load(Ordering::Relaxed)
+    count
+}
+
+fn validate_revision(repo: &Repository, spec: &str, label: &str) -> Result<(), AppError> {
+    repo.revparse_single(spec)
+        .map(|_| ())
+        .map_err(|_| AppError::InvalidInput(format!("invalid {label}: {spec}")))
+}
+
+fn validate_commit_hash(repo: &Repository, hash: &str) -> Result<(), AppError> {
+    let oid = git2::Oid::from_str(hash)
+        .map_err(|_| AppError::InvalidInput(format!("invalid commit hash: {hash}")))?;
+    repo.find_commit(oid)
+        .map(|_| ())
+        .map_err(|_| AppError::InvalidInput(format!("unknown commit hash: {hash}")))
+}
+
+fn branch_exists(repo: &Repository, branch: &str, kind: BranchType) -> bool {
+    repo.find_branch(branch, kind).is_ok()
+}
+
+fn derive_local_branch_name(remote_branch: &str) -> Option<String> {
+    let (_, name) = remote_branch.split_once('/')?;
+    if name.is_empty() {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+fn is_dirty_checkout_error(stderr: &str) -> bool {
+    let msg = stderr.to_lowercase();
+    msg.contains("your local changes")
+        || msg.contains("would be overwritten by checkout")
+        || msg.contains("please commit your changes or stash them")
+}
+
+fn is_conflict_error(stderr: &str) -> bool {
+    let msg = stderr.to_lowercase();
+    msg.contains("conflict") || msg.contains("after resolving the conflicts")
 }
 
 pub fn get_status(project_path: &Path, project_name: &str) -> Result<GitStatus, AppError> {
@@ -205,7 +238,10 @@ pub fn get_status(project_path: &Path, project_name: &str) -> Result<GitStatus, 
 /// 2. SSH agent (if running and has keys)
 /// 3. Git credential helper
 /// 4. Default (e.g. Kerberos/NTLM)
-fn make_fetch_opts<F>(progress_fn: F, ssh_cred: Option<Arc<SshCredStore>>) -> git2::FetchOptions<'static>
+fn make_fetch_opts<F>(
+    progress_fn: F,
+    ssh_cred: Option<Arc<SshCredStore>>,
+) -> git2::FetchOptions<'static>
 where
     F: Fn(usize, usize) + Send + 'static,
 {
@@ -235,9 +271,7 @@ where
             let user = username.unwrap_or("git");
             return git2::Cred::ssh_key_from_agent(user);
         }
-        if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT)
-            && !cred_helper_tried
-        {
+        if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) && !cred_helper_tried {
             cred_helper_tried = true;
             if let Ok(cfg) = git2::Config::open_default() {
                 return git2::Cred::credential_helper(&cfg, url, username);
@@ -278,8 +312,8 @@ pub async fn fetch(
     let progress_clone = progress.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        let repo = Repository::open(&project_path)
-            .map_err(|e| AppError::Git(e.message().to_string()))?;
+        let repo =
+            Repository::open(&project_path).map_err(|e| AppError::Git(e.message().to_string()))?;
 
         let remote_names = repo
             .remotes()
@@ -299,10 +333,19 @@ pub async fn fetch(
             let pc = progress_clone.clone();
             let cred = ssh_cred.clone();
 
-            let mut fetch_opts = make_fetch_opts(move |received, total| {
-                let pct = (received * 100 / total).min(100) as u8;
-                emit_progress(&pc, &pn, "fetch", &format!("Receiving objects: {received}/{total}"), Some(pct));
-            }, cred);
+            let mut fetch_opts = make_fetch_opts(
+                move |received, total| {
+                    let pct = (received * 100 / total).min(100) as u8;
+                    emit_progress(
+                        &pc,
+                        &pn,
+                        "fetch",
+                        &format!("Receiving objects: {received}/{total}"),
+                        Some(pct),
+                    );
+                },
+                cred,
+            );
 
             remote
                 .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
@@ -611,6 +654,7 @@ pub fn update_branch(
     branch: &str,
     remote: &str,
 ) -> Result<BranchUpdateResult, AppError> {
+    cli_fallback::validate_branch_name(branch)?;
     let repo = open_repo(project_path)?;
 
     // Cannot update the currently checked-out branch via fetch refspec
@@ -665,7 +709,236 @@ pub fn update_branch(
     }
 }
 
-pub fn get_log(project_path: &Path, limit: usize) -> Result<Vec<crate::git::types::GitLogEntry>, AppError> {
+pub async fn create_branch(
+    project_path: &Path,
+    name: &str,
+    start_point: Option<&str>,
+    checkout: bool,
+) -> Result<GitActionResult, AppError> {
+    cli_fallback::validate_branch_name(name)?;
+
+    {
+        let repo = open_repo(project_path)?;
+        if branch_exists(&repo, name, BranchType::Local) {
+            return Err(AppError::InvalidInput(format!(
+                "branch already exists: {name}"
+            )));
+        }
+        if let Some(spec) = start_point {
+            validate_revision(&repo, spec, "start point")?;
+        }
+    }
+
+    let mut args = vec!["branch".to_string(), name.to_string()];
+    if let Some(spec) = start_point {
+        args.push(spec.to_string());
+    }
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    cli_fallback::run_git(&arg_refs, project_path).await?;
+
+    if checkout {
+        let mut result =
+            checkout_branch(project_path, name, None, false, CheckoutStrategy::Normal).await?;
+        result.branch = Some(name.to_string());
+        if result.message.is_none() {
+            result.message = Some(format!("Created and checked out {name}"));
+        }
+        return Ok(result);
+    }
+
+    let mut result = GitActionResult::ok(format!("Created branch {name}"));
+    result.branch = Some(name.to_string());
+    Ok(result)
+}
+
+pub async fn checkout_branch(
+    project_path: &Path,
+    branch: &str,
+    start_point: Option<&str>,
+    create: bool,
+    strategy: CheckoutStrategy,
+) -> Result<GitActionResult, AppError> {
+    let repo = open_repo(project_path)?;
+    cli_fallback::validate_branch_name(branch)?;
+    if start_point.is_some() && !create {
+        return Err(AppError::InvalidInput(
+            "startPoint requires create=true".to_string(),
+        ));
+    }
+    let status = get_status(project_path, branch)?;
+    let has_dirty_worktree = !status.is_clean;
+
+    let target_branch = if create {
+        cli_fallback::validate_branch_name(branch)?;
+        if branch_exists(&repo, branch, BranchType::Local) {
+            return Err(AppError::InvalidInput(format!(
+                "branch already exists: {branch}"
+            )));
+        }
+        if let Some(spec) = start_point {
+            validate_revision(&repo, spec, "start point")?;
+        }
+        branch.to_string()
+    } else if branch_exists(&repo, branch, BranchType::Local) {
+        branch.to_string()
+    } else if branch_exists(&repo, branch, BranchType::Remote) {
+        let local_branch = derive_local_branch_name(branch)
+            .ok_or_else(|| AppError::InvalidInput(format!("invalid remote branch: {branch}")))?;
+        cli_fallback::validate_branch_name(&local_branch)?;
+        local_branch
+    } else {
+        return Err(AppError::InvalidInput(format!(
+            "branch not found: {branch}"
+        )));
+    };
+
+    if has_dirty_worktree && strategy == CheckoutStrategy::Normal {
+        return Ok(GitActionResult {
+            ok: false,
+            message: Some("Working tree has local changes".to_string()),
+            branch: Some(target_branch),
+            hash: None,
+            stashed: Some(false),
+            conflict: Some(false),
+            dirty: Some(true),
+            destructive: Some(false),
+        });
+    }
+
+    let mut stashed = false;
+    if has_dirty_worktree && strategy == CheckoutStrategy::Stash {
+        let stash_before = cli_fallback::run_git(&["stash", "list"], project_path)
+            .await?
+            .lines()
+            .count();
+        cli_fallback::run_git(
+            &[
+                "stash",
+                "push",
+                "--include-untracked",
+                "-m",
+                "dam-hopper checkout",
+            ],
+            project_path,
+        )
+        .await?;
+        let stash_after = cli_fallback::run_git(&["stash", "list"], project_path)
+            .await?
+            .lines()
+            .count();
+        stashed = stash_after > stash_before;
+    }
+
+    let mut args = vec!["checkout".to_string()];
+    if strategy == CheckoutStrategy::Force {
+        args.push("-f".to_string());
+    }
+    if create {
+        args.push("-b".to_string());
+        args.push(target_branch.clone());
+        if let Some(spec) = start_point {
+            args.push(spec.to_string());
+        }
+    } else if target_branch != branch {
+        args.push("-b".to_string());
+        args.push(target_branch.clone());
+        args.push("--track".to_string());
+        args.push(branch.to_string());
+    } else {
+        args.push(target_branch.clone());
+    }
+
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    match cli_fallback::run_git(&arg_refs, project_path).await {
+        Ok(_) => Ok(GitActionResult {
+            ok: true,
+            message: Some(format!("Checked out {target_branch}")),
+            branch: Some(target_branch),
+            hash: None,
+            stashed: Some(stashed),
+            conflict: Some(false),
+            dirty: Some(false),
+            destructive: Some(strategy == CheckoutStrategy::Force),
+        }),
+        Err(AppError::Git(stderr)) if is_dirty_checkout_error(&stderr) => Ok(GitActionResult {
+            ok: false,
+            message: Some(stderr),
+            branch: Some(target_branch),
+            hash: None,
+            stashed: Some(stashed),
+            conflict: Some(false),
+            dirty: Some(true),
+            destructive: Some(strategy == CheckoutStrategy::Force),
+        }),
+        Err(err) => Err(err),
+    }
+}
+
+pub async fn cherry_pick(project_path: &Path, hash: &str) -> Result<GitActionResult, AppError> {
+    {
+        let repo = open_repo(project_path)?;
+        validate_commit_hash(&repo, hash)?;
+    }
+
+    match cli_fallback::run_git(&["cherry-pick", hash], project_path).await {
+        Ok(_) => Ok(GitActionResult {
+            ok: true,
+            message: Some(format!("Cherry-picked {hash}")),
+            branch: None,
+            hash: Some(hash.to_string()),
+            stashed: None,
+            conflict: Some(false),
+            dirty: Some(false),
+            destructive: Some(false),
+        }),
+        Err(AppError::Git(stderr)) if is_conflict_error(&stderr) => Ok(GitActionResult {
+            ok: false,
+            message: Some(stderr),
+            branch: None,
+            hash: Some(hash.to_string()),
+            stashed: None,
+            conflict: Some(true),
+            dirty: Some(true),
+            destructive: Some(false),
+        }),
+        Err(err) => Err(err),
+    }
+}
+
+pub async fn reset_to_commit(
+    project_path: &Path,
+    hash: &str,
+    mode: ResetMode,
+) -> Result<GitActionResult, AppError> {
+    {
+        let repo = open_repo(project_path)?;
+        validate_commit_hash(&repo, hash)?;
+    }
+
+    let mode_flag = match mode {
+        ResetMode::Soft => "--soft",
+        ResetMode::Mixed => "--mixed",
+        ResetMode::Hard => "--hard",
+        ResetMode::Keep => "--keep",
+    };
+    cli_fallback::run_git(&["reset", mode_flag, hash], project_path).await?;
+
+    Ok(GitActionResult {
+        ok: true,
+        message: Some(format!("Reset {mode_flag} to {hash}")),
+        branch: None,
+        hash: Some(hash.to_string()),
+        stashed: None,
+        conflict: Some(false),
+        dirty: Some(false),
+        destructive: Some(mode == ResetMode::Hard),
+    })
+}
+
+pub fn get_log(
+    project_path: &Path,
+    limit: usize,
+) -> Result<Vec<crate::git::types::GitLogEntry>, AppError> {
     use std::process::Command;
 
     let output = Command::new("git")
@@ -697,15 +970,12 @@ pub fn get_log(project_path: &Path, limit: usize) -> Result<Vec<crate::git::type
         }
 
         let hash = parts[0].to_string();
-        let parents = parts[1]
-            .split_whitespace()
-            .map(|s| s.to_string())
-            .collect();
+        let parents = parts[1].split_whitespace().map(|s| s.to_string()).collect();
         let author_name = parts[2].to_string();
         let author_email = parts[3].to_string();
         let timestamp = parts[4].parse::<i64>().unwrap_or(0);
         let message = parts[5].to_string();
-        
+
         // Parse refs like "HEAD -> main, origin/main, tag: v1.0"
         let refs: Vec<String> = parts[6]
             .split(',')

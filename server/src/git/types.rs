@@ -125,6 +125,58 @@ pub struct BranchUpdateResult {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CheckoutStrategy {
+    Normal,
+    Stash,
+    Force,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ResetMode {
+    Soft,
+    Mixed,
+    Hard,
+    Keep,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitActionResult {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stashed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dirty: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destructive: Option<bool>,
+}
+
+impl GitActionResult {
+    pub fn ok(message: impl Into<String>) -> Self {
+        Self {
+            ok: true,
+            message: Some(message.into()),
+            branch: None,
+            hash: None,
+            stashed: None,
+            conflict: None,
+            dirty: None,
+            destructive: None,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Git Log Graph types
 // ---------------------------------------------------------------------------

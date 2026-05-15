@@ -1,14 +1,14 @@
+use axum::http::{
+    header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE},
+    Method,
+};
 use axum::{
-    Router,
     extract::DefaultBodyLimit,
     middleware,
     routing::{delete, get, patch, post, put},
+    Router,
 };
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use axum::http::{
-    header::{AUTHORIZATION, CONTENT_TYPE, ACCEPT, COOKIE},
-    Method,
-};
 
 /// 10 MB — generous for config/settings payloads, blocks accidental multi-GB uploads.
 const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
@@ -40,18 +40,27 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/workspace", get(workspace::get_workspace))
         .route("/api/workspace/init", post(workspace::init_workspace))
         .route("/api/workspace/switch", post(workspace::switch_workspace))
-        .route("/api/workspace/discover", get(workspace::discover_projects_handler))
+        .route(
+            "/api/workspace/discover",
+            get(workspace::discover_projects_handler),
+        )
         .route("/api/workspace/known", get(workspace::list_known))
         .route("/api/workspace/known", post(workspace::add_known))
         .route("/api/workspace/known", delete(workspace::remove_known))
         // Global config
         .route("/api/global-config", get(config::get_global_config))
-        .route("/api/global-config/defaults", post(config::update_global_defaults))
+        .route(
+            "/api/global-config/defaults",
+            post(config::update_global_defaults),
+        )
         .route("/api/global-config/ui", post(config::update_global_ui))
         // Projects
         .route("/api/projects", get(config::list_projects))
         .route("/api/projects/{name}", get(config::get_project))
-        .route("/api/projects/{name}/status", get(config::get_project_status))
+        .route(
+            "/api/projects/{name}/status",
+            get(config::get_project_status),
+        )
         // Config
         .route("/api/config", get(config::get_config))
         .route("/api/config", put(config::update_config))
@@ -61,33 +70,75 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/git/pull", post(git::pull_projects))
         .route("/api/git/push", post(git::push_project))
         .route("/api/git/{project}/worktrees", get(git::get_worktrees))
-        .route("/api/git/{project}/worktrees", post(git::add_worktree_route))
-        .route("/api/git/{project}/worktrees", delete(git::remove_worktree_route))
-        .route("/api/git/{project}/branches", get(git::get_branches))
-        .route("/api/git/{project}/branches/update", post(git::update_branch_route))
+        .route(
+            "/api/git/{project}/worktrees",
+            post(git::add_worktree_route),
+        )
+        .route(
+            "/api/git/{project}/worktrees",
+            delete(git::remove_worktree_route),
+        )
+        .route(
+            "/api/git/{project}/branches",
+            get(git::get_branches).post(git::create_branch_route),
+        )
+        .route(
+            "/api/git/{project}/branches/checkout",
+            post(git::checkout_branch_route),
+        )
+        .route(
+            "/api/git/{project}/branches/update",
+            post(git::update_branch_route),
+        )
         .route("/api/git/{project}/log", get(git::get_log_route))
+        .route(
+            "/api/git/{project}/cherry-pick",
+            post(git::cherry_pick_route),
+        )
+        .route("/api/git/{project}/reset", post(git::reset_route))
         // Git diff / change management
         .route("/api/git/{project}/diff", get(git_diff::list_diff))
-        .route("/api/git/{project}/untracked", get(git_diff::list_untracked))
+        .route(
+            "/api/git/{project}/untracked",
+            get(git_diff::list_untracked),
+        )
         .route("/api/git/{project}/diff/file", get(git_diff::get_file_diff))
         .route("/api/git/{project}/stage", post(git_diff::stage))
         .route("/api/git/{project}/unstage", post(git_diff::unstage))
         .route("/api/git/{project}/discard", post(git_diff::discard))
-        .route("/api/git/{project}/discard-hunk", post(git_diff::discard_hunk))
-        .route("/api/git/{project}/conflicts", get(git_diff::list_conflicts))
+        .route(
+            "/api/git/{project}/discard-hunk",
+            post(git_diff::discard_hunk),
+        )
+        .route(
+            "/api/git/{project}/conflicts",
+            get(git_diff::list_conflicts),
+        )
         .route("/api/git/{project}/resolve", post(git_diff::resolve))
         .route("/api/git/{project}/commit", post(git_diff::commit))
-        .route("/api/git/{project}/commit/{hash}/files", get(git_diff::get_commit_files))
-        .route("/api/git/{project}/commit/{hash}/diff", get(git_diff::get_commit_file_diff))
+        .route(
+            "/api/git/{project}/commit/{hash}/files",
+            get(git_diff::get_commit_files),
+        )
+        .route(
+            "/api/git/{project}/commit/{hash}/diff",
+            get(git_diff::get_commit_file_diff),
+        )
         // Terminal — order matters: specific paths before parameterized
         .route("/api/terminal", post(terminal::create_session))
         .route("/api/terminal", get(terminal::list_sessions))
         .route("/api/terminal/detailed", get(terminal::list_detailed))
         .route("/api/terminal/{id}/buffer", get(terminal::get_buffer))
         .route("/api/terminal/{id}", delete(terminal::kill_session))
-        .route("/api/terminal/{id}/remove", delete(terminal::remove_session))
+        .route(
+            "/api/terminal/{id}/remove",
+            delete(terminal::remove_session),
+        )
         // Tunnels
-        .route("/api/tunnels/install", get(tunnel::install_status).post(tunnel::install_cloudflared))
+        .route(
+            "/api/tunnels/install",
+            get(tunnel::install_status).post(tunnel::install_cloudflared),
+        )
         .route("/api/tunnels", post(tunnel::create_tunnel))
         .route("/api/tunnels", get(tunnel::list_tunnels))
         .route("/api/tunnels/{id}", delete(tunnel::stop_tunnel))
@@ -100,21 +151,57 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/agent-store/ship", post(agent_store::ship_item))
         .route("/api/agent-store/unship", post(agent_store::unship_item))
         .route("/api/agent-store/absorb", post(agent_store::absorb_item))
-        .route("/api/agent-store/bulk-ship", post(agent_store::bulk_ship_items))
+        .route(
+            "/api/agent-store/bulk-ship",
+            post(agent_store::bulk_ship_items),
+        )
         .route("/api/agent-store", get(agent_store::list_items))
-        .route("/api/agent-store/{category}/{name}", get(agent_store::get_item))
-        .route("/api/agent-store/{category}/{name}/content", get(agent_store::get_item_content))
-        .route("/api/agent-store/{category}/{name}", delete(agent_store::remove_item))
+        .route(
+            "/api/agent-store/{category}/{name}",
+            get(agent_store::get_item),
+        )
+        .route(
+            "/api/agent-store/{category}/{name}/content",
+            get(agent_store::get_item_content),
+        )
+        .route(
+            "/api/agent-store/{category}/{name}",
+            delete(agent_store::remove_item),
+        )
         // Agent Memory — static paths before dynamic
-        .route("/api/agent-memory/templates", get(agent_memory::list_templates))
-        .route("/api/agent-memory/apply", post(agent_memory::apply_memory_template))
-        .route("/api/agent-memory/{projectName}", get(agent_memory::list_project_memory))
-        .route("/api/agent-memory/{projectName}/{agent}", get(agent_memory::get_project_memory))
-        .route("/api/agent-memory/{projectName}/{agent}", put(agent_memory::update_project_memory))
+        .route(
+            "/api/agent-memory/templates",
+            get(agent_memory::list_templates),
+        )
+        .route(
+            "/api/agent-memory/apply",
+            post(agent_memory::apply_memory_template),
+        )
+        .route(
+            "/api/agent-memory/{projectName}",
+            get(agent_memory::list_project_memory),
+        )
+        .route(
+            "/api/agent-memory/{projectName}/{agent}",
+            get(agent_memory::get_project_memory),
+        )
+        .route(
+            "/api/agent-memory/{projectName}/{agent}",
+            put(agent_memory::update_project_memory),
+        )
         // Agent Import
-        .route("/api/agent-import/scan", post(agent_import::scan_repo_handler))
-        .route("/api/agent-import/scan-local", post(agent_import::scan_local_handler))
-        .route("/api/agent-import/confirm", post(agent_import::import_confirm_handler))
+        .route(
+            "/api/agent-import/scan",
+            post(agent_import::scan_repo_handler),
+        )
+        .route(
+            "/api/agent-import/scan-local",
+            post(agent_import::scan_local_handler),
+        )
+        .route(
+            "/api/agent-import/confirm",
+            post(agent_import::import_confirm_handler),
+        )
         // SSH credentials
         .route("/api/ssh/keys", get(ssh::list_keys))
         .route("/api/ssh/agent", get(ssh::check_agent))
@@ -127,7 +214,10 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/settings/reset", post(settings::reset))
         .route("/api/settings/export", get(settings::export_settings))
         .route("/api/settings/import", post(settings::import_settings))
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
 
     // IDE file explorer routes.
     let ide_routes = Router::new()
@@ -136,7 +226,10 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/fs/stat", get(fs_api::stat))
         .route("/api/fs/download", get(fs_api::download))
         .route("/api/fs/search", get(fs_api::search))
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
 
     Router::new()
         .merge(public)
@@ -150,8 +243,13 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
 fn build_cors(allowed_origins: &[String]) -> CorsLayer {
     // tower-http 0.6 panics if allow_credentials(true) is combined with Any methods or headers.
     let methods = [
-        Method::GET, Method::POST, Method::PUT, Method::PATCH,
-        Method::DELETE, Method::OPTIONS, Method::HEAD,
+        Method::GET,
+        Method::POST,
+        Method::PUT,
+        Method::PATCH,
+        Method::DELETE,
+        Method::OPTIONS,
+        Method::HEAD,
     ];
     let headers = [AUTHORIZATION, CONTENT_TYPE, ACCEPT, COOKIE];
 

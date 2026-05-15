@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use git2::{DiffOptions, Repository};
 
 use crate::error::AppError;
-use crate::git::types::{ConflictFile, DiffFileEntry, DiffResponse, FileDiffContent, HunkInfo, UNTRACKED_PAGE_SIZE};
+use crate::git::types::{
+    ConflictFile, DiffFileEntry, DiffResponse, FileDiffContent, HunkInfo, UNTRACKED_PAGE_SIZE,
+};
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -31,8 +33,13 @@ fn safe_join(base: &Path, rel: &str) -> Result<PathBuf, AppError> {
         return Err(AppError::InvalidInput(format!("invalid path: {rel}")));
     }
     let candidate = Path::new(rel);
-    if candidate.components().any(|c| c == std::path::Component::ParentDir) {
-        return Err(AppError::InvalidInput(format!("path traversal rejected: {rel}")));
+    if candidate
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
+        return Err(AppError::InvalidInput(format!(
+            "path traversal rejected: {rel}"
+        )));
     }
     Ok(base.join(rel))
 }
@@ -135,7 +142,9 @@ fn extract_hunks(patch: &git2::Patch) -> Result<Vec<HunkInfo>, AppError> {
             old_lines: hunk.old_lines(),
             new_start: hunk.new_start(),
             new_lines: hunk.new_lines(),
-            header: String::from_utf8_lossy(hunk.header()).trim_end().to_string(),
+            header: String::from_utf8_lossy(hunk.header())
+                .trim_end()
+                .to_string(),
         });
     }
     Ok(hunks)
@@ -360,10 +369,8 @@ pub fn get_file_diff(project_path: &Path, rel_path: &str) -> Result<FileDiffCont
         });
     }
 
-    let original = original_bytes
-        .map(|b| String::from_utf8_lossy(&b).into_owned());
-    let modified = modified_bytes
-        .map(|b| String::from_utf8_lossy(&b).into_owned());
+    let original = original_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
+    let modified = modified_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
 
     // Compute hunks from workdir diff
     let hunks = compute_hunks_for_file(&repo, rel_path)?;
@@ -395,8 +402,8 @@ fn compute_hunks_for_file(repo: &Repository, rel_path: &str) -> Result<Vec<HunkI
         return Ok(vec![]);
     }
 
-    if let Some(patch) = git2::Patch::from_diff(&diff, 0)
-        .map_err(|e| AppError::Git(e.message().to_string()))?
+    if let Some(patch) =
+        git2::Patch::from_diff(&diff, 0).map_err(|e| AppError::Git(e.message().to_string()))?
     {
         return extract_hunks(&patch);
     }
@@ -502,19 +509,27 @@ pub fn discard_hunk(
     let original_bytes = read_head_blob(&repo, rel_path)?
         .ok_or_else(|| AppError::Git(format!("no HEAD blob for {rel_path}")))?;
     if is_binary_content(&original_bytes) {
-        return Err(AppError::InvalidInput("binary file — cannot discard hunk".to_string()));
+        return Err(AppError::InvalidInput(
+            "binary file — cannot discard hunk".to_string(),
+        ));
     }
     let original_content = String::from_utf8_lossy(&original_bytes).into_owned();
 
     // Workdir
     let modified_bytes = std::fs::read(&abs_path).map_err(AppError::Io)?;
     if is_binary_content(&modified_bytes) {
-        return Err(AppError::InvalidInput("binary file — cannot discard hunk".to_string()));
+        return Err(AppError::InvalidInput(
+            "binary file — cannot discard hunk".to_string(),
+        ));
     }
     let modified_content = String::from_utf8_lossy(&modified_bytes).into_owned();
 
     // Detect line ending from modified file; preserve it in the output
-    let line_ending = if modified_content.contains("\r\n") { "\r\n" } else { "\n" };
+    let line_ending = if modified_content.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
 
     // Use HEAD→workdir diff — same view as get_file_diff — so hunk indices match
     let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
@@ -619,7 +634,12 @@ pub fn get_conflicts(project_path: &Path) -> Result<Vec<ConflictFile>, AppError>
             .and_then(|e| read_blob_utf8(&repo, e.id))
             .flatten();
 
-        conflicts.push(ConflictFile { path, ancestor, ours, theirs });
+        conflicts.push(ConflictFile {
+            path,
+            ancestor,
+            ours,
+            theirs,
+        });
     }
 
     Ok(conflicts)
@@ -665,10 +685,12 @@ pub fn resolve_conflict(
 
 /// Create a commit from the current index with the given message.
 /// Returns the new commit's hash as a hex string.
-pub fn commit_files(project_path: &Path, message: &str) -> Result<String, AppError> {
+pub fn commit_files(project_path: &Path, message: &str, amend: bool) -> Result<String, AppError> {
     let trimmed = message.trim();
     if trimmed.is_empty() {
-        return Err(AppError::InvalidInput("commit message cannot be empty".into()));
+        return Err(AppError::InvalidInput(
+            "commit message cannot be empty".into(),
+        ));
     }
     let repo = open_repo(project_path)?;
     let sig = repo.signature().map_err(|e| {
@@ -686,6 +708,24 @@ pub fn commit_files(project_path: &Path, message: &str) -> Result<String, AppErr
     let tree = repo
         .find_tree(tree_id)
         .map_err(|e| AppError::Git(e.message().to_string()))?;
+    if amend {
+        let head_commit = repo
+            .head()
+            .map_err(|_| AppError::InvalidInput("cannot amend without an existing commit".into()))?
+            .peel_to_commit()
+            .map_err(|e| AppError::Git(e.message().to_string()))?;
+        let oid = head_commit
+            .amend(
+                Some("HEAD"),
+                Some(&sig),
+                Some(&sig),
+                None,
+                Some(trimmed),
+                Some(&tree),
+            )
+            .map_err(|e| AppError::Git(e.message().to_string()))?;
+        return Ok(oid.to_string());
+    }
     let parents: Vec<git2::Commit> = match repo.head() {
         Ok(head) => vec![head
             .peel_to_commit()
@@ -707,7 +747,9 @@ pub fn get_commit_files(project_path: &Path, hash: &str) -> Result<Vec<DiffFileE
         .find_commit(oid)
         .map_err(|e| AppError::Git(e.message().to_string()))?;
 
-    let tree = commit.tree().map_err(|e| AppError::Git(e.message().to_string()))?;
+    let tree = commit
+        .tree()
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
 
     // Diff against parent(s). For merges, we diff against the first parent.
     // For root commits, we diff against an empty tree.
@@ -746,7 +788,9 @@ pub fn get_commit_file_diff(
         .find_commit(oid)
         .map_err(|e| AppError::Git(e.message().to_string()))?;
 
-    let tree = commit.tree().map_err(|e| AppError::Git(e.message().to_string()))?;
+    let tree = commit
+        .tree()
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
 
     // Target blob: the file in the requested commit
     let target_bytes = match tree.get_path(Path::new(rel_path)) {
@@ -809,19 +853,15 @@ pub fn get_commit_file_diff(
     opts.pathspec(rel_path);
     let diff = repo
         .diff_tree_to_tree(
-            commit
-                .parent(0)
-                .ok()
-                .and_then(|p| p.tree().ok())
-                .as_ref(),
+            commit.parent(0).ok().and_then(|p| p.tree().ok()).as_ref(),
             Some(&tree),
             Some(&mut opts),
         )
         .map_err(|e| AppError::Git(e.message().to_string()))?;
 
     let hunks = if diff.deltas().count() > 0 {
-        if let Some(patch) = git2::Patch::from_diff(&diff, 0)
-            .map_err(|e| AppError::Git(e.message().to_string()))?
+        if let Some(patch) =
+            git2::Patch::from_diff(&diff, 0).map_err(|e| AppError::Git(e.message().to_string()))?
         {
             extract_hunks(&patch)?
         } else {

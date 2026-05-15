@@ -1,17 +1,18 @@
 use axum::{
-    Json,
     extract::{Path, State},
     response::IntoResponse,
+    Json,
 };
 use serde::Deserialize;
 use std::path::PathBuf;
 
-use crate::git::{
-    BulkGitService, WorktreeAddOptions,
-    add_worktree, list_branches, list_worktrees, remove_worktree, update_branch, get_log,
-};
 use crate::git::bulk::ProjectRef;
 use crate::git::progress::create_progress_channel;
+use crate::git::{
+    add_worktree, checkout_branch, cherry_pick, create_branch, get_log, list_branches,
+    list_worktrees, remove_worktree, reset_to_commit, update_branch, BulkGitService,
+    CheckoutStrategy, ResetMode, WorktreeAddOptions,
+};
 use crate::pty::EventSink as _;
 use crate::state::AppState;
 
@@ -39,8 +40,12 @@ pub async fn fetch_projects(
     let bulk = BulkGitService::new(4).with_creds(ssh_cred);
     forward_progress_events(bulk.subscribe(), state.event_sink.clone());
 
-    let refs: Vec<ProjectRef<'_>> = project_list.iter()
-        .map(|(n, p)| ProjectRef { name: n.as_str(), path: p.as_path() })
+    let refs: Vec<ProjectRef<'_>> = project_list
+        .iter()
+        .map(|(n, p)| ProjectRef {
+            name: n.as_str(),
+            path: p.as_path(),
+        })
         .collect();
     let results = bulk.fetch_all(&refs).await;
     Ok(Json(results))
@@ -61,8 +66,12 @@ pub async fn pull_projects(
     let bulk = BulkGitService::new(4).with_creds(ssh_cred);
     forward_progress_events(bulk.subscribe(), state.event_sink.clone());
 
-    let refs: Vec<ProjectRef<'_>> = project_list.iter()
-        .map(|(n, p)| ProjectRef { name: n.as_str(), path: p.as_path() })
+    let refs: Vec<ProjectRef<'_>> = project_list
+        .iter()
+        .map(|(n, p)| ProjectRef {
+            name: n.as_str(),
+            path: p.as_path(),
+        })
         .collect();
     let results = bulk.pull_all(&refs).await;
     Ok(Json(results))
@@ -137,7 +146,9 @@ pub async fn add_worktree_route(
         create_branch: body.create_branch.unwrap_or(false),
         base_branch: body.base_branch,
     };
-    let worktree = add_worktree(&path, opts).await.map_err(ApiError::from_app)?;
+    let worktree = add_worktree(&path, opts)
+        .await
+        .map_err(ApiError::from_app)?;
     Ok(Json(worktree))
 }
 
@@ -156,7 +167,9 @@ pub async fn remove_worktree_route(
     Json(body): Json<RemoveWorktreeBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let project_path = resolve_project_path(&state, &project).await?;
-    remove_worktree(&project_path, &body.path).await.map_err(ApiError::from_app)?;
+    remove_worktree(&project_path, &body.path)
+        .await
+        .map_err(ApiError::from_app)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -171,6 +184,58 @@ pub async fn get_branches(
     let path = resolve_project_path(&state, &project).await?;
     let branches = list_branches(&path).map_err(ApiError::from_app)?;
     Ok(Json(branches))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateBranchBody {
+    pub name: String,
+    pub start_point: Option<String>,
+    pub checkout: Option<bool>,
+}
+
+pub async fn create_branch_route(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    Json(body): Json<CreateBranchBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_project_path(&state, &project).await?;
+    let result = create_branch(
+        &path,
+        &body.name,
+        body.start_point.as_deref(),
+        body.checkout.unwrap_or(false),
+    )
+    .await
+    .map_err(ApiError::from_app)?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckoutBranchBody {
+    pub branch: String,
+    pub start_point: Option<String>,
+    pub create: Option<bool>,
+    pub strategy: Option<CheckoutStrategy>,
+}
+
+pub async fn checkout_branch_route(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    Json(body): Json<CheckoutBranchBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_project_path(&state, &project).await?;
+    let result = checkout_branch(
+        &path,
+        &body.branch,
+        body.start_point.as_deref(),
+        body.create.unwrap_or(false),
+        body.strategy.unwrap_or(CheckoutStrategy::Normal),
+    )
+    .await
+    .map_err(ApiError::from_app)?;
+    Ok(Json(result))
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +256,41 @@ pub async fn get_log_route(
     let limit = query.limit.unwrap_or(100);
     let log = get_log(&path, limit).map_err(ApiError::from_app)?;
     Ok(Json(log))
+}
+
+#[derive(Deserialize)]
+pub struct CherryPickBody {
+    pub hash: String,
+}
+
+pub async fn cherry_pick_route(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    Json(body): Json<CherryPickBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_project_path(&state, &project).await?;
+    let result = cherry_pick(&path, &body.hash)
+        .await
+        .map_err(ApiError::from_app)?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+pub struct ResetBody {
+    pub hash: String,
+    pub mode: ResetMode,
+}
+
+pub async fn reset_route(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    Json(body): Json<ResetBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_project_path(&state, &project).await?;
+    let result = reset_to_commit(&path, &body.hash, body.mode)
+        .await
+        .map_err(ApiError::from_app)?;
+    Ok(Json(result))
 }
 
 // ---------------------------------------------------------------------------
@@ -218,14 +318,24 @@ pub async fn update_branch_route(
 // ---------------------------------------------------------------------------
 
 async fn resolve_project_path(state: &AppState, project_name: &str) -> Result<PathBuf, ApiError> {
-    state.project_path(project_name).await.map_err(ApiError::from_app)
+    state
+        .project_path(project_name)
+        .await
+        .map_err(ApiError::from_app)
 }
 
-async fn collect_project_list(state: &AppState, filter: Option<&[String]>) -> Vec<(String, PathBuf)> {
+async fn collect_project_list(
+    state: &AppState,
+    filter: Option<&[String]>,
+) -> Vec<(String, PathBuf)> {
     let cfg = state.config.read().await;
     cfg.projects
         .iter()
-        .filter(|p| filter.map(|f| f.iter().any(|n| n == &p.name)).unwrap_or(true))
+        .filter(|p| {
+            filter
+                .map(|f| f.iter().any(|n| n == &p.name))
+                .unwrap_or(true)
+        })
         .map(|p| (p.name.clone(), PathBuf::from(&p.path)))
         .collect()
 }

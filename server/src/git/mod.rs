@@ -11,16 +11,20 @@ mod tests;
 
 pub use bulk::BulkGitService;
 pub use diff::{
-    commit_files, discard_file, discard_hunk, get_conflicts, get_diff_files, get_file_diff,
-    get_untracked_page, resolve_conflict, stage_files, unstage_files, get_commit_files,
-    get_commit_file_diff,
+    commit_files, discard_file, discard_hunk, get_commit_file_diff, get_commit_files,
+    get_conflicts, get_diff_files, get_file_diff, get_untracked_page, resolve_conflict,
+    stage_files, unstage_files,
 };
 pub use progress::ProgressSender;
-pub use repository::{fetch, get_status, list_branches, pull, update_branch, get_log};
+pub use repository::{
+    checkout_branch, cherry_pick, create_branch, fetch, get_log, get_status, list_branches, pull,
+    reset_to_commit, update_branch,
+};
 pub use types::{
-    BranchInfo, BranchUpdateResult, ConflictFile, DiffFileEntry, DiffResponse, FileDiffContent,
-    GitOperation, GitOperationResult, GitProgressEvent, GitProgressPhase, GitStatus, HunkInfo,
-    GitLogEntry, Worktree, WorktreeAddOptions, UNTRACKED_PAGE_SIZE,
+    BranchInfo, BranchUpdateResult, CheckoutStrategy, ConflictFile, DiffFileEntry, DiffResponse,
+    FileDiffContent, GitActionResult, GitLogEntry, GitOperation, GitOperationResult,
+    GitProgressEvent, GitProgressPhase, GitStatus, HunkInfo, ResetMode, Worktree,
+    WorktreeAddOptions, UNTRACKED_PAGE_SIZE,
 };
 pub use worktree::{
     add as add_worktree, list as list_worktrees, prune as prune_worktrees,
