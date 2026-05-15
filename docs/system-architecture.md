@@ -29,7 +29,7 @@
 │  │  ├─ /api/projects → ProjectList handler                │
 │  │  ├─ /api/pty/* → PTY spawn/send/kill                   │
 │  │  ├─ /api/ports → Port detection list                   │
-│  │  ├─ /api/git/* → Clone/push/status                     │
+│  │  ├─ /api/git/* → Clone/push/status/branch ops          │
 │  │  ├─ /api/fs/* → [conditional] List/read/stat           │
 │  │  ├─ /api/agent-store/* → Distribution/import           │
 │  │  ├─ /api/workspace/* → Config switching                │
@@ -513,6 +513,16 @@ HTTP request handlers + WebSocket upgrade.
 - `POST /api/git/:project/discard-hunk` — discard single hunk
 - `GET /api/git/:project/conflicts` — list merge conflicts
 - `POST /api/git/:project/resolve` — resolve merge conflict
+- `POST /api/git/:project/commit` — create commit, supports `amend`
+
+**git.rs** — Git history and branch action handlers:
+
+- `GET /api/git/:project/branches` — list local and remote branches
+- `POST /api/git/:project/branches` — create branch, optional checkout
+- `POST /api/git/:project/branches/checkout` — checkout branch with `normal`, `stash`, or `force`
+- `POST /api/git/:project/branches/update` — update a branch from its remote tracking branch
+- `POST /api/git/:project/cherry-pick` — cherry-pick a commit
+- `POST /api/git/:project/reset` — reset current branch with `soft`, `mixed`, `hard`, or `keep`
 
 **port_forward.rs** (Phase 03) — Port detection handler:
 

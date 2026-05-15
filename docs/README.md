@@ -77,9 +77,9 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **Phase 06:** Lifecycle UI with status dots, restart badges, exit/restart/reconnect banners
 - See: [API Reference](./api-reference.md#terminals)
 
-**Git Operations** — Clone, push, pull, status with progress.
+**Git Operations** — Clone, push, pull, status, branch actions, history edits.
 
-- API: /api/git/{project}/clone, /push, /status
+- API: /api/git/{project}/clone, /push, /status, /branches, /branches/checkout, /cherry-pick, /reset
 - SSH support: Load keys via /api/ssh/keys/load
 - See: [API Reference](./api-reference.md#git-operations)
 

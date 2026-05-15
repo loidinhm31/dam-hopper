@@ -3,15 +3,18 @@ use std::process::Command;
 
 use tempfile::TempDir;
 
+use crate::git::bulk::ProjectRef;
 use crate::git::cli_fallback::list_worktrees;
 use crate::git::diff::{
-    discard_file, discard_hunk, get_conflicts, get_diff_files, get_file_diff,
+    commit_files, discard_file, discard_hunk, get_conflicts, get_diff_files, get_file_diff,
     stage_files, unstage_files,
 };
-use crate::git::repository::{get_status, list_branches};
-use crate::git::types::GitProgressPhase;
+use crate::git::repository::{
+    checkout_branch, cherry_pick, create_branch, get_status, list_branches, reset_to_commit,
+    update_branch,
+};
+use crate::git::types::{CheckoutStrategy, GitProgressPhase, ResetMode};
 use crate::git::{BulkGitService, WorktreeAddOptions};
-use crate::git::bulk::ProjectRef;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -31,6 +34,21 @@ fn git(args: &[&str], cwd: &Path) {
     );
 }
 
+fn git_output(args: &[&str], cwd: &Path) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("git command failed to spawn");
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
 fn init_repo_with_commit(dir: &Path) {
     git(&["init", "-b", "main"], dir);
     git(&["config", "user.email", "test@test.com"], dir);
@@ -45,6 +63,33 @@ fn make_temp_repo() -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     init_repo_with_commit(dir.path());
     dir
+}
+
+fn make_remote_clone_repo() -> (TempDir, TempDir, TempDir) {
+    let remote = tempfile::tempdir().unwrap();
+    let seed = tempfile::tempdir().unwrap();
+    let clone = tempfile::tempdir().unwrap();
+
+    git(&["init", "--bare"], remote.path());
+    init_repo_with_commit(seed.path());
+    git(
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+        seed.path(),
+    );
+    git(&["push", "-u", "origin", "main"], seed.path());
+
+    git(
+        &[
+            "clone",
+            remote.path().to_str().unwrap(),
+            clone.path().to_str().unwrap(),
+        ],
+        Path::new("/tmp"),
+    );
+    git(&["config", "user.email", "test@test.com"], clone.path());
+    git(&["config", "user.name", "Test"], clone.path());
+
+    (remote, seed, clone)
 }
 
 // ---------------------------------------------------------------------------
@@ -227,8 +272,14 @@ async fn bulk_status_all() {
 
     let bulk = BulkGitService::default();
     let projects = vec![
-        ProjectRef { name: "repo1", path: r1.path() },
-        ProjectRef { name: "repo2", path: r2.path() },
+        ProjectRef {
+            name: "repo1",
+            path: r1.path(),
+        },
+        ProjectRef {
+            name: "repo2",
+            path: r2.path(),
+        },
     ];
 
     let statuses = bulk.status_all(&projects).await;
@@ -323,7 +374,11 @@ fn diff_unstaged_modified_file() {
 
     let entries = get_diff_files(path).unwrap();
     assert!(!entries.entries.is_empty());
-    let entry = entries.entries.iter().find(|e| e.path == "README.md" && !e.staged).unwrap();
+    let entry = entries
+        .entries
+        .iter()
+        .find(|e| e.path == "README.md" && !e.staged)
+        .unwrap();
     assert_eq!(entry.status, "modified");
     assert!(!entry.staged);
 }
@@ -337,7 +392,11 @@ fn diff_staged_new_file() {
     git(&["add", "new.txt"], path);
 
     let entries = get_diff_files(path).unwrap();
-    let staged = entries.entries.iter().find(|e| e.path == "new.txt" && e.staged).unwrap();
+    let staged = entries
+        .entries
+        .iter()
+        .find(|e| e.path == "new.txt" && e.staged)
+        .unwrap();
     assert_eq!(staged.status, "added");
     assert!(staged.staged);
 }
@@ -380,13 +439,19 @@ fn stage_and_unstage_file() {
     stage_files(path, &["README.md"]).unwrap();
 
     let entries = get_diff_files(path).unwrap();
-    let staged_entry = entries.entries.iter().find(|e| e.path == "README.md" && e.staged);
+    let staged_entry = entries
+        .entries
+        .iter()
+        .find(|e| e.path == "README.md" && e.staged);
     assert!(staged_entry.is_some(), "file should be staged");
 
     unstage_files(path, &["README.md"]).unwrap();
 
     let entries2 = get_diff_files(path).unwrap();
-    let still_staged = entries2.entries.iter().any(|e| e.path == "README.md" && e.staged);
+    let still_staged = entries2
+        .entries
+        .iter()
+        .any(|e| e.path == "README.md" && e.staged);
     assert!(!still_staged, "file should be unstaged");
 }
 
@@ -419,7 +484,10 @@ fn discard_hunk_reverts_specific_lines() {
     std::fs::write(path.join("multi.txt"), "line1\nMODIFIED\nline3\nline4\n").unwrap();
 
     let entries = get_diff_files(path).unwrap();
-    assert!(entries.entries.iter().any(|e| e.path == "multi.txt" && !e.staged));
+    assert!(entries
+        .entries
+        .iter()
+        .any(|e| e.path == "multi.txt" && !e.staged));
 
     // Discard hunk 0
     discard_hunk(path, "multi.txt", 0).unwrap();
@@ -446,4 +514,304 @@ fn conflicts_empty_when_no_merge() {
     let repo = make_temp_repo();
     let conflicts = get_conflicts(repo.path()).unwrap();
     assert!(conflicts.is_empty());
+}
+
+#[tokio::test]
+async fn create_branch_without_checkout_keeps_head() {
+    let repo = make_temp_repo();
+    let result = create_branch(repo.path(), "feature/test", None, false)
+        .await
+        .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.branch.as_deref(), Some("feature/test"));
+    assert_eq!(
+        git_output(&["rev-parse", "--abbrev-ref", "HEAD"], repo.path()),
+        "main"
+    );
+    assert_eq!(
+        git_output(&["branch", "--list", "feature/test"], repo.path()),
+        "feature/test"
+    );
+}
+
+#[tokio::test]
+async fn create_branch_with_checkout_switches_head() {
+    let repo = make_temp_repo();
+
+    let result = create_branch(repo.path(), "feature/checked-out", None, true)
+        .await
+        .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.branch.as_deref(), Some("feature/checked-out"));
+    assert_eq!(
+        git_output(&["rev-parse", "--abbrev-ref", "HEAD"], repo.path()),
+        "feature/checked-out"
+    );
+}
+
+#[tokio::test]
+async fn checkout_branch_normal_returns_dirty_result() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    git(&["branch", "feature/test"], path);
+    std::fs::write(path.join("README.md"), "dirty").unwrap();
+
+    let result = checkout_branch(path, "feature/test", None, false, CheckoutStrategy::Normal)
+        .await
+        .unwrap();
+
+    assert!(!result.ok);
+    assert_eq!(result.dirty, Some(true));
+    assert_eq!(
+        git_output(&["rev-parse", "--abbrev-ref", "HEAD"], path),
+        "main"
+    );
+}
+
+#[tokio::test]
+async fn checkout_branch_stash_switches_and_reports_stash() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    git(&["branch", "feature/test"], path);
+    std::fs::write(path.join("README.md"), "dirty").unwrap();
+
+    let result = checkout_branch(path, "feature/test", None, false, CheckoutStrategy::Stash)
+        .await
+        .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.branch.as_deref(), Some("feature/test"));
+    assert_eq!(result.stashed, Some(true));
+    assert_eq!(
+        git_output(&["rev-parse", "--abbrev-ref", "HEAD"], path),
+        "feature/test"
+    );
+    assert_eq!(git_output(&["stash", "list"], path).lines().count(), 1);
+}
+
+#[tokio::test]
+async fn checkout_branch_force_discards_local_changes() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    git(&["branch", "feature/test"], path);
+    std::fs::write(path.join("README.md"), "dirty").unwrap();
+
+    let result = checkout_branch(path, "feature/test", None, false, CheckoutStrategy::Force)
+        .await
+        .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.destructive, Some(true));
+    assert_eq!(
+        git_output(&["rev-parse", "--abbrev-ref", "HEAD"], path),
+        "feature/test"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("README.md")).unwrap(),
+        "# test"
+    );
+}
+
+#[tokio::test]
+async fn checkout_branch_invalid_name_rejected() {
+    let repo = make_temp_repo();
+    let err = checkout_branch(
+        repo.path(),
+        "bad branch",
+        None,
+        false,
+        CheckoutStrategy::Normal,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+}
+
+#[tokio::test]
+async fn checkout_remote_branch_creates_tracking_local_branch() {
+    let (_remote, seed, clone) = make_remote_clone_repo();
+
+    git(&["checkout", "-b", "feature/remote"], seed.path());
+    std::fs::write(seed.path().join("remote.txt"), "remote branch").unwrap();
+    git(&["add", "remote.txt"], seed.path());
+    git(&["commit", "-m", "remote branch"], seed.path());
+    git(&["push", "-u", "origin", "feature/remote"], seed.path());
+
+    git(&["fetch", "origin"], clone.path());
+
+    let result = checkout_branch(
+        clone.path(),
+        "origin/feature/remote",
+        None,
+        false,
+        CheckoutStrategy::Normal,
+    )
+    .await
+    .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.branch.as_deref(), Some("feature/remote"));
+    assert_eq!(
+        git_output(&["rev-parse", "--abbrev-ref", "HEAD"], clone.path()),
+        "feature/remote"
+    );
+}
+
+#[tokio::test]
+async fn cherry_pick_conflict_returns_structured_result() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    git(&["checkout", "-b", "feature/conflict"], path);
+    std::fs::write(path.join("README.md"), "feature change\n").unwrap();
+    git(&["add", "README.md"], path);
+    git(&["commit", "-m", "feature change"], path);
+
+    git(&["checkout", "main"], path);
+    std::fs::write(path.join("README.md"), "main change\n").unwrap();
+    git(&["add", "README.md"], path);
+    git(&["commit", "-m", "main change"], path);
+    let target_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    git(&["checkout", "feature/conflict"], path);
+
+    let result = cherry_pick(path, &target_hash).await.unwrap();
+    assert!(!result.ok);
+    assert_eq!(result.conflict, Some(true));
+}
+
+#[tokio::test]
+async fn cherry_pick_success_returns_hash() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    git(&["checkout", "-b", "feature/success"], path);
+    std::fs::write(path.join("feature.txt"), "feature change\n").unwrap();
+    git(&["add", "feature.txt"], path);
+    git(&["commit", "-m", "feature change"], path);
+    let target_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    git(&["checkout", "main"], path);
+    let result = cherry_pick(path, &target_hash).await.unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.hash.as_deref(), Some(target_hash.as_str()));
+    assert_eq!(
+        std::fs::read_to_string(path.join("feature.txt")).unwrap(),
+        "feature change\n"
+    );
+}
+
+#[tokio::test]
+async fn cherry_pick_invalid_hash_rejected() {
+    let repo = make_temp_repo();
+    let err = cherry_pick(repo.path(), "not-a-hash").await.unwrap_err();
+
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+}
+
+#[tokio::test]
+async fn reset_to_commit_soft_moves_head() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let initial = git_output(&["rev-parse", "HEAD"], path);
+    std::fs::write(path.join("next.txt"), "next").unwrap();
+    git(&["add", "next.txt"], path);
+    git(&["commit", "-m", "next"], path);
+
+    let result = reset_to_commit(path, &initial, ResetMode::Soft)
+        .await
+        .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), initial);
+    assert_eq!(
+        git_output(&["diff", "--cached", "--name-only"], path),
+        "next.txt"
+    );
+}
+
+#[tokio::test]
+async fn reset_to_commit_hard_discards_worktree_changes() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let initial = git_output(&["rev-parse", "HEAD"], path);
+    std::fs::write(path.join("README.md"), "changed").unwrap();
+
+    let result = reset_to_commit(path, &initial, ResetMode::Hard)
+        .await
+        .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.destructive, Some(true));
+    assert_eq!(
+        std::fs::read_to_string(path.join("README.md")).unwrap(),
+        "# test"
+    );
+}
+
+#[tokio::test]
+async fn reset_to_commit_keep_preserves_worktree_changes() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let initial = git_output(&["rev-parse", "HEAD"], path);
+    std::fs::write(path.join("next.txt"), "next").unwrap();
+    git(&["add", "next.txt"], path);
+    git(&["commit", "-m", "next"], path);
+    std::fs::write(path.join("local.txt"), "local change").unwrap();
+
+    let result = reset_to_commit(path, &initial, ResetMode::Keep)
+        .await
+        .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.destructive, Some(false));
+    assert_eq!(
+        std::fs::read_to_string(path.join("local.txt")).unwrap(),
+        "local change"
+    );
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), initial);
+}
+
+#[tokio::test]
+async fn reset_to_commit_invalid_hash_rejected() {
+    let repo = make_temp_repo();
+    let err = reset_to_commit(repo.path(), "bad-hash", ResetMode::Hard)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+}
+
+#[test]
+fn commit_files_supports_amend() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let original = git_output(&["rev-parse", "HEAD"], path);
+    std::fs::write(path.join("before.txt"), "before").unwrap();
+    git(&["add", "before.txt"], path);
+    git(&["commit", "-m", "before amend"], path);
+
+    std::fs::write(path.join("README.md"), "amended").unwrap();
+    git(&["add", "README.md"], path);
+
+    let amended = commit_files(path, "amended commit", true).unwrap();
+
+    assert_ne!(amended, original);
+    assert_eq!(
+        git_output(&["log", "-1", "--pretty=%s"], path),
+        "amended commit"
+    );
+    assert_eq!(git_output(&["rev-list", "--count", "HEAD"], path), "2");
+}
+
+#[test]
+fn update_branch_invalid_name_rejected() {
+    let repo = make_temp_repo();
+    let err = update_branch(repo.path(), "bad branch", "origin").unwrap_err();
+
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
 }

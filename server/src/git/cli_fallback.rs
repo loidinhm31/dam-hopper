@@ -9,13 +9,13 @@ use std::time::Instant;
 use tokio::process::Command;
 
 use crate::error::AppError;
+use crate::git::progress::{emit_completed, emit_failed, emit_started, ProgressSender};
 use crate::git::types::{GitOperation, GitOperationResult, Worktree, WorktreeAddOptions};
-use crate::git::progress::{ProgressSender, emit_started, emit_completed, emit_failed};
 
 /// Validates branch names per git ref spec rules (git-check-ref-format).
 /// Rejects: leading dash, path traversal, null bytes, whitespace,
 /// and git-special chars (~, ^, :, @{, \, *).
-fn validate_branch_name(branch: &str) -> Result<(), AppError> {
+pub(crate) fn validate_branch_name(branch: &str) -> Result<(), AppError> {
     let invalid = branch.is_empty()
         || branch.starts_with('-')
         || branch.starts_with('.')
@@ -28,12 +28,14 @@ fn validate_branch_name(branch: &str) -> Result<(), AppError> {
         || branch.contains(['~', '^', ':', '\\', '*', '\x00', '\n', ' ', '\t']);
 
     if invalid {
-        return Err(AppError::InvalidInput(format!("Invalid branch name: {branch}")));
+        return Err(AppError::InvalidInput(format!(
+            "Invalid branch name: {branch}"
+        )));
     }
     Ok(())
 }
 
-async fn run_git(args: &[&str], cwd: &Path) -> Result<String, AppError> {
+pub(crate) async fn run_git(args: &[&str], cwd: &Path) -> Result<String, AppError> {
     let output = Command::new("git")
         .args(args)
         .current_dir(cwd)
@@ -291,7 +293,10 @@ mod tests {
     #[test]
     fn validate_branch_rejects_git_special_chars() {
         for bad in &["a~b", "a^b", "a:b", "a@{b", "a\\b", "a*b", "a b", "a\tb"] {
-            assert!(validate_branch_name(bad).is_err(), "expected error for: {bad}");
+            assert!(
+                validate_branch_name(bad).is_err(),
+                "expected error for: {bad}"
+            );
         }
     }
 

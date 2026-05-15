@@ -3,9 +3,9 @@
 /// All routes are scoped to a specific project: /api/git/:project/...
 /// Path parameters are validated via `safe_join` inside the git::diff module.
 use axum::{
-    Json,
     extract::{Path, Query, State},
     response::IntoResponse,
+    Json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +22,10 @@ pub async fn list_diff(
     State(state): State<AppState>,
     Path(project): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let path = state.project_path(&project).await.map_err(ApiError::from_app)?;
+    let path = state
+        .project_path(&project)
+        .await
+        .map_err(ApiError::from_app)?;
     let resp = tokio::task::spawn_blocking(move || git::get_diff_files(&path))
         .await
         .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
@@ -46,7 +49,10 @@ pub async fn list_untracked(
     Path(project): Path<String>,
     Query(q): Query<UntrackedQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let path = state.project_path(&project).await.map_err(ApiError::from_app)?;
+    let path = state
+        .project_path(&project)
+        .await
+        .map_err(ApiError::from_app)?;
     let limit = q.limit.unwrap_or(git::UNTRACKED_PAGE_SIZE);
     let offset = q.offset;
     let resp = tokio::task::spawn_blocking(move || git::get_untracked_page(&path, offset, limit))
@@ -70,7 +76,10 @@ pub async fn get_file_diff(
     Path(project): Path<String>,
     Query(q): Query<FilePathQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state.project_path(&project).await.map_err(ApiError::from_app)?;
+    let proj_path = state
+        .project_path(&project)
+        .await
+        .map_err(ApiError::from_app)?;
     let rel = q.path;
     let content = tokio::task::spawn_blocking(move || git::get_file_diff(&proj_path, &rel))
         .await
@@ -93,7 +102,10 @@ pub async fn stage(
     Path(project): Path<String>,
     Json(body): Json<PathsBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state.project_path(&project).await.map_err(ApiError::from_app)?;
+    let proj_path = state
+        .project_path(&project)
+        .await
+        .map_err(ApiError::from_app)?;
     let paths = body.paths;
     tokio::task::spawn_blocking(move || {
         let refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
@@ -114,7 +126,10 @@ pub async fn unstage(
     Path(project): Path<String>,
     Json(body): Json<PathsBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state.project_path(&project).await.map_err(ApiError::from_app)?;
+    let proj_path = state
+        .project_path(&project)
+        .await
+        .map_err(ApiError::from_app)?;
     let paths = body.paths;
     tokio::task::spawn_blocking(move || {
         let refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
@@ -140,7 +155,10 @@ pub async fn discard(
     Path(project): Path<String>,
     Json(body): Json<SinglePathBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state.project_path(&project).await.map_err(ApiError::from_app)?;
+    let proj_path = state
+        .project_path(&project)
+        .await
+        .map_err(ApiError::from_app)?;
     let rel = body.path;
     tokio::task::spawn_blocking(move || git::discard_file(&proj_path, &rel))
         .await
@@ -165,7 +183,10 @@ pub async fn discard_hunk(
     Path(project): Path<String>,
     Json(body): Json<DiscardHunkBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state.project_path(&project).await.map_err(ApiError::from_app)?;
+    let proj_path = state
+        .project_path(&project)
+        .await
+        .map_err(ApiError::from_app)?;
     let rel = body.path;
     let idx = body.hunk_index;
     tokio::task::spawn_blocking(move || git::discard_hunk(&proj_path, &rel, idx))
@@ -183,7 +204,10 @@ pub async fn list_conflicts(
     State(state): State<AppState>,
     Path(project): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let path = state.project_path(&project).await.map_err(ApiError::from_app)?;
+    let path = state
+        .project_path(&project)
+        .await
+        .map_err(ApiError::from_app)?;
     let conflicts = tokio::task::spawn_blocking(move || git::get_conflicts(&path))
         .await
         .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
@@ -206,7 +230,10 @@ pub async fn resolve(
     Path(project): Path<String>,
     Json(body): Json<ResolveBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state.project_path(&project).await.map_err(ApiError::from_app)?;
+    let proj_path = state
+        .project_path(&project)
+        .await
+        .map_err(ApiError::from_app)?;
     let rel = body.path;
     let content = body.content;
     tokio::task::spawn_blocking(move || git::resolve_conflict(&proj_path, &rel, &content))
@@ -223,6 +250,7 @@ pub async fn resolve(
 #[derive(Deserialize)]
 pub struct CommitBody {
     pub message: String,
+    pub amend: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -236,9 +264,13 @@ pub async fn commit(
     Path(project): Path<String>,
     Json(body): Json<CommitBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state.project_path(&project).await.map_err(ApiError::from_app)?;
+    let proj_path = state
+        .project_path(&project)
+        .await
+        .map_err(ApiError::from_app)?;
     let message = body.message;
-    let hash = tokio::task::spawn_blocking(move || git::commit_files(&proj_path, &message))
+    let amend = body.amend.unwrap_or(false);
+    let hash = tokio::task::spawn_blocking(move || git::commit_files(&proj_path, &message, amend))
         .await
         .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
         .map_err(ApiError::from_app)?;
@@ -253,7 +285,10 @@ pub async fn get_commit_files(
     State(state): State<AppState>,
     Path((project, hash)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let path = state.project_path(&project).await.map_err(ApiError::from_app)?;
+    let path = state
+        .project_path(&project)
+        .await
+        .map_err(ApiError::from_app)?;
     let resp = tokio::task::spawn_blocking(move || git::get_commit_files(&path, &hash))
         .await
         .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
@@ -270,11 +305,15 @@ pub async fn get_commit_file_diff(
     Path((project, hash)): Path<(String, String)>,
     Query(q): Query<FilePathQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = state.project_path(&project).await.map_err(ApiError::from_app)?;
-    let rel = q.path;
-    let content = tokio::task::spawn_blocking(move || git::get_commit_file_diff(&proj_path, &rel, &hash))
+    let proj_path = state
+        .project_path(&project)
         .await
-        .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
         .map_err(ApiError::from_app)?;
+    let rel = q.path;
+    let content =
+        tokio::task::spawn_blocking(move || git::get_commit_file_diff(&proj_path, &rel, &hash))
+            .await
+            .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+            .map_err(ApiError::from_app)?;
     Ok(Json(content))
 }

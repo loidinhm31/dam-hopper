@@ -352,6 +352,34 @@ Push commits.
 
 Body: `{ branch?: string, force?: bool }`
 
+**GET /api/git/:project/branches**
+List local and remote branches.
+
+**POST /api/git/:project/branches**
+Create a branch.
+
+Body: `{ name: string, startPoint?: string, checkout?: bool }`
+
+**POST /api/git/:project/branches/checkout**
+Checkout a branch.
+
+Body: `{ branch: string, startPoint?: string, create?: bool, strategy?: "normal"|"stash"|"force" }`
+
+**POST /api/git/:project/branches/update**
+Update a branch from its remote tracking branch.
+
+Body: `{ branch?: string }`
+
+**POST /api/git/:project/cherry-pick**
+Cherry-pick a commit.
+
+Body: `{ hash: string }`
+
+**POST /api/git/:project/reset**
+Reset the current branch to a commit.
+
+Body: `{ hash: string, mode: "soft"|"mixed"|"hard"|"keep" }`
+
 ### Git Diff & Change Management (Phase 01)
 
 **GET /api/git/:project/diff**
@@ -398,6 +426,11 @@ Response:
   "isBinary": false
 }
 ```
+
+**POST /api/git/:project/commit**
+Create a commit from staged files.
+
+Body: `{ message: string, amend?: bool }`
 
 ## Client-Side Profile Management (Phase 2)
 
