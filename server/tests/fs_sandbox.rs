@@ -35,7 +35,10 @@ async fn validate_file_within_root_ok() {
 
     let sb = sandbox(workspace(&tmp)).await;
     let result = sb.validate(file.clone()).await;
-    assert!(result.is_ok(), "file inside root should be valid: {result:?}");
+    assert!(
+        result.is_ok(),
+        "file inside root should be valid: {result:?}"
+    );
     assert_eq!(result.unwrap(), dunce::canonicalize(&file).unwrap());
 }
 
@@ -61,8 +64,13 @@ async fn validate_dotdot_lexical_rejected() {
     let sb = sandbox(workspace(&tmp)).await;
 
     // Attempt to escape via .. suffix
-    let proposed = tmp.path().join("sub").join("..").join("..")
-        .join("etc").join("passwd");
+    let proposed = tmp
+        .path()
+        .join("sub")
+        .join("..")
+        .join("..")
+        .join("etc")
+        .join("passwd");
     let result = sb.validate(proposed).await;
 
     assert!(
@@ -87,7 +95,10 @@ async fn validate_symlink_inside_root_allowed() {
 
     let sb = sandbox(workspace(&tmp)).await;
     let result = sb.validate(link).await;
-    assert!(result.is_ok(), "symlink inside root should be allowed: {result:?}");
+    assert!(
+        result.is_ok(),
+        "symlink inside root should be allowed: {result:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +195,10 @@ async fn detect_binary_text_returns_false() {
     fs::write(&txt, "fn main() { println!(\"hello\"); }").unwrap();
 
     let (is_binary, _mime) = detect_binary(&txt).await.unwrap();
-    assert!(!is_binary, "Rust source file should not be detected as binary");
+    assert!(
+        !is_binary,
+        "Rust source file should not be detected as binary"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -223,7 +237,9 @@ async fn read_file_with_range_reads_correct_slice() {
     let file = tmp.path().join("data.txt");
     fs::write(&file, b"0123456789").unwrap();
 
-    let bytes = read_file(&file, Some((2, 5)), MAX_READ_BYTES).await.unwrap();
+    let bytes = read_file(&file, Some((2, 5)), MAX_READ_BYTES)
+        .await
+        .unwrap();
     assert_eq!(&bytes, b"23456");
 }
 

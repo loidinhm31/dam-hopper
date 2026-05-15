@@ -40,10 +40,7 @@ impl FsWatcherManager {
     ///
     /// Spawns a watcher if none exists for this root. Returns a broadcast
     /// receiver. Errors only if notify fails to watch the path.
-    pub fn subscribe(
-        &self,
-        root: &Path,
-    ) -> Result<broadcast::Receiver<FsEvent>, notify::Error> {
+    pub fn subscribe(&self, root: &Path) -> Result<broadcast::Receiver<FsEvent>, notify::Error> {
         let mut map = self.inner.lock().unwrap_or_else(|p| p.into_inner());
 
         if let Some(handle) = map.get_mut(root) {
@@ -86,7 +83,11 @@ impl FsWatcherManager {
             let rx = tx.subscribe();
             map.insert(
                 root.to_path_buf(),
-                WatcherHandle { tx, refcount: 1, _debouncer: d },
+                WatcherHandle {
+                    tx,
+                    refcount: 1,
+                    _debouncer: d,
+                },
             );
             debug!(root = %root.display(), "watcher spawned, refcount=1");
             return Ok(rx);

@@ -1,11 +1,11 @@
-use std::path::Path;
-use handlebars::{Handlebars, handlebars_helper};
+use handlebars::{handlebars_helper, Handlebars};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::Path;
 use tokio::fs;
 
+use super::schema::{agent_paths, AgentType};
 use crate::error::{AppError, Result};
-use super::schema::{AgentType, agent_paths};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplateContext {
@@ -46,14 +46,16 @@ pub fn render_template(template: &str, ctx: &TemplateContext) -> Result<String> 
     reg.set_strict_mode(false);
 
     // Augment context with tags_joined if not already set
-    let mut value = serde_json::to_value(ctx)
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut value = serde_json::to_value(ctx).map_err(|e| AppError::Internal(e.to_string()))?;
     if let Some(tags) = ctx.project.tags.as_ref() {
         let joined = tags.join(", ");
         if let Some(proj) = value.get_mut("project") {
             if let Some(obj) = proj.as_object_mut() {
                 obj.insert("tagsJoined".to_string(), serde_json::Value::String(joined));
-                obj.insert("tags_joined".to_string(), serde_json::Value::String(ctx.project.tags_joined.clone()));
+                obj.insert(
+                    "tags_joined".to_string(),
+                    serde_json::Value::String(ctx.project.tags_joined.clone()),
+                );
             }
         }
     }
@@ -103,16 +105,27 @@ pub async fn get_memory_file(project_path: &Path, agent: AgentType) -> Result<Op
 }
 
 /// Write/overwrite a project's memory file.
-pub async fn update_memory_file(project_path: &Path, agent: AgentType, content: &str) -> Result<()> {
+pub async fn update_memory_file(
+    project_path: &Path,
+    agent: AgentType,
+    content: &str,
+) -> Result<()> {
     let file_path = project_path.join(agent_paths(agent).memory_file);
     fs::write(&file_path, content).await?;
     Ok(())
 }
 
 /// Render a named template from the store and return the rendered content.
-pub async fn apply_template(store_path: &Path, template_name: &str, ctx: &TemplateContext) -> Result<String> {
-    let template_path = store_path.join("memory-templates").join(format!("{template_name}.md"));
-    let template = fs::read_to_string(&template_path).await
+pub async fn apply_template(
+    store_path: &Path,
+    template_name: &str,
+    ctx: &TemplateContext,
+) -> Result<String> {
+    let template_path = store_path
+        .join("memory-templates")
+        .join(format!("{template_name}.md"));
+    let template = fs::read_to_string(&template_path)
+        .await
         .map_err(|_| AppError::NotFound(format!("Memory template not found: {template_name}")))?;
     render_template(&template, ctx)
 }

@@ -130,8 +130,7 @@ mod tests {
     use super::*;
     use crate::{
         config::schema::{
-            DamHopperConfig, ProjectConfig, ProjectType, RestartPolicy, ServerConfig,
-            WorkspaceInfo,
+            DamHopperConfig, ProjectConfig, ProjectType, RestartPolicy, ServerConfig, WorkspaceInfo,
         },
         persistence::SessionStore,
         pty::{event_sink::BroadcastEventSink, session::SessionMeta},

@@ -12,7 +12,11 @@ use crate::fs::error::FsError;
 ///
 /// `abs` must already be sandbox-validated (inside workspace root).
 /// `project_root` is the canonical project directory.
-pub fn assert_safe_mutation(abs: &Path, project_root: &Path, force_git: bool) -> Result<(), FsError> {
+pub fn assert_safe_mutation(
+    abs: &Path,
+    project_root: &Path,
+    force_git: bool,
+) -> Result<(), FsError> {
     if abs == project_root {
         return Err(FsError::MutationRefused(
             "cannot mutate the project root".into(),
@@ -20,9 +24,9 @@ pub fn assert_safe_mutation(abs: &Path, project_root: &Path, force_git: bool) ->
     }
 
     if !force_git {
-        let in_git = abs.components().any(|c| {
-            matches!(c, Component::Normal(n) if n == ".git")
-        });
+        let in_git = abs
+            .components()
+            .any(|c| matches!(c, Component::Normal(n) if n == ".git"));
         if in_git {
             return Err(FsError::MutationRefused(
                 "refusing .git write without force_git=true".into(),

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, RwLock};
@@ -47,7 +47,11 @@ impl TunnelSessionManager {
     /// Broadcasts `install:progress`, `install:done`, or `install:failed` over WS.
     /// Returns `Err(InstallInProgress)` if an install is already running.
     pub fn start_install(&self) -> Result<(), TunnelError> {
-        if self.installing.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        if self
+            .installing
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
             return Err(TunnelError::InstallInProgress);
         }
         let sink = self.sink.clone();
@@ -56,18 +60,28 @@ impl TunnelSessionManager {
         tokio::spawn(async move {
             let _guard = guard;
             let result = TunnelInstaller::install(|downloaded, total| {
-                sink.broadcast("install:progress", serde_json::json!({
-                    "downloaded": downloaded,
-                    "total": total,
-                }));
-            }).await;
+                sink.broadcast(
+                    "install:progress",
+                    serde_json::json!({
+                        "downloaded": downloaded,
+                        "total": total,
+                    }),
+                );
+            })
+            .await;
             match result {
-                Ok(path) => sink.broadcast("install:done", serde_json::json!({
-                    "path": path.to_string_lossy(),
-                })),
-                Err(e) => sink.broadcast("install:failed", serde_json::json!({
-                    "error": e.to_string(),
-                })),
+                Ok(path) => sink.broadcast(
+                    "install:done",
+                    serde_json::json!({
+                        "path": path.to_string_lossy(),
+                    }),
+                ),
+                Err(e) => sink.broadcast(
+                    "install:failed",
+                    serde_json::json!({
+                        "error": e.to_string(),
+                    }),
+                ),
             }
         });
         Ok(())
@@ -238,10 +252,7 @@ async fn watch_events(
                         sess.url = Some(url.clone());
                     }
                 }
-                sink.broadcast(
-                    "tunnel:ready",
-                    serde_json::json!({ "id": id, "url": url }),
-                );
+                sink.broadcast("tunnel:ready", serde_json::json!({ "id": id, "url": url }));
             }
             TunnelDriverEvent::Failed(msg) => {
                 {

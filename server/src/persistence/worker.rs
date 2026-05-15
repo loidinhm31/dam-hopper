@@ -1,7 +1,10 @@
 use crate::persistence::SessionStore;
 use crate::pty::SessionMeta;
 use std::collections::HashMap;
-use std::sync::{mpsc::{Receiver, RecvTimeoutError}, Arc};
+use std::sync::{
+    mpsc::{Receiver, RecvTimeoutError},
+    Arc,
+};
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
@@ -117,7 +120,10 @@ impl PersistWorker {
                 rows,
                 restart_max_retries,
             } => {
-                if let Err(e) = self.store.save_session(&meta, &env, cols, rows, restart_max_retries) {
+                if let Err(e) =
+                    self.store
+                        .save_session(&meta, &env, cols, rows, restart_max_retries)
+                {
                     warn!(session_id = %meta.id, error = %e, "Failed to persist session");
                 }
                 true
@@ -171,8 +177,16 @@ impl PersistWorker {
 
     /// Writes buffer data to SQLite.
     fn write_buffer(&self, session_id: &str, buf: &PendingBuffer) {
-        debug!(session_id, bytes = buf.data.len(), total_written = buf.total_written, "Writing buffer to SQLite");
-        if let Err(e) = self.store.save_buffer(session_id, &buf.data, buf.total_written) {
+        debug!(
+            session_id,
+            bytes = buf.data.len(),
+            total_written = buf.total_written,
+            "Writing buffer to SQLite"
+        );
+        if let Err(e) = self
+            .store
+            .save_buffer(session_id, &buf.data, buf.total_written)
+        {
             warn!(session_id, error = %e, "Failed to persist buffer");
         }
     }

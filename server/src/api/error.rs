@@ -1,4 +1,4 @@
-use axum::{Json, http::StatusCode, response::IntoResponse};
+use axum::{http::StatusCode, response::IntoResponse, Json};
 use serde::Serialize;
 
 use crate::error::AppError;
@@ -36,7 +36,13 @@ impl IntoResponse for ApiError {
             503 => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
-        (status, Json(ErrorBody { error: self.0.to_string() })).into_response()
+        (
+            status,
+            Json(ErrorBody {
+                error: self.0.to_string(),
+            }),
+        )
+            .into_response()
     }
 }
 

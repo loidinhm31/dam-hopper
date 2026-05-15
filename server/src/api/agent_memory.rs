@@ -1,13 +1,17 @@
-use axum::{Json, extract::{Path, State}, response::IntoResponse};
+use axum::{
+    extract::{Path, State},
+    response::IntoResponse,
+    Json,
+};
 use serde::Deserialize;
 use std::path::PathBuf;
 
 use crate::agent_store::{
-    AgentType,
     memory::{
-        TemplateContext, ProjectContext, WorkspaceContext,
-        apply_template, get_memory_file, list_memory_templates, update_memory_file,
+        apply_template, get_memory_file, list_memory_templates, update_memory_file, ProjectContext,
+        TemplateContext, WorkspaceContext,
     },
+    AgentType,
 };
 use crate::state::AppState;
 
@@ -56,7 +60,9 @@ pub async fn get_project_memory(
 ) -> Result<impl IntoResponse, ApiError> {
     let agent = parse_agent(&agent_str)?;
     let project_path = resolve_project(&state, &project_name).await?;
-    let content = get_memory_file(&project_path, agent).await.map_err(ApiError::from_app)?;
+    let content = get_memory_file(&project_path, agent)
+        .await
+        .map_err(ApiError::from_app)?;
     Ok(Json(serde_json::json!({
         "projectName": project_name,
         "agent": agent_str,
@@ -80,7 +86,9 @@ pub async fn update_project_memory(
 ) -> Result<impl IntoResponse, ApiError> {
     let agent = parse_agent(&agent_str)?;
     let project_path = resolve_project(&state, &project_name).await?;
-    update_memory_file(&project_path, agent, &body.content).await.map_err(ApiError::from_app)?;
+    update_memory_file(&project_path, agent, &body.content)
+        .await
+        .map_err(ApiError::from_app)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -106,10 +114,16 @@ pub async fn apply_memory_template(
 
     let (project_type, tags, workspace_name) = {
         let cfg = state.config.read().await;
-        let proj = cfg.projects.iter().find(|p| p.name == body.project_name)
-            .ok_or_else(|| ApiError::from_app(crate::error::AppError::NotFound(
-                format!("Project not found: {}", body.project_name),
-            )))?;
+        let proj = cfg
+            .projects
+            .iter()
+            .find(|p| p.name == body.project_name)
+            .ok_or_else(|| {
+                ApiError::from_app(crate::error::AppError::NotFound(format!(
+                    "Project not found: {}",
+                    body.project_name
+                )))
+            })?;
         (
             proj.project_type.to_string(),
             proj.tags.clone(),
@@ -128,19 +142,24 @@ pub async fn apply_memory_template(
         },
         workspace: WorkspaceContext {
             name: workspace_name,
-            root: state.workspace_dir.read().await.to_string_lossy().into_owned(),
+            root: state
+                .workspace_dir
+                .read()
+                .await
+                .to_string_lossy()
+                .into_owned(),
         },
         agent: body.agent.clone(),
     };
 
-    let rendered = apply_template(
-        state.agent_store.store_path(),
-        &body.template_name,
-        &ctx,
-    ).await.map_err(ApiError::from_app)?;
+    let rendered = apply_template(state.agent_store.store_path(), &body.template_name, &ctx)
+        .await
+        .map_err(ApiError::from_app)?;
 
     if body.write.unwrap_or(false) {
-        update_memory_file(&project_path, agent, &rendered).await.map_err(ApiError::from_app)?;
+        update_memory_file(&project_path, agent, &rendered)
+            .await
+            .map_err(ApiError::from_app)?;
     }
 
     Ok(Json(serde_json::json!({ "content": rendered })))

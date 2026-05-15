@@ -1,7 +1,7 @@
 use axum::{
-    Json,
     extract::{Query, State},
     response::IntoResponse,
+    Json,
 };
 use serde::Deserialize;
 
@@ -45,6 +45,9 @@ pub async fn list_commands(
     State(state): State<AppState>,
     Query(q): Query<ListQuery>,
 ) -> impl IntoResponse {
-    let commands = state.command_registry.get_commands(&q.project_type).to_vec();
+    let commands = state
+        .command_registry
+        .get_commands(&q.project_type)
+        .to_vec();
     Json(commands).into_response()
 }

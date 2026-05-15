@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
-use super::schema::{AgentPresence, AgentType, ProjectAgentScanResult, agent_paths};
+use super::schema::{agent_paths, AgentPresence, AgentType, ProjectAgentScanResult};
 
 /// Scan a single project directory for agent configurations.
 pub async fn scan_project(project_name: &str, project_path: &Path) -> ProjectAgentScanResult {

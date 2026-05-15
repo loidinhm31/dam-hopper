@@ -51,7 +51,7 @@ impl SessionStore {
                     })?;
             }
         }
-        
+
         let conn = Connection::open(path)?;
 
         // Run migrations (idempotent)
@@ -83,7 +83,7 @@ impl SessionStore {
     ) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let env_json = serde_json::to_string(env).unwrap_or_else(|_| "{}".to_string());
-        
+
         let session_type = match meta.session_type {
             crate::pty::session::SessionType::Shell => "shell",
             crate::pty::session::SessionType::Terminal => "terminal",
@@ -93,7 +93,7 @@ impl SessionStore {
             crate::pty::session::SessionType::Free => "free",
             crate::pty::session::SessionType::Unknown => "unknown",
         };
-        
+
         let restart_policy = match meta.restart_policy {
             RestartPolicy::Never => "never",
             RestartPolicy::OnFailure => "on-failure",
@@ -143,7 +143,7 @@ impl SessionStore {
         total_written: u64,
     ) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
-        
+
         conn.execute(
             "INSERT OR REPLACE INTO session_buffers (session_id, data, total_written, updated_at)
              VALUES (?1, ?2, ?3, ?4)",
@@ -210,7 +210,12 @@ impl SessionStore {
                     restart_policy,
                 };
 
-                Ok(PersistedSession { meta, env, cols, rows })
+                Ok(PersistedSession {
+                    meta,
+                    env,
+                    cols,
+                    rows,
+                })
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -221,7 +226,7 @@ impl SessionStore {
     /// Returns (data, total_written) if found, None if not.
     pub fn load_buffer(&self, id: &str) -> Result<Option<(Vec<u8>, u64)>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
-        
+
         conn.query_row(
             "SELECT data, total_written FROM session_buffers WHERE session_id = ?1",
             params![id],
@@ -237,7 +242,7 @@ impl SessionStore {
     /// Deletes a session and its buffer data.
     pub fn delete_session(&self, id: &str) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
-        
+
         // session_buffers has ON DELETE CASCADE, so this removes both
         conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
 
@@ -270,7 +275,7 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pty::session::{SessionType, now_ms as session_now_ms};
+    use crate::pty::session::{now_ms as session_now_ms, SessionType};
     use tempfile::NamedTempFile;
 
     fn create_test_store() -> (SessionStore, NamedTempFile) {
@@ -326,16 +331,16 @@ mod tests {
         let (store, _temp) = create_test_store();
         let meta = create_test_session();
         let env = HashMap::new();
-        
+
         // Save session first (required by FK constraint)
         store.save_session(&meta, &env, 120, 32, 5).unwrap();
-        
+
         let data = b"hello terminal output";
         store.save_buffer("test-session-1", data, 21).unwrap();
 
         let result = store.load_buffer("test-session-1").unwrap();
         assert!(result.is_some());
-        
+
         let (loaded_data, total_written) = result.unwrap();
         assert_eq!(loaded_data, data);
         assert_eq!(total_written, 21);
@@ -376,13 +381,13 @@ mod tests {
             restart_policy: RestartPolicy::Never,
         };
         let env = HashMap::new();
-        
+
         // Save session first (required by FK constraint)
         store.save_session(&meta, &env, 120, 32, 5).unwrap();
-        
+
         // Save a buffer with current timestamp
         store.save_buffer("session-1", b"recent", 6).unwrap();
-        
+
         // Cleanup with 0 TTL should remove everything
         let deleted = store.cleanup_expired(0).unwrap();
         assert_eq!(deleted, 1);

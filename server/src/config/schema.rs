@@ -228,8 +228,7 @@ fn default_root() -> String {
 // ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct FeaturesConfig {
-}
+pub struct FeaturesConfig {}
 
 // ──────────────────────────────────────────────
 // Server config
@@ -251,7 +250,10 @@ pub struct ServerConfig {
     pub session_db_path: String,
 
     /// TTL for dead session buffers in hours (default: 24)
-    #[serde(default = "default_session_buffer_ttl_hours", alias = "session_buffer_ttl_hours")]
+    #[serde(
+        default = "default_session_buffer_ttl_hours",
+        alias = "session_buffer_ttl_hours"
+    )]
     pub session_buffer_ttl_hours: u64,
 }
 
@@ -314,9 +316,15 @@ pub struct KnownWorkspace {
     pub path: String,
 }
 
-fn default_system_font_size() -> u16 { 14 }
-fn default_editor_font_size() -> u16 { 14 }
-fn default_editor_zoom_wheel_enabled() -> bool { true }
+fn default_system_font_size() -> u16 {
+    14
+}
+fn default_editor_font_size() -> u16 {
+    14
+}
+fn default_editor_zoom_wheel_enabled() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -325,7 +333,10 @@ pub struct UiConfig {
     pub system_font_size: u16,
     #[serde(default = "default_editor_font_size", alias = "editor_font_size")]
     pub editor_font_size: u16,
-    #[serde(default = "default_editor_zoom_wheel_enabled", alias = "editor_zoom_wheel_enabled")]
+    #[serde(
+        default = "default_editor_zoom_wheel_enabled",
+        alias = "editor_zoom_wheel_enabled"
+    )]
     pub editor_zoom_wheel_enabled: bool,
     #[serde(default = "default_true", alias = "terminal_suggestions_enabled")]
     pub terminal_suggestions_enabled: bool,
@@ -339,7 +350,9 @@ pub struct UiConfig {
     pub project_command_order: std::collections::HashMap<String, Vec<String>>,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 impl Default for UiConfig {
     fn default() -> Self {

@@ -43,9 +43,8 @@ pub fn read_global_config_at(path: &Path) -> Result<Option<GlobalConfig>, AppErr
 }
 
 pub fn write_global_config_at(path: &Path, config: &GlobalConfig) -> Result<(), AppError> {
-    let content = toml::to_string_pretty(config).map_err(|e| {
-        AppError::Config(format!("Cannot serialize global config: {}", e))
-    })?;
+    let content = toml::to_string_pretty(config)
+        .map_err(|e| AppError::Config(format!("Cannot serialize global config: {}", e)))?;
     // atomic_write uses 0o600 on Unix (protects workspace paths + future auth tokens)
     atomic_write(path, &content)
 }
@@ -107,10 +106,7 @@ pub fn remove_known_workspace(workspace_path: &str) -> Result<(), AppError> {
     remove_known_workspace_at(&global_config_path(), workspace_path)
 }
 
-pub fn remove_known_workspace_at(
-    config_path: &Path,
-    workspace_path: &str,
-) -> Result<(), AppError> {
+pub fn remove_known_workspace_at(config_path: &Path, workspace_path: &str) -> Result<(), AppError> {
     let mut cfg = match read_global_config_at(config_path)? {
         Some(c) => c,
         None => return Ok(()),

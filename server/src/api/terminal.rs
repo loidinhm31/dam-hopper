@@ -1,8 +1,8 @@
 use axum::{
-    Json,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
+    Json,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -32,16 +32,20 @@ pub struct CreateSessionBody {
     pub project: Option<String>,
 }
 
-fn default_cols() -> u16 { 80 }
-fn default_rows() -> u16 { 24 }
+fn default_cols() -> u16 {
+    80
+}
+fn default_rows() -> u16 {
+    24
+}
 
 pub async fn create_session(
     State(state): State<AppState>,
     Json(body): Json<CreateSessionBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let cwd = body.cwd.unwrap_or_else(|| {
-        std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
-    });
+    let cwd = body
+        .cwd
+        .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
 
     // Resolve restart policy from project config when a project name is provided.
     let (restart_policy, restart_max_retries) = if let Some(ref project_name) = body.project {
@@ -55,17 +59,20 @@ pub async fn create_session(
         (RestartPolicy::default(), DEFAULT_RESTART_MAX_RETRIES)
     };
 
-    let meta = state.pty_manager.create(PtyCreateOpts {
-        id: body.id,
-        command: body.command,
-        cwd,
-        env: body.env,
-        cols: body.cols,
-        rows: body.rows,
-        project: body.project,
-        restart_policy,
-        restart_max_retries,
-    }).map_err(ApiError::from_app)?;
+    let meta = state
+        .pty_manager
+        .create(PtyCreateOpts {
+            id: body.id,
+            command: body.command,
+            cwd,
+            env: body.env,
+            cols: body.cols,
+            rows: body.rows,
+            project: body.project,
+            restart_policy,
+            restart_max_retries,
+        })
+        .map_err(ApiError::from_app)?;
     Ok(Json(meta))
 }
 
@@ -93,7 +100,10 @@ pub async fn get_buffer(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let buffer = state.pty_manager.get_buffer(&id).map_err(ApiError::from_app)?;
+    let buffer = state
+        .pty_manager
+        .get_buffer(&id)
+        .map_err(ApiError::from_app)?;
     Ok(Json(serde_json::json!({ "buffer": buffer })))
 }
 

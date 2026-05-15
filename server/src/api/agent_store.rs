@@ -1,16 +1,14 @@
 use axum::{
-    Json,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
+    Json,
 };
 use serde::Deserialize;
 use std::path::PathBuf;
 
 use crate::agent_store::{
-    AgentItemCategory, AgentType, DistributionMethod,
-    distributor,
-    scanner::scan_project,
+    distributor, scanner::scan_project, AgentItemCategory, AgentType, DistributionMethod,
 };
 use crate::state::AppState;
 
@@ -29,7 +27,11 @@ pub async fn list_items(
     State(state): State<AppState>,
     Query(q): Query<CategoryQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let items = state.agent_store.list(q.category).await.map_err(ApiError::from_app)?;
+    let items = state
+        .agent_store
+        .list(q.category)
+        .await
+        .map_err(ApiError::from_app)?;
     Ok(Json(items))
 }
 
@@ -41,9 +43,16 @@ pub async fn get_item(
     State(state): State<AppState>,
     Path((category, name)): Path<(AgentItemCategory, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let item = state.agent_store.get(&name, category).await.map_err(ApiError::from_app)?;
-    item.map(|i| Json(i).into_response())
-        .ok_or_else(|| ApiError::from_app(crate::error::AppError::NotFound(format!("Item not found: {name}"))))
+    let item = state
+        .agent_store
+        .get(&name, category)
+        .await
+        .map_err(ApiError::from_app)?;
+    item.map(|i| Json(i).into_response()).ok_or_else(|| {
+        ApiError::from_app(crate::error::AppError::NotFound(format!(
+            "Item not found: {name}"
+        )))
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -61,7 +70,8 @@ pub async fn get_item_content(
     Path((category, name)): Path<(AgentItemCategory, String)>,
     Query(q): Query<ContentQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let content = state.agent_store
+    let content = state
+        .agent_store
         .get_content(&name, category, q.file_name.as_deref())
         .await
         .map_err(ApiError::from_app)?;
@@ -76,7 +86,11 @@ pub async fn remove_item(
     State(state): State<AppState>,
     Path((category, name)): Path<(AgentItemCategory, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    state.agent_store.remove(&name, category).await.map_err(ApiError::from_app)?;
+    state
+        .agent_store
+        .remove(&name, category)
+        .await
+        .map_err(ApiError::from_app)?;
     Ok((StatusCode::NO_CONTENT, ()))
 }
 
@@ -107,7 +121,8 @@ pub async fn ship_item(
         &project_path,
         body.agent,
         method,
-    ).await;
+    )
+    .await;
     Ok(Json(result))
 }
 
@@ -137,7 +152,8 @@ pub async fn unship_item(
         &project_path,
         body.agent,
         body.force.unwrap_or(false),
-    ).await;
+    )
+    .await;
     Ok(Json(result))
 }
 
@@ -165,7 +181,8 @@ pub async fn absorb_item(
         body.category,
         &project_path,
         body.agent,
-    ).await;
+    )
+    .await;
     Ok(Json(result))
 }
 
@@ -208,10 +225,13 @@ pub async fn bulk_ship_items(
         project_paths.push((path, pb.agent));
     }
 
-    let items_ref: Vec<(&str, AgentItemCategory)> = body.items.iter()
+    let items_ref: Vec<(&str, AgentItemCategory)> = body
+        .items
+        .iter()
         .map(|i| (i.name.as_str(), i.category))
         .collect();
-    let projects_ref: Vec<(&std::path::Path, AgentType)> = project_paths.iter()
+    let projects_ref: Vec<(&std::path::Path, AgentType)> = project_paths
+        .iter()
         .map(|(p, a)| (p.as_path(), *a))
         .collect();
 
@@ -225,16 +245,24 @@ pub async fn bulk_ship_items(
 
 pub async fn get_matrix(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     let store_path = state.agent_store.store_path().to_path_buf();
-    let items = state.agent_store.list(None).await.map_err(ApiError::from_app)?;
+    let items = state
+        .agent_store
+        .list(None)
+        .await
+        .map_err(ApiError::from_app)?;
     let cfg = state.config.read().await;
 
-    let items_ref: Vec<(&str, AgentItemCategory)> = items.iter()
+    let items_ref: Vec<(&str, AgentItemCategory)> = items
+        .iter()
         .map(|i| (i.name.as_str(), i.category))
         .collect();
-    let projects: Vec<(String, PathBuf)> = cfg.projects.iter()
+    let projects: Vec<(String, PathBuf)> = cfg
+        .projects
+        .iter()
         .map(|p| (p.name.clone(), PathBuf::from(&p.path)))
         .collect();
-    let projects_ref: Vec<(&str, &std::path::Path)> = projects.iter()
+    let projects_ref: Vec<(&str, &std::path::Path)> = projects
+        .iter()
         .map(|(n, p)| (n.as_str(), p.as_path()))
         .collect();
 
@@ -243,7 +271,8 @@ pub async fn get_matrix(State(state): State<AppState>) -> Result<impl IntoRespon
         &items_ref,
         &projects_ref,
         AgentType::all(),
-    ).await;
+    )
+    .await;
 
     Ok(Json(matrix))
 }
@@ -255,7 +284,8 @@ pub async fn get_matrix(State(state): State<AppState>) -> Result<impl IntoRespon
 pub async fn scan(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     let project_paths: Vec<(String, PathBuf)> = {
         let cfg = state.config.read().await;
-        cfg.projects.iter()
+        cfg.projects
+            .iter()
             .map(|p| (p.name.clone(), PathBuf::from(&p.path)))
             .collect()
     };
@@ -281,20 +311,19 @@ pub async fn scan(State(state): State<AppState>) -> Result<impl IntoResponse, Ap
 pub async fn health_check(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     let store_path = state.agent_store.store_path().to_path_buf();
     let cfg = state.config.read().await;
-    let projects: Vec<(String, PathBuf)> = cfg.projects.iter()
+    let projects: Vec<(String, PathBuf)> = cfg
+        .projects
+        .iter()
         .map(|p| (p.name.clone(), PathBuf::from(&p.path)))
         .collect();
     drop(cfg);
 
-    let projects_ref: Vec<(&str, &std::path::Path)> = projects.iter()
+    let projects_ref: Vec<(&str, &std::path::Path)> = projects
+        .iter()
         .map(|(n, p)| (n.as_str(), p.as_path()))
         .collect();
 
-    let result = distributor::health_check(
-        &store_path,
-        &projects_ref,
-        AgentType::all(),
-    ).await;
+    let result = distributor::health_check(&store_path, &projects_ref, AgentType::all()).await;
     Ok(Json(result))
 }
 

@@ -30,7 +30,11 @@ pub enum ClientMsg {
 
     // FS — subscribe
     #[serde(rename = "fs:subscribe_tree")]
-    FsSubTree { req_id: u64, project: String, path: String },
+    FsSubTree {
+        req_id: u64,
+        project: String,
+        path: String,
+    },
     #[serde(rename = "fs:unsubscribe_tree")]
     FsUnsubTree { sub_id: u64 },
 
@@ -68,10 +72,7 @@ pub enum ClientMsg {
     },
     /// JSON header for a write chunk; raw bytes arrive in the NEXT binary WS frame.
     #[serde(rename = "fs:write_chunk_binary")]
-    FsWriteChunkBinary {
-        write_id: u64,
-        seq: u32,
-    },
+    FsWriteChunkBinary { write_id: u64, seq: u32 },
     #[serde(rename = "fs:write_commit")]
     FsWriteCommit { write_id: u64 },
 
@@ -107,15 +108,9 @@ pub enum ClientMsg {
     },
     /// JSON header for an upload chunk; raw bytes arrive in the NEXT binary WS frame.
     #[serde(rename = "fs:upload_chunk")]
-    FsUploadChunk {
-        upload_id: String,
-        seq: u64,
-    },
+    FsUploadChunk { upload_id: String, seq: u64 },
     #[serde(rename = "fs:upload_commit")]
-    FsUploadCommit {
-        req_id: u64,
-        upload_id: String,
-    },
+    FsUploadCommit { req_id: u64, upload_id: String },
 
     // Auth — OPAQUE PAKE registration (neutral kind names, no custom prefix)
     #[serde(rename = "auth:register_start")]
@@ -172,15 +167,9 @@ pub enum ClientMsg {
     },
     /// JSON header for an encrypted chunk; raw bytes arrive in the NEXT binary WS frame.
     #[serde(rename = "fs:put_chunk")]
-    FsPutChunk {
-        upload_id: String,
-        seq: u64,
-    },
+    FsPutChunk { upload_id: String, seq: u64 },
     #[serde(rename = "fs:put_commit")]
-    FsPutCommit {
-        req_id: u64,
-        upload_id: String,
-    },
+    FsPutCommit { req_id: u64, upload_id: String },
 
     // FS — encrypted put save (single blob for text editor saves)
     #[serde(rename = "fs:put_save")]
@@ -195,9 +184,7 @@ pub enum ClientMsg {
 
     // Auth — explicit key eviction (defense-in-depth; 16-entry cap is the primary guard)
     #[serde(rename = "auth:session_remove")]
-    AuthSessionRemove {
-        session_id: String,
-    },
+    AuthSessionRemove { session_id: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -272,18 +259,23 @@ pub enum ServerMsg {
 
     // FS — tree
     #[serde(rename = "fs:tree_snapshot")]
-    TreeSnapshot { req_id: u64, sub_id: u64, nodes: Vec<TreeNode> },
+    TreeSnapshot {
+        req_id: u64,
+        sub_id: u64,
+        nodes: Vec<TreeNode>,
+    },
     #[serde(rename = "fs:event")]
     FsEventMsg { sub_id: u64, event: FsEventDto },
     #[serde(rename = "fs:error")]
-    FsError { req_id: u64, code: String, message: String },
+    FsError {
+        req_id: u64,
+        code: String,
+        message: String,
+    },
 
     // FS — overflow notice (subscription dropped)
     #[serde(rename = "fs:overflow")]
-    FsOverflow {
-        sub_id: u64,
-        message: String,
-    },
+    FsOverflow { sub_id: u64, message: String },
 
     // FS — read
     #[serde(rename = "fs:read_result")]
@@ -348,21 +340,13 @@ pub enum ServerMsg {
     },
 
     #[serde(rename = "tunnel:ready")]
-    TunnelReady {
-        id: String,
-        url: String,
-    },
+    TunnelReady { id: String, url: String },
 
     #[serde(rename = "tunnel:failed")]
-    TunnelFailed {
-        id: String,
-        error: String,
-    },
+    TunnelFailed { id: String, error: String },
 
     #[serde(rename = "tunnel:stopped")]
-    TunnelStopped {
-        id: String,
-    },
+    TunnelStopped { id: String },
 
     // FS — upload results
     #[serde(rename = "fs:upload_begin_ok")]
@@ -463,10 +447,7 @@ pub enum ServerMsg {
     },
 
     #[serde(rename = "port:lost")]
-    PortLost {
-        port: u16,
-        session_id: String,
-    },
+    PortLost { port: u16, session_id: String },
 }
 
 /// Wire message — either a JSON text frame, raw binary frame, or close signal.

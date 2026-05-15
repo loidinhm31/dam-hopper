@@ -3,9 +3,9 @@ use std::time::Duration;
 use tokio::fs;
 use tokio::process::Command;
 
-use crate::error::{AppError, Result};
 use super::schema::AgentItemCategory;
 use super::store::parse_frontmatter;
+use crate::error::{AppError, Result};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RepoScanItem {
@@ -61,17 +61,25 @@ pub async fn scan_repo(repo_url: &str) -> Result<RepoScanResult> {
 
 /// Scan a local directory for importable items. No cleanup needed.
 pub async fn scan_local_dir(dir_path: &Path) -> Result<LocalScanResult> {
-    let resolved = dir_path.canonicalize()
+    let resolved = dir_path
+        .canonicalize()
         .map_err(|_| AppError::NotFound(format!("Path does not exist: {}", dir_path.display())))?;
 
-    let meta = fs::symlink_metadata(&resolved).await
+    let meta = fs::symlink_metadata(&resolved)
+        .await
         .map_err(|_| AppError::NotFound(format!("Path does not exist: {}", resolved.display())))?;
     if !meta.is_dir() {
-        return Err(AppError::Internal(format!("Not a directory: {}", resolved.display())));
+        return Err(AppError::Internal(format!(
+            "Not a directory: {}",
+            resolved.display()
+        )));
     }
 
     let items = scan_dir(&resolved).await;
-    Ok(LocalScanResult { dir_path: resolved, items })
+    Ok(LocalScanResult {
+        dir_path: resolved,
+        items,
+    })
 }
 
 /// Copy selected items from source_dir into the central store.
@@ -81,7 +89,9 @@ pub async fn import_from_repo(
     selected_items: &[RepoScanItem],
     store_path: &Path,
 ) -> Result<Vec<ImportResult>> {
-    let source_dir = source_dir.canonicalize().unwrap_or(source_dir.to_path_buf());
+    let source_dir = source_dir
+        .canonicalize()
+        .unwrap_or(source_dir.to_path_buf());
     let mut results = Vec::new();
 
     for item in selected_items {
@@ -130,7 +140,9 @@ pub async fn import_from_repo(
             _ => item.name.clone(),
         };
 
-        let target = store_path.join(item.category.store_dir()).join(&target_name);
+        let target = store_path
+            .join(item.category.store_dir())
+            .join(&target_name);
         if target.exists() {
             results.push(ImportResult {
                 name: item.name.clone(),
@@ -145,8 +157,16 @@ pub async fn import_from_repo(
         }
 
         match copy_recursive(&src_canonical, &target).await {
-            Ok(()) => results.push(ImportResult { name: item.name.clone(), success: true, error: None }),
-            Err(e) => results.push(ImportResult { name: item.name.clone(), success: false, error: Some(e.to_string()) }),
+            Ok(()) => results.push(ImportResult {
+                name: item.name.clone(),
+                success: true,
+                error: None,
+            }),
+            Err(e) => results.push(ImportResult {
+                name: item.name.clone(),
+                success: false,
+                error: Some(e.to_string()),
+            }),
         }
     }
 
@@ -169,12 +189,16 @@ fn validate_repo_url(url: &str) -> Result<()> {
         || url.starts_with("git://")
         || url.starts_with("git@");
     if !valid {
-        return Err(AppError::Internal(format!("Unsupported repo URL format: \"{url}\"")));
+        return Err(AppError::Internal(format!(
+            "Unsupported repo URL format: \"{url}\""
+        )));
     }
     // Reject shell metacharacters
     for ch in [';', '&', '|', '`', '$', '(', ')', '<', '>'] {
         if url.contains(ch) {
-            return Err(AppError::Internal(format!("Invalid character in repo URL: '{ch}'")));
+            return Err(AppError::Internal(format!(
+                "Invalid character in repo URL: '{ch}'"
+            )));
         }
     }
     Ok(())
@@ -184,12 +208,23 @@ const GIT_CLONE_TIMEOUT: Duration = Duration::from_secs(60);
 
 async fn git_clone(repo_url: &str, target_dir: &Path) -> Result<()> {
     let clone_fut = Command::new("git")
-        .args(["clone", "--depth", "1", repo_url, &target_dir.to_string_lossy()])
+        .args([
+            "clone",
+            "--depth",
+            "1",
+            repo_url,
+            &target_dir.to_string_lossy(),
+        ])
         .output();
 
     let output = tokio::time::timeout(GIT_CLONE_TIMEOUT, clone_fut)
         .await
-        .map_err(|_| AppError::Internal(format!("git clone timed out after {}s: {repo_url}", GIT_CLONE_TIMEOUT.as_secs())))?
+        .map_err(|_| {
+            AppError::Internal(format!(
+                "git clone timed out after {}s: {repo_url}",
+                GIT_CLONE_TIMEOUT.as_secs()
+            ))
+        })?
         .map_err(|e| AppError::Internal(format!("git clone failed to spawn: {e}")))?;
 
     if !output.status.success() {
@@ -238,7 +273,10 @@ async fn find_skills(dir: &Path, root: &Path, out: &mut Vec<RepoScanItem>) {
             if skill_md.exists() {
                 let (data, description) = if let Ok(content) = fs::read_to_string(&skill_md).await {
                     let (fm, _) = parse_frontmatter(&content);
-                    let desc = fm.get("description").and_then(|v| v.as_str()).map(String::from);
+                    let desc = fm
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
                     let name_from_fm = fm.get("name").and_then(|v| v.as_str()).map(String::from);
                     (name_from_fm, desc)
                 } else {
@@ -287,7 +325,10 @@ async fn find_commands(dir: &Path, root: &Path, out: &mut Vec<RepoScanItem>) {
                 if fm.get("description").is_none() {
                     continue;
                 }
-                let description = fm.get("description").and_then(|v| v.as_str()).map(String::from);
+                let description = fm
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
                 out.push(RepoScanItem {
                     name: name[..name.len() - 3].to_string(),
                     category: AgentItemCategory::Command,
@@ -331,7 +372,10 @@ async fn find_subagents(root: &Path, scan_root: &Path, out: &mut Vec<RepoScanIte
             }
             let description = fs::read_to_string(entry.path()).await.ok().and_then(|c| {
                 let (fm, _) = parse_frontmatter(&c);
-                let desc = fm.get("description").and_then(|v| v.as_str()).map(String::from);
+                let desc = fm
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
                 desc
             });
             let item_name = {
@@ -341,7 +385,8 @@ async fn find_subagents(root: &Path, scan_root: &Path, out: &mut Vec<RepoScanIte
                 } else {
                     None
                 }
-            }.unwrap_or_else(|| name[..name.len() - 3].to_string());
+            }
+            .unwrap_or_else(|| name[..name.len() - 3].to_string());
 
             out.push(RepoScanItem {
                 name: item_name,

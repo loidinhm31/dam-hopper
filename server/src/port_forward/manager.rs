@@ -37,12 +37,7 @@ impl PortForwardManager {
 
     /// Called when stdout regex fires: inserts Provisional entry and broadcasts
     /// `port:discovered`. No-op if the port is already tracked.
-    pub async fn report_stdout_hit(
-        &self,
-        port: u16,
-        session_id: String,
-        project: Option<String>,
-    ) {
+    pub async fn report_stdout_hit(&self, port: u16, session_id: String, project: Option<String>) {
         // ... (rest of method unchanged)
         // Capture broadcast payload while holding the write lock, then release
         // before broadcasting (I/O) to avoid blocking readers.
@@ -52,7 +47,10 @@ impl PortForwardManager {
                 return;
             }
             if ports.len() >= MAX_TRACKED_PORTS {
-                tracing::warn!(port, "Port tracking limit ({MAX_TRACKED_PORTS}) reached — ignoring");
+                tracing::warn!(
+                    port,
+                    "Port tracking limit ({MAX_TRACKED_PORTS}) reached — ignoring"
+                );
                 return;
             }
             let entry = DetectedPort::new_provisional(port, session_id.clone(), project.clone());
@@ -133,6 +131,9 @@ impl PortForwardManager {
     /// Returns `true` if the port is tracked and in Listening state.
     pub async fn is_listening(&self, port: u16) -> bool {
         let ports = self.ports.read().await;
-        ports.get(&port).map(|e| e.state == PortState::Listening).unwrap_or(false)
+        ports
+            .get(&port)
+            .map(|e| e.state == PortState::Listening)
+            .unwrap_or(false)
     }
 }

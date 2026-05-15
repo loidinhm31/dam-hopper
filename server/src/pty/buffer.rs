@@ -30,7 +30,8 @@ impl ScrollbackBuffer {
                 // chunk alone exceeds capacity — keep its tail
                 let chunk_keep = chunk.len() - (keep_from - self.data.len());
                 self.data.clear();
-                self.data.extend_from_slice(&chunk[chunk.len() - chunk_keep..]);
+                self.data
+                    .extend_from_slice(&chunk[chunk.len() - chunk_keep..]);
             } else {
                 self.data.drain(..keep_from);
                 self.data.extend_from_slice(chunk);
@@ -147,7 +148,7 @@ mod tests {
     fn offset_tracking_after_eviction() {
         let mut buf = ScrollbackBuffer::new(10);
         buf.push(b"1234567890"); // offset = 10
-        buf.push(b"abcdef");     // offset = 16, buffer = "4567890abc" + "def" (evicted 1-6)
+        buf.push(b"abcdef"); // offset = 16, buffer = "4567890abc" + "def" (evicted 1-6)
         assert_eq!(buf.current_offset(), 16);
 
         // Request from offset 0 (evicted) — should return full buffer
@@ -160,7 +161,7 @@ mod tests {
     fn offset_tracking_delta_replay() {
         let mut buf = ScrollbackBuffer::new(20);
         buf.push(b"1234567890"); // offset = 10
-        buf.push(b"abcdef");     // offset = 16
+        buf.push(b"abcdef"); // offset = 16
 
         // Request last 6 bytes (from offset 10)
         let (data, offset) = buf.read_from(Some(10));
@@ -187,7 +188,10 @@ mod tests {
         for _ in 0..10 {
             buf.push(b"abc");
             let current = buf.current_offset();
-            assert!(current > prev_offset, "Offset should monotonically increase");
+            assert!(
+                current > prev_offset,
+                "Offset should monotonically increase"
+            );
             prev_offset = current;
         }
 

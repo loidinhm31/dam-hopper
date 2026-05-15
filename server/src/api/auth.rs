@@ -1,16 +1,16 @@
+use axum::extract::Request;
 use axum::{
-    Json,
     extract::State,
-    http::{StatusCode, header},
+    http::{header, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
+    Json,
 };
-use axum::extract::Request;
 use axum_extra::extract::CookieJar;
-use serde::{Deserialize, Serialize};
-use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
-use mongodb::bson::doc;
 use bcrypt::{hash, verify, DEFAULT_COST};
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use mongodb::bson::doc;
+use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
 
@@ -28,7 +28,9 @@ struct ErrorBody {
 fn unauthorized() -> Response {
     (
         StatusCode::UNAUTHORIZED,
-        Json(ErrorBody { error: "Unauthorized".into() }),
+        Json(ErrorBody {
+            error: "Unauthorized".into(),
+        }),
     )
         .into_response()
 }
@@ -60,25 +62,31 @@ fn extract_token<'a>(request: &'a Request, jar: &'a CookieJar) -> Option<String>
 pub fn validate_jwt(provided: &str, secret: &str) -> bool {
     let mut validation = Validation::default();
     validation.validate_exp = true;
-    decode::<Claims>(provided, &DecodingKey::from_secret(secret.as_bytes()), &validation).is_ok()
+    decode::<Claims>(
+        provided,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    )
+    .is_ok()
 }
 
 /// Generate JWT token for a given subject (username) with 30-day expiration.
-/// 
+///
 /// Returns `Ok(token)` on success, or `Err` if encoding fails.
 /// Callers should handle errors appropriately (log and return error response).
 fn generate_jwt(subject: &str, secret: &str) -> anyhow::Result<String> {
     let exp = (chrono::Utc::now().timestamp() as usize) + 30 * 24 * 3600;
-    let claims = Claims { 
-        sub: subject.to_string(), 
-        exp 
+    let claims = Claims {
+        sub: subject.to_string(),
+        exp,
     };
-    
+
     encode(
-        &Header::default(), 
-        &claims, 
-        &EncodingKey::from_secret(secret.as_bytes())
-    ).map_err(|e| anyhow::anyhow!("JWT encoding failed: {}", e))
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|e| anyhow::anyhow!("JWT encoding failed: {}", e))
 }
 
 // ---------------------------------------------------------------------------
@@ -135,35 +143,49 @@ struct User {
 }
 
 /// POST /api/auth/register — registers a user in mongodb
-pub async fn register(
-    State(state): State<AppState>,
-    Json(body): Json<LoginBody>,
-) -> Response {
+pub async fn register(State(state): State<AppState>, Json(body): Json<LoginBody>) -> Response {
     let Some(db) = &state.db else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorBody { error: "MongoDB not configured, cannot register".into() })).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorBody {
+                error: "MongoDB not configured, cannot register".into(),
+            }),
+        )
+            .into_response();
     };
 
-    let Some(username) = body.username else { return unauthorized(); };
-    let Some(password) = body.password else { return unauthorized(); };
+    let Some(username) = body.username else {
+        return unauthorized();
+    };
+    let Some(password) = body.password else {
+        return unauthorized();
+    };
 
     let collection = db.collection::<User>("users");
-    
+
     if let Ok(Some(_)) = collection.find_one(doc! { "username": &username }).await {
-        return (StatusCode::BAD_REQUEST, Json(ErrorBody { error: "User already exists".into() })).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorBody {
+                error: "User already exists".into(),
+            }),
+        )
+            .into_response();
     }
-    
+
     let password_hash = hash(&password, DEFAULT_COST).unwrap_or_default();
-    let new_user = User { username, password_hash, is_enabled: false };
+    let new_user = User {
+        username,
+        password_hash,
+        is_enabled: false,
+    };
     let _ = collection.insert_one(new_user).await;
 
     Json(serde_json::json!({ "ok": true })).into_response()
 }
 
 /// POST /api/auth/login — authenticates via mongodb or fallback to token, returns JWT
-pub async fn login(
-    State(state): State<AppState>,
-    Json(body): Json<LoginBody>,
-) -> Response {
+pub async fn login(State(state): State<AppState>, Json(body): Json<LoginBody>) -> Response {
     // Dev mode: return dev token immediately (no credentials check)
     if state.no_auth {
         let jwt_token = match generate_jwt("dev-user", &state.jwt_secret) {
@@ -172,13 +194,19 @@ pub async fn login(
                 tracing::error!("Dev mode JWT generation failed: {}", e);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorBody { error: "Failed to generate dev token".into() })
-                ).into_response();
+                    Json(ErrorBody {
+                        error: "Failed to generate dev token".into(),
+                    }),
+                )
+                    .into_response();
             }
         };
-        
-        let cookie_attrs = format!("{AUTH_COOKIE}={}; HttpOnly; Secure; Path=/; SameSite=Strict", jwt_token);
-        
+
+        let cookie_attrs = format!(
+            "{AUTH_COOKIE}={}; HttpOnly; Secure; Path=/; SameSite=Strict",
+            jwt_token
+        );
+
         return (
             StatusCode::OK,
             [(header::SET_COOKIE, cookie_attrs)],
@@ -187,18 +215,26 @@ pub async fn login(
                 token: Some(jwt_token),
                 dev_mode: Some(true),
             }),
-        ).into_response();
+        )
+            .into_response();
     }
 
     let mut is_authenticated = false;
     let mut logged_in_sub = "unknown".to_string();
 
-    if let (Some(username), Some(password), Some(db)) = (&body.username, &body.password, &state.db) {
+    if let (Some(username), Some(password), Some(db)) = (&body.username, &body.password, &state.db)
+    {
         let collection = db.collection::<User>("users");
         if let Ok(Some(user)) = collection.find_one(doc! { "username": username }).await {
             is_authenticated = verify(password, &user.password_hash).unwrap_or(false);
             if is_authenticated && !user.is_enabled {
-                return (StatusCode::UNAUTHORIZED, Json(ErrorBody { error: "Account is pending approval or disabled".into() })).into_response();
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorBody {
+                        error: "Account is pending approval or disabled".into(),
+                    }),
+                )
+                    .into_response();
             }
             if is_authenticated {
                 logged_in_sub = username.clone();
@@ -207,7 +243,13 @@ pub async fn login(
     }
 
     if !is_authenticated {
-        return (StatusCode::UNAUTHORIZED, Json(ErrorBody { error: "Invalid credentials".into() })).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorBody {
+                error: "Invalid credentials".into(),
+            }),
+        )
+            .into_response();
     }
 
     let jwt_token = match generate_jwt(&logged_in_sub, &state.jwt_secret) {
@@ -216,17 +258,27 @@ pub async fn login(
             tracing::error!("JWT generation failed for user {}: {}", logged_in_sub, e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorBody { error: "Failed to generate authentication token".into() })
-            ).into_response();
+                Json(ErrorBody {
+                    error: "Failed to generate authentication token".into(),
+                }),
+            )
+                .into_response();
         }
     };
 
-    let cookie_attrs = format!("{AUTH_COOKIE}={}; HttpOnly; Secure; Path=/; SameSite=Strict", jwt_token);
+    let cookie_attrs = format!(
+        "{AUTH_COOKIE}={}; HttpOnly; Secure; Path=/; SameSite=Strict",
+        jwt_token
+    );
 
     (
         StatusCode::OK,
         [(header::SET_COOKIE, cookie_attrs)],
-        Json(LoginResponse { ok: true, token: Some(jwt_token), dev_mode: None }),
+        Json(LoginResponse {
+            ok: true,
+            token: Some(jwt_token),
+            dev_mode: None,
+        }),
     )
         .into_response()
 }
@@ -237,24 +289,25 @@ pub async fn logout() -> Response {
     (
         StatusCode::OK,
         [(header::SET_COOKIE, clear)],
-        Json(LoginResponse { ok: true, token: None, dev_mode: None }),
+        Json(LoginResponse {
+            ok: true,
+            token: None,
+            dev_mode: None,
+        }),
     )
         .into_response()
 }
 
 /// GET /api/auth/status — returns 200 if authenticated, 401 otherwise.
-pub async fn status(
-    State(state): State<AppState>,
-    jar: CookieJar,
-    request: Request,
-) -> Response {
+pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Request) -> Response {
     // Dev mode: always authenticated
     if state.no_auth {
         return Json(serde_json::json!({
             "authenticated": true,
             "dev_mode": true,
             "user": "dev-user"
-        })).into_response();
+        }))
+        .into_response();
     }
 
     let ok = extract_token(&request, &jar)
@@ -264,6 +317,10 @@ pub async fn status(
     if ok {
         Json(serde_json::json!({ "authenticated": true })).into_response()
     } else {
-        (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "authenticated": false }))).into_response()
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "authenticated": false })),
+        )
+            .into_response()
     }
 }

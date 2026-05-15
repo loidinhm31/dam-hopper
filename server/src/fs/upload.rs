@@ -34,7 +34,13 @@ impl UploadState {
             ))
         })?;
         let temp = tempfile::NamedTempFile::new_in(parent).map_err(FsError::Io)?;
-        Ok(Self { temp, target_abs, bytes_written: 0, expected_len, next_seq: 0 })
+        Ok(Self {
+            temp,
+            target_abs,
+            bytes_written: 0,
+            expected_len,
+            next_seq: 0,
+        })
     }
 
     /// Append chunk bytes. Enforces running byte count ≤ declared len AND ≤ 100 MB cap.
@@ -65,7 +71,9 @@ impl UploadState {
         }
 
         let target = self.target_abs.clone();
-        self.temp.persist(&target).map_err(|e| FsError::Io(e.error))?;
+        self.temp
+            .persist(&target)
+            .map_err(|e| FsError::Io(e.error))?;
 
         let meta = std::fs::metadata(&target).map_err(FsError::Io)?;
         let mtime = meta

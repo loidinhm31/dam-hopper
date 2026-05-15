@@ -6,9 +6,9 @@ pub mod schema;
 pub mod store;
 
 pub use schema::{
-    AgentItemCategory, AgentPresence, AgentStoreItem, AgentType, BrokenSymlink,
+    agent_paths, AgentItemCategory, AgentPresence, AgentStoreItem, AgentType, BrokenSymlink,
     DistributionMethod, DistributionStatus, HealthCheckResult, OrphanedItem,
-    ProjectAgentScanResult, ShipResult, agent_paths,
+    ProjectAgentScanResult, ShipResult,
 };
 pub use store::AgentStoreService;
 

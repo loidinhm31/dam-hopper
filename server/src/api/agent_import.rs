@@ -1,4 +1,4 @@
-use axum::{Json, extract::State, response::IntoResponse};
+use axum::{extract::State, response::IntoResponse, Json};
 use serde::Deserialize;
 
 use crate::agent_store::importer::{
@@ -22,7 +22,9 @@ pub async fn scan_repo_handler(
     State(_state): State<AppState>,
     Json(body): Json<ScanRepoBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let result = scan_repo(&body.repo_url).await.map_err(ApiError::from_app)?;
+    let result = scan_repo(&body.repo_url)
+        .await
+        .map_err(ApiError::from_app)?;
     Ok(Json(serde_json::json!({
         "repoUrl": result.repo_url,
         "tmpDir": result.tmp_dir,

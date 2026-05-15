@@ -139,7 +139,13 @@ impl FsSubsystem {
         let rx = inner.watcher_mgr.subscribe(&watcher_root)?;
         let sub_id = inner.next_sub_id;
         inner.next_sub_id += 1;
-        inner.subs.insert(sub_id, SubInfo { watcher_root, filter_prefix: filter_abs_path });
+        inner.subs.insert(
+            sub_id,
+            SubInfo {
+                watcher_root,
+                filter_prefix: filter_abs_path,
+            },
+        );
         Ok((sub_id, rx))
     }
 

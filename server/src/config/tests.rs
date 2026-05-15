@@ -282,7 +282,10 @@ health_check_url = "http://localhost:8080/health"
     .unwrap();
 
     let original = read_config(&config_path).unwrap();
-    assert_eq!(original.projects[0].restart_policy, RestartPolicy::OnFailure);
+    assert_eq!(
+        original.projects[0].restart_policy,
+        RestartPolicy::OnFailure
+    );
     assert_eq!(original.projects[0].restart_max_retries, 3);
     assert_eq!(
         original.projects[0].health_check_url.as_deref(),
@@ -292,7 +295,10 @@ health_check_url = "http://localhost:8080/health"
     write_config(&config_path, &original).unwrap();
     let reloaded = read_config(&config_path).unwrap();
 
-    assert_eq!(reloaded.projects[0].restart_policy, RestartPolicy::OnFailure);
+    assert_eq!(
+        reloaded.projects[0].restart_policy,
+        RestartPolicy::OnFailure
+    );
     assert_eq!(reloaded.projects[0].restart_max_retries, 3);
     assert_eq!(
         reloaded.projects[0].health_check_url.as_deref(),
@@ -562,7 +568,10 @@ fn ui_config_serde_roundtrip() {
     assert!(!ui.editor_zoom_wheel_enabled);
     assert_eq!(ui.terminal_order, vec!["term1", "term2"]);
     assert_eq!(ui.project_order, vec!["proj1"]);
-    assert_eq!(ui.project_command_order.get("proj1").unwrap(), &vec!["cmd1"]);
+    assert_eq!(
+        ui.project_command_order.get("proj1").unwrap(),
+        &vec!["cmd1"]
+    );
 }
 
 #[test]
@@ -574,7 +583,10 @@ fn global_config_without_ui_section_parses_ok() {
 
     let loaded = read_global_config_at(&cfg_path).unwrap().unwrap();
     assert!(loaded.ui.is_none());
-    assert_eq!(loaded.defaults.unwrap().workspace.as_deref(), Some("/tmp/ws"));
+    assert_eq!(
+        loaded.defaults.unwrap().workspace.as_deref(),
+        Some("/tmp/ws")
+    );
 }
 
 #[test]

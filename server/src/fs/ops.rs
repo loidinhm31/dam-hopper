@@ -113,20 +113,30 @@ pub async fn detect_binary(abs: &Path) -> Result<(bool, Option<String>), FsError
 
     // 2. NUL byte scan
     if probe.contains(&0u8) {
-        let ret_mime = detected_mime.or_else(|| mime_guess::from_path(abs).first_raw().map(|m| m.to_string()));
+        let ret_mime = detected_mime.or_else(|| {
+            mime_guess::from_path(abs)
+                .first_raw()
+                .map(|m| m.to_string())
+        });
         return Ok((true, ret_mime));
     }
 
     // 3. UTF-8 validity
     if std::str::from_utf8(probe).is_err() {
-        let ret_mime = detected_mime.or_else(|| mime_guess::from_path(abs).first_raw().map(|m| m.to_string()));
+        let ret_mime = detected_mime.or_else(|| {
+            mime_guess::from_path(abs)
+                .first_raw()
+                .map(|m| m.to_string())
+        });
         return Ok((true, ret_mime));
     }
 
     if detected_mime.is_none() {
-        detected_mime = mime_guess::from_path(abs).first_raw().map(|m| m.to_string());
+        detected_mime = mime_guess::from_path(abs)
+            .first_raw()
+            .map(|m| m.to_string());
     }
-    
+
     Ok((false, detected_mime))
 }
 
@@ -160,7 +170,11 @@ pub async fn stat(abs: &Path) -> Result<FileStat, FsError> {
 ///
 /// Without a range: rejects files larger than `max` bytes with `TooLarge`.
 /// With a range `(offset, len)`: reads at most `len` bytes from `offset`.
-pub async fn read_file(abs: &Path, range: Option<(u64, u64)>, max: u64) -> Result<Vec<u8>, FsError> {
+pub async fn read_file(
+    abs: &Path,
+    range: Option<(u64, u64)>,
+    max: u64,
+) -> Result<Vec<u8>, FsError> {
     let meta = fs::metadata(abs).await.map_err(map_io)?;
     let file_size = meta.len();
 
@@ -228,10 +242,12 @@ pub async fn atomic_write_with_check(
     }
 
     // Resolve parent directory; fail loudly if missing (sandbox guarantees it exists)
-    let parent = abs.parent().ok_or_else(|| FsError::Io(std::io::Error::new(
-        std::io::ErrorKind::InvalidInput,
-        "path has no parent",
-    )))?;
+    let parent = abs.parent().ok_or_else(|| {
+        FsError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path has no parent",
+        ))
+    })?;
 
     // Create temp file on same FS partition as target (avoids cross-device rename)
     tokio::task::spawn_blocking({
@@ -240,8 +256,7 @@ pub async fn atomic_write_with_check(
         let abs = abs.to_path_buf();
         move || -> Result<(), FsError> {
             use std::io::Write;
-            let mut tmp = tempfile::NamedTempFile::new_in(&parent)
-                .map_err(FsError::Io)?;
+            let mut tmp = tempfile::NamedTempFile::new_in(&parent).map_err(FsError::Io)?;
             tmp.write_all(&bytes).map_err(FsError::Io)?;
             if fsync {
                 tmp.as_file().sync_data().map_err(FsError::Io)?;
@@ -251,7 +266,12 @@ pub async fn atomic_write_with_check(
         }
     })
     .await
-    .map_err(|e| FsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))??;
+    .map_err(|e| {
+        FsError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        ))
+    })??;
 
     // Stat again for the real new mtime
     let new_meta = fs::metadata(abs).await.map_err(map_io)?;
@@ -300,7 +320,12 @@ pub async fn atomic_persist_with_check(
         }
     })
     .await
-    .map_err(|e| FsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))??;
+    .map_err(|e| {
+        FsError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        ))
+    })??;
 
     // Stat again for the real new mtime
     let new_meta = fs::metadata(abs).await.map_err(map_io)?;
@@ -328,9 +353,9 @@ pub async fn search_workspace(
     max_per_project: usize,
     max_total: usize,
 ) -> (Vec<SearchMatch>, bool) {
-    use tokio::task::JoinSet;
-    use tokio::sync::Semaphore;
     use std::sync::Arc;
+    use tokio::sync::Semaphore;
+    use tokio::task::JoinSet;
 
     let sem = Arc::new(Semaphore::new(4));
     let mut set: JoinSet<(String, Vec<SearchMatch>)> = JoinSet::new();
@@ -363,7 +388,9 @@ pub async fn search_workspace(
     let mut truncated = false;
 
     while let Some(result) = set.join_next().await {
-        let Ok((project_name, mut matches)) = result else { continue };
+        let Ok((project_name, mut matches)) = result else {
+            continue;
+        };
         for m in matches.iter_mut() {
             m.project = Some(project_name.clone());
         }
@@ -398,7 +425,11 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn make_project(dir: &TempDir, name: &str, files: &[(&str, &str)]) -> (String, std::path::PathBuf) {
+    fn make_project(
+        dir: &TempDir,
+        name: &str,
+        files: &[(&str, &str)],
+    ) -> (String, std::path::PathBuf) {
         let root = dir.path().join(name);
         std::fs::create_dir_all(&root).unwrap();
         for (filename, content) in files {
@@ -410,20 +441,26 @@ mod tests {
     #[tokio::test]
     async fn search_workspace_finds_across_projects() {
         let dir = tempfile::tempdir().unwrap();
-        let p1 = make_project(&dir, "alpha", &[("main.rs", "fn hello() {}\n"), ("lib.rs", "pub fn greet() {}")]);
+        let p1 = make_project(
+            &dir,
+            "alpha",
+            &[
+                ("main.rs", "fn hello() {}\n"),
+                ("lib.rs", "pub fn greet() {}"),
+            ],
+        );
         let p2 = make_project(&dir, "beta", &[("main.py", "def hello():\n    pass\n")]);
 
-        let (matches, truncated) = search_workspace(
-            vec![p1, p2],
-            "hello",
-            false,
-            100,
-            500,
-        ).await;
+        let (matches, truncated) = search_workspace(vec![p1, p2], "hello", false, 100, 500).await;
 
         assert!(!truncated);
-        assert!(matches.len() >= 2, "expected matches from both projects, got {}", matches.len());
-        let projects: std::collections::HashSet<_> = matches.iter()
+        assert!(
+            matches.len() >= 2,
+            "expected matches from both projects, got {}",
+            matches.len()
+        );
+        let projects: std::collections::HashSet<_> = matches
+            .iter()
             .filter_map(|m| m.project.as_deref())
             .collect();
         assert!(projects.contains("alpha"));
@@ -495,10 +532,12 @@ pub async fn search_files(
         let re = RegexBuilder::new(&escaped)
             .case_insensitive(!case_sensitive)
             .build()
-            .map_err(|e| FsError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Invalid pattern: {e}"),
-            )))?;
+            .map_err(|e| {
+                FsError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("Invalid pattern: {e}"),
+                ))
+            })?;
 
         let mut matches: Vec<SearchMatch> = Vec::new();
         let mut truncated = false;
@@ -558,5 +597,10 @@ pub async fn search_files(
         Ok((matches, truncated))
     })
     .await
-    .map_err(|e| FsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?
+    .map_err(|e| {
+        FsError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        ))
+    })?
 }

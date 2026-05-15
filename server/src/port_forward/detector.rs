@@ -51,7 +51,7 @@ pub fn strip_ansi(input: &str) -> String {
             match chars.peek() {
                 Some(&'[') => {
                     chars.next(); // consume '['
-                    // Consume until a letter (final byte)
+                                  // Consume until a letter (final byte)
                     for c in chars.by_ref() {
                         if c.is_ascii_alphabetic() {
                             break;
@@ -60,7 +60,7 @@ pub fn strip_ansi(input: &str) -> String {
                 }
                 Some(&']') => {
                     chars.next(); // consume ']'
-                    // Consume until BEL (\x07) or ST (\x1b\\)
+                                  // Consume until BEL (\x07) or ST (\x1b\\)
                     for c in chars.by_ref() {
                         if c == '\x07' {
                             break;
@@ -136,9 +136,9 @@ pub async fn proc_poll_loop(_pfm: Arc<PortForwardManager>) {
 
 #[cfg(target_os = "linux")]
 async fn linux_poll_loop(pfm: Arc<PortForwardManager>) {
+    use procfs::net::TcpState;
     use std::collections::HashSet;
     use std::time::Duration;
-    use procfs::net::TcpState;
     use tokio::time;
 
     let mut interval = time::interval(Duration::from_secs(2));

@@ -1,13 +1,12 @@
-use std::path::PathBuf;
 use std::env::consts::{ARCH, OS};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 
 use super::error::TunnelError;
 
 const CF_BIN_NAME: &str = "cloudflared";
-const CF_RELEASES_BASE: &str =
-    "https://github.com/cloudflare/cloudflared/releases/latest/download";
+const CF_RELEASES_BASE: &str = "https://github.com/cloudflare/cloudflared/releases/latest/download";
 
 pub struct TunnelInstaller;
 
@@ -29,9 +28,7 @@ impl TunnelInstaller {
     /// Download cloudflared to `~/.dam-hopper/bin/cloudflared` atomically.
     /// Linux x86_64 and arm64 only. Other platforms return `BinaryMissingHint`.
     /// `on_progress(downloaded, total)` — total is 0 when Content-Length absent.
-    pub async fn install(
-        on_progress: impl Fn(u64, u64) + Send,
-    ) -> Result<PathBuf, TunnelError> {
+    pub async fn install(on_progress: impl Fn(u64, u64) + Send) -> Result<PathBuf, TunnelError> {
         let asset = asset_filename().ok_or_else(platform_hint)?;
         let url = format!("{CF_RELEASES_BASE}/{asset}");
 

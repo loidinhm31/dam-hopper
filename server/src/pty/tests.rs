@@ -38,23 +38,25 @@ mod pty_tests {
     fn wait_for(timeout: Duration, predicate: impl Fn() -> bool) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            if predicate() { return true; }
+            if predicate() {
+                return true;
+            }
             std::thread::sleep(Duration::from_millis(10));
         }
         false
     }
 
     fn make_manager() -> PtySessionManager {
-        test_rt().block_on(async {
-            PtySessionManager::new(Arc::new(NoopEventSink))
-        })
+        test_rt().block_on(async { PtySessionManager::new(Arc::new(NoopEventSink)) })
     }
 
     /// Async poll helper for use inside `#[tokio::test]` functions.
     async fn tokio_wait_for(timeout: Duration, predicate: impl Fn() -> bool) -> bool {
         let deadline = tokio::time::Instant::now() + timeout;
         while tokio::time::Instant::now() < deadline {
-            if predicate() { return true; }
+            if predicate() {
+                return true;
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         false
@@ -108,7 +110,12 @@ mod pty_tests {
     #[test]
     fn accepts_valid_session_id_formats() {
         let mgr = make_manager();
-        let valid_ids = ["build:proj1", "run:api-server", "terminal:001", "free:abc.xyz"];
+        let valid_ids = [
+            "build:proj1",
+            "run:api-server",
+            "terminal:001",
+            "free:abc.xyz",
+        ];
         for id in &valid_ids {
             let meta = mgr.create(opts(id, "echo ok")).expect(id);
             assert_eq!(meta.id, *id);
@@ -168,7 +175,9 @@ mod pty_tests {
         assert!(!mgr.is_alive("build:kill-test"));
         // Dead meta still shows in list (60s TTL)
         let sessions = mgr.list();
-        assert!(sessions.iter().any(|s| s.id == "build:kill-test" && !s.alive));
+        assert!(sessions
+            .iter()
+            .any(|s| s.id == "build:kill-test" && !s.alive));
     }
 
     #[test]
@@ -268,16 +277,25 @@ mod pty_tests {
 
     impl EventSink for RecordingSink {
         fn send_terminal_data(&self, id: &str, data: &str) {
-            self.events.lock().unwrap().push(format!("data:{id}:{data}"));
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("data:{id}:{data}"));
         }
         fn send_terminal_exit(&self, id: &str, exit_code: Option<i32>) {
-            self.events.lock().unwrap().push(format!("exit:{id}:{exit_code:?}"));
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("exit:{id}:{exit_code:?}"));
         }
         fn send_terminal_changed(&self) {
             self.events.lock().unwrap().push("changed".to_string());
         }
         fn broadcast(&self, event_type: &str, _payload: serde_json::Value) {
-            self.events.lock().unwrap().push(format!("broadcast:{event_type}"));
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("broadcast:{event_type}"));
         }
         fn send_terminal_exit_enhanced(
             &self,
@@ -287,10 +305,16 @@ mod pty_tests {
             _restart_in_ms: Option<u64>,
             _restart_count: Option<u32>,
         ) {
-            self.events.lock().unwrap().push(format!("exit_enhanced:{id}:{exit_code:?}"));
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("exit_enhanced:{id}:{exit_code:?}"));
         }
         fn send_process_restarted(&self, id: &str, restart_count: u32, _prev: Option<i32>) {
-            self.events.lock().unwrap().push(format!("restarted:{id}:{restart_count}"));
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("restarted:{id}:{restart_count}"));
         }
     }
 
@@ -314,9 +338,17 @@ mod pty_tests {
         mgr.create(opts("shell:sink-data", "cat")).unwrap();
         mgr.write("shell:sink-data", b"ping\n").unwrap();
         let ok = wait_for(Duration::from_secs(2), || {
-            events.lock().unwrap().iter().any(|e| e.starts_with("data:shell:sink-data:"))
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e.starts_with("data:shell:sink-data:"))
         });
-        assert!(ok, "expected data event within 2s, events: {:?}", events.lock().unwrap());
+        assert!(
+            ok,
+            "expected data event within 2s, events: {:?}",
+            events.lock().unwrap()
+        );
         mgr.remove("shell:sink-data").unwrap();
     }
 
@@ -339,15 +371,15 @@ mod pty_tests {
     #[test]
     fn restart_delay_ms_exponential_backoff_with_cap() {
         use crate::pty::manager::restart_delay_ms;
-        
-        assert_eq!(restart_delay_ms(0), 1000);      // 1s
-        assert_eq!(restart_delay_ms(1), 2000);      // 2s
-        assert_eq!(restart_delay_ms(2), 4000);      // 4s
-        assert_eq!(restart_delay_ms(3), 8000);      // 8s
-        assert_eq!(restart_delay_ms(4), 16000);     // 16s
-        assert_eq!(restart_delay_ms(5), 30000);     // 30s cap
-        assert_eq!(restart_delay_ms(10), 30000);    // Cap persists
-        assert_eq!(restart_delay_ms(100), 30000);   // Cap persists
+
+        assert_eq!(restart_delay_ms(0), 1000); // 1s
+        assert_eq!(restart_delay_ms(1), 2000); // 2s
+        assert_eq!(restart_delay_ms(2), 4000); // 4s
+        assert_eq!(restart_delay_ms(3), 8000); // 8s
+        assert_eq!(restart_delay_ms(4), 16000); // 16s
+        assert_eq!(restart_delay_ms(5), 30000); // 30s cap
+        assert_eq!(restart_delay_ms(10), 30000); // Cap persists
+        assert_eq!(restart_delay_ms(100), 30000); // Cap persists
     }
 
     #[test]
@@ -366,7 +398,10 @@ mod pty_tests {
         use crate::pty::manager::decide_restart;
 
         // Any policy — was_killed=true → no restart.
-        assert_eq!(decide_restart(RestartPolicy::OnFailure, 1, true, 0, 5), None);
+        assert_eq!(
+            decide_restart(RestartPolicy::OnFailure, 1, true, 0, 5),
+            None
+        );
         assert_eq!(decide_restart(RestartPolicy::Always, 0, true, 0, 5), None);
         assert_eq!(decide_restart(RestartPolicy::Always, 1, true, 0, 5), None);
     }
@@ -376,8 +411,14 @@ mod pty_tests {
         use crate::pty::manager::decide_restart;
 
         // OnFailure + exit=0 → no restart (clean exit).
-        assert_eq!(decide_restart(RestartPolicy::OnFailure, 0, false, 0, 5), None);
-        assert_eq!(decide_restart(RestartPolicy::OnFailure, 0, false, 2, 5), None);
+        assert_eq!(
+            decide_restart(RestartPolicy::OnFailure, 0, false, 0, 5),
+            None
+        );
+        assert_eq!(
+            decide_restart(RestartPolicy::OnFailure, 0, false, 2, 5),
+            None
+        );
     }
 
     #[test]
@@ -385,9 +426,18 @@ mod pty_tests {
         use crate::pty::manager::decide_restart;
 
         // OnFailure + exit≠0 + retries left → restart with backoff.
-        assert_eq!(decide_restart(RestartPolicy::OnFailure, 1, false, 0, 5), Some(1000));
-        assert_eq!(decide_restart(RestartPolicy::OnFailure, 1, false, 1, 5), Some(2000));
-        assert_eq!(decide_restart(RestartPolicy::OnFailure, 127, false, 2, 5), Some(4000));
+        assert_eq!(
+            decide_restart(RestartPolicy::OnFailure, 1, false, 0, 5),
+            Some(1000)
+        );
+        assert_eq!(
+            decide_restart(RestartPolicy::OnFailure, 1, false, 1, 5),
+            Some(2000)
+        );
+        assert_eq!(
+            decide_restart(RestartPolicy::OnFailure, 127, false, 2, 5),
+            Some(4000)
+        );
     }
 
     #[test]
@@ -395,8 +445,14 @@ mod pty_tests {
         use crate::pty::manager::decide_restart;
 
         // OnFailure + exit≠0 but restart_count >= max_retries → no restart.
-        assert_eq!(decide_restart(RestartPolicy::OnFailure, 1, false, 5, 5), None);
-        assert_eq!(decide_restart(RestartPolicy::OnFailure, 1, false, 10, 5), None);
+        assert_eq!(
+            decide_restart(RestartPolicy::OnFailure, 1, false, 5, 5),
+            None
+        );
+        assert_eq!(
+            decide_restart(RestartPolicy::OnFailure, 1, false, 10, 5),
+            None
+        );
     }
 
     #[test]
@@ -404,8 +460,14 @@ mod pty_tests {
         use crate::pty::manager::decide_restart;
 
         // Always + exit=0 + retries left → restart.
-        assert_eq!(decide_restart(RestartPolicy::Always, 0, false, 0, 5), Some(1000));
-        assert_eq!(decide_restart(RestartPolicy::Always, 0, false, 2, 5), Some(4000));
+        assert_eq!(
+            decide_restart(RestartPolicy::Always, 0, false, 0, 5),
+            Some(1000)
+        );
+        assert_eq!(
+            decide_restart(RestartPolicy::Always, 0, false, 2, 5),
+            Some(4000)
+        );
     }
 
     #[test]
@@ -413,8 +475,14 @@ mod pty_tests {
         use crate::pty::manager::decide_restart;
 
         // Always + exit≠0 + retries left → restart.
-        assert_eq!(decide_restart(RestartPolicy::Always, 1, false, 0, 5), Some(1000));
-        assert_eq!(decide_restart(RestartPolicy::Always, 127, false, 1, 5), Some(2000));
+        assert_eq!(
+            decide_restart(RestartPolicy::Always, 1, false, 0, 5),
+            Some(1000)
+        );
+        assert_eq!(
+            decide_restart(RestartPolicy::Always, 127, false, 1, 5),
+            Some(2000)
+        );
     }
 
     #[test]
@@ -451,12 +519,19 @@ mod pty_tests {
                 .find(|s| s.id == "restart:fail")
                 .map(|s| s.restart_count >= 1)
                 .unwrap_or(false)
-        }).await;
-        assert!(restarted, "Process should restart after backoff (restart_count >= 1)");
+        })
+        .await;
+        assert!(
+            restarted,
+            "Process should restart after backoff (restart_count >= 1)"
+        );
 
         let sessions = mgr.list();
         let meta = sessions.iter().find(|s| s.id == "restart:fail").unwrap();
-        assert!(meta.restart_count >= 1, "restart_count should be >= 1 after first restart");
+        assert!(
+            meta.restart_count >= 1,
+            "restart_count should be >= 1 after first restart"
+        );
 
         mgr.remove("restart:fail").unwrap();
     }
@@ -473,11 +548,17 @@ mod pty_tests {
         // Initial run + 2 restarts, backoffs: 1s, 2s → ~4s total.
         tokio::time::sleep(Duration::from_secs(6)).await;
 
-        assert!(!mgr.is_alive("restart:retries"), "Session should be dead after retries exhausted");
+        assert!(
+            !mgr.is_alive("restart:retries"),
+            "Session should be dead after retries exhausted"
+        );
 
         let sessions = mgr.list();
         let meta = sessions.iter().find(|s| s.id == "restart:retries").unwrap();
-        assert_eq!(meta.restart_count, 2, "restart_count should cap at max_retries");
+        assert_eq!(
+            meta.restart_count, 2,
+            "restart_count should cap at max_retries"
+        );
         assert!(!meta.alive, "Session should be dead");
 
         mgr.remove("restart:retries").unwrap();
@@ -491,14 +572,17 @@ mod pty_tests {
         opts.restart_max_retries = 5;
 
         mgr.create(opts).unwrap();
-        
+
         // Wait for process to exit.
         let exited = wait_for(Duration::from_secs(2), || !mgr.is_alive("restart:never"));
         assert!(exited, "Process should exit");
 
         // Wait additional time to ensure no restart happens.
         std::thread::sleep(Duration::from_millis(2000));
-        assert!(!mgr.is_alive("restart:never"), "Never policy should not restart");
+        assert!(
+            !mgr.is_alive("restart:never"),
+            "Never policy should not restart"
+        );
 
         let sessions = mgr.list();
         let meta = sessions.iter().find(|s| s.id == "restart:never").unwrap();
@@ -519,14 +603,17 @@ mod pty_tests {
 
         // Kill via API.
         mgr.kill("restart:kill").unwrap();
-        
+
         // Wait to ensure session dies.
         let killed = wait_for(Duration::from_secs(2), || !mgr.is_alive("restart:kill"));
         assert!(killed, "Session should be killed");
 
         // Wait additional time to ensure no restart happens.
         std::thread::sleep(Duration::from_millis(2000));
-        assert!(!mgr.is_alive("restart:kill"), "Killed sessions should not restart");
+        assert!(
+            !mgr.is_alive("restart:kill"),
+            "Killed sessions should not restart"
+        );
 
         mgr.remove("restart:kill").unwrap();
     }
@@ -540,7 +627,8 @@ mod pty_tests {
 
         mgr.create(opts).unwrap();
 
-        let exited = tokio_wait_for(Duration::from_secs(2), || !mgr.is_alive("restart:always")).await;
+        let exited =
+            tokio_wait_for(Duration::from_secs(2), || !mgr.is_alive("restart:always")).await;
         assert!(exited, "Process should exit");
 
         // `exit 0` exits instantly after restart; poll restart_count instead of
@@ -551,8 +639,12 @@ mod pty_tests {
                 .find(|s| s.id == "restart:always")
                 .map(|s| s.restart_count >= 1)
                 .unwrap_or(false)
-        }).await;
-        assert!(restarted, "Always policy should restart even on clean exit (restart_count >= 1)");
+        })
+        .await;
+        assert!(
+            restarted,
+            "Always policy should restart even on clean exit (restart_count >= 1)"
+        );
 
         let sessions = mgr.list();
         let meta = sessions.iter().find(|s| s.id == "restart:always").unwrap();
@@ -579,11 +671,17 @@ mod pty_tests {
 
         // Still within the 1s backoff window — manually recreate with same ID.
         tokio::time::sleep(Duration::from_millis(200)).await;
-        assert!(!mgr.is_alive("restart:race"), "Should still be dead before manual create");
+        assert!(
+            !mgr.is_alive("restart:race"),
+            "Should still be dead before manual create"
+        );
 
         let meta = mgr.create(opts).unwrap();
         assert!(meta.alive, "New session should be alive immediately");
-        assert_eq!(meta.restart_count, 0, "Fresh session should have restart_count=0");
+        assert_eq!(
+            meta.restart_count, 0,
+            "Fresh session should have restart_count=0"
+        );
 
         // Wait beyond original backoff to confirm no double-spawn.
         // `exit 1` exits instantly so don't rely on is_alive; just confirm the
@@ -592,7 +690,10 @@ mod pty_tests {
 
         let sessions = mgr.list();
         let count = sessions.iter().filter(|s| s.id == "restart:race").count();
-        assert_eq!(count, 1, "Should have exactly one session, no double-spawn from canceled backoff");
+        assert_eq!(
+            count, 1,
+            "Should have exactly one session, no double-spawn from canceled backoff"
+        );
 
         mgr.remove("restart:race").unwrap();
     }
@@ -606,7 +707,7 @@ mod pty_tests {
         let mgr = make_manager();
         mgr.create(opts("shell:offset-test1", "cat")).unwrap();
         mgr.write("shell:offset-test1", b"hello\n").unwrap();
-        
+
         // Wait for data to appear in buffer.
         let ok = wait_for(Duration::from_secs(2), || {
             mgr.get_buffer("shell:offset-test1")
@@ -616,7 +717,9 @@ mod pty_tests {
         assert!(ok, "buffer should contain 'hello' within 2s");
 
         // Get full buffer (no offset).
-        let (data, offset) = mgr.get_buffer_with_offset("shell:offset-test1", None).unwrap();
+        let (data, offset) = mgr
+            .get_buffer_with_offset("shell:offset-test1", None)
+            .unwrap();
         assert!(data.contains("hello"), "data should contain 'hello'");
         assert!(offset > 0, "offset should be > 0 after writing data");
 
@@ -627,7 +730,7 @@ mod pty_tests {
     fn get_buffer_with_offset_returns_delta_when_offset_provided() {
         let mgr = make_manager();
         mgr.create(opts("shell:offset-test2", "cat")).unwrap();
-        
+
         // Write first chunk.
         mgr.write("shell:offset-test2", b"first\n").unwrap();
         let ok1 = wait_for(Duration::from_secs(2), || {
@@ -638,7 +741,9 @@ mod pty_tests {
         assert!(ok1, "buffer should contain 'first'");
 
         // Get current offset.
-        let (data1, offset1) = mgr.get_buffer_with_offset("shell:offset-test2", None).unwrap();
+        let (data1, offset1) = mgr
+            .get_buffer_with_offset("shell:offset-test2", None)
+            .unwrap();
         assert!(data1.contains("first"), "first read should contain 'first'");
 
         // Write second chunk.
@@ -651,9 +756,14 @@ mod pty_tests {
         assert!(ok2, "buffer should contain 'second'");
 
         // Get delta (from previous offset).
-        let (data2, offset2) = mgr.get_buffer_with_offset("shell:offset-test2", Some(offset1)).unwrap();
+        let (data2, offset2) = mgr
+            .get_buffer_with_offset("shell:offset-test2", Some(offset1))
+            .unwrap();
         assert!(data2.contains("second"), "delta should contain 'second'");
-        assert!(!data2.contains("first"), "delta should NOT contain 'first' (already seen)");
+        assert!(
+            !data2.contains("first"),
+            "delta should NOT contain 'first' (already seen)"
+        );
         assert!(offset2 > offset1, "offset should have advanced");
 
         mgr.remove("shell:offset-test2").unwrap();
@@ -662,25 +772,28 @@ mod pty_tests {
     #[test]
     fn get_buffer_with_offset_returns_full_buffer_when_offset_too_old() {
         use crate::pty::buffer::ScrollbackBuffer;
-        
+
         // This test uses a small buffer capacity to force eviction.
         // However, we can't easily override the buffer capacity in a live session,
         // so we test the buffer directly here rather than via manager.
-        
-        let cap = 10;  // Small capacity for testing eviction.
+
+        let cap = 10; // Small capacity for testing eviction.
         let mut buf = ScrollbackBuffer::new(cap);
-        
-        buf.push(b"1234567890");  // Fill buffer to capacity.
-        let offset1 = buf.current_offset();  // offset = 10
-        
-        buf.push(b"ABCDEFGHIJ");  // This evicts old data.
-        let offset2 = buf.current_offset();  // offset = 20
-        
+
+        buf.push(b"1234567890"); // Fill buffer to capacity.
+        let offset1 = buf.current_offset(); // offset = 10
+
+        buf.push(b"ABCDEFGHIJ"); // This evicts old data.
+        let offset2 = buf.current_offset(); // offset = 20
+
         // Request from offset1, which is now older than buffer start.
         let (data, offset) = buf.read_from(Some(offset1));
         assert_eq!(offset, offset2, "should return current offset");
-        assert_eq!(data, b"ABCDEFGHIJ", "should return full buffer when offset too old");
-        
+        assert_eq!(
+            data, b"ABCDEFGHIJ",
+            "should return full buffer when offset too old"
+        );
+
         // Request from offset2 (current), should return empty.
         let (data2, offset3) = buf.read_from(Some(offset2));
         assert_eq!(offset3, offset2, "offset unchanged");
@@ -691,6 +804,9 @@ mod pty_tests {
     fn get_buffer_with_offset_returns_error_for_nonexistent_session() {
         let mgr = make_manager();
         let result = mgr.get_buffer_with_offset("nonexistent", None);
-        assert!(result.is_err(), "should return error for nonexistent session");
+        assert!(
+            result.is_err(),
+            "should return error for nonexistent session"
+        );
     }
 }
