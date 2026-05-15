@@ -154,8 +154,9 @@ pub fn handle_login_finish(
     login_state: ServerLogin<DamHopperOpaqueSuite>,
     finalization_bytes: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, String> {
-    let finalization = CredentialFinalization::<DamHopperOpaqueSuite>::deserialize(finalization_bytes)
-        .map_err(|e| format!("invalid CredentialFinalization: {e}"))?;
+    let finalization =
+        CredentialFinalization::<DamHopperOpaqueSuite>::deserialize(finalization_bytes)
+            .map_err(|e| format!("invalid CredentialFinalization: {e}"))?;
 
     let result = login_state
         .finish(finalization, ServerLoginParameters::default())
@@ -180,7 +181,9 @@ pub fn handle_login_finish(
 pub fn validate_identifier(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
-        && id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        && id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
 }
 
 #[cfg(test)]

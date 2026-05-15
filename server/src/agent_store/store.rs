@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
-use crate::error::{AppError, Result};
 use super::schema::{AgentItemCategory, AgentStoreItem, AgentType};
+use crate::error::{AppError, Result};
 
 /// Parse YAML frontmatter from markdown content.
 /// Returns (data_map, body_after_frontmatter).
@@ -72,10 +72,12 @@ impl AgentStoreService {
             None => source_path
                 .file_stem()
                 .and_then(|s| s.to_str())
-                .ok_or_else(|| AppError::InvalidInput(format!(
-                    "Cannot derive item name from path: {}",
-                    source_path.display()
-                )))?
+                .ok_or_else(|| {
+                    AppError::InvalidInput(format!(
+                        "Cannot derive item name from path: {}",
+                        source_path.display()
+                    ))
+                })?
                 .to_string(),
         };
         assert_safe_name(&item_name)?;
@@ -104,12 +106,16 @@ impl AgentStoreService {
         assert_safe_name(name)?;
 
         // Verify the item actually exists in this category before deleting anything
-        self.get(name, category).await?
-            .ok_or_else(|| AppError::NotFound(format!("Item \"{name}\" not found in category {category}")))?;
+        self.get(name, category).await?.ok_or_else(|| {
+            AppError::NotFound(format!("Item \"{name}\" not found in category {category}"))
+        })?;
 
         let base = self.store_path.join(category.store_dir()).join(name);
         if category == AgentItemCategory::Command {
-            let md_path = self.store_path.join(category.store_dir()).join(format!("{name}.md"));
+            let md_path = self
+                .store_path
+                .join(category.store_dir())
+                .join(format!("{name}.md"));
             let _ = fs::remove_file(&md_path).await;
         }
         let _ = fs::remove_dir_all(&base).await;
@@ -118,7 +124,11 @@ impl AgentStoreService {
     }
 
     /// Get metadata for a single item.
-    pub async fn get(&self, name: &str, category: AgentItemCategory) -> Result<Option<AgentStoreItem>> {
+    pub async fn get(
+        &self,
+        name: &str,
+        category: AgentItemCategory,
+    ) -> Result<Option<AgentStoreItem>> {
         assert_safe_name(name)?;
         let item_path = self.store_path.join(category.store_dir()).join(name);
 
@@ -129,7 +139,10 @@ impl AgentStoreService {
                     Err(_) => return Ok(None),
                     Ok(content) => {
                         let (data, _) = parse_frontmatter(&content);
-                        let description = data.get("description").and_then(|v| v.as_str()).map(String::from);
+                        let description = data
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
                         let size_bytes = dir_size(&item_path).await;
                         let rel = format!("{}/{}", category.store_dir(), name);
                         AgentStoreItem {
@@ -153,7 +166,10 @@ impl AgentStoreService {
                     Err(_) => return Ok(None),
                     Ok(content) => {
                         let (data, _) = parse_frontmatter(&content);
-                        let description = data.get("description").and_then(|v| v.as_str()).map(String::from);
+                        let description = data
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
                         let size_bytes = fs::metadata(&file_path).await.ok().map(|m| m.len());
                         let rel = format!("{}/{}.md", category.store_dir(), name);
                         AgentStoreItem {
@@ -182,15 +198,19 @@ impl AgentStoreService {
                         } else {
                             meta.len()
                         };
-                        let description = if resolved.extension().and_then(|s| s.to_str()) == Some("md") {
-                            fs::read_to_string(&resolved).await.ok().and_then(|c| {
-                                let (data, _) = parse_frontmatter(&c);
-                                data.get("description").and_then(|v| v.as_str()).map(String::from)
-                            })
-                        } else {
-                            None
-                        };
-                        let rel_path = resolved.strip_prefix(&self.store_path)
+                        let description =
+                            if resolved.extension().and_then(|s| s.to_str()) == Some("md") {
+                                fs::read_to_string(&resolved).await.ok().and_then(|c| {
+                                    let (data, _) = parse_frontmatter(&c);
+                                    data.get("description")
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from)
+                                })
+                            } else {
+                                None
+                            };
+                        let rel_path = resolved
+                            .strip_prefix(&self.store_path)
                             .map(|p| p.to_string_lossy().into_owned())
                             .unwrap_or_else(|_| format!("{}/{}", category.store_dir(), name));
                         AgentStoreItem {
@@ -204,27 +224,25 @@ impl AgentStoreService {
                     }
                 }
             }
-            _ => {
-                match fs::symlink_metadata(&item_path).await {
-                    Err(_) => return Ok(None),
-                    Ok(meta) => {
-                        let size_bytes = if meta.is_dir() {
-                            dir_size(&item_path).await
-                        } else {
-                            meta.len()
-                        };
-                        let rel = format!("{}/{}", category.store_dir(), name);
-                        AgentStoreItem {
-                            name: name.to_string(),
-                            category,
-                            relative_path: rel,
-                            description: None,
-                            compatible_agents: vec![AgentType::Claude, AgentType::Gemini],
-                            size_bytes: Some(size_bytes),
-                        }
+            _ => match fs::symlink_metadata(&item_path).await {
+                Err(_) => return Ok(None),
+                Ok(meta) => {
+                    let size_bytes = if meta.is_dir() {
+                        dir_size(&item_path).await
+                    } else {
+                        meta.len()
+                    };
+                    let rel = format!("{}/{}", category.store_dir(), name);
+                    AgentStoreItem {
+                        name: name.to_string(),
+                        category,
+                        relative_path: rel,
+                        description: None,
+                        compatible_agents: vec![AgentType::Claude, AgentType::Gemini],
+                        size_bytes: Some(size_bytes),
                     }
                 }
-            }
+            },
         };
 
         Ok(Some(result))
@@ -319,24 +337,14 @@ impl AgentStoreService {
 }
 
 pub fn assert_safe_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || name.contains('/')
-        || name.contains('\\')
-        || name == ".."
-        || name == "."
-    {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name == ".." || name == "." {
         return Err(AppError::Internal(format!("Invalid item name: \"{name}\"")));
     }
     Ok(())
 }
 
 pub fn assert_safe_file_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || name.contains('/')
-        || name.contains('\\')
-        || name == ".."
-        || name == "."
-    {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name == ".." || name == "." {
         return Err(AppError::Internal(format!("Invalid file name: \"{name}\"")));
     }
     Ok(())

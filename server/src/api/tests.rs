@@ -7,10 +7,12 @@ use tower::ServiceExt;
 use crate::{
     agent_store::AgentStoreService,
     api::build_router,
-    config::{DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo},
+    config::{
+        DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo,
+    },
     crypto::DamHopperOpaqueSuite,
     fs::FsSubsystem,
-    pty::{BroadcastEventSink, PtySessionManager, NoopEventSink},
+    pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
     tunnel::{CloudflaredDriver, TunnelSessionManager},
 };
@@ -41,11 +43,7 @@ fn make_state(tmp: &TempDir) -> AppState {
     // Create a minimal config file so config_path.exists() returns true (required by
     // /api/workspace/status `ready` field).
     let config_file = workspace_dir.join("dam-hopper.toml");
-    std::fs::write(
-        &config_file,
-        "[workspace]\nname = \"test-workspace\"\n",
-    )
-    .ok();
+    std::fs::write(&config_file, "[workspace]\nname = \"test-workspace\"\n").ok();
 
     let config = DamHopperConfig {
         workspace: WorkspaceInfo {
@@ -79,11 +77,12 @@ fn make_state(tmp: &TempDir) -> AppState {
         tunnel_manager,
         None,
         test_opaque_setup(),
-    ).expect("make_state failed")
+    )
+    .expect("make_state failed")
 }
 
 fn test_jwt() -> String {
-    use jsonwebtoken::{encode, Header, EncodingKey};
+    use jsonwebtoken::{encode, EncodingKey, Header};
     #[derive(serde::Serialize)]
     struct Claims {
         sub: String,
@@ -93,7 +92,12 @@ fn test_jwt() -> String {
         sub: "test-user".to_string(),
         exp: (chrono::Utc::now().timestamp() as usize) + 3600,
     };
-    encode(&Header::default(), &claims, &EncodingKey::from_secret(TEST_TOKEN.as_bytes())).unwrap()
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(TEST_TOKEN.as_bytes()),
+    )
+    .unwrap()
 }
 
 fn auth_cookie() -> String {
@@ -110,7 +114,11 @@ async fn get(state: AppState, path: &str) -> axum::response::Response {
     router.oneshot(req).await.unwrap()
 }
 
-async fn post_json(state: AppState, path: &str, body: serde_json::Value) -> axum::response::Response {
+async fn post_json(
+    state: AppState,
+    path: &str,
+    body: serde_json::Value,
+) -> axum::response::Response {
     let router = build_router(state, vec![]);
     let req = Request::builder()
         .method("POST")
@@ -186,8 +194,6 @@ async fn login_returns_401_without_db() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
-
-
 #[tokio::test]
 async fn auth_status_returns_401_without_cookie() {
     let tmp = tempfile::tempdir().unwrap();
@@ -245,7 +251,9 @@ async fn auth_status_returns_200_with_bearer_token() {
         .unwrap();
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["authenticated"], true);
 }
@@ -260,7 +268,9 @@ async fn workspace_status_returns_loaded_true() {
     let state = make_state(&tmp);
     let resp = get(state, "/api/workspace/status").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["ready"], true);
     assert_eq!(json["name"], "test-workspace");
@@ -289,7 +299,9 @@ async fn config_get_returns_workspace_name() {
     let state = make_state(&tmp);
     let resp = get(state, "/api/config").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["workspace"]["name"], "test-workspace");
 }
@@ -304,7 +316,9 @@ async fn terminal_list_returns_empty() {
     let state = make_state(&tmp);
     let resp = get(state, "/api/terminal").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(json.as_array().unwrap().is_empty());
 }
@@ -335,7 +349,9 @@ async fn commands_search_returns_results() {
     let state = make_state(&tmp);
     let resp = get(state, "/api/commands/search?query=build").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(json.as_array().unwrap().len() > 0);
 }
@@ -346,7 +362,9 @@ async fn commands_list_by_type_returns_maven() {
     let state = make_state(&tmp);
     let resp = get(state, "/api/commands?projectType=maven").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(json.as_array().unwrap().len() > 0);
 }
@@ -357,7 +375,9 @@ async fn commands_list_unknown_type_returns_empty() {
     let state = make_state(&tmp);
     let resp = get(state, "/api/commands?projectType=unknown-type").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(json.as_array().unwrap().is_empty());
 }
@@ -380,7 +400,9 @@ async fn agent_store_health_returns_result() {
     let state = make_state(&tmp);
     let resp = get(state, "/api/agent-store/health").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(json["broken_symlinks"].is_array() || json["brokenSymlinks"].is_array());
     assert!(json["orphaned_items"].is_array() || json["orphanedItems"].is_array());
@@ -408,7 +430,9 @@ async fn settings_export_returns_json() {
     let state = make_state(&tmp);
     let resp = get(state, "/api/settings/export").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(json["config"].is_object());
 }
@@ -467,7 +491,8 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         tunnel_manager,
         None,
         test_opaque_setup(),
-    ).expect("make_state_with_project failed")
+    )
+    .expect("make_state_with_project failed")
 }
 
 #[tokio::test]
@@ -484,14 +509,18 @@ async fn terminal_create_returns_meta_and_appears_in_list() {
     });
     let resp = post_json(state.clone(), "/api/terminal", body).await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let raw = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let raw = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let meta: serde_json::Value = serde_json::from_slice(&raw).unwrap();
     assert_eq!(meta["id"], "test-echo-session");
 
     // Session appears in list
     let list_resp = get(state, "/api/terminal").await;
     assert_eq!(list_resp.status(), StatusCode::OK);
-    let list_raw = axum::body::to_bytes(list_resp.into_body(), usize::MAX).await.unwrap();
+    let list_raw = axum::body::to_bytes(list_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let list: Vec<serde_json::Value> = serde_json::from_slice(&list_raw).unwrap();
     assert!(list.iter().any(|s| s["id"] == "test-echo-session"));
 }
@@ -513,7 +542,9 @@ async fn terminal_lifecycle_create_buffer_kill() {
     // Buffer accessible while session is alive
     let buf_resp = get(state.clone(), "/api/terminal/lifecycle-session/buffer").await;
     assert_eq!(buf_resp.status(), StatusCode::OK);
-    let buf_raw = axum::body::to_bytes(buf_resp.into_body(), usize::MAX).await.unwrap();
+    let buf_raw = axum::body::to_bytes(buf_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let buf_json: serde_json::Value = serde_json::from_slice(&buf_raw).unwrap();
     assert!(buf_json["buffer"].is_string());
 
@@ -535,7 +566,9 @@ async fn terminal_list_detailed_returns_array() {
     let state = make_state(&tmp);
     let resp = get(state, "/api/terminal/detailed").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(json.is_array());
 }
@@ -569,7 +602,9 @@ async fn agent_store_ship_and_unship_skill() {
     });
     let ship_resp = post_json(state.clone(), "/api/agent-store/ship", ship_body).await;
     assert_eq!(ship_resp.status(), StatusCode::OK);
-    let ship_raw = axum::body::to_bytes(ship_resp.into_body(), usize::MAX).await.unwrap();
+    let ship_raw = axum::body::to_bytes(ship_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let ship_json: serde_json::Value = serde_json::from_slice(&ship_raw).unwrap();
     assert_eq!(ship_json["success"], true, "ship failed: {ship_json}");
     assert_eq!(ship_json["item"], "test-skill");
@@ -589,8 +624,11 @@ async fn agent_store_ship_and_unship_skill() {
     let unship_resp = post_json(state.clone(), "/api/agent-store/unship", unship_body).await;
     assert_eq!(unship_resp.status(), StatusCode::OK);
     let unship_json: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(unship_resp.into_body(), usize::MAX).await.unwrap()
-    ).unwrap();
+        &axum::body::to_bytes(unship_resp.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(unship_json["success"], true, "unship failed: {unship_json}");
 }
 
@@ -604,7 +642,9 @@ async fn agent_store_absorb_skill_into_store() {
     tokio::fs::write(
         claude_skills.join("absorb-test"),
         "---\nname: absorb-test\ndescription: skill to absorb\n---\n# absorb-test",
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
 
     let state = make_state_with_project(&tmp);
 
@@ -617,8 +657,11 @@ async fn agent_store_absorb_skill_into_store() {
     let resp = post_json(state.clone(), "/api/agent-store/absorb", body).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let json: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap()
-    ).unwrap();
+        &axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     // absorb returns ShipResult — success means the item was copied into the central store
     assert_eq!(json["success"], true, "absorb failed: {json}");
 }
@@ -646,7 +689,9 @@ async fn agent_store_matrix_returns_map() {
     let state = make_state_with_project(&tmp);
     let resp = get(state, "/api/agent-store/matrix").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(json.is_object());
 }
@@ -665,7 +710,8 @@ fn init_git_repo(path: &std::path::Path) {
     index.write().unwrap();
     let tree_id = index.write_tree().unwrap();
     let tree = repo.find_tree(tree_id).unwrap();
-    repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+        .unwrap();
 }
 
 #[tokio::test]
@@ -676,11 +722,15 @@ async fn git_branches_returns_list_for_valid_project() {
 
     let resp = get(state, "/api/git/test-project/branches").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     // Should have at least the initial branch (main/master)
-    assert!(json.as_array().map(|a| !a.is_empty()).unwrap_or(false),
-        "expected non-empty branch list, got: {json}");
+    assert!(
+        json.as_array().map(|a| !a.is_empty()).unwrap_or(false),
+        "expected non-empty branch list, got: {json}"
+    );
 }
 
 #[tokio::test]
@@ -691,7 +741,9 @@ async fn git_worktrees_returns_list_for_valid_project() {
 
     let resp = get(state, "/api/git/test-project/worktrees").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     // Main worktree is always present in an initialized repo
     assert!(

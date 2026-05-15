@@ -2,12 +2,14 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::fs;
 
+use super::distributor::{health_check, ship, unship};
+use super::importer::{import_from_repo, scan_local_dir};
+use super::memory::{
+    list_memory_templates, render_template, ProjectContext, TemplateContext, WorkspaceContext,
+};
+use super::scanner::scan_project;
 use super::schema::{AgentItemCategory, AgentType, DistributionMethod};
 use super::store::AgentStoreService;
-use super::scanner::scan_project;
-use super::distributor::{health_check, ship, unship};
-use super::memory::{render_template, TemplateContext, ProjectContext, WorkspaceContext, list_memory_templates};
-use super::importer::{scan_local_dir, import_from_repo};
 
 fn make_store(tmp: &TempDir) -> AgentStoreService {
     AgentStoreService::new(tmp.path().join("store"))
@@ -25,7 +27,9 @@ async fn write_skill(dir: &PathBuf, skill_name: &str, description: &str) {
     fs::write(
         skill_dir.join("SKILL.md"),
         format!("---\nname: {skill_name}\ndescription: {description}\n---\n# {skill_name}"),
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
 }
 
 async fn write_command(dir: &PathBuf, cmd_name: &str, description: &str) {
@@ -33,7 +37,9 @@ async fn write_command(dir: &PathBuf, cmd_name: &str, description: &str) {
     fs::write(
         dir.join(format!("{cmd_name}.md")),
         format!("---\ndescription: {description}\n---\n# {cmd_name}"),
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
 }
 
 // ── Store tests ───────────────────────────────────────────────────────────────
@@ -65,7 +71,10 @@ async fn test_store_add_and_list_skill() {
     let skill_src = tmp.path().join("my-skill");
     write_skill(&tmp.path().to_path_buf(), "my-skill", "A test skill").await;
 
-    let item = svc.add(&skill_src, AgentItemCategory::Skill, Some("my-skill")).await.unwrap();
+    let item = svc
+        .add(&skill_src, AgentItemCategory::Skill, Some("my-skill"))
+        .await
+        .unwrap();
     assert_eq!(item.name, "my-skill");
     assert_eq!(item.description.as_deref(), Some("A test skill"));
 
@@ -83,12 +92,16 @@ async fn test_store_add_and_remove_command() {
     write_command(&cmd_dir, "deploy", "Deploy the app").await;
     let src = cmd_dir.join("deploy.md");
 
-    svc.add(&src, AgentItemCategory::Command, Some("deploy")).await.unwrap();
+    svc.add(&src, AgentItemCategory::Command, Some("deploy"))
+        .await
+        .unwrap();
 
     let items = svc.list(Some(AgentItemCategory::Command)).await.unwrap();
     assert_eq!(items.len(), 1);
 
-    svc.remove("deploy", AgentItemCategory::Command).await.unwrap();
+    svc.remove("deploy", AgentItemCategory::Command)
+        .await
+        .unwrap();
     let items = svc.list(Some(AgentItemCategory::Command)).await.unwrap();
     assert!(items.is_empty());
 }
@@ -131,7 +144,9 @@ async fn test_ship_skill_symlink() {
     // Add a skill to the store
     let skill_src = tmp.path().join("src-skill");
     write_skill(&tmp.path().to_path_buf(), "src-skill", "Test").await;
-    svc.add(&skill_src, AgentItemCategory::Skill, Some("test-skill")).await.unwrap();
+    svc.add(&skill_src, AgentItemCategory::Skill, Some("test-skill"))
+        .await
+        .unwrap();
 
     let project_path = tmp.path().join("project");
     fs::create_dir_all(&project_path).await.unwrap();
@@ -143,7 +158,8 @@ async fn test_ship_skill_symlink() {
         &project_path,
         AgentType::Claude,
         DistributionMethod::Symlink,
-    ).await;
+    )
+    .await;
 
     assert!(result.success, "ship failed: {:?}", result.error);
     let target = project_path.join(".claude/skills/test-skill");
@@ -157,22 +173,38 @@ async fn test_ship_then_unship() {
 
     let skill_src = tmp.path().join("src-skill2");
     write_skill(&tmp.path().to_path_buf(), "src-skill2", "Test2").await;
-    svc.add(&skill_src, AgentItemCategory::Skill, Some("rmskill")).await.unwrap();
+    svc.add(&skill_src, AgentItemCategory::Skill, Some("rmskill"))
+        .await
+        .unwrap();
 
     let project_path = tmp.path().join("project2");
     fs::create_dir_all(&project_path).await.unwrap();
 
     let ship_result = ship(
-        svc.store_path(), "rmskill", AgentItemCategory::Skill,
-        &project_path, AgentType::Claude, DistributionMethod::Symlink,
-    ).await;
+        svc.store_path(),
+        "rmskill",
+        AgentItemCategory::Skill,
+        &project_path,
+        AgentType::Claude,
+        DistributionMethod::Symlink,
+    )
+    .await;
     assert!(ship_result.success);
 
     let unship_result = unship(
-        svc.store_path(), "rmskill", AgentItemCategory::Skill,
-        &project_path, AgentType::Claude, false,
-    ).await;
-    assert!(unship_result.success, "unship failed: {:?}", unship_result.error);
+        svc.store_path(),
+        "rmskill",
+        AgentItemCategory::Skill,
+        &project_path,
+        AgentType::Claude,
+        false,
+    )
+    .await;
+    assert!(
+        unship_result.success,
+        "unship failed: {:?}",
+        unship_result.error
+    );
 
     let target = project_path.join(".claude/skills/rmskill");
     assert!(!target.exists());
@@ -197,7 +229,8 @@ async fn test_health_check_broken_symlink() {
             &store_path,
             &[("project", project_path.as_path())],
             AgentType::all(),
-        ).await;
+        )
+        .await;
 
         assert_eq!(result.broken_symlinks.len(), 1, "expected 1 broken symlink");
         assert_eq!(result.broken_symlinks[0].project, "project");
@@ -258,7 +291,9 @@ async fn test_render_template_eq_helper() {
 async fn test_list_memory_templates_empty() {
     let tmp = TempDir::new().unwrap();
     let store_path = tmp.path().join("store");
-    fs::create_dir_all(store_path.join("memory-templates")).await.unwrap();
+    fs::create_dir_all(store_path.join("memory-templates"))
+        .await
+        .unwrap();
 
     let templates = list_memory_templates(&store_path).await.unwrap();
     assert!(templates.is_empty());
@@ -268,11 +303,15 @@ async fn test_list_memory_templates_empty() {
 async fn test_list_memory_templates() {
     let tmp = TempDir::new().unwrap();
     let store_path = tmp.path().join("store");
-    fs::create_dir_all(store_path.join("memory-templates")).await.unwrap();
+    fs::create_dir_all(store_path.join("memory-templates"))
+        .await
+        .unwrap();
     fs::write(
         store_path.join("memory-templates/generic.md"),
         "# Generic template for {{project.name}}",
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
 
     let templates = list_memory_templates(&store_path).await.unwrap();
     assert_eq!(templates.len(), 1);
@@ -290,7 +329,11 @@ async fn test_scan_local_dir_finds_skills() {
     write_skill(&skills_dir, "my-skill", "My test skill").await;
 
     let result = scan_local_dir(tmp.path()).await.unwrap();
-    let skills: Vec<_> = result.items.iter().filter(|i| i.category == AgentItemCategory::Skill).collect();
+    let skills: Vec<_> = result
+        .items
+        .iter()
+        .filter(|i| i.category == AgentItemCategory::Skill)
+        .collect();
     assert!(!skills.is_empty(), "no skills found");
     assert!(skills.iter().any(|s| s.name == "my-skill"));
 }
@@ -306,7 +349,9 @@ async fn test_import_from_repo_no_overwrite() {
     // Pre-populate store with the same skill
     let store_skills = store_path.join("skills/existing-skill");
     fs::create_dir_all(&store_skills).await.unwrap();
-    fs::write(store_skills.join("SKILL.md"), "existing").await.unwrap();
+    fs::write(store_skills.join("SKILL.md"), "existing")
+        .await
+        .unwrap();
 
     let items = vec![super::importer::RepoScanItem {
         name: "existing-skill".to_string(),
@@ -315,8 +360,14 @@ async fn test_import_from_repo_no_overwrite() {
         relative_path: "existing-skill".to_string(),
     }];
 
-    let results = import_from_repo(&src_dir, &items, &store_path).await.unwrap();
+    let results = import_from_repo(&src_dir, &items, &store_path)
+        .await
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert!(!results[0].success);
-    assert!(results[0].error.as_deref().unwrap_or("").contains("Already exists"));
+    assert!(results[0]
+        .error
+        .as_deref()
+        .unwrap_or("")
+        .contains("Already exists"));
 }

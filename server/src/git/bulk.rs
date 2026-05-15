@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use tokio::sync::Semaphore;
 
-use crate::git::progress::{create_progress_channel, emit_completed, emit_progress, ProgressSender};
+use crate::git::progress::{
+    create_progress_channel, emit_completed, emit_progress, ProgressSender,
+};
 use crate::git::repository::{self, update_branch};
 use crate::git::types::{BranchUpdateResult, GitOperationResult, GitStatus};
 use crate::ssh::SshCredStore;
@@ -36,7 +38,11 @@ impl Default for BulkGitService {
 impl BulkGitService {
     pub fn new(concurrency: usize) -> Self {
         let progress = Some(create_progress_channel());
-        Self { concurrency, progress, ssh_cred: None }
+        Self {
+            concurrency,
+            progress,
+            ssh_cred: None,
+        }
     }
 
     pub fn with_creds(mut self, cred: Option<Arc<SshCredStore>>) -> Self {
@@ -87,7 +93,12 @@ impl BulkGitService {
             }
         }
 
-        emit_completed(&progress, BULK, "bulk-fetch", &format!("All {total} projects fetched"));
+        emit_completed(
+            &progress,
+            BULK,
+            "bulk-fetch",
+            &format!("All {total} projects fetched"),
+        );
         results
     }
 
@@ -130,7 +141,12 @@ impl BulkGitService {
             }
         }
 
-        emit_completed(&progress, BULK, "bulk-pull", &format!("All {total} projects pulled"));
+        emit_completed(
+            &progress,
+            BULK,
+            "bulk-pull",
+            &format!("All {total} projects pulled"),
+        );
         results
     }
 
@@ -148,9 +164,8 @@ impl BulkGitService {
                 let name_err = name.clone();
                 // spawn_blocking because git2 ops are synchronous
                 tokio::task::spawn_blocking(move || {
-                    repository::get_status(&path, &name).unwrap_or_else(|e| {
-                        GitStatus::error(&name, e.to_string())
-                    })
+                    repository::get_status(&path, &name)
+                        .unwrap_or_else(|e| GitStatus::error(&name, e.to_string()))
                 })
                 .await
                 .unwrap_or_else(|_| GitStatus::error(&name_err, "task panic"))

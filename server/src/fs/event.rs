@@ -34,12 +34,14 @@ pub fn normalize(events: Vec<DebouncedEvent>) -> Vec<FsEvent> {
         match ev.event.kind {
             EventKind::Create(_) => {
                 for path in ev.event.paths {
-                    out.push(FsEvent { kind: FsEventKind::Created, path, from: None });
+                    out.push(FsEvent {
+                        kind: FsEventKind::Created,
+                        path,
+                        from: None,
+                    });
                 }
             }
-            EventKind::Modify(notify::event::ModifyKind::Name(
-                notify::event::RenameMode::Both,
-            )) => {
+            EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::Both)) => {
                 let mut paths = ev.event.paths.into_iter();
                 let from = paths.next();
                 let to = paths.next();
@@ -51,28 +53,40 @@ pub fn normalize(events: Vec<DebouncedEvent>) -> Vec<FsEvent> {
                     });
                 }
             }
-            EventKind::Modify(notify::event::ModifyKind::Name(
-                notify::event::RenameMode::From,
-            )) => {
+            EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::From)) => {
                 for path in ev.event.paths {
-                    out.push(FsEvent { kind: FsEventKind::Removed, path, from: None });
+                    out.push(FsEvent {
+                        kind: FsEventKind::Removed,
+                        path,
+                        from: None,
+                    });
                 }
             }
-            EventKind::Modify(notify::event::ModifyKind::Name(
-                notify::event::RenameMode::To,
-            )) => {
+            EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::To)) => {
                 for path in ev.event.paths {
-                    out.push(FsEvent { kind: FsEventKind::Created, path, from: None });
+                    out.push(FsEvent {
+                        kind: FsEventKind::Created,
+                        path,
+                        from: None,
+                    });
                 }
             }
             EventKind::Modify(_) => {
                 for path in ev.event.paths {
-                    out.push(FsEvent { kind: FsEventKind::Modified, path, from: None });
+                    out.push(FsEvent {
+                        kind: FsEventKind::Modified,
+                        path,
+                        from: None,
+                    });
                 }
             }
             EventKind::Remove(_) => {
                 for path in ev.event.paths {
-                    out.push(FsEvent { kind: FsEventKind::Removed, path, from: None });
+                    out.push(FsEvent {
+                        kind: FsEventKind::Removed,
+                        path,
+                        from: None,
+                    });
                 }
             }
             // Access / Other events — ignored

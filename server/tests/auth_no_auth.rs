@@ -2,14 +2,13 @@
 ///
 /// Tests that --no-auth flag successfully bypasses MongoDB authentication
 /// and generates dev tokens for local development.
-
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
 use dam_hopper_server::{
     agent_store::AgentStoreService,
-    config::{DamHopperConfig, GlobalConfig, WorkspaceInfo, FeaturesConfig},
+    config::{DamHopperConfig, FeaturesConfig, GlobalConfig, WorkspaceInfo},
     crypto::DamHopperOpaqueSuite,
     fs::FsSubsystem,
     pty::{BroadcastEventSink, PtySessionManager},
@@ -37,7 +36,7 @@ const TOKEN_CAPACITY: usize = 512;
 fn create_no_auth_state(workspace_root: PathBuf) -> AppState {
     let (event_sink, _rx) = BroadcastEventSink::new(TOKEN_CAPACITY);
     let pty_manager = PtySessionManager::new(std::sync::Arc::new(event_sink.clone()));
-    
+
     let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
@@ -49,22 +48,22 @@ fn create_no_auth_state(workspace_root: PathBuf) -> AppState {
         features: FeaturesConfig::default(),
         config_path: workspace_root.join("dam-hopper.toml"),
     };
-    
+
     let global_config = GlobalConfig::default();
     let store_path = workspace_root.join(".dam-hopper/agent-store");
     let agent_store = AgentStoreService::new(store_path);
     let jwt_secret = "test-secret-key".to_string();
     let fs = FsSubsystem::new(workspace_root.clone());
-    
+
     // Acquire lock for env var access
     let _guard = ENV_LOCK.lock().unwrap();
-    
+
     // Temporarily clear production flags for test
     let old_rust_env = std::env::var("RUST_ENV").ok();
     let old_environment = std::env::var("ENVIRONMENT").ok();
     std::env::remove_var("RUST_ENV");
     std::env::remove_var("ENVIRONMENT");
-    
+
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
     let state = AppState::new(
         workspace_root,
@@ -80,8 +79,9 @@ fn create_no_auth_state(workspace_root: PathBuf) -> AppState {
         tunnel_manager,
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
-    ).expect("Failed to create no-auth AppState in test");
-    
+    )
+    .expect("Failed to create no-auth AppState in test");
+
     // Restore environment variables
     if let Some(v) = old_rust_env {
         std::env::set_var("RUST_ENV", v);
@@ -89,7 +89,7 @@ fn create_no_auth_state(workspace_root: PathBuf) -> AppState {
     if let Some(v) = old_environment {
         std::env::set_var("ENVIRONMENT", v);
     }
-    
+
     state
 }
 
@@ -97,7 +97,7 @@ fn create_no_auth_state(workspace_root: PathBuf) -> AppState {
 fn create_normal_auth_state(workspace_root: PathBuf) -> AppState {
     let (event_sink, _rx) = BroadcastEventSink::new(TOKEN_CAPACITY);
     let pty_manager = PtySessionManager::new(std::sync::Arc::new(event_sink.clone()));
-    
+
     let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
@@ -109,13 +109,13 @@ fn create_normal_auth_state(workspace_root: PathBuf) -> AppState {
         features: FeaturesConfig::default(),
         config_path: workspace_root.join("dam-hopper.toml"),
     };
-    
+
     let global_config = GlobalConfig::default();
     let store_path = workspace_root.join(".dam-hopper/agent-store");
     let agent_store = AgentStoreService::new(store_path);
     let jwt_secret = "test-secret-key".to_string();
     let fs = FsSubsystem::new(workspace_root.clone());
-    
+
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
     AppState::new(
         workspace_root,
@@ -126,12 +126,13 @@ fn create_normal_auth_state(workspace_root: PathBuf) -> AppState {
         event_sink,
         jwt_secret,
         fs,
-        None, // no MongoDB
+        None,  // no MongoDB
         false, // no_auth = false
         tunnel_manager,
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
-    ).expect("Failed to create normal auth AppState in test")
+    )
+    .expect("Failed to create normal auth AppState in test")
 }
 
 // ---------------------------------------------------------------------------
@@ -153,12 +154,18 @@ async fn test_no_auth_login_returns_dev_token() {
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    
-    assert_eq!(response.status(), StatusCode::OK, "Login should succeed in no-auth mode");
-    
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "Login should succeed in no-auth mode"
+    );
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    
+
     assert_eq!(json["ok"], true, "Response should indicate success");
     assert!(json["token"].is_string(), "Should return a token");
     assert_eq!(json["dev_mode"], true, "Should indicate dev mode is active");
@@ -178,13 +185,22 @@ async fn test_no_auth_status_shows_dev_mode() {
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    
-    assert_eq!(response.status(), StatusCode::OK, "Status should be OK in no-auth mode");
-    
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "Status should be OK in no-auth mode"
+    );
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    
-    assert_eq!(json["authenticated"], true, "Should be authenticated in dev mode");
+
+    assert_eq!(
+        json["authenticated"], true,
+        "Should be authenticated in dev mode"
+    );
     assert_eq!(json["dev_mode"], true, "Should indicate dev mode");
     assert_eq!(json["user"], "dev-user", "Should show dev-user");
 }
@@ -204,7 +220,7 @@ async fn test_no_auth_bypasses_middleware() {
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    
+
     // Should NOT be 401 Unauthorized - should process the request
     // (may be 200 or other status depending on workspace state, but not 401)
     assert_ne!(
@@ -233,7 +249,7 @@ async fn test_normal_auth_requires_credentials() {
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    
+
     // Should fail because no MongoDB is configured and credentials are missing
     assert_eq!(
         response.status(),
@@ -256,7 +272,7 @@ async fn test_normal_auth_protects_routes() {
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    
+
     assert_eq!(
         response.status(),
         StatusCode::UNAUTHORIZED,
@@ -278,16 +294,18 @@ async fn test_normal_auth_status_without_token() {
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    
+
     assert_eq!(
         response.status(),
         StatusCode::UNAUTHORIZED,
         "Status should be unauthorized without valid token in normal mode"
     );
-    
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    
+
     assert_eq!(json["authenticated"], false, "Should not be authenticated");
 }
 
@@ -302,7 +320,7 @@ async fn test_no_auth_with_mongodb_fails() {
     let (event_sink, _rx) = BroadcastEventSink::new(TOKEN_CAPACITY);
     let pty_manager = PtySessionManager::new(std::sync::Arc::new(event_sink.clone()));
     let workspace_root = tmp.path().to_path_buf();
-    
+
     let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
@@ -314,17 +332,19 @@ async fn test_no_auth_with_mongodb_fails() {
         features: FeaturesConfig::default(),
         config_path: workspace_root.join("dam-hopper.toml"),
     };
-    
+
     let global_config = GlobalConfig::default();
     let store_path = workspace_root.join(".dam-hopper/agent-store");
     let agent_store = AgentStoreService::new(store_path);
     let jwt_secret = "test-secret-key".to_string();
     let fs = FsSubsystem::new(workspace_root.clone());
-    
+
     // Create a mock MongoDB database (simulating MONGODB_URI being set)
-    let mongodb_client = mongodb::Client::with_uri_str("mongodb://fake").await.unwrap();
+    let mongodb_client = mongodb::Client::with_uri_str("mongodb://fake")
+        .await
+        .unwrap();
     let mock_db = Some(mongodb_client.database("test"));
-    
+
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
     let result = AppState::new(
         workspace_root,
@@ -341,13 +361,17 @@ async fn test_no_auth_with_mongodb_fails() {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
     );
-    
-    assert!(result.is_err(), "AppState::new() should fail with no_auth + MongoDB");
+
+    assert!(
+        result.is_err(),
+        "AppState::new() should fail with no_auth + MongoDB"
+    );
     if let Err(e) = result {
         let err_msg = e.to_string();
         assert!(
             err_msg.contains("no-auth cannot be used when MongoDB is configured"),
-            "Error message should mention MongoDB conflict. Got: {}", err_msg
+            "Error message should mention MongoDB conflict. Got: {}",
+            err_msg
         );
     }
 }
@@ -356,15 +380,15 @@ async fn test_no_auth_with_mongodb_fails() {
 async fn test_no_auth_in_production_env_fails() {
     // Acquire lock to prevent other tests from interfering with env vars
     let _guard = ENV_LOCK.lock().unwrap();
-    
+
     // Set production environment variable
     std::env::set_var("RUST_ENV", "production");
-    
+
     let tmp = tempfile::tempdir().unwrap();
     let (event_sink, _rx) = BroadcastEventSink::new(TOKEN_CAPACITY);
     let pty_manager = PtySessionManager::new(std::sync::Arc::new(event_sink.clone()));
     let workspace_root = tmp.path().to_path_buf();
-    
+
     let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
@@ -376,13 +400,13 @@ async fn test_no_auth_in_production_env_fails() {
         features: FeaturesConfig::default(),
         config_path: workspace_root.join("dam-hopper.toml"),
     };
-    
+
     let global_config = GlobalConfig::default();
     let store_path = workspace_root.join(".dam-hopper/agent-store");
     let agent_store = AgentStoreService::new(store_path);
     let jwt_secret = "test-secret-key".to_string();
     let fs = FsSubsystem::new(workspace_root.clone());
-    
+
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
     let result = AppState::new(
         workspace_root,
@@ -402,13 +426,17 @@ async fn test_no_auth_in_production_env_fails() {
 
     // Clean up environment variable
     std::env::remove_var("RUST_ENV");
-    
-    assert!(result.is_err(), "AppState::new() should fail with no_auth in production");
+
+    assert!(
+        result.is_err(),
+        "AppState::new() should fail with no_auth in production"
+    );
     if let Err(e) = result {
         let err_msg = e.to_string();
         assert!(
             err_msg.contains("not allowed in production"),
-            "Error message should mention production environment. Got: {}", err_msg
+            "Error message should mention production environment. Got: {}",
+            err_msg
         );
     }
 }
@@ -422,35 +450,46 @@ async fn test_no_auth_login_response_structure() {
     let tmp = tempfile::tempdir().unwrap();
     let state = create_no_auth_state(tmp.path().to_path_buf());
     let app = dam_hopper_server::api::build_router(state, vec![]);
-    
+
     // POST /api/auth/login in dev mode
     let login_body = serde_json::json!({
         "username": "any-user",
         "password": "any-password"
     });
-    
+
     let request = Request::builder()
         .method("POST")
         .uri("/api/auth/login")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&login_body).unwrap()))
         .unwrap();
-    
+
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    
+
     // Validate response structure
     assert!(json.get("ok").is_some(), "Response should have 'ok' field");
     assert_eq!(json["ok"], true, "'ok' should be true");
-    
-    assert!(json.get("token").is_some(), "Response should have 'token' field");
+
+    assert!(
+        json.get("token").is_some(),
+        "Response should have 'token' field"
+    );
     assert!(json["token"].is_string(), "'token' should be a string");
-    assert!(!json["token"].as_str().unwrap().is_empty(), "'token' should not be empty");
-    
-    assert!(json.get("dev_mode").is_some(), "Response should have 'dev_mode' field in no-auth mode");
+    assert!(
+        !json["token"].as_str().unwrap().is_empty(),
+        "'token' should not be empty"
+    );
+
+    assert!(
+        json.get("dev_mode").is_some(),
+        "Response should have 'dev_mode' field in no-auth mode"
+    );
     assert_eq!(json["dev_mode"], true, "'dev_mode' should be true");
 }
 
@@ -459,26 +498,40 @@ async fn test_no_auth_status_response_structure() {
     let tmp = tempfile::tempdir().unwrap();
     let state = create_no_auth_state(tmp.path().to_path_buf());
     let app = dam_hopper_server::api::build_router(state, vec![]);
-    
+
     let request = Request::builder()
         .uri("/api/auth/status")
         .body(Body::empty())
         .unwrap();
-    
+
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    
+
     // Validate response structure
-    assert!(json.get("authenticated").is_some(), "Response should have 'authenticated' field");
-    assert_eq!(json["authenticated"], true, "Should be authenticated in dev mode");
-    
-    assert!(json.get("dev_mode").is_some(), "Response should have 'dev_mode' field");
+    assert!(
+        json.get("authenticated").is_some(),
+        "Response should have 'authenticated' field"
+    );
+    assert_eq!(
+        json["authenticated"], true,
+        "Should be authenticated in dev mode"
+    );
+
+    assert!(
+        json.get("dev_mode").is_some(),
+        "Response should have 'dev_mode' field"
+    );
     assert_eq!(json["dev_mode"], true, "'dev_mode' should be true");
-    
-    assert!(json.get("user").is_some(), "Response should have 'user' field");
+
+    assert!(
+        json.get("user").is_some(),
+        "Response should have 'user' field"
+    );
     assert_eq!(json["user"], "dev-user", "'user' should be 'dev-user'");
 }
 
@@ -487,26 +540,38 @@ async fn test_normal_auth_login_error_response_structure() {
     let tmp = tempfile::tempdir().unwrap();
     let state = create_normal_auth_state(tmp.path().to_path_buf());
     let app = dam_hopper_server::api::build_router(state, vec![]);
-    
+
     // POST /api/auth/login without credentials (should return error response)
     let login_body = serde_json::json!({});
-    
+
     let request = Request::builder()
         .method("POST")
         .uri("/api/auth/login")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&login_body).unwrap()))
         .unwrap();
-    
+
     let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "Should return 401 for invalid credentials");
-    
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "Should return 401 for invalid credentials"
+    );
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    
+
     // Validate error response structure
-    assert!(json.get("error").is_some(), "Response should have 'error' field");
-    
+    assert!(
+        json.get("error").is_some(),
+        "Response should have 'error' field"
+    );
+
     // In normal mode error response, dev_mode field should not be present
-    assert!(json.get("dev_mode").is_none(), "'dev_mode' should not be present in error responses");
+    assert!(
+        json.get("dev_mode").is_none(),
+        "'dev_mode' should not be present in error responses"
+    );
 }

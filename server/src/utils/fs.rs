@@ -6,11 +6,13 @@ use crate::error::AppError;
 /// On Unix, the temp file is created with mode 0o600.
 pub fn atomic_write(target: &Path, content: &str) -> Result<(), AppError> {
     let dir = target.parent().unwrap_or(Path::new("/"));
-    std::fs::create_dir_all(dir).map_err(|e| {
-        AppError::Config(format!("Cannot create dir {}: {}", dir.display(), e))
-    })?;
+    std::fs::create_dir_all(dir)
+        .map_err(|e| AppError::Config(format!("Cannot create dir {}: {}", dir.display(), e)))?;
 
-    let tmp = dir.join(format!(".dam-hopper-tmp-{}.tmp", uuid::Uuid::new_v4().simple()));
+    let tmp = dir.join(format!(
+        ".dam-hopper-tmp-{}.tmp",
+        uuid::Uuid::new_v4().simple()
+    ));
 
     write_with_mode(&tmp, content)?;
 
@@ -29,8 +31,8 @@ pub fn atomic_write(target: &Path, content: &str) -> Result<(), AppError> {
 
 #[cfg(unix)]
 fn write_with_mode(path: &Path, content: &str) -> Result<(), AppError> {
-    use std::os::unix::fs::OpenOptionsExt;
     use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)

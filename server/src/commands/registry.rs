@@ -1,7 +1,7 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-use super::presets::{CommandDefinition, load_all_databases};
+use super::presets::{load_all_databases, CommandDefinition};
 
 const BM25_K1: f64 = 1.2;
 const BM25_B: f64 = 0.75;
@@ -73,12 +73,20 @@ impl CommandRegistry {
         search_index(&self.index, query, limit, None)
     }
 
-    pub fn search_by_type(&self, query: &str, project_type: &str, limit: usize) -> Vec<SearchResult> {
+    pub fn search_by_type(
+        &self,
+        query: &str,
+        project_type: &str,
+        limit: usize,
+    ) -> Vec<SearchResult> {
         search_index(&self.index, query, limit, Some(project_type))
     }
 
     pub fn get_commands(&self, project_type: &str) -> &[CommandDefinition] {
-        self.by_type.get(project_type).map(|v| v.as_slice()).unwrap_or(&[])
+        self.by_type
+            .get(project_type)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     pub fn all_project_types(&self) -> Vec<&str> {
@@ -101,7 +109,13 @@ fn tokenize(text: &str) -> Vec<String> {
 }
 
 fn build_corpus(cmd: &CommandDefinition) -> String {
-    format!("{} {} {} {}", cmd.name, cmd.command, cmd.description, cmd.tags.join(" "))
+    format!(
+        "{} {} {} {}",
+        cmd.name,
+        cmd.command,
+        cmd.description,
+        cmd.tags.join(" ")
+    )
 }
 
 fn build_index(entries: Vec<(CommandDefinition, String)>) -> BM25Index {
@@ -114,13 +128,22 @@ fn build_index(entries: Vec<(CommandDefinition, String)>) -> BM25Index {
                 *term_freq.entry(token.clone()).or_insert(0) += 1;
             }
             let length = tokens.len();
-            IndexedDocument { command: cmd, project_type, term_freq, length }
+            IndexedDocument {
+                command: cmd,
+                project_type,
+                term_freq,
+                length,
+            }
         })
         .collect();
 
     let doc_count = documents.len();
     let total_length: usize = documents.iter().map(|d| d.length).sum();
-    let avg_doc_length = if doc_count > 0 { total_length as f64 / doc_count as f64 } else { 1.0 };
+    let avg_doc_length = if doc_count > 0 {
+        total_length as f64 / doc_count as f64
+    } else {
+        1.0
+    };
 
     let mut df: HashMap<String, usize> = HashMap::new();
     for doc in &documents {
@@ -135,7 +158,11 @@ fn build_index(entries: Vec<(CommandDefinition, String)>) -> BM25Index {
         idf.insert(term.clone(), score);
     }
 
-    BM25Index { documents, avg_doc_length, idf }
+    BM25Index {
+        documents,
+        avg_doc_length,
+        idf,
+    }
 }
 
 fn search_index(
@@ -163,7 +190,8 @@ fn search_index(
             let idf = index.idf.get(term).copied().unwrap_or(0.0);
             let tf = doc.term_freq.get(term).copied().unwrap_or(0) as f64;
             let numerator = tf * (BM25_K1 + 1.0);
-            let denominator = tf + BM25_K1 * (1.0 - BM25_B + BM25_B * (doc.length as f64 / index.avg_doc_length));
+            let denominator =
+                tf + BM25_K1 * (1.0 - BM25_B + BM25_B * (doc.length as f64 / index.avg_doc_length));
             score += idf * (numerator / denominator);
         }
 

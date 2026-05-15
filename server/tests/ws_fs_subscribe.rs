@@ -12,7 +12,9 @@ use std::{
 use dam_hopper_server::{
     agent_store::AgentStoreService,
     api::build_router,
-    config::{DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo},
+    config::{
+        DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo,
+    },
     crypto::DamHopperOpaqueSuite,
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
@@ -30,18 +32,32 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const TEST_TOKEN: &str = "ws-test-token-xyz";
 fn test_jwt() -> String {
-    use jsonwebtoken::{encode, Header, EncodingKey};
+    use jsonwebtoken::{encode, EncodingKey, Header};
     #[derive(serde::Serialize)]
-    struct Claims { sub: String, exp: usize }
-    let claims = Claims { sub: "test-user".into(), exp: (chrono::Utc::now().timestamp() as usize) + 3600 };
-    encode(&Header::default(), &claims, &EncodingKey::from_secret(TEST_TOKEN.as_bytes())).unwrap()
+    struct Claims {
+        sub: String,
+        exp: usize,
+    }
+    let claims = Claims {
+        sub: "test-user".into(),
+        exp: (chrono::Utc::now().timestamp() as usize) + 3600,
+    };
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(TEST_TOKEN.as_bytes()),
+    )
+    .unwrap()
 }
 
 fn make_test_state(tmp: &TempDir) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
 
     let config = DamHopperConfig {
-        workspace: WorkspaceInfo { name: "ws-test".into(), root: ".".into() },
+        workspace: WorkspaceInfo {
+            name: "ws-test".into(),
+            root: ".".into(),
+        },
         agent_store: None,
         server: dam_hopper_server::config::ServerConfig::default(),
         projects: vec![ProjectConfig {
@@ -82,7 +98,8 @@ fn make_test_state(tmp: &TempDir) -> AppState {
         tunnel_manager,
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
-    ).expect("make_test_state failed")
+    )
+    .expect("make_test_state failed")
 }
 
 async fn spawn_server(state: AppState) -> SocketAddr {
@@ -142,13 +159,19 @@ async fn ws_fs_subscribe_receives_snapshot() {
         "project": "test-project",
         "path": ""
     });
-    ws.send(Message::Text(sub_msg.to_string().into())).await.unwrap();
+    ws.send(Message::Text(sub_msg.to_string().into()))
+        .await
+        .unwrap();
 
     // Expect snapshot
-    let snapshot = next_json(&mut ws, Duration::from_secs(5)).await
+    let snapshot = next_json(&mut ws, Duration::from_secs(5))
+        .await
         .expect("expected fs:tree_snapshot");
 
-    assert_eq!(snapshot["kind"], "fs:tree_snapshot", "unexpected: {snapshot}");
+    assert_eq!(
+        snapshot["kind"], "fs:tree_snapshot",
+        "unexpected: {snapshot}"
+    );
     assert_eq!(snapshot["req_id"], 1);
     assert!(snapshot["sub_id"].is_number(), "sub_id missing");
     let nodes = snapshot["nodes"].as_array().expect("nodes array");
@@ -187,7 +210,8 @@ async fn ws_fs_subscribe_receives_create_event() {
     .unwrap();
 
     // Drain snapshot
-    let _snap = next_json(&mut ws, Duration::from_secs(5)).await
+    let _snap = next_json(&mut ws, Duration::from_secs(5))
+        .await
         .expect("expected snapshot");
 
     // Create file — should trigger fs:event
@@ -195,14 +219,18 @@ async fn ws_fs_subscribe_receives_create_event() {
     std::fs::write(&new_file, "data").unwrap();
 
     // Poll for event with 3s window (debounce = 150ms)
-    let event = next_json(&mut ws, Duration::from_secs(3)).await
+    let event = next_json(&mut ws, Duration::from_secs(3))
+        .await
         .expect("expected fs:event after file create");
 
     assert_eq!(event["kind"], "fs:event", "unexpected msg: {event}");
     let ev = &event["event"];
     assert_eq!(ev["kind"], "created");
     assert!(
-        ev["path"].as_str().map(|p| p.contains("new-file.txt")).unwrap_or(false),
+        ev["path"]
+            .as_str()
+            .map(|p| p.contains("new-file.txt"))
+            .unwrap_or(false),
         "path missing new-file.txt: {ev}"
     );
 
@@ -235,12 +263,16 @@ async fn ws_fs_unsubscribe_stops_events() {
     .await
     .unwrap();
 
-    let snap = next_json(&mut ws, Duration::from_secs(5)).await.expect("snapshot");
+    let snap = next_json(&mut ws, Duration::from_secs(5))
+        .await
+        .expect("snapshot");
     let sub_id = snap["sub_id"].as_u64().unwrap();
 
     // Unsubscribe
     ws.send(Message::Text(
-        json!({ "kind": "fs:unsubscribe_tree", "sub_id": sub_id }).to_string().into(),
+        json!({ "kind": "fs:unsubscribe_tree", "sub_id": sub_id })
+            .to_string()
+            .into(),
     ))
     .await
     .unwrap();
@@ -291,7 +323,8 @@ async fn ws_fs_subscribe_nonexistent_project_returns_error() {
     .await
     .unwrap();
 
-    let resp = next_json(&mut ws, Duration::from_secs(3)).await
+    let resp = next_json(&mut ws, Duration::from_secs(3))
+        .await
         .expect("expected error response");
 
     assert_eq!(resp["kind"], "fs:error", "unexpected: {resp}");
@@ -314,19 +347,31 @@ async fn watcher_shared_between_two_connections() {
     let (mut ws1, _) = connect_async(&url).await.unwrap();
     let (mut ws2, _) = connect_async(&url).await.unwrap();
 
-    let sub_msg_1 = json!({ "kind": "fs:subscribe_tree", "req_id": 10, "project": "test-project", "path": "" });
-    let sub_msg_2 = json!({ "kind": "fs:subscribe_tree", "req_id": 11, "project": "test-project", "path": "" });
+    let sub_msg_1 =
+        json!({ "kind": "fs:subscribe_tree", "req_id": 10, "project": "test-project", "path": "" });
+    let sub_msg_2 =
+        json!({ "kind": "fs:subscribe_tree", "req_id": 11, "project": "test-project", "path": "" });
 
-    ws1.send(Message::Text(sub_msg_1.to_string().into())).await.unwrap();
-    ws2.send(Message::Text(sub_msg_2.to_string().into())).await.unwrap();
+    ws1.send(Message::Text(sub_msg_1.to_string().into()))
+        .await
+        .unwrap();
+    ws2.send(Message::Text(sub_msg_2.to_string().into()))
+        .await
+        .unwrap();
 
-    let _snap1 = next_json(&mut ws1, Duration::from_secs(5)).await.expect("snap1");
-    let snap2 = next_json(&mut ws2, Duration::from_secs(5)).await.expect("snap2");
+    let _snap1 = next_json(&mut ws1, Duration::from_secs(5))
+        .await
+        .expect("snap1");
+    let snap2 = next_json(&mut ws2, Duration::from_secs(5))
+        .await
+        .expect("snap2");
     let sub_id2 = snap2["sub_id"].as_u64().unwrap();
 
     // Unsubscribe ws2 only
     ws2.send(Message::Text(
-        json!({ "kind": "fs:unsubscribe_tree", "sub_id": sub_id2 }).to_string().into(),
+        json!({ "kind": "fs:unsubscribe_tree", "sub_id": sub_id2 })
+            .to_string()
+            .into(),
     ))
     .await
     .unwrap();
@@ -335,7 +380,8 @@ async fn watcher_shared_between_two_connections() {
     // ws1 should still receive events — watcher is shared and still alive
     std::fs::write(tmp.path().join("shared-watcher-test.txt"), "x").unwrap();
 
-    let ev = next_json(&mut ws1, Duration::from_secs(3)).await
+    let ev = next_json(&mut ws1, Duration::from_secs(3))
+        .await
         .expect("ws1 should still receive events after ws2 unsubscribed");
     assert_eq!(ev["kind"], "fs:event");
 

@@ -29,19 +29,12 @@ pub struct DecryptResult {
 ///
 /// No PBKDF2 — aes_key is used as AES-256-GCM key directly.
 /// AES-GCM tag verification is automatic via `decrypt()`.
-pub fn decrypt_blob(
-    ciphertext_blob: &[u8],
-    aes_key: &[u8],
-) -> Result<DecryptResult, FsError> {
+pub fn decrypt_blob(ciphertext_blob: &[u8], aes_key: &[u8]) -> Result<DecryptResult, FsError> {
     if ciphertext_blob.len() < IV_LEN + 16 {
-        return Err(FsError::MutationRefused(
-            "encrypted blob too short".into(),
-        ));
+        return Err(FsError::MutationRefused("encrypted blob too short".into()));
     }
     if aes_key.len() != 32 {
-        return Err(FsError::MutationRefused(
-            "aes_key must be 32 bytes".into(),
-        ));
+        return Err(FsError::MutationRefused("aes_key must be 32 bytes".into()));
     }
 
     let iv = &ciphertext_blob[..IV_LEN];
@@ -51,25 +44,17 @@ pub fn decrypt_blob(
     let nonce = GenericArray::from_slice(iv);
 
     // Decrypt and authenticate in one step; any bit-flip → Err
-    let plaintext: Zeroizing<Vec<u8>> = Zeroizing::new(
-        cipher
-            .decrypt(nonce, ct)
-            .map_err(|_| {
-                FsError::MutationRefused(
-                    "AES-GCM decryption failed — wrong key or corrupted data".into(),
-                )
-            })?,
-    );
+    let plaintext: Zeroizing<Vec<u8>> =
+        Zeroizing::new(cipher.decrypt(nonce, ct).map_err(|_| {
+            FsError::MutationRefused(
+                "AES-GCM decryption failed — wrong key or corrupted data".into(),
+            )
+        })?);
 
     // Parse envelope: metadata_json + 0x00 + content_bytes
-    let sep_idx = plaintext
-        .iter()
-        .position(|&b| b == 0x00)
-        .ok_or_else(|| {
-            FsError::MutationRefused(
-                "plaintext missing metadata separator (0x00)".into(),
-            )
-        })?;
+    let sep_idx = plaintext.iter().position(|&b| b == 0x00).ok_or_else(|| {
+        FsError::MutationRefused("plaintext missing metadata separator (0x00)".into())
+    })?;
 
     // FIX-06: cap metadata size to prevent unbounded allocation before UTF-8 parse
     const METADATA_MAX: usize = 4096;
@@ -79,14 +64,11 @@ pub fn decrypt_blob(
         )));
     }
 
-    let meta_json = std::str::from_utf8(&plaintext[..sep_idx]).map_err(|e| {
-        FsError::MutationRefused(format!("metadata is not valid UTF-8: {e}"))
-    })?;
+    let meta_json = std::str::from_utf8(&plaintext[..sep_idx])
+        .map_err(|e| FsError::MutationRefused(format!("metadata is not valid UTF-8: {e}")))?;
 
-    let metadata: serde_json::Value =
-        serde_json::from_str(meta_json).map_err(|e| {
-            FsError::MutationRefused(format!("metadata JSON parse error: {e}"))
-        })?;
+    let metadata: serde_json::Value = serde_json::from_str(meta_json)
+        .map_err(|e| FsError::MutationRefused(format!("metadata JSON parse error: {e}")))?;
 
     let content = plaintext[sep_idx + 1..].to_vec();
 
@@ -123,8 +105,7 @@ pub fn decrypt_and_write(
     let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(FsError::Io)?;
     use std::io::Write as _;
     tmp.write_all(&result.content).map_err(FsError::Io)?;
-    tmp.persist(&output_abs)
-        .map_err(|e| FsError::Io(e.error))?;
+    tmp.persist(&output_abs).map_err(|e| FsError::Io(e.error))?;
 
     Ok(result)
 }
@@ -139,17 +120,13 @@ mod tests {
     use tempfile::tempdir;
 
     const TEST_KEY: [u8; 32] = [
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
-        20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+        26, 27, 28, 29, 30, 31, 32,
     ];
 
     /// Encrypt plaintext using the same AES-256-GCM scheme as the client.
     /// Uses a fixed IV — acceptable in test code only.
-    fn encrypt_for_test(
-        aes_key: &[u8; 32],
-        metadata: &str,
-        content: &[u8],
-    ) -> Vec<u8> {
+    fn encrypt_for_test(aes_key: &[u8; 32], metadata: &str, content: &[u8]) -> Vec<u8> {
         let iv: [u8; 12] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
         let mut plaintext = Vec::new();
@@ -157,8 +134,7 @@ mod tests {
         plaintext.push(0x00);
         plaintext.extend_from_slice(content);
 
-        let cipher =
-            Aes256Gcm::new(GenericArray::from_slice(aes_key));
+        let cipher = Aes256Gcm::new(GenericArray::from_slice(aes_key));
         let nonce = GenericArray::from_slice(&iv);
         let ct = cipher
             .encrypt(nonce, plaintext.as_slice())
@@ -184,11 +160,7 @@ mod tests {
 
     #[test]
     fn test_wrong_key_returns_error() {
-        let blob = encrypt_for_test(
-            &TEST_KEY,
-            r#"{"name":"f","size":1,"type":""}"#,
-            b"x",
-        );
+        let blob = encrypt_for_test(&TEST_KEY, r#"{"name":"f","size":1,"type":""}"#, b"x");
         let wrong_key = [0u8; 32];
         let result = decrypt_blob(&blob, &wrong_key);
         assert!(result.is_err(), "expected error for wrong key");
@@ -207,9 +179,7 @@ mod tests {
         let plaintext_no_sep = b"no-separator-here-just-bytes";
         let cipher = Aes256Gcm::new(GenericArray::from_slice(&TEST_KEY));
         let nonce = GenericArray::from_slice(&iv);
-        let ct = cipher
-            .encrypt(nonce, plaintext_no_sep.as_slice())
-            .unwrap();
+        let ct = cipher.encrypt(nonce, plaintext_no_sep.as_slice()).unwrap();
         let mut blob = Vec::new();
         blob.extend_from_slice(&iv);
         blob.extend_from_slice(&ct);
@@ -226,8 +196,7 @@ mod tests {
         let blob = encrypt_for_test(&TEST_KEY, metadata, content);
 
         let out_path = dir.path().join("out.txt");
-        let result =
-            decrypt_and_write(&blob, &TEST_KEY, out_path.clone()).unwrap();
+        let result = decrypt_and_write(&blob, &TEST_KEY, out_path.clone()).unwrap();
 
         let written = std::fs::read(&out_path).unwrap();
         assert_eq!(written, b"hello world");
@@ -237,17 +206,16 @@ mod tests {
     #[test]
     fn test_wrong_key_no_file_written() {
         let dir = tempdir().unwrap();
-        let blob = encrypt_for_test(
-            &TEST_KEY,
-            r#"{"name":"f","size":1,"type":""}"#,
-            b"x",
-        );
+        let blob = encrypt_for_test(&TEST_KEY, r#"{"name":"f","size":1,"type":""}"#, b"x");
         let out_path = dir.path().join("out.txt");
         let wrong_key = [0u8; 32];
 
         let result = decrypt_and_write(&blob, &wrong_key, out_path.clone());
         assert!(result.is_err());
-        assert!(!out_path.exists(), "output file must not be created on failure");
+        assert!(
+            !out_path.exists(),
+            "output file must not be created on failure"
+        );
     }
 
     // FIX-09 additional edge case tests
@@ -269,14 +237,20 @@ mod tests {
         let meta_4096 = format!(r#"{{"k":"{filler_ok}"}}"#);
         assert_eq!(meta_4096.len(), 4096, "fixture must be exactly 4096 bytes");
         let blob_ok = encrypt_for_test(&TEST_KEY, &meta_4096, b"data");
-        assert!(decrypt_blob(&blob_ok, &TEST_KEY).is_ok(), "4096-byte metadata must pass");
+        assert!(
+            decrypt_blob(&blob_ok, &TEST_KEY).is_ok(),
+            "4096-byte metadata must pass"
+        );
 
         // Metadata of 4097 bytes (sep_idx == 4097) — over cap, should fail
         let filler_over: String = "x".repeat(4097 - base.len());
         let meta_4097 = format!(r#"{{"k":"{filler_over}"}}"#);
         assert_eq!(meta_4097.len(), 4097, "fixture must be exactly 4097 bytes");
         let blob_over = encrypt_for_test(&TEST_KEY, &meta_4097, b"data");
-        assert!(decrypt_blob(&blob_over, &TEST_KEY).is_err(), "4097-byte metadata must fail");
+        assert!(
+            decrypt_blob(&blob_over, &TEST_KEY).is_err(),
+            "4097-byte metadata must fail"
+        );
     }
 
     #[test]
@@ -286,7 +260,10 @@ mod tests {
         let content: &[u8] = b"\x00binary\x00data\x00";
         let blob = encrypt_for_test(&TEST_KEY, metadata, content);
         let result = decrypt_blob(&blob, &TEST_KEY).unwrap();
-        assert_eq!(result.content, content, "null bytes in content must be preserved");
+        assert_eq!(
+            result.content, content,
+            "null bytes in content must be preserved"
+        );
     }
 
     #[test]
@@ -306,6 +283,9 @@ mod tests {
         blob.extend_from_slice(&ct);
 
         let result = decrypt_blob(&blob, &TEST_KEY);
-        assert!(result.is_err(), "invalid UTF-8 in metadata must return error");
+        assert!(
+            result.is_err(),
+            "invalid UTF-8 in metadata must return error"
+        );
     }
 }

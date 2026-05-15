@@ -1,7 +1,10 @@
 use std::{
     collections::HashMap,
     io::Write as _,
-    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Instant,
 };
 
@@ -31,12 +34,24 @@ pub enum SessionType {
 
 impl SessionType {
     pub fn from_id(id: &str) -> Self {
-        if id.starts_with("build:") { return Self::Build; }
-        if id.starts_with("run:") { return Self::Run; }
-        if id.starts_with("custom:") { return Self::Custom; }
-        if id.starts_with("shell:") { return Self::Shell; }
-        if id.starts_with("terminal:") { return Self::Terminal; }
-        if id.starts_with("free:") { return Self::Free; }
+        if id.starts_with("build:") {
+            return Self::Build;
+        }
+        if id.starts_with("run:") {
+            return Self::Run;
+        }
+        if id.starts_with("custom:") {
+            return Self::Custom;
+        }
+        if id.starts_with("shell:") {
+            return Self::Shell;
+        }
+        if id.starts_with("terminal:") {
+            return Self::Terminal;
+        }
+        if id.starts_with("free:") {
+            return Self::Free;
+        }
         Self::Unknown
     }
 }
@@ -156,7 +171,12 @@ impl LiveSession {
         self.master
             .lock()
             .unwrap()
-            .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
             .map_err(|e| anyhow::anyhow!("PTY resize failed: {e}"))
     }
 

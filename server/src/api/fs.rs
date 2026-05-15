@@ -113,9 +113,7 @@ pub async fn read(
         .await
         .map_err(ApiError::from)?;
 
-    let (is_binary, mime) = ops::detect_binary(&canonical)
-        .await
-        .map_err(AppError::Fs)?;
+    let (is_binary, mime) = ops::detect_binary(&canonical).await.map_err(AppError::Fs)?;
 
     if is_binary {
         let body = Json(BinaryResponse { binary: true, mime });
@@ -167,9 +165,9 @@ pub async fn download(
         .await
         .map_err(ApiError::from)?;
 
-    let meta = tokio::fs::metadata(&canonical).await.map_err(|_| {
-        ApiError::from(AppError::Fs(crate::fs::FsError::NotFound))
-    })?;
+    let meta = tokio::fs::metadata(&canonical)
+        .await
+        .map_err(|_| ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)))?;
 
     if !meta.is_file() {
         return Err(ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)));
@@ -197,13 +195,12 @@ pub async fn download(
         })
         .collect();
 
-    let disposition = format!(
-        "attachment; filename=\"{filename}\"; filename*=UTF-8''{encoded_name}"
-    );
+    let disposition =
+        format!("attachment; filename=\"{filename}\"; filename*=UTF-8''{encoded_name}");
 
-    let file = tokio::fs::File::open(&canonical).await.map_err(|_| {
-        ApiError::from(AppError::Fs(crate::fs::FsError::NotFound))
-    })?;
+    let file = tokio::fs::File::open(&canonical)
+        .await
+        .map_err(|_| ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)))?;
 
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = Body::from_stream(stream);
@@ -239,15 +236,13 @@ pub async fn search(
                 .map(|p| (p.name.clone(), std::path::PathBuf::from(&p.path)))
                 .collect()
         };
-        let (matches, truncated) = ops::search_workspace(
-            projects,
-            &query,
-            case,
-            200,
-            MAX_WORKSPACE_SEARCH_RESULTS,
-        )
-        .await;
-        Ok(Json(SearchResponse { query, matches, truncated }))
+        let (matches, truncated) =
+            ops::search_workspace(projects, &query, case, 200, MAX_WORKSPACE_SEARCH_RESULTS).await;
+        Ok(Json(SearchResponse {
+            query,
+            matches,
+            truncated,
+        }))
     } else {
         let project_name = params.project.ok_or_else(|| {
             ApiError::from(AppError::InvalidInput(
@@ -258,10 +253,13 @@ pub async fn search(
             .await
             .map_err(ApiError::from)?;
         let max = params.max.unwrap_or(200).min(ops::MAX_SEARCH_RESULTS);
-        let (matches, truncated) =
-            ops::search_files(&root, &query, case, max)
-                .await
-                .map_err(AppError::Fs)?;
-        Ok(Json(SearchResponse { query, matches, truncated }))
+        let (matches, truncated) = ops::search_files(&root, &query, case, max)
+            .await
+            .map_err(AppError::Fs)?;
+        Ok(Json(SearchResponse {
+            query,
+            matches,
+            truncated,
+        }))
     }
 }

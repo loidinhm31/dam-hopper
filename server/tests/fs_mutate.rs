@@ -1,14 +1,16 @@
+use opaque_ke::ServerSetup;
 /// Integration tests for fs:op WS mutating operations.
 ///
 /// Uses a real server on an ephemeral port + tokio-tungstenite client.
 use std::{net::SocketAddr, sync::Arc, time::Duration};
-use opaque_ke::ServerSetup;
 
 use dam_hopper_server::{
-    crypto::DamHopperOpaqueSuite,
     agent_store::AgentStoreService,
     api::build_router,
-    config::{DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo},
+    config::{
+        DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo,
+    },
+    crypto::DamHopperOpaqueSuite,
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
@@ -23,17 +25,31 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const TEST_TOKEN: &str = "mutate-test-token";
 fn test_jwt() -> String {
-    use jsonwebtoken::{encode, Header, EncodingKey};
+    use jsonwebtoken::{encode, EncodingKey, Header};
     #[derive(serde::Serialize)]
-    struct Claims { sub: String, exp: usize }
-    let claims = Claims { sub: "test-user".into(), exp: (chrono::Utc::now().timestamp() as usize) + 3600 };
-    encode(&Header::default(), &claims, &EncodingKey::from_secret(TEST_TOKEN.as_bytes())).unwrap()
+    struct Claims {
+        sub: String,
+        exp: usize,
+    }
+    let claims = Claims {
+        sub: "test-user".into(),
+        exp: (chrono::Utc::now().timestamp() as usize) + 3600,
+    };
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(TEST_TOKEN.as_bytes()),
+    )
+    .unwrap()
 }
 
 fn make_state(tmp: &TempDir) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
     let config = DamHopperConfig {
-        workspace: WorkspaceInfo { name: "ws".into(), root: ".".into() },
+        workspace: WorkspaceInfo {
+            name: "ws".into(),
+            root: ".".into(),
+        },
         agent_store: None,
         server: dam_hopper_server::config::ServerConfig::default(),
         projects: vec![ProjectConfig {
@@ -58,7 +74,22 @@ fn make_state(tmp: &TempDir) -> AppState {
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(workspace_dir.clone());
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
-    AppState::new(workspace_dir, config, GlobalConfig::default(), pty, agent_store, event_sink, TEST_TOKEN.to_string(), fs, None, false, tunnel_manager, None, ServerSetup::<DamHopperOpaqueSuite>::new(&mut rand::rngs::OsRng)).expect("make_state failed")
+    AppState::new(
+        workspace_dir,
+        config,
+        GlobalConfig::default(),
+        pty,
+        agent_store,
+        event_sink,
+        TEST_TOKEN.to_string(),
+        fs,
+        None,
+        false,
+        tunnel_manager,
+        None,
+        ServerSetup::<DamHopperOpaqueSuite>::new(&mut rand::rngs::OsRng),
+    )
+    .expect("make_state failed")
 }
 
 async fn spawn_server(state: AppState) -> SocketAddr {
@@ -69,11 +100,18 @@ async fn spawn_server(state: AppState) -> SocketAddr {
     addr
 }
 
-async fn next_json(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, timeout: Duration) -> Option<Value> {
+async fn next_json(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    timeout: Duration,
+) -> Option<Value> {
     let deadline = std::time::Instant::now() + timeout;
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        if remaining.is_zero() { return None; }
+        if remaining.is_zero() {
+            return None;
+        }
         match tokio::time::timeout(remaining, ws.next()).await {
             Ok(Some(Ok(Message::Text(t)))) => return serde_json::from_str(&t).ok(),
             Ok(Some(Ok(_))) => continue,
@@ -82,12 +120,23 @@ async fn next_json(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite
     }
 }
 
-async fn send_op(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, msg: Value) -> Value {
-    ws.send(Message::Text(msg.to_string().into())).await.unwrap();
-    next_json(ws, Duration::from_secs(5)).await.expect("expected fs:op_result")
+async fn send_op(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    msg: Value,
+) -> Value {
+    ws.send(Message::Text(msg.to_string().into()))
+        .await
+        .unwrap();
+    next_json(ws, Duration::from_secs(5))
+        .await
+        .expect("expected fs:op_result")
 }
 
-async fn connect(addr: SocketAddr) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+async fn connect(
+    addr: SocketAddr,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
     let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), test_jwt());
     let (ws, _) = connect_async(&url).await.expect("WS connect failed");
     ws
@@ -103,13 +152,17 @@ async fn create_file_exists_after_op() {
     let addr = spawn_server(make_state(&tmp)).await;
     let mut ws = connect(addr).await;
 
-    let resp = send_op(&mut ws, json!({
-        "kind": "fs:op",
-        "req_id": 1,
-        "op": "create_file",
-        "project": "proj",
-        "path": "hello.txt"
-    })).await;
+    let resp = send_op(
+        &mut ws,
+        json!({
+            "kind": "fs:op",
+            "req_id": 1,
+            "op": "create_file",
+            "project": "proj",
+            "path": "hello.txt"
+        }),
+    )
+    .await;
 
     assert_eq!(resp["kind"], "fs:op_result", "{resp}");
     assert_eq!(resp["req_id"], 1);
@@ -125,13 +178,17 @@ async fn create_dir_nested_exists_after_op() {
     let addr = spawn_server(make_state(&tmp)).await;
     let mut ws = connect(addr).await;
 
-    let resp = send_op(&mut ws, json!({
-        "kind": "fs:op",
-        "req_id": 2,
-        "op": "create_dir",
-        "project": "proj",
-        "path": "nested/deep"
-    })).await;
+    let resp = send_op(
+        &mut ws,
+        json!({
+            "kind": "fs:op",
+            "req_id": 2,
+            "op": "create_dir",
+            "project": "proj",
+            "path": "nested/deep"
+        }),
+    )
+    .await;
 
     // create_dir via fs:op uses validate_new_path which requires parent to exist.
     // "nested/deep" — parent "nested" doesn't exist, so this should fail OR we
@@ -142,13 +199,17 @@ async fn create_dir_nested_exists_after_op() {
     // This is correct behavior: client should create parent first.
     // Test: just "newdir" (single level):
     drop(resp);
-    let resp2 = send_op(&mut ws, json!({
-        "kind": "fs:op",
-        "req_id": 3,
-        "op": "create_dir",
-        "project": "proj",
-        "path": "newdir"
-    })).await;
+    let resp2 = send_op(
+        &mut ws,
+        json!({
+            "kind": "fs:op",
+            "req_id": 3,
+            "op": "create_dir",
+            "project": "proj",
+            "path": "newdir"
+        }),
+    )
+    .await;
 
     assert_eq!(resp2["kind"], "fs:op_result", "{resp2}");
     assert_eq!(resp2["ok"], true, "{resp2}");
@@ -165,14 +226,18 @@ async fn rename_file_succeeds() {
     let addr = spawn_server(make_state(&tmp)).await;
     let mut ws = connect(addr).await;
 
-    let resp = send_op(&mut ws, json!({
-        "kind": "fs:op",
-        "req_id": 4,
-        "op": "rename",
-        "project": "proj",
-        "path": "old.txt",
-        "new_path": "new.txt"
-    })).await;
+    let resp = send_op(
+        &mut ws,
+        json!({
+            "kind": "fs:op",
+            "req_id": 4,
+            "op": "rename",
+            "project": "proj",
+            "path": "old.txt",
+            "new_path": "new.txt"
+        }),
+    )
+    .await;
 
     assert_eq!(resp["kind"], "fs:op_result", "{resp}");
     assert_eq!(resp["ok"], true, "{resp}");
@@ -190,13 +255,17 @@ async fn delete_file_gone_after_op() {
     let addr = spawn_server(make_state(&tmp)).await;
     let mut ws = connect(addr).await;
 
-    let resp = send_op(&mut ws, json!({
-        "kind": "fs:op",
-        "req_id": 5,
-        "op": "delete",
-        "project": "proj",
-        "path": "to-delete.txt"
-    })).await;
+    let resp = send_op(
+        &mut ws,
+        json!({
+            "kind": "fs:op",
+            "req_id": 5,
+            "op": "delete",
+            "project": "proj",
+            "path": "to-delete.txt"
+        }),
+    )
+    .await;
 
     assert_eq!(resp["ok"], true, "{resp}");
     assert!(!tmp.path().join("to-delete.txt").exists());
@@ -213,13 +282,17 @@ async fn delete_dir_recursive_gone() {
     let addr = spawn_server(make_state(&tmp)).await;
     let mut ws = connect(addr).await;
 
-    let resp = send_op(&mut ws, json!({
-        "kind": "fs:op",
-        "req_id": 6,
-        "op": "delete",
-        "project": "proj",
-        "path": "subdir"
-    })).await;
+    let resp = send_op(
+        &mut ws,
+        json!({
+            "kind": "fs:op",
+            "req_id": 6,
+            "op": "delete",
+            "project": "proj",
+            "path": "subdir"
+        }),
+    )
+    .await;
 
     assert_eq!(resp["ok"], true, "{resp}");
     assert!(!tmp.path().join("subdir").exists());
@@ -233,15 +306,22 @@ async fn delete_project_root_refused() {
     let addr = spawn_server(make_state(&tmp)).await;
     let mut ws = connect(addr).await;
 
-    let resp = send_op(&mut ws, json!({
-        "kind": "fs:op",
-        "req_id": 7,
-        "op": "delete",
-        "project": "proj",
-        "path": ""   // empty → project root
-    })).await;
+    let resp = send_op(
+        &mut ws,
+        json!({
+            "kind": "fs:op",
+            "req_id": 7,
+            "op": "delete",
+            "project": "proj",
+            "path": ""   // empty → project root
+        }),
+    )
+    .await;
 
-    assert_eq!(resp["ok"], false, "project root delete must be refused: {resp}");
+    assert_eq!(
+        resp["ok"], false,
+        "project root delete must be refused: {resp}"
+    );
 
     ws.close(None).await.unwrap();
 }
@@ -255,16 +335,26 @@ async fn delete_git_head_refused_without_force() {
     let addr = spawn_server(make_state(&tmp)).await;
     let mut ws = connect(addr).await;
 
-    let resp = send_op(&mut ws, json!({
-        "kind": "fs:op",
-        "req_id": 8,
-        "op": "delete",
-        "project": "proj",
-        "path": ".git/HEAD"
-    })).await;
+    let resp = send_op(
+        &mut ws,
+        json!({
+            "kind": "fs:op",
+            "req_id": 8,
+            "op": "delete",
+            "project": "proj",
+            "path": ".git/HEAD"
+        }),
+    )
+    .await;
 
-    assert_eq!(resp["ok"], false, ".git delete without force must be refused: {resp}");
-    assert!(tmp.path().join(".git/HEAD").exists(), "HEAD must still exist");
+    assert_eq!(
+        resp["ok"], false,
+        ".git delete without force must be refused: {resp}"
+    );
+    assert!(
+        tmp.path().join(".git/HEAD").exists(),
+        "HEAD must still exist"
+    );
 
     ws.close(None).await.unwrap();
 }
@@ -278,14 +368,18 @@ async fn delete_git_head_allowed_with_force() {
     let addr = spawn_server(make_state(&tmp)).await;
     let mut ws = connect(addr).await;
 
-    let resp = send_op(&mut ws, json!({
-        "kind": "fs:op",
-        "req_id": 9,
-        "op": "delete",
-        "project": "proj",
-        "path": ".git/HEAD",
-        "force_git": true
-    })).await;
+    let resp = send_op(
+        &mut ws,
+        json!({
+            "kind": "fs:op",
+            "req_id": 9,
+            "op": "delete",
+            "project": "proj",
+            "path": ".git/HEAD",
+            "force_git": true
+        }),
+    )
+    .await;
 
     assert_eq!(resp["ok"], true, "force_git delete should succeed: {resp}");
     assert!(!tmp.path().join(".git/HEAD").exists());
@@ -303,19 +397,26 @@ async fn move_across_dirs_succeeds() {
     let addr = spawn_server(make_state(&tmp)).await;
     let mut ws = connect(addr).await;
 
-    let resp = send_op(&mut ws, json!({
-        "kind": "fs:op",
-        "req_id": 10,
-        "op": "move",
-        "project": "proj",
-        "path": "src/file.txt",
-        "new_path": "dst/file.txt"
-    })).await;
+    let resp = send_op(
+        &mut ws,
+        json!({
+            "kind": "fs:op",
+            "req_id": 10,
+            "op": "move",
+            "project": "proj",
+            "path": "src/file.txt",
+            "new_path": "dst/file.txt"
+        }),
+    )
+    .await;
 
     assert_eq!(resp["ok"], true, "{resp}");
     assert!(!tmp.path().join("src/file.txt").exists());
     assert!(tmp.path().join("dst/file.txt").exists());
-    assert_eq!(std::fs::read_to_string(tmp.path().join("dst/file.txt")).unwrap(), "hello");
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("dst/file.txt")).unwrap(),
+        "hello"
+    );
 
     ws.close(None).await.unwrap();
 }

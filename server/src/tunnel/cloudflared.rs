@@ -13,9 +13,8 @@ use super::{
     installer::TunnelInstaller,
 };
 
-static CF_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https://[a-z0-9-]+\.trycloudflare\.com\b").unwrap()
-});
+static CF_URL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"https://[a-z0-9-]+\.trycloudflare\.com\b").unwrap());
 
 pub struct CloudflaredDriver;
 

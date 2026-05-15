@@ -34,7 +34,14 @@ pub fn emit(
 }
 
 pub fn emit_started(tx: &Option<ProgressSender>, project_name: &str, operation: &str, msg: &str) {
-    emit(tx, project_name, operation, GitProgressPhase::Started, msg, None);
+    emit(
+        tx,
+        project_name,
+        operation,
+        GitProgressPhase::Started,
+        msg,
+        None,
+    );
 }
 
 pub fn emit_progress(
@@ -44,13 +51,34 @@ pub fn emit_progress(
     msg: &str,
     percent: Option<u8>,
 ) {
-    emit(tx, project_name, operation, GitProgressPhase::Progress, msg, percent);
+    emit(
+        tx,
+        project_name,
+        operation,
+        GitProgressPhase::Progress,
+        msg,
+        percent,
+    );
 }
 
 pub fn emit_completed(tx: &Option<ProgressSender>, project_name: &str, operation: &str, msg: &str) {
-    emit(tx, project_name, operation, GitProgressPhase::Completed, msg, None);
+    emit(
+        tx,
+        project_name,
+        operation,
+        GitProgressPhase::Completed,
+        msg,
+        None,
+    );
 }
 
 pub fn emit_failed(tx: &Option<ProgressSender>, project_name: &str, operation: &str, msg: &str) {
-    emit(tx, project_name, operation, GitProgressPhase::Failed, msg, None);
+    emit(
+        tx,
+        project_name,
+        operation,
+        GitProgressPhase::Failed,
+        msg,
+        None,
+    );
 }

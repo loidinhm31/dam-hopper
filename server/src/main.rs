@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::{fmt, EnvFilter};
 
 use dam_hopper_server::{
     agent_store::AgentStoreService,
@@ -9,7 +9,7 @@ use dam_hopper_server::{
     config::{global_config_path, load_workspace_config, read_global_config_at},
     crypto::load_or_create_server_setup,
     fs::FsSubsystem,
-    port_forward::{PortForwardManager, proc_poll_loop},
+    port_forward::{proc_poll_loop, PortForwardManager},
     probe_inotify_limit,
     pty::{BroadcastEventSink, PtySessionManager},
     state::AppState,
@@ -62,7 +62,11 @@ async fn main() -> anyhow::Result<()> {
 
     let token = manage_token(cli.new_token)?;
     // Print server start URL to stderr
-    eprintln!("\n  Server started\n  Open: http://{host}:{port}\n", host = cli.host, port = cli.port);
+    eprintln!(
+        "\n  Server started\n  Open: http://{host}:{port}\n",
+        host = cli.host,
+        port = cli.port
+    );
 
     if cli.new_token {
         return Ok(());
@@ -70,9 +74,9 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Workspace ─────────────────────────────────────────────────────────────
 
-    let workspace_dir = cli.workspace.unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
+    let workspace_dir = cli
+        .workspace
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     let config = match load_workspace_config(&workspace_dir) {
         Ok(cfg) => {
@@ -98,7 +102,6 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     };
-
 
     let gc_path = global_config_path();
     let global_config = read_global_config_at(&gc_path)
@@ -135,7 +138,8 @@ async fn main() -> anyhow::Result<()> {
                     tracing::info!(path = %db_path.display(), "Session store opened");
                     let store_arc = std::sync::Arc::new(store);
                     let (tx, rx) = std::sync::mpsc::sync_channel(256);
-                    let worker = dam_hopper_server::persistence::PersistWorker::new(rx, store_arc.clone());
+                    let worker =
+                        dam_hopper_server::persistence::PersistWorker::new(rx, store_arc.clone());
                     std::thread::Builder::new()
                         .name("persist-worker".to_string())
                         .spawn(move || worker.run())
@@ -159,13 +163,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Restore sessions from persistence (Phase 06) ──────────────────────────
     if let Some(store) = &session_store {
-        match dam_hopper_server::persistence::restore_sessions(
-            store,
-            &pty_manager,
-            &config,
-        )
-        .await
-        {
+        match dam_hopper_server::persistence::restore_sessions(store, &pty_manager, &config).await {
             Ok(count) => {
                 tracing::info!(count, "Restored sessions from persistence");
             }
@@ -208,7 +206,10 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| workspace_dir.clone());
     let fs = FsSubsystem::new(fs_root);
 
-    let db = if let (Ok(uri), Ok(name)) = (std::env::var("MONGODB_URI"), std::env::var("MONGODB_DATABASE")) {
+    let db = if let (Ok(uri), Ok(name)) = (
+        std::env::var("MONGODB_URI"),
+        std::env::var("MONGODB_DATABASE"),
+    ) {
         tracing::info!(%name, "Connecting to MongoDB...");
         let client_options = mongodb::options::ClientOptions::parse(&uri).await?;
         let client = mongodb::Client::with_options(client_options)?;
@@ -218,10 +219,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let tunnel_driver = std::sync::Arc::new(CloudflaredDriver);
-    let tunnel_manager = TunnelSessionManager::new(
-        std::sync::Arc::new(event_sink.clone()),
-        tunnel_driver,
-    );
+    let tunnel_manager =
+        TunnelSessionManager::new(std::sync::Arc::new(event_sink.clone()), tunnel_driver);
 
     // ── Port forward manager ──────────────────────────────────────────────────
     let port_forward_manager = std::sync::Arc::new(
@@ -236,8 +235,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Load (or generate) OPAQUE server keypair — persisted to ~/.config/dam-hopper/opaque-server-setup
-    let opaque_server_setup = load_or_create_server_setup()
-        .expect("Failed to load or create OPAQUE server setup");
+    let opaque_server_setup =
+        load_or_create_server_setup().expect("Failed to load or create OPAQUE server setup");
 
     // AppState::new() performs production safety validation for no-auth mode
     let state = AppState::new(

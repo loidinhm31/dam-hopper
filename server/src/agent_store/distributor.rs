@@ -3,12 +3,12 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{debug, warn};
 
-use crate::error::{AppError, Result};
 use super::schema::{
-    AgentItemCategory, AgentType, BrokenSymlink, DistributionMethod, DistributionStatus,
-    HealthCheckResult, OrphanedItem, ShipResult, agent_paths,
+    agent_paths, AgentItemCategory, AgentType, BrokenSymlink, DistributionMethod,
+    DistributionStatus, HealthCheckResult, OrphanedItem, ShipResult,
 };
 use super::store::assert_safe_name;
+use crate::error::{AppError, Result};
 
 /// Ship an item from the central store to a project for a specific agent.
 pub async fn ship(
@@ -19,16 +19,17 @@ pub async fn ship(
     agent: AgentType,
     method: DistributionMethod,
 ) -> ShipResult {
-    let make_result = |success: bool, error: Option<String>, target_path: Option<PathBuf>| ShipResult {
-        item: item_name.to_string(),
-        category,
-        project: project_path.to_string_lossy().into_owned(),
-        agent,
-        method,
-        success,
-        error,
-        target_path,
-    };
+    let make_result =
+        |success: bool, error: Option<String>, target_path: Option<PathBuf>| ShipResult {
+            item: item_name.to_string(),
+            category,
+            project: project_path.to_string_lossy().into_owned(),
+            agent,
+            method,
+            success,
+            error,
+            target_path,
+        };
 
     if let Err(e) = assert_safe_name(item_name) {
         return make_result(false, Some(e.to_string()), None);
@@ -46,11 +47,16 @@ pub async fn ship(
                 Err(e) => make_result(false, Some(e.to_string()), None),
             }
         }
-        AgentItemCategory::MemoryTemplate => {
-            make_result(false, Some("memory-template distribution not implemented here — use memory module".to_string()), None)
-        }
+        AgentItemCategory::MemoryTemplate => make_result(
+            false,
+            Some(
+                "memory-template distribution not implemented here — use memory module".to_string(),
+            ),
+            None,
+        ),
         _ => {
-            let (source_path, target_path) = resolve_ship_paths(store_path, item_name, category, project_path, agent_p);
+            let (source_path, target_path) =
+                resolve_ship_paths(store_path, item_name, category, project_path, agent_p);
 
             if let Some(parent) = target_path.parent() {
                 if let Err(e) = fs::create_dir_all(parent).await {
@@ -59,21 +65,19 @@ pub async fn ship(
             }
 
             match fs::symlink_metadata(&target_path).await {
-                Ok(_) => {
-                    match check_existing_target(&target_path, &source_path).await {
-                        true => return make_result(true, None, Some(target_path)),
-                        false => {
-                            return make_result(
-                                false,
-                                Some(format!(
-                                    "Target already exists and is not a store symlink: {}",
-                                    target_path.display()
-                                )),
-                                None,
-                            );
-                        }
+                Ok(_) => match check_existing_target(&target_path, &source_path).await {
+                    true => return make_result(true, None, Some(target_path)),
+                    false => {
+                        return make_result(
+                            false,
+                            Some(format!(
+                                "Target already exists and is not a store symlink: {}",
+                                target_path.display()
+                            )),
+                            None,
+                        );
                     }
-                }
+                },
                 Err(_) => {} // does not exist — proceed
             }
 
@@ -125,16 +129,17 @@ pub async fn unship(
     agent: AgentType,
     force: bool,
 ) -> ShipResult {
-    let make_result = |method: DistributionMethod, success: bool, error: Option<String>| ShipResult {
-        item: item_name.to_string(),
-        category,
-        project: project_path.to_string_lossy().into_owned(),
-        agent,
-        method,
-        success,
-        error,
-        target_path: None,
-    };
+    let make_result =
+        |method: DistributionMethod, success: bool, error: Option<String>| ShipResult {
+            item: item_name.to_string(),
+            category,
+            project: project_path.to_string_lossy().into_owned(),
+            agent,
+            method,
+            success,
+            error,
+            target_path: None,
+        };
 
     if let Err(e) = assert_safe_name(item_name) {
         return make_result(DistributionMethod::Symlink, false, Some(e.to_string()));
@@ -150,10 +155,15 @@ pub async fn unship(
     }
 
     if category == AgentItemCategory::MemoryTemplate {
-        return make_result(DistributionMethod::Symlink, false, Some("memory-template unship not implemented".to_string()));
+        return make_result(
+            DistributionMethod::Symlink,
+            false,
+            Some("memory-template unship not implemented".to_string()),
+        );
     }
 
-    let (source_path, target_path) = resolve_ship_paths(store_path, item_name, category, project_path, agent_p);
+    let (source_path, target_path) =
+        resolve_ship_paths(store_path, item_name, category, project_path, agent_p);
 
     match fs::symlink_metadata(&target_path).await {
         Err(_) => return make_result(DistributionMethod::Symlink, true, None), // already gone
@@ -226,18 +236,25 @@ pub async fn absorb(
     }
 
     let agent_p = agent_paths(agent);
-    let (store_target, project_item) = resolve_ship_paths(store_path, item_name, category, project_path, agent_p);
+    let (store_target, project_item) =
+        resolve_ship_paths(store_path, item_name, category, project_path, agent_p);
 
     match fs::symlink_metadata(&project_item).await {
         Err(_) => return make_err(format!("Item not found at: {}", project_item.display())),
         Ok(meta) if meta.file_type().is_symlink() => {
-            return make_err(format!("Item is already a symlink: {}", project_item.display()));
+            return make_err(format!(
+                "Item is already a symlink: {}",
+                project_item.display()
+            ));
         }
         Ok(_) => {}
     }
 
     if store_target.exists() {
-        return make_err(format!("Item already exists in store: {}", store_target.display()));
+        return make_err(format!(
+            "Item already exists in store: {}",
+            store_target.display()
+        ));
     }
 
     if let Some(parent) = store_target.parent() {
@@ -265,11 +282,21 @@ pub async fn absorb(
             store_target = %store_target.display(),
             "absorb: copied to store but failed to remove original; item now exists in both locations: {e}"
         );
-        return make_err(format!("Copied to store but failed to remove original: {e}"));
+        return make_err(format!(
+            "Copied to store but failed to remove original: {e}"
+        ));
     }
     debug!(item = item_name, store_target = %store_target.display(), "absorbed into store");
 
-    ship(store_path, item_name, category, project_path, agent, DistributionMethod::Symlink).await
+    ship(
+        store_path,
+        item_name,
+        category,
+        project_path,
+        agent,
+        DistributionMethod::Symlink,
+    )
+    .await
 }
 
 /// Bulk ship: ship multiple items to multiple projects.
@@ -300,7 +327,10 @@ pub async fn get_distribution_matrix(
 
     for (item_name, category) in store_items {
         // MCP server and memory-template aren't file-based in the same way
-        if matches!(category, AgentItemCategory::McpServer | AgentItemCategory::MemoryTemplate) {
+        if matches!(
+            category,
+            AgentItemCategory::McpServer | AgentItemCategory::MemoryTemplate
+        ) {
             continue;
         }
 
@@ -311,17 +341,24 @@ pub async fn get_distribution_matrix(
             for agent in agents {
                 let proj_key = format!("{proj_name}:{agent}");
                 let agent_p = agent_paths(*agent);
-                let (_, target_path) = resolve_ship_paths(store_path, item_name, *category, proj_path, agent_p);
+                let (_, target_path) =
+                    resolve_ship_paths(store_path, item_name, *category, proj_path, agent_p);
 
                 let status = match fs::symlink_metadata(&target_path).await {
-                    Err(_) => DistributionStatus { shipped: false, method: None },
+                    Err(_) => DistributionStatus {
+                        shipped: false,
+                        method: None,
+                    },
                     Ok(meta) => {
                         let method = if meta.file_type().is_symlink() {
                             DistributionMethod::Symlink
                         } else {
                             DistributionMethod::Copy
                         };
-                        DistributionStatus { shipped: true, method: Some(method) }
+                        DistributionStatus {
+                            shipped: true,
+                            method: Some(method),
+                        }
                     }
                 };
 
@@ -513,21 +550,31 @@ async fn ship_mcp_server(
     project_path: &Path,
     mcp_config_rel: &str,
 ) -> Result<()> {
-    let fragment_path = store_path.join("mcp-servers").join(format!("{server_name}.json"));
-    let fragment_content = fs::read_to_string(&fragment_path).await
-        .map_err(|_| AppError::Internal(format!("MCP server fragment not found: {}", fragment_path.display())))?;
-    let fragment: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&fragment_content)
-        .map_err(|e| AppError::Internal(format!("Invalid MCP server JSON: {e}")))?;
+    let fragment_path = store_path
+        .join("mcp-servers")
+        .join(format!("{server_name}.json"));
+    let fragment_content = fs::read_to_string(&fragment_path).await.map_err(|_| {
+        AppError::Internal(format!(
+            "MCP server fragment not found: {}",
+            fragment_path.display()
+        ))
+    })?;
+    let fragment: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&fragment_content)
+            .map_err(|e| AppError::Internal(format!("Invalid MCP server JSON: {e}")))?;
 
     // Validate: fragment must be a non-empty map with string keys (server name → config).
     // Each value must be an object (the server config), not a primitive.
     if fragment.is_empty() {
-        return Err(AppError::Internal(format!("MCP server fragment \"{server_name}\" is empty")));
+        return Err(AppError::Internal(format!(
+            "MCP server fragment \"{server_name}\" is empty"
+        )));
     }
     for (key, val) in &fragment {
         if !val.is_object() {
             return Err(AppError::Internal(format!(
-                "MCP server fragment \"{server_name}\": entry \"{key}\" must be an object, got {}", val
+                "MCP server fragment \"{server_name}\": entry \"{key}\" must be an object, got {}",
+                val
             )));
         }
     }
@@ -544,7 +591,8 @@ async fn ship_mcp_server(
         serde_json::json!({"mcpServers": {}})
     };
 
-    let servers = existing["mcpServers"].as_object_mut()
+    let servers = existing["mcpServers"]
+        .as_object_mut()
         .ok_or_else(|| AppError::Internal("mcpServers is not an object".to_string()))?;
     servers.extend(fragment);
 
@@ -566,11 +614,15 @@ async fn unship_mcp_server(
     let raw = fs::read_to_string(&mcp_config_path).await?;
     let mut config: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
 
-    let fragment_path = store_path.join("mcp-servers").join(format!("{server_name}.json"));
+    let fragment_path = store_path
+        .join("mcp-servers")
+        .join(format!("{server_name}.json"));
     if let Some(servers) = config["mcpServers"].as_object_mut() {
         if fragment_path.exists() {
             let fragment_content = fs::read_to_string(&fragment_path).await?;
-            if let Ok(fragment) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&fragment_content) {
+            if let Ok(fragment) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+                &fragment_content,
+            ) {
                 for key in fragment.keys() {
                     servers.remove(key);
                 }

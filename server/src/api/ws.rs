@@ -3,13 +3,16 @@ use std::io::Write;
 
 use axum::{
     extract::{
-        State, WebSocketUpgrade,
         ws::{CloseFrame, Message, WebSocket},
+        State, WebSocketUpgrade,
     },
     response::Response,
 };
 use axum_extra::extract::CookieJar;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64, engine::general_purpose::URL_SAFE_NO_PAD as OPAQUE_B64};
+use base64::{
+    engine::general_purpose::STANDARD as BASE64,
+    engine::general_purpose::URL_SAFE_NO_PAD as OPAQUE_B64, Engine as _,
+};
 use futures_util::stream::StreamExt;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
@@ -23,8 +26,8 @@ use zeroize::Zeroizing;
 use crate::api::auth::AUTH_COOKIE;
 use crate::api::ws_protocol::{ClientMsg, FsEventDto, ServerMsg, WireMsg};
 use crate::crypto::opaque::{
-    DamHopperOpaqueSuite, handle_login_finish, handle_login_start, handle_register_finish,
-    handle_register_start, validate_identifier,
+    handle_login_finish, handle_login_start, handle_register_finish, handle_register_start,
+    validate_identifier, DamHopperOpaqueSuite,
 };
 use crate::fs::{
     atomic_persist_with_check, mutate, ops, tree_snapshot_sync, EncUploadState, UploadState,
@@ -77,7 +80,9 @@ pub async fn ws_handler(
     jar: CookieJar,
     State(state): State<AppState>,
 ) -> Response {
-    let token = params.get("token").cloned()
+    let token = params
+        .get("token")
+        .cloned()
         .or_else(|| jar.get(AUTH_COOKIE).map(|c| c.value().to_string()));
 
     let auth_ok = token
@@ -151,10 +156,19 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let mut enc_uploads: HashMap<String, EncUploadState> = HashMap::new();
 
     enum PendingBinary {
-        Upload { upload_id: String, seq: u64 },
-        Write { write_id: u64, seq: u32 },
+        Upload {
+            upload_id: String,
+            seq: u64,
+        },
+        Write {
+            write_id: u64,
+            seq: u32,
+        },
         /// Phase 04: encrypted binary upload chunk (fs:put_chunk)
-        EncPut { upload_id: String, seq: u64 },
+        EncPut {
+            upload_id: String,
+            seq: u64,
+        },
         /// Phase 04/06: encrypted text save — carries resolved paths for the binary handler
         EncPutSave {
             req_id: u64,
@@ -182,19 +196,36 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         if let Message::Binary(bytes) = msg {
             match pending_binary.take() {
                 Some(PendingBinary::Upload { upload_id, seq }) => {
-                    handle_upload_binary(&upload_id, seq, bytes.as_ref(), &mut uploads, &pty_tx).await;
+                    handle_upload_binary(&upload_id, seq, bytes.as_ref(), &mut uploads, &pty_tx)
+                        .await;
                 }
                 Some(PendingBinary::Write { write_id, seq }) => {
                     handle_write_binary(write_id, seq, bytes.as_ref(), &mut writes, &pty_tx).await;
                 }
                 Some(PendingBinary::EncPut { upload_id, seq }) => {
-                    handle_enc_put_binary(&upload_id, seq, bytes.as_ref(), &mut enc_uploads, &pty_tx).await;
+                    handle_enc_put_binary(
+                        &upload_id,
+                        seq,
+                        bytes.as_ref(),
+                        &mut enc_uploads,
+                        &pty_tx,
+                    )
+                    .await;
                 }
-                Some(PendingBinary::EncPutSave { req_id, session_id, path_abs }) => {
+                Some(PendingBinary::EncPutSave {
+                    req_id,
+                    session_id,
+                    path_abs,
+                }) => {
                     handle_enc_put_save_binary(
-                        req_id, &session_id, &path_abs, bytes.as_ref(),
-                        &aes_keys, &pty_tx,
-                    ).await;
+                        req_id,
+                        &session_id,
+                        &path_abs,
+                        bytes.as_ref(),
+                        &aes_keys,
+                        &pty_tx,
+                    )
+                    .await;
                 }
                 None => {
                     warn!("unexpected binary frame (no pending header) — dropping");
@@ -256,7 +287,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // -----------------------------------------------------------
             // FS — subscribe / unsubscribe
             // -----------------------------------------------------------
-            ClientMsg::FsSubTree { req_id, project, path } => {
+            ClientMsg::FsSubTree {
+                req_id,
+                project,
+                path,
+            } => {
                 let result = do_fs_subscribe(
                     req_id,
                     &project,
@@ -284,7 +319,13 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // -----------------------------------------------------------
             // FS — read
             // -----------------------------------------------------------
-            ClientMsg::FsRead { req_id, project, path, offset, len } => {
+            ClientMsg::FsRead {
+                req_id,
+                project,
+                path,
+                offset,
+                len,
+            } => {
                 let result = do_fs_read(req_id, &project, &path, offset, len, &state).await;
                 let json = match serde_json::to_string(&result) {
                     Ok(j) => j,
@@ -299,10 +340,22 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // -----------------------------------------------------------
             // FS — write begin
             // -----------------------------------------------------------
-            ClientMsg::FsWriteBegin { req_id, project, path, expected_mtime, size, encoding: _ } => {
+            ClientMsg::FsWriteBegin {
+                req_id,
+                project,
+                path,
+                expected_mtime,
+                size,
+                encoding: _,
+            } => {
                 if size > FS_WRITE_MAX {
-                    send_fs_error(&pty_tx, req_id, "TOO_LARGE".into(),
-                        format!("write size {} exceeds {FS_WRITE_MAX} byte cap", size)).await;
+                    send_fs_error(
+                        &pty_tx,
+                        req_id,
+                        "TOO_LARGE".into(),
+                        format!("write size {} exceeds {FS_WRITE_MAX} byte cap", size),
+                    )
+                    .await;
                     continue;
                 }
 
@@ -315,21 +368,25 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             Ok(t) => t,
                             Err(e) => {
                                 warn!(req_id, error = %e, "fs:write_begin: tempfile creation failed");
-                                send_fs_error(&pty_tx, req_id, "IO_ERROR".into(), e.to_string()).await;
+                                send_fs_error(&pty_tx, req_id, "IO_ERROR".into(), e.to_string())
+                                    .await;
                                 continue;
                             }
                         };
 
                         let write_id = next_write_id;
                         next_write_id += 1;
-                        writes.insert(write_id, WriteInFlight {
-                            abs_path,
-                            expected_mtime,
-                            declared_size: size,
-                            temp,
-                            bytes_written: 0,
-                            next_seq: 0,
-                        });
+                        writes.insert(
+                            write_id,
+                            WriteInFlight {
+                                abs_path,
+                                expected_mtime,
+                                declared_size: size,
+                                temp,
+                                bytes_written: 0,
+                                next_seq: 0,
+                            },
+                        );
                         let ack = ServerMsg::FsWriteAck { req_id, write_id };
                         if let Ok(json) = serde_json::to_string(&ack) {
                             let _ = pty_tx.send(WireMsg::Text(json)).await;
@@ -342,7 +399,12 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // -----------------------------------------------------------
             // FS — write chunk
             // -----------------------------------------------------------
-            ClientMsg::FsWriteChunk { write_id, seq, eof, data } => {
+            ClientMsg::FsWriteChunk {
+                write_id,
+                seq,
+                eof,
+                data,
+            } => {
                 let entry = match writes.get_mut(&write_id) {
                     Some(e) => e,
                     None => {
@@ -352,7 +414,12 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 };
 
                 if seq != entry.next_seq {
-                    warn!(write_id, seq, expected = entry.next_seq, "out-of-order chunk — aborting write");
+                    warn!(
+                        write_id,
+                        seq,
+                        expected = entry.next_seq,
+                        "out-of-order chunk — aborting write"
+                    );
                     writes.remove(&write_id);
                     continue;
                 }
@@ -361,8 +428,12 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     Ok(bytes) => {
                         let accumulated = entry.bytes_written + bytes.len() as u64;
                         if accumulated > entry.declared_size {
-                            warn!(write_id, accumulated, declared = entry.declared_size,
-                                "write_chunk exceeds declared size — aborting write");
+                            warn!(
+                                write_id,
+                                accumulated,
+                                declared = entry.declared_size,
+                                "write_chunk exceeds declared size — aborting write"
+                            );
                             writes.remove(&write_id);
                             continue;
                         }
@@ -396,13 +467,21 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 let entry = match writes.get(&write_id) {
                     Some(e) => e,
                     None => {
-                        warn!(write_id, "fs:write_chunk_binary for unknown write_id — dropping");
+                        warn!(
+                            write_id,
+                            "fs:write_chunk_binary for unknown write_id — dropping"
+                        );
                         continue;
                     }
                 };
 
                 if seq != entry.next_seq {
-                    warn!(write_id, seq, expected = entry.next_seq, "out-of-order binary chunk — aborting write");
+                    warn!(
+                        write_id,
+                        seq,
+                        expected = entry.next_seq,
+                        "out-of-order binary chunk — aborting write"
+                    );
                     writes.remove(&write_id);
                     continue;
                 }
@@ -434,14 +513,21 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
                 // Integrity check: must have written exactly the declared size.
                 if entry.bytes_written != entry.declared_size {
-                    warn!(write_id, written = entry.bytes_written, declared = entry.declared_size,
-                        "fs:write_commit: bytes_written != declared_size — rejecting");
+                    warn!(
+                        write_id,
+                        written = entry.bytes_written,
+                        declared = entry.declared_size,
+                        "fs:write_commit: bytes_written != declared_size — rejecting"
+                    );
                     let result_msg = ServerMsg::FsWriteResult {
                         write_id,
                         ok: false,
                         new_mtime: None,
                         conflict: false,
-                        error: Some(format!("incomplete write: sent {} of {} bytes", entry.bytes_written, entry.declared_size)),
+                        error: Some(format!(
+                            "incomplete write: sent {} of {} bytes",
+                            entry.bytes_written, entry.declared_size
+                        )),
                     };
                     if let Ok(json) = serde_json::to_string(&result_msg) {
                         let _ = pty_tx.send(WireMsg::Text(json)).await;
@@ -498,13 +584,37 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // -----------------------------------------------------------
             // FS — mutating ops
             // -----------------------------------------------------------
-            ClientMsg::FsOp { req_id, op, project, path, new_path, force_git } => {
-                let result = do_fs_op(req_id, &op, &project, &path, new_path.as_deref(), force_git, &state).await;
+            ClientMsg::FsOp {
+                req_id,
+                op,
+                project,
+                path,
+                new_path,
+                force_git,
+            } => {
+                let result = do_fs_op(
+                    req_id,
+                    &op,
+                    &project,
+                    &path,
+                    new_path.as_deref(),
+                    force_git,
+                    &state,
+                )
+                .await;
                 let msg = match result {
-                    Ok(()) => ServerMsg::FsOpResult { req_id, ok: true, error: None },
+                    Ok(()) => ServerMsg::FsOpResult {
+                        req_id,
+                        ok: true,
+                        error: None,
+                    },
                     Err(e) => {
                         warn!(req_id, op = %op, error = %e, "fs:op failed");
-                        ServerMsg::FsOpResult { req_id, ok: false, error: Some(e.to_string()) }
+                        ServerMsg::FsOpResult {
+                            req_id,
+                            ok: false,
+                            error: Some(e.to_string()),
+                        }
                     }
                 };
                 if let Ok(json) = serde_json::to_string(&msg) {
@@ -515,13 +625,34 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // -----------------------------------------------------------
             // FS — upload begin
             // -----------------------------------------------------------
-            ClientMsg::FsUploadBegin { req_id, upload_id, project, dir, filename, len } => {
-                let result = do_upload_begin(req_id, &upload_id, &project, &dir, &filename, len, &state, &mut uploads).await;
+            ClientMsg::FsUploadBegin {
+                req_id,
+                upload_id,
+                project,
+                dir,
+                filename,
+                len,
+            } => {
+                let result = do_upload_begin(
+                    req_id,
+                    &upload_id,
+                    &project,
+                    &dir,
+                    &filename,
+                    len,
+                    &state,
+                    &mut uploads,
+                )
+                .await;
                 let msg = match result {
                     Ok(()) => ServerMsg::FsUploadBeginOk { req_id, upload_id },
                     Err(e) => {
                         warn!(req_id, upload_id, error = %e, "fs:upload_begin failed");
-                        ServerMsg::FsError { req_id, code: "UPLOAD_BEGIN_FAILED".into(), message: e.to_string() }
+                        ServerMsg::FsError {
+                            req_id,
+                            code: "UPLOAD_BEGIN_FAILED".into(),
+                            message: e.to_string(),
+                        }
                     }
                 };
                 if let Ok(json) = serde_json::to_string(&msg) {
@@ -535,11 +666,19 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             ClientMsg::FsUploadChunk { upload_id, seq } => {
                 // Validate state exists before accepting the binary frame.
                 if !uploads.contains_key(&upload_id) {
-                    warn!(upload_id, seq, "fs:upload_chunk for unknown upload_id — dropping");
+                    warn!(
+                        upload_id,
+                        seq, "fs:upload_chunk for unknown upload_id — dropping"
+                    );
                     continue;
                 }
                 if uploads[&upload_id].next_seq != seq {
-                    warn!(upload_id, seq, expected = uploads[&upload_id].next_seq, "out-of-order chunk — aborting upload");
+                    warn!(
+                        upload_id,
+                        seq,
+                        expected = uploads[&upload_id].next_seq,
+                        "out-of-order chunk — aborting upload"
+                    );
                     uploads.remove(&upload_id);
                     continue;
                 }
@@ -565,7 +704,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }
                     Some(upload_state) => {
                         let up_id = upload_state.target_abs.to_string_lossy().to_string();
-                        match tokio::task::spawn_blocking(move || upload_state.commit(false)).await {
+                        match tokio::task::spawn_blocking(move || upload_state.commit(false)).await
+                        {
                             Ok(Ok(new_mtime)) => {
                                 debug!(req_id, new_mtime, "fs:upload_commit success");
                                 crate::audit_fs!("upload", "<upload>", up_id, true);
@@ -608,11 +748,19 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // -----------------------------------------------------------
             // Auth — OPAQUE registration (auth:register_start)
             // -----------------------------------------------------------
-            ClientMsg::AuthRegisterStart { req_id, identifier, data } => {
+            ClientMsg::AuthRegisterStart {
+                req_id,
+                identifier,
+                data,
+            } => {
                 if !validate_identifier(&identifier) {
                     let msg = ServerMsg::AuthRegisterStartResponse {
-                        req_id, ok: false, data: None,
-                        error: Some("invalid identifier (alphanumeric + hyphens, max 128 chars)".into()),
+                        req_id,
+                        ok: false,
+                        data: None,
+                        error: Some(
+                            "invalid identifier (alphanumeric + hyphens, max 128 chars)".into(),
+                        ),
                     };
                     send_json(&pty_tx, &msg).await;
                     continue;
@@ -622,7 +770,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     Ok(b) => b,
                     Err(e) => {
                         let msg = ServerMsg::AuthRegisterStartResponse {
-                            req_id, ok: false, data: None,
+                            req_id,
+                            ok: false,
+                            data: None,
                             error: Some(format!("base64 decode failed: {e}")),
                         };
                         send_json(&pty_tx, &msg).await;
@@ -634,13 +784,15 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 let id = identifier.clone();
                 let result = tokio::task::spawn_blocking(move || {
                     handle_register_start(&setup, &id, &decoded)
-                }).await;
+                })
+                .await;
 
                 let msg = match result {
                     Ok(Ok(response_bytes)) => {
                         debug!(req_id, identifier, "auth:register_start ok");
                         ServerMsg::AuthRegisterStartResponse {
-                            req_id, ok: true,
+                            req_id,
+                            ok: true,
                             data: Some(OPAQUE_B64.encode(&response_bytes)),
                             error: None,
                         }
@@ -648,13 +800,18 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     Ok(Err(e)) => {
                         warn!(req_id, identifier, error = %e, "auth:register_start failed");
                         ServerMsg::AuthRegisterStartResponse {
-                            req_id, ok: false, data: None, error: Some(e),
+                            req_id,
+                            ok: false,
+                            data: None,
+                            error: Some(e),
                         }
                     }
                     Err(e) => {
                         warn!(req_id, error = %e, "auth:register_start spawn_blocking error");
                         ServerMsg::AuthRegisterStartResponse {
-                            req_id, ok: false, data: None,
+                            req_id,
+                            ok: false,
+                            data: None,
                             error: Some(format!("internal error: {e}")),
                         }
                     }
@@ -665,10 +822,16 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // -----------------------------------------------------------
             // Auth — OPAQUE registration (auth:register_finish)
             // -----------------------------------------------------------
-            ClientMsg::AuthRegisterFinish { req_id, identifier, data, overwrite } => {
+            ClientMsg::AuthRegisterFinish {
+                req_id,
+                identifier,
+                data,
+                overwrite,
+            } => {
                 if !validate_identifier(&identifier) {
                     let msg = ServerMsg::AuthRegisterFinishResponse {
-                        req_id, ok: false,
+                        req_id,
+                        ok: false,
                         error: Some("invalid identifier".into()),
                     };
                     send_json(&pty_tx, &msg).await;
@@ -676,10 +839,19 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 }
 
                 // Reject silent overwrite of an existing registration (H1).
-                if !overwrite && state.opaque_registrations.read().await.contains_key(&identifier) {
+                if !overwrite
+                    && state
+                        .opaque_registrations
+                        .read()
+                        .await
+                        .contains_key(&identifier)
+                {
                     let msg = ServerMsg::AuthRegisterFinishResponse {
-                        req_id, ok: false,
-                        error: Some("identifier already registered — set overwrite:true to replace".into()),
+                        req_id,
+                        ok: false,
+                        error: Some(
+                            "identifier already registered — set overwrite:true to replace".into(),
+                        ),
                     };
                     send_json(&pty_tx, &msg).await;
                     continue;
@@ -689,7 +861,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     Ok(b) => b,
                     Err(e) => {
                         let msg = ServerMsg::AuthRegisterFinishResponse {
-                            req_id, ok: false,
+                            req_id,
+                            ok: false,
                             error: Some(format!("base64 decode failed: {e}")),
                         };
                         send_json(&pty_tx, &msg).await;
@@ -697,24 +870,39 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }
                 };
 
-                let result = tokio::task::spawn_blocking(move || {
-                    handle_register_finish(&decoded)
-                }).await;
+                let result =
+                    tokio::task::spawn_blocking(move || handle_register_finish(&decoded)).await;
 
                 let msg = match result {
                     Ok(Ok(registration)) => {
-                        state.opaque_registrations.write().await.insert(identifier.clone(), registration);
-                        debug!(req_id, identifier, overwrite, "auth:register_finish ok — credential stored");
-                        ServerMsg::AuthRegisterFinishResponse { req_id, ok: true, error: None }
+                        state
+                            .opaque_registrations
+                            .write()
+                            .await
+                            .insert(identifier.clone(), registration);
+                        debug!(
+                            req_id,
+                            identifier, overwrite, "auth:register_finish ok — credential stored"
+                        );
+                        ServerMsg::AuthRegisterFinishResponse {
+                            req_id,
+                            ok: true,
+                            error: None,
+                        }
                     }
                     Ok(Err(e)) => {
                         warn!(req_id, identifier, error = %e, "auth:register_finish failed");
-                        ServerMsg::AuthRegisterFinishResponse { req_id, ok: false, error: Some(e) }
+                        ServerMsg::AuthRegisterFinishResponse {
+                            req_id,
+                            ok: false,
+                            error: Some(e),
+                        }
                     }
                     Err(e) => {
                         warn!(req_id, error = %e, "auth:register_finish spawn_blocking error");
                         ServerMsg::AuthRegisterFinishResponse {
-                            req_id, ok: false,
+                            req_id,
+                            ok: false,
                             error: Some(format!("internal error: {e}")),
                         }
                     }
@@ -725,10 +913,17 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // -----------------------------------------------------------
             // Auth — OPAQUE login (auth:login_start)
             // -----------------------------------------------------------
-            ClientMsg::AuthLoginStart { req_id, identifier, data } => {
+            ClientMsg::AuthLoginStart {
+                req_id,
+                identifier,
+                data,
+            } => {
                 if !validate_identifier(&identifier) {
                     let msg = ServerMsg::AuthLoginStartResponse {
-                        req_id, ok: false, session_id: None, data: None,
+                        req_id,
+                        ok: false,
+                        session_id: None,
+                        data: None,
                         error: Some("invalid identifier".into()),
                     };
                     send_json(&pty_tx, &msg).await;
@@ -738,8 +933,14 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 // C2: cap in-flight login sessions per connection to prevent memory exhaustion.
                 if opaque_login_states.len() >= 16 {
                     let msg = ServerMsg::AuthLoginStartResponse {
-                        req_id, ok: false, session_id: None, data: None,
-                        error: Some("too many pending login sessions — complete or abandon existing ones".into()),
+                        req_id,
+                        ok: false,
+                        session_id: None,
+                        data: None,
+                        error: Some(
+                            "too many pending login sessions — complete or abandon existing ones"
+                                .into(),
+                        ),
                     };
                     send_json(&pty_tx, &msg).await;
                     continue;
@@ -749,7 +950,10 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     Ok(b) => b,
                     Err(e) => {
                         let msg = ServerMsg::AuthLoginStartResponse {
-                            req_id, ok: false, session_id: None, data: None,
+                            req_id,
+                            ok: false,
+                            session_id: None,
+                            data: None,
                             error: Some(format!("base64 decode failed: {e}")),
                         };
                         send_json(&pty_tx, &msg).await;
@@ -757,7 +961,10 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }
                 };
 
-                let registration = state.opaque_registrations.read().await
+                let registration = state
+                    .opaque_registrations
+                    .read()
+                    .await
                     .get(&identifier)
                     .cloned();
                 let setup = std::sync::Arc::clone(&state.opaque_server_setup);
@@ -767,14 +974,16 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
                 let result = tokio::task::spawn_blocking(move || {
                     handle_login_start(&setup, &id, registration, &decoded)
-                }).await;
+                })
+                .await;
 
                 let msg = match result {
                     Ok(Ok((login_state, response_bytes))) => {
                         opaque_login_states.insert(sid_for_state, login_state);
                         debug!(req_id, identifier, session_id, "auth:login_start ok");
                         ServerMsg::AuthLoginStartResponse {
-                            req_id, ok: true,
+                            req_id,
+                            ok: true,
                             session_id: Some(session_id),
                             data: Some(OPAQUE_B64.encode(&response_bytes)),
                             error: None,
@@ -783,13 +992,20 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     Ok(Err(e)) => {
                         warn!(req_id, identifier, error = %e, "auth:login_start failed");
                         ServerMsg::AuthLoginStartResponse {
-                            req_id, ok: false, session_id: None, data: None, error: Some(e),
+                            req_id,
+                            ok: false,
+                            session_id: None,
+                            data: None,
+                            error: Some(e),
                         }
                     }
                     Err(e) => {
                         warn!(req_id, error = %e, "auth:login_start spawn_blocking error");
                         ServerMsg::AuthLoginStartResponse {
-                            req_id, ok: false, session_id: None, data: None,
+                            req_id,
+                            ok: false,
+                            session_id: None,
+                            data: None,
                             error: Some(format!("internal error: {e}")),
                         }
                     }
@@ -800,7 +1016,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // -----------------------------------------------------------
             // Auth — OPAQUE login (auth:login_finish)
             // -----------------------------------------------------------
-            ClientMsg::AuthLoginFinish { req_id, session_id, data } => {
+            ClientMsg::AuthLoginFinish {
+                req_id,
+                session_id,
+                data,
+            } => {
                 // C3: check aes_keys cap before consuming login_state so client can retry.
                 if aes_keys.len() >= 16 {
                     let msg = ServerMsg::AuthLoginFinishResponse {
@@ -815,8 +1035,12 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     Some(s) => s,
                     None => {
                         let msg = ServerMsg::AuthLoginFinishResponse {
-                            req_id, ok: false, session_id: None,
-                            error: Some("login session not found — run auth:login_start first".into()),
+                            req_id,
+                            ok: false,
+                            session_id: None,
+                            error: Some(
+                                "login session not found — run auth:login_start first".into(),
+                            ),
                         };
                         send_json(&pty_tx, &msg).await;
                         continue;
@@ -827,7 +1051,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     Ok(b) => b,
                     Err(e) => {
                         let msg = ServerMsg::AuthLoginFinishResponse {
-                            req_id, ok: false, session_id: None,
+                            req_id,
+                            ok: false,
+                            session_id: None,
                             error: Some(format!("base64 decode failed: {e}")),
                         };
                         send_json(&pty_tx, &msg).await;
@@ -836,29 +1062,39 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 };
 
                 let sid = session_id.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    handle_login_finish(login_state, &decoded)
-                }).await;
+                let result =
+                    tokio::task::spawn_blocking(move || handle_login_finish(login_state, &decoded))
+                        .await;
 
                 let msg = match result {
                     Ok(Ok(aes_key)) => {
                         aes_keys.insert(session_id.clone(), aes_key);
                         debug!(req_id, session_id, "auth:login_finish ok — AES key derived");
                         ServerMsg::AuthLoginFinishResponse {
-                            req_id, ok: true, session_id: Some(sid), error: None,
+                            req_id,
+                            ok: true,
+                            session_id: Some(sid),
+                            error: None,
                         }
                     }
                     Ok(Err(_e)) => {
-                        warn!(req_id, session_id, "auth:login_finish failed (crypto error)");
+                        warn!(
+                            req_id,
+                            session_id, "auth:login_finish failed (crypto error)"
+                        );
                         ServerMsg::AuthLoginFinishResponse {
-                            req_id, ok: false, session_id: None,
+                            req_id,
+                            ok: false,
+                            session_id: None,
                             error: Some("authentication failed".into()),
                         }
                     }
                     Err(e) => {
                         warn!(req_id, error = %e, "auth:login_finish spawn_blocking error");
                         ServerMsg::AuthLoginFinishResponse {
-                            req_id, ok: false, session_id: None,
+                            req_id,
+                            ok: false,
+                            session_id: None,
                             error: Some(format!("internal error: {e}")),
                         }
                     }
@@ -876,21 +1112,42 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // FS — encrypted put (Phase 04 implementation)
             // -----------------------------------------------------------
             ClientMsg::FsPutBegin {
-                req_id, upload_id, session_id, project, dir, filename, len, expected_mtime,
+                req_id,
+                upload_id,
+                session_id,
+                project,
+                dir,
+                filename,
+                len,
+                expected_mtime,
             } => {
                 if !aes_keys.contains_key(&session_id) {
-                    send_fs_error(&pty_tx, req_id, "OPAQUE_LOGIN_REQUIRED".into(),
-                        "fs:put_begin requires OPAQUE login (auth:login_start + auth:login_finish)".into()).await;
+                    send_fs_error(
+                        &pty_tx,
+                        req_id,
+                        "OPAQUE_LOGIN_REQUIRED".into(),
+                        "fs:put_begin requires OPAQUE login (auth:login_start + auth:login_finish)"
+                            .into(),
+                    )
+                    .await;
                 } else {
                     match do_enc_put_begin(
-                        req_id, &upload_id, &session_id, &project, &dir, &filename, len,
-                        expected_mtime, &state, &mut enc_uploads,
-                    ).await {
+                        req_id,
+                        &upload_id,
+                        &session_id,
+                        &project,
+                        &dir,
+                        &filename,
+                        len,
+                        expected_mtime,
+                        &state,
+                        &mut enc_uploads,
+                    )
+                    .await
+                    {
                         Ok(()) => {
                             debug!(req_id, upload_id, len, project, "fs:put_begin accepted");
-                            let msg = ServerMsg::FsPutBeginOk {
-                                req_id, upload_id,
-                            };
+                            let msg = ServerMsg::FsPutBeginOk { req_id, upload_id };
                             send_json(&pty_tx, &msg).await;
                         }
                         Err((code, message)) => {
@@ -909,7 +1166,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     Some(s) => s,
                     None => {
                         let msg = ServerMsg::FsPutResult {
-                            req_id, upload_id, ok: false, conflict: false, new_mtime: None,
+                            req_id,
+                            upload_id,
+                            ok: false,
+                            conflict: false,
+                            new_mtime: None,
                             error: Some("upload session not found — fs:put_begin first".into()),
                         };
                         send_json(&pty_tx, &msg).await;
@@ -922,7 +1183,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     Some(k) => k.clone(),
                     None => {
                         let msg = ServerMsg::FsPutResult {
-                            req_id, upload_id, ok: false, conflict: false, new_mtime: None,
+                            req_id,
+                            upload_id,
+                            ok: false,
+                            conflict: false,
+                            new_mtime: None,
                             error: Some("OPAQUE session not found — login may have expired".into()),
                         };
                         send_json(&pty_tx, &msg).await;
@@ -939,7 +1204,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 let expected_len = enc_state.inner.expected_len;
                 if bytes_written != expected_len {
                     let msg = ServerMsg::FsPutResult {
-                        req_id, upload_id: uid, ok: false, conflict: false, new_mtime: None,
+                        req_id,
+                        upload_id: uid,
+                        ok: false,
+                        conflict: false,
+                        new_mtime: None,
                         error: Some(format!(
                             "size mismatch: wrote {bytes_written} bytes but declared {expected_len}"
                         )),
@@ -1005,8 +1274,12 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     Ok(Ok(new_mtime)) => {
                         debug!(req_id, new_mtime, upload_id, "fs:put_commit decrypt ok");
                         ServerMsg::FsPutResult {
-                            req_id, upload_id: uid, ok: true,
-                            conflict: false, new_mtime: Some(new_mtime), error: None,
+                            req_id,
+                            upload_id: uid,
+                            ok: true,
+                            conflict: false,
+                            new_mtime: Some(new_mtime),
+                            error: None,
                         }
                     }
                     Ok(Err((e, is_conflict))) => {
@@ -1016,31 +1289,50 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             warn!(req_id, error = %e, "fs:put_commit decrypt failed");
                         }
                         ServerMsg::FsPutResult {
-                            req_id, upload_id: uid, ok: false,
-                            conflict: is_conflict, new_mtime: None, error: Some(e),
+                            req_id,
+                            upload_id: uid,
+                            ok: false,
+                            conflict: is_conflict,
+                            new_mtime: None,
+                            error: Some(e),
                         }
                     }
                     Err(e) => {
                         warn!(req_id, error = %e, "fs:put_commit spawn_blocking error");
                         ServerMsg::FsPutResult {
-                            req_id, upload_id: uid, ok: false,
-                            conflict: false, new_mtime: None,
+                            req_id,
+                            upload_id: uid,
+                            ok: false,
+                            conflict: false,
+                            new_mtime: None,
                             error: Some(format!("internal error: {e}")),
                         }
                     }
                 };
                 send_json(&pty_tx, &msg).await;
             }
-            ClientMsg::FsPutSave { req_id, session_id, project, path } => {
+            ClientMsg::FsPutSave {
+                req_id,
+                session_id,
+                project,
+                path,
+            } => {
                 // Validate session and resolve path first; binary frame will do the decrypt+write
                 if !aes_keys.contains_key(&session_id) {
-                    send_fs_error(&pty_tx, req_id, "OPAQUE_LOGIN_REQUIRED".into(),
-                        "fs:put_save requires OPAQUE login".into()).await;
+                    send_fs_error(
+                        &pty_tx,
+                        req_id,
+                        "OPAQUE_LOGIN_REQUIRED".into(),
+                        "fs:put_save requires OPAQUE login".into(),
+                    )
+                    .await;
                 } else {
                     match resolve_abs_path(&project, &path, &state).await {
                         Ok(path_abs) => {
                             pending_binary = Some(PendingBinary::EncPutSave {
-                                req_id, session_id, path_abs,
+                                req_id,
+                                session_id,
+                                path_abs,
                             });
                         }
                         Err((code, message)) => {
@@ -1067,7 +1359,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 // ---------------------------------------------------------------------------
 
 async fn send_fs_error(out_tx: &mpsc::Sender<WireMsg>, req_id: u64, code: String, message: String) {
-    let err_msg = ServerMsg::FsError { req_id, code, message };
+    let err_msg = ServerMsg::FsError {
+        req_id,
+        code,
+        message,
+    };
     if let Ok(json) = serde_json::to_string(&err_msg) {
         let _ = out_tx.send(WireMsg::Text(json)).await;
     }
@@ -1085,18 +1381,25 @@ async fn resolve_abs_path(
     path: &str,
     state: &AppState,
 ) -> Result<std::path::PathBuf, (String, String)> {
-    let project_abs = state.project_path(project).await.map_err(|e| {
-        ("PROJECT_NOT_FOUND".to_string(), e.to_string())
-    })?;
+    let project_abs = state
+        .project_path(project)
+        .await
+        .map_err(|e| ("PROJECT_NOT_FOUND".to_string(), e.to_string()))?;
 
-    let sandbox = state.fs.sandbox().map_err(|e| {
-        ("FS_UNAVAILABLE".to_string(), e.to_string())
-    })?;
+    let sandbox = state
+        .fs
+        .sandbox()
+        .map_err(|e| ("FS_UNAVAILABLE".to_string(), e.to_string()))?;
 
-    let rel = if path.is_empty() || path == "/" { "." } else { path.trim_start_matches('/') };
-    sandbox.validate(project_abs.join(rel)).await.map_err(|e| {
-        ("PATH_REJECTED".to_string(), e.to_string())
-    })
+    let rel = if path.is_empty() || path == "/" {
+        "."
+    } else {
+        path.trim_start_matches('/')
+    };
+    sandbox
+        .validate(project_abs.join(rel))
+        .await
+        .map_err(|e| ("PATH_REJECTED".to_string(), e.to_string()))
 }
 
 /// Handle `fs:read` — stat + binary detect + ranged/full read → base64 response.
@@ -1112,8 +1415,13 @@ async fn do_fs_read(
         Ok(p) => p,
         Err((code, _message)) => {
             return ServerMsg::FsReadResult {
-                req_id, ok: false, mime: None, binary: false,
-                mtime: None, size: None, data: None,
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
                 code: Some(code),
             };
         }
@@ -1124,8 +1432,13 @@ async fn do_fs_read(
         Ok(v) => v,
         Err(e) => {
             return ServerMsg::FsReadResult {
-                req_id, ok: false, mime: None, binary: false,
-                mtime: None, size: None, data: None,
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
                 code: Some(format!("IO_ERROR: {e}")),
             };
         }
@@ -1136,8 +1449,13 @@ async fn do_fs_read(
         Ok(m) => m,
         Err(e) => {
             return ServerMsg::FsReadResult {
-                req_id, ok: false, mime: None, binary: false,
-                mtime: None, size: None, data: None,
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
                 code: Some(format!("IO_ERROR: {e}")),
             };
         }
@@ -1158,21 +1476,35 @@ async fn do_fs_read(
     };
 
     // Without a range, enforce 5MB cap (range reads are uncapped — LargeFileViewer owns that)
-    let max = if range.is_some() { u64::MAX } else { FS_WS_READ_MAX };
+    let max = if range.is_some() {
+        u64::MAX
+    } else {
+        FS_WS_READ_MAX
+    };
 
     let bytes = match ops::read_file(&abs, range, max).await {
         Ok(b) => b,
         Err(crate::fs::FsError::TooLarge(_)) => {
             return ServerMsg::FsReadResult {
-                req_id, ok: false, mime, binary: is_binary,
-                mtime: Some(mtime), size: Some(file_size),
-                data: None, code: Some("TOO_LARGE".into()),
+                req_id,
+                ok: false,
+                mime,
+                binary: is_binary,
+                mtime: Some(mtime),
+                size: Some(file_size),
+                data: None,
+                code: Some("TOO_LARGE".into()),
             };
         }
         Err(e) => {
             return ServerMsg::FsReadResult {
-                req_id, ok: false, mime, binary: is_binary,
-                mtime: None, size: None, data: None,
+                req_id,
+                ok: false,
+                mime,
+                binary: is_binary,
+                mtime: None,
+                size: None,
+                data: None,
                 code: Some(e.to_string()),
             };
         }
@@ -1205,9 +1537,10 @@ async fn do_fs_op(
     force_git: bool,
     state: &AppState,
 ) -> Result<(), crate::fs::FsError> {
-    let project_abs = state.project_path(project).await.map_err(|e| {
-        crate::fs::FsError::MutationRefused(e.to_string())
-    })?;
+    let project_abs = state
+        .project_path(project)
+        .await
+        .map_err(|e| crate::fs::FsError::MutationRefused(e.to_string()))?;
 
     let sandbox = state.fs.sandbox()?;
 
@@ -1216,12 +1549,11 @@ async fn do_fs_op(
             // Target doesn't exist yet — validate via parent + filename split.
             let rel = trim_leading_slash(path);
             let proposed = project_abs.join(rel);
-            let parent = proposed.parent()
+            let parent = proposed
+                .parent()
                 .map(|p| p.to_path_buf())
                 .unwrap_or(project_abs.clone());
-            let name = proposed.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let name = proposed.file_name().and_then(|n| n.to_str()).unwrap_or("");
             // Validate parent exists and is within sandbox, then construct new abs path.
             let new_abs = sandbox.validate_new_path(parent, name).await?;
             if op == "create_file" {
@@ -1250,10 +1582,12 @@ async fn do_fs_op(
             })?;
             let dst_rel = trim_leading_slash(dst_rel);
             let dst_proposed = project_abs.join(dst_rel);
-            let dst_parent = dst_proposed.parent()
+            let dst_parent = dst_proposed
+                .parent()
                 .map(|p| p.to_path_buf())
                 .unwrap_or(project_abs.clone());
-            let dst_name = dst_proposed.file_name()
+            let dst_name = dst_proposed
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("");
             let dst_abs = sandbox.validate_new_path(dst_parent, dst_name).await?;
@@ -1264,12 +1598,18 @@ async fn do_fs_op(
                 mutate::move_path(&abs, &dst_abs, &project_abs).await
             }
         }
-        _ => Err(crate::fs::FsError::MutationRefused(format!("unknown op: {op}"))),
+        _ => Err(crate::fs::FsError::MutationRefused(format!(
+            "unknown op: {op}"
+        ))),
     }
 }
 
 fn trim_leading_slash(s: &str) -> &str {
-    if s.is_empty() || s == "/" { "." } else { s.trim_start_matches('/') }
+    if s.is_empty() || s == "/" {
+        "."
+    } else {
+        s.trim_start_matches('/')
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1290,9 +1630,10 @@ async fn do_upload_begin(
         return Err(crate::fs::FsError::TooLarge(len));
     }
 
-    let project_abs = state.project_path(project).await.map_err(|e| {
-        crate::fs::FsError::MutationRefused(e.to_string())
-    })?;
+    let project_abs = state
+        .project_path(project)
+        .await
+        .map_err(|e| crate::fs::FsError::MutationRefused(e.to_string()))?;
 
     let sandbox = state.fs.sandbox()?;
 
@@ -1323,7 +1664,10 @@ async fn handle_upload_binary(
     let state = match uploads.get_mut(upload_id) {
         Some(s) => s,
         None => {
-            warn!(upload_id, seq, "binary frame: upload session not found — dropping");
+            warn!(
+                upload_id,
+                seq, "binary frame: upload session not found — dropping"
+            );
             return;
         }
     };
@@ -1359,7 +1703,10 @@ async fn handle_write_binary(
     let entry = match writes.get_mut(&write_id) {
         Some(e) => e,
         None => {
-            warn!(write_id, seq, "binary frame: write session not found — dropping");
+            warn!(
+                write_id,
+                seq, "binary frame: write session not found — dropping"
+            );
             return;
         }
     };
@@ -1367,8 +1714,12 @@ async fn handle_write_binary(
     // Note: seq check already done in FsWriteChunkBinary handler to set pending_binary
     let accumulated = entry.bytes_written + data.len() as u64;
     if accumulated > entry.declared_size {
-        warn!(write_id, accumulated, declared = entry.declared_size,
-            "binary write_chunk exceeds declared size — aborting write");
+        warn!(
+            write_id,
+            accumulated,
+            declared = entry.declared_size,
+            "binary write_chunk exceeds declared size — aborting write"
+        );
         writes.remove(&write_id);
         return;
     }
@@ -1403,14 +1754,21 @@ async fn handle_enc_put_binary(
     let expected_seq = match enc_uploads.get(upload_id) {
         Some(s) => s.inner.next_seq,
         None => {
-            warn!(upload_id, seq, "enc put binary: upload session not found — dropping");
+            warn!(
+                upload_id,
+                seq, "enc put binary: upload session not found — dropping"
+            );
             return;
         }
     };
 
     if seq != expected_seq {
-        warn!(upload_id, seq, expected = expected_seq,
-            "enc put chunk: seq out of order — aborting upload");
+        warn!(
+            upload_id,
+            seq,
+            expected = expected_seq,
+            "enc put chunk: seq out of order — aborting upload"
+        );
         enc_uploads.remove(upload_id);
         return;
     }
@@ -1455,7 +1813,9 @@ async fn handle_enc_put_save_binary(
         None => {
             warn!(req_id, session_id, "enc put_save: no aes_key for session");
             let msg = ServerMsg::FsPutSaveResult {
-                req_id, ok: false, new_mtime: None,
+                req_id,
+                ok: false,
+                new_mtime: None,
                 error: Some("OPAQUE session not found — login may have expired".into()),
             };
             if let Ok(json) = serde_json::to_string(&msg) {
@@ -1480,26 +1840,34 @@ async fn handle_enc_put_save_binary(
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         Ok(mtime)
-    }).await;
+    })
+    .await;
 
     let msg = match result {
         Ok(Ok(new_mtime)) => {
             debug!(req_id, new_mtime, "fs:put_save decrypt ok");
             ServerMsg::FsPutSaveResult {
-                req_id, ok: true, new_mtime: Some(new_mtime), error: None,
+                req_id,
+                ok: true,
+                new_mtime: Some(new_mtime),
+                error: None,
             }
         }
         Ok(Err(e)) => {
             warn!(req_id, error = %e, "fs:put_save decrypt failed");
             ServerMsg::FsPutSaveResult {
-                req_id, ok: false, new_mtime: None,
+                req_id,
+                ok: false,
+                new_mtime: None,
                 error: Some(format!("decrypt failed: {e}")),
             }
         }
         Err(e) => {
             warn!(req_id, error = %e, "fs:put_save spawn_blocking error");
             ServerMsg::FsPutSaveResult {
-                req_id, ok: false, new_mtime: None,
+                req_id,
+                ok: false,
+                new_mtime: None,
                 error: Some(format!("internal error: {e}")),
             }
         }
@@ -1527,34 +1895,46 @@ async fn do_enc_put_begin(
 ) -> Result<(), (String, String)> {
     // FIX-04: cap concurrent encrypted uploads per connection
     if enc_uploads.len() >= 8 {
-        return Err(("LIMIT_EXCEEDED".into(),
-            "too many concurrent encrypted uploads on this connection (max 8)".into()));
+        return Err((
+            "LIMIT_EXCEEDED".into(),
+            "too many concurrent encrypted uploads on this connection (max 8)".into(),
+        ));
     }
 
     if len > MAX_UPLOAD_BYTES {
-        return Err(("TOO_LARGE".into(), format!(
-            "encrypted upload too large: {len} bytes (max {})", MAX_UPLOAD_BYTES,
-        )));
+        return Err((
+            "TOO_LARGE".into(),
+            format!(
+                "encrypted upload too large: {len} bytes (max {})",
+                MAX_UPLOAD_BYTES,
+            ),
+        ));
     }
 
     if enc_uploads.contains_key(upload_id) {
-        return Err(("DUPLICATE_UPLOAD_ID".into(), format!(
-            "upload_id already active: {upload_id}"
-        )));
+        return Err((
+            "DUPLICATE_UPLOAD_ID".into(),
+            format!("upload_id already active: {upload_id}"),
+        ));
     }
 
-    let project_abs = state.project_path(project).await.map_err(|e| {
-        ("PROJECT_NOT_FOUND".into(), e.to_string())
-    })?;
+    let project_abs = state
+        .project_path(project)
+        .await
+        .map_err(|e| ("PROJECT_NOT_FOUND".into(), e.to_string()))?;
 
-    let sandbox = state.fs.sandbox().map_err(|e| {
-        ("FS_UNAVAILABLE".into(), e.to_string())
-    })?;
+    let sandbox = state
+        .fs
+        .sandbox()
+        .map_err(|e| ("FS_UNAVAILABLE".into(), e.to_string()))?;
 
     let dir_abs = project_abs.join(dir.trim_start_matches('/'));
 
     // FIX-01: fast-path lexical traversal check before any filesystem I/O
-    if dir_abs.components().any(|c| c == std::path::Component::ParentDir) {
+    if dir_abs
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
         return Err(("FORBIDDEN".into(), "path traversal in dir field".into()));
     }
 
@@ -1567,53 +1947,57 @@ async fn do_enc_put_begin(
                 Ok(_) => break, // found an existing ancestor within sandbox
                 Err(crate::fs::FsError::NotFound) => {
                     check = check.parent().map(|p| p.to_path_buf()).ok_or_else(|| {
-                        ("INVALID_PATH".into(), "dir has no valid parent within workspace".into())
+                        (
+                            "INVALID_PATH".into(),
+                            "dir has no valid parent within workspace".into(),
+                        )
                     })?;
                 }
-                Err(e) => return Err(match e {
-                    crate::fs::FsError::PathEscape | crate::fs::FsError::PermissionDenied =>
-                        ("FORBIDDEN".into(), "dir resolves outside workspace".into()),
-                    _ => ("INVALID_PATH".into(), e.to_string()),
-                }),
+                Err(e) => {
+                    return Err(match e {
+                        crate::fs::FsError::PathEscape | crate::fs::FsError::PermissionDenied => {
+                            ("FORBIDDEN".into(), "dir resolves outside workspace".into())
+                        }
+                        _ => ("INVALID_PATH".into(), e.to_string()),
+                    })
+                }
             }
         }
     }
 
     // FIX-08: auto-create target directory (ancestor validated safe above)
     tokio::fs::create_dir_all(&dir_abs).await.map_err(|e| {
-        ("UPLOAD_INIT_FAILED".into(), format!("failed to create target directory: {e}"))
+        (
+            "UPLOAD_INIT_FAILED".into(),
+            format!("failed to create target directory: {e}"),
+        )
     })?;
 
     // FIX-01: final canonicalize + sandbox check on now-existing dir
-    let dir_validated = sandbox.validate(dir_abs).await.map_err(|e| {
-        match e {
-            crate::fs::FsError::PathEscape | crate::fs::FsError::PermissionDenied =>
-                ("FORBIDDEN".into(), "dir resolves outside workspace".into()),
-            _ => ("INVALID_PATH".into(), e.to_string()),
+    let dir_validated = sandbox.validate(dir_abs).await.map_err(|e| match e {
+        crate::fs::FsError::PathEscape | crate::fs::FsError::PermissionDenied => {
+            ("FORBIDDEN".into(), "dir resolves outside workspace".into())
         }
+        _ => ("INVALID_PATH".into(), e.to_string()),
     })?;
 
-    let target_abs = sandbox.validate_new_path(dir_validated, filename).await.map_err(|e| {
-        ("INVALID_PATH".into(), e.to_string())
-    })?;
+    let target_abs = sandbox
+        .validate_new_path(dir_validated, filename)
+        .await
+        .map_err(|e| ("INVALID_PATH".into(), e.to_string()))?;
 
-    let enc_state = EncUploadState::new(target_abs, len, session_id.to_string(), expected_mtime).map_err(|e| {
-        ("UPLOAD_INIT_FAILED".into(), e.to_string())
-    })?;
+    let enc_state = EncUploadState::new(target_abs, len, session_id.to_string(), expected_mtime)
+        .map_err(|e| ("UPLOAD_INIT_FAILED".into(), e.to_string()))?;
 
     enc_uploads.insert(upload_id.to_string(), enc_state);
     Ok(())
 }
 
-
 // ---------------------------------------------------------------------------
 // PTY broadcast pump
 // ---------------------------------------------------------------------------
 
-async fn pump_pty(
-    mut rx: tokio::sync::broadcast::Receiver<String>,
-    pty_tx: mpsc::Sender<WireMsg>,
-) {
+async fn pump_pty(mut rx: tokio::sync::broadcast::Receiver<String>, pty_tx: mpsc::Sender<WireMsg>) {
     loop {
         match rx.recv().await {
             Ok(msg) => {
@@ -1642,20 +2026,29 @@ async fn do_fs_subscribe(
     fs_tx: mpsc::Sender<WireMsg>,
     fs_pumps: &mut HashMap<u64, tokio::task::JoinHandle<()>>,
 ) -> Result<(), (String, String)> {
-    let project_abs = state.project_path(project).await.map_err(|e| {
-        ("PROJECT_NOT_FOUND".to_string(), e.to_string())
-    })?;
+    let project_abs = state
+        .project_path(project)
+        .await
+        .map_err(|e| ("PROJECT_NOT_FOUND".to_string(), e.to_string()))?;
 
-    let sandbox = state.fs.sandbox().map_err(|e| {
-        ("FS_UNAVAILABLE".to_string(), e.to_string())
-    })?;
+    let sandbox = state
+        .fs
+        .sandbox()
+        .map_err(|e| ("FS_UNAVAILABLE".to_string(), e.to_string()))?;
 
-    let rel_path = if path.is_empty() || path == "/" { "." } else { path.trim_start_matches('/') };
-    let abs_path = sandbox.validate(project_abs.join(rel_path)).await.map_err(|e| {
-        ("PATH_REJECTED".to_string(), e.to_string())
-    })?;
+    let rel_path = if path.is_empty() || path == "/" {
+        "."
+    } else {
+        path.trim_start_matches('/')
+    };
+    let abs_path = sandbox
+        .validate(project_abs.join(rel_path))
+        .await
+        .map_err(|e| ("PATH_REJECTED".to_string(), e.to_string()))?;
 
-    let (sub_id, fs_rx) = state.fs.subscribe_tree(project_abs.clone(), abs_path.clone())
+    let (sub_id, fs_rx) = state
+        .fs
+        .subscribe_tree(project_abs.clone(), abs_path.clone())
         .map_err(|e| ("WATCHER_ERROR".to_string(), e.to_string()))?;
 
     debug!(sub_id, project, path, "fs:subscribe_tree");
@@ -1666,9 +2059,17 @@ async fn do_fs_subscribe(
         .map_err(|e| ("INTERNAL".to_string(), e.to_string()))?
         .map_err(|e| ("SNAPSHOT_ERROR".to_string(), e.to_string()))?;
 
-    let snap = ServerMsg::TreeSnapshot { req_id, sub_id, nodes };
-    let json = serde_json::to_string(&snap).map_err(|e| ("SERIALIZE".to_string(), e.to_string()))?;
-    pty_tx.send(WireMsg::Text(json)).await.map_err(|_| ("CONN_CLOSED".to_string(), "connection closed".to_string()))?;
+    let snap = ServerMsg::TreeSnapshot {
+        req_id,
+        sub_id,
+        nodes,
+    };
+    let json =
+        serde_json::to_string(&snap).map_err(|e| ("SERIALIZE".to_string(), e.to_string()))?;
+    pty_tx
+        .send(WireMsg::Text(json))
+        .await
+        .map_err(|_| ("CONN_CLOSED".to_string(), "connection closed".to_string()))?;
 
     let filter_prefix = abs_path.clone();
     let handle = tokio::spawn(async move {
@@ -1694,7 +2095,11 @@ async fn pump_fs_events(
         match rx.recv().await {
             Ok(ev) => {
                 let path_in = ev.path.starts_with(&filter_prefix);
-                let from_in = ev.from.as_ref().map(|p| p.starts_with(&filter_prefix)).unwrap_or(false);
+                let from_in = ev
+                    .from
+                    .as_ref()
+                    .map(|p| p.starts_with(&filter_prefix))
+                    .unwrap_or(false);
                 if !path_in && !from_in {
                     continue;
                 }
@@ -1712,12 +2117,19 @@ async fn pump_fs_events(
                 match fs_tx.try_send(WireMsg::Text(json)) {
                     Ok(_) => {}
                     Err(mpsc::error::TrySendError::Full(_)) => {
-                        warn!(sub_id, cap = FS_CHAN_CAP, "fs pump mpsc full — dropping subscription");
-                        
+                        warn!(
+                            sub_id,
+                            cap = FS_CHAN_CAP,
+                            "fs pump mpsc full — dropping subscription"
+                        );
+
                         // Send overflow notice via pty channel (proper backpressure)
                         let overflow = ServerMsg::FsOverflow {
                             sub_id,
-                            message: format!("FS event buffer full ({}); subscription dropped", FS_CHAN_CAP),
+                            message: format!(
+                                "FS event buffer full ({}); subscription dropped",
+                                FS_CHAN_CAP
+                            ),
                         };
                         if let Ok(json) = serde_json::to_string(&overflow) {
                             let _ = pty_tx.send(WireMsg::Text(json)).await;

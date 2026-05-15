@@ -48,14 +48,16 @@ impl EventSink for NoopEventSink {
         _will_restart: bool,
         _restart_in_ms: Option<u64>,
         _restart_count: Option<u32>,
-    ) {}
+    ) {
+    }
 
     fn send_process_restarted(
         &self,
         _id: &str,
         _restart_count: u32,
         _previous_exit_code: Option<i32>,
-    ) {}
+    ) {
+    }
 }
 
 // ---------------------------------------------------------------------------

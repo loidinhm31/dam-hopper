@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     io::Read as _,
-    sync::{Arc, Mutex, atomic::Ordering},
+    sync::{atomic::Ordering, Arc, Mutex},
     time::Duration,
 };
 
@@ -138,13 +138,13 @@ impl PtySessionManager {
         // Bounded channel prevents DoS if supervisor hangs/panics.
         // 256 slots = ~5× typical max sessions (50). If full, supervisor is dead/slow.
         let (respawn_tx, respawn_rx) = mpsc::channel(256);
-        
+
         // Clone respawn_tx before moving it into manager.
         let respawn_tx_clone = respawn_tx.clone();
-        
+
         // Clone persist_tx before moving it into manager.
         let persist_tx_clone = persist_tx.clone();
-        
+
         let manager = Self {
             inner: Arc::new(Mutex::new(Inner::new())),
             sink: Arc::clone(&sink),
@@ -264,7 +264,20 @@ impl PtySessionManager {
         std::thread::Builder::new()
             .name(format!("pty-reader:{session_id}"))
             .spawn(move || {
-                reader_thread(session_id, reader, child, buffer, shutdown, sink, inner_ref, respawn_tx, persist_tx, port_forward_manager, project_name, rt_handle);
+                reader_thread(
+                    session_id,
+                    reader,
+                    child,
+                    buffer,
+                    shutdown,
+                    sink,
+                    inner_ref,
+                    respawn_tx,
+                    persist_tx,
+                    port_forward_manager,
+                    project_name,
+                    rt_handle,
+                );
             })
             .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
 
@@ -289,19 +302,32 @@ impl PtySessionManager {
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), AppError> {
         let inner = self.inner.lock().unwrap();
-        let session = inner.live.get(id).ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
-        session.write(data).map_err(|e| AppError::PtyError(e.to_string()))
+        let session = inner
+            .live
+            .get(id)
+            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+        session
+            .write(data)
+            .map_err(|e| AppError::PtyError(e.to_string()))
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), AppError> {
         let inner = self.inner.lock().unwrap();
-        let session = inner.live.get(id).ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
-        session.resize(cols, rows).map_err(|e| AppError::PtyError(e.to_string()))
+        let session = inner
+            .live
+            .get(id)
+            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+        session
+            .resize(cols, rows)
+            .map_err(|e| AppError::PtyError(e.to_string()))
     }
 
     pub fn get_buffer(&self, id: &str) -> Result<String, AppError> {
         let inner = self.inner.lock().unwrap();
-        let session = inner.live.get(id).ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+        let session = inner
+            .live
+            .get(id)
+            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
         let buf = session.buffer.lock().unwrap();
         Ok(buf.as_str_lossy().into_owned())
     }
@@ -319,17 +345,17 @@ impl PtySessionManager {
         from_offset: Option<u64>,
     ) -> Result<(String, u64), AppError> {
         let inner = self.inner.lock().unwrap();
-        
+
         // Try in-memory first (live sessions)
         if let Some(session) = inner.live.get(id) {
             let buf = session.buffer.lock().unwrap();
             let (data, offset) = buf.read_from(from_offset);
             return Ok((String::from_utf8_lossy(data).into_owned(), offset));
         }
-        
+
         // Release lock before slow I/O
         drop(inner);
-        
+
         // Fallback to persistence (for dead sessions)
         if let Some(store) = &self.session_store {
             if let Some((data, total_written)) = store
@@ -339,7 +365,7 @@ impl PtySessionManager {
                 return Ok((String::from_utf8_lossy(&data).into_owned(), total_written));
             }
         }
-        
+
         Err(AppError::SessionNotFound(id.to_string()))
     }
 
@@ -375,7 +401,7 @@ impl PtySessionManager {
         }
         inner.dead.remove(id);
         drop(inner);
-        
+
         // Send SessionRemoved to persist worker (if enabled)
         if let Some(tx) = &self.persist_tx {
             if let Err(e) = tx.try_send(crate::persistence::PersistCmd::SessionRemoved {
@@ -384,7 +410,7 @@ impl PtySessionManager {
                 warn!("Persist queue full, dropping SessionRemoved: {}", e);
             }
         }
-        
+
         self.sink.send_terminal_changed();
         Ok(())
     }
@@ -432,7 +458,9 @@ impl PtySessionManager {
                 interval.tick().await;
                 let mut guard = inner.lock().unwrap();
                 let before = guard.dead.len();
-                guard.dead.retain(|_, d| d.died_at.elapsed() < DEAD_SESSION_TTL);
+                guard
+                    .dead
+                    .retain(|_, d| d.died_at.elapsed() < DEAD_SESSION_TTL);
                 let removed = before - guard.dead.len();
                 if removed > 0 {
                     debug!(removed, "Dead session tombstones swept");
@@ -441,7 +469,9 @@ impl PtySessionManager {
                 // Prevents unbounded memory growth when session IDs are never reused.
                 let before_killed = guard.killed.len();
                 // Collect orphaned IDs to avoid borrow checker conflict with retain closure.
-                let orphaned: Vec<String> = guard.killed.iter()
+                let orphaned: Vec<String> = guard
+                    .killed
+                    .iter()
                     .filter(|id| !guard.live.contains_key(*id) && !guard.dead.contains_key(*id))
                     .cloned()
                     .collect();
@@ -450,7 +480,10 @@ impl PtySessionManager {
                 }
                 let removed_killed = before_killed - guard.killed.len();
                 if removed_killed > 0 {
-                    debug!(removed = removed_killed, "Orphaned killed set entries cleaned");
+                    debug!(
+                        removed = removed_killed,
+                        "Orphaned killed set entries cleaned"
+                    );
                 }
             }
         });
@@ -466,7 +499,9 @@ impl PtySessionManager {
         inner.killed.insert(id.to_string());
         if let Some(session) = inner.live.remove(id) {
             session.signal_shutdown();
-            inner.dead.insert(id.to_string(), DeadSession::killed(session.meta));
+            inner
+                .dead
+                .insert(id.to_string(), DeadSession::killed(session.meta));
         }
     }
 }
@@ -496,7 +531,7 @@ fn reader_thread(
     // only server restart loses buffer for short sessions like quick commands or failed builds).
     let mut bytes_since_snapshot = 0usize;
     const SNAPSHOT_THRESHOLD: usize = 16 * 1024; // 16KB
-    
+
     loop {
         if shutdown.load(Ordering::Relaxed) {
             break;
@@ -514,17 +549,19 @@ fn reader_thread(
                     let mut buf = buffer.lock().unwrap();
                     buf.push(data);
                     bytes_since_snapshot += n;
-                    
+
                     // Send buffer update to persist worker (if enabled)
                     // Throttle: only snapshot every 16KB to reduce memory churn from 256KB copies
                     if bytes_since_snapshot >= SNAPSHOT_THRESHOLD {
                         if let Some(tx) = &persist_tx {
                             let (snapshot_data, total_written) = buf.snapshot();
-                            if let Err(_) = tx.try_send(crate::persistence::PersistCmd::BufferUpdate {
-                                session_id: session_id.clone(),
-                                data: snapshot_data,
-                                total_written,
-                            }) {
+                            if let Err(_) =
+                                tx.try_send(crate::persistence::PersistCmd::BufferUpdate {
+                                    session_id: session_id.clone(),
+                                    data: snapshot_data,
+                                    total_written,
+                                })
+                            {
                                 // Queue full - this is expected under load. Worker will flush latest on timer.
                                 // Dropping is safe: batching means worker only persists latest anyway.
                             }
@@ -535,7 +572,13 @@ fn reader_thread(
                 let data_str = String::from_utf8_lossy(data).into_owned();
                 // Port forward: scan chunk for service startup messages (sync, ~µs).
                 if let (Some(pfm), Some(handle)) = (&port_forward_manager, &rt_handle) {
-                    crate::port_forward::scan_chunk(data, &session_id, project.as_deref(), pfm, handle);
+                    crate::port_forward::scan_chunk(
+                        data,
+                        &session_id,
+                        project.as_deref(),
+                        pfm,
+                        handle,
+                    );
                 }
                 sink.send_terminal_data(&session_id, &data_str);
             }
@@ -576,7 +619,8 @@ fn reader_thread(
             let respawn_opts = session.respawn_opts.clone();
 
             // Decide if we should restart.
-            let restart_decision = decide_restart(policy, exit_code, was_killed, restart_count, max_retries);
+            let restart_decision =
+                decide_restart(policy, exit_code, was_killed, restart_count, max_retries);
 
             let (will_restart, restart_in_ms) = if let Some(delay) = restart_decision {
                 (true, Some(delay))
@@ -606,17 +650,23 @@ fn reader_thread(
             )
         } else {
             // Session already removed (concurrent kill) — no restart.
-            (RespawnOpts {
-                id: session_id.clone(),
-                command: String::new(),
-                cwd: String::new(),
-                env: HashMap::new(),
-                cols: 80,
-                rows: 24,
-                project: None,
-                restart_policy: RestartPolicy::Never,
-                restart_max_retries: 0,
-            }, 0, true, None, 0)
+            (
+                RespawnOpts {
+                    id: session_id.clone(),
+                    command: String::new(),
+                    cwd: String::new(),
+                    env: HashMap::new(),
+                    cols: 80,
+                    rows: 24,
+                    project: None,
+                    restart_policy: RestartPolicy::Never,
+                    restart_max_retries: 0,
+                },
+                0,
+                true,
+                None,
+                0,
+            )
         }
     };
 
@@ -692,7 +742,9 @@ async fn supervisor_loop(
             &respawn_tx,
             persist_tx.clone(),
             pfm,
-        ).await {
+        )
+        .await
+        {
             warn!(id = %session_id, error = %e, "Respawn failed");
         } else {
             sink.send_terminal_changed();
@@ -798,7 +850,10 @@ async fn respawn_internal(
             rows: opts.rows,
             restart_max_retries: opts.restart_max_retries,
         }) {
-            warn!("Persist queue full, dropping SessionCreated (respawn): {}", e);
+            warn!(
+                "Persist queue full, dropping SessionCreated (respawn): {}",
+                e
+            );
         }
     }
 
@@ -852,7 +907,9 @@ fn is_eof_error(e: &std::io::Error) -> bool {
 fn strip_unc_prefix(path: &str) -> String {
     if cfg!(target_os = "windows") && path.starts_with(r"\\?\UNC\") {
         // UNC network path: \\?\UNC\server\share -> \\server\share
-        path.strip_prefix(r"\\?\UNC\").map(|p| format!(r"\\{}", p)).unwrap_or_else(|| path.to_string())
+        path.strip_prefix(r"\\?\UNC\")
+            .map(|p| format!(r"\\{}", p))
+            .unwrap_or_else(|| path.to_string())
     } else if cfg!(target_os = "windows") && path.starts_with(r"\\?\") {
         // UNC prefix for long paths: \\?\C:\path -> C:\path
         path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
@@ -875,7 +932,10 @@ fn build_command(opts: &PtyCreateOpts) -> CommandBuilder {
             .unwrap_or_else(|| "/bin/bash".to_string());
         (shell, vec![])
     } else {
-        ("/bin/sh".to_string(), vec!["-c".to_string(), opts.command.clone()])
+        (
+            "/bin/sh".to_string(),
+            vec!["-c".to_string(), opts.command.clone()],
+        )
     };
 
     let mut cmd = CommandBuilder::new(&exe);
@@ -898,7 +958,10 @@ fn validate_session_id(id: &str) -> Result<(), AppError> {
             "Session ID must be 1-{SESSION_ID_MAX_LEN} chars"
         )));
     }
-    if !id.chars().all(|c| c.is_alphanumeric() || matches!(c, ':' | '.' | '-' | '_')) {
+    if !id
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, ':' | '.' | '-' | '_'))
+    {
         return Err(AppError::InvalidInput(format!(
             "Invalid session id: \"{id}\" — only [a-zA-Z0-9:._-] allowed"
         )));
@@ -1057,10 +1120,7 @@ mod strip_unc_prefix_tests {
 
     #[test]
     fn leaves_unix_path_unchanged() {
-        assert_eq!(
-            strip_unc_prefix("/home/user/path"),
-            "/home/user/path"
-        );
+        assert_eq!(strip_unc_prefix("/home/user/path"), "/home/user/path");
     }
 }
 
@@ -1073,13 +1133,19 @@ mod tests {
     async fn get_buffer_with_offset_session_not_found() {
         let mgr = PtySessionManager::new(Arc::new(NoopEventSink));
         let err = mgr.get_buffer_with_offset("nonexistent", None).unwrap_err();
-        assert!(matches!(err, AppError::SessionNotFound(_)), "Expected SessionNotFound error, got: {err:?}");
+        assert!(
+            matches!(err, AppError::SessionNotFound(_)),
+            "Expected SessionNotFound error, got: {err:?}"
+        );
     }
 
     #[tokio::test]
     async fn get_buffer_with_offset_with_some_offset_session_not_found() {
         let mgr = PtySessionManager::new(Arc::new(NoopEventSink));
         let err = mgr.get_buffer_with_offset("ghost", Some(1024)).unwrap_err();
-        assert!(matches!(err, AppError::SessionNotFound(_)), "Expected SessionNotFound error, got: {err:?}");
+        assert!(
+            matches!(err, AppError::SessionNotFound(_)),
+            "Expected SessionNotFound error, got: {err:?}"
+        );
     }
 }

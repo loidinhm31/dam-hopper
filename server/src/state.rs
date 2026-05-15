@@ -77,7 +77,7 @@ impl AppState {
     }
 
     /// Create new AppState with production safety validation for no-auth mode.
-    /// 
+    ///
     /// Returns `Err` if:
     /// - `no_auth` is enabled with MongoDB configured (security risk)
     /// - `no_auth` is enabled in production environment (detected via RUST_ENV or ENVIRONMENT)
@@ -105,16 +105,17 @@ impl AppState {
                      This combination is unsafe and forbidden."
                 );
             }
-            
+
             // Check for production environment indicators
-            if std::env::var("RUST_ENV").unwrap_or_default() == "production" 
-                || std::env::var("ENVIRONMENT").unwrap_or_default() == "production" {
+            if std::env::var("RUST_ENV").unwrap_or_default() == "production"
+                || std::env::var("ENVIRONMENT").unwrap_or_default() == "production"
+            {
                 anyhow::bail!(
                     "FATAL: --no-auth is not allowed in production environment.\n\
                      Set RUST_ENV or ENVIRONMENT to 'development' for local dev."
                 );
             }
-            
+
             // Prominent multi-line warning banner
             eprintln!(concat!(
                 "\n⚠️  ═══════════════════════════════════════════════════════\n",
@@ -124,7 +125,7 @@ impl AppState {
                 "⚠️  DO NOT use in production or with sensitive data.\n",
                 "⚠️  ═══════════════════════════════════════════════════════\n"
             ));
-            
+
             tracing::error!("⚠️  NO-AUTH mode enabled — authentication bypassed");
         }
 

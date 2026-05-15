@@ -69,13 +69,11 @@ const KNOWN_KEY_NAMES: &[&str] = &[
 /// Returns the `~/.ssh` directory, or `%USERPROFILE%\.ssh` on Windows when
 /// `dirs::home_dir()` is unavailable.
 pub fn ssh_dir() -> Option<PathBuf> {
-    dirs::home_dir()
-        .map(|h| h.join(".ssh"))
-        .or_else(|| {
-            std::env::var("USERPROFILE")
-                .ok()
-                .map(|p| PathBuf::from(p).join(".ssh"))
-        })
+    dirs::home_dir().map(|h| h.join(".ssh")).or_else(|| {
+        std::env::var("USERPROFILE")
+            .ok()
+            .map(|p| PathBuf::from(p).join(".ssh"))
+    })
 }
 
 /// Resolves a key basename to its absolute path inside `~/.ssh`.

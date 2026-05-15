@@ -21,13 +21,8 @@ pub fn read_config(file_path: &Path) -> Result<DamHopperConfig, AppError> {
         ))
     })?;
 
-    let raw: DamHopperConfigRaw = toml::from_str(&content).map_err(|e| {
-        AppError::Config(format!(
-            "Invalid TOML in {}: {}",
-            file_path.display(),
-            e
-        ))
-    })?;
+    let raw: DamHopperConfigRaw = toml::from_str(&content)
+        .map_err(|e| AppError::Config(format!("Invalid TOML in {}: {}", file_path.display(), e)))?;
 
     validate_config(&raw)?;
 
@@ -72,10 +67,7 @@ fn validate_config(raw: &DamHopperConfigRaw) -> Result<(), AppError> {
 
         // Reject absolute paths and path traversal in env_file
         if let Some(env_file) = &project.env_file {
-            validate_relative_path(
-                env_file,
-                &format!("projects.{}.env_file", project.name),
-            )?;
+            validate_relative_path(env_file, &format!("projects.{}.env_file", project.name))?;
         }
 
         // Unique service names
@@ -159,7 +151,9 @@ fn resolve_project(raw: ProjectConfigRaw, config_dir: &Path) -> Result<ProjectCo
         terminals,
         agents: raw.agents,
         restart_policy: raw.restart.unwrap_or(RestartPolicy::Never),
-        restart_max_retries: raw.restart_max_retries.unwrap_or(DEFAULT_RESTART_MAX_RETRIES),
+        restart_max_retries: raw
+            .restart_max_retries
+            .unwrap_or(DEFAULT_RESTART_MAX_RETRIES),
         health_check_url: raw.health_check_url,
     })
 }
@@ -168,10 +162,7 @@ fn resolve_terminal(raw: TerminalProfileRaw, project_path: &Path) -> TerminalPro
     TerminalProfile {
         name: raw.name,
         command: raw.command,
-        cwd: project_path
-            .join(&raw.cwd)
-            .to_string_lossy()
-            .to_string(),
+        cwd: project_path.join(&raw.cwd).to_string_lossy().to_string(),
     }
 }
 
@@ -186,9 +177,8 @@ pub fn write_config(file_path: &Path, config: &DamHopperConfig) -> Result<(), Ap
     let config_dir = abs_path.parent().unwrap_or(Path::new("/"));
 
     let raw = build_raw_toml(config, config_dir);
-    let toml_str = toml::to_string_pretty(&raw).map_err(|e| {
-        AppError::Config(format!("Failed to serialize config: {}", e))
-    })?;
+    let toml_str = toml::to_string_pretty(&raw)
+        .map_err(|e| AppError::Config(format!("Failed to serialize config: {}", e)))?;
 
     atomic_write(file_path, &toml_str)
 }
@@ -199,8 +189,14 @@ fn build_raw_toml(config: &DamHopperConfig, config_dir: &Path) -> toml::Value {
     let mut map = toml::map::Map::new();
 
     let mut ws = toml::map::Map::new();
-    ws.insert("name".to_string(), Value::String(config.workspace.name.clone()));
-    ws.insert("root".to_string(), Value::String(config.workspace.root.clone()));
+    ws.insert(
+        "name".to_string(),
+        Value::String(config.workspace.name.clone()),
+    );
+    ws.insert(
+        "root".to_string(),
+        Value::String(config.workspace.root.clone()),
+    );
     map.insert("workspace".to_string(), Value::Table(ws));
 
     if let Some(agent_store) = &config.agent_store {
@@ -234,7 +230,10 @@ fn project_to_toml(p: &ProjectConfig, config_dir: &Path) -> toml::Value {
         .to_string();
     let rel = if rel.is_empty() { ".".to_string() } else { rel };
     map.insert("path".to_string(), Value::String(rel));
-    map.insert("type".to_string(), Value::String(p.project_type.to_string()));
+    map.insert(
+        "type".to_string(),
+        Value::String(p.project_type.to_string()),
+    );
 
     if let Some(services) = &p.services {
         let svcs: Vec<Value> = services
@@ -309,7 +308,10 @@ fn project_to_toml(p: &ProjectConfig, config_dir: &Path) -> toml::Value {
         map.insert("restart".to_string(), Value::String(policy_str.to_string()));
     }
     if p.restart_max_retries != DEFAULT_RESTART_MAX_RETRIES {
-        map.insert("restart_max_retries".to_string(), Value::Integer(p.restart_max_retries as i64));
+        map.insert(
+            "restart_max_retries".to_string(),
+            Value::Integer(p.restart_max_retries as i64),
+        );
     }
     if let Some(url) = &p.health_check_url {
         map.insert("health_check_url".to_string(), Value::String(url.clone()));
