@@ -25,6 +25,7 @@ interface GitLogTreeProps {
   onSelectCommit?: (entry: GitLogEntry) => void;
   onCherryPick?: (entry: GitLogEntry) => void;
   onReset?: (entry: GitLogEntry) => void;
+  onDropCommit?: (entry: GitLogEntry) => void;
 }
 
 interface HistoryContextMenuState {
@@ -40,12 +41,34 @@ interface RenderNode {
   nextTracks: string[];
 }
 
+export function getDropCommitMenuState(entry: Pick<GitLogEntry, "isPushed">) {
+  return {
+    disabled: entry.isPushed,
+    title: entry.isPushed
+      ? "Drop commit is only available for commits not pushed upstream"
+      : undefined,
+  };
+}
+
+export function clampHistoryContextMenuPosition(
+  x: number,
+  y: number,
+  windowWidth: number,
+  windowHeight: number,
+) {
+  return {
+    x: Math.min(x, windowWidth - 190),
+    y: Math.min(y, windowHeight - 156),
+  };
+}
+
 function HistoryContextMenu({
   x,
   y,
   entry,
   onCherryPick,
   onReset,
+  onDropCommit,
   onClose,
 }: {
   x: number;
@@ -53,9 +76,11 @@ function HistoryContextMenu({
   entry: GitLogEntry;
   onCherryPick?: (entry: GitLogEntry) => void;
   onReset?: (entry: GitLogEntry) => void;
+  onDropCommit?: (entry: GitLogEntry) => void;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const dropCommitState = getDropCommitMenuState(entry);
 
   useEffect(() => {
     function handleMouseDown(event: MouseEvent) {
@@ -105,6 +130,18 @@ function HistoryContextMenu({
       >
         Reset to this commit
       </button>
+      <button
+        type="button"
+        disabled={dropCommitState.disabled}
+        title={dropCommitState.title}
+        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+        onClick={() => {
+          onDropCommit?.(entry);
+          onClose();
+        }}
+      >
+        Drop commit
+      </button>
     </div>
   );
 }
@@ -115,6 +152,7 @@ export function GitLogTree({
   onSelectCommit,
   onCherryPick,
   onReset,
+  onDropCommit,
 }: GitLogTreeProps) {
   const { data: logs = [], isLoading } = useGitLog(project, 200);
   const [contextMenu, setContextMenu] = useState<HistoryContextMenuState | null>(
@@ -123,9 +161,15 @@ export function GitLogTree({
 
   function openContextMenu(entry: GitLogEntry, x: number, y: number) {
     onSelectCommit?.(entry);
+    const position = clampHistoryContextMenuPosition(
+      x,
+      y,
+      window.innerWidth,
+      window.innerHeight,
+    );
     setContextMenu({
-      x: Math.min(x, window.innerWidth - 190),
-      y: Math.min(y, window.innerHeight - 120),
+      x: position.x,
+      y: position.y,
       entry,
     });
   }
@@ -350,6 +394,7 @@ export function GitLogTree({
           entry={contextMenu.entry}
           onCherryPick={onCherryPick}
           onReset={onReset}
+          onDropCommit={onDropCommit}
           onClose={() => setContextMenu(null)}
         />
       )}
