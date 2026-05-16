@@ -391,25 +391,6 @@ export default function WorkspacePage() {
         defaultActive: true,
         content: (
           <div className="flex flex-col h-full">
-            {projects.length > 1 && (
-              <div className="shrink-0 px-2 py-1.5 border-b border-[var(--color-border)]">
-                <Select
-                  value={projectName ?? ""}
-                  onValueChange={setActiveProject}
-                >
-                  <SelectTrigger className="text-xs h-7">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {projects.map((p) => (
-                      <SelectItem key={p.name} value={p.name}>
-                        {p.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
             {projectName ? (
               <FileTree
                 key={projectName}

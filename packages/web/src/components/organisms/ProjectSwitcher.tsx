@@ -1,0 +1,54 @@
+import { Folder } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/Select.js";
+import { useWorkspaceStore } from "@/stores/workspace.js";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/api/client.js";
+import { cn } from "@/lib/utils.js";
+
+interface ProjectSwitcherProps {
+  className?: string;
+}
+
+export function ProjectSwitcher({ className }: ProjectSwitcherProps) {
+  const { activeProject, setActiveProject } = useWorkspaceStore();
+  const { data: projects = [] } = useQuery({
+    queryKey: ["projects"],
+    queryFn: () => api.projects.list(),
+  });
+
+  const value = activeProject ?? (projects.length > 0 ? projects[0].name : "");
+
+  if (projects.length === 0) return null;
+
+  return (
+    <div className={cn("flex items-center gap-2 px-1 min-w-0", className)}>
+      <Folder className="h-4 w-4 shrink-0 text-[var(--color-primary)] opacity-80" />
+      <Select
+        value={value}
+        onValueChange={(val) => setActiveProject(val)}
+      >
+        <SelectTrigger
+          className={cn(
+            "min-w-0 h-8 text-[11px] font-bold px-3 glass-input font-sans tracking-tight",
+            "w-[140px] lg:w-[180px]"
+          )}
+        >
+          <SelectValue placeholder="Select project" />
+        </SelectTrigger>
+        <SelectContent className="min-w-[180px]">
+          {projects.map((p) => (
+            <SelectItem key={p.name} value={p.name}>
+              {p.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
