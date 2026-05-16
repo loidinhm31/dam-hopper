@@ -27,7 +27,7 @@ export function ProjectSwitcher({ className }: ProjectSwitcherProps) {
   if (projects.length === 0) return null;
 
   return (
-    <div className={cn("flex items-center gap-2 px-1 min-w-0", className)}>
+    <div className={cn("flex items-center gap-1.5 min-w-0 flex-1", className)}>
       <Folder className="h-4 w-4 shrink-0 text-[var(--color-primary)] opacity-80" />
       <Select
         value={value}
@@ -35,11 +35,13 @@ export function ProjectSwitcher({ className }: ProjectSwitcherProps) {
       >
         <SelectTrigger
           className={cn(
-            "min-w-0 h-8 text-[11px] font-bold px-3 glass-input font-sans tracking-tight",
-            "w-[140px] lg:w-[180px]"
+            "min-w-0 h-8 text-[11px] font-bold px-2 glass-input font-sans tracking-tight flex-1",
+            "w-[100px] sm:w-[140px] lg:w-[180px]"
           )}
         >
-          <SelectValue placeholder="Select project" />
+          <div className="truncate text-left flex-1">
+            <SelectValue placeholder="Select project" />
+          </div>
         </SelectTrigger>
         <SelectContent className="min-w-[180px]">
           {projects.map((p) => (

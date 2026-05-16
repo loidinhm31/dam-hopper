@@ -106,7 +106,7 @@ export function WorkspaceSwitcher({
           <p
             className={cn(
               "text-xs font-semibold text-[var(--color-text)] truncate tracking-wide",
-              isCompact ? "max-w-[120px]" : "flex-1",
+              isCompact ? "max-w-[80px] sm:max-w-[120px]" : "flex-1",
             )}
           >
             {workspace?.name ?? "dam-hopper"}
