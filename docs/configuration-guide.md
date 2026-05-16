@@ -89,6 +89,19 @@ run_command = "bash scripts/run.sh"
 
 - Requires explicit build_command and run_command
 
+### Terminal Environment Resolution
+
+Project environment-file values are applied only when DamHopper creates a terminal session for that project. DamHopper does not pass its full server process environment through to PTY children.
+
+Terminal env precedence is:
+
+1. Safe baseline inherited from the host for basic shell execution, such as `PATH` and `HOME`
+2. DamHopper default `TERM`
+3. Project environment-file values
+4. Explicit terminal request `env` overrides
+
+If a project-level environment file sets `MONGODB_DATABASE=gleanOak` and the terminal create request includes `env.MONGODB_DATABASE=overrideDb`, the terminal child process sees `overrideDb`.
+
 ### Agent Store Configuration
 
 Optional: configure where the agent store directory is located.

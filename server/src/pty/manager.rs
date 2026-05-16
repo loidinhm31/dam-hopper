@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    ffi::OsString,
     io::Read as _,
     sync::{atomic::Ordering, Arc, Mutex},
     time::Duration,
@@ -24,6 +25,26 @@ const DEAD_SESSION_TTL: Duration = Duration::from_secs(60);
 const SESSION_ID_MAX_LEN: usize = 128;
 /// Maximum backoff delay for auto-restart: 30 seconds.
 const MAX_RESTART_DELAY_MS: u64 = 30_000;
+const SAFE_BASELINE_ENV_VARS: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMPDIR",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "PNPM_HOME",
+    "SSH_AUTH_SOCK",
+    "GPG_TTY",
+    "COLORTERM",
+];
 
 // ---------------------------------------------------------------------------
 // Restart engine types
@@ -196,13 +217,9 @@ impl PtySessionManager {
             .map_err(|e| AppError::PtyError(e.to_string()))?;
 
         let mut cmd = build_command(&opts);
-        cmd.env("TERM", "xterm-256color");
+        apply_child_env(&mut cmd, &opts.env);
         // Log env keys only — values may contain secrets (API keys, tokens).
         debug!(id = %opts.id, env_keys = ?opts.env.keys().collect::<Vec<_>>(), "Spawning PTY");
-        for (k, v) in &opts.env {
-            cmd.env(k, v);
-        }
-
         let child = pair
             .slave
             .spawn_command(cmd)
@@ -794,10 +811,7 @@ async fn respawn_internal(
     };
 
     build_cmd.cwd(&opts.cwd);
-    build_cmd.env("TERM", "xterm-256color");
-    for (k, v) in &opts.env {
-        build_cmd.env(k, v);
-    }
+    apply_child_env(&mut build_cmd, &opts.env);
 
     let child = pair
         .slave
@@ -946,6 +960,43 @@ fn build_command(opts: &PtyCreateOpts) -> CommandBuilder {
     let safe_cwd = strip_unc_prefix(&opts.cwd);
     cmd.cwd(safe_cwd);
     cmd
+}
+
+fn apply_child_env(cmd: &mut CommandBuilder, env: &HashMap<String, String>) {
+    cmd.env_clear();
+    for (key, value) in build_child_env(env) {
+        cmd.env(key, value);
+    }
+}
+
+fn build_child_env(env: &HashMap<String, String>) -> Vec<(String, OsString)> {
+    let parent_env = std::env::vars_os()
+        .filter_map(|(key, value)| key.into_string().ok().map(|key| (key, value)))
+        .collect::<HashMap<_, _>>();
+    build_child_env_from_parent_snapshot(&parent_env, env)
+}
+
+pub(crate) fn build_child_env_from_parent_snapshot(
+    parent_env: &HashMap<String, OsString>,
+    env: &HashMap<String, String>,
+) -> Vec<(String, OsString)> {
+    let mut child_env = safe_baseline_env_from(parent_env)
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value))
+        .collect::<Vec<_>>();
+    child_env.push(("TERM".to_string(), OsString::from("xterm-256color")));
+    child_env.extend(
+        env.iter()
+            .map(|(key, value)| (key.clone(), OsString::from(value))),
+    );
+    child_env
+}
+
+fn safe_baseline_env_from(parent_env: &HashMap<String, OsString>) -> Vec<(&'static str, OsString)> {
+    SAFE_BASELINE_ENV_VARS
+        .iter()
+        .filter_map(|key| parent_env.get(*key).cloned().map(|value| (*key, value)))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

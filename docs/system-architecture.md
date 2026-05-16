@@ -251,11 +251,19 @@ Manages portable terminal sessions with automatic restart capabilities and idemp
 - Map<id, LiveSession> for active sessions
 - Map<id, DeadSession> tombstones (60s TTL; auto-evicted by cleanup task)
 - Set<id, String> killed tracks manually terminated sessions (used to prevent supervisor respawn race)
+- PTY child env is rebuilt from a safe baseline allowlist, then `TERM` and the resolved session env snapshot are applied before spawn
 - `create()` fully idempotent: removes dead tombstone, inserts into killed set pre-spawn, removes post-spawn (TOCTOU guard)
 - `kill()` marks session dead + adds to killed set, retains 60s tombstone for reconnect
 - `remove()` immediately evicts session + adds to killed set (no restart on user kill)
 - `spawn_cleanup_task()` runs every 30s: prunes expired tombstones AND orphaned killed set entries (prevents unbounded memory growth)
 - Bounded respawn channel (256 slots) prevents DoS
+
+**api/terminal.rs** — terminal creation env resolution:
+
+- Loads project `env_file` into a per-session env map without mutating the server process env
+- Request `env` values override `env_file` values
+- Missing `env_file` logs a warning and continues
+- Malformed `env_file` returns a clear terminal creation error
 
 **session.rs** — Session state management:
 

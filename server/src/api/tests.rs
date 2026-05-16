@@ -29,6 +29,7 @@ fn make_tunnel_manager(event_sink: &BroadcastEventSink) -> TunnelSessionManager 
 }
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -128,6 +129,17 @@ async fn post_json(
         .body(Body::from(body.to_string()))
         .unwrap();
     router.oneshot(req).await.unwrap()
+}
+
+fn wait_for(timeout: Duration, predicate: impl Fn() -> bool) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if predicate() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -453,20 +465,7 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         },
         agent_store: None,
         server: crate::config::ServerConfig::default(),
-        projects: vec![ProjectConfig {
-            name: "test-project".into(),
-            path: workspace_dir.to_string_lossy().into_owned(),
-            project_type: ProjectType::Custom,
-            services: None,
-            commands: None,
-            env_file: None,
-            tags: None,
-            terminals: vec![],
-            agents: None,
-            restart_policy: crate::config::RestartPolicy::Never,
-            restart_max_retries: crate::config::DEFAULT_RESTART_MAX_RETRIES,
-            health_check_url: None,
-        }],
+        projects: vec![test_project_config(&workspace_dir)],
         features: FeaturesConfig::default(),
         config_path: workspace_dir.join("dam-hopper.toml"),
     };
@@ -493,6 +492,64 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         test_opaque_setup(),
     )
     .expect("make_state_with_project failed")
+}
+
+fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> AppState {
+    let workspace_dir = tmp.path().to_path_buf();
+    let mut project = test_project_config(&workspace_dir);
+    project.env_file = env_file.map(str::to_string);
+
+    let config = DamHopperConfig {
+        workspace: WorkspaceInfo {
+            name: "test-workspace".into(),
+            root: ".".into(),
+        },
+        agent_store: None,
+        server: crate::config::ServerConfig::default(),
+        projects: vec![project],
+        features: FeaturesConfig::default(),
+        config_path: workspace_dir.join("dam-hopper.toml"),
+    };
+
+    let (event_sink, _rx) = BroadcastEventSink::new(64);
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
+    let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
+    let fs = FsSubsystem::new(workspace_dir.clone());
+    let tunnel_manager = make_tunnel_manager(&event_sink);
+
+    AppState::new(
+        workspace_dir,
+        config,
+        GlobalConfig::default(),
+        pty_manager,
+        agent_store,
+        event_sink,
+        TEST_TOKEN.to_string(),
+        fs,
+        None,
+        false,
+        tunnel_manager,
+        None,
+        test_opaque_setup(),
+    )
+    .expect("make_state_with_project_env_file failed")
+}
+
+fn test_project_config(workspace_dir: &std::path::Path) -> ProjectConfig {
+    ProjectConfig {
+        name: "test-project".into(),
+        path: workspace_dir.to_string_lossy().into_owned(),
+        project_type: ProjectType::Custom,
+        services: None,
+        commands: None,
+        env_file: None,
+        tags: None,
+        terminals: vec![],
+        agents: None,
+        restart_policy: crate::config::RestartPolicy::Never,
+        restart_max_retries: crate::config::DEFAULT_RESTART_MAX_RETRIES,
+        health_check_url: None,
+    }
 }
 
 #[tokio::test]
@@ -571,6 +628,86 @@ async fn terminal_list_detailed_returns_array() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(json.is_array());
+}
+
+#[tokio::test]
+async fn terminal_create_loads_project_env_file_for_terminal_sessions() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".env"), "MONGODB_DATABASE=gleanOak\n").unwrap();
+    let state = make_state_with_project_env_file(&tmp, Some(".env"));
+
+    let body = serde_json::json!({
+        "id": "env-file-session",
+        "command": "printf '%s\n' \"$MONGODB_DATABASE\"; cat",
+        "cwd": tmp.path().to_str().unwrap(),
+        "project": "test-project"
+    });
+    let resp = post_json(state.clone(), "/api/terminal", body).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let ok = wait_for(Duration::from_secs(2), || {
+        state
+            .pty_manager
+            .get_buffer("env-file-session")
+            .map(|buf| buf.contains("gleanOak"))
+            .unwrap_or(false)
+    });
+    assert!(ok, "terminal should receive project env_file values");
+}
+
+#[tokio::test]
+async fn terminal_create_request_env_overrides_project_env_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".env"), "MONGODB_DATABASE=gleanOak\n").unwrap();
+    let state = make_state_with_project_env_file(&tmp, Some(".env"));
+
+    let body = serde_json::json!({
+        "id": "env-override-session",
+        "command": "printf '%s\n' \"$MONGODB_DATABASE\"; cat",
+        "cwd": tmp.path().to_str().unwrap(),
+        "project": "test-project",
+        "env": {
+            "MONGODB_DATABASE": "overrideDb"
+        }
+    });
+    let resp = post_json(state.clone(), "/api/terminal", body).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let ok = wait_for(Duration::from_secs(2), || {
+        state
+            .pty_manager
+            .get_buffer("env-override-session")
+            .map(|buf| buf.contains("overrideDb"))
+            .unwrap_or(false)
+    });
+    assert!(ok, "request env should override project env_file values");
+}
+
+#[tokio::test]
+async fn terminal_create_rejects_malformed_project_env_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".env"), "NOT VALID\n").unwrap();
+    let state = make_state_with_project_env_file(&tmp, Some(".env"));
+
+    let body = serde_json::json!({
+        "id": "bad-env-file-session",
+        "command": "echo should-not-run",
+        "cwd": tmp.path().to_str().unwrap(),
+        "project": "test-project"
+    });
+    let resp = post_json(state, "/api/terminal", body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let raw = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Invalid env_file"),
+        "unexpected error: {json}"
+    );
 }
 
 // ---------------------------------------------------------------------------

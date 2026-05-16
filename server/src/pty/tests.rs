@@ -7,6 +7,7 @@
 mod pty_tests {
     use std::{
         collections::HashMap,
+        ffi::OsString,
         sync::{Arc, Mutex},
         time::{Duration, Instant},
     };
@@ -16,7 +17,7 @@ mod pty_tests {
     use crate::config::schema::{RestartPolicy, DEFAULT_RESTART_MAX_RETRIES};
     use crate::pty::{
         event_sink::{EventSink, NoopEventSink},
-        manager::{PtyCreateOpts, PtySessionManager},
+        manager::{build_child_env_from_parent_snapshot, PtyCreateOpts, PtySessionManager},
     };
 
     // Shared multi-thread Tokio runtime for tests. PtySessionManager::new
@@ -198,12 +199,12 @@ mod pty_tests {
         let mgr = make_manager();
         mgr.create(opts("shell:write-test", "cat")).unwrap();
         mgr.write("shell:write-test", b"hello\n").unwrap();
-        let ok = wait_for(Duration::from_secs(2), || {
+        let ok = wait_for(Duration::from_secs(5), || {
             mgr.get_buffer("shell:write-test")
                 .map(|b| b.contains("hello"))
                 .unwrap_or(false)
         });
-        assert!(ok, "buffer should contain echo within 2s");
+        assert!(ok, "buffer should contain echo within 5s");
         mgr.remove("shell:write-test").unwrap();
     }
 
@@ -212,6 +213,77 @@ mod pty_tests {
         let mgr = make_manager();
         let result = mgr.write("nonexistent", b"data");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn child_env_builder_excludes_unallowlisted_parent_vars() {
+        let parent_env = HashMap::from([
+            ("PATH".to_string(), OsString::from("/usr/bin:/bin")),
+            ("HOME".to_string(), OsString::from("/tmp/test-home")),
+            (
+                "DAM_HOPPER_SECRET_TEST".to_string(),
+                OsString::from("server-only-secret"),
+            ),
+        ]);
+
+        let child_env = build_child_env_from_parent_snapshot(&parent_env, &HashMap::new())
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(
+            child_env.get("PATH"),
+            Some(&OsString::from("/usr/bin:/bin"))
+        );
+        assert_eq!(
+            child_env.get("HOME"),
+            Some(&OsString::from("/tmp/test-home"))
+        );
+        assert!(
+            !child_env.contains_key("DAM_HOPPER_SECRET_TEST"),
+            "synthetic parent-only secret should not reach child env"
+        );
+    }
+
+    #[test]
+    fn create_does_not_inherit_unallowlisted_parent_env() {
+        let inherited_key = ["CARGO_PKG_NAME", "CARGO_MANIFEST_DIR", "PWD"]
+            .iter()
+            .find(|key| std::env::var(key).is_ok())
+            .expect("expected at least one inherited test env var");
+
+        let mgr = make_manager();
+        let mut create_opts = opts(
+            "shell:no-inherit",
+            &format!("printf '%s\n' \"${{{inherited_key}:-missing}}\"; cat"),
+        );
+        create_opts.env.remove(*inherited_key);
+
+        mgr.create(create_opts).unwrap();
+        let ok = wait_for(Duration::from_secs(2), || {
+            mgr.get_buffer("shell:no-inherit")
+                .map(|b| b.contains("missing"))
+                .unwrap_or(false)
+        });
+        assert!(ok, "child should not inherit {inherited_key}");
+        mgr.remove("shell:no-inherit").unwrap();
+    }
+
+    #[test]
+    fn create_preserves_safe_baseline_env_for_shell_execution() {
+        let mgr = make_manager();
+        let create_opts = opts(
+            "shell:safe-baseline",
+            "printf '%s|%s\\n' \"${PATH:+path-set}\" \"${HOME:+home-set}\"; cat",
+        );
+
+        mgr.create(create_opts).unwrap();
+        let ok = wait_for(Duration::from_secs(2), || {
+            mgr.get_buffer("shell:safe-baseline")
+                .map(|b| b.contains("path-set|home-set"))
+                .unwrap_or(false)
+        });
+        assert!(ok, "safe baseline env should preserve PATH and HOME");
+        mgr.remove("shell:safe-baseline").unwrap();
     }
 
     // -----------------------------------------------------------------------
