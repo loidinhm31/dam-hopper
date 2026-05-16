@@ -63,18 +63,18 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
   }, [status]);
 
   return (
-    <header className="shrink-0 glass-card border-b border-[var(--color-border)] px-4 h-12 flex items-center justify-between z-50">
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2">
+    <header className="shrink-0 glass-card border-b border-[var(--color-border)] px-4 h-12 flex items-center justify-between z-50 gap-2">
+      <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+        <div className="flex items-center gap-2 flex-shrink-0">
           <Logo size="sm" />
-          <span className="text-[10px] text-[var(--color-primary)] font-bold tracking-widest opacity-70 hidden sm:inline">
+          <span className="text-[10px] text-[var(--color-primary)] font-bold tracking-widest opacity-70 hidden xl:inline">
             DAM-HOPPER
           </span>
         </div>
 
         <button
           onClick={onToggle}
-          className="p-1.5 hover:bg-[var(--color-surface-2)] rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+          className="p-1.5 hover:bg-[var(--color-surface-2)] rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors flex-shrink-0"
           title={collapsed ? "Show menu" : "Hide menu"}
         >
           {collapsed ? <Menu size={16} /> : <X size={16} />}
@@ -86,7 +86,7 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
             "flex items-center gap-1 overflow-hidden transition-all duration-300 ease-in-out",
             collapsed
               ? "max-w-0 opacity-0 pointer-events-none"
-              : "max-w-[1000px] opacity-100 ml-2",
+              : "max-w-[120px] sm:max-w-[180px] lg:max-w-[500px] xl:max-w-[1000px] opacity-100 ml-1 sm:ml-2",
           )}
         >
           {BASE_NAV.map(({ to, icon: Icon, label }) => (
@@ -96,7 +96,7 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
               end={to === "/"}
               className={({ isActive }) =>
                 cn(
-                  "flex items-center gap-2 rounded-sm px-2.5 py-1.5 text-xs font-bold transition-all whitespace-nowrap",
+                  "flex items-center gap-2 rounded-sm px-2 sm:px-2.5 py-1.5 text-xs font-bold transition-all whitespace-nowrap",
                   isActive
                     ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)] border-b border-[var(--color-primary)]"
                     : "text-[var(--color-text)] opacity-50 hover:opacity-100 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] border-b border-transparent",
@@ -104,28 +104,29 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
               }
             >
               <Icon className="h-3.5 w-3.5" />
-              <span className="tracking-widest text-[10px]">{label}</span>
+              <span className="tracking-widest text-[10px] hidden lg:inline">{label}</span>
             </NavLink>
           ))}
         </nav>
       </div>
 
-      <div className="flex items-center gap-3">
-        <WorkspaceSwitcher variant="compact" />
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 justify-end">
+        <div className="min-w-0">
+          <WorkspaceSwitcher variant="compact" />
+        </div>
 
         {projects.length > 0 && (
           <>
-            <div className="h-4 w-[1px] bg-[var(--color-border)]" />
-            <div className="px-1">
+            <div className="h-4 w-[1px] bg-[var(--color-border)] hidden lg:block" />
+            <div className="px-1 min-w-0 flex-shrink hidden lg:block">
               <ProjectSwitcher />
             </div>
 
-            <div className="h-4 w-[1px] bg-[var(--color-border)]" />
-            <div className="px-1">
+            <div className="h-4 w-[1px] bg-[var(--color-border)] hidden xl:block" />
+            <div className="px-1 hidden xl:block">
               <GitBranchControl
                 project={activeProject ?? projects[0].name}
                 compact
-                className="hidden lg:flex"
               />
             </div>
           </>
@@ -133,30 +134,32 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
 
         <div className="h-4 w-[1px] bg-[var(--color-border)]" />
 
-        <button
-          onClick={() => setProfilesDialogOpen(true)}
-          className="flex items-center gap-2 px-2 py-1 rounded-sm hover:bg-[var(--color-surface-2)] transition-colors"
-          title={activeProfile?.name || "Server connection"}
-        >
-          <ConnectionDot
-            status={status}
-            collapsed={false}
-            devMode={isDevMode}
-          />
-          {activeProfile && (
-            <span className="text-[10px] font-bold text-[var(--color-text-muted)] tracking-wider uppercase hidden md:inline">
-              {activeProfile.name}
-            </span>
-          )}
-        </button>
+        <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+          <button
+            onClick={() => setProfilesDialogOpen(true)}
+            className="flex items-center gap-2 px-2 py-1 rounded-sm hover:bg-[var(--color-surface-2)] transition-colors"
+            title={activeProfile?.name || "Server connection"}
+          >
+            <ConnectionDot
+              status={status}
+              collapsed={false}
+              devMode={isDevMode}
+            />
+            {activeProfile && (
+              <span className="text-[10px] font-bold text-[var(--color-text-muted)] tracking-wider uppercase hidden xl:inline">
+                {activeProfile.name}
+              </span>
+            )}
+          </button>
 
-        <button
-          onClick={() => setProfilesDialogOpen(true)}
-          className="p-1.5 hover:bg-[var(--color-surface-2)] rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-          title="Manage server connections"
-        >
-          <ServerCog size={16} />
-        </button>
+          <button
+            onClick={() => setProfilesDialogOpen(true)}
+            className="p-1.5 hover:bg-[var(--color-surface-2)] rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            title="Manage server connections"
+          >
+            <ServerCog size={16} />
+          </button>
+        </div>
       </div>
 
       <ServerSettingsDialog
