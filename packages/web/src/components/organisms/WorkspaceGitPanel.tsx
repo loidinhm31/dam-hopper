@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils.js";
 import type { GitLogEntry, DiffFileEntry } from "@/api/client.js";
 import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
 import {
+  GitDropCommitDialog,
   GitHistoryStatusBanner,
   GitResetDialog,
   useGitHistoryActions,
@@ -33,6 +34,14 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
         selectedCommit.hash,
       );
     }
+  };
+
+  const handleDropCommitConfirm = async () => {
+    const droppedHash = await historyActions.handleDropCommit();
+    if (!droppedHash) return;
+    setSelectedCommit((current) =>
+      current?.hash === droppedHash ? null : current,
+    );
   };
 
   return (
@@ -70,6 +79,7 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
               onCherryPick={(entry) =>
                 void historyActions.handleCherryPick(entry)
               }
+              onDropCommit={historyActions.setDropCommit}
               onReset={historyActions.setResetCommit}
             />
           </div>
@@ -97,6 +107,12 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
         commit={historyActions.resetCommit}
         onClose={() => historyActions.setResetCommit(null)}
         onConfirm={(mode) => void historyActions.handleReset(mode)}
+      />
+      <GitDropCommitDialog
+        commit={historyActions.dropCommit}
+        loading={historyActions.isDropCommitPending}
+        onClose={() => historyActions.setDropCommit(null)}
+        onConfirm={() => void handleDropCommitConfirm()}
       />
     </>
   );

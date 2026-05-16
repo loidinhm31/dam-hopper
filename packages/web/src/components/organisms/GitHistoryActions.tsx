@@ -5,6 +5,7 @@ import {
   useGitDropCommitFiles,
   useGitReset,
 } from "@/api/queries.js";
+import { api } from "@/api/client.js";
 import type { DiffFileEntry, GitLogEntry, ResetMode } from "@/api/client.js";
 import { cn } from "@/lib/utils.js";
 import { Button } from "@/components/atoms/Button.js";
@@ -127,8 +128,60 @@ export function GitResetDialog({
   );
 }
 
+interface GitDropCommitDialogProps {
+  commit: GitLogEntry | null;
+  loading: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}
+
+export function GitDropCommitDialog({
+  commit,
+  loading,
+  onClose,
+  onConfirm,
+}: GitDropCommitDialogProps) {
+  return (
+    <Dialog open={commit !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-[500px]">
+        <DialogHeader>
+          <DialogTitle>Drop commit</DialogTitle>
+          <DialogDescription>
+            This rewrites local history and removes commit{" "}
+            <strong>{commit?.hash.slice(0, 7)}</strong> from the current branch.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="rounded border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2 text-xs text-[var(--color-danger)]">
+          Only available for commits that have not been pushed upstream.
+        </div>
+        <div className="text-xs text-[var(--color-text-muted)]">
+          DamHopper will load all changed files from this commit, then reuse the
+          existing drop-selected-changes flow for the full commit.
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="danger"
+            loading={loading}
+            onClick={onConfirm}
+          >
+            Drop commit
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function useGitHistoryActions(project: string) {
   const [resetCommitState, setResetCommitState] = useState<{
+    project: string;
+    commit: GitLogEntry | null;
+  }>({ project: "", commit: null });
+  const [dropCommitState, setDropCommitState] = useState<{
     project: string;
     commit: GitLogEntry | null;
   }>({ project: "", commit: null });
@@ -146,6 +199,8 @@ export function useGitHistoryActions(project: string) {
   const dropFilesMutation = useGitDropCommitFiles(project);
   const resetCommit =
     resetCommitState.project === project ? resetCommitState.commit : null;
+  const dropCommit =
+    dropCommitState.project === project ? dropCommitState.commit : null;
   const message = messageState.project === project ? messageState.value : null;
   const error = errorState.project === project ? errorState.value : null;
 
@@ -280,6 +335,53 @@ export function useGitHistoryActions(project: string) {
     }
   }
 
+  async function handleDropCommit() {
+    if (!project || !dropCommit) return null;
+    const targetHash = dropCommit.hash;
+    if (dropCommit.isPushed) {
+      setErrorState({
+        project,
+        value: "Drop commit is only available for commits not pushed upstream",
+      });
+      return null;
+    }
+
+    setErrorState({ project, value: null });
+    setMessageState({ project, value: null });
+    try {
+      const files = await api.git.commitFiles(project, targetHash);
+      if (files.length === 0) {
+        setMessageState({ project, value: "No changes to drop" });
+        setDropCommitState({ project, commit: null });
+        return targetHash;
+      }
+      const paths = files.map((file) => file.path);
+      const result = await dropFilesMutation.mutateAsync({
+        hash: targetHash,
+        paths,
+      });
+      if (result.ok) {
+        setMessageState({
+          project,
+          value: result.message ?? `Dropped commit ${targetHash.slice(0, 7)}`,
+        });
+        setDropCommitState({ project, commit: null });
+        return targetHash;
+      }
+      setErrorState({
+        project,
+        value: result.message ?? `Drop commit failed for ${targetHash.slice(0, 7)}`,
+      });
+    } catch (caughtError) {
+      setErrorState({
+        project,
+        value:
+          caughtError instanceof Error ? caughtError.message : "Drop commit failed",
+      });
+    }
+    return null;
+  }
+
   const clearStatus = useCallback(() => {
     setMessageState((current) => ({ ...current, value: null }));
     setErrorState((current) => ({ ...current, value: null }));
@@ -287,17 +389,23 @@ export function useGitHistoryActions(project: string) {
 
   const resetScope = useCallback(() => {
     setResetCommitState((current) => ({ ...current, commit: null }));
+    setDropCommitState((current) => ({ ...current, commit: null }));
     clearStatus();
   }, [clearStatus]);
 
   return {
+    dropCommit,
     error,
+    isDropCommitPending: dropFilesMutation.isPending,
     message,
     resetCommit,
+    setDropCommit: (commit: GitLogEntry | null) =>
+      setDropCommitState({ project, commit }),
     setResetCommit: (commit: GitLogEntry | null) =>
       setResetCommitState({ project, commit }),
     handleCherryPick,
     handleCherryPickFiles,
+    handleDropCommit,
     handleDropFiles,
     handleReset,
     clearStatus,

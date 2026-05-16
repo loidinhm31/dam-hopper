@@ -18,6 +18,7 @@ import { CommitDetailsPanel } from "@/components/organisms/CommitDetailsPanel.js
 import { useEditorStore } from "@/stores/editor.js";
 import { cn } from "@/lib/utils.js";
 import {
+  GitDropCommitDialog,
   GitHistoryStatusBanner,
   GitResetDialog,
   useGitHistoryActions,
@@ -104,6 +105,14 @@ export function GitPage() {
         selectedCommit.hash,
       );
     }
+  }
+
+  async function handleDropCommitConfirm() {
+    const droppedHash = await historyActions.handleDropCommit();
+    if (!droppedHash) return;
+    setSelectedCommit((current) =>
+      current?.hash === droppedHash ? null : current,
+    );
   }
 
   return (
@@ -253,6 +262,7 @@ export function GitPage() {
                     onCherryPick={(entry) =>
                       void historyActions.handleCherryPick(entry)
                     }
+                    onDropCommit={historyActions.setDropCommit}
                     onReset={historyActions.setResetCommit}
                   />
                 </div>
@@ -293,6 +303,12 @@ export function GitPage() {
         commit={historyActions.resetCommit}
         onClose={() => historyActions.setResetCommit(null)}
         onConfirm={(mode) => void historyActions.handleReset(mode)}
+      />
+      <GitDropCommitDialog
+        commit={historyActions.dropCommit}
+        loading={historyActions.isDropCommitPending}
+        onClose={() => historyActions.setDropCommit(null)}
+        onConfirm={() => void handleDropCommitConfirm()}
       />
     </AppLayout>
   );
