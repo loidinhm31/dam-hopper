@@ -7,13 +7,51 @@ import type {
   AgentItemCategory,
   AgentType,
   DistributionMethod,
+  CheckoutStrategy,
   DiffFileEntry,
   DiffResponse,
   FileDiffContent,
   ConflictFile,
+  ResetMode,
   UiConfig,
 } from "./client.js";
 import type { SessionInfo } from "@/api/client.js";
+
+function invalidateGitProjectQueries(
+  qc: ReturnType<typeof useQueryClient>,
+  project: string,
+  options?: {
+    includeBranches?: boolean;
+    includeConflicts?: boolean;
+    includeFileTree?: boolean;
+    includeGitDiff?: boolean;
+    includeGitLog?: boolean;
+    includeProjects?: boolean;
+    includeProjectStatus?: boolean;
+  },
+) {
+  if (options?.includeBranches) {
+    void qc.invalidateQueries({ queryKey: ["branches", project] });
+  }
+  if (options?.includeProjectStatus) {
+    void qc.invalidateQueries({ queryKey: ["project-status", project] });
+  }
+  if (options?.includeProjects) {
+    void qc.invalidateQueries({ queryKey: ["projects"] });
+  }
+  if (options?.includeGitLog) {
+    void qc.invalidateQueries({ queryKey: ["git-log", project] });
+  }
+  if (options?.includeGitDiff) {
+    void qc.invalidateQueries({ queryKey: ["git-diff", project] });
+  }
+  if (options?.includeConflicts) {
+    void qc.invalidateQueries({ queryKey: ["git-conflicts", project] });
+  }
+  if (options?.includeFileTree) {
+    void qc.invalidateQueries({ queryKey: ["fs-tree", project] });
+  }
+}
 
 export function useWorkspaceStatus() {
   return useQuery({
@@ -325,9 +363,92 @@ export function useGitResolve(project: string) {
 export function useGitCommit(project: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (message: string) => api.git.commit(project, message),
+    mutationFn: ({ message, amend = false }: { message: string; amend?: boolean }) =>
+      api.git.commit(project, message, amend),
     onSuccess: () =>
-      void qc.invalidateQueries({ queryKey: ["git-diff", project] }),
+      invalidateGitProjectQueries(qc, project, {
+        includeConflicts: true,
+        includeGitDiff: true,
+        includeGitLog: true,
+        includeProjects: true,
+        includeProjectStatus: true,
+      }),
+  });
+}
+
+export function useGitCreateBranch(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (options: {
+      name: string;
+      startPoint?: string;
+      checkout?: boolean;
+    }) => api.git.createBranch(project, options),
+    onSuccess: (_result, vars) =>
+      invalidateGitProjectQueries(qc, project, {
+        includeBranches: true,
+        includeConflicts: Boolean(vars.checkout),
+        includeFileTree: Boolean(vars.checkout),
+        includeGitDiff: Boolean(vars.checkout),
+        includeGitLog: true,
+        includeProjects: true,
+        includeProjectStatus: true,
+      }),
+  });
+}
+
+export function useGitCheckoutBranch(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (options: {
+      branch: string;
+      startPoint?: string;
+      create?: boolean;
+      strategy?: CheckoutStrategy;
+    }) => api.git.checkoutBranch(project, options),
+    onSuccess: () =>
+      invalidateGitProjectQueries(qc, project, {
+        includeBranches: true,
+        includeConflicts: true,
+        includeFileTree: true,
+        includeGitDiff: true,
+        includeGitLog: true,
+        includeProjects: true,
+        includeProjectStatus: true,
+      }),
+  });
+}
+
+export function useGitCherryPick(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (hash: string) => api.git.cherryPick(project, hash),
+    onSuccess: () =>
+      invalidateGitProjectQueries(qc, project, {
+        includeConflicts: true,
+        includeFileTree: true,
+        includeGitDiff: true,
+        includeGitLog: true,
+        includeProjects: true,
+        includeProjectStatus: true,
+      }),
+  });
+}
+
+export function useGitReset(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ hash, mode }: { hash: string; mode: ResetMode }) =>
+      api.git.reset(project, hash, mode),
+    onSuccess: () =>
+      invalidateGitProjectQueries(qc, project, {
+        includeConflicts: true,
+        includeFileTree: true,
+        includeGitDiff: true,
+        includeGitLog: true,
+        includeProjects: true,
+        includeProjectStatus: true,
+      }),
   });
 }
 

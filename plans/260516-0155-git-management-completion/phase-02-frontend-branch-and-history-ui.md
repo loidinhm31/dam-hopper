@@ -11,8 +11,8 @@
 
 - Date: 2026-05-16
 - Priority: P2
-- Implementation status: pending
-- Review status: pending
+- Implementation status: DONE 2026-05-16 03:12
+- Review status: APPROVED 2026-05-16 03:12
 - Description: Add branch controls and history actions to existing Git surfaces.
 
 ## Key Insights
@@ -71,15 +71,15 @@
 
 ## Todo List
 
-- [ ] Add client/transport contracts
-- [ ] Add React Query hooks
-- [ ] Create branch control
-- [ ] Add checkout dirty dialog
-- [ ] Add create branch dialog
-- [ ] Add history context menu
-- [ ] Add reset dialog
-- [ ] Integrate in Git panel and Explorer
-- [ ] Run web build/tests
+- [x] Add client/transport contracts
+- [x] Add React Query hooks
+- [x] Create branch control
+- [x] Add checkout dirty dialog
+- [x] Add create branch dialog
+- [x] Add history context menu
+- [x] Add reset dialog
+- [x] Integrate in Git panel and Explorer
+- [x] Run web build/tests
 
 ## Success Criteria
 

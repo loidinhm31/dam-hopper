@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { GitCommit, GitBranch, History } from "lucide-react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button } from "@/components/atoms/Button.js";
@@ -17,6 +17,11 @@ import { GitLocalChanges } from "@/components/organisms/GitLocalChanges.js";
 import { CommitDetailsPanel } from "@/components/organisms/CommitDetailsPanel.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { cn } from "@/lib/utils.js";
+import {
+  GitHistoryStatusBanner,
+  GitResetDialog,
+  useGitHistoryActions,
+} from "@/components/organisms/GitHistoryActions.js";
 
 interface SectionResults {
   results: GitOpResult[];
@@ -61,23 +66,25 @@ export function GitPage() {
   const [fetchResults, setFetchResults] = useState<GitOpResult[] | null>(null);
   const [pullResults, setPullResults] = useState<GitOpResult[] | null>(null);
 
+  const allSelected = selected.size === 0; // empty = all
+  const selectedList = allSelected ? undefined : [...selected];
+  const projectNames = projects.map((p) => p.name);
+  const selectedProjectName = selected.size === 1 ? [...selected][0] : null;
+
   const gitFetch = useGitFetch();
   const gitPull = useGitPull();
   const { PassphraseDialogElement, executeWithRetry } = useGitWithSshRetry();
   const openDiff = useEditorStore((s) => s.openDiff);
-
-  const allSelected = selected.size === 0; // empty = all
-  const selectedList = allSelected ? undefined : [...selected];
-  const projectNames = projects.map((p) => p.name);
-
-  const selectedProjectName = selected.size === 1 ? [...selected][0] : null;
+  const historyActions = useGitHistoryActions(selectedProjectName ?? "");
   const { data: projectStatus } = useProjectStatus(selectedProjectName ?? "");
 
-  useEffect(() => {
+  function resetHistoryView() {
     setSelectedCommit(null);
-  }, [selectedProjectName]);
+    historyActions.resetScope();
+  }
 
   function toggleProject(name: string) {
+    resetHistoryView();
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(name)) next.delete(name);
@@ -127,7 +134,10 @@ export function GitPage() {
             <Badge variant="primary">{selected.size} selected</Badge>
             <button
               className="text-xs text-[var(--color-text-muted)] hover:underline"
-              onClick={() => setSelected(new Set())}
+              onClick={() => {
+                resetHistoryView();
+                setSelected(new Set());
+              }}
             >
               Clear
             </button>
@@ -200,7 +210,7 @@ export function GitPage() {
             Git Repository: {selectedProjectName}
             {projectStatus?.branch && (
               <Badge
-                variant="outline"
+                variant="primary"
                 className="ml-1 text-[var(--color-primary)] bg-[var(--color-primary)]/5 border-[var(--color-primary)]/20"
               >
                 <GitBranch className="w-3 h-3 mr-1" />
@@ -208,6 +218,11 @@ export function GitPage() {
               </Badge>
             )}
           </h2>
+          <GitHistoryStatusBanner
+            className="rounded-lg px-3 py-2 text-sm"
+            error={historyActions.error}
+            message={historyActions.message}
+          />
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 h-[700px]">
             {/* Sidebar: Commit / Local Changes */}
             <div className="lg:col-span-1 flex flex-col h-full overflow-hidden">
@@ -235,6 +250,8 @@ export function GitPage() {
                     project={selectedProjectName}
                     selectedHash={selectedCommit?.hash}
                     onSelectCommit={setSelectedCommit}
+                    onCherryPick={(entry) => void historyActions.handleCherryPick(entry)}
+                    onReset={historyActions.setResetCommit}
                   />
                 </div>
               </div>
@@ -264,6 +281,11 @@ export function GitPage() {
           </p>
         </div>
       )}
+      <GitResetDialog
+        commit={historyActions.resetCommit}
+        onClose={() => historyActions.setResetCommit(null)}
+        onConfirm={(mode) => void historyActions.handleReset(mode)}
+      />
     </AppLayout>
   );
 }
