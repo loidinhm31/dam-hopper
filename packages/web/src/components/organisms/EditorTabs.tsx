@@ -21,6 +21,11 @@ import { mimeToLanguage } from "@/lib/mime-to-language.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useEncryptedWrite } from "@/hooks/useEncryptedWrite.js";
 import { LockToggle } from "@/components/atoms/LockToggle.js";
+import {
+  clampEditorTabContextMenuPosition,
+  EditorTabContextMenu,
+  getEditorTabContextMenuItems,
+} from "@/components/organisms/editor-tab-context-menu.js";
 
 const MonacoHost = lazy(() =>
   import("@/components/organisms/MonacoHost.js").then((m) => ({
@@ -40,6 +45,8 @@ export function EditorTabs({ project }: { project: string | null }) {
     activeKeys,
     setActive,
     close,
+    closeOthers,
+    closeAll,
     setContent,
     save,
     saveViewState,
@@ -61,6 +68,11 @@ export function EditorTabs({ project }: { project: string | null }) {
 
   const [activeEditor, setActiveEditor] =
     useState<monacoNs.editor.IStandaloneCodeEditor | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    key: string;
+    x: number;
+    y: number;
+  } | null>(null);
 
   const handleSave = useCallback(
     async (key: string) => {
@@ -109,6 +121,22 @@ export function EditorTabs({ project }: { project: string | null }) {
   const projectTabs = project ? tabs.filter((t) => t.project === project) : [];
   const activeKey = project ? activeKeys[project] : null;
   const activeTab = projectTabs.find((t) => t.key === activeKey) ?? null;
+  const contextTab =
+    contextMenu && project
+      ? projectTabs.find((tab) => tab.key === contextMenu.key) ?? null
+      : null;
+  const contextMenuItems = contextTab
+    ? getEditorTabContextMenuItems({
+        tabCount: projectTabs.length,
+        onCloseTab: () => close(contextTab.key),
+        onCloseOthers: () => {
+          if (project) closeOthers(project, contextTab.key);
+        },
+        onCloseAll: () => {
+          if (project) closeAll(project);
+        },
+      })
+    : [];
 
   // Auto-hydrate active tab if content is not loaded
   useEffect(() => {
@@ -146,6 +174,20 @@ export function EditorTabs({ project }: { project: string | null }) {
               dirty={tab.dirty}
               onClick={() => project && setActive(project, tab.key)}
               onClose={() => close(tab.key)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                const position = clampEditorTabContextMenuPosition(
+                  event.clientX,
+                  event.clientY,
+                  window.innerWidth,
+                  window.innerHeight,
+                );
+                setContextMenu({
+                  key: tab.key,
+                  x: position.x,
+                  y: position.y,
+                });
+              }}
             />
           ))}
         </div>
@@ -155,6 +197,15 @@ export function EditorTabs({ project }: { project: string | null }) {
           </div>
         )}
       </div>
+
+      {contextMenu && contextTab && (
+        <EditorTabContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenuItems}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
 
       {/* Editor area + status bar */}
       <div className="flex-1 overflow-hidden flex flex-col min-h-0">

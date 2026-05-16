@@ -58,6 +58,8 @@ interface EditorState {
     commitHash?: string,
   ) => void;
   close: (key: string) => void;
+  closeOthers: (project: string, key: string) => void;
+  closeAll: (project: string) => void;
   setActive: (project: string, key: string | null) => void;
   setContent: (key: string, content: string) => void;
   save: (key: string) => Promise<void>;
@@ -289,6 +291,29 @@ export const useEditorStore = create<EditorState>()(
             activeKeys: { ...s.activeKeys, [project]: nextActive },
           };
         });
+      },
+
+      closeOthers: (project: string, key: string) => {
+        set((s) => {
+          const keepTab = s.tabs.find(
+            (tab) => tab.project === project && tab.key === key,
+          );
+          if (!keepTab) return s;
+
+          return {
+            tabs: s.tabs.filter(
+              (tab) => tab.project !== project || tab.key === key,
+            ),
+            activeKeys: { ...s.activeKeys, [project]: key },
+          };
+        });
+      },
+
+      closeAll: (project: string) => {
+        set((s) => ({
+          tabs: s.tabs.filter((tab) => tab.project !== project),
+          activeKeys: { ...s.activeKeys, [project]: null },
+        }));
       },
 
       setActive: (project: string, key: string | null) =>

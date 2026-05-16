@@ -26,14 +26,45 @@ interface GitBranchControlProps {
   project: string;
   compact?: boolean;
   className?: string;
+  showFeedback?: boolean;
 }
 
 type CheckoutRetryStrategy = "normal" | "stash" | "force";
+
+interface GitBranchFeedbackProps {
+  message: string | null;
+  error: string | null;
+  showFeedback?: boolean;
+}
+
+export function GitBranchFeedback({
+  message,
+  error,
+  showFeedback = true,
+}: GitBranchFeedbackProps) {
+  if (!showFeedback || (!message && !error)) {
+    return null;
+  }
+
+  return (
+    <div
+      className={cn(
+        "rounded border px-2 py-1 text-[10px] mt-1 mx-1",
+        error
+          ? "border-[var(--color-danger)]/20 bg-[var(--color-danger)]/10 text-[var(--color-danger)]"
+          : "border-emerald-500/20 bg-emerald-500/10 text-emerald-400",
+      )}
+    >
+      {error ?? message}
+    </div>
+  );
+}
 
 export function GitBranchControl({
   project,
   compact = false,
   className,
+  showFeedback = true,
 }: GitBranchControlProps) {
   const { data: branches = [] } = useBranches(project);
   const { data: projectStatus } = useProjectStatus(project);
@@ -198,18 +229,11 @@ export function GitBranchControl({
         </Button>
       </div>
 
-      {(message || error) && (
-        <div
-          className={cn(
-            "rounded border px-2 py-1 text-[10px] mt-1 mx-1",
-            error
-              ? "border-[var(--color-danger)]/20 bg-[var(--color-danger)]/10 text-[var(--color-danger)]"
-              : "border-emerald-500/20 bg-emerald-500/10 text-emerald-400",
-          )}
-        >
-          {error ?? message}
-        </div>
-      )}
+      <GitBranchFeedback
+        message={message}
+        error={error}
+        showFeedback={showFeedback}
+      />
       <GitBranchCreateDialog
         open={createOpen}
         branchName={branchName}

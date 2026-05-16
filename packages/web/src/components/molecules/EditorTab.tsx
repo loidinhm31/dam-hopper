@@ -1,3 +1,4 @@
+import type { MouseEventHandler } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { FileDecorationIcon } from "@/lib/file-decoration-icon.js";
@@ -9,6 +10,7 @@ interface EditorTabProps {
   dirty: boolean;
   onClick: () => void;
   onClose: () => void;
+  onContextMenu?: MouseEventHandler<HTMLDivElement>;
 }
 
 export function EditorTab({
@@ -18,6 +20,7 @@ export function EditorTab({
   dirty,
   onClick,
   onClose,
+  onContextMenu,
 }: EditorTabProps) {
   return (
     <div
@@ -31,6 +34,7 @@ export function EditorTab({
           : "bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]",
       )}
       onClick={onClick}
+      onContextMenu={onContextMenu}
     >
       <FileDecorationIcon pathOrName={path ?? name} className="h-3.5 w-3.5" />
       <span className="max-w-[140px] truncate">{name}</span>
