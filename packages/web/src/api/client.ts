@@ -459,8 +459,12 @@ export const api = {
         project,
         branch,
       }),
-    log: (project: string, limit?: number) =>
-      getTransport().invoke<GitLogEntry[]>("git:log", { project, limit }),
+    log: (project: string, limit?: number, offset?: number) =>
+      getTransport().invoke<GitLogEntry[]>("git:log", {
+        project,
+        limit,
+        offset,
+      }),
     diff: (project: string) =>
       getTransport().invoke<DiffResponse>("git:diff", { project }),
     untrackedFiles: (project: string, offset: number, limit: number) =>

@@ -892,7 +892,7 @@ fn get_log_shows_current_branch_history_only() {
     git(&["add", "main.txt"], path);
     git(&["commit", "-m", "main only"], path);
 
-    let messages: Vec<_> = get_log(path, 10)
+    let messages: Vec<_> = get_log(path, 10, 0)
         .unwrap()
         .into_iter()
         .map(|entry| entry.message)
@@ -901,6 +901,34 @@ fn get_log_shows_current_branch_history_only() {
     assert!(messages.iter().any(|message| message == "main only"));
     assert!(messages.iter().any(|message| message == "init"));
     assert!(!messages.iter().any(|message| message == "feature only"));
+}
+
+#[test]
+fn get_log_supports_offset_pagination() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    for idx in 1..=3 {
+      let file_name = format!("commit-{idx}.txt");
+      let message = format!("commit {idx}");
+      std::fs::write(path.join(&file_name), message.as_bytes()).unwrap();
+      git(&["add", &file_name], path);
+      git(&["commit", "-m", &message], path);
+    }
+
+    let first_page: Vec<_> = get_log(path, 2, 0)
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    let second_page: Vec<_> = get_log(path, 2, 2)
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+
+    assert_eq!(first_page, vec!["commit 3", "commit 2"]);
+    assert_eq!(second_page, vec!["commit 1", "init"]);
 }
 
 #[test]

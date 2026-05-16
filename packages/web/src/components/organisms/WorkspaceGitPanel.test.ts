@@ -45,6 +45,7 @@ describe("WorkspaceGitPanel refresh helpers", () => {
       { invalidateQueries, refetchQueries, fetchQuery },
       "demo-project",
       selectedCommit.hash,
+      0,
     );
 
     expect(refreshed).toEqual(selectedCommit);
@@ -60,7 +61,7 @@ describe("WorkspaceGitPanel refresh helpers", () => {
       [{ queryKey: ["git-commit-files", "demo-project", "abc1234"] }],
     ]);
     expect(fetchQuery).toHaveBeenCalledWith({
-      queryKey: ["git-log", "demo-project", 200],
+      queryKey: ["git-log", "demo-project", 200, 0],
       queryFn: expect.any(Function),
     });
   });
@@ -88,6 +89,7 @@ describe("WorkspaceGitPanel refresh helpers", () => {
       },
       "demo-project",
       "abc1234",
+      0,
     );
 
     expect(refreshed).toBeNull();

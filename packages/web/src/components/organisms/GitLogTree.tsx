@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useGitLog } from "@/api/queries.js";
 import { cn } from "@/lib/utils.js";
 import type { GitLogEntry } from "@/api/client.js";
 
@@ -20,7 +19,8 @@ const COLORS = [
 ];
 
 interface GitLogTreeProps {
-  project: string;
+  logs: GitLogEntry[];
+  isLoading?: boolean;
   selectedHash?: string;
   onSelectCommit?: (entry: GitLogEntry) => void;
   onCherryPick?: (entry: GitLogEntry) => void;
@@ -147,14 +147,14 @@ function HistoryContextMenu({
 }
 
 export function GitLogTree({
-  project,
+  logs,
+  isLoading = false,
   selectedHash,
   onSelectCommit,
   onCherryPick,
   onReset,
   onDropCommit,
 }: GitLogTreeProps) {
-  const { data: logs = [], isLoading } = useGitLog(project, 200);
   const [contextMenu, setContextMenu] = useState<HistoryContextMenuState | null>(
     null,
   );
@@ -238,7 +238,7 @@ export function GitLogTree({
   }
 
   return (
-    <div className="relative w-full overflow-x-auto border border-[var(--color-border)] rounded-md bg-[var(--color-surface)]">
+    <div className="relative h-full w-full overflow-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]">
       <table className="w-full text-left text-xs whitespace-nowrap border-collapse">
         <thead>
           <tr className="border-b border-[var(--color-border)] text-[var(--color-text-muted)] bg-[var(--color-background)]">
