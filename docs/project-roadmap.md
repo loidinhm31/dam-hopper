@@ -197,6 +197,17 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-05-16:** Completed PTY Env Leakage Fix Phase 01.
+  - ✅ PTY child env now starts from a safe baseline instead of inheriting server process env
+  - ✅ Project `env_file` values load into terminal sessions before request overrides
+  - ✅ Validation passed: `cargo test --manifest-path server/Cargo.toml pty`, `cargo test --manifest-path server/Cargo.toml terminal`, full `cargo test`
+
+- **2026-05-16:** Completed PTY Env Leakage Fix Phase 02.
+  - ✅ Added PTY regressions for synthetic parent-env leakage and safe-baseline shell vars
+  - ✅ Added API coverage for project environment-file loading, override precedence, and malformed-file rejection
+  - ✅ Documented terminal env precedence in `docs/configuration-guide.md` and recorded completion in `docs/CHANGELOG.md`
+  - ✅ Full verification passed: `cargo test --manifest-path server/Cargo.toml`
+
 - **2026-05-15:** Completed Control Running Ports Phase 02.
   - ✅ `PortsPanel` now exposes a confirmed kill action for detected ports with owner sessions
   - ✅ `usePorts()` kill mutation revalidates ports and terminal session data

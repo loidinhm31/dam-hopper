@@ -183,6 +183,8 @@ Infrastructure
 - Tokio-based PTY management
 - WebSocket streaming for terminal output
 - Session persistence across reconnects
+- PTY spawn env starts from a safe baseline allowlist, then applies `TERM` and the resolved session env snapshot
+- Terminal env loading reads project `env_file` per session, with request overrides and clear missing/malformed file handling
 - Signal handling (SIGTERM, SIGHUP)
 - Binary and UTF-8 support
 
