@@ -129,6 +129,20 @@ interface TerminalPanelProps {
 
 **Purpose:** Handles branch-focused actions such as checkout, create, and update flows.
 
+**Visible consumers:**
+
+- `WorkspaceGitPanel`
+- `FileTree` Explorer header
+
+**Behavior:**
+
+- Lists local and remote branches through the shared Git API client.
+- Creates branches from the current or selected base branch.
+- Checks out branches from both Git workspace and Explorer surfaces.
+- On dirty checkout, offers normal retry, stash then checkout, force checkout, or cancel.
+- Uses `invalidateGitProjectQueries()` as the cache invalidation source of truth after mutations.
+- Branch mutations refresh `branches`, `projects`, `project-status`, and `git-log`; checkout paths also refresh `git-diff`, `git-conflicts`, and `fs-tree`.
+
 **Dialogs:** `GitBranchControlDialogs.tsx` contains the supporting create/checkout/update dialogs.
 
 ### GitLogTree
@@ -142,6 +156,13 @@ interface TerminalPanelProps {
 **Location:** `packages/web/src/components/organisms/GitHistoryActions.tsx`
 
 **Purpose:** Provides commit-level actions from the log view.
+
+**Behavior:**
+
+- Cherry-picks the selected commit and surfaces conflict/dirty result flags.
+- Opens a reset confirmation dialog for soft, mixed, hard, and keep reset modes.
+- Marks destructive history actions clearly before invoking the backend.
+- Cherry-pick and reset refresh Git, project status, and file tree queries through `invalidateGitProjectQueries()`.
 
 ### GitLocalChanges
 
@@ -159,7 +180,7 @@ interface TerminalPanelProps {
 
 **Location:** `packages/web/src/components/organisms/FileTree.tsx`
 
-**Purpose:** Reuses shared file decorations in Git-aware file rows so file identity stays consistent across the explorer and Git views.
+**Purpose:** Reuses shared file decorations in Git-aware file rows so file identity stays consistent across the explorer and Git views. The Explorer header area also hosts `GitBranchControl` so users can switch or create branches without leaving the file browser.
 
 ---
 
