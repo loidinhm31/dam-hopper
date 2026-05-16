@@ -17,6 +17,8 @@ interface GitLocalChangesProps {
 export function GitLocalChanges({ project }: GitLocalChangesProps) {
   const { data: diff, isLoading, refetch } = useGitDiff(project);
   const [commitMessage, setCommitMessage] = useState("");
+  const [amendCommit, setAmendCommit] = useState(false);
+  const [commitError, setCommitError] = useState<string | null>(null);
 
   const stageMutation = useGitStage(project);
   const unstageMutation = useGitUnstage(project);
@@ -28,9 +30,18 @@ export function GitLocalChanges({ project }: GitLocalChangesProps) {
 
   const handleCommit = async () => {
     if (!commitMessage.trim()) return;
-    await commitMutation.mutateAsync(commitMessage);
-    setCommitMessage("");
-    refetch();
+    setCommitError(null);
+    try {
+      await commitMutation.mutateAsync({
+        message: commitMessage,
+        amend: amendCommit,
+      });
+      setCommitMessage("");
+      setAmendCommit(false);
+      refetch();
+    } catch (error) {
+      setCommitError(error instanceof Error ? error.message : "Commit failed");
+    }
   };
 
   if (isLoading)
@@ -39,8 +50,6 @@ export function GitLocalChanges({ project }: GitLocalChangesProps) {
         Loading changes...
       </div>
     );
-
-  const totalChanges = stagedFiles.length + unstagedFiles.length;
 
   return (
     <div className="flex flex-col h-full bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md overflow-hidden">
@@ -162,16 +171,32 @@ export function GitLocalChanges({ project }: GitLocalChangesProps) {
 
       {/* Commit Area */}
       <div className="p-3 border-t border-[var(--color-border)] bg-[var(--color-background)]/50">
+        {commitError && (
+          <div className="mb-2 rounded border border-[var(--color-danger)]/20 bg-[var(--color-danger)]/10 px-2 py-1 text-[10px] text-[var(--color-danger)]">
+            {commitError}
+          </div>
+        )}
         <textarea
           value={commitMessage}
           onChange={(e) => setCommitMessage(e.target.value)}
           placeholder="Commit message..."
           className="w-full h-20 p-2 text-xs bg-[var(--color-surface)] border border-[var(--color-border)] rounded focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none mb-2"
         />
-        <div className="flex items-center justify-between">
+        <div className="mb-2 flex items-center justify-between">
+          <label className="flex items-center gap-2 text-[10px] text-[var(--color-text-muted)]">
+            <input
+              type="checkbox"
+              checked={amendCommit}
+              onChange={(event) => setAmendCommit(event.target.checked)}
+              className="h-3.5 w-3.5 accent-[var(--color-primary)]"
+            />
+            Amend previous commit
+          </label>
           <span className="text-[10px] text-[var(--color-text-muted)]">
             {stagedFiles.length} files staged
           </span>
+        </div>
+        <div className="flex items-center justify-end">
           <Button
             size="sm"
             variant="primary"
@@ -182,7 +207,13 @@ export function GitLocalChanges({ project }: GitLocalChangesProps) {
             }
             onClick={handleCommit}
           >
-            {commitMutation.isPending ? "Committing..." : "Commit"}
+            {commitMutation.isPending
+              ? amendCommit
+                ? "Amending..."
+                : "Committing..."
+              : amendCommit
+                ? "Amend Commit"
+                : "Commit"}
           </Button>
         </div>
       </div>

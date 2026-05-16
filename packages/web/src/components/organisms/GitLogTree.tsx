@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useGitLog } from "@/api/queries.js";
 import { cn } from "@/lib/utils.js";
 import type { GitLogEntry } from "@/api/client.js";
@@ -23,23 +23,120 @@ interface GitLogTreeProps {
   project: string;
   selectedHash?: string;
   onSelectCommit?: (entry: GitLogEntry) => void;
+  onCherryPick?: (entry: GitLogEntry) => void;
+  onReset?: (entry: GitLogEntry) => void;
+}
+
+interface HistoryContextMenuState {
+  x: number;
+  y: number;
+  entry: GitLogEntry;
+}
+
+interface RenderNode {
+  entry: GitLogEntry;
+  trackIndex: number;
+  prevTracks: string[];
+  nextTracks: string[];
+}
+
+function HistoryContextMenu({
+  x,
+  y,
+  entry,
+  onCherryPick,
+  onReset,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  entry: GitLogEntry;
+  onCherryPick?: (entry: GitLogEntry) => void;
+  onReset?: (entry: GitLogEntry) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleMouseDown(event: MouseEvent) {
+      if (ref.current && !ref.current.contains(event.target as Node)) onClose();
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    document.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  const style: React.CSSProperties = {
+    position: "fixed",
+    zIndex: 60,
+    top: y,
+    left: x,
+  };
+
+  return (
+    <div
+      ref={ref}
+      style={style}
+      className="w-44 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-xl"
+    >
+      <button
+        type="button"
+        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-2)]"
+        onClick={() => {
+          onCherryPick?.(entry);
+          onClose();
+        }}
+      >
+        Cherry-pick commit
+      </button>
+      <button
+        type="button"
+        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10"
+        onClick={() => {
+          onReset?.(entry);
+          onClose();
+        }}
+      >
+        Reset to this commit
+      </button>
+    </div>
+  );
 }
 
 export function GitLogTree({
   project,
   selectedHash,
   onSelectCommit,
+  onCherryPick,
+  onReset,
 }: GitLogTreeProps) {
   const { data: logs = [], isLoading } = useGitLog(project, 200);
+  const [contextMenu, setContextMenu] = useState<HistoryContextMenuState | null>(
+    null,
+  );
+
+  function openContextMenu(entry: GitLogEntry, x: number, y: number) {
+    onSelectCommit?.(entry);
+    setContextMenu({
+      x: Math.min(x, window.innerWidth - 190),
+      y: Math.min(y, window.innerHeight - 120),
+      entry,
+    });
+  }
 
   const parsedGraph = useMemo(() => {
     const tracks: string[] = []; // the hash expected at each track index
-    const renderNodes: any[] = [];
+    const renderNodes: RenderNode[] = [];
 
     for (let i = 0; i < logs.length; i++) {
       const entry = logs[i];
       let trackIndex = tracks.indexOf(entry.hash);
-      const isNewTrack = trackIndex === -1;
 
       if (trackIndex === -1) {
         trackIndex = tracks.indexOf("");
@@ -68,7 +165,6 @@ export function GitLogTree({
       renderNodes.push({
         entry,
         trackIndex,
-        isNewTrack,
         prevTracks,
         nextTracks: [...tracks],
       });
@@ -78,18 +174,7 @@ export function GitLogTree({
   }, [logs]);
 
   function formatRelativeDate(timestamp: number) {
-    const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
-    const diff = (timestamp * 1000 - Date.now()) / 1000;
-
-    if (Math.abs(diff) < 60) return "just now";
-    if (Math.abs(diff) < 3600)
-      return rtf.format(Math.round(diff / 60), "minute");
-    if (Math.abs(diff) < 86400)
-      return rtf.format(Math.round(diff / 3600), "hour");
-    if (Math.abs(diff) < 604800)
-      return rtf.format(Math.round(diff / 86400), "day");
-
-    return new Date(timestamp * 1000).toLocaleDateString();
+    return new Date(timestamp * 1000).toLocaleString();
   }
 
   if (isLoading) {
@@ -109,7 +194,7 @@ export function GitLogTree({
   }
 
   return (
-    <div className="w-full overflow-x-auto border border-[var(--color-border)] rounded-md bg-[var(--color-surface)]">
+    <div className="relative w-full overflow-x-auto border border-[var(--color-border)] rounded-md bg-[var(--color-surface)]">
       <table className="w-full text-left text-xs whitespace-nowrap border-collapse">
         <thead>
           <tr className="border-b border-[var(--color-border)] text-[var(--color-text-muted)] bg-[var(--color-background)]">
@@ -122,7 +207,7 @@ export function GitLogTree({
           </tr>
         </thead>
         <tbody>
-          {parsedGraph.map((node, rowIndex) => {
+          {parsedGraph.map((node) => {
             const maxTracks = Math.max(
               node.prevTracks.length,
               node.nextTracks.length,
@@ -135,9 +220,30 @@ export function GitLogTree({
             return (
               <tr
                 key={node.entry.hash}
+                tabIndex={0}
+                aria-haspopup="menu"
                 onClick={() => onSelectCommit?.(node.entry)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  openContextMenu(node.entry, event.clientX, event.clientY);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelectCommit?.(node.entry);
+                    return;
+                  }
+                  if (
+                    event.key === "ContextMenu" ||
+                    (event.shiftKey && event.key === "F10")
+                  ) {
+                    event.preventDefault();
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    openContextMenu(node.entry, rect.left + 24, rect.top + 20);
+                  }
+                }}
                 className={cn(
-                  "border-b border-[var(--color-border)] hover:bg-[var(--color-border)]/20 transition-colors cursor-pointer",
+                  "border-b border-[var(--color-border)] hover:bg-[var(--color-border)]/20 transition-colors cursor-pointer focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]/40",
                   isSelected &&
                     "bg-[var(--color-primary)]/10 hover:bg-[var(--color-primary)]/15",
                 )}
@@ -237,6 +343,16 @@ export function GitLogTree({
           })}
         </tbody>
       </table>
+      {contextMenu && (
+        <HistoryContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          entry={contextMenu.entry}
+          onCherryPick={onCherryPick}
+          onReset={onReset}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   );
 }

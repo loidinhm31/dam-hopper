@@ -111,6 +111,56 @@ interface TerminalPanelProps {
 
 **Data flow:** `usePorts()` preserves `sessionId` on detected rows and exposes `killPortSession(sessionId)` so the panel can terminate the owning terminal session without direct process handling.
 
+## Git Workspace Panel
+
+**Location:** `packages/web/src/components/pages/GitPage.tsx`
+
+**Purpose:** Primary Git workspace view for branch management, history browsing, and local change review.
+
+### WorkspaceGitPanel
+
+**Location:** `packages/web/src/components/organisms/WorkspaceGitPanel.tsx`
+
+**Purpose:** Composes the Git page into branch controls, commit history, and working tree sections.
+
+### GitBranchControl
+
+**Location:** `packages/web/src/components/organisms/GitBranchControl.tsx`
+
+**Purpose:** Handles branch-focused actions such as checkout, create, and update flows.
+
+**Dialogs:** `GitBranchControlDialogs.tsx` contains the supporting create/checkout/update dialogs.
+
+### GitLogTree
+
+**Location:** `packages/web/src/components/organisms/GitLogTree.tsx`
+
+**Purpose:** Renders the commit history tree and anchors history actions.
+
+### GitHistoryActions
+
+**Location:** `packages/web/src/components/organisms/GitHistoryActions.tsx`
+
+**Purpose:** Provides commit-level actions from the log view.
+
+### GitLocalChanges
+
+**Location:** `packages/web/src/components/organisms/GitLocalChanges.tsx`
+
+**Purpose:** Shows staged and unstaged working tree changes for the active project.
+
+### ChangedFilesList
+
+**Location:** `packages/web/src/components/organisms/ChangedFilesList.tsx`
+
+**Purpose:** Renders the file-level change list used by the local changes view.
+
+### FileTree integration
+
+**Location:** `packages/web/src/components/organisms/FileTree.tsx`
+
+**Purpose:** Reuses shared file decorations in Git-aware file rows so file identity stays consistent across the explorer and Git views.
+
 ---
 
 ## Session Status Helpers

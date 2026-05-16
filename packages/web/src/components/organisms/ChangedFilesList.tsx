@@ -277,6 +277,7 @@ export function ChangedFilesList({
   onSelectFile,
 }: ChangedFilesListProps) {
   const [commitMsg, setCommitMsg] = useState("");
+  const [amendCommit, setAmendCommit] = useState(false);
   const [mutatingPaths, setMutatingPaths] = useState<Set<string>>(new Set());
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<GitContextMenuState | null>(
@@ -415,8 +416,12 @@ export function ChangedFilesList({
     if (!commitMsg.trim() || stagedCount === 0) return;
     setMutationError(null);
     try {
-      const result = await commitMutation.mutateAsync(commitMsg);
+      const result = await commitMutation.mutateAsync({
+        message: commitMsg,
+        amend: amendCommit,
+      });
       setCommitMsg("");
+      setAmendCommit(false);
       setCommitSuccess(result.hash.slice(0, 7));
       setTimeout(() => setCommitSuccess(null), 3000);
     } catch (e) {
@@ -671,6 +676,15 @@ export function ChangedFilesList({
           rows={2}
           className="w-full resize-none rounded-sm border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-[11px] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)]/50 transition-colors"
         />
+        <label className="flex items-center gap-2 text-[10px] text-[var(--color-text-muted)]">
+          <input
+            type="checkbox"
+            checked={amendCommit}
+            onChange={(event) => setAmendCommit(event.target.checked)}
+            className="h-3.5 w-3.5 accent-[var(--color-primary)]"
+          />
+          Amend previous commit
+        </label>
         <button
           onClick={() => void handleCommit()}
           disabled={
@@ -683,7 +697,7 @@ export function ChangedFilesList({
           ) : (
             <Check className="h-3 w-3" />
           )}
-          Commit
+          {amendCommit ? "Amend Commit" : "Commit"}
           {stagedCount > 0
             ? ` ${stagedCount} file${stagedCount !== 1 ? "s" : ""}`
             : ""}

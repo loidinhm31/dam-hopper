@@ -191,6 +191,33 @@ function channelToEndpoint(
         method: "GET",
         url: `/api/git/${encodeURIComponent(data as string)}/branches`,
       };
+    case "git:createBranch": {
+      const d = data as {
+        project: string;
+        options: { name: string; startPoint?: string; checkout?: boolean };
+      };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/branches`,
+        body: d.options,
+      };
+    }
+    case "git:checkoutBranch": {
+      const d = data as {
+        project: string;
+        options: {
+          branch: string;
+          startPoint?: string;
+          create?: boolean;
+          strategy?: string;
+        };
+      };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/branches/checkout`,
+        body: d.options,
+      };
+    }
     case "git:updateBranch": {
       const d = data as { project: string; branch?: string };
       return {
@@ -467,11 +494,27 @@ function channelToEndpoint(
       };
     }
     case "git:commit": {
-      const d = data as { project: string; message: string };
+      const d = data as { project: string; message: string; amend?: boolean };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/commit`,
-        body: { message: d.message },
+        body: { message: d.message, amend: d.amend },
+      };
+    }
+    case "git:cherryPick": {
+      const d = data as { project: string; hash: string };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/cherry-pick`,
+        body: { hash: d.hash },
+      };
+    }
+    case "git:reset": {
+      const d = data as { project: string; hash: string; mode: string };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/reset`,
+        body: { hash: d.hash, mode: d.mode },
       };
     }
     case "git:commitFiles": {

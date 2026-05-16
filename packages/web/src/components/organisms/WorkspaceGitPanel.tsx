@@ -1,11 +1,15 @@
 import { useState } from "react";
-import { GitBranch } from "lucide-react";
 import { GitLogTree } from "@/components/organisms/GitLogTree.js";
 import { CommitDetailsPanel } from "@/components/organisms/CommitDetailsPanel.js";
-import { useProjectStatus } from "@/api/queries.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { cn } from "@/lib/utils.js";
 import type { GitLogEntry, DiffFileEntry } from "@/api/client.js";
+import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
+import {
+  GitHistoryStatusBanner,
+  GitResetDialog,
+  useGitHistoryActions,
+} from "@/components/organisms/GitHistoryActions.js";
 
 interface WorkspaceGitPanelProps {
   project: string;
@@ -16,7 +20,7 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
     null,
   );
   const openDiff = useEditorStore((s) => s.openDiff);
-  const { data: projectStatus } = useProjectStatus(project);
+  const historyActions = useGitHistoryActions(project);
 
   const handleGitFileDoubleClick = (file: DiffFileEntry) => {
     if (selectedCommit) {
@@ -32,7 +36,8 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
   };
 
   return (
-    <div className="flex h-full overflow-hidden bg-[var(--color-surface)]">
+    <>
+      <div className="flex h-full overflow-hidden bg-[var(--color-surface)]">
       <div
         className={cn(
           "flex flex-col min-w-0 transition-all duration-200",
@@ -42,15 +47,17 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
         )}
       >
         <div className="p-3 border-b border-[var(--color-border)]">
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between gap-2 mb-2">
             <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-              Current Branch
+              Branch
             </span>
           </div>
-          <div className="flex items-center gap-2 text-xs font-medium text-[var(--color-text)]">
-            <GitBranch className="w-3.5 h-3.5 text-[var(--color-primary)]" />
-            {projectStatus?.branch ?? "..."}
-          </div>
+          <GitBranchControl project={project} className="w-full" />
+          <GitHistoryStatusBanner
+            className="mt-2"
+            error={historyActions.error}
+            message={historyActions.message}
+          />
         </div>
         <div className="flex-1 min-h-0">
           <div className="px-3 py-2 border-b border-[var(--color-border)] text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] bg-[var(--color-surface-2)]">
@@ -60,6 +67,8 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
             project={project}
             selectedHash={selectedCommit?.hash}
             onSelectCommit={setSelectedCommit}
+            onCherryPick={(entry) => void historyActions.handleCherryPick(entry)}
+            onReset={historyActions.setResetCommit}
           />
         </div>
       </div>
@@ -74,6 +83,13 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
           />
         </div>
       )}
-    </div>
+      </div>
+
+      <GitResetDialog
+        commit={historyActions.resetCommit}
+        onClose={() => historyActions.setResetCommit(null)}
+        onConfirm={(mode) => void historyActions.handleReset(mode)}
+      />
+    </>
   );
 }

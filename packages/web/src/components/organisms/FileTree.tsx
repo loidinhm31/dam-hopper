@@ -40,6 +40,7 @@ import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog.js";
 import { NewItemDialog } from "./NewItemDialog.js";
 import { LockToggle } from "@/components/atoms/LockToggle.js";
 import { EncryptedUploadDialog } from "@/components/organisms/EncryptedUploadDialog.js";
+import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useSettingsStore } from "@/stores/settings.js";
 
@@ -222,14 +223,12 @@ export function FileTree({
   const [renameValue, setRenameValue] = useState("");
   const [deleteState, setDeleteState] = useState<DeleteState | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
+  const [uploadDir, setUploadDir] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const uploadDirRef = useRef<string>("");
 
   // Track dirs the user has expanded so we can auto-reload them after a refetch
   // wipes children back to null.
   const expandedDirsRef = useRef<Set<string>>(new Set());
-  const loadChildrenRef = useRef(loadChildren);
-  loadChildrenRef.current = loadChildren;
 
   useEffect(() => {
     if (!data) return;
@@ -238,11 +237,9 @@ export function FileTree({
       expandedDirsRef.current,
     );
     for (const id of unloaded) {
-      void loadChildrenRef.current(id);
+      void loadChildren(id);
     }
-    // data identity changes on every refetch/delta — that's exactly when we want to run.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data]);
+  }, [data, loadChildren]);
 
   const visibleNodes = useMemo(
     () =>
@@ -355,8 +352,7 @@ export function FileTree({
 
   function handleUploadHere() {
     if (!menu) return;
-    uploadDirRef.current =
-      menu.node.kind === "dir" ? menu.node.id : parentDir(menu.node.id);
+    setUploadDir(menu.node.kind === "dir" ? menu.node.id : parentDir(menu.node.id));
     fileInputRef.current?.click();
   }
 
@@ -364,7 +360,7 @@ export function FileTree({
     const files = Array.from(e.target.files ?? []);
     if (files.length === 0) return;
     for (const file of files) {
-      void upload(uploadDirRef.current, file);
+      void upload(uploadDir, file);
     }
     e.target.value = "";
   }
@@ -442,15 +438,18 @@ export function FileTree({
         className={cn("flex flex-col h-full", className)}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-2 py-1.5 border-b border-[var(--color-border)] shrink-0">
-          <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase">
-            Explorer
-          </span>
+        <div className="flex items-center justify-between gap-2 px-2 py-1.5 border-b border-[var(--color-border)] shrink-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="shrink-0 text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase">
+              Explorer
+            </span>
+            <GitBranchControl project={project} compact className="min-w-0" />
+          </div>
           <button
             onClick={() => saveDebounced({ explorerShowHidden: !showHidden })}
             title={showHidden ? "Hide dotfiles" : "Show dotfiles"}
             className={cn(
-              "text-[10px] px-1.5 py-0.5 rounded-sm transition-colors",
+              "shrink-0 text-[10px] px-1.5 py-0.5 rounded-sm transition-colors",
               showHidden
                 ? "text-[var(--color-primary)] bg-[var(--color-primary)]/10"
                 : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
@@ -610,7 +609,7 @@ export function FileTree({
       {encUploadOpen && (
         <EncryptedUploadDialog
           project={project}
-          dir={uploadDirRef.current || ""}
+          dir={uploadDir}
           onClose={() => setEncUploadOpen(false)}
         />
       )}

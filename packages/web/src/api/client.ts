@@ -261,13 +261,37 @@ export interface Branch {
   name: string;
   isCurrent: boolean;
   isRemote: boolean;
-  lastCommit?: string;
+  trackingBranch?: string;
+  ahead: number;
+  behind: number;
+  lastCommit: string;
 }
 
 export interface GitOpResult {
   projectName: string;
   success: boolean;
   error?: string;
+}
+
+export interface BranchUpdateResult {
+  branch: string;
+  success: boolean;
+  reason?: string;
+}
+
+export type CheckoutStrategy = "normal" | "stash" | "force";
+
+export type ResetMode = "soft" | "mixed" | "hard" | "keep";
+
+export interface GitActionResult {
+  ok: boolean;
+  message?: string;
+  branch?: string;
+  hash?: string;
+  stashed?: boolean;
+  conflict?: boolean;
+  dirty?: boolean;
+  destructive?: boolean;
 }
 
 export interface GitLogEntry {
@@ -402,8 +426,33 @@ export const api = {
       getTransport().invoke<void>("git:removeWorktree", { project, path }),
     branches: (project: string) =>
       getTransport().invoke<Branch[]>("git:branches", project),
+    createBranch: (
+      project: string,
+      options: {
+        name: string;
+        startPoint?: string;
+        checkout?: boolean;
+      },
+    ) =>
+      getTransport().invoke<GitActionResult>("git:createBranch", {
+        project,
+        options,
+      }),
+    checkoutBranch: (
+      project: string,
+      options: {
+        branch: string;
+        startPoint?: string;
+        create?: boolean;
+        strategy?: CheckoutStrategy;
+      },
+    ) =>
+      getTransport().invoke<GitActionResult>("git:checkoutBranch", {
+        project,
+        options,
+      }),
     updateBranch: (project: string, branch?: string) =>
-      getTransport().invoke<GitOpResult[]>("git:updateBranch", {
+      getTransport().invoke<BranchUpdateResult>("git:updateBranch", {
         project,
         branch,
       }),
@@ -439,10 +488,22 @@ export const api = {
         path,
         content,
       }),
-    commit: (project: string, message: string) =>
+    commit: (project: string, message: string, amend?: boolean) =>
       getTransport().invoke<{ ok: boolean; hash: string }>("git:commit", {
         project,
         message,
+        amend,
+      }),
+    cherryPick: (project: string, hash: string) =>
+      getTransport().invoke<GitActionResult>("git:cherryPick", {
+        project,
+        hash,
+      }),
+    reset: (project: string, hash: string, mode: ResetMode) =>
+      getTransport().invoke<GitActionResult>("git:reset", {
+        project,
+        hash,
+        mode,
       }),
     commitFiles: (project: string, hash: string) =>
       getTransport().invoke<DiffFileEntry[]>("git:commitFiles", {
