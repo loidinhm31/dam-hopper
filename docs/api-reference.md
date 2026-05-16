@@ -160,6 +160,165 @@ info: Persist worker stopped
 
 See [Phase 05: Persist Worker](../phase-05-persist-worker/) for detailed architecture and design rationale.
 
+## Git API
+
+Git routes are scoped to the configured project name and run inside the resolved
+project path.
+
+### Branches
+
+**GET /api/git/{project}/branches**
+Returns local and remote branches.
+
+```json
+[
+  {
+    "name": "main",
+    "isCurrent": true,
+    "isRemote": false,
+    "trackingBranch": "origin/main",
+    "ahead": 0,
+    "behind": 0,
+    "lastCommit": "abc123..."
+  }
+]
+```
+
+**POST /api/git/{project}/branches**
+Create a branch. Set `checkout` to switch to it after creation.
+
+```json
+{
+  "name": "feature/git-flow",
+  "startPoint": "main",
+  "checkout": true
+}
+```
+
+**POST /api/git/{project}/branches/checkout**
+Checkout an existing branch, or create one when `create` is true. `strategy` is
+`normal`, `stash`, or `force`.
+
+```json
+{
+  "branch": "feature/git-flow",
+  "startPoint": "origin/main",
+  "create": false,
+  "strategy": "normal"
+}
+```
+
+**POST /api/git/{project}/branches/update**
+Update a branch from its tracking branch.
+
+```json
+{ "branch": "main" }
+```
+
+### History Actions
+
+**POST /api/git/{project}/cherry-pick**
+Apply a commit to the current branch.
+
+```json
+{ "hash": "abc123def456" }
+```
+
+**POST /api/git/{project}/reset**
+Reset to a commit. `mode` is `soft`, `mixed`, `hard`, or `keep`.
+
+```json
+{ "hash": "abc123def456", "mode": "mixed" }
+```
+
+Branch create, branch checkout, cherry-pick, and reset return `GitActionResult`:
+
+```json
+{
+  "ok": true,
+  "message": "Checked out feature/git-flow",
+  "branch": "feature/git-flow",
+  "hash": "abc123def456",
+  "stashed": false,
+  "conflict": false,
+  "dirty": false,
+  "destructive": false
+}
+```
+
+Result flags:
+
+| Field | Meaning |
+| --- | --- |
+| `ok` | `true` when the Git action completed; `false` when Git reported a recoverable state. |
+| `message` | Human-readable operation summary or recovery hint. |
+| `branch` | Branch affected by branch create or checkout actions. |
+| `hash` | Commit hash affected by cherry-pick or reset actions. |
+| `stashed` | Checkout used `strategy: "stash"` and created a stash before switching branches. |
+| `conflict` | Cherry-pick or reset reached a Git conflict state. |
+| `dirty` | The operation was blocked by local working tree changes. |
+| `destructive` | The selected mode can discard local state, such as force checkout or hard reset. |
+
+Recoverable dirty checkout example:
+
+```json
+{
+  "ok": false,
+  "message": "Working tree has local changes",
+  "branch": "feature/git-flow",
+  "stashed": false,
+  "conflict": false,
+  "dirty": true,
+  "destructive": false
+}
+```
+
+Branch update returns `BranchUpdateResult`:
+
+```json
+{
+  "branch": "feature/git-flow",
+  "success": true,
+  "reason": null
+}
+```
+
+Checked-out branch update guard example:
+
+```json
+{
+  "branch": "main",
+  "success": false,
+  "reason": "checked-out — use pull instead"
+}
+```
+
+Invalid branch names and commit hashes are rejected before Git execution. Dirty
+checkout and cherry-pick conflicts return structured result flags so clients can
+show recovery choices instead of treating every non-clean operation as an
+unclassified error. Validation failures use the standard API error shape with a
+400 status for invalid input:
+
+```json
+{ "error": "Invalid input: invalid branch name" }
+```
+
+### Commit
+
+**POST /api/git/{project}/commit**
+Create a commit from the index. Set `amend` to replace the current `HEAD`
+commit.
+
+```json
+{ "message": "Update git controls", "amend": false }
+```
+
+Response:
+
+```json
+{ "ok": true, "hash": "abc123def456" }
+```
+
 ## Reconnection Flow (Phase A feature)
 
 **Location:** `packages/web/src/api/transport.ts`
