@@ -10,7 +10,9 @@ import { Button } from "@/components/atoms/Button.js";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/Select.js";
@@ -56,16 +58,18 @@ export function GitBranchControl({
       ""
     );
   }, [branches, currentBranch]);
-  const branchOptions = useMemo(
-    () =>
-      [...branches].sort((a, b) => {
-        if (a.isCurrent) return -1;
-        if (b.isCurrent) return 1;
-        if (a.isRemote !== b.isRemote) return a.isRemote ? 1 : -1;
-        return a.name.localeCompare(b.name);
-      }),
+
+  const localBranches = useMemo(
+    () => branches.filter((b) => !b.isRemote).sort((a, b) => a.name.localeCompare(b.name)),
     [branches],
   );
+
+  const remoteBranches = useMemo(
+    () => branches.filter((b) => b.isRemote).sort((a, b) => a.name.localeCompare(b.name)),
+    [branches],
+  );
+
+  const allSortedBranches = useMemo(() => [...localBranches, ...remoteBranches], [localBranches, remoteBranches]);
 
   async function runCheckout(
     branch: string,
@@ -121,12 +125,12 @@ export function GitBranchControl({
     <>
       <div
         className={cn(
-          "flex items-center gap-1.5 min-w-0",
+          "flex items-center gap-2 px-1 min-w-0",
           compact && "max-w-full",
           className,
         )}
       >
-        <GitBranch className="h-3.5 w-3.5 shrink-0 text-[var(--color-primary)]" />
+        <GitBranch className="h-4 w-4 shrink-0 text-[var(--color-primary)] opacity-80" />
         <Select
           value={currentBranch || undefined}
           disabled={checkoutBranch.isPending || createBranch.isPending}
@@ -136,33 +140,48 @@ export function GitBranchControl({
           }}
         >
           <SelectTrigger
-            className={cn(
-              "min-w-0 h-7 text-xs",
-              compact ? "w-[140px] px-2" : "w-[220px]",
-            )}
-          >
+          className={cn(
+            "min-w-0 h-8 text-[11px] font-bold px-3 glass-input font-sans tracking-tight",
+            compact ? "w-[200px]" : "w-[300px]",
+          )}
+        >
             <SelectValue placeholder="Select branch" />
           </SelectTrigger>
-          <SelectContent>
-            {branchOptions.map((branch) => (
-              <SelectItem key={branch.name} value={branch.name}>
-                <span className="inline-flex items-center gap-2">
-                  <span>{branch.name}</span>
-                  {branch.isRemote ? (
-                    <span className="text-[10px] text-[var(--color-text-muted)]">
-                      remote
+          <SelectContent className="min-w-[200px]">
+            {localBranches.length > 0 && (
+              <SelectGroup>
+                <SelectLabel className="text-[10px] uppercase tracking-wider opacity-50 px-2 py-1">
+                  Local Branches
+                </SelectLabel>
+                {localBranches.map((branch) => (
+                  <SelectItem key={branch.name} value={branch.name}>
+                    {branch.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            )}
+            {remoteBranches.length > 0 && (
+              <SelectGroup>
+                <SelectLabel className="text-[10px] uppercase tracking-wider opacity-50 px-2 py-1">
+                  Remote Branches
+                </SelectLabel>
+                {remoteBranches.map((branch) => (
+                  <SelectItem key={branch.name} value={branch.name}>
+                    <span className="flex items-center gap-2">
+                      <span className="truncate">{branch.name}</span>
+                      <span className="text-[9px] opacity-40 px-1 border border-current rounded-[2px]">REMOTE</span>
                     </span>
-                  ) : null}
-                </span>
-              </SelectItem>
-            ))}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            )}
           </SelectContent>
         </Select>
         <Button
           type="button"
           size="sm"
           variant="ghost"
-          className="shrink-0 px-2"
+          className="shrink-0 px-2.5 h-8 hover:bg-[var(--color-primary)]/10 hover:text-[var(--color-primary)] transition-all"
           onClick={() => {
             setBranchName("");
             setStartPoint(defaultStartPoint);
@@ -172,16 +191,17 @@ export function GitBranchControl({
             setCreateOpen(true);
           }}
           disabled={checkoutBranch.isPending || createBranch.isPending}
+          title="Create new branch"
         >
-          <Plus className="h-3.5 w-3.5" />
-          {!compact ? "New" : null}
+          <Plus className="h-4 w-4" />
+          {!compact ? <span className="ml-1">New Branch</span> : null}
         </Button>
       </div>
 
       {(message || error) && (
         <div
           className={cn(
-            "rounded border px-2 py-1 text-[10px]",
+            "rounded border px-2 py-1 text-[10px] mt-1 mx-1",
             error
               ? "border-[var(--color-danger)]/20 bg-[var(--color-danger)]/10 text-[var(--color-danger)]"
               : "border-emerald-500/20 bg-emerald-500/10 text-emerald-400",
@@ -195,7 +215,7 @@ export function GitBranchControl({
         branchName={branchName}
         startPoint={startPoint}
         checkoutAfterCreate={checkoutAfterCreate}
-        branches={branchOptions}
+        branches={allSortedBranches}
         isPending={createBranch.isPending}
         onOpenChange={setCreateOpen}
         onBranchNameChange={setBranchName}
