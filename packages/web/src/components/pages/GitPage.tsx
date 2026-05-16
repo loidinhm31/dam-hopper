@@ -250,7 +250,9 @@ export function GitPage() {
                     project={selectedProjectName}
                     selectedHash={selectedCommit?.hash}
                     onSelectCommit={setSelectedCommit}
-                    onCherryPick={(entry) => void historyActions.handleCherryPick(entry)}
+                    onCherryPick={(entry) =>
+                      void historyActions.handleCherryPick(entry)
+                    }
                     onReset={historyActions.setResetCommit}
                   />
                 </div>
@@ -263,6 +265,12 @@ export function GitPage() {
                     commit={selectedCommit}
                     onClose={() => setSelectedCommit(null)}
                     onFileDoubleClick={handleFileDoubleClick}
+                    onCherryPickSelectedChanges={(commit, files) =>
+                      void historyActions.handleCherryPickFiles(commit, files)
+                    }
+                    onDropSelectedChanges={(commit, files) =>
+                      void historyActions.handleDropFiles(commit, files)
+                    }
                   />
                 </div>
               )}

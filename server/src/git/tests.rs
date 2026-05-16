@@ -10,10 +10,11 @@ use crate::git::diff::{
     stage_files, unstage_files,
 };
 use crate::git::repository::{
-    checkout_branch, cherry_pick, create_branch, get_status, list_branches, reset_to_commit,
-    update_branch,
+    checkout_branch, cherry_pick, create_branch, get_log, get_status, list_branches,
+    reset_to_commit, update_branch,
 };
 use crate::git::types::{CheckoutStrategy, GitProgressPhase, ResetMode};
+use crate::git::{cherry_pick_commit_files, drop_commit_files};
 use crate::git::{BulkGitService, WorktreeAddOptions};
 
 // ---------------------------------------------------------------------------
@@ -706,9 +707,77 @@ async fn cherry_pick_success_returns_hash() {
 }
 
 #[tokio::test]
+async fn cherry_pick_commit_files_applies_only_selected_paths() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    git(&["checkout", "-b", "feature/files"], path);
+    std::fs::write(path.join("one.txt"), "one\n").unwrap();
+    std::fs::write(path.join("two.txt"), "two\n").unwrap();
+    git(&["add", "one.txt", "two.txt"], path);
+    git(&["commit", "-m", "two files"], path);
+    let target_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    git(&["checkout", "main"], path);
+    let result = cherry_pick_commit_files(path, &target_hash, &["one.txt".to_string()])
+        .await
+        .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(
+        std::fs::read_to_string(path.join("one.txt")).unwrap(),
+        "one\n"
+    );
+    assert!(!path.join("two.txt").exists());
+    assert_eq!(
+        git_output(&["rev-list", "--count", "HEAD"], path),
+        "1",
+        "selected file cherry-pick should leave changes uncommitted"
+    );
+}
+
+#[tokio::test]
 async fn cherry_pick_invalid_hash_rejected() {
     let repo = make_temp_repo();
     let err = cherry_pick(repo.path(), "not-a-hash").await.unwrap_err();
+
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+}
+
+#[tokio::test]
+async fn drop_commit_files_removes_selected_path_from_head_commit() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("one.txt"), "one\n").unwrap();
+    std::fs::write(path.join("two.txt"), "two\n").unwrap();
+    git(&["add", "one.txt", "two.txt"], path);
+    git(&["commit", "-m", "two files"], path);
+    let target_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    let result = drop_commit_files(path, &target_hash, &["one.txt".to_string()])
+        .await
+        .unwrap();
+
+    assert!(result.ok);
+    assert!(!path.join("one.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(path.join("two.txt")).unwrap(),
+        "two\n"
+    );
+    assert_eq!(git_output(&["log", "-1", "--pretty=%s"], path), "two files");
+    assert_eq!(git_output(&["status", "--porcelain"], path), "");
+}
+
+#[tokio::test]
+async fn drop_commit_files_rejects_pushed_commit() {
+    let (_remote, seed, _clone) = make_remote_clone_repo();
+    let path = seed.path();
+    let pushed_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    let err = drop_commit_files(path, &pushed_hash, &["README.md".to_string()])
+        .await
+        .unwrap_err();
 
     assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
 }
@@ -806,6 +875,32 @@ fn commit_files_supports_amend() {
         "amended commit"
     );
     assert_eq!(git_output(&["rev-list", "--count", "HEAD"], path), "2");
+}
+
+#[test]
+fn get_log_shows_current_branch_history_only() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    git(&["checkout", "-b", "feature"], path);
+    std::fs::write(path.join("feature.txt"), "feature").unwrap();
+    git(&["add", "feature.txt"], path);
+    git(&["commit", "-m", "feature only"], path);
+
+    git(&["checkout", "main"], path);
+    std::fs::write(path.join("main.txt"), "main").unwrap();
+    git(&["add", "main.txt"], path);
+    git(&["commit", "-m", "main only"], path);
+
+    let messages: Vec<_> = get_log(path, 10)
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+
+    assert!(messages.iter().any(|message| message == "main only"));
+    assert!(messages.iter().any(|message| message == "init"));
+    assert!(!messages.iter().any(|message| message == "feature only"));
 }
 
 #[test]

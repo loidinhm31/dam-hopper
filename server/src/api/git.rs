@@ -9,9 +9,9 @@ use std::path::PathBuf;
 use crate::git::bulk::ProjectRef;
 use crate::git::progress::create_progress_channel;
 use crate::git::{
-    add_worktree, checkout_branch, cherry_pick, create_branch, get_log, list_branches,
-    list_worktrees, remove_worktree, reset_to_commit, update_branch, BulkGitService,
-    CheckoutStrategy, ResetMode, WorktreeAddOptions,
+    add_worktree, checkout_branch, cherry_pick, cherry_pick_commit_files, create_branch,
+    drop_commit_files, get_log, list_branches, list_worktrees, remove_worktree, reset_to_commit,
+    update_branch, BulkGitService, CheckoutStrategy, ResetMode, WorktreeAddOptions,
 };
 use crate::pty::EventSink as _;
 use crate::state::AppState;
@@ -288,6 +288,35 @@ pub async fn reset_route(
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
     let result = reset_to_commit(&path, &body.hash, body.mode)
+        .await
+        .map_err(ApiError::from_app)?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+pub struct CommitFileOperationBody {
+    pub paths: Vec<String>,
+}
+
+pub async fn cherry_pick_commit_files_route(
+    State(state): State<AppState>,
+    Path((project, hash)): Path<(String, String)>,
+    Json(body): Json<CommitFileOperationBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_project_path(&state, &project).await?;
+    let result = cherry_pick_commit_files(&path, &hash, &body.paths)
+        .await
+        .map_err(ApiError::from_app)?;
+    Ok(Json(result))
+}
+
+pub async fn drop_commit_files_route(
+    State(state): State<AppState>,
+    Path((project, hash)): Path<(String, String)>,
+    Json(body): Json<CommitFileOperationBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_project_path(&state, &project).await?;
+    let result = drop_commit_files(&path, &hash, &body.paths)
         .await
         .map_err(ApiError::from_app)?;
     Ok(Json(result))

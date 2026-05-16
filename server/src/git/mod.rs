@@ -1,5 +1,6 @@
 pub mod bulk;
 pub mod cli_fallback;
+pub mod commit_file_ops;
 pub mod diff;
 pub mod progress;
 pub mod repository;
@@ -10,6 +11,7 @@ pub mod worktree;
 mod tests;
 
 pub use bulk::BulkGitService;
+pub use commit_file_ops::{cherry_pick_commit_files, drop_commit_files};
 pub use diff::{
     commit_files, discard_file, discard_hunk, get_commit_file_diff, get_commit_files,
     get_conflicts, get_diff_files, get_file_diff, get_untracked_page, resolve_conflict,

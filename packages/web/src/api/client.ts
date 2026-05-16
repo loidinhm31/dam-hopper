@@ -304,6 +304,7 @@ export interface GitLogEntry {
   timestamp: number;
   message: string;
   refs: string[];
+  isPushed: boolean;
 }
 
 // ── Git Diff Types ────────────────────────────────────────────────────────────
@@ -517,6 +518,18 @@ export const api = {
         project,
         hash,
         path,
+      }),
+    cherryPickCommitFiles: (project: string, hash: string, paths: string[]) =>
+      getTransport().invoke<GitActionResult>("git:cherryPickCommitFiles", {
+        project,
+        hash,
+        paths,
+      }),
+    dropCommitFiles: (project: string, hash: string, paths: string[]) =>
+      getTransport().invoke<GitActionResult>("git:dropCommitFiles", {
+        project,
+        hash,
+        paths,
       }),
   },
   config: {
