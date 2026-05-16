@@ -6,8 +6,12 @@ import { ConnectionDot } from "@/components/atoms/ConnectionDot.js";
 import { Logo } from "@/components/atoms/Logo.js";
 import { useIpc } from "@/hooks/useSSE.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
+import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 import { ServerProfilesDialog } from "@/components/organisms/ServerProfilesDialog.js";
+import { useWorkspaceStore } from "@/stores/workspace.js";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/api/client.js";
 import {
   getActiveProfile,
   getServerUrl,
@@ -23,6 +27,12 @@ interface TopNavProps {
 
 export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
   const { status } = useIpc();
+  const { activeProject } = useWorkspaceStore();
+  const { data: projects = [] } = useQuery({
+    queryKey: ["projects"],
+    queryFn: () => api.projects.list(),
+  });
+
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [profilesDialogOpen, setProfilesDialogOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<
@@ -101,6 +111,19 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
 
       <div className="flex items-center gap-3">
         <WorkspaceSwitcher variant="compact" />
+
+        {projects.length > 0 && (
+          <>
+            <div className="h-4 w-[1px] bg-[var(--color-border)]" />
+            <div className="px-1">
+              <GitBranchControl
+                project={activeProject ?? projects[0].name}
+                compact
+                className="hidden lg:flex"
+              />
+            </div>
+          </>
+        )}
 
         <div className="h-4 w-[1px] bg-[var(--color-border)]" />
 

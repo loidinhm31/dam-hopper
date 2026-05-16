@@ -40,7 +40,6 @@ import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog.js";
 import { NewItemDialog } from "./NewItemDialog.js";
 import { LockToggle } from "@/components/atoms/LockToggle.js";
 import { EncryptedUploadDialog } from "@/components/organisms/EncryptedUploadDialog.js";
-import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useSettingsStore } from "@/stores/settings.js";
 
@@ -443,7 +442,6 @@ export function FileTree({
             <span className="shrink-0 text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase">
               Explorer
             </span>
-            <GitBranchControl project={project} compact className="min-w-0" />
           </div>
           <button
             onClick={() => saveDebounced({ explorerShowHidden: !showHidden })}

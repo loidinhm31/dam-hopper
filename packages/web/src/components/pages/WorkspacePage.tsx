@@ -30,6 +30,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/Select.js";
+import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { useSearchUiStore } from "@/stores/searchUi.js";
 import { useTerminalManager } from "@/hooks/useTerminalManager.js";
@@ -37,18 +38,10 @@ import { api } from "@/api/client.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 import type { ToolWindowDef } from "@/types/ide.js";
 
-const ACTIVE_PROJECT_KEY = "dam-hopper:active-project";
-
 export default function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [activeProject, setActiveProjectState] = useState<string | null>(() =>
-    localStorage.getItem(ACTIVE_PROJECT_KEY),
-  );
-  function setActiveProject(name: string | null) {
-    setActiveProjectState(name);
-    if (name) localStorage.setItem(ACTIVE_PROJECT_KEY, name);
-    else localStorage.removeItem(ACTIVE_PROJECT_KEY);
-  }
+  const { activeProject, setActiveProject } = useWorkspaceStore();
+
   const openFile = useEditorStore((s) => s.open);
   const openDiff = useEditorStore((s) => s.openDiff);
 

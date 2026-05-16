@@ -240,6 +240,8 @@ export interface UiConfig {
   systemFontSize: number;
   editorFontSize: number;
   editorZoomWheelEnabled: boolean;
+  terminalSuggestionsEnabled?: boolean;
+  explorerShowHidden?: boolean;
   terminalOrder?: string[];
   projectOrder?: string[];
   projectCommandOrder?: Record<string, string[]>;
