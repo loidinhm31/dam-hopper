@@ -413,13 +413,15 @@ export default function WorkspacePage() {
         label: "Commit",
         icon: GitCommit,
         content: projectName ? (
-          <ChangedFilesList
-            project={projectName}
-            selectedFile={null}
-            onSelectFile={(path) => {
-              if (projectName) openDiff(projectName, path, "modified", 0, 0);
-            }}
-          />
+          <div className="flex h-full min-h-0 flex-col">
+            <ChangedFilesList
+              project={projectName}
+              selectedFile={null}
+              onSelectFile={(path) => {
+                if (projectName) openDiff(projectName, path, "modified", 0, 0);
+              }}
+            />
+          </div>
         ) : (
           <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
             Select a project to view changes

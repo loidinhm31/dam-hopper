@@ -964,6 +964,7 @@ pub async fn reset_to_commit(
 pub fn get_log(
     project_path: &Path,
     limit: usize,
+    offset: usize,
 ) -> Result<Vec<crate::git::types::GitLogEntry>, AppError> {
     use std::process::Command;
 
@@ -974,6 +975,7 @@ pub fn get_log(
         .current_dir(project_path)
         .arg("log")
         .arg("--date-order")
+        .arg(format!("--skip={}", offset))
         .arg(format!("-n {}", limit))
         .arg("--format=%H%x00%P%x00%aN%x00%aE%x00%at%x00%s%x00%D")
         .output()

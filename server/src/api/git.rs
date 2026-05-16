@@ -245,6 +245,7 @@ pub async fn checkout_branch_route(
 #[derive(Deserialize)]
 pub struct GetLogQuery {
     pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 pub async fn get_log_route(
@@ -254,7 +255,8 @@ pub async fn get_log_route(
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
     let limit = query.limit.unwrap_or(100);
-    let log = get_log(&path, limit).map_err(ApiError::from_app)?;
+    let offset = query.offset.unwrap_or(0);
+    let log = get_log(&path, limit, offset).map_err(ApiError::from_app)?;
     Ok(Json(log))
 }
 

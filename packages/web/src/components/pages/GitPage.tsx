@@ -7,6 +7,7 @@ import {
   useProjects,
   useGitFetch,
   useGitPull,
+  useGitLog,
   useProjectStatus,
 } from "@/api/queries.js";
 import type { GitOpResult, GitLogEntry, DiffFileEntry } from "@/api/client.js";
@@ -74,6 +75,11 @@ export function GitPage() {
 
   const gitFetch = useGitFetch();
   const gitPull = useGitPull();
+  const { data: logs = [], isLoading: isGitLogLoading } = useGitLog(
+    selectedProjectName ?? "",
+    200,
+    0,
+  );
   const { PassphraseDialogElement, executeWithRetry } = useGitWithSshRetry();
   const openDiff = useEditorStore((s) => s.openDiff);
   const historyActions = useGitHistoryActions(selectedProjectName ?? "");
@@ -256,7 +262,8 @@ export function GitPage() {
                 </div>
                 <div className="flex-1 min-h-0 overflow-hidden">
                   <GitLogTree
-                    project={selectedProjectName}
+                    logs={logs}
+                    isLoading={isGitLogLoading}
                     selectedHash={selectedCommit?.hash}
                     onSelectCommit={setSelectedCommit}
                     onCherryPick={(entry) =>
