@@ -44,22 +44,34 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
   const activeProfile = getActiveProfile();
 
   useEffect(() => {
-    if (status !== "connected") {
-      setIsDevMode(false);
-      return;
-    }
+    let cancelled = false;
+
     const checkDevMode = async () => {
+      if (status !== "connected") {
+        if (!cancelled) {
+          setIsDevMode(false);
+        }
+        return;
+      }
+
       try {
         const res = await fetch(`${getServerUrl()}/api/auth/status`, {
           headers: buildAuthHeaders(),
         });
         if (res.ok) {
           const data = await res.json();
-          setIsDevMode(!!data.dev_mode);
+          if (!cancelled) {
+            setIsDevMode(!!data.dev_mode);
+          }
         }
       } catch {}
     };
+
     void checkDevMode();
+
+    return () => {
+      cancelled = true;
+    };
   }, [status]);
 
   return (
@@ -127,6 +139,7 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
               <GitBranchControl
                 project={activeProject ?? projects[0].name}
                 compact
+                showFeedback={false}
               />
             </div>
           </>

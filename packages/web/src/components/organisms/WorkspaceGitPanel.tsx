@@ -1,8 +1,11 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { RefreshCw } from "lucide-react";
 import { GitLogTree } from "@/components/organisms/GitLogTree.js";
 import { CommitDetailsPanel } from "@/components/organisms/CommitDetailsPanel.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { cn } from "@/lib/utils.js";
+import { api } from "@/api/client.js";
 import type { GitLogEntry, DiffFileEntry } from "@/api/client.js";
 import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
 import {
@@ -16,12 +19,70 @@ interface WorkspaceGitPanelProps {
   project: string;
 }
 
+const WORKSPACE_GIT_LOG_LIMIT = 200;
+
+export function resolveWorkspaceGitSelection(
+  selectedHash: string | null,
+  logs: GitLogEntry[],
+) {
+  if (!selectedHash) {
+    return null;
+  }
+
+  return logs.find((entry) => entry.hash === selectedHash) ?? null;
+}
+
+export async function refreshWorkspaceGitPanelQueries(
+  queryClient: {
+    invalidateQueries: (args: { queryKey: unknown[] }) => Promise<unknown>;
+    refetchQueries: (args: { queryKey: unknown[] }) => Promise<unknown>;
+    fetchQuery: <T>(args: {
+      queryKey: unknown[];
+      queryFn: () => Promise<T>;
+    }) => Promise<T>;
+  },
+  project: string,
+  selectedHash: string | null,
+) {
+  const queryKeys = [
+    ["branches", project],
+    ["project-status", project],
+    ["git-log", project],
+  ];
+
+  if (selectedHash) {
+    queryKeys.push(["git-commit-files", project, selectedHash]);
+  }
+
+  await Promise.all(
+    queryKeys.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+  );
+
+  const [logs] = await Promise.all([
+    queryClient.fetchQuery({
+      queryKey: ["git-log", project, WORKSPACE_GIT_LOG_LIMIT],
+      queryFn: () => api.git.log(project, WORKSPACE_GIT_LOG_LIMIT),
+    }),
+    queryClient.refetchQueries({ queryKey: ["branches", project] }),
+    queryClient.refetchQueries({ queryKey: ["project-status", project] }),
+    selectedHash
+      ? queryClient.refetchQueries({
+          queryKey: ["git-commit-files", project, selectedHash],
+        })
+      : Promise.resolve(),
+  ]);
+
+  return resolveWorkspaceGitSelection(selectedHash, logs);
+}
+
 export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
   const [selectedCommit, setSelectedCommit] = useState<GitLogEntry | null>(
     null,
   );
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const openDiff = useEditorStore((s) => s.openDiff);
   const historyActions = useGitHistoryActions(project);
+  const queryClient = useQueryClient();
 
   const handleGitFileDoubleClick = (file: DiffFileEntry) => {
     if (selectedCommit) {
@@ -42,6 +103,22 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
     setSelectedCommit((current) =>
       current?.hash === droppedHash ? null : current,
     );
+  };
+
+  const handleRefresh = async () => {
+    if (isRefreshing) return;
+
+    setIsRefreshing(true);
+    try {
+      const refreshedSelection = await refreshWorkspaceGitPanelQueries(
+        queryClient,
+        project,
+        selectedCommit?.hash ?? null,
+      );
+      setSelectedCommit(refreshedSelection);
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   return (
@@ -69,8 +146,20 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
             />
           </div>
           <div className="flex-1 min-h-0">
-            <div className="px-3 py-2 border-b border-[var(--color-border)] text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] bg-[var(--color-surface-2)]">
-              History
+            <div className="px-3 py-2 border-b border-[var(--color-border)] text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] bg-[var(--color-surface-2)] flex items-center justify-between gap-2">
+              <span>History</span>
+              <button
+                type="button"
+                onClick={() => void handleRefresh()}
+                disabled={isRefreshing}
+                aria-label="Refresh git history"
+                title="Refresh git history"
+                className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <RefreshCw
+                  className={cn("h-3 w-3", isRefreshing && "animate-spin")}
+                />
+              </button>
             </div>
             <GitLogTree
               project={project}
