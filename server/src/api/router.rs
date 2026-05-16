@@ -124,6 +124,14 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             "/api/git/{project}/commit/{hash}/diff",
             get(git_diff::get_commit_file_diff),
         )
+        .route(
+            "/api/git/{project}/commit/{hash}/cherry-pick-files",
+            post(git::cherry_pick_commit_files_route),
+        )
+        .route(
+            "/api/git/{project}/commit/{hash}/drop-files",
+            post(git::drop_commit_files_route),
+        )
         // Terminal — order matters: specific paths before parameterized
         .route("/api/terminal", post(terminal::create_session))
         .route("/api/terminal", get(terminal::list_sessions))

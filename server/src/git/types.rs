@@ -191,6 +191,7 @@ pub struct GitLogEntry {
     pub timestamp: i64,
     pub message: String,
     pub refs: Vec<String>,
+    pub is_pushed: bool,
 }
 
 // ---------------------------------------------------------------------------

@@ -112,6 +112,32 @@ fn get_ahead_behind(repo: &Repository) -> (usize, usize) {
         .unwrap_or((0, 0))
 }
 
+fn upstream_oid(repo: &Repository) -> Option<git2::Oid> {
+    let head = repo.head().ok()?;
+    if !head.is_branch() {
+        return None;
+    }
+
+    let branch_name = head.shorthand()?.to_string();
+    let config = repo.config().ok()?;
+    let remote = config
+        .get_string(&format!("branch.{branch_name}.remote"))
+        .ok()?;
+    let merge_ref = config
+        .get_string(&format!("branch.{branch_name}.merge"))
+        .ok()?;
+    if remote.is_empty() || merge_ref.is_empty() {
+        return None;
+    }
+
+    let remote_branch = merge_ref.replace("refs/heads/", "");
+    let upstream_ref = format!("refs/remotes/{remote}/{remote_branch}");
+    repo.find_reference(&upstream_ref)
+        .and_then(|r| r.peel_to_commit())
+        .map(|c| c.id())
+        .ok()
+}
+
 fn count_stash(repo: &mut Repository) -> usize {
     let mut count = 0usize;
     let _ = repo.stash_foreach(|_, _, _| {
@@ -941,10 +967,12 @@ pub fn get_log(
 ) -> Result<Vec<crate::git::types::GitLogEntry>, AppError> {
     use std::process::Command;
 
+    let repo = open_repo(project_path)?;
+    let upstream = upstream_oid(&repo);
+
     let output = Command::new("git")
         .current_dir(project_path)
         .arg("log")
-        .arg("--all")
         .arg("--date-order")
         .arg(format!("-n {}", limit))
         .arg("--format=%H%x00%P%x00%aN%x00%aE%x00%at%x00%s%x00%D")
@@ -982,6 +1010,14 @@ pub fn get_log(
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
+        let is_pushed = upstream
+            .and_then(|upstream_oid| {
+                git2::Oid::from_str(&hash)
+                    .ok()
+                    .map(|oid| (upstream_oid, oid))
+            })
+            .and_then(|(upstream_oid, oid)| repo.graph_descendant_of(upstream_oid, oid).ok())
+            .unwrap_or(false);
 
         entries.push(crate::git::types::GitLogEntry {
             hash,
@@ -991,6 +1027,7 @@ pub fn get_log(
             timestamp,
             message,
             refs,
+            is_pushed,
         });
     }
 

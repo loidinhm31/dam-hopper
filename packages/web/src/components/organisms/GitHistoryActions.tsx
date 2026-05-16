@@ -1,6 +1,11 @@
 import { useCallback, useState } from "react";
-import { useGitCherryPick, useGitReset } from "@/api/queries.js";
-import type { GitLogEntry, ResetMode } from "@/api/client.js";
+import {
+  useGitCherryPick,
+  useGitCherryPickCommitFiles,
+  useGitDropCommitFiles,
+  useGitReset,
+} from "@/api/queries.js";
+import type { DiffFileEntry, GitLogEntry, ResetMode } from "@/api/client.js";
 import { cn } from "@/lib/utils.js";
 import { Button } from "@/components/atoms/Button.js";
 import {
@@ -26,7 +31,8 @@ export const RESET_OPTIONS: Array<{
   {
     mode: "mixed",
     label: "Mixed",
-    description: "Move HEAD and reset the index, but keep working tree changes.",
+    description:
+      "Move HEAD and reset the index, but keep working tree changes.",
   },
   {
     mode: "hard",
@@ -136,6 +142,8 @@ export function useGitHistoryActions(project: string) {
   }>({ project: "", value: null });
   const cherryPickMutation = useGitCherryPick(project);
   const resetMutation = useGitReset(project);
+  const cherryPickFilesMutation = useGitCherryPickCommitFiles(project);
+  const dropFilesMutation = useGitDropCommitFiles(project);
   const resetCommit =
     resetCommitState.project === project ? resetCommitState.commit : null;
   const message = messageState.project === project ? messageState.value : null;
@@ -156,13 +164,16 @@ export function useGitHistoryActions(project: string) {
       }
       setErrorState({
         project,
-        value: result.message ?? `Cherry-pick failed for ${entry.hash.slice(0, 7)}`,
+        value:
+          result.message ?? `Cherry-pick failed for ${entry.hash.slice(0, 7)}`,
       });
     } catch (caughtError) {
       setErrorState({
         project,
         value:
-          caughtError instanceof Error ? caughtError.message : "Cherry-pick failed",
+          caughtError instanceof Error
+            ? caughtError.message
+            : "Cherry-pick failed",
       });
     }
   }
@@ -179,7 +190,9 @@ export function useGitHistoryActions(project: string) {
       if (result.ok) {
         setMessageState({
           project,
-          value: result.message ?? `Reset ${mode} to ${resetCommit.hash.slice(0, 7)}`,
+          value:
+            result.message ??
+            `Reset ${mode} to ${resetCommit.hash.slice(0, 7)}`,
         });
         setResetCommitState({ project, commit: null });
         return;
@@ -191,7 +204,78 @@ export function useGitHistoryActions(project: string) {
     } catch (caughtError) {
       setErrorState({
         project,
-        value: caughtError instanceof Error ? caughtError.message : "Reset failed",
+        value:
+          caughtError instanceof Error ? caughtError.message : "Reset failed",
+      });
+    }
+  }
+
+  async function handleCherryPickFiles(
+    commit: GitLogEntry,
+    files: DiffFileEntry[],
+  ) {
+    if (!project || files.length === 0) return;
+    const paths = files.map((file) => file.path);
+    setErrorState({ project, value: null });
+    setMessageState({ project, value: null });
+    try {
+      const result = await cherryPickFilesMutation.mutateAsync({
+        hash: commit.hash,
+        paths,
+      });
+      if (result.ok) {
+        setMessageState({
+          project,
+          value:
+            result.message ??
+            `Cherry-picked ${files.length} selected file change(s)`,
+        });
+        return;
+      }
+      setErrorState({
+        project,
+        value: result.message ?? "Cherry-pick selected changes failed",
+      });
+    } catch (caughtError) {
+      setErrorState({
+        project,
+        value:
+          caughtError instanceof Error
+            ? caughtError.message
+            : "Cherry-pick selected changes failed",
+      });
+    }
+  }
+
+  async function handleDropFiles(commit: GitLogEntry, files: DiffFileEntry[]) {
+    if (!project || files.length === 0) return;
+    const paths = files.map((file) => file.path);
+    setErrorState({ project, value: null });
+    setMessageState({ project, value: null });
+    try {
+      const result = await dropFilesMutation.mutateAsync({
+        hash: commit.hash,
+        paths,
+      });
+      if (result.ok) {
+        setMessageState({
+          project,
+          value:
+            result.message ?? `Dropped ${files.length} selected file change(s)`,
+        });
+        return;
+      }
+      setErrorState({
+        project,
+        value: result.message ?? "Drop selected changes failed",
+      });
+    } catch (caughtError) {
+      setErrorState({
+        project,
+        value:
+          caughtError instanceof Error
+            ? caughtError.message
+            : "Drop selected changes failed",
       });
     }
   }
@@ -213,6 +297,8 @@ export function useGitHistoryActions(project: string) {
     setResetCommit: (commit: GitLogEntry | null) =>
       setResetCommitState({ project, commit }),
     handleCherryPick,
+    handleCherryPickFiles,
+    handleDropFiles,
     handleReset,
     clearStatus,
     resetScope,

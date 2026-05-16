@@ -363,8 +363,13 @@ export function useGitResolve(project: string) {
 export function useGitCommit(project: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ message, amend = false }: { message: string; amend?: boolean }) =>
-      api.git.commit(project, message, amend),
+    mutationFn: ({
+      message,
+      amend = false,
+    }: {
+      message: string;
+      amend?: boolean;
+    }) => api.git.commit(project, message, amend),
     onSuccess: () =>
       invalidateGitProjectQueries(qc, project, {
         includeConflicts: true,
@@ -440,6 +445,40 @@ export function useGitReset(project: string) {
   return useMutation({
     mutationFn: ({ hash, mode }: { hash: string; mode: ResetMode }) =>
       api.git.reset(project, hash, mode),
+    onSuccess: () =>
+      invalidateGitProjectQueries(qc, project, {
+        includeConflicts: true,
+        includeFileTree: true,
+        includeGitDiff: true,
+        includeGitLog: true,
+        includeProjects: true,
+        includeProjectStatus: true,
+      }),
+  });
+}
+
+export function useGitCherryPickCommitFiles(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ hash, paths }: { hash: string; paths: string[] }) =>
+      api.git.cherryPickCommitFiles(project, hash, paths),
+    onSuccess: () =>
+      invalidateGitProjectQueries(qc, project, {
+        includeConflicts: true,
+        includeFileTree: true,
+        includeGitDiff: true,
+        includeGitLog: true,
+        includeProjects: true,
+        includeProjectStatus: true,
+      }),
+  });
+}
+
+export function useGitDropCommitFiles(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ hash, paths }: { hash: string; paths: string[] }) =>
+      api.git.dropCommitFiles(project, hash, paths),
     onSuccess: () =>
       invalidateGitProjectQueries(qc, project, {
         includeConflicts: true,

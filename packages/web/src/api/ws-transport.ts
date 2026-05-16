@@ -531,6 +531,22 @@ function channelToEndpoint(
         url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/diff?path=${encodeURIComponent(d.path)}`,
       };
     }
+    case "git:cherryPickCommitFiles": {
+      const d = data as { project: string; hash: string; paths: string[] };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/cherry-pick-files`,
+        body: { paths: d.paths },
+      };
+    }
+    case "git:dropCommitFiles": {
+      const d = data as { project: string; hash: string; paths: string[] };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/drop-files`,
+        body: { paths: d.paths },
+      };
+    }
 
     // Ports
     case "port:list":
