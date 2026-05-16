@@ -6,6 +6,7 @@ import { ConnectionDot } from "@/components/atoms/ConnectionDot.js";
 import { Logo } from "@/components/atoms/Logo.js";
 import { useIpc } from "@/hooks/useSSE.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
+import { ProjectSwitcher } from "@/components/organisms/ProjectSwitcher.js";
 import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 import { ServerProfilesDialog } from "@/components/organisms/ServerProfilesDialog.js";
@@ -114,6 +115,11 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
 
         {projects.length > 0 && (
           <>
+            <div className="h-4 w-[1px] bg-[var(--color-border)]" />
+            <div className="px-1">
+              <ProjectSwitcher />
+            </div>
+
             <div className="h-4 w-[1px] bg-[var(--color-border)]" />
             <div className="px-1">
               <GitBranchControl
