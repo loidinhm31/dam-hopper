@@ -108,7 +108,9 @@ export function useTerminalSuggestions(
 
   // Project ref lets debounce callback always see the latest project name
   const projectRef = useRef(project);
-  projectRef.current = project;
+  useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
 
   const dismiss = useCallback(() => {
     m.current.isVisible = false;

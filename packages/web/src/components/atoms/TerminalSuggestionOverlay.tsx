@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { cn } from "@/lib/utils.js";
 import type { HistorySearchResult } from "@/lib/command-history.js";
 
@@ -21,7 +22,8 @@ interface Props {
 const MAX_VISIBLE = 5;
 
 function RecencyDot({ lastUsedAt }: { lastUsedAt: number }) {
-  const ageDays = (Date.now() - lastUsedAt) / (1000 * 60 * 60 * 24);
+  const [now] = useState(() => Date.now());
+  const ageDays = (now - lastUsedAt) / (1000 * 60 * 60 * 24);
   const fresh = ageDays < 1;
   const recent = ageDays < 7;
   return (

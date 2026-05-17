@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
   useMemoryFile,
@@ -34,10 +34,13 @@ export function MemoryEditor({ projects }: Props) {
 
   // Reset editor when project/agent changes or fresh data arrives
   useEffect(() => {
-    setContent(memoryContent ?? "");
-    setPreview(null);
-    setInitialPreview(null);
-    setSaveStatus("idle");
+    const timer = setTimeout(() => {
+      setContent(memoryContent ?? "");
+      setPreview(null);
+      setInitialPreview(null);
+      setSaveStatus("idle");
+    }, 0);
+    return () => clearTimeout(timer);
   }, [memoryContent, projectName, agent]);
 
   async function handleApply() {

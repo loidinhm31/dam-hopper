@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { X, Plus, Server, Check, Trash2, Edit2 } from "lucide-react";
 import type { ServerProfile } from "@/api/server-config.js";
@@ -23,18 +23,13 @@ export function ServerProfilesDialog({
   onEditProfile,
   onSwitchProfile,
 }: Props) {
-  const [profiles, setProfiles] = useState<ServerProfile[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [, refreshProfiles] = useState(0);
   const queryClient = useQueryClient();
 
-  useEffect(() => {
-    if (open) {
-      setProfiles(getProfiles());
-      setActiveId(getActiveProfileId());
-    }
-  }, [open]);
-
   if (!open) return null;
+
+  const profiles = getProfiles();
+  const activeId = getActiveProfileId();
 
   function handleSwitch(profile: ServerProfile) {
     setActiveProfile(profile.id);
@@ -52,8 +47,7 @@ export function ServerProfilesDialog({
   function handleDelete(id: string) {
     if (!confirm("Delete this server profile?")) return;
     deleteProfile(id);
-    setProfiles(getProfiles());
-    setActiveId(getActiveProfileId());
+    refreshProfiles((version) => version + 1);
   }
 
   return (

@@ -1,6 +1,5 @@
-import { useCallback, useMemo, useRef, useState } from "react";
-import type { ReactElement } from "react";
-import { createElement } from "react";
+import { useCallback, useRef, useState } from "react";
+import type { ComponentProps } from "react";
 import { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";
 import { useSshAddKey, useSshListKeys } from "@/api/queries.js";
 import type { GitOpResult } from "@/api/client.js";
@@ -40,8 +39,8 @@ interface SshRetryState {
 }
 
 interface UseGitWithSshRetryResult {
-  /** Render this element near the top of your JSX tree */
-  PassphraseDialogElement: ReactElement;
+  /** Pass these props to PassphraseDialog near the top of your JSX tree */
+  passphraseDialogProps: ComponentProps<typeof PassphraseDialog>;
   /**
    * Wraps a git operation. If it returns auth-error results,
    * opens the passphrase dialog, loads key, then retries once.
@@ -143,18 +142,14 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
     reject?.(new Error("SSH_CANCELLED"));
   }, []);
 
-  const PassphraseDialogElement = useMemo(
-    () =>
-      createElement(PassphraseDialog, {
-        open: state.open,
-        onSubmit: handleSubmit,
-        onCancel: handleCancel,
-        loading: state.loading,
-        error: state.error,
-        availableKeys,
-      }),
-    [state, handleSubmit, handleCancel, availableKeys],
-  );
+  const passphraseDialogProps = {
+    open: state.open,
+    onSubmit: handleSubmit,
+    onCancel: handleCancel,
+    loading: state.loading,
+    error: state.error,
+    availableKeys,
+  };
 
-  return { PassphraseDialogElement, executeWithRetry };
+  return { passphraseDialogProps, executeWithRetry };
 }

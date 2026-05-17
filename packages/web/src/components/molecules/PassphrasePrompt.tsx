@@ -26,9 +26,12 @@ export function PassphrasePrompt({ project }: PassphrasePromptProps) {
 
   useEffect(() => {
     if (isPrompting) {
-      setPassphrase("");
-      setError(null);
-      setTimeout(() => inputRef.current?.focus(), 50);
+      const timer = setTimeout(() => {
+        setPassphrase("");
+        setError(null);
+        inputRef.current?.focus();
+      }, 50);
+      return () => clearTimeout(timer);
     }
   }, [isPrompting]);
 
