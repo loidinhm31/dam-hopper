@@ -8,10 +8,6 @@ import {
   useLocation,
 } from "react-router-dom";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
-import { DashboardPage } from "@/components/pages/DashboardPage.js";
-import { GitPage } from "@/components/pages/GitPage.js";
-import { SettingsPage } from "@/components/pages/SettingsPage.js";
-import { AgentStorePage } from "@/components/pages/AgentStorePage.js";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
 import { getTransport } from "@/api/transport.js";
 import { useSettingsStore } from "@/stores/settings.js";
@@ -39,6 +35,26 @@ useSettingsStore.subscribe((s) => {
 });
 
 const WorkspacePage = lazy(() => import("@/components/pages/WorkspacePage.js"));
+const DashboardPage = lazy(() =>
+  import("@/components/pages/DashboardPage.js").then((m) => ({
+    default: m.DashboardPage,
+  })),
+);
+const GitPage = lazy(() =>
+  import("@/components/pages/GitPage.js").then((m) => ({
+    default: m.GitPage,
+  })),
+);
+const SettingsPage = lazy(() =>
+  import("@/components/pages/SettingsPage.js").then((m) => ({
+    default: m.SettingsPage,
+  })),
+);
+const AgentStorePage = lazy(() =>
+  import("@/components/pages/AgentStorePage.js").then((m) => ({
+    default: m.AgentStorePage,
+  })),
+);
 
 const LOADING_FALLBACK = (
   <div className="h-screen flex items-center justify-center text-xs text-[var(--color-text-muted)]">
@@ -254,7 +270,9 @@ export function App() {
                   path="/"
                   element={
                     <ErrorBoundary>
-                      <DashboardPage />
+                      <Suspense fallback={LOADING_FALLBACK}>
+                        <DashboardPage />
+                      </Suspense>
                     </ErrorBoundary>
                   }
                 />
@@ -281,7 +299,9 @@ export function App() {
                   path="/git"
                   element={
                     <ErrorBoundary>
-                      <GitPage />
+                      <Suspense fallback={LOADING_FALLBACK}>
+                        <GitPage />
+                      </Suspense>
                     </ErrorBoundary>
                   }
                 />
@@ -289,7 +309,9 @@ export function App() {
                   path="/settings"
                   element={
                     <ErrorBoundary>
-                      <SettingsPage />
+                      <Suspense fallback={LOADING_FALLBACK}>
+                        <SettingsPage />
+                      </Suspense>
                     </ErrorBoundary>
                   }
                 />
@@ -297,7 +319,9 @@ export function App() {
                   path="/agent-store"
                   element={
                     <ErrorBoundary>
-                      <AgentStorePage />
+                      <Suspense fallback={LOADING_FALLBACK}>
+                        <AgentStorePage />
+                      </Suspense>
                     </ErrorBoundary>
                   }
                 />

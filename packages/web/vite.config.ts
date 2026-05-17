@@ -25,7 +25,11 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         output: {
           manualChunks: {
-            monaco: ["monaco-editor"],
+            monaco: ["monaco-editor", "@monaco-editor/react"],
+            terminal: ["@xterm/xterm", "@xterm/addon-fit"],
+            markdown: ["react-markdown", "remark-gfm"],
+            tree: ["react-arborist"],
+            qr: ["react-qr-code"],
           },
         },
       },
