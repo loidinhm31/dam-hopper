@@ -90,6 +90,18 @@ export interface SearchResponse {
   truncated: boolean;
 }
 
+export interface PathSearchMatch {
+  path: string;
+  /** Present when scope=workspace; identifies the source project */
+  project?: string;
+}
+
+export interface PathSearchResponse {
+  query: string;
+  matches: PathSearchMatch[];
+  truncated: boolean;
+}
+
 export interface FsUploadResult {
   ok: boolean;
   newMtime?: number;

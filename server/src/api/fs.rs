@@ -42,6 +42,13 @@ pub struct SearchResponse {
     pub truncated: bool,
 }
 
+#[derive(Serialize)]
+pub struct PathSearchResponse {
+    pub query: String,
+    pub matches: Vec<ops::PathSearchMatch>,
+    pub truncated: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Shared param / response types
 // ---------------------------------------------------------------------------
@@ -257,6 +264,54 @@ pub async fn search(
             .await
             .map_err(AppError::Fs)?;
         Ok(Json(SearchResponse {
+            query,
+            matches,
+            truncated,
+        }))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/fs/search-paths?project=NAME&q=QUERY[&case=true&max=N&scope=project|workspace]
+// ---------------------------------------------------------------------------
+
+pub async fn search_paths(
+    State(state): State<AppState>,
+    Query(params): Query<SearchParams>,
+) -> Result<Json<PathSearchResponse>, ApiError> {
+    let case = params.case.unwrap_or(false);
+    let query = params.q.clone();
+
+    if params.scope == SearchScope::Workspace {
+        let projects: Vec<(String, std::path::PathBuf)> = {
+            let cfg = state.config.read().await;
+            cfg.projects
+                .iter()
+                .map(|p| (p.name.clone(), std::path::PathBuf::from(&p.path)))
+                .collect()
+        };
+        let (matches, truncated) =
+            ops::search_paths_workspace(projects, &query, case, 200, MAX_WORKSPACE_SEARCH_RESULTS)
+                .await;
+        Ok(Json(PathSearchResponse {
+            query,
+            matches,
+            truncated,
+        }))
+    } else {
+        let project_name = params.project.ok_or_else(|| {
+            ApiError::from(AppError::InvalidInput(
+                "project parameter required for project scope".into(),
+            ))
+        })?;
+        let root = resolve(&state, &project_name, "")
+            .await
+            .map_err(ApiError::from)?;
+        let max = params.max.unwrap_or(200).min(ops::MAX_SEARCH_RESULTS);
+        let (matches, truncated) = ops::search_paths(&root, &query, case, max)
+            .await
+            .map_err(AppError::Fs)?;
+        Ok(Json(PathSearchResponse {
             query,
             matches,
             truncated,

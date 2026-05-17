@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useEffect, useRef, useMemo, useCallback } from "react";
 import {
   Terminal as TerminalIcon,
   Plus,
@@ -33,7 +33,9 @@ import {
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { useSearchUiStore } from "@/stores/searchUi.js";
+import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalManager } from "@/hooks/useTerminalManager.js";
+import { useDocumentKeyboardShortcut } from "@/hooks/useShortcuts.js";
 import { api } from "@/api/client.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 import type { ToolWindowDef } from "@/types/ide.js";
@@ -57,7 +59,7 @@ export default function WorkspacePage() {
         setActiveProject(null);
       }
     }
-  }, [projects, activeProject]); // Added activeProject to dependencies
+  }, [projects, activeProject, setActiveProject]); // Added activeProject to dependencies
 
   const { state, derived, actions } = useTerminalManager(
     searchParams,
@@ -104,18 +106,16 @@ export default function WorkspacePage() {
     close: closeSearch,
     openWith: openSearch,
   } = useSearchUiStore();
+  const searchTextShortcut = useSettingsStore((s) => s.searchTextShortcut);
+  const searchFilenameShortcut = useSettingsStore(
+    (s) => s.searchFilenameShortcut,
+  );
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.ctrlKey && e.shiftKey && e.key === "F") {
-        e.preventDefault();
-        openSearch();
-      }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [openSearch]);
+  useDocumentKeyboardShortcut(searchTextShortcut, () => openSearch("content"));
+  useDocumentKeyboardShortcut(searchFilenameShortcut, () =>
+    openSearch("filename"),
+  );
 
   const handleFileOpen = useCallback(
     (node: FsArborNode) => {
@@ -129,7 +129,7 @@ export default function WorkspacePage() {
       setActiveProject(name);
       handleSelectProject(name);
     },
-    [handleSelectProject],
+    [handleSelectProject, setActiveProject],
   );
 
   const terminalPanel = useMemo(
@@ -457,12 +457,12 @@ export default function WorkspacePage() {
       },
     ],
     [
-      projects,
       projectName,
       handleFileOpen,
       handleLaunchShell,
       openDiff,
       openFile,
+      setActiveProject,
       terminalPanel,
     ],
   );

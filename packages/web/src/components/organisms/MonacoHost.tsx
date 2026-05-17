@@ -15,6 +15,11 @@ import type { FileTier } from "@/lib/file-tier.js";
 import { useSettingsStore, clampFont } from "@/stores/settings.js";
 import { useSearchUiStore } from "@/stores/searchUi.js";
 import { mimeToMonacoLanguage } from "@/lib/mime-to-language.js";
+import {
+  addKeyboardShortcutListener,
+  addWheelShortcutListener,
+} from "@/hooks/useShortcuts.js";
+import { EDITOR_ZOOM_WHEEL_SHORTCUT } from "@/lib/shortcuts.js";
 
 interface MonacoHostProps {
   tabKey: string;
@@ -78,18 +83,6 @@ export function MonacoHost({
         onSaveRef.current(),
       );
 
-      // Ctrl+Shift+F → open search panel with current selection as initial query
-      editor.addCommand(
-        monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF,
-        () => {
-          const sel = editor.getSelection();
-          const text = sel
-            ? (editor.getModel()?.getValueInRange(sel) ?? "")
-            : "";
-          useSearchUiStore.getState().openWith(text.trim());
-        },
-      );
-
       onEditorReady?.(editor);
 
       // Persist view state on blur
@@ -110,22 +103,46 @@ export function MonacoHost({
           ro.disconnect();
       }
 
-      // Ctrl+Shift+Wheel → zoom editor font (custom handler; Monaco's mouseWheelZoom only handles Ctrl)
       const domNode = editor.getDomNode();
       if (domNode) {
-        const handleWheel = (e: WheelEvent) => {
-          if (!e.ctrlKey || !e.shiftKey || !wheelEnabledRef.current) return;
-          e.preventDefault();
-          const delta = e.deltaY < 0 ? 1 : -1;
-          const store = useSettingsStore.getState();
-          store.saveDebounced({
-            editorFontSize: clampFont(store.editorFontSize + delta),
-          });
+        const openContentSearch = () => {
+          const sel = editor.getSelection();
+          const text = sel
+            ? (editor.getModel()?.getValueInRange(sel) ?? "")
+            : "";
+          useSearchUiStore.getState().openWith("content", text.trim());
         };
-        domNode.addEventListener("wheel", handleWheel, { passive: false });
+        const openFilenameSearch = () => {
+          useSearchUiStore.getState().openWith("filename");
+        };
+        const cleanupTextSearch = addKeyboardShortcutListener(
+          domNode,
+          () => useSettingsStore.getState().searchTextShortcut,
+          openContentSearch,
+        );
+        const cleanupFilenameSearch = addKeyboardShortcutListener(
+          domNode,
+          () => useSettingsStore.getState().searchFilenameShortcut,
+          openFilenameSearch,
+        );
+        const cleanupWheel = addWheelShortcutListener(
+          domNode,
+          () => (wheelEnabledRef.current ? EDITOR_ZOOM_WHEEL_SHORTCUT : ""),
+          (e) => {
+            const delta = e.deltaY < 0 ? 1 : -1;
+            const store = useSettingsStore.getState();
+            store.saveDebounced({
+              editorFontSize: clampFont(store.editorFontSize + delta),
+            });
+          },
+        );
         // Cleanup stored on the editor instance for the unmount effect
         (editor as unknown as { _wheelCleanup?: () => void })._wheelCleanup =
-          () => domNode.removeEventListener("wheel", handleWheel);
+          () => {
+            cleanupTextSearch();
+            cleanupFilenameSearch();
+            cleanupWheel();
+          };
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps

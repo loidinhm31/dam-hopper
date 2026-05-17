@@ -38,8 +38,8 @@ export function SettingsAppearanceSection() {
       <div className="border-t border-[var(--color-border)]" />
 
       <SettingRow
-        title="Ctrl+Shift+Wheel zoom"
-        description="Zoom editor font size with mouse wheel while holding Ctrl+Shift"
+        title="Ctrl+Wheel zoom"
+        description="Zoom editor font size with mouse wheel while holding Ctrl"
       >
         <Switch
           checked={editorZoomWheelEnabled}

@@ -6,6 +6,7 @@
  */
 import { create } from "zustand";
 import { api } from "@/api/client.js";
+import { withUiConfigDefaults } from "@/lib/ui-config.js";
 
 const FONT_MIN = 10;
 const FONT_MAX = 32;
@@ -18,6 +19,8 @@ interface SettingsState {
   systemFontSize: number;
   editorFontSize: number;
   editorZoomWheelEnabled: boolean;
+  searchTextShortcut: string;
+  searchFilenameShortcut: string;
   terminalSuggestionsEnabled: boolean;
   explorerShowHidden: boolean;
   hydrated: boolean;
@@ -30,6 +33,8 @@ interface SettingsState {
         | "systemFontSize"
         | "editorFontSize"
         | "editorZoomWheelEnabled"
+        | "searchTextShortcut"
+        | "searchFilenameShortcut"
         | "terminalSuggestionsEnabled"
         | "explorerShowHidden"
       >
@@ -42,6 +47,8 @@ interface SettingsState {
         | "systemFontSize"
         | "editorFontSize"
         | "editorZoomWheelEnabled"
+        | "searchTextShortcut"
+        | "searchFilenameShortcut"
         | "terminalSuggestionsEnabled"
         | "explorerShowHidden"
       >
@@ -55,6 +62,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   systemFontSize: 14,
   editorFontSize: 14,
   editorZoomWheelEnabled: true,
+  searchTextShortcut: "Mod+Shift+KeyF",
+  searchFilenameShortcut: "DoubleShift",
   terminalSuggestionsEnabled: true,
   explorerShowHidden: false,
   hydrated: false,
@@ -62,13 +71,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   hydrate: async () => {
     try {
       const config = await api.globalConfig.get();
-      const ui = config.ui;
+      const ui = withUiConfigDefaults(config.ui);
       set({
-        systemFontSize: ui?.systemFontSize ?? 14,
-        editorFontSize: ui?.editorFontSize ?? 14,
-        editorZoomWheelEnabled: ui?.editorZoomWheelEnabled ?? true,
-        terminalSuggestionsEnabled: ui?.terminalSuggestionsEnabled ?? true,
-        explorerShowHidden: ui?.explorerShowHidden ?? false,
+        systemFontSize: ui.systemFontSize,
+        editorFontSize: ui.editorFontSize,
+        editorZoomWheelEnabled: ui.editorZoomWheelEnabled,
+        searchTextShortcut: ui.searchTextShortcut,
+        searchFilenameShortcut: ui.searchFilenameShortcut,
+        terminalSuggestionsEnabled: ui.terminalSuggestionsEnabled ?? true,
+        explorerShowHidden: ui.explorerShowHidden ?? false,
         hydrated: true,
       });
     } catch {
@@ -85,6 +96,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.editorFontSize = clampFont(partial.editorFontSize);
     if (partial.editorZoomWheelEnabled !== undefined)
       clamped.editorZoomWheelEnabled = partial.editorZoomWheelEnabled;
+    if (partial.searchTextShortcut !== undefined)
+      clamped.searchTextShortcut = partial.searchTextShortcut;
+    if (partial.searchFilenameShortcut !== undefined)
+      clamped.searchFilenameShortcut = partial.searchFilenameShortcut;
     if (partial.terminalSuggestionsEnabled !== undefined)
       clamped.terminalSuggestionsEnabled = partial.terminalSuggestionsEnabled;
     if (partial.explorerShowHidden !== undefined)
@@ -101,6 +116,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         systemFontSize,
         editorFontSize,
         editorZoomWheelEnabled,
+        searchTextShortcut,
+        searchFilenameShortcut,
         terminalSuggestionsEnabled,
         explorerShowHidden,
       } = get();
@@ -108,6 +125,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         systemFontSize,
         editorFontSize,
         editorZoomWheelEnabled,
+        searchTextShortcut,
+        searchFilenameShortcut,
         terminalSuggestionsEnabled,
         explorerShowHidden,
       });

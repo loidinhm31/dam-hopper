@@ -11,6 +11,7 @@ import {
 import { ConfigEditor } from "@/components/organisms/ConfigEditor.js";
 import { GlobalConfigEditor } from "@/components/organisms/GlobalConfigEditor.js";
 import { SettingsAppearanceSection } from "@/components/organisms/SettingsAppearanceSection.js";
+import { SettingsKeyboardShortcutsSection } from "@/components/organisms/SettingsKeyboardShortcutsSection.js";
 
 export function SettingsPage() {
   const { data: config, isLoading, error } = useConfig();
@@ -108,6 +109,13 @@ export function SettingsPage() {
             Appearance
           </h2>
           <SettingsAppearanceSection />
+        </section>
+
+        <section>
+          <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">
+            Keyboard Shortcuts
+          </h2>
+          <SettingsKeyboardShortcutsSection />
         </section>
 
         <section>
