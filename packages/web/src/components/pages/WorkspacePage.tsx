@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useCallback } from "react";
+import { lazy, Suspense, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   Terminal as TerminalIcon,
   Plus,
@@ -12,15 +12,6 @@ import {
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { IdeShell } from "@/components/templates/IdeShell.js";
-import { FileTree } from "@/components/organisms/FileTree.js";
-import { EditorTabs } from "@/components/organisms/EditorTabs.js";
-import { TerminalTreeView } from "@/components/organisms/TerminalTreeView.js";
-import { MultiTerminalDisplay } from "@/components/organisms/MultiTerminalDisplay.js";
-import { ProjectInfoPanel } from "@/components/organisms/ProjectInfoPanel.js";
-import { SearchPanel } from "@/components/organisms/SearchPanel.js";
-import { ChangedFilesList } from "@/components/organisms/ChangedFilesList.js";
-import { PortsPanel } from "@/components/organisms/PortsPanel.js";
-import { WorkspaceGitPanel } from "@/components/organisms/WorkspaceGitPanel.js";
 
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
@@ -39,6 +30,61 @@ import { useDocumentKeyboardShortcut } from "@/hooks/useShortcuts.js";
 import { api } from "@/api/client.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 import type { ToolWindowDef } from "@/types/ide.js";
+
+const FileTree = lazy(() =>
+  import("@/components/organisms/FileTree.js").then((m) => ({
+    default: m.FileTree,
+  })),
+);
+const EditorTabs = lazy(() =>
+  import("@/components/organisms/EditorTabs.js").then((m) => ({
+    default: m.EditorTabs,
+  })),
+);
+const TerminalTreeView = lazy(() =>
+  import("@/components/organisms/TerminalTreeView.js").then((m) => ({
+    default: m.TerminalTreeView,
+  })),
+);
+const MultiTerminalDisplay = lazy(() =>
+  import("@/components/organisms/MultiTerminalDisplay.js").then((m) => ({
+    default: m.MultiTerminalDisplay,
+  })),
+);
+const ProjectInfoPanel = lazy(() =>
+  import("@/components/organisms/ProjectInfoPanel.js").then((m) => ({
+    default: m.ProjectInfoPanel,
+  })),
+);
+const SearchPanel = lazy(() =>
+  import("@/components/organisms/SearchPanel.js").then((m) => ({
+    default: m.SearchPanel,
+  })),
+);
+const ChangedFilesList = lazy(() =>
+  import("@/components/organisms/ChangedFilesList.js").then((m) => ({
+    default: m.ChangedFilesList,
+  })),
+);
+const PortsPanel = lazy(() =>
+  import("@/components/organisms/PortsPanel.js").then((m) => ({
+    default: m.PortsPanel,
+  })),
+);
+const WorkspaceGitPanel = lazy(() =>
+  import("@/components/organisms/WorkspaceGitPanel.js").then((m) => ({
+    default: m.WorkspaceGitPanel,
+  })),
+);
+
+function PanelFallback({ label = "Loading…" }: { label?: string }) {
+  return (
+    <div className="flex h-full min-h-0 flex-1 items-center justify-center text-xs text-[var(--color-text-muted)]">
+      <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
+      <span className="ml-2">{label}</span>
+    </div>
+  );
+}
 
 export default function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -265,29 +311,33 @@ export default function WorkspacePage() {
 
         <div className="flex-1 min-h-0">
           {selection?.type === "project" ? (
-            <ProjectInfoPanel
-              projectName={selection.name}
-              onLaunchCommand={(cmd) => {
-                if (selection.type === "project")
-                  handleLaunchTerminal(selection.name, cmd);
-              }}
-            />
+            <Suspense fallback={<PanelFallback label="Loading project…" />}>
+              <ProjectInfoPanel
+                projectName={selection.name}
+                onLaunchCommand={(cmd) => {
+                  if (selection.type === "project")
+                    handleLaunchTerminal(selection.name, cmd);
+                }}
+              />
+            </Suspense>
           ) : mountedSessions.length > 0 ? (
-            <MultiTerminalDisplay
-              activeSessionId={activeTab}
-              mountedSessions={mountedSessions}
-              openTabs={tabsWithLiveSession}
-              onSessionExit={handleSessionExit}
-              onNewTerminal={() => {
-                if (projectName) {
-                  handleLaunchShell(projectName);
-                } else {
-                  handleAddFreeTerminal();
-                }
-              }}
-              onSelectTab={handleSelectTab}
-              onCloseTab={handleCloseTab}
-            />
+            <Suspense fallback={<PanelFallback label="Loading terminals…" />}>
+              <MultiTerminalDisplay
+                activeSessionId={activeTab}
+                mountedSessions={mountedSessions}
+                openTabs={tabsWithLiveSession}
+                onSessionExit={handleSessionExit}
+                onNewTerminal={() => {
+                  if (projectName) {
+                    handleLaunchShell(projectName);
+                  } else {
+                    handleAddFreeTerminal();
+                  }
+                }}
+                onSelectTab={handleSelectTab}
+                onCloseTab={handleCloseTab}
+              />
+            </Suspense>
           ) : projects.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full gap-4 text-[var(--color-text-muted)]">
               <TerminalIcon className="h-12 w-12 opacity-20" />
@@ -360,24 +410,26 @@ export default function WorkspacePage() {
         label: "Search",
         icon: Search,
         content: projectName ? (
-          <SearchPanel
-            project={projectName}
-            onResultClick={(match) => {
-              const targetProject = match.project ?? projectName;
-              if (match.project && match.project !== projectName) {
-                setActiveProject(match.project);
-              }
-              void openFile(targetProject, {
-                id: match.path,
-                name: match.path.split("/").pop()!,
-                kind: "file",
-                size: 0,
-                mtime: 0,
-                isSymlink: false,
-                children: null,
-              });
-            }}
-          />
+          <Suspense fallback={<PanelFallback label="Loading search…" />}>
+            <SearchPanel
+              project={projectName}
+              onResultClick={(match) => {
+                const targetProject = match.project ?? projectName;
+                if (match.project && match.project !== projectName) {
+                  setActiveProject(match.project);
+                }
+                void openFile(targetProject, {
+                  id: match.path,
+                  name: match.path.split("/").pop()!,
+                  kind: "file",
+                  size: 0,
+                  mtime: 0,
+                  isSymlink: false,
+                  children: null,
+                });
+              }}
+            />
+          </Suspense>
         ) : (
           <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
             Select a project to search
@@ -392,14 +444,16 @@ export default function WorkspacePage() {
         content: (
           <div className="flex flex-col h-full">
             {projectName ? (
-              <FileTree
-                key={projectName}
-                project={projectName}
-                path=""
-                onFileOpen={handleFileOpen}
-                onOpenTerminal={() => handleLaunchShell(projectName)}
-                className="flex-1"
-              />
+              <Suspense fallback={<PanelFallback label="Loading files…" />}>
+                <FileTree
+                  key={projectName}
+                  project={projectName}
+                  path=""
+                  onFileOpen={handleFileOpen}
+                  onOpenTerminal={() => handleLaunchShell(projectName)}
+                  className="flex-1"
+                />
+              </Suspense>
             ) : (
               <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
                 No projects configured
@@ -414,13 +468,16 @@ export default function WorkspacePage() {
         icon: GitCommit,
         content: projectName ? (
           <div className="flex h-full min-h-0 flex-col">
-            <ChangedFilesList
-              project={projectName}
-              selectedFile={null}
-              onSelectFile={(path) => {
-                if (projectName) openDiff(projectName, path, "modified", 0, 0);
-              }}
-            />
+            <Suspense fallback={<PanelFallback label="Loading changes…" />}>
+              <ChangedFilesList
+                project={projectName}
+                selectedFile={null}
+                onSelectFile={(path) => {
+                  if (projectName)
+                    openDiff(projectName, path, "modified", 0, 0);
+                }}
+              />
+            </Suspense>
           </div>
         ) : (
           <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
@@ -441,7 +498,9 @@ export default function WorkspacePage() {
         icon: GitMerge,
         position: "bottom",
         content: projectName ? (
-          <WorkspaceGitPanel key={projectName} project={projectName} />
+          <Suspense fallback={<PanelFallback label="Loading Git…" />}>
+            <WorkspaceGitPanel key={projectName} project={projectName} />
+          </Suspense>
         ) : (
           <div className="p-4 text-xs text-[var(--color-text-muted)] italic text-center">
             Select a project to see Git status
@@ -453,7 +512,11 @@ export default function WorkspacePage() {
         label: "Ports",
         icon: Radio,
         position: "bottom",
-        content: <PortsPanel />,
+        content: (
+          <Suspense fallback={<PanelFallback label="Loading ports…" />}>
+            <PortsPanel />
+          </Suspense>
+        ),
       },
     ],
     [
@@ -478,27 +541,29 @@ export default function WorkspacePage() {
             <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
           </div>
         ) : (
-          <TerminalTreeView
-            projects={tree}
-            freeTerminals={freeTerminals}
-            selectedId={selectedId}
-            onSelectProject={handleSelectProjectInTree}
-            onSelectTerminal={handleSelectTerminal}
-            onLaunchTerminal={handleLaunchTerminal}
-            onKillTerminal={handleKillTerminal}
-            onAddShell={handleLaunchShell}
-            onLaunchProfile={handleLaunchProfile}
-            onDeleteProfile={handleDeleteProfile}
-            onLaunchSuggestedCommand={handleLaunchSuggestedCommand}
-            onAddFreeTerminal={handleAddFreeTerminal}
-            onLaunchFreeWithCommand={handleLaunchFreeWithCommand}
-            onSelectFreeTerminal={handleSelectTerminal}
-            onKillFreeTerminal={handleKillTerminal}
-            onRemoveFreeTerminal={handleRemoveFreeTerminal}
-            onSaveFreeTerminal={handleOpenFreeTerminalSavePrompt}
-            onUpdateProfile={handleUpdateProfile}
-            onUpdateCustomCommand={handleUpdateCustomCommand}
-          />
+          <Suspense fallback={<PanelFallback label="Loading terminal tree…" />}>
+            <TerminalTreeView
+              projects={tree}
+              freeTerminals={freeTerminals}
+              selectedId={selectedId}
+              onSelectProject={handleSelectProjectInTree}
+              onSelectTerminal={handleSelectTerminal}
+              onLaunchTerminal={handleLaunchTerminal}
+              onKillTerminal={handleKillTerminal}
+              onAddShell={handleLaunchShell}
+              onLaunchProfile={handleLaunchProfile}
+              onDeleteProfile={handleDeleteProfile}
+              onLaunchSuggestedCommand={handleLaunchSuggestedCommand}
+              onAddFreeTerminal={handleAddFreeTerminal}
+              onLaunchFreeWithCommand={handleLaunchFreeWithCommand}
+              onSelectFreeTerminal={handleSelectTerminal}
+              onKillFreeTerminal={handleKillTerminal}
+              onRemoveFreeTerminal={handleRemoveFreeTerminal}
+              onSaveFreeTerminal={handleOpenFreeTerminalSavePrompt}
+              onUpdateProfile={handleUpdateProfile}
+              onUpdateCustomCommand={handleUpdateCustomCommand}
+            />
+          </Suspense>
         ),
       },
     ],
@@ -529,7 +594,11 @@ export default function WorkspacePage() {
       <IdeShell
         leftTools={leftTools}
         rightTools={rightTools}
-        editor={<EditorTabs project={projectName} />}
+        editor={
+          <Suspense fallback={<PanelFallback label="Loading editor…" />}>
+            <EditorTabs project={projectName} />
+          </Suspense>
+        }
       />
 
       {/* Floating search dialog */}
@@ -546,27 +615,29 @@ export default function WorkspacePage() {
             className="relative z-10 w-full max-w-2xl mx-4 rounded-xl shadow-2xl border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden flex flex-col h-[70vh]"
             onClick={(e) => e.stopPropagation()}
           >
-            <SearchPanel
-              project={projectName}
-              inputRef={searchInputRef}
-              onClose={closeSearch}
-              onResultClick={(match) => {
-                closeSearch();
-                const targetProject = match.project ?? projectName;
-                if (match.project && match.project !== projectName) {
-                  setActiveProject(match.project);
-                }
-                void openFile(targetProject, {
-                  id: match.path,
-                  name: match.path.split("/").pop()!,
-                  kind: "file",
-                  size: 0,
-                  mtime: 0,
-                  isSymlink: false,
-                  children: null,
-                });
-              }}
-            />
+            <Suspense fallback={<PanelFallback label="Loading search…" />}>
+              <SearchPanel
+                project={projectName}
+                inputRef={searchInputRef}
+                onClose={closeSearch}
+                onResultClick={(match) => {
+                  closeSearch();
+                  const targetProject = match.project ?? projectName;
+                  if (match.project && match.project !== projectName) {
+                    setActiveProject(match.project);
+                  }
+                  void openFile(targetProject, {
+                    id: match.path,
+                    name: match.path.split("/").pop()!,
+                    kind: "file",
+                    size: 0,
+                    mtime: 0,
+                    isSymlink: false,
+                    children: null,
+                  });
+                }}
+              />
+            </Suspense>
           </div>
         </div>
       )}

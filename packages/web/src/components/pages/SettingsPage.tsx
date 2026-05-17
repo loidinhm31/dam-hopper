@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import {
   useConfig,
@@ -8,10 +8,26 @@ import {
   useExportSettings,
   useImportSettings,
 } from "@/api/queries.js";
-import { ConfigEditor } from "@/components/organisms/ConfigEditor.js";
-import { GlobalConfigEditor } from "@/components/organisms/GlobalConfigEditor.js";
 import { SettingsAppearanceSection } from "@/components/organisms/SettingsAppearanceSection.js";
 import { SettingsKeyboardShortcutsSection } from "@/components/organisms/SettingsKeyboardShortcutsSection.js";
+
+const ConfigEditor = lazy(() =>
+  import("@/components/organisms/ConfigEditor.js").then((m) => ({
+    default: m.ConfigEditor,
+  })),
+);
+const GlobalConfigEditor = lazy(() =>
+  import("@/components/organisms/GlobalConfigEditor.js").then((m) => ({
+    default: m.GlobalConfigEditor,
+  })),
+);
+
+const SETTINGS_FALLBACK = (
+  <div className="flex min-h-24 items-center text-xs text-[var(--color-text-muted)]">
+    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
+    <span className="ml-2">Loading settings…</span>
+  </div>
+);
 
 export function SettingsPage() {
   const { data: config, isLoading, error } = useConfig();
@@ -122,7 +138,9 @@ export function SettingsPage() {
           <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">
             Global Settings
           </h2>
-          <GlobalConfigEditor />
+          <Suspense fallback={SETTINGS_FALLBACK}>
+            <GlobalConfigEditor />
+          </Suspense>
         </section>
 
         <section>
@@ -140,18 +158,20 @@ export function SettingsPage() {
             </p>
           )}
           {config && (
-            <ConfigEditor
-              config={config}
-              onSave={updateConfig}
-              isSaving={isPending}
-              saveError={
-                saveError
-                  ? saveError instanceof Error
-                    ? saveError.message
-                    : String(saveError)
-                  : null
-              }
-            />
+            <Suspense fallback={SETTINGS_FALLBACK}>
+              <ConfigEditor
+                config={config}
+                onSave={updateConfig}
+                isSaving={isPending}
+                saveError={
+                  saveError
+                    ? saveError instanceof Error
+                      ? saveError.message
+                      : String(saveError)
+                    : null
+                }
+              />
+            </Suspense>
           )}
         </section>
 

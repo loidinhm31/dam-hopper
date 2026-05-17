@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { GitCommit, GitBranch, History } from "lucide-react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button } from "@/components/atoms/Button.js";
@@ -13,9 +13,6 @@ import {
 import type { GitOpResult, GitLogEntry, DiffFileEntry } from "@/api/client.js";
 import { Badge } from "@/components/atoms/Badge.js";
 import { useGitWithSshRetry } from "@/hooks/useGitWithSshRetry.js";
-import { GitLogTree } from "@/components/organisms/GitLogTree.js";
-import { GitLocalChanges } from "@/components/organisms/GitLocalChanges.js";
-import { CommitDetailsPanel } from "@/components/organisms/CommitDetailsPanel.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { cn } from "@/lib/utils.js";
 import {
@@ -25,9 +22,32 @@ import {
   useGitHistoryActions,
 } from "@/components/organisms/GitHistoryActions.js";
 
+const GitLogTree = lazy(() =>
+  import("@/components/organisms/GitLogTree.js").then((m) => ({
+    default: m.GitLogTree,
+  })),
+);
+const GitLocalChanges = lazy(() =>
+  import("@/components/organisms/GitLocalChanges.js").then((m) => ({
+    default: m.GitLocalChanges,
+  })),
+);
+const CommitDetailsPanel = lazy(() =>
+  import("@/components/organisms/CommitDetailsPanel.js").then((m) => ({
+    default: m.CommitDetailsPanel,
+  })),
+);
+
 interface SectionResults {
   results: GitOpResult[];
 }
+
+const GIT_PANEL_FALLBACK = (
+  <div className="flex h-full items-center justify-center text-xs text-[var(--color-text-muted)]">
+    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
+    <span className="ml-2">Loading Git view…</span>
+  </div>
+);
 
 function ResultsSummary({ results }: SectionResults) {
   const ok = results.filter((r) => r.success).length;
@@ -245,7 +265,9 @@ export function GitPage() {
                 <GitCommit className="w-3.5 h-3.5" />
                 Local Changes
               </div>
-              <GitLocalChanges project={selectedProjectName} />
+              <Suspense fallback={GIT_PANEL_FALLBACK}>
+                <GitLocalChanges project={selectedProjectName} />
+              </Suspense>
             </div>
 
             {/* Main: Git Log Graph + Details */}
@@ -261,34 +283,38 @@ export function GitPage() {
                   Commits
                 </div>
                 <div className="flex-1 min-h-0 overflow-hidden">
-                  <GitLogTree
-                    logs={logs}
-                    isLoading={isGitLogLoading}
-                    selectedHash={selectedCommit?.hash}
-                    onSelectCommit={setSelectedCommit}
-                    onCherryPick={(entry) =>
-                      void historyActions.handleCherryPick(entry)
-                    }
-                    onDropCommit={historyActions.setDropCommit}
-                    onReset={historyActions.setResetCommit}
-                  />
+                  <Suspense fallback={GIT_PANEL_FALLBACK}>
+                    <GitLogTree
+                      logs={logs}
+                      isLoading={isGitLogLoading}
+                      selectedHash={selectedCommit?.hash}
+                      onSelectCommit={setSelectedCommit}
+                      onCherryPick={(entry) =>
+                        void historyActions.handleCherryPick(entry)
+                      }
+                      onDropCommit={historyActions.setDropCommit}
+                      onReset={historyActions.setResetCommit}
+                    />
+                  </Suspense>
                 </div>
               </div>
 
               {selectedCommit && (
                 <div className="w-[35%] h-full shrink-0">
-                  <CommitDetailsPanel
-                    project={selectedProjectName}
-                    commit={selectedCommit}
-                    onClose={() => setSelectedCommit(null)}
-                    onFileDoubleClick={handleFileDoubleClick}
-                    onCherryPickSelectedChanges={(commit, files) =>
-                      void historyActions.handleCherryPickFiles(commit, files)
-                    }
-                    onDropSelectedChanges={(commit, files) =>
-                      void historyActions.handleDropFiles(commit, files)
-                    }
-                  />
+                  <Suspense fallback={GIT_PANEL_FALLBACK}>
+                    <CommitDetailsPanel
+                      project={selectedProjectName}
+                      commit={selectedCommit}
+                      onClose={() => setSelectedCommit(null)}
+                      onFileDoubleClick={handleFileDoubleClick}
+                      onCherryPickSelectedChanges={(commit, files) =>
+                        void historyActions.handleCherryPickFiles(commit, files)
+                      }
+                      onDropSelectedChanges={(commit, files) =>
+                        void historyActions.handleDropFiles(commit, files)
+                      }
+                    />
+                  </Suspense>
                 </div>
               )}
             </div>

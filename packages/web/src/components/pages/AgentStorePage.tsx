@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button } from "@/components/atoms/Button.js";
 import { StoreInventory } from "@/components/organisms/StoreInventory.js";
@@ -6,8 +6,6 @@ import { ItemDetail } from "@/components/organisms/ItemDetail.js";
 import { DistributionMatrix } from "@/components/organisms/DistributionMatrix.js";
 import { ShipDialog } from "@/components/organisms/ShipDialog.js";
 import { HealthStatus } from "@/components/organisms/HealthStatus.js";
-import { MemoryEditor } from "@/components/organisms/MemoryEditor.js";
-import { ImportDialog } from "@/components/organisms/ImportDialog.js";
 import {
   useAgentStoreItems,
   useAgentStoreMatrix,
@@ -16,6 +14,24 @@ import {
 import type { AgentStoreItem } from "@/api/client.js";
 
 type Tab = "store" | "memory" | "import";
+
+const MemoryEditor = lazy(() =>
+  import("@/components/organisms/MemoryEditor.js").then((m) => ({
+    default: m.MemoryEditor,
+  })),
+);
+const ImportDialog = lazy(() =>
+  import("@/components/organisms/ImportDialog.js").then((m) => ({
+    default: m.ImportDialog,
+  })),
+);
+
+const AGENT_STORE_FALLBACK = (
+  <div className="flex h-full min-h-24 items-center justify-center text-xs text-[var(--color-text-muted)]">
+    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
+    <span className="ml-2">Loading agent store…</span>
+  </div>
+);
 
 export function AgentStorePage() {
   const {
@@ -150,7 +166,9 @@ export function AgentStorePage() {
             className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 flex flex-col"
             style={{ height: "clamp(400px, 60vh, 640px)" }}
           >
-            <MemoryEditor projects={projects} />
+            <Suspense fallback={AGENT_STORE_FALLBACK}>
+              <MemoryEditor projects={projects} />
+            </Suspense>
           </div>
         )}
 
@@ -180,7 +198,9 @@ export function AgentStorePage() {
       )}
 
       {showImportDialog && (
-        <ImportDialog onClose={() => setShowImportDialog(false)} />
+        <Suspense fallback={AGENT_STORE_FALLBACK}>
+          <ImportDialog onClose={() => setShowImportDialog(false)} />
+        </Suspense>
       )}
     </AppLayout>
   );
