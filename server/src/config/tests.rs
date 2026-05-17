@@ -533,6 +533,8 @@ fn ui_config_defaults() {
     assert_eq!(ui.system_font_size, 14);
     assert_eq!(ui.editor_font_size, 14);
     assert!(ui.editor_zoom_wheel_enabled);
+    assert_eq!(ui.search_text_shortcut, "Mod+Shift+KeyF");
+    assert_eq!(ui.search_filename_shortcut, "DoubleShift");
 }
 
 #[test]
@@ -547,6 +549,8 @@ fn ui_config_serde_roundtrip() {
             system_font_size: 16,
             editor_font_size: 12,
             editor_zoom_wheel_enabled: false,
+            search_text_shortcut: "Ctrl+Alt+KeyS".to_string(),
+            search_filename_shortcut: "Ctrl+KeyP".to_string(),
             terminal_suggestions_enabled: true,
             explorer_show_hidden: false,
             terminal_order: vec!["term1".to_string(), "term2".to_string()],
@@ -566,12 +570,31 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(ui.system_font_size, 16);
     assert_eq!(ui.editor_font_size, 12);
     assert!(!ui.editor_zoom_wheel_enabled);
+    assert_eq!(ui.search_text_shortcut, "Ctrl+Alt+KeyS");
+    assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
     assert_eq!(ui.terminal_order, vec!["term1", "term2"]);
     assert_eq!(ui.project_order, vec!["proj1"]);
     assert_eq!(
         ui.project_command_order.get("proj1").unwrap(),
         &vec!["cmd1"]
     );
+}
+
+#[test]
+fn ui_config_serde_aliases_search_shortcuts() {
+    let toml = r#"
+[ui]
+system_font_size = 14
+editor_font_size = 14
+editor_zoom_wheel_enabled = true
+search_text_shortcut = "Ctrl+Shift+KeyF"
+search_filename_shortcut = "Ctrl+KeyP"
+"#;
+
+    let loaded: GlobalConfig = toml::from_str(toml).unwrap();
+    let ui = loaded.ui.unwrap();
+    assert_eq!(ui.search_text_shortcut, "Ctrl+Shift+KeyF");
+    assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
 }
 
 #[test]

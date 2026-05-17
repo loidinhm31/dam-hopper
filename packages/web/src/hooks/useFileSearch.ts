@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getTransport } from "@/api/transport.js";
-import type { SearchResponse } from "@/api/fs-types.js";
-import type { SearchScope } from "@/stores/searchUi.js";
+import type { PathSearchResponse, SearchResponse } from "@/api/fs-types.js";
+import type { SearchMode, SearchScope } from "@/stores/searchUi.js";
 
 const DEBOUNCE_MS = 350;
 const MAX_QUERY_LEN = 200;
@@ -10,8 +10,9 @@ const MAX_QUERY_LEN = 200;
 export function useFileSearch(
   project: string | null,
   scope: SearchScope = "project",
+  mode: SearchMode = "content",
+  query = "",
 ) {
-  const [query, setQuery] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState("");
 
@@ -23,29 +24,32 @@ export function useFileSearch(
   const trimmedQuery = debouncedQuery.slice(0, MAX_QUERY_LEN);
   const isWorkspace = scope === "workspace";
 
-  const { data, isLoading, isError } = useQuery<SearchResponse>({
+  const { data, isLoading, isError } = useQuery<
+    SearchResponse | PathSearchResponse
+  >({
     queryKey: [
-      "fs-search",
+      mode === "filename" ? "fs-path-search" : "fs-search",
       isWorkspace ? "__workspace__" : project,
       trimmedQuery,
       caseSensitive,
       scope,
     ],
     queryFn: () =>
-      getTransport().invoke("fs:search", {
-        ...(isWorkspace ? {} : { project }),
-        q: trimmedQuery,
-        case: caseSensitive || undefined,
-        scope: isWorkspace ? "workspace" : undefined,
-      }) as Promise<SearchResponse>,
+      getTransport().invoke(
+        mode === "filename" ? "fs:searchPaths" : "fs:search",
+        {
+          ...(isWorkspace ? {} : { project }),
+          q: trimmedQuery,
+          case: caseSensitive || undefined,
+          scope: isWorkspace ? "workspace" : undefined,
+        },
+      ) as Promise<SearchResponse | PathSearchResponse>,
     enabled: (isWorkspace || !!project) && trimmedQuery.length >= 2,
     staleTime: 30_000,
     placeholderData: (prev) => prev,
   });
 
   return {
-    query,
-    setQuery,
     caseSensitive,
     setCaseSensitive,
     data,

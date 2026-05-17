@@ -240,6 +240,8 @@ export interface UiConfig {
   systemFontSize: number;
   editorFontSize: number;
   editorZoomWheelEnabled: boolean;
+  searchTextShortcut: string;
+  searchFilenameShortcut: string;
   terminalSuggestionsEnabled?: boolean;
   explorerShowHidden?: boolean;
   terminalOrder?: string[];
@@ -401,7 +403,7 @@ export const api = {
         "globalConfig:updateDefaults",
         defaults,
       ),
-    updateUi: (ui: UiConfig) =>
+    updateUi: (ui: Partial<UiConfig>) =>
       getTransport().invoke<{ updated: true }>("globalConfig:updateUi", ui),
   },
   projects: {

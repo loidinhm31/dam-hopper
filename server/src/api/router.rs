@@ -234,6 +234,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/fs/stat", get(fs_api::stat))
         .route("/api/fs/download", get(fs_api::download))
         .route("/api/fs/search", get(fs_api::search))
+        .route("/api/fs/search-paths", get(fs_api::search_paths))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,

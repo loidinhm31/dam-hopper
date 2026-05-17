@@ -325,6 +325,12 @@ fn default_editor_font_size() -> u16 {
 fn default_editor_zoom_wheel_enabled() -> bool {
     true
 }
+fn default_search_text_shortcut() -> String {
+    "Mod+Shift+KeyF".to_string()
+}
+fn default_search_filename_shortcut() -> String {
+    "DoubleShift".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -338,6 +344,16 @@ pub struct UiConfig {
         alias = "editor_zoom_wheel_enabled"
     )]
     pub editor_zoom_wheel_enabled: bool,
+    #[serde(
+        default = "default_search_text_shortcut",
+        alias = "search_text_shortcut"
+    )]
+    pub search_text_shortcut: String,
+    #[serde(
+        default = "default_search_filename_shortcut",
+        alias = "search_filename_shortcut"
+    )]
+    pub search_filename_shortcut: String,
     #[serde(default = "default_true", alias = "terminal_suggestions_enabled")]
     pub terminal_suggestions_enabled: bool,
     #[serde(default, alias = "explorer_show_hidden", alias = "explorerShowHidden")]
@@ -360,6 +376,8 @@ impl Default for UiConfig {
             system_font_size: default_system_font_size(),
             editor_font_size: default_editor_font_size(),
             editor_zoom_wheel_enabled: default_editor_zoom_wheel_enabled(),
+            search_text_shortcut: default_search_text_shortcut(),
+            search_filename_shortcut: default_search_filename_shortcut(),
             terminal_suggestions_enabled: true,
             explorer_show_hidden: false,
             terminal_order: vec![],

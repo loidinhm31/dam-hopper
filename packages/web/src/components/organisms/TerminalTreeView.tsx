@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils.js";
 import type { TreeProject, TreeCommand } from "@/hooks/useTerminalTree.js";
 import type { SessionInfo, ProjectType } from "@/api/client.js";
 import { getSessionStatus, getStatusDotColor } from "@/lib/session-status.js";
+import { withUiConfigDefaults } from "@/lib/ui-config.js";
 import { useGlobalConfig, useUpdateUiConfig } from "@/api/queries.js";
 
 interface Props {
@@ -250,7 +251,9 @@ function CommandEditorRow({
           disabled={value.saving}
         />
         {value.error && (
-          <p className="text-[10px] text-[var(--color-danger)]">{value.error}</p>
+          <p className="text-[10px] text-[var(--color-danger)]">
+            {value.error}
+          </p>
         )}
         <div className="flex items-center justify-end gap-2">
           <button
@@ -468,7 +471,9 @@ function ProfileEditorRow({
           disabled={value.saving}
         />
         {value.error && (
-          <p className="text-[10px] text-[var(--color-danger)]">{value.error}</p>
+          <p className="text-[10px] text-[var(--color-danger)]">
+            {value.error}
+          </p>
         )}
         <div className="flex items-center justify-end gap-2">
           <button
@@ -823,11 +828,7 @@ export function TerminalTreeView({
         const [removed] = newOrder.splice(fromIndex, 1);
         newOrder.splice(toIndex, 0, removed);
 
-        const baseUi = globalConfig?.ui || {
-          systemFontSize: 14,
-          editorFontSize: 14,
-          editorZoomWheelEnabled: true,
-        };
+        const baseUi = withUiConfigDefaults(globalConfig?.ui);
 
         updateUi.mutate({
           ...baseUi,
@@ -844,11 +845,7 @@ export function TerminalTreeView({
         const [removed] = newOrder.splice(fromIndex, 1);
         newOrder.splice(toIndex, 0, removed);
 
-        const baseUi = globalConfig?.ui || {
-          systemFontSize: 14,
-          editorFontSize: 14,
-          editorZoomWheelEnabled: true,
-        };
+        const baseUi = withUiConfigDefaults(globalConfig?.ui);
 
         updateUi.mutate({
           ...baseUi,
@@ -856,7 +853,9 @@ export function TerminalTreeView({
         });
       }
     } else if (type === "command" && dragProject === projectName) {
-      const project = projects.find((candidate) => candidate.name === projectName);
+      const project = projects.find(
+        (candidate) => candidate.name === projectName,
+      );
       if (project) {
         const currentOrder = project.commands.map((command) => command.key);
         const fromIndex = currentOrder.indexOf(draggedId);
@@ -867,11 +866,7 @@ export function TerminalTreeView({
           const [removed] = newOrder.splice(fromIndex, 1);
           newOrder.splice(toIndex, 0, removed);
 
-          const baseUi = globalConfig?.ui || {
-            systemFontSize: 14,
-            editorFontSize: 14,
-            editorZoomWheelEnabled: true,
-          };
+          const baseUi = withUiConfigDefaults(globalConfig?.ui);
 
           const commandOrderMap = { ...(baseUi.projectCommandOrder || {}) };
           commandOrderMap[projectName] = newOrder;
@@ -919,7 +914,9 @@ export function TerminalTreeView({
     if (!editState || editState.kind !== "profile") return;
 
     setEditState((prev) =>
-      prev?.kind === "profile" ? { ...prev, saving: true, error: undefined } : prev,
+      prev?.kind === "profile"
+        ? { ...prev, saving: true, error: undefined }
+        : prev,
     );
 
     try {
@@ -935,7 +932,10 @@ export function TerminalTreeView({
           ? {
               ...prev,
               saving: false,
-              error: error instanceof Error ? error.message : "Failed to save profile",
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Failed to save profile",
             }
           : prev,
       );
@@ -946,14 +946,20 @@ export function TerminalTreeView({
     if (!editState || editState.kind !== "command") return;
 
     setEditState((prev) =>
-      prev?.kind === "command" ? { ...prev, saving: true, error: undefined } : prev,
+      prev?.kind === "command"
+        ? { ...prev, saving: true, error: undefined }
+        : prev,
     );
 
     try {
-      await onUpdateCustomCommand(editState.projectName, editState.originalKey, {
-        key: editState.key,
-        command: editState.command,
-      });
+      await onUpdateCustomCommand(
+        editState.projectName,
+        editState.originalKey,
+        {
+          key: editState.key,
+          command: editState.command,
+        },
+      );
       setEditState(null);
     } catch (error) {
       setEditState((prev) =>
@@ -962,7 +968,9 @@ export function TerminalTreeView({
               ...prev,
               saving: false,
               error:
-                error instanceof Error ? error.message : "Failed to save command",
+                error instanceof Error
+                  ? error.message
+                  : "Failed to save command",
             }
           : prev,
       );
@@ -994,7 +1002,9 @@ export function TerminalTreeView({
           <Terminal className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)]" />
           <span className="flex-1">Terminals</span>
           {(() => {
-            const aliveCount = freeTerminals.filter((session) => session.alive).length;
+            const aliveCount = freeTerminals.filter(
+              (session) => session.alive,
+            ).length;
             return aliveCount > 0 ? (
               <span className="rounded-full bg-green-500/20 px-1.5 text-green-600 text-[10px] font-medium">
                 {aliveCount}
@@ -1171,9 +1181,15 @@ export function TerminalTreeView({
                           ) : null
                         }
                         onToggle={() => toggleProfile(profileKey)}
-                        onSelectInstance={(sessionId) => onSelectTerminal(sessionId)}
-                        onLaunchInstance={() => onLaunchProfile(project.name, cmd)}
-                        onKillInstance={(sessionId) => onKillTerminal(sessionId)}
+                        onSelectInstance={(sessionId) =>
+                          onSelectTerminal(sessionId)
+                        }
+                        onLaunchInstance={() =>
+                          onLaunchProfile(project.name, cmd)
+                        }
+                        onKillInstance={(sessionId) =>
+                          onKillTerminal(sessionId)
+                        }
                         onEdit={() => startProfileEdit(project.name, cmd)}
                         onDelete={() =>
                           onDeleteProfile(project.name, cmd.profileName!)
@@ -1220,7 +1236,9 @@ export function TerminalTreeView({
                         onLaunch={() => onLaunchTerminal(project.name, cmd)}
                         onKill={() => onKillTerminal(cmd.sessionId)}
                         onEdit={
-                          canEdit ? () => startCommandEdit(project.name, cmd) : undefined
+                          canEdit
+                            ? () => startCommandEdit(project.name, cmd)
+                            : undefined
                         }
                         onDragStart={(e) =>
                           handleDragStart(e, "command", cmd.key, project.name)

@@ -208,7 +208,7 @@ export function useUpdateGlobalDefaults() {
 export function useUpdateUiConfig() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (ui: UiConfig) => api.globalConfig.updateUi(ui),
+    mutationFn: (ui: Partial<UiConfig>) => api.globalConfig.updateUi(ui),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["global-config"] }),
   });
 }

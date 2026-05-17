@@ -326,6 +326,21 @@ function channelToEndpoint(
       if (d.scope === "workspace") params.set("scope", "workspace");
       return { method: "GET", url: `/api/fs/search?${params}` };
     }
+    case "fs:searchPaths": {
+      const d = data as {
+        project?: string;
+        q: string;
+        case?: boolean;
+        max?: number;
+        scope?: "project" | "workspace";
+      };
+      const params = new URLSearchParams({ q: d.q });
+      if (d.project) params.set("project", d.project);
+      if (d.case) params.set("case", "true");
+      if (d.max) params.set("max", String(d.max));
+      if (d.scope === "workspace") params.set("scope", "workspace");
+      return { method: "GET", url: `/api/fs/search-paths?${params}` };
+    }
 
     // Agent Store
     case "agent-store:list": {

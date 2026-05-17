@@ -99,7 +99,7 @@ pub async fn update_global_defaults(
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/global-config/ui  { ui: { system_font_size, editor_font_size, editor_zoom_wheel_enabled } }
+// POST /api/global-config/ui  { ui: UiConfig fields }
 // ---------------------------------------------------------------------------
 
 pub async fn update_global_ui(
@@ -112,7 +112,10 @@ pub async fn update_global_ui(
         .unwrap_or_default();
 
     if let Some(ui_val) = body.get("ui") {
-        let new_ui: crate::config::schema::UiConfig = serde_json::from_value(ui_val.clone())
+        let mut merged = serde_json::to_value(gc.ui.clone().unwrap_or_default())
+            .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
+        merge_json_objects(&mut merged, ui_val);
+        let new_ui: crate::config::schema::UiConfig = serde_json::from_value(merged)
             .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
         new_ui
             .validate_font_sizes()
@@ -123,6 +126,15 @@ pub async fn update_global_ui(
     write_global_config_at(&gc_path, &gc).map_err(ApiError::from_app)?;
     *state.global_config.write().await = gc;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+fn merge_json_objects(base: &mut Value, incoming: &Value) {
+    let (Some(base_obj), Some(incoming_obj)) = (base.as_object_mut(), incoming.as_object()) else {
+        return;
+    };
+    for (key, value) in incoming_obj {
+        base_obj.insert(key.clone(), value.clone());
+    }
 }
 
 // ---------------------------------------------------------------------------

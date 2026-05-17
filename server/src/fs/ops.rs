@@ -410,6 +410,62 @@ pub async fn search_workspace(
     (all, truncated)
 }
 
+/// Search file paths across multiple project roots in parallel.
+pub async fn search_paths_workspace(
+    projects: Vec<(String, std::path::PathBuf)>,
+    query: &str,
+    case_sensitive: bool,
+    max_per_project: usize,
+    max_total: usize,
+) -> (Vec<PathSearchMatch>, bool) {
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
+    use tokio::task::JoinSet;
+
+    let sem = Arc::new(Semaphore::new(4));
+    let mut set: JoinSet<(String, Vec<PathSearchMatch>)> = JoinSet::new();
+
+    for (name, root) in projects {
+        let sem = Arc::clone(&sem);
+        let query = query.to_string();
+        set.spawn(async move {
+            let _permit = sem.acquire().await;
+            match search_paths(&root, &query, case_sensitive, max_per_project).await {
+                Ok((matches, _)) => (name, matches),
+                Err(e) => {
+                    tracing::warn!(project = %name, error = %e, "workspace path search: project failed, skipping");
+                    (name, vec![])
+                }
+            }
+        });
+    }
+
+    let mut all: Vec<PathSearchMatch> = Vec::new();
+    let mut truncated = false;
+
+    while let Some(result) = set.join_next().await {
+        let Ok((project_name, mut matches)) = result else {
+            continue;
+        };
+        for m in matches.iter_mut() {
+            m.project = Some(project_name.clone());
+        }
+        for m in matches {
+            if all.len() >= max_total {
+                truncated = true;
+                break;
+            }
+            all.push(m);
+        }
+        if truncated {
+            set.abort_all();
+            break;
+        }
+    }
+
+    (all, truncated)
+}
+
 fn map_io(e: std::io::Error) -> FsError {
     if e.kind() == std::io::ErrorKind::NotFound {
         FsError::NotFound
@@ -491,6 +547,57 @@ mod tests {
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].project.as_deref(), Some("proj-a"));
     }
+
+    #[tokio::test]
+    async fn search_paths_finds_project_files_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src").join("main.rs"), "fn main() {}").unwrap();
+        std::fs::create_dir_all(root.join("src").join("main_test.rs")).unwrap();
+
+        let (matches, truncated) = search_paths(root, "main", false, 20).await.unwrap();
+
+        assert!(!truncated);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path, "src/main.rs");
+    }
+
+    #[tokio::test]
+    async fn search_paths_workspace_tags_project_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let p1 = make_project(&dir, "alpha", &[("src_alpha.rs", "")]);
+        let p2 = make_project(&dir, "beta", &[("src_beta.rs", "")]);
+
+        let (matches, truncated) =
+            search_paths_workspace(vec![p1, p2], "src_", false, 20, 50).await;
+
+        assert!(!truncated);
+        assert_eq!(matches.len(), 2);
+        let projects: std::collections::HashSet<_> = matches
+            .iter()
+            .filter_map(|m| m.project.as_deref())
+            .collect();
+        assert!(projects.contains("alpha"));
+        assert!(projects.contains("beta"));
+    }
+
+    #[tokio::test]
+    async fn search_paths_respects_gitignore_and_truncates() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join(".gitignore"), "ignored.txt\n").unwrap();
+        std::fs::write(root.join("ignored.txt"), "").unwrap();
+        for i in 0..5 {
+            std::fs::write(root.join(format!("match-{i}.txt")), "").unwrap();
+        }
+
+        let (matches, truncated) = search_paths(root, ".txt", false, 3).await.unwrap();
+
+        assert!(truncated);
+        assert_eq!(matches.len(), 3);
+        assert!(!matches.iter().any(|m| m.path == "ignored.txt"));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -507,6 +614,13 @@ pub struct SearchMatch {
     pub line: u64,
     pub col: u64,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PathSearchMatch {
+    pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
 }
@@ -594,6 +708,78 @@ pub async fn search_files(
                 }
             }
         }
+        Ok((matches, truncated))
+    })
+    .await
+    .map_err(|e| {
+        FsError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        ))
+    })?
+}
+
+/// Search relative file paths within `root` for `query`.
+///
+/// Walks files only and respects .gitignore via the `ignore` crate.
+pub async fn search_paths(
+    root: &Path,
+    query: &str,
+    case_sensitive: bool,
+    max_results: usize,
+) -> Result<(Vec<PathSearchMatch>, bool), FsError> {
+    let root_clone = root.to_path_buf();
+    let needle = if case_sensitive {
+        query.to_string()
+    } else {
+        query.to_lowercase()
+    };
+    let max = max_results.min(MAX_SEARCH_RESULTS);
+
+    tokio::task::spawn_blocking(move || {
+        use ignore::WalkBuilder;
+
+        let mut matches: Vec<PathSearchMatch> = Vec::new();
+        let mut truncated = false;
+
+        for entry in WalkBuilder::new(&root_clone)
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .build()
+            .filter_map(|e| e.ok())
+        {
+            if !entry.file_type().map_or(false, |ft| ft.is_file()) {
+                continue;
+            }
+
+            let rel = entry
+                .path()
+                .strip_prefix(&root_clone)
+                .unwrap_or(entry.path())
+                .to_string_lossy()
+                .replace('\\', "/");
+            let haystack = if case_sensitive {
+                rel.clone()
+            } else {
+                rel.to_lowercase()
+            };
+
+            if !haystack.contains(&needle) {
+                continue;
+            }
+
+            matches.push(PathSearchMatch {
+                path: rel,
+                project: None,
+            });
+            if matches.len() >= max {
+                truncated = true;
+                break;
+            }
+        }
+
         Ok((matches, truncated))
     })
     .await
