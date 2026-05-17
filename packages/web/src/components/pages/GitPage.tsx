@@ -3,6 +3,7 @@ import { GitCommit, GitBranch, History } from "lucide-react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button } from "@/components/atoms/Button.js";
 import { ProgressList } from "@/components/organisms/ProgressList.js";
+import { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";
 import {
   useProjects,
   useGitFetch,
@@ -100,7 +101,7 @@ export function GitPage() {
     200,
     0,
   );
-  const { PassphraseDialogElement, executeWithRetry } = useGitWithSshRetry();
+  const { passphraseDialogProps, executeWithRetry } = useGitWithSshRetry();
   const openDiff = useEditorStore((s) => s.openDiff);
   const historyActions = useGitHistoryActions(selectedProjectName ?? "");
   const { data: projectStatus } = useProjectStatus(selectedProjectName ?? "");
@@ -143,7 +144,7 @@ export function GitPage() {
 
   return (
     <AppLayout title="Git Operations">
-      {PassphraseDialogElement}
+      <PassphraseDialog {...passphraseDialogProps} />
       {/* Project selector */}
       <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4 mb-6">
         <p className="text-sm font-medium text-[var(--color-text)] mb-3">

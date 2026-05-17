@@ -11,6 +11,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useGitWithSshRetry } from "@/hooks/useGitWithSshRetry.js";
+import { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";
 import { cn } from "@/lib/utils.js";
 import { CollapsibleSection } from "@/components/atoms/CollapsibleSection.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
@@ -59,11 +60,11 @@ function GitSection({ projectName }: { projectName: string }) {
   const gitFetch = useGitFetch();
   const gitPull = useGitPull();
   const gitPush = useGitPush();
-  const { PassphraseDialogElement, executeWithRetry } = useGitWithSshRetry();
+  const { passphraseDialogProps, executeWithRetry } = useGitWithSshRetry();
 
   return (
     <div className="px-3 py-2 space-y-2">
-      {PassphraseDialogElement}
+      <PassphraseDialog {...passphraseDialogProps} />
       {/* Actions */}
       <div className="flex gap-2 flex-wrap">
         <Button

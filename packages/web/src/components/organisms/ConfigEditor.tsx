@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import type {
   DamHopperConfig,
@@ -163,20 +163,14 @@ export function CommandsForm({
   disabled?: boolean;
 }) {
   const entries = Object.entries(commands);
-  const commandRowIdsRef = useRef(createCommandRowIdState());
+  const [commandRowIds, setCommandRowIds] = useState(createCommandRowIdState);
 
   function getCommandRowId(key: string) {
-    const ensured = ensureCommandRowId(commandRowIdsRef.current, key);
-    commandRowIdsRef.current = ensured.state;
-    return ensured.id;
+    return commandRowIds.ids[key] ?? `command-row-key:${key}`;
   }
 
   function updateKey(oldKey: string, newKey: string) {
-    commandRowIdsRef.current = renameCommandRowId(
-      commandRowIdsRef.current,
-      oldKey,
-      newKey,
-    );
+    setCommandRowIds((state) => renameCommandRowId(state, oldKey, newKey));
     const next: Record<string, string> = {};
     for (const [k, v] of Object.entries(commands)) {
       next[k === oldKey ? newKey : k] = v;
@@ -189,10 +183,7 @@ export function CommandsForm({
   }
 
   function remove(key: string) {
-    commandRowIdsRef.current = removeCommandRowId(
-      commandRowIdsRef.current,
-      key,
-    );
+    setCommandRowIds((state) => removeCommandRowId(state, key));
     const next = { ...commands };
     delete next[key];
     onChange(next);
@@ -203,7 +194,7 @@ export function CommandsForm({
     let i = entries.length + 1;
     while (`cmd${i}` in commands) i++;
     const newKey = `cmd${i}`;
-    getCommandRowId(newKey);
+    setCommandRowIds((state) => ensureCommandRowId(state, newKey).state);
     onChange({ ...commands, [newKey]: "" });
   }
 

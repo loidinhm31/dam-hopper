@@ -15,7 +15,7 @@ export function useCommandSearch(projectType?: string, projectName?: string) {
     if (timerRef.current) clearTimeout(timerRef.current);
 
     if (!query.trim()) {
-      setResults([]);
+      timerRef.current = setTimeout(() => setResults([]), 0);
       return;
     }
 
@@ -60,7 +60,7 @@ export function useCommandSearch(projectType?: string, projectName?: string) {
     }, 150);
 
     // Show history immediately while catalog is loading
-    setResults(histResults);
+    setTimeout(() => setResults(histResults), 0);
 
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);

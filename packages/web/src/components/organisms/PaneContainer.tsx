@@ -22,11 +22,21 @@ interface PaneDropZonesProps {
 }
 
 function PaneDropZones({ paneId, isDragging }: PaneDropZonesProps) {
-  const top = useDroppable({ id: `${paneId}:top` });
-  const bottom = useDroppable({ id: `${paneId}:bottom` });
-  const left = useDroppable({ id: `${paneId}:left` });
-  const right = useDroppable({ id: `${paneId}:right` });
-  const center = useDroppable({ id: `${paneId}:center` });
+  const { setNodeRef: setTopNodeRef, isOver: isTopOver } = useDroppable({
+    id: `${paneId}:top`,
+  });
+  const { setNodeRef: setBottomNodeRef, isOver: isBottomOver } = useDroppable({
+    id: `${paneId}:bottom`,
+  });
+  const { setNodeRef: setLeftNodeRef, isOver: isLeftOver } = useDroppable({
+    id: `${paneId}:left`,
+  });
+  const { setNodeRef: setRightNodeRef, isOver: isRightOver } = useDroppable({
+    id: `${paneId}:right`,
+  });
+  const { setNodeRef: setCenterNodeRef, isOver: isCenterOver } = useDroppable({
+    id: `${paneId}:center`,
+  });
 
   const edgeClass = (isOver: boolean) =>
     cn(
@@ -41,31 +51,31 @@ function PaneDropZones({ paneId, isDragging }: PaneDropZonesProps) {
     <>
       {/* Top edge strip */}
       <div
-        ref={top.setNodeRef}
-        className={cn(edgeClass(top.isOver), "inset-x-0 top-0 h-5")}
+        ref={setTopNodeRef}
+        className={cn(edgeClass(isTopOver), "inset-x-0 top-0 h-5")}
       />
       {/* Bottom edge strip */}
       <div
-        ref={bottom.setNodeRef}
-        className={cn(edgeClass(bottom.isOver), "inset-x-0 bottom-0 h-5")}
+        ref={setBottomNodeRef}
+        className={cn(edgeClass(isBottomOver), "inset-x-0 bottom-0 h-5")}
       />
       {/* Left edge strip */}
       <div
-        ref={left.setNodeRef}
-        className={cn(edgeClass(left.isOver), "inset-y-0 left-0 w-5")}
+        ref={setLeftNodeRef}
+        className={cn(edgeClass(isLeftOver), "inset-y-0 left-0 w-5")}
       />
       {/* Right edge strip */}
       <div
-        ref={right.setNodeRef}
-        className={cn(edgeClass(right.isOver), "inset-y-0 right-0 w-5")}
+        ref={setRightNodeRef}
+        className={cn(edgeClass(isRightOver), "inset-y-0 right-0 w-5")}
       />
       {/* Center zone */}
       <div
-        ref={center.setNodeRef}
+        ref={setCenterNodeRef}
         className={cn(
           "absolute inset-5 z-9 transition-colors duration-75",
           !isDragging && "pointer-events-none",
-          isDragging && center.isOver ? "bg-blue-500/10" : "bg-transparent",
+          isDragging && isCenterOver ? "bg-blue-500/10" : "bg-transparent",
         )}
       />
     </>

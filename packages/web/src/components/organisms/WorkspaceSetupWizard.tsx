@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   FolderOpen,
   ChevronRight,
@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDiscoverProjects, useInitWorkspace } from "@/api/queries.js";
-import type { DiscoveredProject } from "@/api/client.js";
 import { getActiveProfile } from "@/api/server-config.js";
 
 interface Props {
@@ -35,7 +34,9 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
   const [step, setStep] = useState<Step>("path");
   const [selectedPath, setSelectedPath] = useState("");
   const [inputPath, setInputPath] = useState("");
-  const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
+  const [selectedProjects, setSelectedProjects] = useState<string[] | null>(
+    null,
+  );
   const [workspaceName, setWorkspaceName] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -52,26 +53,24 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
     if (!path) return;
     setSelectedPath(path);
     setWorkspaceName(path.split("/").filter(Boolean).pop() || "workspace");
+    setSelectedProjects(null);
     setError(null);
     setStep("projects");
   }
 
-  // Auto-select all discovered projects
-  useEffect(() => {
-    if (discoverData?.projects) {
-      setSelectedProjects(discoverData.projects.map((p) => p.path));
-    }
-  }, [discoverData]);
-
   function toggleProject(path: string) {
-    setSelectedProjects((prev) =>
-      prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path],
+    const currentSelection = getSelectedProjects();
+    setSelectedProjects(
+      currentSelection.includes(path)
+        ? currentSelection.filter((p) => p !== path)
+        : [...currentSelection, path],
     );
   }
 
   function toggleAll() {
     if (!discoverData?.projects) return;
-    if (selectedProjects.length === discoverData.projects.length) {
+    const currentSelection = getSelectedProjects();
+    if (currentSelection.length === discoverData.projects.length) {
       setSelectedProjects([]);
     } else {
       setSelectedProjects(discoverData.projects.map((p) => p.path));
@@ -94,6 +93,11 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
   }
 
   const projects = discoverData?.projects ?? [];
+  const effectiveSelectedProjects = getSelectedProjects();
+
+  function getSelectedProjects() {
+    return selectedProjects ?? projects.map((p) => p.path);
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-bg)]/95 backdrop-blur-md">
@@ -259,13 +263,13 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
                   <>
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm text-[var(--color-text-muted)]">
-                        {selectedProjects.length} of {projects.length} selected
+                        {effectiveSelectedProjects.length} of {projects.length} selected
                       </span>
                       <button
                         onClick={toggleAll}
                         className="text-xs text-[var(--color-primary)] hover:underline"
                       >
-                        {selectedProjects.length === projects.length
+                        {effectiveSelectedProjects.length === projects.length
                           ? "Deselect all"
                           : "Select all"}
                       </button>
@@ -278,7 +282,7 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
                             <label className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-[var(--color-surface-2)] transition-colors">
                               <input
                                 type="checkbox"
-                                checked={selectedProjects.includes(
+                                checked={effectiveSelectedProjects.includes(
                                   project.path,
                                 )}
                                 onChange={() => toggleProject(project.path)}
@@ -361,7 +365,7 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
                       Projects
                     </span>
                     <span className="text-sm text-[var(--color-text)]">
-                      {selectedProjects.length}
+                      {effectiveSelectedProjects.length}
                     </span>
                   </div>
                 </div>

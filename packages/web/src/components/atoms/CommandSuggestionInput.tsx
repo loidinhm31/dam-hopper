@@ -92,11 +92,10 @@ export function CommandSuggestionInput({
 
   const hasResults = results.length > 0 && query.trim().length > 0;
   const open = openState && hasResults;
-
-  useEffect(() => {
-    setHighlightedIndex(-1);
-    setOpenState(true);
-  }, [results, query]);
+  const selectedIndex =
+    highlightedIndex >= 0 && highlightedIndex < results.length
+      ? highlightedIndex
+      : -1;
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "ArrowDown") {
@@ -107,8 +106,8 @@ export function CommandSuggestionInput({
       setHighlightedIndex((i) => Math.max(i - 1, -1));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if (!e.shiftKey && highlightedIndex >= 0 && results[highlightedIndex]) {
-        onSelect(results[highlightedIndex].command);
+      if (!e.shiftKey && selectedIndex >= 0 && results[selectedIndex]) {
+        onSelect(results[selectedIndex].command);
         setQuery("");
         setOpenState(false);
       } else {
@@ -154,7 +153,11 @@ export function CommandSuggestionInput({
           type="text"
           autoFocus={autoFocus}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setHighlightedIndex(-1);
+            setOpenState(true);
+          }}
           onKeyDown={handleKeyDown}
           onBlur={() => {
             blurTimerRef.current = setTimeout(() => setOpenState(false), 150);
@@ -196,7 +199,7 @@ export function CommandSuggestionInput({
                     className={cn(
                       "flex flex-col gap-0.5 px-3 py-2 cursor-pointer transition-colors",
                       "border-b border-[var(--color-border)] last:border-0",
-                      i === highlightedIndex
+                      i === selectedIndex
                         ? "bg-[var(--color-primary)]/10 text-[var(--color-primary)]"
                         : "text-[var(--color-text)] hover:bg-[var(--color-surface-2)]",
                     )}

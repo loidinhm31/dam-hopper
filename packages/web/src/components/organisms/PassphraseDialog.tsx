@@ -23,14 +23,7 @@ export function PassphraseDialog({
   const [passphrase, setPassphrase] = useState("");
   const [selectedKey, setSelectedKey] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-
-  // Reset state when dialog opens
-  useEffect(() => {
-    if (open) {
-      setPassphrase("");
-      setSelectedKey(availableKeys[0] ?? "");
-    }
-  }, [open]); // Removed availableKeys to avoid unnecessary resets if it changes while open
+  const currentSelectedKey = selectedKey || availableKeys[0] || "";
 
   // Handle focus
   useEffect(() => {
@@ -55,13 +48,21 @@ export function PassphraseDialog({
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (loading) return;
-    onSubmit(passphrase, selectedKey || undefined);
+    onSubmit(passphrase, currentSelectedKey || undefined);
+    setPassphrase("");
+    setSelectedKey("");
+  }
+
+  function handleCancel() {
+    setPassphrase("");
+    setSelectedKey("");
+    onCancel();
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/50" onClick={onCancel} />
+      <div className="absolute inset-0 bg-black/50" onClick={handleCancel} />
 
       {/* Dialog */}
       <div className="relative z-10 w-full max-w-sm rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl p-5">
@@ -73,7 +74,7 @@ export function PassphraseDialog({
           </h2>
           <button
             type="button"
-            onClick={onCancel}
+            onClick={handleCancel}
             className="rounded p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
           >
             <X className="h-4 w-4" />
@@ -93,7 +94,7 @@ export function PassphraseDialog({
                 SSH Key
               </label>
               <select
-                value={selectedKey}
+                value={currentSelectedKey}
                 onChange={(e) => setSelectedKey(e.target.value)}
                 disabled={loading}
                 className={cn(inputClass, "pr-8")}

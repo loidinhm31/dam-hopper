@@ -44,14 +44,17 @@ export function EditorStatusBar({ editor, language }: EditorStatusBarProps) {
 
   // Handle editor changes by resetting state (this is okay if it only happens on prop change)
   useEffect(() => {
-    if (!editor) {
-      setPosition({ line: 1, col: 1 });
-      setLineCount(null);
-    } else {
-      const pos = editor.getPosition();
-      if (pos) setPosition({ line: pos.lineNumber, col: pos.column });
-      setLineCount(editor.getModel()?.getLineCount() ?? null);
-    }
+    const timer = setTimeout(() => {
+      if (!editor) {
+        setPosition({ line: 1, col: 1 });
+        setLineCount(null);
+      } else {
+        const pos = editor.getPosition();
+        if (pos) setPosition({ line: pos.lineNumber, col: pos.column });
+        setLineCount(editor.getModel()?.getLineCount() ?? null);
+      }
+    }, 0);
+    return () => clearTimeout(timer);
   }, [editor]);
 
   if (!editor) return null;

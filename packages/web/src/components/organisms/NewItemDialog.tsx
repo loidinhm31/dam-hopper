@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -21,21 +21,21 @@ interface Props {
 export function NewItemDialog({ open, type, onConfirm, onCancel }: Props) {
   const [name, setName] = useState("");
 
-  useEffect(() => {
-    if (open) {
-      setName("");
-    }
-  }, [open]);
-
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault();
     if (name.trim()) {
       onConfirm(name.trim());
+      setName("");
     }
   };
 
+  const handleCancel = () => {
+    setName("");
+    onCancel();
+  };
+
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onCancel()}>
+    <Dialog open={open} onOpenChange={(v) => !v && handleCancel()}>
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
           <DialogTitle>
@@ -57,7 +57,7 @@ export function NewItemDialog({ open, type, onConfirm, onCancel }: Props) {
             />
           </div>
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={onCancel}>
+            <Button type="button" variant="ghost" onClick={handleCancel}>
               Cancel
             </Button>
             <Button type="submit" variant="primary" disabled={!name.trim()}>
