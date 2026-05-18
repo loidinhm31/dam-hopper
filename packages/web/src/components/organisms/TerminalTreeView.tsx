@@ -25,6 +25,7 @@ import { useGlobalConfig, useUpdateUiConfig } from "@/api/queries.js";
 interface Props {
   projects: TreeProject[];
   freeTerminals: SessionInfo[];
+  activeProjectName?: string;
   selectedId: string | null;
   onSelectProject: (name: string) => void;
   onSelectTerminal: (sessionId: string) => void;
@@ -34,8 +35,8 @@ interface Props {
   onLaunchProfile: (projectName: string, command: TreeCommand) => void;
   onDeleteProfile: (projectName: string, profileName: string) => void;
   onLaunchSuggestedCommand: (projectName: string, command: string) => void;
-  onAddFreeTerminal: () => void;
-  onLaunchFreeWithCommand: (command: string) => void;
+  onAddFreeTerminal: (projectName?: string) => void;
+  onLaunchFreeWithCommand: (command: string, projectName?: string) => void;
   onSelectFreeTerminal: (sessionId: string) => void;
   onKillFreeTerminal: (sessionId: string) => void;
   onRemoveFreeTerminal: (sessionId: string) => void;
@@ -643,6 +644,7 @@ function ProfileRow({
 export function TerminalTreeView({
   projects,
   freeTerminals,
+  activeProjectName,
   selectedId,
   onSelectProject,
   onSelectTerminal,
@@ -702,6 +704,9 @@ export function TerminalTreeView({
     "free" | "project" | "command" | null
   >(null);
   const [dragProject, setDragProject] = useState<string | null>(null);
+  const activeProject = activeProjectName
+    ? projects.find((project) => project.name === activeProjectName)
+    : undefined;
 
   const autoExpandedRef = useRef<Set<string>>(
     new Set(projects.map((project) => project.name)),
@@ -1029,16 +1034,21 @@ export function TerminalTreeView({
               <div className="px-2 pb-1 pt-0.5">
                 <CommandSuggestionInput
                   autoFocus
+                  projectName={activeProject?.name}
+                  projectType={activeProject?.type}
                   placeholder="Command or press Enter for shell..."
                   onSelect={(command) => {
-                    onLaunchFreeWithCommand(command.command);
+                    onLaunchFreeWithCommand(
+                      command.command,
+                      activeProject?.name,
+                    );
                     setShowFreeSuggestion(false);
                   }}
                   onSubmitCustom={(command) => {
                     if (command.trim()) {
-                      onLaunchFreeWithCommand(command);
+                      onLaunchFreeWithCommand(command, activeProject?.name);
                     } else {
-                      onAddFreeTerminal();
+                      onAddFreeTerminal(activeProject?.name);
                     }
                     setShowFreeSuggestion(false);
                   }}

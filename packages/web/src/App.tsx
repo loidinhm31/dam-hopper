@@ -25,6 +25,7 @@ import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialo
 import { WorkspaceSetupWizard } from "@/components/organisms/WorkspaceSetupWizard.js";
 import { EncryptProvider } from "@/contexts/EncryptContext.js";
 import { PassphrasePrompt } from "@/components/molecules/PassphrasePrompt.js";
+import { useWorkspaceStore } from "@/stores/workspace.js";
 
 // Wire CSS var outside React so it updates synchronously with store changes
 useSettingsStore.subscribe((s) => {
@@ -71,17 +72,20 @@ function LegacyRedirect({ to }: { to: string }) {
 /** Registers Ctrl+` as a global shortcut to open a new free terminal in workspace. */
 function GlobalShortcuts() {
   const navigate = useNavigate();
+  const activeProject = useWorkspaceStore((state) => state.activeProject);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.ctrlKey && e.code === "Backquote") {
         e.preventDefault();
-        navigate("/workspace?action=new-terminal");
+        const params = new URLSearchParams({ action: "new-terminal" });
+        if (activeProject) params.set("project", activeProject);
+        navigate(`/workspace?${params.toString()}`);
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [navigate]);
+  }, [activeProject, navigate]);
 
   return null;
 }

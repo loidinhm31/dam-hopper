@@ -351,7 +351,7 @@ export default function WorkspacePage() {
                 <Button
                   variant="primary"
                   size="sm"
-                  onClick={handleAddFreeTerminal}
+                  onClick={() => handleAddFreeTerminal()}
                 >
                   Open Terminal
                 </Button>
@@ -545,6 +545,7 @@ export default function WorkspacePage() {
             <TerminalTreeView
               projects={tree}
               freeTerminals={freeTerminals}
+              activeProjectName={projectName ?? undefined}
               selectedId={selectedId}
               onSelectProject={handleSelectProjectInTree}
               onSelectTerminal={handleSelectTerminal}
@@ -571,6 +572,7 @@ export default function WorkspacePage() {
       isLoading,
       tree,
       freeTerminals,
+      projectName,
       selectedId,
       handleSelectProjectInTree,
       handleSelectTerminal,
