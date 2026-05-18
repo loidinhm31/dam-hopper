@@ -131,24 +131,6 @@ export function DiffViewer({
     return () => clearTimeout(t);
   }, [saveState]);
 
-  // Keyboard shortcuts: Alt+↑/↓ for hunk nav, Ctrl+S for save
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.altKey && e.key === "ArrowUp") {
-        e.preventDefault();
-        navigateHunk("prev");
-      } else if (e.altKey && e.key === "ArrowDown") {
-        e.preventDefault();
-        navigateHunk("next");
-      } else if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-        e.preventDefault();
-        void handleSave();
-      }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [isDirty, saveState]); // re-bind when save eligibility changes
-
   // Dispose models and ResizeObserver when the component unmounts.
   // keepCurrentModels=true prevents @monaco-editor/react from disposing models that
   // Monaco's DiffEditorWidget may have already disposed, which causes the
@@ -289,6 +271,25 @@ export function DiffViewer({
       setSaveError(e instanceof Error ? e.message : String(e));
     }
   }
+
+  // Keyboard shortcuts: Alt+↑/↓ for hunk nav, Ctrl+S for save.
+  // `handleSave` stays stable so the listener always sees current save eligibility.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.altKey && e.key === "ArrowUp") {
+        e.preventDefault();
+        navigateHunk("prev");
+      } else if (e.altKey && e.key === "ArrowDown") {
+        e.preventDefault();
+        navigateHunk("next");
+      } else if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        void handleSave();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [handleSave]); // re-bind when save eligibility changes
 
   const fileName = filePath.split("/").pop() ?? filePath;
   const dirPath = filePath.includes("/")
