@@ -14,7 +14,11 @@ vi.mock("react-router-dom", () => ({
   }) => (
     <a
       href={to}
-      className={typeof className === "function" ? className({ isActive: false }) : className}
+      className={
+        typeof className === "function"
+          ? className({ isActive: false })
+          : className
+      }
     >
       {children}
     </a>
@@ -67,6 +71,10 @@ vi.mock("@/components/organisms/ServerSettingsDialog.js", () => ({
 
 vi.mock("@/components/organisms/ServerProfilesDialog.js", () => ({
   ServerProfilesDialog: () => null,
+}));
+
+vi.mock("@/components/organisms/HostResourcePopover.js", () => ({
+  HostResourcePopover: () => <button>resources</button>,
 }));
 
 import { TopNav } from "./TopNav.js";

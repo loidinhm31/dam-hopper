@@ -12,6 +12,7 @@ pub mod port_forward;
 pub mod router;
 pub mod settings;
 pub mod ssh;
+pub mod system;
 pub mod terminal;
 pub mod tunnel;
 pub mod workspace;

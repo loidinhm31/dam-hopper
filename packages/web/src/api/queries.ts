@@ -14,6 +14,7 @@ import type {
   ConflictFile,
   ResetMode,
   UiConfig,
+  HostMetrics,
 } from "./client.js";
 import type { SessionInfo } from "@/api/client.js";
 
@@ -110,6 +111,15 @@ export function useProjectStatus(name: string) {
     queryKey: ["project-status", name],
     queryFn: () => api.projects.status(name),
     enabled: !!name,
+  });
+}
+
+export function useHostMetrics(enabled: boolean) {
+  return useQuery<HostMetrics>({
+    queryKey: ["system", "metrics"],
+    queryFn: () => api.system.metrics(),
+    enabled,
+    refetchInterval: enabled ? 5_000 : false,
   });
 }
 

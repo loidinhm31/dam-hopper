@@ -11,6 +11,7 @@ pub mod port_forward;
 pub mod pty;
 pub mod ssh;
 pub mod state;
+pub mod system;
 pub mod tunnel;
 pub mod utils;
 

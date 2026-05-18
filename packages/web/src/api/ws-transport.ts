@@ -570,6 +570,10 @@ function channelToEndpoint(
     case "port:list":
       return { method: "GET", url: "/api/ports" };
 
+    // System
+    case "system:metrics":
+      return { method: "GET", url: "/api/system/metrics" };
+
     // Tunnels
     case "tunnel:install:status":
       return { method: "GET", url: "/api/tunnels/install" };

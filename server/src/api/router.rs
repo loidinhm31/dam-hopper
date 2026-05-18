@@ -17,7 +17,7 @@ use crate::state::AppState;
 
 use super::{
     agent_import, agent_memory, agent_store, auth, commands, config, fs as fs_api, git, git_diff,
-    port_forward as port_forward_api, settings, ssh, terminal, tunnel, workspace, ws,
+    port_forward as port_forward_api, settings, ssh, system, terminal, tunnel, workspace, ws,
 };
 
 /// Build the full Axum router with auth middleware, CORS, and all routes.
@@ -152,6 +152,8 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/tunnels/{id}", delete(tunnel::stop_tunnel))
         // Port forwarding
         .route("/api/ports", get(port_forward_api::list_ports))
+        // Host system metrics
+        .route("/api/system/metrics", get(system::get_metrics))
         // Agent Store — static paths before dynamic
         .route("/api/agent-store/matrix", get(agent_store::get_matrix))
         .route("/api/agent-store/scan", get(agent_store::scan))
