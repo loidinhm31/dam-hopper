@@ -4,7 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { cn } from "@/lib/utils.js";
 import { getTransport } from "@/api/transport.js";
-import { api } from "@/api/client.js";
+import { api, type SessionInfo } from "@/api/client.js";
 import { registerTerminal, removeTerminal } from "@/lib/terminal-registry.js";
 import { recordCommand } from "@/lib/command-history.js";
 import { useTerminalSuggestions } from "@/hooks/useTerminalSuggestions.js";
@@ -266,9 +266,9 @@ export function TerminalPanel({
     // Start initialization flow
     api.workspace
       .status()
-      .then(() => transport.invoke<Array<{ id: string }>>("terminal:list"))
-      .then((alive) => {
-        if (alive.some((s) => s.id === safeSessionId)) {
+      .then(() => transport.invoke<SessionInfo[]>("terminal:listDetailed"))
+      .then((sessions) => {
+        if (sessions.some((s) => s.id === safeSessionId && s.alive)) {
           attachToSession();
         } else {
           return createSession();
