@@ -15,6 +15,7 @@ use crate::fs::FsSubsystem;
 use crate::port_forward::PortForwardManager;
 use crate::pty::{BroadcastEventSink, PtySessionManager};
 use crate::ssh::SshCredStore;
+use crate::system::HostMetricsSampler;
 use crate::tunnel::TunnelSessionManager;
 
 /// Shared application state across all Axum handlers.
@@ -62,6 +63,8 @@ pub struct AppState {
     /// In-memory OPAQUE registration records (identifier → ServerRegistration).
     /// Lost on server restart — acceptable for encrypt-in-transit model.
     pub opaque_registrations: OpaqueRegistrations,
+    /// Host metrics sampler with retained sysinfo state for CPU deltas.
+    pub host_metrics: HostMetricsSampler,
 }
 
 impl AppState {
@@ -146,6 +149,7 @@ impl AppState {
             port_forward_manager,
             opaque_server_setup: Arc::new(opaque_server_setup),
             opaque_registrations: OpaqueRegistrations::default(),
+            host_metrics: HostMetricsSampler::new(),
         })
     }
 }

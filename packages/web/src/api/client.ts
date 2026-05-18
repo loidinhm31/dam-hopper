@@ -108,6 +108,35 @@ export interface DetectedPort {
   state: "provisional" | "listening" | "lost";
 }
 
+// ── Host System Metrics ─────────────────────────────────────────────────────
+
+export interface HostMetrics {
+  sampledAt: number;
+  hostname?: string;
+  osName?: string;
+  uptimeSeconds: number;
+  cpu: {
+    usagePercent: number;
+    logicalCoreCount: number;
+    physicalCoreCount?: number;
+    loadAverage?: { one: number; five: number; fifteen: number };
+  };
+  memory: {
+    totalBytes: number;
+    usedBytes: number;
+    availableBytes: number;
+    usagePercent: number;
+  };
+  disk: {
+    name: string;
+    mountPoint: string;
+    totalBytes: number;
+    availableBytes: number;
+    usedBytes: number;
+    usagePercent: number;
+  };
+}
+
 // ── Memory + Import Types ─────────────────────────────────────────────────────
 // NOTE: These mirror types from @dam-hopper/core. Duplication is intentional —
 // the web renderer runs in Chromium and cannot import Node.js core packages.
@@ -719,6 +748,9 @@ export const api = {
   },
   health: {
     get: () => getTransport().invoke<HealthResponse>("health:get"),
+  },
+  system: {
+    metrics: () => getTransport().invoke<HostMetrics>("system:metrics"),
   },
   fs: {
     list: (project: string, path: string) =>

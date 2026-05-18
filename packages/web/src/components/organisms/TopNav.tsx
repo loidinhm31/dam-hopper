@@ -10,6 +10,7 @@ import { ProjectSwitcher } from "@/components/organisms/ProjectSwitcher.js";
 import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 import { ServerProfilesDialog } from "@/components/organisms/ServerProfilesDialog.js";
+import { HostResourcePopover } from "@/components/organisms/HostResourcePopover.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client.js";
@@ -116,7 +117,9 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
               }
             >
               <Icon className="h-3.5 w-3.5" />
-              <span className="tracking-widest text-[10px] hidden lg:inline">{label}</span>
+              <span className="tracking-widest text-[10px] hidden lg:inline">
+                {label}
+              </span>
             </NavLink>
           ))}
         </nav>
@@ -148,6 +151,8 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
         <div className="h-4 w-[1px] bg-[var(--color-border)]" />
 
         <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+          <HostResourcePopover />
+
           <button
             onClick={() => setProfilesDialogOpen(true)}
             className="flex items-center gap-2 px-2 py-1 rounded-sm hover:bg-[var(--color-surface-2)] transition-colors"

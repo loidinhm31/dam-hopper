@@ -115,6 +115,12 @@ async fn get(state: AppState, path: &str) -> axum::response::Response {
     router.oneshot(req).await.unwrap()
 }
 
+async fn get_without_auth(state: AppState, path: &str) -> axum::response::Response {
+    let router = build_router(state, vec![]);
+    let req = Request::builder().uri(path).body(Body::empty()).unwrap();
+    router.oneshot(req).await.unwrap()
+}
+
 async fn post_json(
     state: AppState,
     path: &str,
@@ -188,6 +194,39 @@ async fn protected_route_with_wrong_cookie_returns_401() {
         .unwrap();
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn system_metrics_requires_auth() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let resp = get_without_auth(state, "/api/system/metrics").await;
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn system_metrics_returns_sane_json() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let resp = get(state, "/api/system/metrics").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert!(json["sampledAt"].as_u64().unwrap() > 0);
+    assert!(json["uptimeSeconds"].as_u64().is_some());
+    assert!(json["cpu"]["usagePercent"].as_f64().unwrap() >= 0.0);
+    assert!(json["cpu"]["logicalCoreCount"].as_u64().unwrap() > 0);
+    assert!(json["memory"]["totalBytes"].as_u64().unwrap() > 0);
+    assert!(json["memory"]["usagePercent"].as_f64().unwrap() >= 0.0);
+    assert!(json["disk"]["mountPoint"].as_str().is_some());
+    assert!(json["disk"]["usagePercent"].as_f64().unwrap() >= 0.0);
 }
 
 #[tokio::test]
