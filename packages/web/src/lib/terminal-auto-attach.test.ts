@@ -157,6 +157,40 @@ describe("deriveTerminalAutoAttachState", () => {
     ]);
   });
 
+  it("keeps an already open terminal visible after it exits", () => {
+    const result = derive({
+      sessions: [],
+      openTabs: [
+        {
+          sessionId: "custom:web:test",
+          label: "web:test",
+          session: session("custom:web:test", {
+            project: "web",
+            command: "pnpm test",
+            type: "custom",
+          }),
+        },
+      ],
+      mountedSessions: [
+        {
+          sessionId: "custom:web:test",
+          project: "web",
+          command: "pnpm test",
+          cwd: "/repo/web",
+        },
+      ],
+      activeTab: "custom:web:test",
+    });
+
+    expect(result.openTabs.map((tab) => tab.sessionId)).toEqual([
+      "custom:web:test",
+    ]);
+    expect(result.mountedSessions.map((mounted) => mounted.sessionId)).toEqual([
+      "custom:web:test",
+    ]);
+    expect(result.activeTab).toBe("custom:web:test");
+  });
+
   it("does not resurrect explicitly ignored live sessions", () => {
     const result = derive({
       sessions: [

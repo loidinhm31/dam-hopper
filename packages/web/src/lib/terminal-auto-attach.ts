@@ -119,6 +119,7 @@ export function deriveTerminalAutoAttachState({
   const liveById = new Map(
     liveSessions.map((session) => [session.id, session]),
   );
+  const knownSessionIds = new Set(sessions.map((session) => session.id));
   const existingTabIds = new Set(openTabs.map((tab) => tab.sessionId));
   const existingMountedIds = new Set(
     mountedSessions.map((session) => session.sessionId),
@@ -128,7 +129,9 @@ export function deriveTerminalAutoAttachState({
     ...openTabs
       .filter(
         (tab) =>
-          liveById.has(tab.sessionId) || pendingSessionIds.has(tab.sessionId),
+          liveById.has(tab.sessionId) ||
+          pendingSessionIds.has(tab.sessionId) ||
+          !knownSessionIds.has(tab.sessionId),
       )
       .map((tab) => {
         const session = liveById.get(tab.sessionId);
@@ -150,7 +153,8 @@ export function deriveTerminalAutoAttachState({
       .filter(
         (mounted) =>
           liveById.has(mounted.sessionId) ||
-          pendingSessionIds.has(mounted.sessionId),
+          pendingSessionIds.has(mounted.sessionId) ||
+          !knownSessionIds.has(mounted.sessionId),
       )
       .map((mounted) => ({
         ...mounted,
@@ -164,9 +168,12 @@ export function deriveTerminalAutoAttachState({
   ];
 
   const nextActiveTab =
-    activeTab && (liveById.has(activeTab) || pendingSessionIds.has(activeTab))
+    activeTab &&
+    (liveById.has(activeTab) ||
+      pendingSessionIds.has(activeTab) ||
+      nextOpenTabs.some((tab) => tab.sessionId === activeTab))
       ? activeTab
-      : (liveSessions.at(-1)?.id ?? null);
+      : (nextOpenTabs.at(-1)?.sessionId ?? null);
 
   return {
     openTabs: nextOpenTabs,
