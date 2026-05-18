@@ -144,6 +144,33 @@ pub enum ResetMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GitRecoveryState {
+    pub operation: GitRecoveryOperation,
+    pub can_abort: bool,
+    pub can_continue: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum GitRecoveryOperation {
+    Merge,
+    Rebase,
+    CherryPick,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum GitBlockReason {
+    ActiveOperation,
+    DirtyWorktree,
+    DetachedHead,
+    PushedCommit,
+    UnreachableCommit,
+    RootCommit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GitActionResult {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -160,6 +187,12 @@ pub struct GitActionResult {
     pub dirty: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub destructive: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<GitRecoveryState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<GitBlockReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommendation: Option<String>,
 }
 
 impl GitActionResult {
@@ -173,6 +206,29 @@ impl GitActionResult {
             conflict: None,
             dirty: None,
             destructive: None,
+            recovery: None,
+            blocked_reason: None,
+            recommendation: None,
+        }
+    }
+
+    pub fn blocked(
+        reason: GitBlockReason,
+        message: impl Into<String>,
+        recommendation: impl Into<String>,
+    ) -> Self {
+        Self {
+            ok: false,
+            message: Some(message.into()),
+            branch: None,
+            hash: None,
+            stashed: None,
+            conflict: Some(false),
+            dirty: None,
+            destructive: Some(false),
+            recovery: None,
+            blocked_reason: Some(reason),
+            recommendation: Some(recommendation.into()),
         }
     }
 }

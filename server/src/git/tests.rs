@@ -14,7 +14,9 @@ use crate::git::repository::{
     reset_to_commit, update_branch,
 };
 use crate::git::types::{CheckoutStrategy, GitProgressPhase, ResetMode};
-use crate::git::{cherry_pick_commit_files, drop_commit_files};
+use crate::git::{
+    cherry_pick_commit_files, drop_commit, drop_commit_files, revert_commit, revert_commit_files,
+};
 use crate::git::{BulkGitService, WorktreeAddOptions};
 
 // ---------------------------------------------------------------------------
@@ -775,11 +777,191 @@ async fn drop_commit_files_rejects_pushed_commit() {
     let path = seed.path();
     let pushed_hash = git_output(&["rev-parse", "HEAD"], path);
 
-    let err = drop_commit_files(path, &pushed_hash, &["README.md".to_string()])
+    let result = drop_commit_files(path, &pushed_hash, &["README.md".to_string()])
         .await
-        .unwrap_err();
+        .unwrap();
 
-    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+    assert!(!result.ok);
+    assert_eq!(
+        result.blocked_reason,
+        Some(crate::git::GitBlockReason::PushedCommit)
+    );
+    assert_eq!(result.destructive, Some(false));
+    assert!(result
+        .recommendation
+        .as_deref()
+        .unwrap_or_default()
+        .contains("revert"));
+}
+
+#[tokio::test]
+async fn drop_commit_blocks_root_commit_with_structured_reason() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let root_hash = git_output(&["rev-list", "--max-parents=0", "HEAD"], path);
+
+    let result = drop_commit(path, &root_hash).await.unwrap();
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.blocked_reason,
+        Some(crate::git::GitBlockReason::RootCommit)
+    );
+    assert_eq!(result.hash.as_deref(), Some(root_hash.as_str()));
+    assert!(result
+        .recommendation
+        .as_deref()
+        .unwrap_or_default()
+        .contains("replacement commit"));
+}
+
+#[tokio::test]
+async fn drop_commit_removes_head_commit_with_reset() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let initial = git_output(&["rev-parse", "HEAD"], path);
+
+    std::fs::write(path.join("head.txt"), "head\n").unwrap();
+    git(&["add", "head.txt"], path);
+    git(&["commit", "-m", "head commit"], path);
+    let target_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    let result = drop_commit(path, &target_hash).await.unwrap();
+
+    assert!(result.ok);
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), initial);
+    assert!(!path.join("head.txt").exists());
+    assert_eq!(git_output(&["status", "--porcelain"], path), "");
+}
+
+#[tokio::test]
+async fn drop_commit_removes_non_head_commit_and_replays_descendants() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("drop.txt"), "drop\n").unwrap();
+    git(&["add", "drop.txt"], path);
+    git(&["commit", "-m", "drop me"], path);
+    let dropped_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    std::fs::write(path.join("keep.txt"), "keep\n").unwrap();
+    git(&["add", "keep.txt"], path);
+    git(&["commit", "-m", "keep me"], path);
+
+    let result = drop_commit(path, &dropped_hash).await.unwrap();
+
+    assert!(result.ok);
+    assert!(!path.join("drop.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(path.join("keep.txt")).unwrap(),
+        "keep\n"
+    );
+    assert_eq!(git_output(&["rev-list", "--count", "HEAD"], path), "2");
+    assert_eq!(git_output(&["log", "-1", "--pretty=%s"], path), "keep me");
+}
+
+#[tokio::test]
+async fn drop_commit_blocks_when_rebase_is_active() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    git(&["checkout", "-b", "feature/rebase-block"], path);
+    std::fs::write(path.join("README.md"), "feature change\n").unwrap();
+    git(&["add", "README.md"], path);
+    git(&["commit", "-m", "feature change"], path);
+    let feature_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    git(&["checkout", "main"], path);
+    std::fs::write(path.join("README.md"), "main change\n").unwrap();
+    git(&["add", "README.md"], path);
+    git(&["commit", "-m", "main change"], path);
+
+    git(&["checkout", "feature/rebase-block"], path);
+    let output = Command::new("git")
+        .args(["rebase", "main"])
+        .current_dir(path)
+        .output()
+        .expect("git rebase failed to spawn");
+    assert!(!output.status.success(), "rebase should conflict");
+
+    let result = drop_commit(path, &feature_hash).await.unwrap();
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.blocked_reason,
+        Some(crate::git::GitBlockReason::ActiveOperation)
+    );
+    assert_eq!(
+        result.recovery.as_ref().map(|r| &r.operation),
+        Some(&crate::git::GitRecoveryOperation::Rebase)
+    );
+}
+
+#[tokio::test]
+async fn drop_commit_conflict_returns_recoverable_rebase_state() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("README.md"), "drop base\n").unwrap();
+    git(&["add", "README.md"], path);
+    git(&["commit", "-m", "drop base"], path);
+    let dropped_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    std::fs::write(path.join("README.md"), "descendant\n").unwrap();
+    git(&["add", "README.md"], path);
+    git(&["commit", "-m", "descendant"], path);
+
+    let result = drop_commit(path, &dropped_hash).await.unwrap();
+
+    assert!(!result.ok);
+    assert_eq!(result.conflict, Some(true));
+    assert_eq!(
+        result.recovery.as_ref().map(|r| &r.operation),
+        Some(&crate::git::GitRecoveryOperation::Rebase)
+    );
+}
+
+#[tokio::test]
+async fn revert_commit_creates_inverse_commit_for_shared_history() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("shared.txt"), "shared\n").unwrap();
+    git(&["add", "shared.txt"], path);
+    git(&["commit", "-m", "shared commit"], path);
+    let target_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    let result = revert_commit(path, &target_hash).await.unwrap();
+
+    assert!(result.ok);
+    assert!(!path.join("shared.txt").exists());
+    assert!(git_output(&["log", "-1", "--pretty=%s"], path).contains("Revert"));
+}
+
+#[tokio::test]
+async fn revert_commit_files_changes_only_selected_path_in_worktree() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("one.txt"), "one\n").unwrap();
+    std::fs::write(path.join("two.txt"), "two\n").unwrap();
+    git(&["add", "one.txt", "two.txt"], path);
+    git(&["commit", "-m", "two files"], path);
+    let target_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    let result = revert_commit_files(path, &target_hash, &["one.txt".to_string()])
+        .await
+        .unwrap();
+
+    assert!(result.ok);
+    assert!(!path.join("one.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(path.join("two.txt")).unwrap(),
+        "two\n"
+    );
+    let status = git_output(&["status", "--porcelain"], path);
+    assert!(status.contains("one.txt"));
+    assert!(!status.contains("two.txt"));
 }
 
 #[tokio::test]
@@ -909,11 +1091,11 @@ fn get_log_supports_offset_pagination() {
     let path = repo.path();
 
     for idx in 1..=3 {
-      let file_name = format!("commit-{idx}.txt");
-      let message = format!("commit {idx}");
-      std::fs::write(path.join(&file_name), message.as_bytes()).unwrap();
-      git(&["add", &file_name], path);
-      git(&["commit", "-m", &message], path);
+        let file_name = format!("commit-{idx}.txt");
+        let message = format!("commit {idx}");
+        std::fs::write(path.join(&file_name), message.as_bytes()).unwrap();
+        git(&["add", &file_name], path);
+        git(&["commit", "-m", &message], path);
     }
 
     let first_page: Vec<_> = get_log(path, 2, 0)

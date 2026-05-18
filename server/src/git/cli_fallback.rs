@@ -10,7 +10,10 @@ use tokio::process::Command;
 
 use crate::error::AppError;
 use crate::git::progress::{emit_completed, emit_failed, emit_started, ProgressSender};
-use crate::git::types::{GitOperation, GitOperationResult, Worktree, WorktreeAddOptions};
+use crate::git::types::{
+    GitOperation, GitOperationResult, GitRecoveryOperation, GitRecoveryState, Worktree,
+    WorktreeAddOptions,
+};
 
 /// Validates branch names per git ref spec rules (git-check-ref-format).
 /// Rejects: leading dash, path traversal, null bytes, whitespace,
@@ -49,6 +52,108 @@ pub(crate) async fn run_git(args: &[&str], cwd: &Path) -> Result<String, AppErro
         let stderr = String::from_utf8_lossy(&output.stderr);
         Err(AppError::Git(stderr.trim().to_string()))
     }
+}
+
+pub(crate) async fn current_branch(cwd: &Path) -> Result<String, AppError> {
+    let branch = run_git(&["branch", "--show-current"], cwd)
+        .await?
+        .trim()
+        .to_string();
+    if branch.is_empty() {
+        return Err(AppError::InvalidInput(
+            "operation requires a checked-out branch".to_string(),
+        ));
+    }
+    Ok(branch)
+}
+
+pub(crate) async fn head_hash(cwd: &Path) -> Result<String, AppError> {
+    Ok(run_git(&["rev-parse", "HEAD"], cwd)
+        .await?
+        .trim()
+        .to_string())
+}
+
+pub(crate) async fn first_parent(cwd: &Path, hash: &str) -> Result<String, AppError> {
+    Ok(run_git(&["rev-parse", &format!("{hash}^")], cwd)
+        .await?
+        .trim()
+        .to_string())
+}
+
+pub(crate) async fn is_clean_worktree(cwd: &Path) -> Result<bool, AppError> {
+    Ok(run_git(&["status", "--porcelain"], cwd)
+        .await?
+        .trim()
+        .is_empty())
+}
+
+pub(crate) async fn active_git_operation(cwd: &Path) -> Result<Option<GitRecoveryState>, AppError> {
+    if git_path_exists(cwd, "MERGE_HEAD").await? {
+        return Ok(Some(GitRecoveryState {
+            operation: GitRecoveryOperation::Merge,
+            can_abort: true,
+            can_continue: false,
+        }));
+    }
+    if git_path_exists(cwd, "rebase-merge").await? || git_path_exists(cwd, "rebase-apply").await? {
+        return Ok(Some(GitRecoveryState {
+            operation: GitRecoveryOperation::Rebase,
+            can_abort: true,
+            can_continue: true,
+        }));
+    }
+    if git_path_exists(cwd, "CHERRY_PICK_HEAD").await? {
+        return Ok(Some(GitRecoveryState {
+            operation: GitRecoveryOperation::CherryPick,
+            can_abort: true,
+            can_continue: true,
+        }));
+    }
+    Ok(None)
+}
+
+pub(crate) async fn is_commit_reachable_from_head(
+    cwd: &Path,
+    hash: &str,
+) -> Result<bool, AppError> {
+    git_status(&["merge-base", "--is-ancestor", hash, "HEAD"], cwd).await
+}
+
+pub(crate) async fn is_commit_pushed(cwd: &Path, hash: &str) -> Result<bool, AppError> {
+    let upstream = match run_git(
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+        cwd,
+    )
+    .await
+    {
+        Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
+        _ => return Ok(false),
+    };
+    git_status(&["merge-base", "--is-ancestor", hash, &upstream], cwd).await
+}
+
+pub(crate) async fn git_status(args: &[&str], cwd: &Path) -> Result<bool, AppError> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .await
+        .map_err(|e| AppError::Git(format!("Failed to spawn git: {e}")))?;
+    Ok(output.status.success())
+}
+
+async fn git_path_exists(cwd: &Path, git_path: &str) -> Result<bool, AppError> {
+    let resolved = run_git(&["rev-parse", "--git-path", git_path], cwd)
+        .await?
+        .trim()
+        .to_string();
+    Ok(cwd.join(resolved).exists())
 }
 
 pub async fn push(

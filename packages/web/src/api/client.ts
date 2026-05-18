@@ -325,6 +325,19 @@ export interface GitActionResult {
   conflict?: boolean;
   dirty?: boolean;
   destructive?: boolean;
+  recovery?: {
+    operation: "merge" | "rebase" | "cherry-pick";
+    canAbort: boolean;
+    canContinue: boolean;
+  };
+  blockedReason?:
+    | "active-operation"
+    | "dirty-worktree"
+    | "detached-head"
+    | "pushed-commit"
+    | "unreachable-commit"
+    | "root-commit";
+  recommendation?: string;
 }
 
 export interface GitLogEntry {
@@ -562,6 +575,22 @@ export const api = {
       }),
     dropCommitFiles: (project: string, hash: string, paths: string[]) =>
       getTransport().invoke<GitActionResult>("git:dropCommitFiles", {
+        project,
+        hash,
+        paths,
+      }),
+    dropCommit: (project: string, hash: string) =>
+      getTransport().invoke<GitActionResult>("git:dropCommit", {
+        project,
+        hash,
+      }),
+    revertCommit: (project: string, hash: string) =>
+      getTransport().invoke<GitActionResult>("git:revertCommit", {
+        project,
+        hash,
+      }),
+    revertCommitFiles: (project: string, hash: string, paths: string[]) =>
+      getTransport().invoke<GitActionResult>("git:revertCommitFiles", {
         project,
         hash,
         paths,

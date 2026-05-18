@@ -501,6 +501,57 @@ export function useGitDropCommitFiles(project: string) {
   });
 }
 
+export function useGitDropCommit(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ hash }: { hash: string }) =>
+      api.git.dropCommit(project, hash),
+    onSuccess: () =>
+      invalidateGitProjectQueries(qc, project, {
+        includeConflicts: true,
+        includeFileTree: true,
+        includeGitDiff: true,
+        includeGitLog: true,
+        includeProjects: true,
+        includeProjectStatus: true,
+      }),
+  });
+}
+
+export function useGitRevertCommit(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ hash }: { hash: string }) =>
+      api.git.revertCommit(project, hash),
+    onSuccess: () =>
+      invalidateGitProjectQueries(qc, project, {
+        includeConflicts: true,
+        includeFileTree: true,
+        includeGitDiff: true,
+        includeGitLog: true,
+        includeProjects: true,
+        includeProjectStatus: true,
+      }),
+  });
+}
+
+export function useGitRevertCommitFiles(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ hash, paths }: { hash: string; paths: string[] }) =>
+      api.git.revertCommitFiles(project, hash, paths),
+    onSuccess: () =>
+      invalidateGitProjectQueries(qc, project, {
+        includeConflicts: true,
+        includeFileTree: true,
+        includeGitDiff: true,
+        includeGitLog: true,
+        includeProjects: true,
+        includeProjectStatus: true,
+      }),
+  });
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 
 export function useGitFetch() {
