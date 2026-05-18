@@ -6,6 +6,7 @@ interface LogoProps {
 }
 
 export function Logo({ className, size = "md" }: LogoProps) {
+  const baseUrl = import.meta.env.BASE_URL as string;
   const sizeMap = {
     xs: "h-3 w-3",
     sm: "h-4 w-4",
@@ -15,7 +16,7 @@ export function Logo({ className, size = "md" }: LogoProps) {
 
   return (
     <img
-      src={`${(import.meta as any).env.BASE_URL}favicon.svg`}
+      src={`${baseUrl}favicon.svg`}
       className={cn(sizeMap[size], "object-contain shrink-0", className)}
       style={{
         filter:
