@@ -565,6 +565,28 @@ function channelToEndpoint(
         body: { paths: d.paths },
       };
     }
+    case "git:dropCommit": {
+      const d = data as { project: string; hash: string };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/drop`,
+      };
+    }
+    case "git:revertCommit": {
+      const d = data as { project: string; hash: string };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/revert`,
+      };
+    }
+    case "git:revertCommitFiles": {
+      const d = data as { project: string; hash: string; paths: string[] };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/revert-files`,
+        body: { paths: d.paths },
+      };
+    }
 
     // Ports
     case "port:list":

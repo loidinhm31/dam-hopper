@@ -132,6 +132,18 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             "/api/git/{project}/commit/{hash}/drop-files",
             post(git::drop_commit_files_route),
         )
+        .route(
+            "/api/git/{project}/commit/{hash}/drop",
+            post(git::drop_commit_route),
+        )
+        .route(
+            "/api/git/{project}/commit/{hash}/revert",
+            post(git::revert_commit_route),
+        )
+        .route(
+            "/api/git/{project}/commit/{hash}/revert-files",
+            post(git::revert_commit_files_route),
+        )
         // Terminal — order matters: specific paths before parameterized
         .route("/api/terminal", post(terminal::create_session))
         .route("/api/terminal", get(terminal::list_sessions))

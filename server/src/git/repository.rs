@@ -828,6 +828,9 @@ pub async fn checkout_branch(
             conflict: Some(false),
             dirty: Some(true),
             destructive: Some(false),
+            recovery: None,
+            blocked_reason: None,
+            recommendation: None,
         });
     }
 
@@ -885,6 +888,9 @@ pub async fn checkout_branch(
             conflict: Some(false),
             dirty: Some(false),
             destructive: Some(strategy == CheckoutStrategy::Force),
+            recovery: None,
+            blocked_reason: None,
+            recommendation: None,
         }),
         Err(AppError::Git(stderr)) if is_dirty_checkout_error(&stderr) => Ok(GitActionResult {
             ok: false,
@@ -895,6 +901,9 @@ pub async fn checkout_branch(
             conflict: Some(false),
             dirty: Some(true),
             destructive: Some(strategy == CheckoutStrategy::Force),
+            recovery: None,
+            blocked_reason: None,
+            recommendation: None,
         }),
         Err(err) => Err(err),
     }
@@ -916,6 +925,9 @@ pub async fn cherry_pick(project_path: &Path, hash: &str) -> Result<GitActionRes
             conflict: Some(false),
             dirty: Some(false),
             destructive: Some(false),
+            recovery: None,
+            blocked_reason: None,
+            recommendation: None,
         }),
         Err(AppError::Git(stderr)) if is_conflict_error(&stderr) => Ok(GitActionResult {
             ok: false,
@@ -926,6 +938,14 @@ pub async fn cherry_pick(project_path: &Path, hash: &str) -> Result<GitActionRes
             conflict: Some(true),
             dirty: Some(true),
             destructive: Some(false),
+            recovery: crate::git::cli_fallback::active_git_operation(project_path)
+                .await
+                .ok()
+                .flatten(),
+            blocked_reason: None,
+            recommendation: Some(
+                "Resolve conflicts, then continue or abort the cherry-pick".to_string(),
+            ),
         }),
         Err(err) => Err(err),
     }
@@ -958,6 +978,9 @@ pub async fn reset_to_commit(
         conflict: Some(false),
         dirty: Some(false),
         destructive: Some(mode == ResetMode::Hard),
+        recovery: None,
+        blocked_reason: None,
+        recommendation: None,
     })
 }
 

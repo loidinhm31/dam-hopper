@@ -231,7 +231,33 @@ Reset to a commit. `mode` is `soft`, `mixed`, `hard`, or `keep`.
 { "hash": "abc123def456", "mode": "mixed" }
 ```
 
-Branch create, branch checkout, cherry-pick, and reset return `GitActionResult`:
+**POST /api/git/{project}/commit/{hash}/drop**
+Drop a local, unpushed commit from the current branch history. `HEAD` drops use
+`git reset --hard <parent>` after preflight checks. Non-HEAD drops use
+`git rebase --onto <parent> <hash> <branch>`. Pushed/shared commits are blocked
+by default and should use revert.
+
+**POST /api/git/{project}/commit/{hash}/drop-files**
+Drop selected file changes from an unpushed commit while preserving other files
+from that commit.
+
+```json
+{ "paths": ["src/main.rs"] }
+```
+
+**POST /api/git/{project}/commit/{hash}/revert**
+Create a new inverse commit with `git revert <hash>`.
+
+**POST /api/git/{project}/commit/{hash}/revert-files**
+Apply the inverse patch for selected files to the working tree without rewriting
+history.
+
+```json
+{ "paths": ["src/main.rs"] }
+```
+
+Branch create, branch checkout, cherry-pick, reset, drop, and revert return
+`GitActionResult`:
 
 ```json
 {
@@ -242,22 +268,28 @@ Branch create, branch checkout, cherry-pick, and reset return `GitActionResult`:
   "stashed": false,
   "conflict": false,
   "dirty": false,
-  "destructive": false
+  "destructive": false,
+  "recovery": null,
+  "blockedReason": null,
+  "recommendation": null
 }
 ```
 
 Result flags:
 
-| Field | Meaning |
-| --- | --- |
-| `ok` | `true` when the Git action completed; `false` when Git reported a recoverable state. |
-| `message` | Human-readable operation summary or recovery hint. |
-| `branch` | Branch affected by branch create or checkout actions. |
-| `hash` | Commit hash affected by cherry-pick or reset actions. |
-| `stashed` | Checkout used `strategy: "stash"` and created a stash before switching branches. |
-| `conflict` | Cherry-pick or reset reached a Git conflict state. |
-| `dirty` | The operation was blocked by local working tree changes. |
-| `destructive` | The selected mode can discard local state, such as force checkout or hard reset. |
+| Field            | Meaning                                                                                                                                               |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ok`             | `true` when the Git action completed; `false` when Git reported a recoverable state.                                                                  |
+| `message`        | Human-readable operation summary or recovery hint.                                                                                                    |
+| `branch`         | Branch affected by branch create or checkout actions.                                                                                                 |
+| `hash`           | Commit hash affected by cherry-pick or reset actions.                                                                                                 |
+| `stashed`        | Checkout used `strategy: "stash"` and created a stash before switching branches.                                                                      |
+| `conflict`       | Cherry-pick or reset reached a Git conflict state.                                                                                                    |
+| `dirty`          | The operation was blocked by local working tree changes.                                                                                              |
+| `destructive`    | The selected mode can discard local state, such as force checkout or hard reset.                                                                      |
+| `recovery`       | Active operation metadata when recovery commands are available.                                                                                       |
+| `blockedReason`  | Machine-readable block reason such as `active-operation`, `dirty-worktree`, `detached-head`, `pushed-commit`, `unreachable-commit`, or `root-commit`. |
+| `recommendation` | User-facing next action for blocked or recoverable operations.                                                                                        |
 
 Recoverable dirty checkout example:
 
@@ -270,6 +302,39 @@ Recoverable dirty checkout example:
   "conflict": false,
   "dirty": true,
   "destructive": false
+}
+```
+
+Blocked pushed-history drop example:
+
+```json
+{
+  "ok": false,
+  "message": "commit abc123def456 is already reachable from upstream",
+  "hash": "abc123def456",
+  "conflict": false,
+  "destructive": false,
+  "blockedReason": "pushed-commit",
+  "recommendation": "use revert for pushed/shared history"
+}
+```
+
+Recoverable rebase conflict example:
+
+```json
+{
+  "ok": false,
+  "message": "CONFLICT (content): Merge conflict in README.md",
+  "hash": "abc123def456",
+  "conflict": true,
+  "dirty": true,
+  "destructive": true,
+  "recovery": {
+    "operation": "rebase",
+    "canAbort": true,
+    "canContinue": true
+  },
+  "recommendation": "resolve rebase conflicts, then continue or abort"
 }
 ```
 
@@ -293,11 +358,13 @@ Checked-out branch update guard example:
 }
 ```
 
-Invalid branch names and commit hashes are rejected before Git execution. Dirty
-checkout and cherry-pick conflicts return structured result flags so clients can
-show recovery choices instead of treating every non-clean operation as an
-unclassified error. Validation failures use the standard API error shape with a
-400 status for invalid input:
+Invalid branch names, relative paths, and commit hashes are rejected before Git
+execution. Destructive history rewrites preflight active operations, dirty
+worktree state, commit reachability, root commits, and pushed/shared history.
+Dirty checkout and conflicts return structured result flags so clients can show
+recovery choices instead of treating every non-clean operation as an unclassified
+error. Validation failures use the standard API error shape with a 400 status
+for invalid input:
 
 ```json
 { "error": "Invalid input: invalid branch name" }

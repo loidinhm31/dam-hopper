@@ -6,7 +6,7 @@ use tokio::process::Command;
 
 use crate::error::AppError;
 use crate::git::cli_fallback;
-use crate::git::types::GitActionResult;
+use crate::git::types::{GitActionResult, GitBlockReason};
 
 fn validate_rel_path(path: &str) -> Result<(), AppError> {
     if path.is_empty() || path.starts_with('/') || path.starts_with('\\') {
@@ -157,43 +157,56 @@ async fn apply_patch(
     }
 }
 
-async fn ensure_clean(project_path: &Path) -> Result<(), AppError> {
-    let status = git_output(&["status", "--porcelain"], project_path).await?;
-    if status.is_empty() {
-        Ok(())
-    } else {
-        Err(AppError::InvalidInput(
-            "working tree must be clean before dropping selected changes".to_string(),
-        ))
-    }
-}
-
-async fn ensure_unpushed(project_path: &Path, hash: &str) -> Result<(), AppError> {
-    let upstream = match git_output(
-        &[
-            "rev-parse",
-            "--abbrev-ref",
-            "--symbolic-full-name",
-            "@{upstream}",
-        ],
-        project_path,
-    )
-    .await
-    {
-        Ok(value) if !value.is_empty() => value,
-        _ => return Ok(()),
+async fn preflight_history_rewrite(
+    project_path: &Path,
+    hash: &str,
+    root_message: &str,
+) -> Result<Option<GitActionResult>, AppError> {
+    let parent_count = {
+        let repo = git2::Repository::open(project_path)
+            .map_err(|e| AppError::Git(e.message().to_string()))?;
+        let commit = validate_commit(&repo, hash)?;
+        commit.parent_count()
     };
-    if git_status(
-        &["merge-base", "--is-ancestor", hash, &upstream],
-        project_path,
-    )
-    .await?
-    {
-        return Err(AppError::InvalidInput(format!(
-            "commit {hash} is already reachable from {upstream}"
+
+    if let Some(recovery) = cli_fallback::active_git_operation(project_path).await? {
+        let mut blocked = GitActionResult::blocked(
+            GitBlockReason::ActiveOperation,
+            "another Git operation is already in progress",
+            "finish or abort the in-progress operation before starting a destructive action",
+        );
+        blocked.recovery = Some(recovery);
+        return Ok(Some(blocked));
+    }
+    if !cli_fallback::is_clean_worktree(project_path).await? {
+        return Ok(Some(GitActionResult::blocked(
+            GitBlockReason::DirtyWorktree,
+            "working tree must be clean before rewriting history",
+            "commit, stash, or discard local changes first",
         )));
     }
-    Ok(())
+    if !cli_fallback::is_commit_reachable_from_head(project_path, hash).await? {
+        return Ok(Some(GitActionResult::blocked(
+            GitBlockReason::UnreachableCommit,
+            format!("commit {hash} is not reachable from HEAD"),
+            "check out the branch that contains this commit first",
+        )));
+    }
+    if cli_fallback::is_commit_pushed(project_path, hash).await? {
+        return Ok(Some(GitActionResult::blocked(
+            GitBlockReason::PushedCommit,
+            format!("commit {hash} is already reachable from upstream"),
+            "use revert for pushed/shared history",
+        )));
+    }
+    if parent_count == 0 {
+        return Ok(Some(GitActionResult::blocked(
+            GitBlockReason::RootCommit,
+            root_message,
+            "create a new replacement commit instead of rewriting the root commit",
+        )));
+    }
+    Ok(None)
 }
 
 pub async fn cherry_pick_commit_files(
@@ -226,6 +239,9 @@ pub async fn cherry_pick_commit_files(
             conflict: Some(false),
             dirty: Some(true),
             destructive: Some(false),
+            recovery: None,
+            blocked_reason: None,
+            recommendation: None,
         }),
         Err(AppError::Git(stderr)) => Ok(GitActionResult {
             ok: false,
@@ -236,6 +252,12 @@ pub async fn cherry_pick_commit_files(
             conflict: Some(true),
             dirty: Some(true),
             destructive: Some(false),
+            recovery: cli_fallback::active_git_operation(project_path)
+                .await
+                .ok()
+                .flatten(),
+            blocked_reason: None,
+            recommendation: Some("resolve conflicts before continuing".to_string()),
         }),
         Err(err) => Err(err),
     }
@@ -247,8 +269,16 @@ pub async fn drop_commit_files(
     paths: &[String],
 ) -> Result<GitActionResult, AppError> {
     let path_refs = validate_paths(paths)?;
-    ensure_clean(project_path).await?;
-    ensure_unpushed(project_path, hash).await?;
+    if let Some(mut blocked) = preflight_history_rewrite(
+        project_path,
+        hash,
+        "drop selected changes is not supported for root commits",
+    )
+    .await?
+    {
+        blocked.hash = Some(hash.to_string());
+        return Ok(blocked);
+    }
 
     let (parent, branch, head) = {
         let repo = git2::Repository::open(project_path)
@@ -269,21 +299,6 @@ pub async fn drop_commit_files(
             .map_err(|e| AppError::Git(e.message().to_string()))?
             .id()
             .to_string();
-        let head_oid = git2::Oid::from_str(&head).unwrap();
-        if head_oid != commit.id()
-            && !repo
-                .graph_descendant_of(head_oid, commit.id())
-                .unwrap_or(false)
-        {
-            return Err(AppError::InvalidInput(format!(
-                "commit {hash} is not reachable from HEAD"
-            )));
-        }
-        if commit.parent_count() == 0 {
-            return Err(AppError::InvalidInput(
-                "drop selected changes is not supported for root commits".to_string(),
-            ));
-        }
         (first_parent_or_empty_tree(&repo, &commit)?, branch, head)
     };
 
@@ -305,6 +320,14 @@ pub async fn drop_commit_files(
                 conflict: Some(true),
                 dirty: Some(true),
                 destructive: Some(true),
+                recovery: cli_fallback::active_git_operation(project_path)
+                    .await
+                    .ok()
+                    .flatten(),
+                blocked_reason: None,
+                recommendation: Some(
+                    "abort the in-progress operation, then retry selected-file drop".to_string(),
+                ),
             }),
             other => Err(other),
         };
@@ -339,6 +362,14 @@ pub async fn drop_commit_files(
                     conflict: Some(true),
                     dirty: Some(true),
                     destructive: Some(true),
+                    recovery: cli_fallback::active_git_operation(project_path)
+                        .await
+                        .ok()
+                        .flatten(),
+                    blocked_reason: None,
+                    recommendation: Some(
+                        "resolve rebase conflicts, then continue or abort".to_string(),
+                    ),
                 });
             }
             Err(err) => return Err(err),
@@ -354,5 +385,182 @@ pub async fn drop_commit_files(
         conflict: Some(false),
         dirty: Some(false),
         destructive: Some(true),
+        recovery: None,
+        blocked_reason: None,
+        recommendation: None,
     })
+}
+
+pub async fn drop_commit(project_path: &Path, hash: &str) -> Result<GitActionResult, AppError> {
+    {
+        let repo = git2::Repository::open(project_path)
+            .map_err(|e| AppError::Git(e.message().to_string()))?;
+        validate_commit(&repo, hash)?;
+    }
+    if let Some(mut blocked) = preflight_history_rewrite(
+        project_path,
+        hash,
+        "drop commit is not supported for root commits",
+    )
+    .await?
+    {
+        blocked.hash = Some(hash.to_string());
+        return Ok(blocked);
+    }
+
+    let branch = match cli_fallback::current_branch(project_path).await {
+        Ok(branch) => branch,
+        Err(_) => {
+            let mut blocked = GitActionResult::blocked(
+                GitBlockReason::DetachedHead,
+                "drop requires a checked-out branch",
+                "check out a branch before dropping commits",
+            );
+            blocked.hash = Some(hash.to_string());
+            return Ok(blocked);
+        }
+    };
+    let head = cli_fallback::head_hash(project_path).await?;
+    let parent = cli_fallback::first_parent(project_path, hash).await?;
+
+    let result = if head == hash {
+        cli_fallback::run_git(&["reset", "--hard", &parent], project_path).await
+    } else {
+        cli_fallback::run_git(&["rebase", "--onto", &parent, hash, &branch], project_path).await
+    };
+
+    match result {
+        Ok(_) => Ok(GitActionResult {
+            ok: true,
+            message: Some(format!("Dropped commit {hash}")),
+            branch: Some(branch),
+            hash: Some(hash.to_string()),
+            stashed: None,
+            conflict: Some(false),
+            dirty: Some(false),
+            destructive: Some(true),
+            recovery: None,
+            blocked_reason: None,
+            recommendation: None,
+        }),
+        Err(AppError::Git(stderr)) => Ok(GitActionResult {
+            ok: false,
+            message: Some(stderr),
+            branch: Some(branch),
+            hash: Some(hash.to_string()),
+            stashed: None,
+            conflict: Some(true),
+            dirty: Some(true),
+            destructive: Some(true),
+            recovery: cli_fallback::active_git_operation(project_path)
+                .await
+                .ok()
+                .flatten(),
+            blocked_reason: None,
+            recommendation: Some("resolve rebase conflicts, then continue or abort".to_string()),
+        }),
+        Err(err) => Err(err),
+    }
+}
+
+pub async fn revert_commit(project_path: &Path, hash: &str) -> Result<GitActionResult, AppError> {
+    {
+        let repo = git2::Repository::open(project_path)
+            .map_err(|e| AppError::Git(e.message().to_string()))?;
+        validate_commit(&repo, hash)?;
+    }
+    if let Some(recovery) = cli_fallback::active_git_operation(project_path).await? {
+        let mut blocked = GitActionResult::blocked(
+            GitBlockReason::ActiveOperation,
+            "another Git operation is already in progress",
+            "finish or abort the in-progress operation before reverting",
+        );
+        blocked.hash = Some(hash.to_string());
+        blocked.recovery = Some(recovery);
+        return Ok(blocked);
+    }
+
+    match cli_fallback::run_git(&["revert", hash], project_path).await {
+        Ok(_) => Ok(GitActionResult {
+            ok: true,
+            message: Some(format!("Reverted commit {hash}")),
+            branch: None,
+            hash: Some(hash.to_string()),
+            stashed: None,
+            conflict: Some(false),
+            dirty: Some(false),
+            destructive: Some(false),
+            recovery: None,
+            blocked_reason: None,
+            recommendation: None,
+        }),
+        Err(AppError::Git(stderr)) => Ok(GitActionResult {
+            ok: false,
+            message: Some(stderr),
+            branch: None,
+            hash: Some(hash.to_string()),
+            stashed: None,
+            conflict: Some(true),
+            dirty: Some(true),
+            destructive: Some(false),
+            recovery: cli_fallback::active_git_operation(project_path)
+                .await
+                .ok()
+                .flatten(),
+            blocked_reason: None,
+            recommendation: Some("resolve revert conflicts, then continue or abort".to_string()),
+        }),
+        Err(err) => Err(err),
+    }
+}
+
+pub async fn revert_commit_files(
+    project_path: &Path,
+    hash: &str,
+    paths: &[String],
+) -> Result<GitActionResult, AppError> {
+    let path_refs = validate_paths(paths)?;
+    let parent = {
+        let repo = git2::Repository::open(project_path)
+            .map_err(|e| AppError::Git(e.message().to_string()))?;
+        let commit = validate_commit(&repo, hash)?;
+        first_parent_or_empty_tree(&repo, &commit)?
+    };
+    let patch = selected_patch(project_path, &parent, hash, &path_refs).await?;
+    if patch.trim().is_empty() {
+        return Ok(GitActionResult::ok("No selected changes to revert"));
+    }
+
+    match apply_patch(project_path, &patch, true, false).await {
+        Ok(()) => Ok(GitActionResult {
+            ok: true,
+            message: Some(format!("Reverted {} selected file change(s)", paths.len())),
+            branch: None,
+            hash: Some(hash.to_string()),
+            stashed: None,
+            conflict: Some(false),
+            dirty: Some(true),
+            destructive: Some(false),
+            recovery: None,
+            blocked_reason: None,
+            recommendation: None,
+        }),
+        Err(AppError::Git(stderr)) => Ok(GitActionResult {
+            ok: false,
+            message: Some(stderr),
+            branch: None,
+            hash: Some(hash.to_string()),
+            stashed: None,
+            conflict: Some(true),
+            dirty: Some(true),
+            destructive: Some(false),
+            recovery: cli_fallback::active_git_operation(project_path)
+                .await
+                .ok()
+                .flatten(),
+            blocked_reason: None,
+            recommendation: Some("resolve conflicts before continuing".to_string()),
+        }),
+        Err(err) => Err(err),
+    }
 }

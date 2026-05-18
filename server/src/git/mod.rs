@@ -11,7 +11,9 @@ pub mod worktree;
 mod tests;
 
 pub use bulk::BulkGitService;
-pub use commit_file_ops::{cherry_pick_commit_files, drop_commit_files};
+pub use commit_file_ops::{
+    cherry_pick_commit_files, drop_commit, drop_commit_files, revert_commit, revert_commit_files,
+};
 pub use diff::{
     commit_files, discard_file, discard_hunk, get_commit_file_diff, get_commit_files,
     get_conflicts, get_diff_files, get_file_diff, get_untracked_page, resolve_conflict,
@@ -24,9 +26,9 @@ pub use repository::{
 };
 pub use types::{
     BranchInfo, BranchUpdateResult, CheckoutStrategy, ConflictFile, DiffFileEntry, DiffResponse,
-    FileDiffContent, GitActionResult, GitLogEntry, GitOperation, GitOperationResult,
-    GitProgressEvent, GitProgressPhase, GitStatus, HunkInfo, ResetMode, Worktree,
-    WorktreeAddOptions, UNTRACKED_PAGE_SIZE,
+    FileDiffContent, GitActionResult, GitBlockReason, GitLogEntry, GitOperation,
+    GitOperationResult, GitProgressEvent, GitProgressPhase, GitRecoveryOperation, GitRecoveryState,
+    GitStatus, HunkInfo, ResetMode, Worktree, WorktreeAddOptions, UNTRACKED_PAGE_SIZE,
 };
 pub use worktree::{
     add as add_worktree, list as list_worktrees, prune as prune_worktrees,

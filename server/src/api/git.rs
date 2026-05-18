@@ -10,8 +10,9 @@ use crate::git::bulk::ProjectRef;
 use crate::git::progress::create_progress_channel;
 use crate::git::{
     add_worktree, checkout_branch, cherry_pick, cherry_pick_commit_files, create_branch,
-    drop_commit_files, get_log, list_branches, list_worktrees, remove_worktree, reset_to_commit,
-    update_branch, BulkGitService, CheckoutStrategy, ResetMode, WorktreeAddOptions,
+    drop_commit, drop_commit_files, get_log, list_branches, list_worktrees, remove_worktree,
+    reset_to_commit, revert_commit, revert_commit_files, update_branch, BulkGitService,
+    CheckoutStrategy, ResetMode, WorktreeAddOptions,
 };
 use crate::pty::EventSink as _;
 use crate::state::AppState;
@@ -319,6 +320,40 @@ pub async fn drop_commit_files_route(
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
     let result = drop_commit_files(&path, &hash, &body.paths)
+        .await
+        .map_err(ApiError::from_app)?;
+    Ok(Json(result))
+}
+
+pub async fn drop_commit_route(
+    State(state): State<AppState>,
+    Path((project, hash)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_project_path(&state, &project).await?;
+    let result = drop_commit(&path, &hash)
+        .await
+        .map_err(ApiError::from_app)?;
+    Ok(Json(result))
+}
+
+pub async fn revert_commit_route(
+    State(state): State<AppState>,
+    Path((project, hash)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_project_path(&state, &project).await?;
+    let result = revert_commit(&path, &hash)
+        .await
+        .map_err(ApiError::from_app)?;
+    Ok(Json(result))
+}
+
+pub async fn revert_commit_files_route(
+    State(state): State<AppState>,
+    Path((project, hash)): Path<(String, String)>,
+    Json(body): Json<CommitFileOperationBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_project_path(&state, &project).await?;
+    let result = revert_commit_files(&path, &hash, &body.paths)
         .await
         .map_err(ApiError::from_app)?;
     Ok(Json(result))
