@@ -11,8 +11,7 @@ import {
 } from "@dnd-kit/core";
 import type { Layout } from "react-resizable-panels";
 import { Group, Panel, Separator } from "react-resizable-panels";
-import type { LayoutNode } from "@/types/terminal-layout.js";
-import type { SplitDirection } from "@/types/terminal-layout.js";
+import type { DockTarget, LayoutNode } from "@/types/terminal-layout.js";
 import type { UseTerminalLayoutResult } from "@/hooks/useTerminalLayout.js";
 import { PaneContainer } from "@/components/organisms/PaneContainer.js";
 import type { DragItem } from "@/components/organisms/TabBar.js";
@@ -128,6 +127,31 @@ export interface SplitLayoutProps {
   onCloseTab: (sessionId: string) => void;
 }
 
+function parseDockTarget(id: string): DockTarget | null {
+  const parts = id.split(":");
+  if (parts[0] === "pane" && parts[2] === "center") {
+    return { kind: "pane-center", paneId: parts[1] ?? "" };
+  }
+  if (parts[0] === "pane" && parts[2] === "edge") {
+    const edge = parts[3];
+    if (
+      edge === "top" ||
+      edge === "bottom" ||
+      edge === "left" ||
+      edge === "right"
+    ) {
+      return { kind: "pane-edge", paneId: parts[1] ?? "", edge };
+    }
+  }
+  if (parts[0] === "tabs" && parts[2] === "index") {
+    const index = Number(parts[3]);
+    if (Number.isFinite(index)) {
+      return { kind: "tab-index", paneId: parts[1] ?? "", index };
+    }
+  }
+  return null;
+}
+
 export function SplitLayout({
   root,
   layout,
@@ -153,61 +177,46 @@ export function SplitLayout({
   );
 
   // ── active drag state for DragOverlay label ──────────────────────────────
-  const [activeTabLabel, setActiveTabLabel] = useState<string | null>(null);
+  const [activeDragMeta, setActiveDragMeta] = useState<{
+    label: string;
+    sourcePaneLabel: string;
+  } | null>(null);
 
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
       const data = event.active.data.current as DragItem | undefined;
       if (data?.type === "terminal-tab") {
         const tab = openTabs.find((t) => t.sessionId === data.sessionId);
-        setActiveTabLabel(tab?.label ?? data.sessionId);
+        const paneIndex = layout
+          .getPanes()
+          .findIndex((pane) => pane.id === data.sourcePaneId);
+        setActiveDragMeta({
+          label: tab?.label ?? data.sessionId,
+          sourcePaneLabel: paneIndex >= 0 ? `Pane ${paneIndex + 1}` : "Current Pane",
+        });
       }
     },
-    [openTabs],
+    [layout, openTabs],
   );
 
-  const handleDragCancel = useCallback(() => setActiveTabLabel(null), []);
+  const handleDragCancel = useCallback(() => setActiveDragMeta(null), []);
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
-      setActiveTabLabel(null);
+      setActiveDragMeta(null);
       const { active, over } = event;
       if (!over) return;
 
       const dragItem = active.data.current as DragItem | undefined;
       if (dragItem?.type !== "terminal-tab") return;
-
-      const overId = String(over.id); // e.g. "paneId:top" | "paneId:center"
-      const lastColon = overId.lastIndexOf(":");
-      if (lastColon === -1) return;
-
-      const targetPaneId = overId.substring(0, lastColon);
-      const edge = overId.substring(lastColon + 1);
-      const { sessionId, sourcePaneId } = dragItem;
-
-      // Dropped on same pane center: no-op
-      if (edge === "center" && targetPaneId === sourcePaneId) return;
-
-      // Source pane will become empty after this move?
-      const sourcePane = layout.getPaneById(sourcePaneId);
-      const willBecomeEmpty = (sourcePane?.sessionIds.length ?? 0) <= 1;
-
-      // Dragging only tab to own pane's edge: no meaningful split (would
-      // create a split then immediately collapse it). Skip.
-      if (edge !== "center" && targetPaneId === sourcePaneId && willBecomeEmpty)
-        return;
-
-      if (edge === "center") {
-        layout.moveTabToPane(sessionId, sourcePaneId, targetPaneId);
-        if (willBecomeEmpty) layout.closePane(sourcePaneId);
-      } else {
-        const direction: SplitDirection =
-          edge === "left" || edge === "right" ? "horizontal" : "vertical";
-        const newPaneId = layout.splitPane(targetPaneId, direction);
-        layout.moveTabToPane(sessionId, sourcePaneId, newPaneId);
-        layout.setFocusedPaneId(newPaneId);
-        if (willBecomeEmpty) layout.closePane(sourcePaneId);
-      }
+      const target = parseDockTarget(String(over.id));
+      if (!target) return;
+      const changed = layout.dockSession(
+        dragItem.sessionId,
+        dragItem.sourcePaneId,
+        target,
+      );
+      if (!changed) return;
 
       // Fit all registered terminals 150ms after state settles
       if (fitTimerRef.current) clearTimeout(fitTimerRef.current);
@@ -246,9 +255,12 @@ export function SplitLayout({
       </div>
       {/* Drag overlay: floating tab label following the pointer */}
       <DragOverlay dropAnimation={null}>
-        {activeTabLabel !== null && (
+        {activeDragMeta !== null && (
           <div className="px-3 py-1.5 text-xs rounded border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] shadow-lg opacity-90 pointer-events-none whitespace-nowrap">
-            {activeTabLabel}
+            <div className="font-mono">{activeDragMeta.label}</div>
+            <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--color-text-muted)]">
+              {activeDragMeta.sourcePaneLabel} · Drop to dock terminal
+            </div>
           </div>
         )}
       </DragOverlay>

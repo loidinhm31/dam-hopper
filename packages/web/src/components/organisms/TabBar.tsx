@@ -1,4 +1,5 @@
-import { useDraggable } from "@dnd-kit/core";
+import { Fragment, useState } from "react";
+import { useDndMonitor, useDraggable } from "@dnd-kit/core";
 import {
   GripVertical,
   SplitSquareHorizontal,
@@ -8,6 +9,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
+import { TerminalTabInsertionZone } from "@/components/organisms/terminal-tab-insertion-zone.js";
 
 // ─── DragItem schema ─────────────────────────────────────────────────────────
 
@@ -123,20 +125,50 @@ export function TabBar({
   onSplitPaneVertical,
   onClosePane,
 }: TabBarProps) {
+  const [isDragging, setIsDragging] = useState(false);
+
+  useDndMonitor({
+    onDragStart: () => setIsDragging(true),
+    onDragEnd: () => setIsDragging(false),
+    onDragCancel: () => setIsDragging(false),
+  });
+
   return (
     <div className="flex items-center shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden h-8">
       {/* Scrollable tab strip */}
       <div className="flex items-center overflow-x-auto min-w-0 flex-1 scrollbar-hide h-full">
-        {paneTabs.map((tab) => (
-          <DraggableTab
-            key={tab.sessionId}
+        {paneTabs.length === 0 ? (
+          <TerminalTabInsertionZone
             paneId={paneId}
-            tab={tab}
-            isActive={tab.sessionId === activeSessionId}
-            onSelect={onSelectTab}
-            onClose={onCloseTab}
+            index={0}
+            isDragging={isDragging}
+            isEmpty
           />
-        ))}
+        ) : (
+          <>
+            <TerminalTabInsertionZone
+              paneId={paneId}
+              index={0}
+              isDragging={isDragging}
+            />
+            {paneTabs.map((tab, index) => (
+              <Fragment key={tab.sessionId}>
+                <DraggableTab
+                  paneId={paneId}
+                  tab={tab}
+                  isActive={tab.sessionId === activeSessionId}
+                  onSelect={onSelectTab}
+                  onClose={onCloseTab}
+                />
+                <TerminalTabInsertionZone
+                  paneId={paneId}
+                  index={index + 1}
+                  isDragging={isDragging}
+                />
+              </Fragment>
+            ))}
+          </>
+        )}
 
         {/* New Terminal Button in Tab Strip */}
         <button

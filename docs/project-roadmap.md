@@ -213,6 +213,12 @@ This document outlines the high-level roadmap for DamHopper development, trackin
   - ✅ Made `Ctrl+Backquote` exact so new-terminal no longer conflicts
   - ✅ Validation passed: `pnpm --filter @dam-hopper/web test -- --run src/lib/shortcuts.test.ts src/lib/ui-config.test.ts`, `pnpm build`, `cargo test ui_config`
 
+- **2026-05-20:** Completed Terminal Workspace Docking Phase 04.
+  - ✅ Added intent-based docking targets for pane center, pane edge, and tab insertion index
+  - ✅ Added labeled pane docking previews and stronger drag overlay context
+  - ✅ Added tab reorder and cross-pane insertion behavior without PTY remount changes
+  - ✅ Validation passed: `pnpm --filter @dam-hopper/web exec vitest run src/lib/terminal-layout-docking.test.ts`, `pnpm --filter @dam-hopper/web build`
+
 - **2026-05-19:** Completed Terminal Workspace Docking Phase 01.
   - ✅ Workspace mode state added for IDE/Terminal shell switching
   - ✅ Top nav toggle wired through `WorkspacePage`, `IdeShell`, and `TopNav`
