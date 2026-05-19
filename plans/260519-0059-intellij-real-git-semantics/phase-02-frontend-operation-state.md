@@ -8,8 +8,8 @@
 
 ## Overview
 
-Priority: P1  
-Status: Pending  
+Priority: P1
+Status: Completed 2026-05-19
 Goal: keep the current IntelliJ-like UI, but make operation state and cache refresh scoped and predictable.
 
 ## Key Insights
@@ -62,11 +62,11 @@ These scopes should live in API/query helpers, not duplicated in components.
 
 ## Todo List
 
-- [ ] Add refresh scope helper.
-- [ ] Narrow discard invalidation.
-- [ ] Add editor stale state.
-- [ ] Update Git history result banner.
-- [ ] Add frontend tests.
+- [x] Add refresh scope helper.
+- [x] Narrow discard invalidation.
+- [x] Add editor stale state.
+- [x] Update Git history result banner.
+- [x] Add frontend tests.
 
 ## Success Criteria
 
@@ -88,3 +88,8 @@ These scopes should live in API/query helpers, not duplicated in components.
 ## Next Steps
 
 After state is stable, add IntelliJ-compatible safe/rewrite actions in Phase 03.
+
+## Review Notes
+
+- Current implementation covers the planned frontend operation-state work.
+- Code review found branch-history rewrites did not reconcile open editor tabs; fixed with project-wide tab reconciliation for branch-level Git operations.

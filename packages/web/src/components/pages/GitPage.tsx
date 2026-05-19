@@ -256,8 +256,7 @@ export function GitPage() {
           </h2>
           <GitHistoryStatusBanner
             className="rounded-lg px-3 py-2 text-sm"
-            error={historyActions.error}
-            message={historyActions.message}
+            status={historyActions.status}
           />
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 h-[700px]">
             {/* Sidebar: Commit / Local Changes */}

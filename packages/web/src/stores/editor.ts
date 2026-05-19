@@ -34,6 +34,8 @@ export interface Tab {
   loading: boolean;
   saving: boolean;
   conflicted: boolean;
+  /** File changed on disk while this tab has unsaved edits. */
+  stale?: boolean;
   error?: string;
   /** Extra data for diff tabs. */
   fileStatus?: string;
@@ -66,6 +68,12 @@ interface EditorState {
   forceOverwrite: (key: string) => Promise<void>;
   reloadTab: (key: string) => Promise<void>;
   clearConflict: (key: string) => void;
+  clearStale: (key: string) => void;
+  reconcileGitMutationFiles: (
+    project: string,
+    paths: string[],
+  ) => Promise<void>;
+  reconcileGitProjectFiles: (project: string) => Promise<void>;
   markSaved: (key: string, mtime: number) => void;
   saveViewState: (key: string, vs: unknown) => void;
   getActiveTab: (project: string) => Tab | null;
@@ -365,6 +373,7 @@ export const useEditorStore = create<EditorState>()(
                       ...t,
                       saving: false,
                       dirty: false,
+                      stale: false,
                       savedContent: t.content,
                       mtime: result.newMtime,
                     }
@@ -442,6 +451,7 @@ export const useEditorStore = create<EditorState>()(
                       ...t,
                       saving: false,
                       dirty: false,
+                      stale: false,
                       savedContent: t.content,
                       mtime: result.newMtime,
                     }
@@ -500,6 +510,7 @@ export const useEditorStore = create<EditorState>()(
                     savedContent: decoded,
                     mtime: result.mtime,
                     dirty: false,
+                    stale: false,
                     binaryBase64: result.binary ? result.content : undefined,
                   }
                 : t,
@@ -522,6 +533,56 @@ export const useEditorStore = create<EditorState>()(
         }));
       },
 
+      clearStale: (key: string) => {
+        set((s) => ({
+          tabs: s.tabs.map((t) => (t.key === key ? { ...t, stale: false } : t)),
+        }));
+      },
+
+      reconcileGitMutationFiles: async (project: string, paths: string[]) => {
+        const affected = new Set(paths);
+        const tabs = get().tabs.filter(
+          (tab) =>
+            tab.project === project &&
+            tab.tier !== "diff" &&
+            affected.has(tab.path),
+        );
+        const cleanTabs = tabs.filter((tab) => !tab.dirty);
+        const dirtyKeys = tabs.filter((tab) => tab.dirty).map((tab) => tab.key);
+
+        if (dirtyKeys.length > 0) {
+          set((s) => ({
+            tabs: s.tabs.map((tab) =>
+              dirtyKeys.includes(tab.key) ? { ...tab, stale: true } : tab,
+            ),
+          }));
+        }
+
+        for (const tab of cleanTabs) {
+          await get().reloadTab(tab.key);
+        }
+      },
+
+      reconcileGitProjectFiles: async (project: string) => {
+        const tabs = get().tabs.filter(
+          (tab) => tab.project === project && tab.tier !== "diff",
+        );
+        const cleanTabs = tabs.filter((tab) => !tab.dirty);
+        const dirtyKeys = tabs.filter((tab) => tab.dirty).map((tab) => tab.key);
+
+        if (dirtyKeys.length > 0) {
+          set((s) => ({
+            tabs: s.tabs.map((tab) =>
+              dirtyKeys.includes(tab.key) ? { ...tab, stale: true } : tab,
+            ),
+          }));
+        }
+
+        for (const tab of cleanTabs) {
+          await get().reloadTab(tab.key);
+        }
+      },
+
       markSaved: (key: string, mtime: number) => {
         set((s) => ({
           tabs: s.tabs.map((t) =>
@@ -530,6 +591,7 @@ export const useEditorStore = create<EditorState>()(
                   ...t,
                   saving: false,
                   dirty: false,
+                  stale: false,
                   savedContent: t.content,
                   mtime,
                 }
@@ -667,6 +729,7 @@ export const useEditorStore = create<EditorState>()(
           dirty: false,
           saving: false,
           conflicted: false,
+          stale: false,
         })),
         activeKeys: state.activeKeys,
       }),

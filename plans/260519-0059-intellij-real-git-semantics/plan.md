@@ -1,7 +1,7 @@
 ---
 title: "IntelliJ Real Git Semantics"
 description: "Refactor DamHopper Git operations so Rust server executes real Git porcelain semantics while preserving the current IntelliJ-like web UI."
-status: pending
+status: in-progress
 priority: P1
 effort: 28h
 issue:
@@ -23,14 +23,14 @@ Primary outcomes:
 - Pushed/shared history uses revert semantics by default.
 - UI exposes operation state and recovery instead of generic errors.
 
-Plan progress: 1/4 phases complete (25%).
+Plan progress: 2/4 phases complete (50%).
 
 ## Phases
 
 | #   | Phase                       | Status               | Effort | Link                                                  |
 | --- | --------------------------- | -------------------- | ------ | ----------------------------------------------------- |
 | 1   | Backend Real Git Semantics  | Completed 2026-05-19 | 10h    | [phase-01](./phase-01-backend-real-git-semantics.md)  |
-| 2   | Frontend Operation State    | Pending              | 7h     | [phase-02](./phase-02-frontend-operation-state.md)    |
+| 2   | Frontend Operation State    | Completed 2026-05-19 | 7h     | [phase-02](./phase-02-frontend-operation-state.md)    |
 | 3   | IntelliJ-Compatible Actions | Pending              | 7h     | [phase-03](./phase-03-intellij-compatible-actions.md) |
 | 4   | Verification and Docs       | Pending              | 4h     | [phase-04](./phase-04-verification-and-docs.md)       |
 

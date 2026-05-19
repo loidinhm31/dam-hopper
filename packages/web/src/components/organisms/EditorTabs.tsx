@@ -53,6 +53,7 @@ export function EditorTabs({ project }: { project: string | null }) {
     forceOverwrite,
     reloadTab,
     clearConflict,
+    clearStale,
     markSaved,
     loadContent,
   } = useEditorStore();
@@ -123,7 +124,7 @@ export function EditorTabs({ project }: { project: string | null }) {
   const activeTab = projectTabs.find((t) => t.key === activeKey) ?? null;
   const contextTab =
     contextMenu && project
-      ? projectTabs.find((tab) => tab.key === contextMenu.key) ?? null
+      ? (projectTabs.find((tab) => tab.key === contextMenu.key) ?? null)
       : null;
   const contextMenuItems = contextTab
     ? getEditorTabContextMenuItems({
@@ -295,6 +296,30 @@ export function EditorTabs({ project }: { project: string | null }) {
             <div className="absolute top-2 right-3 flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)]">
               <Loader2 className="h-3 w-3 animate-spin" />
               Saving…
+            </div>
+          )}
+
+          {activeTab?.stale && activeTab.dirty && (
+            <div className="absolute bottom-2 left-3 right-3 flex items-center justify-between gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[10px] text-amber-300 shadow-lg">
+              <span className="truncate">
+                File changed on disk while this tab has unsaved edits.
+              </span>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <button
+                  type="button"
+                  className="rounded border border-amber-500/30 px-2 py-0.5 hover:bg-amber-500/10"
+                  onClick={() => void reloadTab(activeTab.key)}
+                >
+                  Reload
+                </button>
+                <button
+                  type="button"
+                  className="rounded border border-[var(--color-border)] px-2 py-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                  onClick={() => clearStale(activeTab.key)}
+                >
+                  Keep edits
+                </button>
+              </div>
             </div>
           )}
         </div>
