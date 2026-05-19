@@ -30,6 +30,16 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [x] Vertical layout refactoring (`AppLayout`, `IdeShell`)
 - [x] Responsive design and accessibility polish
 
+### Phase 02: Terminal Workspace Shortcut Routing
+
+**Status: [COMPLETED 2026-05-19]**
+
+- [x] Added configurable `terminalWorkspaceShortcut` to Rust `UiConfig` and TS UI config defaults
+- [x] Exposed Terminal workspace shortcut in Settings Keyboard Shortcuts
+- [x] Wired `WorkspacePage` to toggle IDE/Terminal modes from the configured shortcut
+- [x] Suppressed the shortcut from `TerminalPanel` and `PaneContainer` xterm input
+- [x] Validation passed: `pnpm --filter @dam-hopper/web test -- --run src/lib/shortcuts.test.ts src/lib/ui-config.test.ts`, `pnpm build`, `cargo test ui_config`
+
 ### Phase 02: File Watcher
 
 **Status: [COMPLETED]**
@@ -196,6 +206,12 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [ ] Multi-workspace management UI
 
 ## Recent Milestones
+
+- **2026-05-19:** Completed Terminal Workspace Docking Phase 02.
+  - ✅ Added configurable terminal workspace shortcut with default `Mod+Shift+Backquote`
+  - ✅ Moved shortcut config through Rust UiConfig, TS UiConfig, and settings UI
+  - ✅ Made `Ctrl+Backquote` exact so new-terminal no longer conflicts
+  - ✅ Validation passed: `pnpm --filter @dam-hopper/web test -- --run src/lib/shortcuts.test.ts src/lib/ui-config.test.ts`, `pnpm build`, `cargo test ui_config`
 
 - **2026-05-19:** Completed Terminal Workspace Docking Phase 01.
   - ✅ Workspace mode state added for IDE/Terminal shell switching

@@ -7,6 +7,11 @@ import { getTransport } from "@/api/transport.js";
 import { api, type SessionInfo } from "@/api/client.js";
 import { registerTerminal, removeTerminal } from "@/lib/terminal-registry.js";
 import { recordCommand } from "@/lib/command-history.js";
+import {
+  matchesKeyboardShortcut,
+  matchesNewTerminalShortcut,
+} from "@/lib/shortcuts.js";
+import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalSuggestions } from "@/hooks/useTerminalSuggestions.js";
 import { TerminalSuggestionOverlay } from "@/components/atoms/TerminalSuggestionOverlay.js";
 
@@ -206,7 +211,18 @@ export function TerminalPanel({
         if (sel) void navigator.clipboard.writeText(sel);
         return false;
       }
-      if (e.ctrlKey && e.code === "Backquote") return false;
+      if (
+        e.type === "keydown" &&
+        matchesKeyboardShortcut(
+          useSettingsStore.getState().terminalWorkspaceShortcut,
+          e,
+        )
+      ) {
+        return false;
+      }
+      if (matchesNewTerminalShortcut(e)) {
+        return false;
+      }
       if (
         e.shiftKey &&
         !e.ctrlKey &&

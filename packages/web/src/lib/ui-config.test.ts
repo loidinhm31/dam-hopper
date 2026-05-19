@@ -6,6 +6,7 @@ describe("withUiConfigDefaults", () => {
     const ui = withUiConfigDefaults();
     expect(ui.searchTextShortcut).toBe("Mod+Shift+KeyF");
     expect(ui.searchFilenameShortcut).toBe("DoubleShift");
+    expect(ui.terminalWorkspaceShortcut).toBe("Mod+Shift+Backquote");
   });
 
   it("preserves existing fields while normalizing provided shortcuts", () => {
@@ -13,11 +14,13 @@ describe("withUiConfigDefaults", () => {
       editorFontSize: 18,
       terminalOrder: ["one"],
       searchTextShortcut: "ctrl+shift+p",
+      terminalWorkspaceShortcut: "ctrl+shift+backquote",
     });
 
     expect(ui.editorFontSize).toBe(18);
     expect(ui.terminalOrder).toEqual(["one"]);
     expect(ui.searchTextShortcut).toBe("Ctrl+Shift+KeyP");
     expect(ui.searchFilenameShortcut).toBe("DoubleShift");
+    expect(ui.terminalWorkspaceShortcut).toBe("Ctrl+Shift+Backquote");
   });
 });

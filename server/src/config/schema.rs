@@ -331,6 +331,9 @@ fn default_search_text_shortcut() -> String {
 fn default_search_filename_shortcut() -> String {
     "DoubleShift".to_string()
 }
+fn default_terminal_workspace_shortcut() -> String {
+    "Mod+Shift+Backquote".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -354,6 +357,11 @@ pub struct UiConfig {
         alias = "search_filename_shortcut"
     )]
     pub search_filename_shortcut: String,
+    #[serde(
+        default = "default_terminal_workspace_shortcut",
+        alias = "terminal_workspace_shortcut"
+    )]
+    pub terminal_workspace_shortcut: String,
     #[serde(default = "default_true", alias = "terminal_suggestions_enabled")]
     pub terminal_suggestions_enabled: bool,
     #[serde(default, alias = "explorer_show_hidden", alias = "explorerShowHidden")]
@@ -378,6 +386,7 @@ impl Default for UiConfig {
             editor_zoom_wheel_enabled: default_editor_zoom_wheel_enabled(),
             search_text_shortcut: default_search_text_shortcut(),
             search_filename_shortcut: default_search_filename_shortcut(),
+            terminal_workspace_shortcut: default_terminal_workspace_shortcut(),
             terminal_suggestions_enabled: true,
             explorer_show_hidden: false,
             terminal_order: vec![],

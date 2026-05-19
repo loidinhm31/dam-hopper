@@ -117,6 +117,23 @@ If omitted, defaults to `.dam-hopper/agent-store/` in workspace root.
 
 All features are enabled by default.
 
+### UI Configuration
+
+The global UI config includes the terminal workspace shortcut used by `WorkspacePage` and terminal input guards.
+
+| Field                     | Type   | Default                    | Notes |
+| ------------------------- | ------ | -------------------------- | ----- |
+| terminalWorkspaceShortcut  | string | `Mod+Shift+Backquote`      | Global IDE/Terminal mode toggle shortcut |
+
+Example:
+
+```toml
+[ui]
+terminalWorkspaceShortcut = "Mod+Shift+Backquote"
+```
+
+The shortcut is normalized by the client config layer, and terminal panels treat it as a non-text global shortcut.
+
 ### Server Configuration
 
 Optional: configure session persistence and TTL settings for server restart recovery.

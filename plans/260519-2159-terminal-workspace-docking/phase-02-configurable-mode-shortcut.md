@@ -9,7 +9,7 @@
 ## Overview
 
 Priority: P1  
-Status: Pending  
+Status: Completed 2026-05-19 23:43
 Goal: add a configurable shortcut for switching IDE/Terminal workspace modes, defaulting to `Mod+Shift+Backquote`.
 
 ## Key Insights
@@ -76,12 +76,12 @@ Shortcut handling:
 
 ## Todo List
 
-- [ ] Add config schema field.
-- [ ] Add frontend default/hydration/save plumbing.
-- [ ] Add settings UI row.
-- [ ] Register shortcut.
-- [ ] Fix shortcut conflict with new-terminal shortcut.
-- [ ] Add tests.
+- [x] Add config schema field.
+- [x] Add frontend default/hydration/save plumbing.
+- [x] Add settings UI row.
+- [x] Register shortcut.
+- [x] Fix shortcut conflict with new-terminal shortcut.
+- [x] Add tests.
 
 ## Success Criteria
 

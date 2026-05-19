@@ -87,6 +87,8 @@ The `IdeShell` orchestrates the system:
 - Passes optional mode props through `IdeShell` to `TopNav`.
 - `TopNav` renders a compact IDE/Terminal toggle only when mode props are supplied.
 - `IdeShell` keeps the mode contract optional, so existing callers without mode props render unchanged.
+- Uses `terminalWorkspaceShortcut` from UI config for the global mode toggle.
+- Default binding is `Mod+Shift+Backquote`.
 
 ---
 
@@ -97,6 +99,8 @@ The `IdeShell` orchestrates the system:
 **Location:** `packages/web/src/components/organisms/TerminalPanel.tsx`
 
 **Purpose:** Renders a single terminal session using xterm.js. Handles lifecycle events (output, exit, restart, reconnect) and session attachment.
+
+**Behavior:** Filters out the terminal workspace shortcut so xterm input does not swallow the global mode toggle.
 
 **Props:**
 
@@ -124,6 +128,12 @@ interface TerminalPanelProps {
 **Purpose:** Combined panel for port detection, tunnel management, and confirmed session kill control for detected ports.
 
 **Data flow:** `usePorts()` preserves `sessionId` on detected rows and exposes `killPortSession(sessionId)` so the panel can terminate the owning terminal session without direct process handling.
+
+### PaneContainer
+
+**Location:** `packages/web/src/components/organisms/PaneContainer.tsx`
+
+**Behavior:** Suppresses the same terminal workspace shortcut inside split-pane terminal containers, matching `TerminalPanel` input handling.
 
 ## Git Workspace Panel
 

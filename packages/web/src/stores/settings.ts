@@ -21,6 +21,7 @@ interface SettingsState {
   editorZoomWheelEnabled: boolean;
   searchTextShortcut: string;
   searchFilenameShortcut: string;
+  terminalWorkspaceShortcut: string;
   terminalSuggestionsEnabled: boolean;
   explorerShowHidden: boolean;
   hydrated: boolean;
@@ -35,6 +36,7 @@ interface SettingsState {
         | "editorZoomWheelEnabled"
         | "searchTextShortcut"
         | "searchFilenameShortcut"
+        | "terminalWorkspaceShortcut"
         | "terminalSuggestionsEnabled"
         | "explorerShowHidden"
       >
@@ -49,6 +51,7 @@ interface SettingsState {
         | "editorZoomWheelEnabled"
         | "searchTextShortcut"
         | "searchFilenameShortcut"
+        | "terminalWorkspaceShortcut"
         | "terminalSuggestionsEnabled"
         | "explorerShowHidden"
       >
@@ -64,6 +67,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   editorZoomWheelEnabled: true,
   searchTextShortcut: "Mod+Shift+KeyF",
   searchFilenameShortcut: "DoubleShift",
+  terminalWorkspaceShortcut: "Mod+Shift+Backquote",
   terminalSuggestionsEnabled: true,
   explorerShowHidden: false,
   hydrated: false,
@@ -78,6 +82,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         editorZoomWheelEnabled: ui.editorZoomWheelEnabled,
         searchTextShortcut: ui.searchTextShortcut,
         searchFilenameShortcut: ui.searchFilenameShortcut,
+        terminalWorkspaceShortcut: ui.terminalWorkspaceShortcut,
         terminalSuggestionsEnabled: ui.terminalSuggestionsEnabled ?? true,
         explorerShowHidden: ui.explorerShowHidden ?? false,
         hydrated: true,
@@ -100,6 +105,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.searchTextShortcut = partial.searchTextShortcut;
     if (partial.searchFilenameShortcut !== undefined)
       clamped.searchFilenameShortcut = partial.searchFilenameShortcut;
+    if (partial.terminalWorkspaceShortcut !== undefined)
+      clamped.terminalWorkspaceShortcut = partial.terminalWorkspaceShortcut;
     if (partial.terminalSuggestionsEnabled !== undefined)
       clamped.terminalSuggestionsEnabled = partial.terminalSuggestionsEnabled;
     if (partial.explorerShowHidden !== undefined)
@@ -118,6 +125,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         editorZoomWheelEnabled,
         searchTextShortcut,
         searchFilenameShortcut,
+        terminalWorkspaceShortcut,
         terminalSuggestionsEnabled,
         explorerShowHidden,
       } = get();
@@ -127,6 +135,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         editorZoomWheelEnabled,
         searchTextShortcut,
         searchFilenameShortcut,
+        terminalWorkspaceShortcut,
         terminalSuggestionsEnabled,
         explorerShowHidden,
       });

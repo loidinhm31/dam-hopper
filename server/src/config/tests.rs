@@ -535,6 +535,7 @@ fn ui_config_defaults() {
     assert!(ui.editor_zoom_wheel_enabled);
     assert_eq!(ui.search_text_shortcut, "Mod+Shift+KeyF");
     assert_eq!(ui.search_filename_shortcut, "DoubleShift");
+    assert_eq!(ui.terminal_workspace_shortcut, "Mod+Shift+Backquote");
 }
 
 #[test]
@@ -551,6 +552,7 @@ fn ui_config_serde_roundtrip() {
             editor_zoom_wheel_enabled: false,
             search_text_shortcut: "Ctrl+Alt+KeyS".to_string(),
             search_filename_shortcut: "Ctrl+KeyP".to_string(),
+            terminal_workspace_shortcut: "Ctrl+Shift+Backquote".to_string(),
             terminal_suggestions_enabled: true,
             explorer_show_hidden: false,
             terminal_order: vec!["term1".to_string(), "term2".to_string()],
@@ -572,6 +574,7 @@ fn ui_config_serde_roundtrip() {
     assert!(!ui.editor_zoom_wheel_enabled);
     assert_eq!(ui.search_text_shortcut, "Ctrl+Alt+KeyS");
     assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
+    assert_eq!(ui.terminal_workspace_shortcut, "Ctrl+Shift+Backquote");
     assert_eq!(ui.terminal_order, vec!["term1", "term2"]);
     assert_eq!(ui.project_order, vec!["proj1"]);
     assert_eq!(
@@ -589,12 +592,14 @@ editor_font_size = 14
 editor_zoom_wheel_enabled = true
 search_text_shortcut = "Ctrl+Shift+KeyF"
 search_filename_shortcut = "Ctrl+KeyP"
+terminal_workspace_shortcut = "Ctrl+Shift+Backquote"
 "#;
 
     let loaded: GlobalConfig = toml::from_str(toml).unwrap();
     let ui = loaded.ui.unwrap();
     assert_eq!(ui.search_text_shortcut, "Ctrl+Shift+KeyF");
     assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
+    assert_eq!(ui.terminal_workspace_shortcut, "Ctrl+Shift+Backquote");
 }
 
 #[test]
