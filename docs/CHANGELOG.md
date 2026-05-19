@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 01: Workspace Mode Shell.** Complete ✓ 2026-05-19. Added persisted workspace mode for the main shell: `WorkspacePage` now owns `ide`/`terminal` mode state in `localStorage` key `dam-hopper:workspace-mode`, `IdeShell` accepts optional mode props and forwards them to `TopNav`, and `TopNav` shows a compact IDE/Terminal toggle only when those props are present. IDE mode behavior stays unchanged when mode props are omitted. [See plan](../plans/260519-2159-terminal-workspace-docking/phase-01-workspace-mode-shell.md).
+
 - **Phase 04: IntelliJ Real Git Semantics Verification and Docs.** Complete ✓ 2026-05-19. Expanded verification coverage for the real Git semantics refactor: backend tests now cover active-operation rewrite blocking and recovery metadata, frontend tests cover targeted Git invalidation, selected-history refresh, pushed rewrite availability, and recovery banner copy, and the API/architecture docs now define the safe-vs-rewrite history contract plus manual browser verification checklist. [See plan](../plans/260519-0059-intellij-real-git-semantics/phase-04-verification-and-docs.md).
 
 - **Phase 03: IntelliJ-Compatible Actions.** Complete ✓ 2026-05-19. Added the remaining IntelliJ-style Git action split so safe history preservation and rewrite actions are separate: revert commit for pushed/shared history, revert selected changes as a non-history-rewriting path, undo last commit to move changes back into the worktree, explicit confirmation copy for destructive actions, and backend/web API surface updates for the new action routing. [See plan](../plans/260519-0059-intellij-real-git-semantics/phase-03-intellij-compatible-actions.md).

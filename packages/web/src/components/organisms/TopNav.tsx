@@ -14,6 +14,7 @@ import { HostResourcePopover } from "@/components/organisms/HostResourcePopover.
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client.js";
+import type { WorkspaceMode } from "@/lib/workspace-mode.js";
 import {
   getActiveProfile,
   getServerUrl,
@@ -25,9 +26,18 @@ import { BASE_NAV } from "@/lib/navigation.js";
 interface TopNavProps {
   collapsed?: boolean;
   onToggle?: () => void;
+  workspaceMode?: WorkspaceMode;
+  onWorkspaceModeChange?: (mode: WorkspaceMode) => void;
+  workspaceModeShortcutLabel?: string;
 }
 
-export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
+export function TopNav({
+  collapsed = true,
+  onToggle,
+  workspaceMode,
+  onWorkspaceModeChange,
+  workspaceModeShortcutLabel,
+}: TopNavProps) {
   const { status } = useIpc();
   const { activeProject } = useWorkspaceStore();
   const { data: projects = [] } = useQuery({
@@ -129,6 +139,37 @@ export function TopNav({ collapsed = true, onToggle }: TopNavProps) {
         <div className="min-w-0">
           <WorkspaceSwitcher variant="compact" />
         </div>
+
+        {workspaceMode && onWorkspaceModeChange && (
+          <>
+            <div className="h-4 w-[1px] bg-[var(--color-border)] hidden md:block" />
+            <div
+              className="flex items-center rounded-sm border border-[var(--color-border)] bg-[var(--color-surface)]/60 p-0.5"
+              title={
+                workspaceModeShortcutLabel
+                  ? `Switch workspace mode (${workspaceModeShortcutLabel})`
+                  : "Switch workspace mode"
+              }
+            >
+              {(["ide", "terminal"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => onWorkspaceModeChange(mode)}
+                  aria-pressed={workspaceMode === mode}
+                  className={cn(
+                    "rounded-[3px] px-1.5 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors sm:px-2",
+                    workspaceMode === mode
+                      ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+                      : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
+                  )}
+                >
+                  {mode === "ide" ? "IDE" : "Terminal"}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
 
         {projects.length > 0 && (
           <>

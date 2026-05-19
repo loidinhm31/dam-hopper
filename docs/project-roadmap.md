@@ -197,6 +197,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-05-19:** Completed Terminal Workspace Docking Phase 01.
+  - ✅ Workspace mode state added for IDE/Terminal shell switching
+  - ✅ Top nav toggle wired through `WorkspacePage`, `IdeShell`, and `TopNav`
+  - ✅ Validation passed: `pnpm --filter @dam-hopper/web test` (123/123), `pnpm build`
+
 - **2026-05-19:** Completed IntelliJ-Compatible Actions Phase 03.
   - ✅ Added safe revert path for pushed/shared commits
   - ✅ Split revert selected changes from drop selected changes

@@ -8,6 +8,7 @@ import type { ToolWindowDef } from "@/types/ide.js";
 import { ActivityBar } from "@/components/organisms/ActivityBar.js";
 import { SidebarTopGroup } from "@/components/organisms/SidebarTopGroup.js";
 import { SidebarBottomGroup } from "@/components/organisms/SidebarBottomGroup.js";
+import type { WorkspaceMode } from "@/lib/workspace-mode.js";
 
 const TREE_WIDTH_KEY = "dam-hopper:ide-tree-width";
 const TERMINAL_TREE_WIDTH_KEY = "dam-hopper:ide-terminal-tree-width";
@@ -22,10 +23,16 @@ export function IdeShell({
   leftTools,
   rightTools,
   editor,
+  workspaceMode,
+  onWorkspaceModeChange,
+  workspaceModeShortcutLabel,
 }: {
   leftTools: ToolWindowDef[];
   rightTools: ToolWindowDef[];
   editor: ReactNode;
+  workspaceMode?: WorkspaceMode;
+  onWorkspaceModeChange?: (mode: WorkspaceMode) => void;
+  workspaceModeShortcutLabel?: string;
 }) {
   const { collapsed, toggle } = useSidebarCollapse();
 
@@ -191,7 +198,13 @@ export function IdeShell({
       )}
     >
       {/* App nav top bar */}
-      <TopNav collapsed={collapsed} onToggle={toggle} />
+      <TopNav
+        collapsed={collapsed}
+        onToggle={toggle}
+        workspaceMode={workspaceMode}
+        onWorkspaceModeChange={onWorkspaceModeChange}
+        workspaceModeShortcutLabel={workspaceModeShortcutLabel}
+      />
 
       <div className="flex-1 flex min-w-0 overflow-hidden">
         {/* ── Left Activity Bar ────────────────────────────────────────── */}

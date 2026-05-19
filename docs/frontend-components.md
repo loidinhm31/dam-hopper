@@ -74,6 +74,20 @@ The `IdeShell` orchestrates the system:
 </IdeShell>
 ```
 
+### Workspace Mode Shell
+
+**Location:** `packages/web/src/components/pages/WorkspacePage.tsx`
+
+**Purpose:** Owns the persisted workspace mode for the main workspace shell.
+
+**Behavior:**
+
+- Stores `workspaceMode` in `localStorage` key `dam-hopper:workspace-mode`.
+- Valid values: `ide` and `terminal`; fallback is `ide`.
+- Passes optional mode props through `IdeShell` to `TopNav`.
+- `TopNav` renders a compact IDE/Terminal toggle only when mode props are supplied.
+- `IdeShell` keeps the mode contract optional, so existing callers without mode props render unchanged.
+
 ---
 
 ## Key Components
