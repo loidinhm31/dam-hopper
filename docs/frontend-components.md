@@ -174,6 +174,27 @@ interface TerminalPanelProps {
 
 **Behavior:** Suppresses the same terminal workspace shortcut inside split-pane terminal containers, matching `TerminalPanel` input handling.
 
+### Terminal Docking
+
+**Locations:**
+
+- `packages/web/src/components/organisms/SplitLayout.tsx`
+- `packages/web/src/components/organisms/PaneContainer.tsx`
+- `packages/web/src/components/organisms/TabBar.tsx`
+- `packages/web/src/lib/terminal-layout-docking.ts`
+- `packages/web/src/lib/terminal-layout-tree.ts`
+
+**Purpose:** Provides intent-based terminal docking for the terminal workspace without changing PTY lifecycle ownership.
+
+**Behavior:**
+
+- Dock targets are explicit: pane center, pane edge, and tab insertion index.
+- `SplitLayout` parses dnd-kit droppable IDs and delegates one atomic `dockSession()` action to the layout hook.
+- `terminal-layout-docking.ts` removes the session from the source pane, inserts or splits into the target, collapses safe-empty source panes, and focuses the destination pane in one state transition.
+- `TabBar` exposes insertion droppables before the first tab, between tabs, and after the last tab for reorder and cross-pane insertion.
+- `PaneContainer` renders labeled five-zone docking previews only while dragging, keeping pointer interference off the live terminal during normal input.
+- Terminal layout persistence remains in localStorage under `dam-hopper:terminal-layout`.
+
 ## Git Workspace Panel
 
 **Location:** `packages/web/src/components/pages/GitPage.tsx`

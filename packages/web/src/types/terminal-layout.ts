@@ -2,6 +2,7 @@
 // Persisted in localStorage under key "dam-hopper:terminal-layout".
 
 export type SplitDirection = "horizontal" | "vertical";
+export type DockEdge = "top" | "bottom" | "left" | "right";
 
 export interface SplitNode {
   type: "split";
@@ -19,6 +20,11 @@ export interface PaneNode {
 }
 
 export type LayoutNode = SplitNode | PaneNode;
+
+export type DockTarget =
+  | { kind: "pane-center"; paneId: string }
+  | { kind: "pane-edge"; paneId: string; edge: DockEdge }
+  | { kind: "tab-index"; paneId: string; index: number };
 
 export interface PersistedLayout {
   version: 1;

@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useRef } from "react";
-import { useDroppable, useDndMonitor } from "@dnd-kit/core";
+import { useDndMonitor } from "@dnd-kit/core";
 import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import {
@@ -16,76 +16,7 @@ import type { UseTerminalLayoutResult } from "@/hooks/useTerminalLayout.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import { TabBar } from "@/components/organisms/TabBar.js";
-
-// ─── PaneDropZones ────────────────────────────────────────────────────────────
-// Always mounted so dnd-kit has registered droppables before drag starts.
-// Uses pointer-events-none when not dragging to avoid blocking terminal input.
-
-interface PaneDropZonesProps {
-  paneId: string;
-  isDragging: boolean;
-}
-
-function PaneDropZones({ paneId, isDragging }: PaneDropZonesProps) {
-  const { setNodeRef: setTopNodeRef, isOver: isTopOver } = useDroppable({
-    id: `${paneId}:top`,
-  });
-  const { setNodeRef: setBottomNodeRef, isOver: isBottomOver } = useDroppable({
-    id: `${paneId}:bottom`,
-  });
-  const { setNodeRef: setLeftNodeRef, isOver: isLeftOver } = useDroppable({
-    id: `${paneId}:left`,
-  });
-  const { setNodeRef: setRightNodeRef, isOver: isRightOver } = useDroppable({
-    id: `${paneId}:right`,
-  });
-  const { setNodeRef: setCenterNodeRef, isOver: isCenterOver } = useDroppable({
-    id: `${paneId}:center`,
-  });
-
-  const edgeClass = (isOver: boolean) =>
-    cn(
-      "absolute transition-colors duration-75 z-10",
-      !isDragging && "pointer-events-none",
-      isDragging && isOver
-        ? "bg-blue-500/30 ring-2 ring-inset ring-blue-400"
-        : "bg-transparent",
-    );
-
-  return (
-    <>
-      {/* Top edge strip */}
-      <div
-        ref={setTopNodeRef}
-        className={cn(edgeClass(isTopOver), "inset-x-0 top-0 h-5")}
-      />
-      {/* Bottom edge strip */}
-      <div
-        ref={setBottomNodeRef}
-        className={cn(edgeClass(isBottomOver), "inset-x-0 bottom-0 h-5")}
-      />
-      {/* Left edge strip */}
-      <div
-        ref={setLeftNodeRef}
-        className={cn(edgeClass(isLeftOver), "inset-y-0 left-0 w-5")}
-      />
-      {/* Right edge strip */}
-      <div
-        ref={setRightNodeRef}
-        className={cn(edgeClass(isRightOver), "inset-y-0 right-0 w-5")}
-      />
-      {/* Center zone */}
-      <div
-        ref={setCenterNodeRef}
-        className={cn(
-          "absolute inset-5 z-9 transition-colors duration-75",
-          !isDragging && "pointer-events-none",
-          isDragging && isCenterOver ? "bg-blue-500/10" : "bg-transparent",
-        )}
-      />
-    </>
-  );
-}
+import { TerminalDockPreview } from "@/components/organisms/terminal-dock-preview.js";
 
 interface PaneContainerProps {
   node: PaneNode;
@@ -438,8 +369,7 @@ export const PaneContainer = memo(function PaneContainer({
             </div>
           </div>
         )}
-        {/* Drop zones — always in DOM so dnd-kit has them registered */}
-        <PaneDropZones paneId={node.id} isDragging={isDragging} />
+        <TerminalDockPreview paneId={node.id} isDragging={isDragging} />
       </div>
     </div>
   );
