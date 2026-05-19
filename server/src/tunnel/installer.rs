@@ -1,4 +1,5 @@
 use std::env::consts::{ARCH, OS};
+use std::ffi::{OsStr, OsString};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -14,7 +15,7 @@ impl TunnelInstaller {
     /// Returns path to a usable cloudflared binary or `TunnelError::BinaryMissing`.
     /// Search order: PATH → ~/.dam-hopper/bin/cloudflared
     pub async fn resolve() -> Result<PathBuf, TunnelError> {
-        if let Some(p) = find_in_path() {
+        if let Some(p) = Self::resolve_path_binary(std::env::var_os("PATH")) {
             return Ok(p);
         }
         if let Some(p) = local_bin_path() {
@@ -23,6 +24,10 @@ impl TunnelInstaller {
             }
         }
         Err(TunnelError::BinaryMissing)
+    }
+
+    pub(crate) fn resolve_path_binary(path_var: Option<OsString>) -> Option<PathBuf> {
+        find_in_path(path_var.as_deref())
     }
 
     /// Download cloudflared to `~/.dam-hopper/bin/cloudflared` atomically.
@@ -61,9 +66,9 @@ pub fn local_bin_path() -> Option<PathBuf> {
 
 /// Search PATH for the cloudflared binary.
 /// Note: `is_file()` is a sync syscall; acceptable for PATH scan (typically <20 dirs).
-fn find_in_path() -> Option<PathBuf> {
-    let path_var = std::env::var("PATH").ok()?;
-    for dir in std::env::split_paths(&path_var) {
+fn find_in_path(path_var: Option<&OsStr>) -> Option<PathBuf> {
+    let path_var = path_var?;
+    for dir in std::env::split_paths(path_var) {
         let candidate = dir.join(CF_BIN_NAME);
         if candidate.is_file() {
             return Some(candidate);

@@ -37,8 +37,8 @@ describe("WorkspaceGitPanel refresh helpers", () => {
 
     const invalidateQueries = vi.fn().mockResolvedValue(undefined);
     const refetchQueries = vi.fn().mockResolvedValue(undefined);
-    const fetchQuery = vi.fn(({ queryFn }: { queryFn: () => Promise<unknown> }) =>
-      queryFn(),
+    const fetchQuery = vi.fn(
+      ({ queryFn }: { queryFn: () => Promise<unknown> }) => queryFn(),
     );
 
     const refreshed = await refreshWorkspaceGitPanelQueries(
@@ -94,5 +94,33 @@ describe("WorkspaceGitPanel refresh helpers", () => {
 
     expect(refreshed).toBeNull();
     expect(resolveWorkspaceGitSelection("abc1234", [])).toBeNull();
+  });
+
+  it("does not refetch commit files when no history selection is active", async () => {
+    gitLogMock.mockResolvedValue([]);
+
+    const invalidateQueries = vi.fn().mockResolvedValue(undefined);
+    const refetchQueries = vi.fn().mockResolvedValue(undefined);
+    const fetchQuery = vi.fn(
+      ({ queryFn }: { queryFn: () => Promise<unknown> }) => queryFn(),
+    );
+
+    const refreshed = await refreshWorkspaceGitPanelQueries(
+      { invalidateQueries, refetchQueries, fetchQuery },
+      "demo-project",
+      null,
+      0,
+    );
+
+    expect(refreshed).toBeNull();
+    expect(invalidateQueries.mock.calls).toEqual([
+      [{ queryKey: ["branches", "demo-project"] }],
+      [{ queryKey: ["project-status", "demo-project"] }],
+      [{ queryKey: ["git-log", "demo-project"] }],
+    ]);
+    expect(refetchQueries.mock.calls).toEqual([
+      [{ queryKey: ["branches", "demo-project"] }],
+      [{ queryKey: ["project-status", "demo-project"] }],
+    ]);
   });
 });

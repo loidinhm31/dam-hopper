@@ -898,6 +898,44 @@ async fn drop_commit_blocks_when_rebase_is_active() {
 }
 
 #[tokio::test]
+async fn drop_commit_blocks_when_cherry_pick_is_active() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    git(&["checkout", "-b", "feature/cherry-pick-block"], path);
+    std::fs::write(path.join("README.md"), "feature change\n").unwrap();
+    git(&["add", "README.md"], path);
+    git(&["commit", "-m", "feature change"], path);
+    let feature_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    git(&["checkout", "main"], path);
+    std::fs::write(path.join("README.md"), "main change\n").unwrap();
+    git(&["add", "README.md"], path);
+    git(&["commit", "-m", "main change"], path);
+    let main_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    git(&["checkout", "feature/cherry-pick-block"], path);
+    let output = Command::new("git")
+        .args(["cherry-pick", &main_hash])
+        .current_dir(path)
+        .output()
+        .expect("git cherry-pick failed to spawn");
+    assert!(!output.status.success(), "cherry-pick should conflict");
+
+    let result = drop_commit(path, &feature_hash).await.unwrap();
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.blocked_reason,
+        Some(crate::git::GitBlockReason::ActiveOperation)
+    );
+    assert_eq!(
+        result.recovery.as_ref().map(|r| &r.operation),
+        Some(&crate::git::GitRecoveryOperation::CherryPick)
+    );
+}
+
+#[tokio::test]
 async fn drop_commit_conflict_returns_recoverable_rebase_state() {
     let repo = make_temp_repo();
     let path = repo.path();

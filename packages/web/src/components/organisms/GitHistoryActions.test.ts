@@ -1,5 +1,10 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { createElement } from "react";
 import { describe, expect, it } from "vitest";
-import { formatGitActionStatus } from "./GitHistoryActions.js";
+import {
+  formatGitActionStatus,
+  GitHistoryStatusBanner,
+} from "./GitHistoryActions.js";
 
 describe("formatGitActionStatus", () => {
   it("formats success results", () => {
@@ -64,5 +69,21 @@ describe("formatGitActionStatus", () => {
       message: "Cherry-pick failed",
       detail: "Resolve the active operation before continuing.",
     });
+  });
+
+  it("renders recovery copy as an actionable status banner", () => {
+    const markup = renderToStaticMarkup(
+      createElement(GitHistoryStatusBanner, {
+        status: {
+          kind: "conflict",
+          message: "Rebase stopped on conflicts",
+          detail: "Resolve the active operation before continuing.",
+        },
+      }),
+    );
+
+    expect(markup).toContain("Rebase stopped on conflicts");
+    expect(markup).toContain("Resolve the active operation before continuing.");
+    expect(markup).toContain("border-[var(--color-danger)]");
   });
 });
