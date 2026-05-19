@@ -531,6 +531,7 @@ HTTP request handlers + WebSocket upgrade.
 - `POST /api/git/:project/branches/update` — update a branch from its remote tracking branch
 - `POST /api/git/:project/cherry-pick` — cherry-pick a commit
 - `POST /api/git/:project/reset` — reset current branch with `soft`, `mixed`, `hard`, or `keep`
+- `POST /api/git/:project/undo-last-commit` — safe local commit recovery; blocks pushed/shared history and recommends revert
 
 **port_forward.rs** (Phase 03) — Port detection handler:
 
@@ -793,6 +794,8 @@ API layer (handlers) catch AppError → HTTP status:
 **Phase 02 (Complete):** Watcher subsystem via inotify/notify; WebSocket subscription protocol `{kind:}` envelope (hard cut from legacy `{type:}`); fs:subscribe_tree/fs:unsubscribe_tree/fs:event channels; health endpoint with feature flags.
 
 **Phase 03 (Complete):** Web IDE shell—react-resizable-panels layout (file tree | editor | terminal); react-arborist tree component; TanStack Query + useFsSubscription hook for live tree sync; applyFsDelta merges server events into client cache; feature flag `ide_explorer` gates routes and sidebar link; /ide lazy route with fallback placeholder.
+
+**Phase 03 (Complete):** IntelliJ-compatible Git actions—shared safe-vs-rewrite history menu, undo-last-commit endpoint, revert-selected-changes vs drop-selected-changes split, and pushed/shared history protections that steer users toward revert.
 
 **Phase 04 (Complete):** Monaco editor with tab mgmt + save. WS write protocol (fs:write_begin → fs:write_chunk\* → fs:write_commit). File tiering (normal <1MB, degraded 1-5MB, large ≥5MB, binary). Conflict detection via mtime. Ctrl+S save, MonacoHost, EditorTabs, LargeFileViewer, BinaryPreview, ConflictDialog components.
 

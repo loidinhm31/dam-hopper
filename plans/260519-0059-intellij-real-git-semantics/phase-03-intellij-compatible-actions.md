@@ -7,8 +7,8 @@
 
 ## Overview
 
-Priority: P2  
-Status: Pending  
+Priority: P2
+Status: Completed 2026-05-19
 Goal: add missing IntelliJ-style action separation while keeping the current web UI.
 
 ## Key Insights

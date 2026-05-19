@@ -14,6 +14,10 @@ interface CommitDetailsPanelProps {
     commit: GitLogEntry,
     files: DiffFileEntry[],
   ) => void;
+  onRevertSelectedChanges?: (
+    commit: GitLogEntry,
+    files: DiffFileEntry[],
+  ) => void;
   onDropSelectedChanges?: (commit: GitLogEntry, files: DiffFileEntry[]) => void;
 }
 
@@ -35,6 +39,7 @@ export function CommitDetailsPanel({
   onClose,
   onFileDoubleClick,
   onCherryPickSelectedChanges,
+  onRevertSelectedChanges,
   onDropSelectedChanges,
 }: CommitDetailsPanelProps) {
   const { data: files, isLoading } = useGitCommitFiles(project, commit.hash);
@@ -116,6 +121,11 @@ export function CommitDetailsPanel({
 
   function handleCherryPickSelectedChanges() {
     onCherryPickSelectedChanges?.(commit, selectedFiles);
+    setContextMenu(null);
+  }
+
+  function handleRevertSelectedChanges() {
+    onRevertSelectedChanges?.(commit, selectedFiles);
     setContextMenu(null);
   }
 
@@ -242,6 +252,7 @@ export function CommitDetailsPanel({
           count={selectedFiles.length}
           canDrop={!commit.isPushed}
           onCherryPick={handleCherryPickSelectedChanges}
+          onRevert={handleRevertSelectedChanges}
           onDrop={handleDropSelectedChanges}
           onClose={() => setContextMenu(null)}
         />
@@ -256,6 +267,7 @@ function CommitFileContextMenu({
   count,
   canDrop,
   onCherryPick,
+  onRevert,
   onDrop,
   onClose,
 }: {
@@ -264,6 +276,7 @@ function CommitFileContextMenu({
   count: number;
   canDrop: boolean;
   onCherryPick: () => void;
+  onRevert: () => void;
   onDrop: () => void;
   onClose: () => void;
 }) {
@@ -304,6 +317,14 @@ function CommitFileContextMenu({
         onClick={onCherryPick}
       >
         Cherry-Pick Selected Changes
+      </button>
+      <button
+        type="button"
+        disabled={count === 0}
+        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-50"
+        onClick={onRevert}
+      >
+        Revert Selected Changes
       </button>
       <button
         type="button"

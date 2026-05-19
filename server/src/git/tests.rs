@@ -11,7 +11,7 @@ use crate::git::diff::{
 };
 use crate::git::repository::{
     checkout_branch, cherry_pick, create_branch, get_log, get_status, list_branches,
-    reset_to_commit, update_branch,
+    reset_to_commit, undo_last_commit, update_branch,
 };
 use crate::git::types::{CheckoutStrategy, GitProgressPhase, ResetMode};
 use crate::git::{
@@ -982,6 +982,100 @@ async fn reset_to_commit_soft_moves_head() {
     assert_eq!(
         git_output(&["diff", "--cached", "--name-only"], path),
         "next.txt"
+    );
+}
+
+#[tokio::test]
+async fn undo_last_commit_moves_changes_to_unstaged_worktree() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let initial = git_output(&["rev-parse", "HEAD"], path);
+    std::fs::write(path.join("undo.txt"), "undo\n").unwrap();
+    git(&["add", "undo.txt"], path);
+    git(&["commit", "-m", "undo me"], path);
+    let undone = git_output(&["rev-parse", "HEAD"], path);
+
+    let result = undo_last_commit(path).await.unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.hash.as_deref(), Some(undone.as_str()));
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), initial);
+    assert_eq!(git_output(&["status", "--porcelain"], path), "?? undo.txt");
+    assert_eq!(git_output(&["diff", "--cached", "--name-only"], path), "");
+}
+
+#[tokio::test]
+async fn undo_last_commit_blocks_root_commit() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    let result = undo_last_commit(path).await.unwrap();
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.blocked_reason,
+        Some(crate::git::GitBlockReason::RootCommit)
+    );
+}
+
+#[tokio::test]
+async fn undo_last_commit_blocks_pushed_head_commit() {
+    let (_remote, seed, _clone) = make_remote_clone_repo();
+    let path = seed.path();
+    std::fs::write(path.join("pushed.txt"), "pushed\n").unwrap();
+    git(&["add", "pushed.txt"], path);
+    git(&["commit", "-m", "pushed head"], path);
+    git(&["push"], path);
+    let pushed_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    let result = undo_last_commit(path).await.unwrap();
+
+    assert!(!result.ok);
+    assert_eq!(result.hash.as_deref(), Some(pushed_hash.as_str()));
+    assert_eq!(
+        result.blocked_reason,
+        Some(crate::git::GitBlockReason::PushedCommit)
+    );
+    assert!(result
+        .recommendation
+        .as_deref()
+        .unwrap_or_default()
+        .contains("revert"));
+}
+
+#[tokio::test]
+async fn undo_last_commit_blocks_when_rebase_is_active() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    git(&["checkout", "-b", "feature/undo-rebase-block"], path);
+    std::fs::write(path.join("README.md"), "feature change\n").unwrap();
+    git(&["add", "README.md"], path);
+    git(&["commit", "-m", "feature change"], path);
+
+    git(&["checkout", "main"], path);
+    std::fs::write(path.join("README.md"), "main change\n").unwrap();
+    git(&["add", "README.md"], path);
+    git(&["commit", "-m", "main change"], path);
+
+    git(&["checkout", "feature/undo-rebase-block"], path);
+    let output = Command::new("git")
+        .args(["rebase", "main"])
+        .current_dir(path)
+        .output()
+        .expect("git rebase failed to spawn");
+    assert!(!output.status.success(), "rebase should conflict");
+
+    let result = undo_last_commit(path).await.unwrap();
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.blocked_reason,
+        Some(crate::git::GitBlockReason::ActiveOperation)
+    );
+    assert_eq!(
+        result.recovery.as_ref().map(|r| &r.operation),
+        Some(&crate::git::GitRecoveryOperation::Rebase)
     );
 }
 

@@ -4,7 +4,10 @@ import {
   useGitCherryPickCommitFiles,
   useGitDropCommit,
   useGitDropCommitFiles,
+  useGitRevertCommit,
+  useGitRevertCommitFiles,
   useGitReset,
+  useGitUndoLastCommit,
 } from "@/api/queries.js";
 import type {
   DiffFileEntry,
@@ -246,6 +249,160 @@ export function GitDropCommitDialog({
   );
 }
 
+interface GitRevertCommitDialogProps {
+  commit: GitLogEntry | null;
+  loading: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}
+
+export function GitRevertCommitDialog({
+  commit,
+  loading,
+  onClose,
+  onConfirm,
+}: GitRevertCommitDialogProps) {
+  return (
+    <Dialog open={commit !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-[500px]">
+        <DialogHeader>
+          <DialogTitle>Revert commit</DialogTitle>
+          <DialogDescription>
+            Create a new commit that reverses{" "}
+            <strong>{commit?.hash.slice(0, 7)}</strong>. History is preserved.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="text-xs text-[var(--color-text-muted)]">
+          This is the safe action for pushed or shared commits.
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="primary"
+            loading={loading}
+            onClick={onConfirm}
+          >
+            Revert commit
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+interface GitUndoLastCommitDialogProps {
+  commit: GitLogEntry | null;
+  loading: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}
+
+export function GitUndoLastCommitDialog({
+  commit,
+  loading,
+  onClose,
+  onConfirm,
+}: GitUndoLastCommitDialogProps) {
+  return (
+    <Dialog open={commit !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-[500px]">
+        <DialogHeader>
+          <DialogTitle>Undo Last Commit</DialogTitle>
+          <DialogDescription>
+            Move HEAD back one commit and keep changes from{" "}
+            <strong>{commit?.hash.slice(0, 7)}</strong> as unstaged local
+            changes.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="rounded border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2 text-xs text-[var(--color-danger)]">
+          This rewrites local branch history. Use Revert for pushed commits.
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="danger"
+            loading={loading}
+            onClick={onConfirm}
+          >
+            Undo Last Commit
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+interface GitSelectedChangesDialogProps {
+  operation: GitSelectedChangesOperation | null;
+  loading: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}
+
+export function GitSelectedChangesDialog({
+  operation,
+  loading,
+  onClose,
+  onConfirm,
+}: GitSelectedChangesDialogProps) {
+  const isDrop = operation?.kind === "drop";
+  return (
+    <Dialog
+      open={operation !== null}
+      onOpenChange={(open) => !open && onClose()}
+    >
+      <DialogContent className="sm:max-w-[500px]">
+        <DialogHeader>
+          <DialogTitle>
+            {isDrop ? "Drop Selected Changes" : "Revert Selected Changes"}
+          </DialogTitle>
+          <DialogDescription>
+            {isDrop
+              ? "Rewrite local history to remove the selected file changes from this commit."
+              : "Apply the inverse of the selected file changes to the working tree."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="text-xs text-[var(--color-text-muted)]">
+          {operation?.files.length ?? 0} file change
+          {(operation?.files.length ?? 0) === 1 ? "" : "s"} selected from{" "}
+          <strong>{operation?.commit.hash.slice(0, 7)}</strong>.
+        </div>
+        {isDrop && (
+          <div className="rounded border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2 text-xs text-[var(--color-danger)]">
+            Drop is only available for commits that have not been pushed
+            upstream.
+          </div>
+        )}
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant={isDrop ? "danger" : "primary"}
+            loading={loading}
+            onClick={onConfirm}
+          >
+            {isDrop ? "Drop Selected Changes" : "Revert Selected Changes"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export interface GitSelectedChangesOperation {
+  kind: "revert" | "drop";
+  commit: GitLogEntry;
+  files: DiffFileEntry[];
+}
+
 export function useGitHistoryActions(project: string) {
   const [resetCommitState, setResetCommitState] = useState<{
     project: string;
@@ -255,19 +412,42 @@ export function useGitHistoryActions(project: string) {
     project: string;
     commit: GitLogEntry | null;
   }>({ project: "", commit: null });
+  const [revertCommitState, setRevertCommitState] = useState<{
+    project: string;
+    commit: GitLogEntry | null;
+  }>({ project: "", commit: null });
+  const [undoLastCommitState, setUndoLastCommitState] = useState<{
+    project: string;
+    commit: GitLogEntry | null;
+  }>({ project: "", commit: null });
+  const [selectedChangesState, setSelectedChangesState] = useState<{
+    project: string;
+    operation: GitSelectedChangesOperation | null;
+  }>({ project: "", operation: null });
   const [statusState, setStatusState] = useState<{
     project: string;
     value: GitHistoryActionStatus | null;
   }>({ project: "", value: null });
   const cherryPickMutation = useGitCherryPick(project);
   const resetMutation = useGitReset(project);
+  const undoLastCommitMutation = useGitUndoLastCommit(project);
   const cherryPickFilesMutation = useGitCherryPickCommitFiles(project);
+  const revertFilesMutation = useGitRevertCommitFiles(project);
   const dropFilesMutation = useGitDropCommitFiles(project);
   const dropCommitMutation = useGitDropCommit(project);
+  const revertCommitMutation = useGitRevertCommit(project);
   const resetCommit =
     resetCommitState.project === project ? resetCommitState.commit : null;
   const dropCommit =
     dropCommitState.project === project ? dropCommitState.commit : null;
+  const revertCommit =
+    revertCommitState.project === project ? revertCommitState.commit : null;
+  const undoLastCommit =
+    undoLastCommitState.project === project ? undoLastCommitState.commit : null;
+  const selectedChangesOperation =
+    selectedChangesState.project === project
+      ? selectedChangesState.operation
+      : null;
   const status = statusState.project === project ? statusState.value : null;
 
   function setStatus(value: GitHistoryActionStatus | null) {
@@ -322,6 +502,65 @@ export function useGitHistoryActions(project: string) {
           caughtError instanceof Error ? caughtError.message : "Reset failed",
       });
     }
+  }
+
+  async function handleRevertCommit() {
+    if (!project || !revertCommit) return null;
+    const targetHash = revertCommit.hash;
+    setStatus(null);
+    try {
+      const result = await revertCommitMutation.mutateAsync({
+        hash: targetHash,
+      });
+      setStatus(
+        formatGitActionStatus(
+          result,
+          `Reverted commit ${targetHash.slice(0, 7)}`,
+          `Revert commit failed for ${targetHash.slice(0, 7)}`,
+        ),
+      );
+      if (result.ok) {
+        setRevertCommitState({ project, commit: null });
+      }
+    } catch (caughtError) {
+      setStatus({
+        kind: "error",
+        message:
+          caughtError instanceof Error
+            ? caughtError.message
+            : "Revert commit failed",
+      });
+    }
+    return targetHash;
+  }
+
+  async function handleUndoLastCommit() {
+    if (!project || !undoLastCommit) return null;
+    const targetHash = undoLastCommit.hash;
+    setStatus(null);
+    try {
+      const result = await undoLastCommitMutation.mutateAsync();
+      setStatus(
+        formatGitActionStatus(
+          result,
+          `Undid last commit ${targetHash.slice(0, 7)}`,
+          "Undo Last Commit failed",
+        ),
+      );
+      if (result.ok) {
+        setUndoLastCommitState({ project, commit: null });
+        return targetHash;
+      }
+    } catch (caughtError) {
+      setStatus({
+        kind: "error",
+        message:
+          caughtError instanceof Error
+            ? caughtError.message
+            : "Undo Last Commit failed",
+      });
+    }
+    return null;
   }
 
   async function handleCherryPickFiles(
@@ -381,6 +620,69 @@ export function useGitHistoryActions(project: string) {
     }
   }
 
+  async function handleRevertFiles(
+    commit: GitLogEntry,
+    files: DiffFileEntry[],
+  ) {
+    if (!project || files.length === 0) return;
+    const paths = files.map((file) => file.path);
+    setStatus(null);
+    try {
+      const result = await revertFilesMutation.mutateAsync({
+        hash: commit.hash,
+        paths,
+      });
+      setStatus(
+        formatGitActionStatus(
+          result,
+          `Reverted ${files.length} selected file change(s)`,
+          "Revert selected changes failed",
+        ),
+      );
+    } catch (caughtError) {
+      setStatus({
+        kind: "error",
+        message:
+          caughtError instanceof Error
+            ? caughtError.message
+            : "Revert selected changes failed",
+      });
+    }
+  }
+
+  function requestSelectedChangesOperation(
+    kind: GitSelectedChangesOperation["kind"],
+    commit: GitLogEntry,
+    files: DiffFileEntry[],
+  ) {
+    if (files.length === 0) return;
+    setSelectedChangesState({
+      project,
+      operation: { kind, commit, files },
+    });
+  }
+
+  async function handleSelectedChangesOperation() {
+    if (!selectedChangesOperation) return;
+    const operation = selectedChangesOperation;
+    if (operation.kind === "drop" && operation.commit.isPushed) {
+      setStatus({
+        kind: "blocked",
+        message:
+          "Drop selected changes is only available for commits not pushed upstream",
+        detail: "Use Revert Selected Changes for shared history.",
+      });
+      setSelectedChangesState({ project, operation: null });
+      return;
+    }
+    if (operation.kind === "drop") {
+      await handleDropFiles(operation.commit, operation.files);
+    } else {
+      await handleRevertFiles(operation.commit, operation.files);
+    }
+    setSelectedChangesState({ project, operation: null });
+  }
+
   async function handleDropCommit() {
     if (!project || !dropCommit) return null;
     const targetHash = dropCommit.hash;
@@ -429,23 +731,47 @@ export function useGitHistoryActions(project: string) {
   const resetScope = useCallback(() => {
     setResetCommitState((current) => ({ ...current, commit: null }));
     setDropCommitState((current) => ({ ...current, commit: null }));
+    setRevertCommitState((current) => ({ ...current, commit: null }));
+    setUndoLastCommitState((current) => ({ ...current, commit: null }));
+    setSelectedChangesState((current) => ({ ...current, operation: null }));
     clearStatus();
   }, [clearStatus]);
 
   return {
     dropCommit,
     isDropCommitPending: dropCommitMutation.isPending,
+    revertCommit,
+    isRevertCommitPending: revertCommitMutation.isPending,
+    undoLastCommit,
+    isUndoLastCommitPending: undoLastCommitMutation.isPending,
+    selectedChangesOperation,
+    isSelectedChangesPending:
+      dropFilesMutation.isPending || revertFilesMutation.isPending,
     status,
     resetCommit,
     setDropCommit: (commit: GitLogEntry | null) =>
       setDropCommitState({ project, commit }),
+    setRevertCommit: (commit: GitLogEntry | null) =>
+      setRevertCommitState({ project, commit }),
+    setUndoLastCommit: (commit: GitLogEntry | null) =>
+      setUndoLastCommitState({ project, commit }),
     setResetCommit: (commit: GitLogEntry | null) =>
       setResetCommitState({ project, commit }),
     handleCherryPick,
     handleCherryPickFiles,
     handleDropCommit,
     handleDropFiles,
+    handleRevertCommit,
+    handleRevertFiles,
     handleReset,
+    handleUndoLastCommit,
+    handleSelectedChangesOperation,
+    requestDropFiles: (commit: GitLogEntry, files: DiffFileEntry[]) =>
+      requestSelectedChangesOperation("drop", commit, files),
+    requestRevertFiles: (commit: GitLogEntry, files: DiffFileEntry[]) =>
+      requestSelectedChangesOperation("revert", commit, files),
+    clearSelectedChangesOperation: () =>
+      setSelectedChangesState({ project, operation: null }),
     clearStatus,
     resetScope,
   };

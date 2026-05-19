@@ -89,6 +89,14 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - git2 library for operations, CLI fallback for advanced ops
 - SSH key storage in ~/.config/dam-hopper/credentials/
 - Constant-time comparison for auth tokens
+- History mutations must distinguish safe recovery from rewrite actions
+- Pushed/shared history must prefer revert over destructive rewrite
+
+**Phase-Based Implementation:**
+
+- Phase 01: Backend Git operations and repo-state guards
+- Phase 02: Web Git workspace semantics and refresh flow
+- Phase 03: IntelliJ-compatible actions, including undo last commit and selected-change revert/drop split
 
 ### PR-004: IDE File Explorer (Phase 01)
 

@@ -163,6 +163,8 @@ interface TerminalPanelProps {
 - Cherry-picks the selected commit and surfaces conflict/dirty result flags.
 - Opens a reset confirmation dialog for soft, mixed, hard, and keep reset modes.
 - Marks destructive history actions clearly before invoking the backend.
+- Groups history actions into safe vs rewrite actions.
+- Exposes undo last commit and safe revert paths for local history recovery.
 - Prevents local commit drops for pushed commits and shows a shared revert recommendation instead.
 - Branch-history operations refresh Git, project status, file tree, and open editor tabs through scoped Git invalidation helpers.
 
@@ -195,6 +197,7 @@ interface TerminalPanelProps {
 - Uses the shared Git history action hook and the same commit-details/diff flow as the workspace panel.
 - Resets the selected commit state when project selection changes.
 - Supports file double-click diffing from the selected commit in the Git view.
+- Uses the same safe-vs-rewrite action labeling as the workspace Git panel.
 
 ---
 

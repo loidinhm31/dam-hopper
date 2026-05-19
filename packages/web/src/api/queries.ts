@@ -507,6 +507,14 @@ export function useGitReset(project: string) {
   });
 }
 
+export function useGitUndoLastCommit(project: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.git.undoLastCommit(project),
+    onSuccess: () => void invalidateGitBranchOperation(qc, project),
+  });
+}
+
 export function useGitCherryPickCommitFiles(project: string) {
   const qc = useQueryClient();
   return useMutation({

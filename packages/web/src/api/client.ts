@@ -556,6 +556,10 @@ export const api = {
         hash,
         mode,
       }),
+    undoLastCommit: (project: string) =>
+      getTransport().invoke<GitActionResult>("git:undoLastCommit", {
+        project,
+      }),
     commitFiles: (project: string, hash: string) =>
       getTransport().invoke<DiffFileEntry[]>("git:commitFiles", {
         project,

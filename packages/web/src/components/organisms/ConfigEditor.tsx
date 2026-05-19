@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import type {
   DamHopperConfig,

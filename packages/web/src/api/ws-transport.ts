@@ -535,6 +535,13 @@ function channelToEndpoint(
         body: { hash: d.hash, mode: d.mode },
       };
     }
+    case "git:undoLastCommit": {
+      const d = data as { project: string };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/undo-last-commit`,
+      };
+    }
     case "git:commitFiles": {
       const d = data as { project: string; hash: string };
       return {

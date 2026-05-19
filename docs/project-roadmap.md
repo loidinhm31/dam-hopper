@@ -197,6 +197,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-05-19:** Completed IntelliJ-Compatible Actions Phase 03.
+  - ✅ Added safe revert path for pushed/shared commits
+  - ✅ Split revert selected changes from drop selected changes
+  - ✅ Added undo last commit semantics for local rewrite recovery
+  - ✅ Confirmation copy now separates safe vs destructive Git actions
+  - ✅ Status updated in plan and phase docs
+
 - **2026-05-16:** Completed PTY Env Leakage Fix Phase 01.
   - ✅ PTY child env now starts from a safe baseline instead of inheriting server process env
   - ✅ Project `env_file` values load into terminal sessions before request overrides

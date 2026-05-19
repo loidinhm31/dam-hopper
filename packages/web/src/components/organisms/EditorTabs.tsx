@@ -82,6 +82,7 @@ export function EditorTabs({ project }: { project: string | null }) {
       }
       const tab = tabs.find((t) => t.key === key);
       if (!tab) return;
+      if (!tab.path) return save(key);
 
       // If a session is already cached the AES key is live — no passphrase needed
       const sessionActive = !!getSession(project);
@@ -94,12 +95,14 @@ export function EditorTabs({ project }: { project: string | null }) {
           return;
         }
       }
+      const resolvedPassphrase = sessionActive ? "" : passphrase;
+      if (resolvedPassphrase === null) return;
 
       const result = await encryptedWrite.saveText(
         project,
         tab.path,
         tab.content,
-        passphrase,
+        resolvedPassphrase,
       );
       if (result.ok) {
         markSaved(key, result.newMtime ?? tab.mtime);

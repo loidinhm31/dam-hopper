@@ -103,6 +103,16 @@ Infrastructure
 
 ## Recent Phases
 
+### Phase 03: IntelliJ-Compatible Git Actions ✅ Complete
+
+- **Status**: Safe-vs-rewrite Git actions split across backend and web UI
+- **Features**:
+  - `POST /api/git/{project}/undo-last-commit` for local commit recovery
+  - Safe revert paths for pushed/shared commits and selected changes
+  - Separate `Revert Selected Changes` and `Drop Selected Changes` actions
+  - History context menu groups safe actions apart from rewrite actions
+- **Validation**: tests and build passed
+
 ### Phase 01: Server-Side Auth Bypass ✅ Complete
 
 - **Status**: Fully implemented and tested (7/7 tests passing)
