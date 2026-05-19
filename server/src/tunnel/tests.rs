@@ -117,28 +117,15 @@ async fn manager_list_empty_on_new() {
 }
 
 // ---------------------------------------------------------------------------
-// installer::resolve() returns BinaryMissing when binary absent from PATH
+// installer PATH lookup returns none when binary absent from PATH
 // ---------------------------------------------------------------------------
 
-/// Tests resolve() with an isolated temp dir as PATH to avoid finding the real
-/// cloudflared binary. Runs single-threaded to avoid concurrent env mutation.
-#[tokio::test(flavor = "current_thread")]
-async fn installer_resolve_binary_missing_isolated_path() {
+/// Tests resolve() with an isolated PATH without mutating process-global env.
+#[test]
+fn installer_path_lookup_missing_isolated_path() {
     let tmp = tempfile::tempdir().unwrap();
 
-    // Swap PATH to a dir that definitely has no cloudflared.
-    // Single-threaded runtime keeps this env mutation safe within this test.
-    let original = std::env::var("PATH").unwrap_or_default();
-    std::env::set_var("PATH", tmp.path());
+    let result = TunnelInstaller::resolve_path_binary(Some(tmp.path().as_os_str().to_os_string()));
 
-    let result = TunnelInstaller::resolve().await;
-
-    std::env::set_var("PATH", original);
-
-    // Either BinaryMissing (expected) or Ok (user has ~/.dam-hopper/bin/cloudflared).
-    match result {
-        Err(TunnelError::BinaryMissing) => {}
-        Ok(_) => {} // pre-installed binary present at local path
-        Err(other) => panic!("unexpected error: {other}"),
-    }
+    assert!(result.is_none());
 }

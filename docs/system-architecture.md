@@ -468,9 +468,30 @@ Server-side OPAQUE password-authenticated key exchange for the encrypt-in-transi
 
 ### git/
 
-Git operations via `git2` library + CLI fallback.
+Git operations use `git2` for read-heavy repository inspection and real `git`
+CLI porcelain for mutating history operations where porcelain semantics matter.
+CLI calls are built with `Command::new("git").args(...)`; request data is never
+interpolated through a shell.
 
-**repository.rs** — Clone, push, pull, status.
+**repository.rs** — Clone, push, pull, status, branch actions, reset, cherry-pick,
+and undo-last-commit.
+
+**commit_file_ops.rs** — IntelliJ-compatible history actions:
+
+- `drop_commit()` — local unpushed commit removal; uses hard reset for `HEAD`
+  and `rebase --onto` for non-HEAD commits with descendants.
+- `drop_commit_files()` — removes selected file changes from an unpushed commit
+  while preserving the rest of the commit.
+- `revert_commit()` — creates an inverse commit for safe shared-history changes.
+- `revert_commit_files()` — applies inverse selected-file changes to the
+  worktree without rewriting history.
+
+History rewrite preflights check dirty worktree state, root commits,
+reachability, upstream pushed/shared status, detached HEAD, and active
+merge/rebase/cherry-pick operations. Safe operations like revert stay available
+for shared history, while blocked or conflicted rewrite operations return
+`GitActionResult` with `blockedReason`, `recovery`, and `recommendation` so the
+web UI can show recoverable state instead of generic errors.
 
 **types.rs** — Shared data types:
 
@@ -532,6 +553,10 @@ HTTP request handlers + WebSocket upgrade.
 - `POST /api/git/:project/cherry-pick` — cherry-pick a commit
 - `POST /api/git/:project/reset` — reset current branch with `soft`, `mixed`, `hard`, or `keep`
 - `POST /api/git/:project/undo-last-commit` — safe local commit recovery; blocks pushed/shared history and recommends revert
+- `POST /api/git/:project/commit/:hash/drop` — drop an unpushed commit
+- `POST /api/git/:project/commit/:hash/drop-files` — drop selected changes from an unpushed commit
+- `POST /api/git/:project/commit/:hash/revert` — revert a commit with an inverse commit
+- `POST /api/git/:project/commit/:hash/revert-files` — apply inverse selected-file changes to the worktree
 
 **port_forward.rs** (Phase 03) — Port detection handler:
 
@@ -796,6 +821,7 @@ API layer (handlers) catch AppError → HTTP status:
 **Phase 03 (Complete):** Web IDE shell—react-resizable-panels layout (file tree | editor | terminal); react-arborist tree component; TanStack Query + useFsSubscription hook for live tree sync; applyFsDelta merges server events into client cache; feature flag `ide_explorer` gates routes and sidebar link; /ide lazy route with fallback placeholder.
 
 **Phase 03 (Complete):** IntelliJ-compatible Git actions—shared safe-vs-rewrite history menu, undo-last-commit endpoint, revert-selected-changes vs drop-selected-changes split, and pushed/shared history protections that steer users toward revert.
+**Phase 04 (Complete):** Verification and docs for real Git semantics—tests cover active-operation blocking, recovery metadata, pushed-history rewrite guards, and UI refresh behavior after history mutations.
 
 **Phase 04 (Complete):** Monaco editor with tab mgmt + save. WS write protocol (fs:write_begin → fs:write_chunk\* → fs:write_commit). File tiering (normal <1MB, degraded 1-5MB, large ≥5MB, binary). Conflict detection via mtime. Ctrl+S save, MonacoHost, EditorTabs, LargeFileViewer, BinaryPreview, ConflictDialog components.
 

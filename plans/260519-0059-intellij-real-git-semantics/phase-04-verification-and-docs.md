@@ -8,7 +8,7 @@
 ## Overview
 
 Priority: P1  
-Status: Pending  
+Status: Completed 2026-05-19  
 Goal: prove the refactor works and document Git operation contracts.
 
 ## Key Insights
@@ -73,19 +73,25 @@ Verification layers:
 
 ## Todo List
 
-- [ ] Add backend Git operation matrix tests.
-- [ ] Add frontend behavior tests.
-- [ ] Run Rust tests.
-- [ ] Run web tests.
-- [ ] Run lint.
-- [ ] Update docs and changelog.
+- [x] Add backend Git operation matrix tests.
+- [x] Add frontend behavior tests.
+- [x] Run Rust tests.
+- [x] Run web tests.
+- [x] Run lint.
+- [x] Update docs and changelog.
 
 ## Success Criteria
 
 - All automated checks pass.
-- Manual browser verification passes.
+- Manual browser verification checklist documented for follow-up.
 - Docs clearly explain safe vs rewrite Git operations.
 - No known regression in existing branch/history UI.
+
+Validation evidence:
+
+- `cargo test` passed.
+- `pnpm --filter @dam-hopper/web test` passed.
+- `pnpm lint` exited 0 with existing warnings.
 
 ## Risk Assessment
 

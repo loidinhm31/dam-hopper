@@ -235,22 +235,27 @@ Reset to a commit. `mode` is `soft`, `mixed`, `hard`, or `keep`.
 Drop a local, unpushed commit from the current branch history. `HEAD` drops use
 `git reset --hard <parent>` after preflight checks. Non-HEAD drops use
 `git rebase --onto <parent> <hash> <branch>`. Pushed/shared commits are blocked
-by default and should use revert.
+by default and should use revert. The server refuses to start a rewrite while a
+merge, rebase, or cherry-pick is already in progress and returns `recovery`
+metadata for the active operation.
 
 **POST /api/git/{project}/commit/{hash}/drop-files**
 Drop selected file changes from an unpushed commit while preserving other files
-from that commit.
+from that commit. This is a local-history rewrite and is blocked for pushed
+commits.
 
 ```json
 { "paths": ["src/main.rs"] }
 ```
 
 **POST /api/git/{project}/commit/{hash}/revert**
-Create a new inverse commit with `git revert <hash>`.
+Create a new inverse commit with `git revert <hash>`. This is the default safe
+operation for pushed or shared history because it preserves existing commits.
 
 **POST /api/git/{project}/commit/{hash}/revert-files**
 Apply the inverse patch for selected files to the working tree without rewriting
-history.
+history. The resulting file changes are left in the worktree for review and
+commit.
 
 ```json
 { "paths": ["src/main.rs"] }
@@ -359,16 +364,49 @@ Checked-out branch update guard example:
 ```
 
 Invalid branch names, relative paths, and commit hashes are rejected before Git
-execution. Destructive history rewrites preflight active operations, dirty
-worktree state, commit reachability, root commits, and pushed/shared history.
-Dirty checkout and conflicts return structured result flags so clients can show
-recovery choices instead of treating every non-clean operation as an unclassified
-error. Validation failures use the standard API error shape with a 400 status
-for invalid input:
+execution. Rewrite operations preflight active merge/rebase/cherry-pick state,
+dirty worktree state, commit reachability, root commits, and pushed/shared
+history. Safe operations such as revert remain available for shared history,
+while blocked or conflicted operations return structured result flags so clients
+can show recovery choices instead of treating every non-clean operation as an
+unclassified error. Validation failures use the standard API error shape with a
+400 status for invalid input:
 
 ```json
 { "error": "Invalid input: invalid branch name" }
 ```
+
+### Git History Safety Contract
+
+DamHopper follows IntelliJ-style Git semantics: safe operations preserve shared
+history, while rewrite operations are restricted to local commits that have not
+been pushed upstream. Recovery states are surfaced explicitly so the UI can
+offer continue/abort guidance instead of hiding active Git porcelain state.
+
+| Operation          | History effect       | Shared-history behavior                                  |
+| ------------------ | -------------------- | -------------------------------------------------------- |
+| `revert`           | Adds inverse commit  | Allowed and recommended                                  |
+| `revert-files`     | Worktree inverse     | Allowed; selected changes stay uncommitted for review    |
+| `drop`             | Rewrites branch      | Blocked with `blockedReason: "pushed-commit"`            |
+| `drop-files`       | Rewrites branch      | Blocked with `blockedReason: "pushed-commit"`            |
+| `undo-last-commit` | Rewrites local HEAD  | Blocked when `HEAD` is reachable from upstream           |
+| `reset --hard`     | Rewrites local state | Allowed only after explicit request and preflight checks |
+
+Manual verification checklist for browser integrations:
+
+- Modify an open file and discard it from the Git panel; the browser must not
+  reload, and the affected editor tab should reconcile with disk.
+- Drop a selected file change from an old local commit; branch history and the
+  affected file diff should refresh without a full app reset.
+- Drop a local non-HEAD commit with descendants; descendants should replay or
+  produce a recoverable rebase state.
+- Revert a pushed commit in a clone/remote test repo; the UI should route users
+  to revert instead of enabling drop.
+- Start a conflicting rebase or cherry-pick, then attempt a rewrite; the API
+  should return `blockedReason: "active-operation"` and recovery metadata.
+- Verify the recovery banner copy in the UI by triggering an active-operation
+  block; the banner should mention the active operation and tell the user to
+  resolve, continue, or abort.
 
 ### Commit
 
