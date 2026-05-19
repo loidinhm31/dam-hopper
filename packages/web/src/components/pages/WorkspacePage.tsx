@@ -20,6 +20,7 @@ import {
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { IdeShell } from "@/components/templates/IdeShell.js";
+import { TerminalWorkspaceShell } from "@/components/templates/TerminalWorkspaceShell.js";
 
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
@@ -107,6 +108,7 @@ export default function WorkspacePage() {
   const { activeProject, setActiveProject } = useWorkspaceStore();
   const [workspaceMode, setWorkspaceModeState] =
     useState<WorkspaceMode>(loadWorkspaceMode);
+  const [terminalLayoutRevision, setTerminalLayoutRevision] = useState(0);
 
   const openFile = useEditorStore((s) => s.open);
   const openDiff = useEditorStore((s) => s.openDiff);
@@ -174,6 +176,9 @@ export default function WorkspacePage() {
   const searchFilenameShortcut = useSettingsStore(
     (s) => s.searchFilenameShortcut,
   );
+  const terminalWorkspaceShortcut = useSettingsStore(
+    (s) => s.terminalWorkspaceShortcut,
+  );
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useDocumentKeyboardShortcut(searchTextShortcut, () => openSearch("content"));
@@ -184,12 +189,14 @@ export default function WorkspacePage() {
   const setWorkspaceMode = useCallback((mode: WorkspaceMode) => {
     setWorkspaceModeState(mode);
     saveWorkspaceMode(mode);
+    setTerminalLayoutRevision((current) => current + 1);
   }, []);
 
   const toggleWorkspaceMode = useCallback(() => {
     setWorkspaceModeState((current) => {
       const next = current === "ide" ? "terminal" : "ide";
       saveWorkspaceMode(next);
+      setTerminalLayoutRevision((revision) => revision + 1);
       return next;
     });
   }, []);
@@ -219,7 +226,7 @@ export default function WorkspacePage() {
     [handleSelectProject, setActiveProject],
   );
 
-  const terminalPanel = useMemo(
+  const terminalContent = useMemo(
     () => (
       <div className="flex flex-col h-full">
         {freeTerminalSavePrompt && projects.length > 0 && (
@@ -367,6 +374,7 @@ export default function WorkspacePage() {
                 activeSessionId={activeTab}
                 mountedSessions={mountedSessions}
                 openTabs={tabsWithLiveSession}
+                layoutRevision={terminalLayoutRevision}
                 onSessionExit={handleSessionExit}
                 onNewTerminal={() => {
                   if (projectName) {
@@ -404,18 +412,32 @@ export default function WorkspacePage() {
           ) : (
             <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--color-text-muted)]">
               <TerminalIcon className="h-10 w-10 opacity-20" />
-              <p className="text-sm">
-                Select a project or terminal from the tree
-              </p>
+              <div className="text-center">
+                <p className="text-sm">
+                  {workspaceMode === "terminal"
+                    ? "Terminal workspace"
+                    : "Select a project or terminal from the tree"}
+                </p>
+                {workspaceMode === "terminal" && (
+                  <p className="mt-1 text-xs opacity-60">
+                    Open a terminal from Fleet Terminal or launch one here
+                  </p>
+                )}
+              </div>
               {projectName && (
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={() => handleLaunchShell(projectName)}
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Open Terminal
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => handleLaunchShell(projectName)}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Open Terminal
+                  </Button>
+                  <kbd className="text-[10px] text-[var(--color-text-muted)]/50 font-mono">
+                    Ctrl+`
+                  </kbd>
+                </div>
               )}
             </div>
           )}
@@ -430,6 +452,7 @@ export default function WorkspacePage() {
       handleLaunchFormSubmit,
       tabsWithLiveSession,
       activeTab,
+      terminalLayoutRevision,
       handleSelectTab,
       handleCloseTab,
       setFreeTerminalSavePrompt,
@@ -441,6 +464,62 @@ export default function WorkspacePage() {
       handleAddFreeTerminal,
       projectName,
       handleLaunchShell,
+      workspaceMode,
+    ],
+  );
+
+  const fleetContent = useMemo(
+    () =>
+      isLoading ? (
+        <div className="flex items-center justify-center flex-1 h-full">
+          <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
+        </div>
+      ) : (
+        <Suspense fallback={<PanelFallback label="Loading terminal tree…" />}>
+          <TerminalTreeView
+            projects={tree}
+            freeTerminals={freeTerminals}
+            activeProjectName={projectName ?? undefined}
+            selectedId={selectedId}
+            onSelectProject={handleSelectProjectInTree}
+            onSelectTerminal={handleSelectTerminal}
+            onLaunchTerminal={handleLaunchTerminal}
+            onKillTerminal={handleKillTerminal}
+            onAddShell={handleLaunchShell}
+            onLaunchProfile={handleLaunchProfile}
+            onDeleteProfile={handleDeleteProfile}
+            onLaunchSuggestedCommand={handleLaunchSuggestedCommand}
+            onAddFreeTerminal={handleAddFreeTerminal}
+            onLaunchFreeWithCommand={handleLaunchFreeWithCommand}
+            onSelectFreeTerminal={handleSelectTerminal}
+            onKillFreeTerminal={handleKillTerminal}
+            onRemoveFreeTerminal={handleRemoveFreeTerminal}
+            onSaveFreeTerminal={handleOpenFreeTerminalSavePrompt}
+            onUpdateProfile={handleUpdateProfile}
+            onUpdateCustomCommand={handleUpdateCustomCommand}
+          />
+        </Suspense>
+      ),
+    [
+      isLoading,
+      tree,
+      freeTerminals,
+      projectName,
+      selectedId,
+      handleSelectProjectInTree,
+      handleSelectTerminal,
+      handleLaunchTerminal,
+      handleKillTerminal,
+      handleLaunchShell,
+      handleLaunchProfile,
+      handleDeleteProfile,
+      handleLaunchSuggestedCommand,
+      handleAddFreeTerminal,
+      handleLaunchFreeWithCommand,
+      handleOpenFreeTerminalSavePrompt,
+      handleUpdateProfile,
+      handleUpdateCustomCommand,
+      handleRemoveFreeTerminal,
     ],
   );
 
@@ -531,7 +610,7 @@ export default function WorkspacePage() {
         label: "Terminal",
         icon: TerminalIcon,
         position: "bottom",
-        content: terminalPanel,
+        content: terminalContent,
       },
       {
         id: "git",
@@ -567,7 +646,7 @@ export default function WorkspacePage() {
       openDiff,
       openFile,
       setActiveProject,
-      terminalPanel,
+      terminalContent,
     ],
   );
 
@@ -577,74 +656,41 @@ export default function WorkspacePage() {
         id: "terminals",
         label: "Fleet Terminal",
         icon: LayoutGrid,
-        content: isLoading ? (
-          <div className="flex items-center justify-center flex-1 h-full">
-            <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
-          </div>
-        ) : (
-          <Suspense fallback={<PanelFallback label="Loading terminal tree…" />}>
-            <TerminalTreeView
-              projects={tree}
-              freeTerminals={freeTerminals}
-              activeProjectName={projectName ?? undefined}
-              selectedId={selectedId}
-              onSelectProject={handleSelectProjectInTree}
-              onSelectTerminal={handleSelectTerminal}
-              onLaunchTerminal={handleLaunchTerminal}
-              onKillTerminal={handleKillTerminal}
-              onAddShell={handleLaunchShell}
-              onLaunchProfile={handleLaunchProfile}
-              onDeleteProfile={handleDeleteProfile}
-              onLaunchSuggestedCommand={handleLaunchSuggestedCommand}
-              onAddFreeTerminal={handleAddFreeTerminal}
-              onLaunchFreeWithCommand={handleLaunchFreeWithCommand}
-              onSelectFreeTerminal={handleSelectTerminal}
-              onKillFreeTerminal={handleKillTerminal}
-              onRemoveFreeTerminal={handleRemoveFreeTerminal}
-              onSaveFreeTerminal={handleOpenFreeTerminalSavePrompt}
-              onUpdateProfile={handleUpdateProfile}
-              onUpdateCustomCommand={handleUpdateCustomCommand}
-            />
-          </Suspense>
-        ),
+        content: fleetContent,
       },
     ],
-    [
-      isLoading,
-      tree,
-      freeTerminals,
-      projectName,
-      selectedId,
-      handleSelectProjectInTree,
-      handleSelectTerminal,
-      handleLaunchTerminal,
-      handleKillTerminal,
-      handleLaunchShell,
-      handleLaunchProfile,
-      handleDeleteProfile,
-      handleLaunchSuggestedCommand,
-      handleAddFreeTerminal,
-      handleLaunchFreeWithCommand,
-      handleOpenFreeTerminalSavePrompt,
-      handleUpdateProfile,
-      handleUpdateCustomCommand,
-      handleRemoveFreeTerminal,
-    ],
+    [fleetContent],
   );
+
+  const handleTerminalWorkspaceFleetLayoutChange = useCallback(() => {
+    setTerminalLayoutRevision((current) => current + 1);
+  }, []);
 
   return (
     <>
-      <IdeShell
-        leftTools={leftTools}
-        rightTools={rightTools}
-        workspaceMode={workspaceMode}
-        onWorkspaceModeChange={setWorkspaceMode}
-        editor={
-          <Suspense fallback={<PanelFallback label="Loading editor…" />}>
-            <EditorTabs project={projectName} />
-          </Suspense>
-        }
-      />
+      {workspaceMode === "terminal" ? (
+        <TerminalWorkspaceShell
+          terminalContent={terminalContent}
+          fleetContent={fleetContent}
+          workspaceMode={workspaceMode}
+          onWorkspaceModeChange={setWorkspaceMode}
+          workspaceModeShortcutLabel={terminalWorkspaceShortcut}
+          onFleetLayoutChange={handleTerminalWorkspaceFleetLayoutChange}
+        />
+      ) : (
+        <IdeShell
+          leftTools={leftTools}
+          rightTools={rightTools}
+          workspaceMode={workspaceMode}
+          onWorkspaceModeChange={setWorkspaceMode}
+          workspaceModeShortcutLabel={terminalWorkspaceShortcut}
+          editor={
+            <Suspense fallback={<PanelFallback label="Loading editor…" />}>
+              <EditorTabs project={projectName} />
+            </Suspense>
+          }
+        />
+      )}
 
       {/* Floating search dialog */}
       {searchOpen && projectName && (

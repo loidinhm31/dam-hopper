@@ -8,6 +8,7 @@ interface UseResizeHandleOptions {
   storageKey?: string;
   /** When true, dragging left increases width (right-side panels) */
   reversed?: boolean;
+  onResizeEnd?: () => void;
 }
 
 interface UseResizeHandleReturn {
@@ -24,6 +25,7 @@ export function useResizeHandle({
   defaultWidth,
   storageKey,
   reversed = false,
+  onResizeEnd,
 }: UseResizeHandleOptions): UseResizeHandleReturn {
   const [width, setWidth] = useState<number>(() => {
     if (storageKey) {
@@ -73,6 +75,7 @@ export function useResizeHandle({
         if (storageKey) localStorage.setItem(storageKey, String(w));
         return w;
       });
+      onResizeEnd?.();
     }
 
     document.addEventListener("mousemove", onMouseMove);

@@ -89,6 +89,45 @@ The `IdeShell` orchestrates the system:
 - `IdeShell` keeps the mode contract optional, so existing callers without mode props render unchanged.
 - Uses `terminalWorkspaceShortcut` from UI config for the global mode toggle.
 - Default binding is `Mod+Shift+Backquote`.
+- In terminal mode, `WorkspacePage` renders a full-height terminal workspace below the top nav.
+- The same terminal manager state is reused across mode switches, so PTY lifecycle is not duplicated.
+- Terminal panes refit when switching modes or when the Fleet Terminal rail changes size/collapse state.
+
+### Terminal Workspace Shell
+
+**Location:** `packages/web/src/components/templates/TerminalWorkspaceShell.tsx`
+
+**Purpose:** Wraps the terminal-mode workspace layout.
+
+**Behavior:**
+
+- Renders the Fleet Terminal as a persisted right rail in terminal mode.
+- Persists rail width and collapse state.
+- Keeps the main terminal area full-height below the top nav.
+- Triggers terminal refit on rail resize and collapse changes.
+
+### Multi Terminal Display
+
+**Location:** `packages/web/src/components/organisms/MultiTerminalDisplay.tsx`
+
+**Purpose:** Renders the active terminal panes inside the terminal workspace.
+
+**Behavior:**
+
+- Reuses existing mounted session state from the terminal manager.
+- Does not create a second PTY lifecycle for terminal-mode rendering.
+- Refits visible panes when the workspace shell layout changes.
+
+### Resize Handle Hook
+
+**Location:** `packages/web/src/hooks/useResizeHandle.ts`
+
+**Purpose:** Shared resize state helper for workspace shell rails and split panes.
+
+**Behavior:**
+
+- Persists terminal rail width and collapse state where the caller opts in.
+- Emits layout updates that trigger terminal refit after mode or rail changes.
 
 ---
 

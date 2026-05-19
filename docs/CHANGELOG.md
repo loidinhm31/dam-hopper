@@ -1,3 +1,7 @@
+## 2026-05-20
+
+- **Phase 03: Terminal Workspace Layout.** Complete ✓ 2026-05-20. Workspace Terminal now renders a full-height shell below the top nav, Fleet Terminal stays available as a persisted right rail in terminal mode, the existing terminal manager state is reused across mode switches, and terminal panes refit when mode or rail layout changes.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.

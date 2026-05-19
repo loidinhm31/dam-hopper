@@ -3,6 +3,7 @@ import { Terminal as TerminalIcon } from "lucide-react";
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
 import { SplitLayout } from "@/components/organisms/SplitLayout.js";
 import { useTerminalLayout } from "@/hooks/useTerminalLayout.js";
+import { terminalRegistry } from "@/lib/terminal-registry.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 
 export interface MountedSession {
@@ -20,6 +21,7 @@ interface Props {
   onNewTerminal?: () => void;
   onSelectTab?: (sessionId: string) => void;
   onCloseTab?: (sessionId: string) => void;
+  layoutRevision?: number;
 }
 
 export function MultiTerminalDisplay({
@@ -30,6 +32,7 @@ export function MultiTerminalDisplay({
   onNewTerminal,
   onSelectTab,
   onCloseTab,
+  layoutRevision = 0,
 }: Props) {
   const layout = useTerminalLayout();
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
@@ -73,6 +76,21 @@ export function MultiTerminalDisplay({
   // PaneContainer has its own 150ms retry timer so no forced re-render needed.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleTerminalReady = useCallback((_: string) => {}, []);
+
+  // Mode switches and Fleet rail resize-end events change the pane host size
+  // outside SplitLayout's drag/drop path, so refit registered terminals once.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      for (const [, entry] of terminalRegistry) {
+        try {
+          entry.fitAddon.fit();
+        } catch {
+          /* terminal may be disposed */
+        }
+      }
+    }, 180);
+    return () => clearTimeout(timer);
+  }, [layoutRevision]);
 
   if (mountedSessions.length === 0 || !activeSessionId) {
     return (
