@@ -39,6 +39,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Support terminal input (stdin) via API
 - Auto-restart crashed processes with configurable policy
 - Ensure idempotent session creation
+- Support a terminal workspace mode with a full-height workspace shell and a persistent Fleet Terminal rail
 
 **Acceptance Criteria:**
 
@@ -50,6 +51,8 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Exponential backoff (1s→30s max)
 - ✓ Session ID reused across restarts (frontend tab stays connected)
 - ✓ Idempotent create: removes dead tombstones, cancels pending restarts, safe to retry (Phase 07 ✓)
+- ✓ Workspace terminal mode reuses the existing terminal manager state, without a duplicate PTY lifecycle
+- ✓ Fleet Terminal rail persists width/collapse state and refits terminal panes on layout changes
 
 **Technical Constraints:**
 
@@ -64,6 +67,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 - Phase 02: Config extension — RestartPolicy enum per terminal
 - Phase 03: Session metadata — restart_count, last_exit_at fields
+- Phase 03: Terminal workspace layout — full-height terminal workspace, persistent Fleet rail, refit on mode/layout changes
 - Phase 04: Restart engine — supervisor + exponential backoff
 - Phase 05: Enhanced WS events — terminal:exit (willRestart field) + process:restarted
 - Phase 07: Idempotency — killed set lifecycle, TOCTOU guard, memory leak fix

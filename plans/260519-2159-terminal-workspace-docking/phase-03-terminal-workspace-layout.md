@@ -9,7 +9,7 @@
 ## Overview
 
 Priority: P1  
-Status: Pending  
+Status: Completed 2026-05-20 00:33
 Goal: render Terminal mode as a full workspace with terminal split view as the main tool and Fleet Terminal as the right control rail.
 
 ## Key Insights

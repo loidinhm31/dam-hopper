@@ -18,6 +18,7 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 - **Compatibility Layer**: `packages/web/src/lib/mime-to-language.ts` keeps MIME-only callers working while routing to the shared registry.
 - **Rendering Wrapper**: `packages/web/src/lib/file-decoration-icon.tsx` is a thin icon component over the registry.
 - **Shared Surfaces**: explorer tree, editor tabs, search headers, and path labels all read from the same lookup so file identity stays aligned across the UI.
+- **Workspace Terminal Layout**: `WorkspacePage` switches between IDE and terminal modes, `TerminalWorkspaceShell` renders the full-height terminal workspace with a persisted Fleet Terminal rail, and `MultiTerminalDisplay` reuses the existing terminal manager state across layout changes.
 
 ## Key Features
 
