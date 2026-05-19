@@ -2,11 +2,16 @@ import { useCallback, useState } from "react";
 import {
   useGitCherryPick,
   useGitCherryPickCommitFiles,
+  useGitDropCommit,
   useGitDropCommitFiles,
   useGitReset,
 } from "@/api/queries.js";
-import { api } from "@/api/client.js";
-import type { DiffFileEntry, GitLogEntry, ResetMode } from "@/api/client.js";
+import type {
+  DiffFileEntry,
+  GitActionResult,
+  GitLogEntry,
+  ResetMode,
+} from "@/api/client.js";
 import { cn } from "@/lib/utils.js";
 import { Button } from "@/components/atoms/Button.js";
 import {
@@ -49,29 +54,94 @@ export const RESET_OPTIONS: Array<{
 ];
 
 interface GitHistoryStatusBannerProps {
-  error: string | null;
-  message: string | null;
+  status: GitHistoryActionStatus | null;
   className?: string;
 }
 
+export type GitHistoryActionStatusKind =
+  | "success"
+  | "blocked"
+  | "conflict"
+  | "dirty"
+  | "error";
+
+export interface GitHistoryActionStatus {
+  kind: GitHistoryActionStatusKind;
+  message: string;
+  detail?: string;
+}
+
+export function formatGitActionStatus(
+  result: GitActionResult,
+  successFallback: string,
+  errorFallback: string,
+): GitHistoryActionStatus {
+  if (result.ok) {
+    return {
+      kind: "success",
+      message: result.message ?? successFallback,
+      detail: result.recommendation,
+    };
+  }
+
+  if (result.conflict) {
+    return {
+      kind: "conflict",
+      message: result.message ?? errorFallback,
+      detail:
+        result.recovery?.canAbort || result.recovery?.canContinue
+          ? "Resolve the active operation before continuing."
+          : result.recommendation,
+    };
+  }
+
+  if (result.dirty) {
+    return {
+      kind: "dirty",
+      message: result.message ?? errorFallback,
+      detail:
+        result.recommendation ?? "Commit, stash, or discard local changes.",
+    };
+  }
+
+  if (result.blockedReason) {
+    return {
+      kind: "blocked",
+      message: result.message ?? errorFallback,
+      detail: result.recommendation ?? result.blockedReason,
+    };
+  }
+
+  return {
+    kind: "error",
+    message: result.message ?? errorFallback,
+    detail: result.recommendation,
+  };
+}
+
 export function GitHistoryStatusBanner({
-  error,
-  message,
+  status,
   className,
 }: GitHistoryStatusBannerProps) {
-  if (!error && !message) return null;
+  if (!status) return null;
+
+  const tone =
+    status.kind === "success"
+      ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
+      : status.kind === "blocked"
+        ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
+        : status.kind === "dirty"
+          ? "border-blue-500/30 bg-blue-500/10 text-blue-300"
+          : "border-[var(--color-danger)]/20 bg-[var(--color-danger)]/10 text-[var(--color-danger)]";
 
   return (
     <div
-      className={cn(
-        "rounded border px-2 py-1 text-[10px]",
-        error
-          ? "border-[var(--color-danger)]/20 bg-[var(--color-danger)]/10 text-[var(--color-danger)]"
-          : "border-emerald-500/20 bg-emerald-500/10 text-emerald-400",
-        className,
-      )}
+      className={cn("rounded border px-2 py-1 text-[10px]", tone, className)}
     >
-      {error ?? message}
+      <div>{status.message}</div>
+      {status.detail && (
+        <div className="mt-0.5 opacity-80">{status.detail}</div>
+      )}
     </div>
   );
 }
@@ -155,8 +225,8 @@ export function GitDropCommitDialog({
           Only available for commits that have not been pushed upstream.
         </div>
         <div className="text-xs text-[var(--color-text-muted)]">
-          DamHopper will load all changed files from this commit, then reuse the
-          existing drop-selected-changes flow for the full commit.
+          DamHopper will remove this local commit through the server Git
+          operation and refresh branch history afterward.
         </div>
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={onClose}>
@@ -185,47 +255,41 @@ export function useGitHistoryActions(project: string) {
     project: string;
     commit: GitLogEntry | null;
   }>({ project: "", commit: null });
-  const [messageState, setMessageState] = useState<{
+  const [statusState, setStatusState] = useState<{
     project: string;
-    value: string | null;
-  }>({ project: "", value: null });
-  const [errorState, setErrorState] = useState<{
-    project: string;
-    value: string | null;
+    value: GitHistoryActionStatus | null;
   }>({ project: "", value: null });
   const cherryPickMutation = useGitCherryPick(project);
   const resetMutation = useGitReset(project);
   const cherryPickFilesMutation = useGitCherryPickCommitFiles(project);
   const dropFilesMutation = useGitDropCommitFiles(project);
+  const dropCommitMutation = useGitDropCommit(project);
   const resetCommit =
     resetCommitState.project === project ? resetCommitState.commit : null;
   const dropCommit =
     dropCommitState.project === project ? dropCommitState.commit : null;
-  const message = messageState.project === project ? messageState.value : null;
-  const error = errorState.project === project ? errorState.value : null;
+  const status = statusState.project === project ? statusState.value : null;
+
+  function setStatus(value: GitHistoryActionStatus | null) {
+    setStatusState({ project, value });
+  }
 
   async function handleCherryPick(entry: GitLogEntry) {
     if (!project) return;
-    setErrorState({ project, value: null });
-    setMessageState({ project, value: null });
+    setStatus(null);
     try {
       const result = await cherryPickMutation.mutateAsync(entry.hash);
-      if (result.ok) {
-        setMessageState({
-          project,
-          value: result.message ?? `Cherry-picked ${entry.hash.slice(0, 7)}`,
-        });
-        return;
-      }
-      setErrorState({
-        project,
-        value:
-          result.message ?? `Cherry-pick failed for ${entry.hash.slice(0, 7)}`,
-      });
+      setStatus(
+        formatGitActionStatus(
+          result,
+          `Cherry-picked ${entry.hash.slice(0, 7)}`,
+          `Cherry-pick failed for ${entry.hash.slice(0, 7)}`,
+        ),
+      );
     } catch (caughtError) {
-      setErrorState({
-        project,
-        value:
+      setStatus({
+        kind: "error",
+        message:
           caughtError instanceof Error
             ? caughtError.message
             : "Cherry-pick failed",
@@ -235,31 +299,26 @@ export function useGitHistoryActions(project: string) {
 
   async function handleReset(mode: ResetMode) {
     if (!project || !resetCommit) return;
-    setErrorState({ project, value: null });
-    setMessageState({ project, value: null });
+    setStatus(null);
     try {
       const result = await resetMutation.mutateAsync({
         hash: resetCommit.hash,
         mode,
       });
+      setStatus(
+        formatGitActionStatus(
+          result,
+          `Reset ${mode} to ${resetCommit.hash.slice(0, 7)}`,
+          `Reset ${mode} failed`,
+        ),
+      );
       if (result.ok) {
-        setMessageState({
-          project,
-          value:
-            result.message ??
-            `Reset ${mode} to ${resetCommit.hash.slice(0, 7)}`,
-        });
         setResetCommitState({ project, commit: null });
-        return;
       }
-      setErrorState({
-        project,
-        value: result.message ?? `Reset ${mode} failed`,
-      });
     } catch (caughtError) {
-      setErrorState({
-        project,
-        value:
+      setStatus({
+        kind: "error",
+        message:
           caughtError instanceof Error ? caughtError.message : "Reset failed",
       });
     }
@@ -271,30 +330,23 @@ export function useGitHistoryActions(project: string) {
   ) {
     if (!project || files.length === 0) return;
     const paths = files.map((file) => file.path);
-    setErrorState({ project, value: null });
-    setMessageState({ project, value: null });
+    setStatus(null);
     try {
       const result = await cherryPickFilesMutation.mutateAsync({
         hash: commit.hash,
         paths,
       });
-      if (result.ok) {
-        setMessageState({
-          project,
-          value:
-            result.message ??
-            `Cherry-picked ${files.length} selected file change(s)`,
-        });
-        return;
-      }
-      setErrorState({
-        project,
-        value: result.message ?? "Cherry-pick selected changes failed",
-      });
+      setStatus(
+        formatGitActionStatus(
+          result,
+          `Cherry-picked ${files.length} selected file change(s)`,
+          "Cherry-pick selected changes failed",
+        ),
+      );
     } catch (caughtError) {
-      setErrorState({
-        project,
-        value:
+      setStatus({
+        kind: "error",
+        message:
           caughtError instanceof Error
             ? caughtError.message
             : "Cherry-pick selected changes failed",
@@ -305,29 +357,23 @@ export function useGitHistoryActions(project: string) {
   async function handleDropFiles(commit: GitLogEntry, files: DiffFileEntry[]) {
     if (!project || files.length === 0) return;
     const paths = files.map((file) => file.path);
-    setErrorState({ project, value: null });
-    setMessageState({ project, value: null });
+    setStatus(null);
     try {
       const result = await dropFilesMutation.mutateAsync({
         hash: commit.hash,
         paths,
       });
-      if (result.ok) {
-        setMessageState({
-          project,
-          value:
-            result.message ?? `Dropped ${files.length} selected file change(s)`,
-        });
-        return;
-      }
-      setErrorState({
-        project,
-        value: result.message ?? "Drop selected changes failed",
-      });
+      setStatus(
+        formatGitActionStatus(
+          result,
+          `Dropped ${files.length} selected file change(s)`,
+          "Drop selected changes failed",
+        ),
+      );
     } catch (caughtError) {
-      setErrorState({
-        project,
-        value:
+      setStatus({
+        kind: "error",
+        message:
           caughtError instanceof Error
             ? caughtError.message
             : "Drop selected changes failed",
@@ -339,52 +385,45 @@ export function useGitHistoryActions(project: string) {
     if (!project || !dropCommit) return null;
     const targetHash = dropCommit.hash;
     if (dropCommit.isPushed) {
-      setErrorState({
-        project,
-        value: "Drop commit is only available for commits not pushed upstream",
+      setStatus({
+        kind: "blocked",
+        message:
+          "Drop commit is only available for commits not pushed upstream",
+        detail: "Use revert for shared history.",
       });
       return null;
     }
 
-    setErrorState({ project, value: null });
-    setMessageState({ project, value: null });
+    setStatus(null);
     try {
-      const files = await api.git.commitFiles(project, targetHash);
-      if (files.length === 0) {
-        setMessageState({ project, value: "No changes to drop" });
-        setDropCommitState({ project, commit: null });
-        return targetHash;
-      }
-      const paths = files.map((file) => file.path);
-      const result = await dropFilesMutation.mutateAsync({
+      const result = await dropCommitMutation.mutateAsync({
         hash: targetHash,
-        paths,
       });
+      setStatus(
+        formatGitActionStatus(
+          result,
+          `Dropped commit ${targetHash.slice(0, 7)}`,
+          `Drop commit failed for ${targetHash.slice(0, 7)}`,
+        ),
+      );
       if (result.ok) {
-        setMessageState({
-          project,
-          value: result.message ?? `Dropped commit ${targetHash.slice(0, 7)}`,
-        });
         setDropCommitState({ project, commit: null });
         return targetHash;
       }
-      setErrorState({
-        project,
-        value: result.message ?? `Drop commit failed for ${targetHash.slice(0, 7)}`,
-      });
     } catch (caughtError) {
-      setErrorState({
-        project,
-        value:
-          caughtError instanceof Error ? caughtError.message : "Drop commit failed",
+      setStatus({
+        kind: "error",
+        message:
+          caughtError instanceof Error
+            ? caughtError.message
+            : "Drop commit failed",
       });
     }
     return null;
   }
 
   const clearStatus = useCallback(() => {
-    setMessageState((current) => ({ ...current, value: null }));
-    setErrorState((current) => ({ ...current, value: null }));
+    setStatusState((current) => ({ ...current, value: null }));
   }, []);
 
   const resetScope = useCallback(() => {
@@ -395,9 +434,8 @@ export function useGitHistoryActions(project: string) {
 
   return {
     dropCommit,
-    error,
-    isDropCommitPending: dropFilesMutation.isPending,
-    message,
+    isDropCommitPending: dropCommitMutation.isPending,
+    status,
     resetCommit,
     setDropCommit: (commit: GitLogEntry | null) =>
       setDropCommitState({ project, commit }),

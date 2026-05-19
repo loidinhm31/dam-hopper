@@ -159,10 +159,12 @@ interface TerminalPanelProps {
 
 **Behavior:**
 
+- Maps Git mutation results into a shared status model with `success`, `blocked`, `conflict`, `dirty`, and `error` states.
 - Cherry-picks the selected commit and surfaces conflict/dirty result flags.
 - Opens a reset confirmation dialog for soft, mixed, hard, and keep reset modes.
 - Marks destructive history actions clearly before invoking the backend.
-- Cherry-pick and reset refresh Git, project status, and file tree queries through `invalidateGitProjectQueries()`.
+- Prevents local commit drops for pushed commits and shows a shared revert recommendation instead.
+- Branch-history operations refresh Git, project status, file tree, and open editor tabs through scoped Git invalidation helpers.
 
 ### GitLocalChanges
 
@@ -181,6 +183,18 @@ interface TerminalPanelProps {
 **Location:** `packages/web/src/components/organisms/FileTree.tsx`
 
 **Purpose:** Reuses shared file decorations in Git-aware file rows so file identity stays consistent across the explorer and Git views. The Explorer header area also hosts `GitBranchControl` so users can switch or create branches without leaving the file browser.
+
+### GitPage
+
+**Location:** `packages/web/src/components/pages/GitPage.tsx`
+
+**Purpose:** Standalone Git operations page for bulk fetch/pull actions across selected projects, with shared commit-history and diff interactions.
+
+**Behavior:**
+
+- Uses the shared Git history action hook and the same commit-details/diff flow as the workspace panel.
+- Resets the selected commit state when project selection changes.
+- Supports file double-click diffing from the selected commit in the Git view.
 
 ---
 

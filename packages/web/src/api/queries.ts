@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client.js";
 import { getTransport } from "./transport.js";
+import { useEditorStore } from "@/stores/editor.js";
 import type {
   DamHopperConfig,
   ProjectConfig,
@@ -18,8 +19,67 @@ import type {
 } from "./client.js";
 import type { SessionInfo } from "@/api/client.js";
 
+type QueryInvalidator = Pick<
+  ReturnType<typeof useQueryClient>,
+  "invalidateQueries"
+>;
+
+async function reconcileAffectedEditorTabs(project: string, paths: string[]) {
+  if (paths.length === 0) return;
+  await useEditorStore.getState().reconcileGitMutationFiles(project, paths);
+}
+
+async function reconcileProjectEditorTabs(project: string) {
+  await useEditorStore.getState().reconcileGitProjectFiles(project);
+}
+
+export async function invalidateGitFileOperation(
+  qc: QueryInvalidator,
+  project: string,
+  path: string,
+) {
+  await Promise.all([
+    qc.invalidateQueries({ queryKey: ["git-diff", project] }),
+    qc.invalidateQueries({ queryKey: ["git-file-diff", project, path] }),
+    qc.invalidateQueries({ queryKey: ["project-status", project] }),
+    reconcileAffectedEditorTabs(project, [path]),
+  ]);
+}
+
+export async function invalidateGitHistoryOperation(
+  qc: QueryInvalidator,
+  project: string,
+  affectedPaths: string[] = [],
+) {
+  await Promise.all([
+    qc.invalidateQueries({ queryKey: ["git-diff", project] }),
+    qc.invalidateQueries({ queryKey: ["git-conflicts", project] }),
+    qc.invalidateQueries({ queryKey: ["project-status", project] }),
+    ...affectedPaths.map((path) =>
+      qc.invalidateQueries({ queryKey: ["git-file-diff", project, path] }),
+    ),
+    reconcileAffectedEditorTabs(project, affectedPaths),
+  ]);
+}
+
+export async function invalidateGitBranchOperation(
+  qc: QueryInvalidator,
+  project: string,
+) {
+  await Promise.all([
+    qc.invalidateQueries({ queryKey: ["branches", project] }),
+    qc.invalidateQueries({ queryKey: ["project-status", project] }),
+    qc.invalidateQueries({ queryKey: ["projects"] }),
+    qc.invalidateQueries({ queryKey: ["git-log", project] }),
+    qc.invalidateQueries({ queryKey: ["git-diff", project] }),
+    qc.invalidateQueries({ queryKey: ["git-conflicts", project] }),
+    qc.invalidateQueries({ queryKey: ["fs-tree", project] }),
+    reconcileProjectEditorTabs(project),
+  ]);
+}
+
 function invalidateGitProjectQueries(
-  qc: ReturnType<typeof useQueryClient>,
+  qc: QueryInvalidator,
   project: string,
   options?: {
     includeBranches?: boolean;
@@ -339,10 +399,8 @@ export function useGitDiscard(project: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (path: string) => api.git.discard(project, path),
-    onSuccess: (_data, path) => {
-      void qc.invalidateQueries({ queryKey: ["git-diff", project] });
-      void qc.invalidateQueries({ queryKey: ["git-file-diff", project, path] });
-    },
+    onSuccess: (_data, path) =>
+      void invalidateGitFileOperation(qc, project, path),
   });
 }
 
@@ -351,10 +409,8 @@ export function useGitDiscardHunk(project: string) {
   return useMutation({
     mutationFn: ({ path, hunkIndex }: { path: string; hunkIndex: number }) =>
       api.git.discardHunk(project, path, hunkIndex),
-    onSuccess: (_data, { path }) => {
-      void qc.invalidateQueries({ queryKey: ["git-diff", project] });
-      void qc.invalidateQueries({ queryKey: ["git-file-diff", project, path] });
-    },
+    onSuccess: (_data, { path }) =>
+      void invalidateGitFileOperation(qc, project, path),
   });
 }
 
@@ -438,15 +494,7 @@ export function useGitCherryPick(project: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (hash: string) => api.git.cherryPick(project, hash),
-    onSuccess: () =>
-      invalidateGitProjectQueries(qc, project, {
-        includeConflicts: true,
-        includeFileTree: true,
-        includeGitDiff: true,
-        includeGitLog: true,
-        includeProjects: true,
-        includeProjectStatus: true,
-      }),
+    onSuccess: () => void invalidateGitBranchOperation(qc, project),
   });
 }
 
@@ -455,15 +503,7 @@ export function useGitReset(project: string) {
   return useMutation({
     mutationFn: ({ hash, mode }: { hash: string; mode: ResetMode }) =>
       api.git.reset(project, hash, mode),
-    onSuccess: () =>
-      invalidateGitProjectQueries(qc, project, {
-        includeConflicts: true,
-        includeFileTree: true,
-        includeGitDiff: true,
-        includeGitLog: true,
-        includeProjects: true,
-        includeProjectStatus: true,
-      }),
+    onSuccess: () => void invalidateGitBranchOperation(qc, project),
   });
 }
 
@@ -472,15 +512,8 @@ export function useGitCherryPickCommitFiles(project: string) {
   return useMutation({
     mutationFn: ({ hash, paths }: { hash: string; paths: string[] }) =>
       api.git.cherryPickCommitFiles(project, hash, paths),
-    onSuccess: () =>
-      invalidateGitProjectQueries(qc, project, {
-        includeConflicts: true,
-        includeFileTree: true,
-        includeGitDiff: true,
-        includeGitLog: true,
-        includeProjects: true,
-        includeProjectStatus: true,
-      }),
+    onSuccess: (_result, { paths }) =>
+      void invalidateGitHistoryOperation(qc, project, paths),
   });
 }
 
@@ -489,15 +522,8 @@ export function useGitDropCommitFiles(project: string) {
   return useMutation({
     mutationFn: ({ hash, paths }: { hash: string; paths: string[] }) =>
       api.git.dropCommitFiles(project, hash, paths),
-    onSuccess: () =>
-      invalidateGitProjectQueries(qc, project, {
-        includeConflicts: true,
-        includeFileTree: true,
-        includeGitDiff: true,
-        includeGitLog: true,
-        includeProjects: true,
-        includeProjectStatus: true,
-      }),
+    onSuccess: (_result, { paths }) =>
+      void invalidateGitHistoryOperation(qc, project, paths),
   });
 }
 
@@ -506,15 +532,7 @@ export function useGitDropCommit(project: string) {
   return useMutation({
     mutationFn: ({ hash }: { hash: string }) =>
       api.git.dropCommit(project, hash),
-    onSuccess: () =>
-      invalidateGitProjectQueries(qc, project, {
-        includeConflicts: true,
-        includeFileTree: true,
-        includeGitDiff: true,
-        includeGitLog: true,
-        includeProjects: true,
-        includeProjectStatus: true,
-      }),
+    onSuccess: () => void invalidateGitBranchOperation(qc, project),
   });
 }
 
@@ -523,15 +541,7 @@ export function useGitRevertCommit(project: string) {
   return useMutation({
     mutationFn: ({ hash }: { hash: string }) =>
       api.git.revertCommit(project, hash),
-    onSuccess: () =>
-      invalidateGitProjectQueries(qc, project, {
-        includeConflicts: true,
-        includeFileTree: true,
-        includeGitDiff: true,
-        includeGitLog: true,
-        includeProjects: true,
-        includeProjectStatus: true,
-      }),
+    onSuccess: () => void invalidateGitBranchOperation(qc, project),
   });
 }
 
@@ -540,15 +550,8 @@ export function useGitRevertCommitFiles(project: string) {
   return useMutation({
     mutationFn: ({ hash, paths }: { hash: string; paths: string[] }) =>
       api.git.revertCommitFiles(project, hash, paths),
-    onSuccess: () =>
-      invalidateGitProjectQueries(qc, project, {
-        includeConflicts: true,
-        includeFileTree: true,
-        includeGitDiff: true,
-        includeGitLog: true,
-        includeProjects: true,
-        includeProjectStatus: true,
-      }),
+    onSuccess: (_result, { paths }) =>
+      void invalidateGitHistoryOperation(qc, project, paths),
   });
 }
 
