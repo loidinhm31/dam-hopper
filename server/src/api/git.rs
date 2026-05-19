@@ -11,8 +11,8 @@ use crate::git::progress::create_progress_channel;
 use crate::git::{
     add_worktree, checkout_branch, cherry_pick, cherry_pick_commit_files, create_branch,
     drop_commit, drop_commit_files, get_log, list_branches, list_worktrees, remove_worktree,
-    reset_to_commit, revert_commit, revert_commit_files, update_branch, BulkGitService,
-    CheckoutStrategy, ResetMode, WorktreeAddOptions,
+    reset_to_commit, revert_commit, revert_commit_files, undo_last_commit, update_branch,
+    BulkGitService, CheckoutStrategy, ResetMode, WorktreeAddOptions,
 };
 use crate::pty::EventSink as _;
 use crate::state::AppState;
@@ -293,6 +293,15 @@ pub async fn reset_route(
     let result = reset_to_commit(&path, &body.hash, body.mode)
         .await
         .map_err(ApiError::from_app)?;
+    Ok(Json(result))
+}
+
+pub async fn undo_last_commit_route(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_project_path(&state, &project).await?;
+    let result = undo_last_commit(&path).await.map_err(ApiError::from_app)?;
     Ok(Json(result))
 }
 

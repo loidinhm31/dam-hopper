@@ -48,6 +48,12 @@ export interface EncryptResult {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+function copyToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 /**
  * Import a 32-byte export_key as a non-extractable AES-256-GCM CryptoKey,
  * then zero the source buffer.
@@ -59,10 +65,7 @@ async function importAesKey(exportKeyBytes: Uint8Array): Promise<CryptoKey> {
 
   const key = await crypto.subtle.importKey(
     "raw",
-    exportKeyBytes.buffer.slice(
-      exportKeyBytes.byteOffset,
-      exportKeyBytes.byteOffset + exportKeyBytes.byteLength,
-    ),
+    copyToArrayBuffer(exportKeyBytes),
     { name: "AES-GCM", length: 256 },
     false, // non-extractable
     ["encrypt", "decrypt"],
@@ -91,9 +94,9 @@ async function encryptBytes(
 ): Promise<Uint8Array> {
   const iv = randomIv();
   const ciphertextBuf = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
+    { name: "AES-GCM", iv: copyToArrayBuffer(iv) },
     key,
-    plaintext,
+    copyToArrayBuffer(plaintext),
   );
   const ciphertext = new Uint8Array(ciphertextBuf);
 
@@ -171,7 +174,9 @@ export async function encryptFile(
   plaintext.fill(0);
 
   return {
-    blob: new Blob([envelope], { type: "application/octet-stream" }),
+    blob: new Blob([copyToArrayBuffer(envelope)], {
+      type: "application/octet-stream",
+    }),
     metadata,
   };
 }
@@ -216,7 +221,9 @@ export async function encryptText(
   plaintext.fill(0);
 
   return {
-    blob: new Blob([envelope], { type: "application/octet-stream" }),
+    blob: new Blob([copyToArrayBuffer(envelope)], {
+      type: "application/octet-stream",
+    }),
     metadata,
   };
 }
@@ -241,9 +248,9 @@ export async function decryptBlob(
 
   const key = await importAesKey(exportKey);
   const plainBuf = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv },
+    { name: "AES-GCM", iv: copyToArrayBuffer(iv) },
     key,
-    ciphertext,
+    copyToArrayBuffer(ciphertext),
   );
   const plain = new Uint8Array(plainBuf);
 

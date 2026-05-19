@@ -386,6 +386,42 @@ Response:
 { "ok": true, "hash": "abc123def456" }
 ```
 
+### Undo Last Commit
+
+**POST /api/git/{project}/undo-last-commit**
+Undo the most recent local commit with `git reset --mixed HEAD~1`. The backend
+blocks pushed/shared commits and returns a revert recommendation instead of
+rewriting public history. Changes from the undone commit remain as unstaged
+local changes.
+
+Response shape follows `GitActionResult`:
+
+```json
+{
+  "ok": true,
+  "message": "Undid last commit abc123d",
+  "hash": "abc123def456",
+  "conflict": false,
+  "dirty": true,
+  "destructive": true,
+  "recommendation": "changes from the undone commit are now unstaged"
+}
+```
+
+Blocked pushed-history example:
+
+```json
+{
+  "ok": false,
+  "message": "commit abc123def456 is already reachable from upstream",
+  "hash": "abc123def456",
+  "conflict": false,
+  "destructive": false,
+  "blockedReason": "pushed-commit",
+  "recommendation": "use revert for pushed/shared history"
+}
+```
+
 ## Reconnection Flow (Phase A feature)
 
 **Location:** `packages/web/src/api/transport.ts`

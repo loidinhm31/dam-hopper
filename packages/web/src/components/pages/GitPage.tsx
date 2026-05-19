@@ -19,7 +19,10 @@ import { cn } from "@/lib/utils.js";
 import {
   GitDropCommitDialog,
   GitHistoryStatusBanner,
+  GitRevertCommitDialog,
   GitResetDialog,
+  GitSelectedChangesDialog,
+  GitUndoLastCommitDialog,
   useGitHistoryActions,
 } from "@/components/organisms/GitHistoryActions.js";
 
@@ -139,6 +142,14 @@ export function GitPage() {
     if (!droppedHash) return;
     setSelectedCommit((current) =>
       current?.hash === droppedHash ? null : current,
+    );
+  }
+
+  async function handleUndoLastCommitConfirm() {
+    const undoneHash = await historyActions.handleUndoLastCommit();
+    if (!undoneHash) return;
+    setSelectedCommit((current) =>
+      current?.hash === undoneHash ? null : current,
     );
   }
 
@@ -292,6 +303,8 @@ export function GitPage() {
                       onCherryPick={(entry) =>
                         void historyActions.handleCherryPick(entry)
                       }
+                      onRevertCommit={historyActions.setRevertCommit}
+                      onUndoLastCommit={historyActions.setUndoLastCommit}
                       onDropCommit={historyActions.setDropCommit}
                       onReset={historyActions.setResetCommit}
                     />
@@ -310,8 +323,11 @@ export function GitPage() {
                       onCherryPickSelectedChanges={(commit, files) =>
                         void historyActions.handleCherryPickFiles(commit, files)
                       }
+                      onRevertSelectedChanges={
+                        historyActions.requestRevertFiles
+                      }
                       onDropSelectedChanges={(commit, files) =>
-                        void historyActions.handleDropFiles(commit, files)
+                        historyActions.requestDropFiles(commit, files)
                       }
                     />
                   </Suspense>
@@ -342,6 +358,24 @@ export function GitPage() {
         loading={historyActions.isDropCommitPending}
         onClose={() => historyActions.setDropCommit(null)}
         onConfirm={() => void handleDropCommitConfirm()}
+      />
+      <GitRevertCommitDialog
+        commit={historyActions.revertCommit}
+        loading={historyActions.isRevertCommitPending}
+        onClose={() => historyActions.setRevertCommit(null)}
+        onConfirm={() => void historyActions.handleRevertCommit()}
+      />
+      <GitUndoLastCommitDialog
+        commit={historyActions.undoLastCommit}
+        loading={historyActions.isUndoLastCommitPending}
+        onClose={() => historyActions.setUndoLastCommit(null)}
+        onConfirm={() => void handleUndoLastCommitConfirm()}
+      />
+      <GitSelectedChangesDialog
+        operation={historyActions.selectedChangesOperation}
+        loading={historyActions.isSelectedChangesPending}
+        onClose={historyActions.clearSelectedChangesOperation}
+        onConfirm={() => void historyActions.handleSelectedChangesOperation()}
       />
     </AppLayout>
   );

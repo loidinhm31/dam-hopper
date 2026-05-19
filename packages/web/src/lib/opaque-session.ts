@@ -8,6 +8,12 @@ function base64ToBytes(b64: string): Uint8Array {
   return Uint8Array.from(atob(std), (c) => c.charCodeAt(0));
 }
 
+function copyToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 /**
  * Derive a 32-byte AES-256-GCM key from the OPAQUE sessionKey via HKDF-SHA256.
  *
@@ -21,11 +27,20 @@ async function deriveAesKey(sessionKeyB64: string): Promise<Uint8Array> {
   const salt = new Uint8Array(32); // 32 zero bytes = Rust `None` default for SHA-256
   const info = new TextEncoder().encode("dam-hopper-aes-256-gcm-v1");
 
-  const baseKey = await crypto.subtle.importKey("raw", ikm, "HKDF", false, [
-    "deriveBits",
-  ]);
+  const baseKey = await crypto.subtle.importKey(
+    "raw",
+    copyToArrayBuffer(ikm),
+    "HKDF",
+    false,
+    ["deriveBits"],
+  );
   const bits = await crypto.subtle.deriveBits(
-    { name: "HKDF", hash: "SHA-256", salt, info },
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: copyToArrayBuffer(salt),
+      info: copyToArrayBuffer(info),
+    },
     baseKey,
     256,
   );

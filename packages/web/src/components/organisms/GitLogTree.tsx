@@ -24,6 +24,8 @@ interface GitLogTreeProps {
   selectedHash?: string;
   onSelectCommit?: (entry: GitLogEntry) => void;
   onCherryPick?: (entry: GitLogEntry) => void;
+  onRevertCommit?: (entry: GitLogEntry) => void;
+  onUndoLastCommit?: (entry: GitLogEntry) => void;
   onReset?: (entry: GitLogEntry) => void;
   onDropCommit?: (entry: GitLogEntry) => void;
 }
@@ -32,6 +34,7 @@ interface HistoryContextMenuState {
   x: number;
   y: number;
   entry: GitLogEntry;
+  isHead: boolean;
 }
 
 interface RenderNode {
@@ -50,6 +53,28 @@ export function getDropCommitMenuState(entry: Pick<GitLogEntry, "isPushed">) {
   };
 }
 
+export function getUndoLastCommitMenuState({
+  isHead,
+  isPushed,
+}: {
+  isHead: boolean;
+  isPushed: boolean;
+}) {
+  const title = !isHead
+    ? "Undo Last Commit is only available on HEAD"
+    : isPushed
+      ? "Undo Last Commit is only available for commits not pushed upstream"
+      : undefined;
+  return {
+    disabled: Boolean(title),
+    title,
+  };
+}
+
+export function isHeadCommit(entry: Pick<GitLogEntry, "refs">) {
+  return entry.refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD ->"));
+}
+
 export function clampHistoryContextMenuPosition(
   x: number,
   y: number,
@@ -58,7 +83,7 @@ export function clampHistoryContextMenuPosition(
 ) {
   return {
     x: Math.min(x, windowWidth - 190),
-    y: Math.min(y, windowHeight - 156),
+    y: Math.min(y, windowHeight - 226),
   };
 }
 
@@ -66,7 +91,10 @@ function HistoryContextMenu({
   x,
   y,
   entry,
+  isHead,
   onCherryPick,
+  onRevertCommit,
+  onUndoLastCommit,
   onReset,
   onDropCommit,
   onClose,
@@ -74,13 +102,20 @@ function HistoryContextMenu({
   x: number;
   y: number;
   entry: GitLogEntry;
+  isHead: boolean;
   onCherryPick?: (entry: GitLogEntry) => void;
+  onRevertCommit?: (entry: GitLogEntry) => void;
+  onUndoLastCommit?: (entry: GitLogEntry) => void;
   onReset?: (entry: GitLogEntry) => void;
   onDropCommit?: (entry: GitLogEntry) => void;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const dropCommitState = getDropCommitMenuState(entry);
+  const undoLastCommitState = getUndoLastCommitMenuState({
+    isHead,
+    isPushed: entry.isPushed,
+  });
 
   useEffect(() => {
     function handleMouseDown(event: MouseEvent) {
@@ -110,6 +145,19 @@ function HistoryContextMenu({
       style={style}
       className="w-44 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-xl"
     >
+      <div className="px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+        Safe actions
+      </div>
+      <button
+        type="button"
+        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-2)]"
+        onClick={() => {
+          onRevertCommit?.(entry);
+          onClose();
+        }}
+      >
+        Revert commit
+      </button>
       <button
         type="button"
         className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-2)]"
@@ -119,6 +167,22 @@ function HistoryContextMenu({
         }}
       >
         Cherry-pick commit
+      </button>
+      <div className="my-1 border-t border-[var(--color-border)]" />
+      <div className="px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+        Rewrite actions
+      </div>
+      <button
+        type="button"
+        disabled={undoLastCommitState.disabled}
+        title={undoLastCommitState.title}
+        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+        onClick={() => {
+          onUndoLastCommit?.(entry);
+          onClose();
+        }}
+      >
+        Undo Last Commit
       </button>
       <button
         type="button"
@@ -152,14 +216,20 @@ export function GitLogTree({
   selectedHash,
   onSelectCommit,
   onCherryPick,
+  onRevertCommit,
+  onUndoLastCommit,
   onReset,
   onDropCommit,
 }: GitLogTreeProps) {
-  const [contextMenu, setContextMenu] = useState<HistoryContextMenuState | null>(
-    null,
-  );
+  const [contextMenu, setContextMenu] =
+    useState<HistoryContextMenuState | null>(null);
 
-  function openContextMenu(entry: GitLogEntry, x: number, y: number) {
+  function openContextMenu(
+    entry: GitLogEntry,
+    isHead: boolean,
+    x: number,
+    y: number,
+  ) {
     onSelectCommit?.(entry);
     const position = clampHistoryContextMenuPosition(
       x,
@@ -171,6 +241,7 @@ export function GitLogTree({
       x: position.x,
       y: position.y,
       entry,
+      isHead,
     });
   }
 
@@ -269,7 +340,12 @@ export function GitLogTree({
                 onClick={() => onSelectCommit?.(node.entry)}
                 onContextMenu={(event) => {
                   event.preventDefault();
-                  openContextMenu(node.entry, event.clientX, event.clientY);
+                  openContextMenu(
+                    node.entry,
+                    isHeadCommit(node.entry),
+                    event.clientX,
+                    event.clientY,
+                  );
                 }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
@@ -283,7 +359,12 @@ export function GitLogTree({
                   ) {
                     event.preventDefault();
                     const rect = event.currentTarget.getBoundingClientRect();
-                    openContextMenu(node.entry, rect.left + 24, rect.top + 20);
+                    openContextMenu(
+                      node.entry,
+                      isHeadCommit(node.entry),
+                      rect.left + 24,
+                      rect.top + 20,
+                    );
                   }
                 }}
                 className={cn(
@@ -392,7 +473,10 @@ export function GitLogTree({
           x={contextMenu.x}
           y={contextMenu.y}
           entry={contextMenu.entry}
+          isHead={contextMenu.isHead}
           onCherryPick={onCherryPick}
+          onRevertCommit={onRevertCommit}
+          onUndoLastCommit={onUndoLastCommit}
           onReset={onReset}
           onDropCommit={onDropCommit}
           onClose={() => setContextMenu(null)}

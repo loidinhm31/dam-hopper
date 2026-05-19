@@ -15,8 +15,8 @@ use crate::git::progress::{
     emit_completed, emit_failed, emit_progress, emit_started, ProgressSender,
 };
 use crate::git::types::{
-    BranchInfo, BranchUpdateResult, CheckoutStrategy, GitActionResult, GitOperation,
-    GitOperationResult, GitStatus, LastCommit, ResetMode,
+    BranchInfo, BranchUpdateResult, CheckoutStrategy, GitActionResult, GitBlockReason,
+    GitOperation, GitOperationResult, GitStatus, LastCommit, ResetMode,
 };
 use crate::ssh::SshCredStore;
 
@@ -981,6 +981,66 @@ pub async fn reset_to_commit(
         recovery: None,
         blocked_reason: None,
         recommendation: None,
+    })
+}
+
+pub async fn undo_last_commit(project_path: &Path) -> Result<GitActionResult, AppError> {
+    let (head_hash, parent_count) = {
+        let repo = open_repo(project_path)?;
+        let head = repo
+            .head()
+            .map_err(|e| AppError::Git(e.message().to_string()))?;
+        let commit = head
+            .peel_to_commit()
+            .map_err(|e| AppError::Git(e.message().to_string()))?;
+        (commit.id().to_string(), commit.parent_count())
+    };
+
+    if parent_count == 0 {
+        let mut blocked = GitActionResult::blocked(
+            GitBlockReason::RootCommit,
+            "undo last commit is not supported for the root commit",
+            "create a new commit or use reset from the command line if you need to rewrite the root commit",
+        );
+        blocked.hash = Some(head_hash);
+        return Ok(blocked);
+    }
+
+    if let Some(recovery) = cli_fallback::active_git_operation(project_path).await? {
+        let mut blocked = GitActionResult::blocked(
+            GitBlockReason::ActiveOperation,
+            "another Git operation is already in progress",
+            "finish or abort the in-progress operation before undoing the last commit",
+        );
+        blocked.hash = Some(head_hash);
+        blocked.recovery = Some(recovery);
+        return Ok(blocked);
+    }
+
+    if cli_fallback::is_commit_pushed(project_path, &head_hash).await? {
+        let mut blocked = GitActionResult::blocked(
+            GitBlockReason::PushedCommit,
+            "undo last commit is only available for commits not pushed upstream",
+            "use revert for pushed/shared history",
+        );
+        blocked.hash = Some(head_hash);
+        return Ok(blocked);
+    }
+
+    cli_fallback::run_git(&["reset", "--mixed", "HEAD~1"], project_path).await?;
+
+    Ok(GitActionResult {
+        ok: true,
+        message: Some(format!("Undid last commit {}", &head_hash[..7])),
+        branch: None,
+        hash: Some(head_hash),
+        stashed: None,
+        conflict: Some(false),
+        dirty: Some(true),
+        destructive: Some(true),
+        recovery: None,
+        blocked_reason: None,
+        recommendation: Some("changes from the undone commit are now unstaged".to_string()),
     })
 }
 

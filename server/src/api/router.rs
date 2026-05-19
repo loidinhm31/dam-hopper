@@ -96,6 +96,10 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             post(git::cherry_pick_route),
         )
         .route("/api/git/{project}/reset", post(git::reset_route))
+        .route(
+            "/api/git/{project}/undo-last-commit",
+            post(git::undo_last_commit_route),
+        )
         // Git diff / change management
         .route("/api/git/{project}/diff", get(git_diff::list_diff))
         .route(
