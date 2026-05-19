@@ -1,4 +1,12 @@
-import { lazy, Suspense, useEffect, useRef, useMemo, useCallback } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+  useState,
+} from "react";
 import {
   Terminal as TerminalIcon,
   Plus,
@@ -28,6 +36,11 @@ import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalManager } from "@/hooks/useTerminalManager.js";
 import { useDocumentKeyboardShortcut } from "@/hooks/useShortcuts.js";
 import { api } from "@/api/client.js";
+import {
+  loadWorkspaceMode,
+  saveWorkspaceMode,
+  type WorkspaceMode,
+} from "@/lib/workspace-mode.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 import type { ToolWindowDef } from "@/types/ide.js";
 
@@ -89,6 +102,8 @@ function PanelFallback({ label = "Loading…" }: { label?: string }) {
 export default function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { activeProject, setActiveProject } = useWorkspaceStore();
+  const [workspaceMode, setWorkspaceModeState] =
+    useState<WorkspaceMode>(loadWorkspaceMode);
 
   const openFile = useEditorStore((s) => s.open);
   const openDiff = useEditorStore((s) => s.openDiff);
@@ -162,6 +177,11 @@ export default function WorkspacePage() {
   useDocumentKeyboardShortcut(searchFilenameShortcut, () =>
     openSearch("filename"),
   );
+
+  const setWorkspaceMode = useCallback((mode: WorkspaceMode) => {
+    setWorkspaceModeState(mode);
+    saveWorkspaceMode(mode);
+  }, []);
 
   const handleFileOpen = useCallback(
     (node: FsArborNode) => {
@@ -596,6 +616,8 @@ export default function WorkspacePage() {
       <IdeShell
         leftTools={leftTools}
         rightTools={rightTools}
+        workspaceMode={workspaceMode}
+        onWorkspaceModeChange={setWorkspaceMode}
         editor={
           <Suspense fallback={<PanelFallback label="Loading editor…" />}>
             <EditorTabs project={projectName} />
