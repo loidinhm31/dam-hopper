@@ -503,11 +503,12 @@ export const api = {
         project,
         branch,
       }),
-    log: (project: string, limit?: number, offset?: number) =>
+    log: (project: string, limit?: number, offset?: number, ref?: string) =>
       getTransport().invoke<GitLogEntry[]>("git:log", {
         project,
         limit,
         offset,
+        ref,
       }),
     diff: (project: string) =>
       getTransport().invoke<DiffResponse>("git:diff", { project }),

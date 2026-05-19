@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import { GitLogTree } from "@/components/organisms/GitLogTree.js";
@@ -6,13 +6,15 @@ import { CommitDetailsPanel } from "@/components/organisms/CommitDetailsPanel.js
 import { useEditorStore } from "@/stores/editor.js";
 import { cn } from "@/lib/utils.js";
 import { api } from "@/api/client.js";
-import { useGitLog } from "@/api/queries.js";
-import type { GitLogEntry, DiffFileEntry } from "@/api/client.js";
+import { useBranches, useGitLog, useProjectStatus } from "@/api/queries.js";
+import type { Branch, GitLogEntry, DiffFileEntry } from "@/api/client.js";
 import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
 import {
   GitDropCommitDialog,
   GitHistoryStatusBanner,
+  GitRevertCommitDialog,
   GitResetDialog,
+  GitUndoLastCommitDialog,
   useGitHistoryActions,
 } from "@/components/organisms/GitHistoryActions.js";
 
@@ -21,6 +23,12 @@ interface WorkspaceGitPanelProps {
 }
 
 const WORKSPACE_GIT_LOG_LIMIT = 200;
+
+interface WorkspaceHistoryBranchState {
+  project: string;
+  branch: string;
+  followsActive: boolean;
+}
 
 export function resolveWorkspaceGitSelection(
   selectedHash: string | null,
@@ -31,6 +39,52 @@ export function resolveWorkspaceGitSelection(
   }
 
   return logs.find((entry) => entry.hash === selectedHash) ?? null;
+}
+
+export function resolveWorkspaceHistoryRef(
+  branches: Branch[],
+  selectedBranch: string,
+) {
+  if (!selectedBranch) {
+    return undefined;
+  }
+
+  return (
+    branches.find((branch) => branch.name === selectedBranch)?.lastCommit ??
+    selectedBranch
+  );
+}
+
+export function resolveWorkspaceHistoryBranchState(
+  current: WorkspaceHistoryBranchState,
+  project: string,
+  activeBranch: string,
+): WorkspaceHistoryBranchState {
+  if (current.project !== project) {
+    return {
+      project,
+      branch: activeBranch,
+      followsActive: true,
+    };
+  }
+
+  if (!current.branch && activeBranch) {
+    return {
+      project,
+      branch: activeBranch,
+      followsActive: true,
+    };
+  }
+
+  if (current.followsActive && activeBranch && current.branch !== activeBranch) {
+    return {
+      project,
+      branch: activeBranch,
+      followsActive: true,
+    };
+  }
+
+  return current;
 }
 
 export async function refreshWorkspaceGitPanelQueries(
@@ -45,6 +99,7 @@ export async function refreshWorkspaceGitPanelQueries(
   project: string,
   selectedHash: string | null,
   offset = 0,
+  ref?: string,
 ) {
   const queryKeys = [
     ["branches", project],
@@ -62,8 +117,8 @@ export async function refreshWorkspaceGitPanelQueries(
 
   const [logs] = await Promise.all([
     queryClient.fetchQuery({
-      queryKey: ["git-log", project, WORKSPACE_GIT_LOG_LIMIT, offset],
-      queryFn: () => api.git.log(project, WORKSPACE_GIT_LOG_LIMIT, offset),
+      queryKey: ["git-log", project, WORKSPACE_GIT_LOG_LIMIT, offset, ref ?? null],
+      queryFn: () => api.git.log(project, WORKSPACE_GIT_LOG_LIMIT, offset, ref),
     }),
     queryClient.refetchQueries({ queryKey: ["branches", project] }),
     queryClient.refetchQueries({ queryKey: ["project-status", project] }),
@@ -83,17 +138,54 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
   );
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [page, setPage] = useState(0);
+  const [historyScope, setHistoryScope] = useState<{
+    project: string;
+    branch: string;
+    followsActive: boolean;
+  }>({
+    project: "",
+    branch: "",
+    followsActive: true,
+  });
   const openDiff = useEditorStore((s) => s.openDiff);
   const historyActions = useGitHistoryActions(project);
   const queryClient = useQueryClient();
   const offset = page * WORKSPACE_GIT_LOG_LIMIT;
+  const { data: branches = [] } = useBranches(project);
+  const { data: projectStatus } = useProjectStatus(project);
+  const activeBranch = projectStatus?.branch ?? "";
+  const historyBranch =
+    historyScope.project === project ? historyScope.branch : "";
+  const historyRef = resolveWorkspaceHistoryRef(branches, historyBranch);
   const { data: logs = [], isLoading: isLogLoading } = useGitLog(
     project,
     WORKSPACE_GIT_LOG_LIMIT,
     offset,
+    historyRef,
+  );
+  const isViewingActiveBranch = useMemo(
+    () => !historyBranch || historyBranch === activeBranch,
+    [activeBranch, historyBranch],
   );
   const hasPreviousPage = page > 0;
   const hasNextPage = logs.length === WORKSPACE_GIT_LOG_LIMIT;
+
+  useEffect(() => {
+    const next = resolveWorkspaceHistoryBranchState(
+      historyScope,
+      project,
+      activeBranch,
+    );
+    if (
+      next.project !== historyScope.project ||
+      next.branch !== historyScope.branch ||
+      next.followsActive !== historyScope.followsActive
+    ) {
+      setSelectedCommit(null);
+      setPage(0);
+      setHistoryScope(next);
+    }
+  }, [activeBranch, historyScope, project]);
 
   useEffect(() => {
     if (!selectedCommit) return;
@@ -133,11 +225,24 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
         project,
         selectedCommit?.hash ?? null,
         offset,
+        historyRef,
       );
       setSelectedCommit(refreshedSelection);
     } finally {
       setIsRefreshing(false);
     }
+  };
+
+  const handleRevertCommitConfirm = async () => {
+    await historyActions.handleRevertCommit();
+  };
+
+  const handleUndoLastCommitConfirm = async () => {
+    const undoneHash = await historyActions.handleUndoLastCommit();
+    if (!undoneHash) return;
+    setSelectedCommit((current) =>
+      current?.hash === undoneHash ? null : current,
+    );
   };
 
   return (
@@ -154,10 +259,31 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
           <div className="p-3 border-b border-[var(--color-border)]">
             <div className="flex items-center justify-between gap-2 mb-2">
               <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-                Branch
+                History Branch
               </span>
             </div>
-            <GitBranchControl project={project} className="w-full" />
+            <GitBranchControl
+              project={project}
+              mode="view"
+              selectedBranch={historyBranch}
+              onSelectedBranchChange={(branch) => {
+                setPage(0);
+                setSelectedCommit(null);
+                setHistoryScope({
+                  project,
+                  branch,
+                  followsActive: branch === activeBranch,
+                });
+              }}
+              className="w-full"
+            />
+            {!isViewingActiveBranch && activeBranch ? (
+              <div className="mt-2 rounded border border-blue-500/30 bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300">
+                Viewing <strong>{historyBranch}</strong>. Cherry-pick and revert
+                apply to checked-out branch <strong>{activeBranch}</strong>.
+                Rewrite actions stay on the active branch.
+              </div>
+            ) : null}
             <GitHistoryStatusBanner
               className="mt-2"
               status={historyActions.status}
@@ -217,8 +343,18 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
                 onCherryPick={(entry) =>
                   void historyActions.handleCherryPick(entry)
                 }
-                onDropCommit={historyActions.setDropCommit}
-                onReset={historyActions.setResetCommit}
+                onRevertCommit={historyActions.setRevertCommit}
+                onUndoLastCommit={
+                  isViewingActiveBranch
+                    ? historyActions.setUndoLastCommit
+                    : undefined
+                }
+                onDropCommit={
+                  isViewingActiveBranch ? historyActions.setDropCommit : undefined
+                }
+                onReset={
+                  isViewingActiveBranch ? historyActions.setResetCommit : undefined
+                }
               />
             </div>
           </div>
@@ -234,8 +370,13 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
               onCherryPickSelectedChanges={(commit, files) =>
                 void historyActions.handleCherryPickFiles(commit, files)
               }
+              onRevertSelectedChanges={(commit, files) =>
+                void historyActions.handleRevertFiles(commit, files)
+              }
               onDropSelectedChanges={(commit, files) =>
-                void historyActions.handleDropFiles(commit, files)
+                isViewingActiveBranch
+                  ? void historyActions.handleDropFiles(commit, files)
+                  : undefined
               }
             />
           </div>
@@ -252,6 +393,18 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
         loading={historyActions.isDropCommitPending}
         onClose={() => historyActions.setDropCommit(null)}
         onConfirm={() => void handleDropCommitConfirm()}
+      />
+      <GitRevertCommitDialog
+        commit={historyActions.revertCommit}
+        loading={historyActions.isRevertCommitPending}
+        onClose={() => historyActions.setRevertCommit(null)}
+        onConfirm={() => void handleRevertCommitConfirm()}
+      />
+      <GitUndoLastCommitDialog
+        commit={historyActions.undoLastCommit}
+        loading={historyActions.isUndoLastCommitPending}
+        onClose={() => historyActions.setUndoLastCommit(null)}
+        onConfirm={() => void handleUndoLastCommitConfirm()}
       />
     </>
   );
