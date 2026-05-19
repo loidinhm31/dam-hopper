@@ -4,6 +4,7 @@ import {
   displayShortcut,
   formatShortcut,
   matchesKeyboardShortcut,
+  matchesNewTerminalShortcut,
   matchesWheelShortcut,
   parseShortcut,
   shortcutFromKeyboardEvent,
@@ -26,6 +27,7 @@ function key(overrides: Partial<ShortcutKeyEvent>): ShortcutKeyEvent {
 describe("shortcuts", () => {
   it("parses and formats keyboard, wheel, and DoubleShift shortcuts", () => {
     expect(formatShortcut("mod+shift+f")).toBe("Mod+Shift+KeyF");
+    expect(formatShortcut("mod+shift+backquote")).toBe("Mod+Shift+Backquote");
     expect(parseShortcut("Mod+Wheel")?.kind).toBe("wheel");
     expect(formatShortcut("DoubleShift")).toBe("DoubleShift");
   });
@@ -33,6 +35,9 @@ describe("shortcuts", () => {
   it("displays Mod platform-aware", () => {
     expect(displayShortcut("Mod+Shift+KeyF", false)).toBe("Ctrl+Shift+F");
     expect(displayShortcut("Mod+Shift+KeyF", true)).toBe("Cmd+Shift+F");
+    expect(displayShortcut("Mod+Shift+Backquote", false)).toBe(
+      "Ctrl+Shift+Backquote",
+    );
   });
 
   it("validates wheel modifiers", () => {
@@ -70,6 +75,30 @@ describe("shortcuts", () => {
         key({ ctrlKey: true, shiftKey: true, isComposing: true }),
         false,
       ),
+    ).toBe(false);
+  });
+
+  it("matches new terminal shortcut exactly", () => {
+    expect(
+      matchesNewTerminalShortcut(key({ code: "Backquote", ctrlKey: true })),
+    ).toBe(true);
+    expect(
+      matchesNewTerminalShortcut(
+        key({ code: "Backquote", ctrlKey: true, shiftKey: true }),
+      ),
+    ).toBe(false);
+    expect(
+      matchesNewTerminalShortcut(
+        key({ code: "Backquote", ctrlKey: true, altKey: true }),
+      ),
+    ).toBe(false);
+    expect(
+      matchesNewTerminalShortcut(
+        key({ code: "Backquote", ctrlKey: true, metaKey: true }),
+      ),
+    ).toBe(false);
+    expect(
+      matchesNewTerminalShortcut(key({ code: "KeyF", ctrlKey: true })),
     ).toBe(false);
   });
 

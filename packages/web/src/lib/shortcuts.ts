@@ -1,6 +1,7 @@
 export const DOUBLE_SHIFT_SHORTCUT = "DoubleShift";
 export const DEFAULT_SEARCH_TEXT_SHORTCUT = "Mod+Shift+KeyF";
 export const DEFAULT_SEARCH_FILENAME_SHORTCUT = DOUBLE_SHIFT_SHORTCUT;
+export const DEFAULT_TERMINAL_WORKSPACE_SHORTCUT = "Mod+Shift+Backquote";
 export const EDITOR_ZOOM_WHEEL_SHORTCUT = "Mod+Wheel";
 
 const DOUBLE_SHIFT_MS = 450;
@@ -151,6 +152,16 @@ export function matchesKeyboardShortcut(
   );
 }
 
+export function matchesNewTerminalShortcut(event: ShortcutKeyEvent): boolean {
+  return (
+    event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    event.code === "Backquote"
+  );
+}
+
 export function matchesWheelShortcut(
   shortcut: string,
   event: ShortcutWheelEvent,
@@ -205,6 +216,7 @@ function hasAnyModifier(parsed: ShortcutMods): boolean {
 function normalizeCode(code: string): string {
   if (/^[a-z]$/i.test(code)) return `Key${code.toUpperCase()}`;
   if (/^[0-9]$/.test(code)) return `Digit${code}`;
+  if (code.toLowerCase() === "backquote") return "Backquote";
   return code;
 }
 

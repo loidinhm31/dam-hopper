@@ -3,6 +3,11 @@ import { useDroppable, useDndMonitor } from "@dnd-kit/core";
 import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import {
+  matchesKeyboardShortcut,
+  matchesNewTerminalShortcut,
+} from "@/lib/shortcuts.js";
+import { useSettingsStore } from "@/stores/settings.js";
+import {
   terminalRegistry,
   subscribeToRegistry,
 } from "@/lib/terminal-registry.js";
@@ -280,8 +285,20 @@ export const PaneContainer = memo(function PaneContainer({
         return false;
       }
 
+      if (
+        e.type === "keydown" &&
+        matchesKeyboardShortcut(
+          useSettingsStore.getState().terminalWorkspaceShortcut,
+          e,
+        )
+      ) {
+        return false;
+      }
+
       // Ctrl+` → global shortcut, don't forward
-      if (e.ctrlKey && e.code === "Backquote") return false;
+      if (matchesNewTerminalShortcut(e)) {
+        return false;
+      }
 
       // Shift+Enter → open new terminal
       if (

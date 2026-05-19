@@ -34,7 +34,10 @@ import { useEditorStore } from "@/stores/editor.js";
 import { useSearchUiStore } from "@/stores/searchUi.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalManager } from "@/hooks/useTerminalManager.js";
-import { useDocumentKeyboardShortcut } from "@/hooks/useShortcuts.js";
+import {
+  addKeyboardShortcutListener,
+  useDocumentKeyboardShortcut,
+} from "@/hooks/useShortcuts.js";
 import { api } from "@/api/client.js";
 import {
   loadWorkspaceMode,
@@ -182,6 +185,24 @@ export default function WorkspacePage() {
     setWorkspaceModeState(mode);
     saveWorkspaceMode(mode);
   }, []);
+
+  const toggleWorkspaceMode = useCallback(() => {
+    setWorkspaceModeState((current) => {
+      const next = current === "ide" ? "terminal" : "ide";
+      saveWorkspaceMode(next);
+      return next;
+    });
+  }, []);
+
+  useEffect(
+    () =>
+      addKeyboardShortcutListener(
+        window,
+        () => useSettingsStore.getState().terminalWorkspaceShortcut,
+        toggleWorkspaceMode,
+      ),
+    [toggleWorkspaceMode],
+  );
 
   const handleFileOpen = useCallback(
     (node: FsArborNode) => {

@@ -24,14 +24,14 @@ Primary outcomes:
 - Existing terminal sessions survive mode switching with no duplicate PTY creation.
 - Drag/drop supports clear docking previews, edge splits, tab moves, and tab reorder.
 
-Plan progress: 1/5 phases complete (20%).
+Plan progress: 2/5 phases complete (40%).
 
 ## Phases
 
 | # | Phase | Status | Effort | Link |
 | --- | --- | --- | --- | --- |
 | 1 | Workspace Mode Shell | Completed | 6h | [phase-01](./phase-01-workspace-mode-shell.md) |
-| 2 | Configurable Mode Shortcut | Pending | 5h | [phase-02](./phase-02-configurable-mode-shortcut.md) |
+| 2 | Configurable Mode Shortcut | Completed 2026-05-19 23:43 | 5h | [phase-02](./phase-02-configurable-mode-shortcut.md) |
 | 3 | Terminal Workspace Layout | Pending | 7h | [phase-03](./phase-03-terminal-workspace-layout.md) |
 | 4 | Advanced Terminal Docking | Pending | 9h | [phase-04](./phase-04-advanced-terminal-docking.md) |
 | 5 | Verification and Docs | Pending | 3h | [phase-05](./phase-05-verification-and-docs.md) |

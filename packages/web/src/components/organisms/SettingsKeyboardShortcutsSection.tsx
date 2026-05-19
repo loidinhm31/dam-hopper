@@ -5,6 +5,7 @@ import { useSettingsStore } from "@/stores/settings.js";
 import {
   DEFAULT_SEARCH_FILENAME_SHORTCUT,
   DEFAULT_SEARCH_TEXT_SHORTCUT,
+  DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
   DoubleShiftDetector,
   displayShortcut,
   shortcutFromKeyboardEvent,
@@ -95,8 +96,12 @@ function ShortcutCapture({
 }
 
 export function SettingsKeyboardShortcutsSection() {
-  const { searchTextShortcut, searchFilenameShortcut, saveDebounced } =
-    useSettingsStore();
+  const {
+    searchTextShortcut,
+    searchFilenameShortcut,
+    terminalWorkspaceShortcut,
+    saveDebounced,
+  } = useSettingsStore();
 
   return (
     <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-4">
@@ -122,6 +127,21 @@ export function SettingsKeyboardShortcutsSection() {
           defaultValue={DEFAULT_SEARCH_FILENAME_SHORTCUT}
           onChange={(shortcut) =>
             saveDebounced({ searchFilenameShortcut: shortcut })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Terminal workspace"
+        description="Switch IDE and terminal modes"
+      >
+        <ShortcutCapture
+          value={terminalWorkspaceShortcut}
+          defaultValue={DEFAULT_TERMINAL_WORKSPACE_SHORTCUT}
+          onChange={(shortcut) =>
+            saveDebounced({ terminalWorkspaceShortcut: shortcut })
           }
         />
       </SettingRow>

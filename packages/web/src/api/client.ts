@@ -271,6 +271,7 @@ export interface UiConfig {
   editorZoomWheelEnabled: boolean;
   searchTextShortcut: string;
   searchFilenameShortcut: string;
+  terminalWorkspaceShortcut: string;
   terminalSuggestionsEnabled?: boolean;
   explorerShowHidden?: boolean;
   terminalOrder?: string[];

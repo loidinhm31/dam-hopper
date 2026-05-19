@@ -26,6 +26,7 @@ import { WorkspaceSetupWizard } from "@/components/organisms/WorkspaceSetupWizar
 import { EncryptProvider } from "@/contexts/EncryptContext.js";
 import { PassphrasePrompt } from "@/components/molecules/PassphrasePrompt.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
+import { matchesNewTerminalShortcut } from "@/lib/shortcuts.js";
 
 // Wire CSS var outside React so it updates synchronously with store changes
 useSettingsStore.subscribe((s) => {
@@ -76,7 +77,7 @@ function GlobalShortcuts() {
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.ctrlKey && e.code === "Backquote") {
+      if (matchesNewTerminalShortcut(e)) {
         e.preventDefault();
         const params = new URLSearchParams({ action: "new-terminal" });
         if (activeProject) params.set("project", activeProject);
