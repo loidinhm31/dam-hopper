@@ -227,10 +227,16 @@ function channelToEndpoint(
       };
     }
     case "git:log": {
-      const d = data as { project: string; limit?: number; offset?: number };
+      const d = data as {
+        project: string;
+        limit?: number;
+        offset?: number;
+        ref?: string;
+      };
       const params = new URLSearchParams();
       if (d.limit !== undefined) params.set("limit", String(d.limit));
       if (d.offset !== undefined) params.set("offset", String(d.offset));
+      if (d.ref !== undefined) params.set("ref", d.ref);
       const qs = params.toString();
       return {
         method: "GET",

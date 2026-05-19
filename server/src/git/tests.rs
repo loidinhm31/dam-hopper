@@ -1206,7 +1206,7 @@ fn get_log_shows_current_branch_history_only() {
     git(&["add", "main.txt"], path);
     git(&["commit", "-m", "main only"], path);
 
-    let messages: Vec<_> = get_log(path, 10, 0)
+    let messages: Vec<_> = get_log(path, 10, 0, None)
         .unwrap()
         .into_iter()
         .map(|entry| entry.message)
@@ -1230,12 +1230,12 @@ fn get_log_supports_offset_pagination() {
         git(&["commit", "-m", &message], path);
     }
 
-    let first_page: Vec<_> = get_log(path, 2, 0)
+    let first_page: Vec<_> = get_log(path, 2, 0, None)
         .unwrap()
         .into_iter()
         .map(|entry| entry.message)
         .collect();
-    let second_page: Vec<_> = get_log(path, 2, 2)
+    let second_page: Vec<_> = get_log(path, 2, 2, None)
         .unwrap()
         .into_iter()
         .map(|entry| entry.message)
@@ -1243,6 +1243,32 @@ fn get_log_supports_offset_pagination() {
 
     assert_eq!(first_page, vec!["commit 3", "commit 2"]);
     assert_eq!(second_page, vec!["commit 1", "init"]);
+}
+
+#[test]
+fn get_log_can_read_an_explicit_branch_without_checkout() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    git(&["checkout", "-b", "feature"], path);
+    std::fs::write(path.join("feature.txt"), "feature").unwrap();
+    git(&["add", "feature.txt"], path);
+    git(&["commit", "-m", "feature only"], path);
+
+    git(&["checkout", "main"], path);
+    std::fs::write(path.join("main.txt"), "main").unwrap();
+    git(&["add", "main.txt"], path);
+    git(&["commit", "-m", "main only"], path);
+
+    let messages: Vec<_> = get_log(path, 10, 0, Some("feature"))
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+
+    assert!(messages.iter().any(|message| message == "feature only"));
+    assert!(messages.iter().any(|message| message == "init"));
+    assert!(!messages.iter().any(|message| message == "main only"));
 }
 
 #[test]

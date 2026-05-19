@@ -1048,19 +1048,30 @@ pub fn get_log(
     project_path: &Path,
     limit: usize,
     offset: usize,
+    git_ref: Option<&str>,
 ) -> Result<Vec<crate::git::types::GitLogEntry>, AppError> {
     use std::process::Command;
 
     let repo = open_repo(project_path)?;
+    if let Some(git_ref) = git_ref {
+        validate_revision(&repo, git_ref, "git ref")?;
+    }
     let upstream = upstream_oid(&repo);
 
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .current_dir(project_path)
         .arg("log")
         .arg("--date-order")
         .arg(format!("--skip={}", offset))
         .arg(format!("-n {}", limit))
-        .arg("--format=%H%x00%P%x00%aN%x00%aE%x00%at%x00%s%x00%D")
+        .arg("--format=%H%x00%P%x00%aN%x00%aE%x00%at%x00%s%x00%D");
+
+    if let Some(git_ref) = git_ref {
+        command.arg(git_ref);
+    }
+
+    let output = command
         .output()
         .map_err(|e| AppError::Git(format!("Failed to execute git log: {}", e)))?;
 

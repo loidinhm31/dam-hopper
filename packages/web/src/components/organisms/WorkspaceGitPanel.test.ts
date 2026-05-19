@@ -11,6 +11,8 @@ vi.mock("@/api/client.js", () => ({
 import { api } from "@/api/client.js";
 import {
   refreshWorkspaceGitPanelQueries,
+  resolveWorkspaceHistoryRef,
+  resolveWorkspaceHistoryBranchState,
   resolveWorkspaceGitSelection,
 } from "./WorkspaceGitPanel.js";
 
@@ -61,7 +63,7 @@ describe("WorkspaceGitPanel refresh helpers", () => {
       [{ queryKey: ["git-commit-files", "demo-project", "abc1234"] }],
     ]);
     expect(fetchQuery).toHaveBeenCalledWith({
-      queryKey: ["git-log", "demo-project", 200, 0],
+      queryKey: ["git-log", "demo-project", 200, 0, null],
       queryFn: expect.any(Function),
     });
   });
@@ -122,5 +124,88 @@ describe("WorkspaceGitPanel refresh helpers", () => {
       [{ queryKey: ["branches", "demo-project"] }],
       [{ queryKey: ["project-status", "demo-project"] }],
     ]);
+  });
+
+  it("refreshes history for the selected branch without changing query scope", async () => {
+    gitLogMock.mockResolvedValue([]);
+
+    const fetchQuery = vi.fn(
+      ({ queryFn }: { queryFn: () => Promise<unknown> }) => queryFn(),
+    );
+
+    await refreshWorkspaceGitPanelQueries(
+      {
+        invalidateQueries: vi.fn().mockResolvedValue(undefined),
+        refetchQueries: vi.fn().mockResolvedValue(undefined),
+        fetchQuery,
+      },
+      "demo-project",
+      null,
+      0,
+      "feature/demo",
+    );
+
+    expect(fetchQuery).toHaveBeenCalledWith({
+      queryKey: ["git-log", "demo-project", 200, 0, "feature/demo"],
+      queryFn: expect.any(Function),
+    });
+  });
+
+  it("follows active branch changes until the history view is pinned", () => {
+    expect(
+      resolveWorkspaceHistoryBranchState(
+        { project: "demo-project", branch: "main", followsActive: true },
+        "demo-project",
+        "release",
+      ),
+    ).toEqual({
+      project: "demo-project",
+      branch: "release",
+      followsActive: true,
+    });
+
+    expect(
+      resolveWorkspaceHistoryBranchState(
+        {
+          project: "demo-project",
+          branch: "feature/demo",
+          followsActive: false,
+        },
+        "demo-project",
+        "release",
+      ),
+    ).toEqual({
+      project: "demo-project",
+      branch: "feature/demo",
+      followsActive: false,
+    });
+  });
+
+  it("resolves the selected viewing branch to its exact tip commit", () => {
+    expect(
+      resolveWorkspaceHistoryRef(
+        [
+          {
+            name: "main",
+            isRemote: false,
+            isCurrent: true,
+            ahead: 0,
+            behind: 0,
+            lastCommit: "abc1234",
+          },
+          {
+            name: "feature/demo",
+            isRemote: false,
+            isCurrent: false,
+            ahead: 0,
+            behind: 0,
+            lastCommit: "def5678",
+          },
+        ],
+        "feature/demo",
+      ),
+    ).toBe("def5678");
+
+    expect(resolveWorkspaceHistoryRef([], "feature/demo")).toBe("feature/demo");
   });
 });

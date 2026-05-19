@@ -116,6 +116,9 @@ function HistoryContextMenu({
     isHead,
     isPushed: entry.isPushed,
   });
+  const resetDisabled = !onReset;
+  const undoDisabled = undoLastCommitState.disabled || !onUndoLastCommit;
+  const dropDisabled = dropCommitState.disabled || !onDropCommit;
 
   useEffect(() => {
     function handleMouseDown(event: MouseEvent) {
@@ -174,8 +177,13 @@ function HistoryContextMenu({
       </div>
       <button
         type="button"
-        disabled={undoLastCommitState.disabled}
-        title={undoLastCommitState.title}
+        disabled={undoDisabled}
+        title={
+          undoLastCommitState.title ??
+          (!onUndoLastCommit
+            ? "Undo Last Commit is only available while viewing the checked-out branch"
+            : undefined)
+        }
         className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10 disabled:cursor-not-allowed disabled:opacity-50"
         onClick={() => {
           onUndoLastCommit?.(entry);
@@ -186,7 +194,13 @@ function HistoryContextMenu({
       </button>
       <button
         type="button"
-        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10"
+        disabled={resetDisabled}
+        title={
+          !onReset
+            ? "Reset is only available while viewing the checked-out branch"
+            : undefined
+        }
+        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10 disabled:cursor-not-allowed disabled:opacity-50"
         onClick={() => {
           onReset?.(entry);
           onClose();
@@ -196,8 +210,13 @@ function HistoryContextMenu({
       </button>
       <button
         type="button"
-        disabled={dropCommitState.disabled}
-        title={dropCommitState.title}
+        disabled={dropDisabled}
+        title={
+          dropCommitState.title ??
+          (!onDropCommit
+            ? "Drop commit is only available while viewing the checked-out branch"
+            : undefined)
+        }
         className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10 disabled:cursor-not-allowed disabled:opacity-50"
         onClick={() => {
           onDropCommit?.(entry);

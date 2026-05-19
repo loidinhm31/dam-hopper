@@ -27,6 +27,9 @@ interface GitBranchControlProps {
   compact?: boolean;
   className?: string;
   showFeedback?: boolean;
+  mode?: "checkout" | "view";
+  selectedBranch?: string;
+  onSelectedBranchChange?: (branch: string) => void;
 }
 
 type CheckoutRetryStrategy = "normal" | "stash" | "force";
@@ -65,6 +68,9 @@ export function GitBranchControl({
   compact = false,
   className,
   showFeedback = true,
+  mode = "checkout",
+  selectedBranch,
+  onSelectedBranchChange,
 }: GitBranchControlProps) {
   const { data: branches = [] } = useBranches(project);
   const { data: projectStatus } = useProjectStatus(project);
@@ -80,6 +86,8 @@ export function GitBranchControl({
   const [error, setError] = useState<string | null>(null);
 
   const currentBranch = projectStatus?.branch ?? "";
+  const branchValue =
+    mode === "view" ? selectedBranch || currentBranch : currentBranch;
   const defaultStartPoint = useMemo(() => {
     const localBranches = branches.filter((branch) => !branch.isRemote);
     return (
@@ -163,10 +171,14 @@ export function GitBranchControl({
       >
         <GitBranch className="h-4 w-4 shrink-0 text-[var(--color-primary)] opacity-80" />
         <Select
-          value={currentBranch || undefined}
+          value={branchValue || undefined}
           disabled={checkoutBranch.isPending || createBranch.isPending}
           onValueChange={(value) => {
-            if (!value || value === currentBranch) return;
+            if (!value || value === branchValue) return;
+            if (mode === "view") {
+              onSelectedBranchChange?.(value);
+              return;
+            }
             void runCheckout(value);
           }}
         >
@@ -208,25 +220,27 @@ export function GitBranchControl({
             )}
           </SelectContent>
         </Select>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="shrink-0 px-2.5 h-8 hover:bg-[var(--color-primary)]/10 hover:text-[var(--color-primary)] transition-all"
-          onClick={() => {
-            setBranchName("");
-            setStartPoint(defaultStartPoint);
-            setCheckoutAfterCreate(true);
-            setError(null);
-            setMessage(null);
-            setCreateOpen(true);
-          }}
-          disabled={checkoutBranch.isPending || createBranch.isPending}
-          title="Create new branch"
-        >
-          <Plus className="h-4 w-4" />
-          {!compact ? <span className="ml-1">New Branch</span> : null}
-        </Button>
+        {mode === "checkout" ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="shrink-0 px-2.5 h-8 hover:bg-[var(--color-primary)]/10 hover:text-[var(--color-primary)] transition-all"
+            onClick={() => {
+              setBranchName("");
+              setStartPoint(defaultStartPoint);
+              setCheckoutAfterCreate(true);
+              setError(null);
+              setMessage(null);
+              setCreateOpen(true);
+            }}
+            disabled={checkoutBranch.isPending || createBranch.isPending}
+            title="Create new branch"
+          >
+            <Plus className="h-4 w-4" />
+            {!compact ? <span className="ml-1">New Branch</span> : null}
+          </Button>
+        ) : null}
       </div>
 
       <GitBranchFeedback
@@ -234,26 +248,32 @@ export function GitBranchControl({
         error={error}
         showFeedback={showFeedback}
       />
-      <GitBranchCreateDialog
-        open={createOpen}
-        branchName={branchName}
-        startPoint={startPoint}
-        checkoutAfterCreate={checkoutAfterCreate}
-        branches={allSortedBranches}
-        isPending={createBranch.isPending}
-        onOpenChange={setCreateOpen}
-        onBranchNameChange={setBranchName}
-        onStartPointChange={setStartPoint}
-        onCheckoutAfterCreateChange={setCheckoutAfterCreate}
-        onSubmit={() => void handleCreateBranch()}
-      />
+      {mode === "checkout" ? (
+        <GitBranchCreateDialog
+          open={createOpen}
+          branchName={branchName}
+          startPoint={startPoint}
+          checkoutAfterCreate={checkoutAfterCreate}
+          branches={allSortedBranches}
+          isPending={createBranch.isPending}
+          onOpenChange={setCreateOpen}
+          onBranchNameChange={setBranchName}
+          onStartPointChange={setStartPoint}
+          onCheckoutAfterCreateChange={setCheckoutAfterCreate}
+          onSubmit={() => void handleCreateBranch()}
+        />
+      ) : null}
 
-      <GitDirtyCheckoutDialog
-        targetBranch={dirtyTarget}
-        isPending={checkoutBranch.isPending}
-        onRetry={(strategy) => dirtyTarget && void runCheckout(dirtyTarget, strategy)}
-        onClose={() => setDirtyTarget(null)}
-      />
+      {mode === "checkout" ? (
+        <GitDirtyCheckoutDialog
+          targetBranch={dirtyTarget}
+          isPending={checkoutBranch.isPending}
+          onRetry={(strategy) =>
+            dirtyTarget && void runCheckout(dirtyTarget, strategy)
+          }
+          onClose={() => setDirtyTarget(null)}
+        />
+      ) : null}
     </>
   );
 }

@@ -199,10 +199,15 @@ export function useBranches(project: string) {
   });
 }
 
-export function useGitLog(project: string, limit?: number, offset?: number) {
+export function useGitLog(
+  project: string,
+  limit?: number,
+  offset?: number,
+  ref?: string,
+) {
   return useQuery({
-    queryKey: ["git-log", project, limit, offset],
-    queryFn: () => api.git.log(project, limit, offset),
+    queryKey: ["git-log", project, limit, offset, ref ?? null],
+    queryFn: () => api.git.log(project, limit, offset, ref),
     enabled: !!project,
   });
 }

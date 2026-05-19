@@ -250,7 +250,7 @@ export function CommitDetailsPanel({
           x={activeContextMenu.x}
           y={activeContextMenu.y}
           count={selectedFiles.length}
-          canDrop={!commit.isPushed}
+          canDrop={Boolean(onDropSelectedChanges) && !commit.isPushed}
           onCherryPick={handleCherryPickSelectedChanges}
           onRevert={handleRevertSelectedChanges}
           onDrop={handleDropSelectedChanges}
@@ -332,7 +332,7 @@ function CommitFileContextMenu({
         title={
           canDrop
             ? undefined
-            : "Drop is only available for commits not pushed upstream"
+            : "Drop Selected Changes is only available while viewing the checked-out branch and for commits not pushed upstream"
         }
         className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10 disabled:cursor-not-allowed disabled:opacity-50"
         onClick={onDrop}
