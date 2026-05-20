@@ -26,6 +26,7 @@ function saveFleetCollapsed(collapsed: boolean) {
 export function TerminalWorkspaceShell({
   terminalContent,
   fleetContent,
+  portsContent,
   workspaceMode,
   onWorkspaceModeChange,
   workspaceModeShortcutLabel,
@@ -33,6 +34,7 @@ export function TerminalWorkspaceShell({
 }: {
   terminalContent: ReactNode;
   fleetContent: ReactNode;
+  portsContent?: ReactNode;
   workspaceMode: WorkspaceMode;
   onWorkspaceModeChange: (mode: WorkspaceMode) => void;
   workspaceModeShortcutLabel?: string;
@@ -98,22 +100,37 @@ export function TerminalWorkspaceShell({
               style={{ width: fleetWidth }}
               className="flex min-h-0 shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)]"
             >
-              <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-3">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-                  Fleet Terminal
-                </span>
-                <button
-                  type="button"
-                  onClick={toggleFleet}
-                  className="rounded-sm p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-                  title="Collapse Fleet Terminal"
-                >
-                  <PanelRightClose className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="min-h-0 flex-1 overflow-hidden">
-                {fleetContent}
-              </div>
+              <section className="flex min-h-0 flex-[3] flex-col border-b border-[var(--color-border)]">
+                <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-3">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                    Fleet Terminal
+                  </span>
+                  <button
+                    type="button"
+                    onClick={toggleFleet}
+                    className="rounded-sm p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+                    title="Collapse Fleet Terminal"
+                  >
+                    <PanelRightClose className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  {fleetContent}
+                </div>
+              </section>
+
+              {portsContent && (
+                <section className="flex min-h-48 flex-[2] flex-col">
+                  <div className="flex h-9 shrink-0 items-center border-b border-[var(--color-border)] px-3">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                      Ports
+                    </span>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-hidden">
+                    {portsContent}
+                  </div>
+                </section>
+              )}
             </aside>
           </>
         )}

@@ -523,6 +523,15 @@ export default function WorkspacePage() {
     ],
   );
 
+  const portsContent = useMemo(
+    () => (
+      <Suspense fallback={<PanelFallback label="Loading ports…" />}>
+        <PortsPanel />
+      </Suspense>
+    ),
+    [],
+  );
+
   const leftTools = useMemo<ToolWindowDef[]>(
     () => [
       {
@@ -632,11 +641,7 @@ export default function WorkspacePage() {
         label: "Ports",
         icon: Radio,
         position: "bottom",
-        content: (
-          <Suspense fallback={<PanelFallback label="Loading ports…" />}>
-            <PortsPanel />
-          </Suspense>
-        ),
+        content: portsContent,
       },
     ],
     [
@@ -647,6 +652,7 @@ export default function WorkspacePage() {
       openFile,
       setActiveProject,
       terminalContent,
+      portsContent,
     ],
   );
 
@@ -672,6 +678,7 @@ export default function WorkspacePage() {
         <TerminalWorkspaceShell
           terminalContent={terminalContent}
           fleetContent={fleetContent}
+          portsContent={portsContent}
           workspaceMode={workspaceMode}
           onWorkspaceModeChange={setWorkspaceMode}
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}
