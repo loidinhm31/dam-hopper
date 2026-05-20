@@ -11,6 +11,10 @@ import { cn } from "@/lib/utils.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import { TerminalTabInsertionZone } from "@/components/organisms/terminal-tab-insertion-zone.js";
 
+export function splitActionToPaneDirection(action: "right" | "down") {
+  return action === "right" ? "horizontal" : "vertical";
+}
+
 // ─── DragItem schema ─────────────────────────────────────────────────────────
 
 export interface DragItem {
@@ -127,6 +131,15 @@ export function TabBar({
 }: TabBarProps) {
   const [isDragging, setIsDragging] = useState(false);
 
+  function splitPane(action: "right" | "down") {
+    const direction = splitActionToPaneDirection(action);
+    if (direction === "horizontal") {
+      onSplitPaneHorizontal();
+      return;
+    }
+    onSplitPaneVertical();
+  }
+
   useDndMonitor({
     onDragStart: () => setIsDragging(true),
     onDragEnd: () => setIsDragging(false),
@@ -192,7 +205,7 @@ export function TabBar({
           className="p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
           onClick={(e) => {
             e.stopPropagation();
-            onSplitPaneVertical();
+            splitPane("right");
           }}
         >
           <SplitSquareHorizontal className="h-3.5 w-3.5" />
@@ -205,7 +218,7 @@ export function TabBar({
           className="p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
           onClick={(e) => {
             e.stopPropagation();
-            onSplitPaneHorizontal();
+            splitPane("down");
           }}
         >
           <SplitSquareVertical className="h-3.5 w-3.5" />

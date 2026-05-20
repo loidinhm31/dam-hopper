@@ -26,6 +26,18 @@ function split(
 }
 
 describe("dockSessionInLayout", () => {
+  it("activates an existing tab when dropped into its own pane center", () => {
+    const root = pane("pane-a", ["s1", "s2"], "s1");
+    const result = dockSessionInLayout(root, "s2", "pane-a", {
+      kind: "pane-center",
+      paneId: "pane-a",
+    });
+
+    expect(result.root).toEqual(pane("pane-a", ["s1", "s2"], "s2"));
+    expect(result.focusedPaneId).toBe("pane-a");
+    expect(result.changed).toBe(true);
+  });
+
   it("moves a tab to another pane center and collapses an empty source pane", () => {
     const root = split("root", "horizontal", pane("left", ["s1"]), pane("right", ["s2"]));
     const result = dockSessionInLayout(root, "s1", "left", {
@@ -112,5 +124,18 @@ describe("dockSessionInLayout", () => {
 
     expect(result.root).toEqual(pane("empty", ["s1"], "s1"));
     expect(result.focusedPaneId).toBe("empty");
+  });
+
+  it("ignores edge-dock on the same single-tab pane", () => {
+    const root = pane("solo", ["s1"], "s1");
+    const result = dockSessionInLayout(root, "s1", "solo", {
+      kind: "pane-edge",
+      paneId: "solo",
+      edge: "right",
+    });
+
+    expect(result.root).toEqual(root);
+    expect(result.focusedPaneId).toBe("solo");
+    expect(result.changed).toBe(false);
   });
 });

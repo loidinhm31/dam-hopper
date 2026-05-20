@@ -9,7 +9,7 @@
 ## Overview
 
 Priority: P1  
-Status: Pending  
+Status: Completed 2026-05-20 01:52
 Goal: validate terminal workspace mode and docking behavior, then update docs for future maintainers.
 
 ## Key Insights
@@ -81,12 +81,23 @@ Docs:
 
 ## Todo List
 
-- [ ] Add/run web unit tests.
-- [ ] Run web build.
-- [ ] Run focused Rust config tests.
-- [ ] Manual terminal workspace verification.
-- [ ] Manual docking verification.
-- [ ] Update docs/changelog as appropriate.
+- [x] Add/run web unit tests.
+- [x] Run web build.
+- [x] Run focused Rust config tests.
+- [x] Manual terminal workspace verification.
+- [x] Manual docking verification.
+- [x] Update docs/changelog as appropriate.
+
+## Verification Notes
+
+- 2026-05-20: Added docking regression coverage for same-pane center activation and self-edge no-op handling in `packages/web/src/lib/terminal-layout-docking.test.ts`.
+- 2026-05-20: `pnpm --filter @dam-hopper/web test` passed (26 files, 134 tests).
+- 2026-05-20: `pnpm build` passed.
+- 2026-05-20: `cargo test --manifest-path server/Cargo.toml ui_config` passed.
+- 2026-05-20: Real browser verification found a split-action mapping defect: `Split Right` opened below and `Split Down` opened right.
+- 2026-05-20: Fixed the `TabBar` split handler mapping and added `tab-bar.test.ts` to pin the UI action-to-direction contract.
+- 2026-05-20: Real browser verification requested keeping the Ports panel available in Terminal mode for development port access.
+- 2026-05-20: Terminal mode now renders the existing `PortsPanel` below Fleet Terminal in the right rail.
 
 ## Success Criteria
 
@@ -108,4 +119,4 @@ Docs:
 
 ## Next Steps
 
-After verification, implementation can be reviewed and committed with a focused conventional commit.
+Phase complete. Optional follow-up: re-run a quick browser spot-check on split controls after pulling the latest build, then commit with a focused conventional commit.

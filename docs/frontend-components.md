@@ -93,6 +93,10 @@ The `IdeShell` orchestrates the system:
 - The same terminal manager state is reused across mode switches, so PTY lifecycle is not duplicated.
 - Terminal panes refit when switching modes or when the Fleet Terminal rail changes size/collapse state.
 
+**Persistence keys:**
+
+- `dam-hopper:workspace-mode` stores the active shell mode (`ide` or `terminal`).
+
 ### Terminal Workspace Shell
 
 **Location:** `packages/web/src/components/templates/TerminalWorkspaceShell.tsx`
@@ -102,7 +106,8 @@ The `IdeShell` orchestrates the system:
 **Behavior:**
 
 - Renders the Fleet Terminal as a persisted right rail in terminal mode.
-- Persists rail width and collapse state.
+- Keeps the Ports panel visible below Fleet Terminal in terminal mode for localhost and tunnel actions while developing.
+- Persists rail width and collapse state with `dam-hopper:terminal-workspace-fleet-width` and `dam-hopper:terminal-workspace-fleet-collapsed`.
 - Keeps the main terminal area full-height below the top nav.
 - Triggers terminal refit on rail resize and collapse changes.
 
@@ -168,6 +173,8 @@ interface TerminalPanelProps {
 
 **Data flow:** `usePorts()` preserves `sessionId` on detected rows and exposes `killPortSession(sessionId)` so the panel can terminate the owning terminal session without direct process handling.
 
+**Terminal workspace:** The same `PortsPanel` is rendered in the Terminal workspace right rail below Fleet Terminal, so detected ports and tunnel actions remain available without switching back to IDE mode.
+
 ### PaneContainer
 
 **Location:** `packages/web/src/components/organisms/PaneContainer.tsx`
@@ -193,7 +200,13 @@ interface TerminalPanelProps {
 - `terminal-layout-docking.ts` removes the session from the source pane, inserts or splits into the target, collapses safe-empty source panes, and focuses the destination pane in one state transition.
 - `TabBar` exposes insertion droppables before the first tab, between tabs, and after the last tab for reorder and cross-pane insertion.
 - `PaneContainer` renders labeled five-zone docking previews only while dragging, keeping pointer interference off the live terminal during normal input.
+- Re-dropping onto the same pane center only changes active tab focus; invalid self-edge splits are ignored.
 - Terminal layout persistence remains in localStorage under `dam-hopper:terminal-layout`.
+
+**Runtime verification notes:**
+
+- Manual verification is still required for xterm reparenting, focus retention, resize/refit timing, and PTY reuse across IDE/Terminal mode switches.
+- Automated coverage currently proves shortcut normalization, workspace mode persistence, and pure docking-tree transitions.
 
 ## Git Workspace Panel
 

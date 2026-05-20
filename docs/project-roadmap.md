@@ -207,6 +207,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-05-20:** Completed Terminal Workspace Docking Phase 05.
+  - ✅ Verified `pnpm --filter @dam-hopper/web test`, `pnpm build`, and focused Rust `ui_config` tests
+  - ✅ Real-browser verification caught a swapped split-action mapping in the terminal tab bar
+  - ✅ Fixed `Split Right`/`Split Down` direction wiring and added a focused regression test
+  - ✅ Kept Ports visible in Terminal mode below Fleet Terminal for development port access
+  - ✅ Documented terminal workspace persistence keys and runtime verification boundaries
+
 - **2026-05-19:** Completed Terminal Workspace Docking Phase 02.
   - ✅ Added configurable terminal workspace shortcut with default `Mod+Shift+Backquote`
   - ✅ Moved shortcut config through Rust UiConfig, TS UiConfig, and settings UI
