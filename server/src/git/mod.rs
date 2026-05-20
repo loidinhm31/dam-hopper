@@ -5,6 +5,7 @@ pub mod diff;
 pub mod progress;
 pub mod repository;
 pub mod types;
+pub mod vcs_roots;
 pub mod worktree;
 
 #[cfg(test)]
@@ -28,8 +29,10 @@ pub use types::{
     BranchInfo, BranchUpdateResult, CheckoutStrategy, ConflictFile, DiffFileEntry, DiffResponse,
     FileDiffContent, GitActionResult, GitBlockReason, GitLogEntry, GitOperation,
     GitOperationResult, GitProgressEvent, GitProgressPhase, GitRecoveryOperation, GitRecoveryState,
-    GitStatus, HunkInfo, ResetMode, Worktree, WorktreeAddOptions, UNTRACKED_PAGE_SIZE,
+    GitStatus, HunkInfo, ResetMode, SubmoduleGitlinkInfo, VcsRoot, VcsRootKind,
+    VcsRootMappingState, Worktree, WorktreeAddOptions, UNTRACKED_PAGE_SIZE,
 };
+pub use vcs_roots::{discover_vcs_roots, resolve_vcs_root};
 pub use worktree::{
     add as add_worktree, list as list_worktrees, prune as prune_worktrees,
     remove as remove_worktree,

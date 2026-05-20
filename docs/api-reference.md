@@ -184,6 +184,46 @@ Returns local and remote branches.
 ]
 ```
 
+**GET /api/git/{project}/roots**
+Discover VCS roots inside the project. Returns the primary repo root, nested repositories, and submodule gitlinks.
+
+Response shape:
+
+```json
+[
+  {
+    "rootId": ".",
+    "path": ".",
+    "absolutePath": "/abs/path/to/project",
+    "kind": "primary",
+    "status": { "...": "GitStatus" },
+    "warnings": []
+  },
+  {
+    "rootId": "modules/child",
+    "path": "modules/child",
+    "absolutePath": "/abs/path/to/project/modules/child",
+    "kind": "submodule",
+    "mappingState": "mapped",
+    "gitlink": {
+      "path": "modules/child",
+      "objectId": "abc123...",
+      "moduleName": "child",
+      "url": "../child.git"
+    },
+    "status": { "...": "GitStatus" },
+    "warnings": []
+  }
+]
+```
+
+Fields:
+
+- `kind` is `primary`, `submodule`, or `nestedRepo`.
+- `mappingState` is only present for submodules and can be `mapped`, `unmapped`, `missing`, or `uninitialized`.
+- `gitlink` is only present for submodules.
+- `warnings` may include invalid `.gitmodules` or missing/uninitialized gitlink notes.
+
 **POST /api/git/{project}/branches**
 Create a branch. Set `checkout` to switch to it after creation.
 

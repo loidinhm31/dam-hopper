@@ -929,6 +929,24 @@ async fn git_worktrees_returns_list_for_valid_project() {
 }
 
 #[tokio::test]
+async fn git_roots_returns_primary_root_for_valid_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_git_repo(tmp.path());
+    let state = make_state_with_project(&tmp);
+
+    let resp = get(state, "/api/git/test-project/roots").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let roots = json.as_array().expect("roots response should be an array");
+    assert!(roots.iter().any(|root| {
+        root["rootId"] == "." && root["kind"] == "primary" && root["status"].is_object()
+    }));
+}
+
+#[tokio::test]
 async fn git_branches_unknown_project_returns_404() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp); // no projects

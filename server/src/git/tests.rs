@@ -13,11 +13,13 @@ use crate::git::repository::{
     checkout_branch, cherry_pick, create_branch, get_log, get_status, list_branches,
     reset_to_commit, undo_last_commit, update_branch,
 };
-use crate::git::types::{CheckoutStrategy, GitProgressPhase, ResetMode};
+use crate::git::types::{
+    CheckoutStrategy, GitProgressPhase, ResetMode, VcsRootKind, VcsRootMappingState,
+};
 use crate::git::{
     cherry_pick_commit_files, drop_commit, drop_commit_files, revert_commit, revert_commit_files,
 };
-use crate::git::{BulkGitService, WorktreeAddOptions};
+use crate::git::{discover_vcs_roots, resolve_vcs_root, BulkGitService, WorktreeAddOptions};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -66,6 +68,12 @@ fn make_temp_repo() -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     init_repo_with_commit(dir.path());
     dir
+}
+
+fn make_nested_repo(path: &Path) -> String {
+    std::fs::create_dir_all(path).unwrap();
+    init_repo_with_commit(path);
+    git_output(&["rev-parse", "HEAD"], path)
 }
 
 fn make_remote_clone_repo() -> (TempDir, TempDir, TempDir) {
@@ -154,6 +162,109 @@ fn status_has_stash() {
 
     let status = get_status(path, "stash-test").unwrap();
     assert!(status.has_stash);
+}
+
+// ---------------------------------------------------------------------------
+// VCS root discovery tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn vcs_roots_discovers_gitlinks_when_gitmodules_is_invalid() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let child_oid = make_nested_repo(&path.join("libs/mapped"));
+
+    git(&["add", "libs/mapped"], path);
+    std::fs::write(path.join(".gitmodules"), "not valid git config = [").unwrap();
+    git(
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000",
+            &child_oid,
+            "libs/missing",
+        ],
+        path,
+    );
+
+    let roots = discover_vcs_roots(path).unwrap();
+    let mapped = roots
+        .iter()
+        .find(|root| root.root_id == "libs/mapped")
+        .unwrap();
+    let missing = roots
+        .iter()
+        .find(|root| root.root_id == "libs/missing")
+        .unwrap();
+    let primary = roots.iter().find(|root| root.root_id == ".").unwrap();
+
+    assert_eq!(mapped.kind, VcsRootKind::Submodule);
+    assert_eq!(mapped.mapping_state, Some(VcsRootMappingState::Unmapped));
+    assert!(mapped.status.is_some());
+    assert_eq!(missing.mapping_state, Some(VcsRootMappingState::Missing));
+    assert!(primary
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("invalid .gitmodules")));
+}
+
+#[test]
+fn vcs_roots_classifies_mapped_uninitialized_and_plain_nested_roots() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let child_oid = make_nested_repo(&path.join("modules/child"));
+    make_nested_repo(&path.join("tools/plain"));
+    std::fs::create_dir_all(path.join("modules/uninitialized")).unwrap();
+
+    std::fs::write(
+        path.join(".gitmodules"),
+        "[submodule \"child\"]\n\tpath = modules/child\n\turl = ../child.git\n",
+    )
+    .unwrap();
+    git(&["add", ".gitmodules", "modules/child"], path);
+    git(
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000",
+            &child_oid,
+            "modules/uninitialized",
+        ],
+        path,
+    );
+
+    let roots = discover_vcs_roots(path).unwrap();
+    let child = roots
+        .iter()
+        .find(|root| root.root_id == "modules/child")
+        .unwrap();
+    let uninitialized = roots
+        .iter()
+        .find(|root| root.root_id == "modules/uninitialized")
+        .unwrap();
+    let plain = roots
+        .iter()
+        .find(|root| root.root_id == "tools/plain")
+        .unwrap();
+
+    assert_eq!(child.kind, VcsRootKind::Submodule);
+    assert_eq!(child.mapping_state, Some(VcsRootMappingState::Mapped));
+    assert_eq!(
+        child.gitlink.as_ref().and_then(|info| info.url.as_deref()),
+        Some("../child.git")
+    );
+    assert_eq!(
+        uninitialized.mapping_state,
+        Some(VcsRootMappingState::Uninitialized)
+    );
+    assert_eq!(plain.kind, VcsRootKind::NestedRepo);
+    assert_eq!(
+        resolve_vcs_root(path, "tools/plain").unwrap(),
+        dunce::canonicalize(path.join("tools/plain")).unwrap()
+    );
+    assert!(resolve_vcs_root(path, "../escape").is_err());
 }
 
 // ---------------------------------------------------------------------------

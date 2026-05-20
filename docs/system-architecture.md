@@ -29,7 +29,7 @@
 │  │  ├─ /api/projects → ProjectList handler                │
 │  │  ├─ /api/pty/* → PTY spawn/send/kill                   │
 │  │  ├─ /api/ports → Port detection list                   │
-│  │  ├─ /api/git/* → Clone/push/status/branch ops          │
+│  │  ├─ /api/git/* → Clone/push/status/branch/root ops     │
 │  │  ├─ /api/fs/* → [conditional] List/read/stat           │
 │  │  ├─ /api/agent-store/* → Distribution/import           │
 │  │  ├─ /api/workspace/* → Config switching                │
@@ -198,6 +198,23 @@ pub struct PersistedSession {
 
 - Lazy init: sandbox stored as Option (Unavailable if init failed)
 - Cheap clone pattern
+
+### git/
+
+Git operations and repository discovery helpers.
+
+**types.rs** — shared API types for git surfaces.
+
+- `VcsRoot` — root descriptor returned by `/api/git/{project}/roots`
+- `VcsRootKind` — `Primary`, `Submodule`, or `NestedRepo`
+- `VcsRootMappingState` — `Mapped`, `Unmapped`, `Missing`, or `Uninitialized`
+- `SubmoduleGitlinkInfo` — gitlink path, object id, optional module name, optional URL
+
+**vcs_roots.rs** — discovery and resolution helpers.
+
+- `discover_vcs_roots(project_path)` scans the primary repo, gitlinks, `.gitmodules`, and nested repos.
+- `resolve_vcs_root(project_path, root_id)` validates root ids, blocks traversal, and returns the canonical path for a usable VCS root.
+- Primary root accumulates warnings when `.gitmodules` is invalid or gitlink state is inconsistent.
 
 ### Web Frontend Shared File Decorations
 
