@@ -158,7 +158,7 @@ export function formatVcsRootLabel(root: VcsRoot) {
   return root.rootId === DEFAULT_GIT_ROOT_ID ? "Project root" : root.path;
 }
 
-function describeVcsRoot(root: VcsRoot) {
+export function describeVcsRoot(root: VcsRoot) {
   if (root.kind === "primary") return "Primary";
   if (root.mappingState === "uninitialized") return "Uninitialized";
   if (root.mappingState === "missing") return "Missing mapping";
@@ -166,7 +166,21 @@ function describeVcsRoot(root: VcsRoot) {
   return root.kind === "submodule" ? "Submodule" : "Nested repo";
 }
 
-function projectRelativePathForRoot(root: string, path: string) {
+export function workspaceGitRootOptions(roots: VcsRoot[]): VcsRoot[] {
+  return roots.length > 0
+    ? roots
+    : [
+        {
+          rootId: DEFAULT_GIT_ROOT_ID,
+          path: ".",
+          absolutePath: "",
+          kind: "primary" as const,
+          warnings: [],
+        },
+      ];
+}
+
+export function projectRelativePathForRoot(root: string, path: string) {
   if (!path || root === DEFAULT_GIT_ROOT_ID) return path;
   if (path === root || path.startsWith(`${root}/`)) return path;
   return `${root}/${path}`;
@@ -196,17 +210,7 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
   const offset = page * WORKSPACE_GIT_LOG_LIMIT;
   const { data: roots = [] } = useGitRoots(project);
   const { data: branches = [] } = useBranches(project, selectedRootId);
-  const rootOptions = roots.length > 0
-    ? roots
-    : [
-        {
-          rootId: DEFAULT_GIT_ROOT_ID,
-          path: ".",
-          absolutePath: "",
-          kind: "primary" as const,
-          warnings: [],
-        },
-      ];
+  const rootOptions = workspaceGitRootOptions(roots);
   const selectedRoot =
     rootOptions.find((root) => root.rootId === selectedRootId) ??
     rootOptions[0];

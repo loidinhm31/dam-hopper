@@ -218,6 +218,13 @@ Git operations and repository discovery helpers.
 - `staged_vcs_root_ids(project_path)` reports which discovered roots currently have staged changes.
 - Primary root accumulates warnings when `.gitmodules` is invalid or gitlink state is inconsistent.
 
+Root discovery treats `.gitmodules` as optional metadata. The index gitlink is
+the source of truth for submodule rows, and a child `.git` marker promotes that
+path to an actionable VCS root. This keeps parent gitlink state separate from
+child repository file state: parent diffs can show `modules/child` as a
+submodule entry while root-scoped child diffs show `README.md`, `src/*`, and
+other child-local paths.
+
 ### Web Frontend Shared File Decorations
 
 **Location:** `packages/web/src/lib/`
@@ -555,6 +562,7 @@ HTTP request handlers + WebSocket upgrade.
 **git_diff.rs** (Phase 01) — Git diff/staging/conflict handlers:
 
 - `GET /api/git/:project/diff?root=ID` — list changed files for a VCS root
+- `GET /api/git/:project/diff?root=*` — read-only aggregate local changes grouped by VCS root metadata
 - `GET /api/git/:project/diff/file?path=REL&root=ID` — file diff with hunks inside one root
 - `POST /api/git/:project/stage` — stage files, root-aware
 - `POST /api/git/:project/unstage` — unstage files, root-aware

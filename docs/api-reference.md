@@ -734,6 +734,10 @@ Optional query: `root=ID` to scope results to one VCS root. When no root is
 supplied, the backend resolves the deepest matching root for the requested
 paths and rejects mixed-root operations.
 
+Use `root=*` for the read-only aggregate local-changes view. Aggregate entries
+include `rootId` and `rootPath`; mutation endpoints reject aggregate roots and
+must be called with one concrete root.
+
 Response:
 
 ```json
@@ -881,25 +885,27 @@ All functions in `packages/web/src/api/server-config.ts`.
 **POST /api/git/:project/stage**
 Stage files for commit.
 
-Body: `{ paths: string[] }`
+Body: `{ paths: string[], root?: string }`
 
 **POST /api/git/:project/unstage**
 Unstage files.
 
-Body: `{ paths: string[] }`
+Body: `{ paths: string[], root?: string }`
 
 **POST /api/git/:project/discard**
 Discard changes to file (restore from HEAD).
 
-Body: `{ path: string }`
+Body: `{ path: string, root?: string }`
 
 **POST /api/git/:project/discard-hunk**
 Discard single hunk from file.
 
-Body: `{ path: string, hunkIndex: number }`
+Body: `{ path: string, hunkIndex: number, root?: string }`
 
 **GET /api/git/:project/conflicts**
 List conflicted files with 3-way merge content.
+
+Optional query: `root=ID`.
 
 Response:
 
@@ -919,7 +925,7 @@ Response:
 **POST /api/git/:project/resolve**
 Resolve merge conflict.
 
-Body: `{ path: string, content: string }`
+Body: `{ path: string, content: string, root?: string }`
 
 ### IDE File Explorer
 
