@@ -170,6 +170,8 @@ project path.
 **GET /api/git/{project}/branches**
 Returns local and remote branches.
 
+Optional query: `root=ID` to scope branch data to one VCS root.
+
 ```json
 [
   {
@@ -223,6 +225,7 @@ Fields:
 - `mappingState` is only present for submodules and can be `mapped`, `unmapped`, `missing`, or `uninitialized`.
 - `gitlink` is only present for submodules.
 - `warnings` may include invalid `.gitmodules` or missing/uninitialized gitlink notes.
+- `status` reflects the root's own Git status snapshot.
 
 **POST /api/git/{project}/branches**
 Create a branch. Set `checkout` to switch to it after creation.
@@ -231,7 +234,8 @@ Create a branch. Set `checkout` to switch to it after creation.
 {
   "name": "feature/git-flow",
   "startPoint": "main",
-  "checkout": true
+  "checkout": true,
+  "root": "modules/child"
 }
 ```
 
@@ -244,7 +248,8 @@ Checkout an existing branch, or create one when `create` is true. `strategy` is
   "branch": "feature/git-flow",
   "startPoint": "origin/main",
   "create": false,
-  "strategy": "normal"
+  "strategy": "normal",
+  "root": "modules/child"
 }
 ```
 
@@ -252,7 +257,7 @@ Checkout an existing branch, or create one when `create` is true. `strategy` is
 Update a branch from its tracking branch.
 
 ```json
-{ "branch": "main" }
+{ "branch": "main", "root": "modules/child" }
 ```
 
 ### History Actions
@@ -725,6 +730,10 @@ Body: `{ hash: string, mode: "soft"|"mixed"|"hard"|"keep" }`
 **GET /api/git/:project/diff**
 List changed files (staged + unstaged).
 
+Optional query: `root=ID` to scope results to one VCS root. When no root is
+supplied, the backend resolves the deepest matching root for the requested
+paths and rejects mixed-root operations.
+
 Response:
 
 ```json
@@ -736,14 +745,27 @@ Response:
       "staged": false,
       "additions": 5,
       "deletions": 2,
-      "oldPath": "src/old.rs"
+      "oldPath": "src/old.rs",
+      "rootId": ".",
+      "rootPath": ".",
+      "submodule": {
+        "path": "modules/child",
+        "objectId": "abc123...",
+        "moduleName": "child",
+        "url": "../child.git"
+      }
     }
   ]
 }
 ```
 
+`rootId`, `rootPath`, and `submodule` are omitted when the entry is not tied to
+an explicit VCS root or submodule gitlink.
+
 **GET /api/git/:project/diff/file?path=REL**
 File diff content with hunks (HEAD vs working directory).
+
+Optional query: `root=ID` for root-scoped file diff resolution.
 
 Response:
 
@@ -767,10 +789,40 @@ Response:
 }
 ```
 
+**POST /api/git/:project/stage**
+Stage files.
+
+Body: `{ paths: string[], root?: string }`
+
+**POST /api/git/:project/unstage**
+Unstage files.
+
+Body: `{ paths: string[], root?: string }`
+
+**POST /api/git/:project/discard**
+Discard changes to file.
+
+Body: `{ path: string, root?: string }`
+
+**POST /api/git/:project/discard-hunk**
+Discard single hunk from file.
+
+Body: `{ path: string, hunkIndex: number, root?: string }`
+
+**GET /api/git/:project/conflicts**
+List conflicted files with 3-way merge content.
+
+Optional query: `root=ID` for root-scoped conflict discovery.
+
+**POST /api/git/:project/resolve**
+Resolve merge conflict.
+
+Body: `{ path: string, content: string, root?: string }`
+
 **POST /api/git/:project/commit**
 Create a commit from staged files.
 
-Body: `{ message: string, amend?: bool }`
+Body: `{ message: string, amend?: bool, root?: string }`
 
 ## Client-Side Profile Management (Phase 2)
 

@@ -214,6 +214,8 @@ Git operations and repository discovery helpers.
 
 - `discover_vcs_roots(project_path)` scans the primary repo, gitlinks, `.gitmodules`, and nested repos.
 - `resolve_vcs_root(project_path, root_id)` validates root ids, blocks traversal, and returns the canonical path for a usable VCS root.
+- `resolve_git_request_root(project_path, requested_root)` and `resolve_git_path_root(...)` normalize root-scoped API requests so branch, diff, staging, and history actions stay inside one VCS root.
+- `staged_vcs_root_ids(project_path)` reports which discovered roots currently have staged changes.
 - Primary root accumulates warnings when `.gitmodules` is invalid or gitlink state is inconsistent.
 
 ### Web Frontend Shared File Decorations
@@ -512,7 +514,7 @@ web UI can show recoverable state instead of generic errors.
 
 **types.rs** — Shared data types:
 
-- `DiffFileEntry` — file status, staged flag, additions/deletions
+- `DiffFileEntry` — file status, staged flag, additions/deletions, optional root/submodule metadata
 - `FileDiffContent` — hunks, original+modified content, language detection, binary flag
 - `HunkInfo` — hunk position + header for unified diff display
 - `ConflictFile` — 3-way merge content (ancestor, ours, theirs)
@@ -521,6 +523,7 @@ web UI can show recoverable state instead of generic errors.
 
 - `get_diff_files()` — list changed files (staged + unstaged)
 - `get_file_diff()` — hunked diff for single file
+- `append_submodule_status_entries()` — surfaces dirty submodule gitlinks from parent repo status
 - `stage_files()` — stage paths for commit
 - `unstage_files()` — unstage paths
 - `discard_file()` — restore file from HEAD
@@ -551,22 +554,23 @@ HTTP request handlers + WebSocket upgrade.
 
 **git_diff.rs** (Phase 01) — Git diff/staging/conflict handlers:
 
-- `GET /api/git/:project/diff` — list changed files
-- `GET /api/git/:project/diff/file?path=REL` — file diff with hunks
-- `POST /api/git/:project/stage` — stage files
-- `POST /api/git/:project/unstage` — unstage files
-- `POST /api/git/:project/discard` — discard file changes
-- `POST /api/git/:project/discard-hunk` — discard single hunk
-- `GET /api/git/:project/conflicts` — list merge conflicts
-- `POST /api/git/:project/resolve` — resolve merge conflict
-- `POST /api/git/:project/commit` — create commit, supports `amend`
+- `GET /api/git/:project/diff?root=ID` — list changed files for a VCS root
+- `GET /api/git/:project/diff/file?path=REL&root=ID` — file diff with hunks inside one root
+- `POST /api/git/:project/stage` — stage files, root-aware
+- `POST /api/git/:project/unstage` — unstage files, root-aware
+- `POST /api/git/:project/discard` — discard file changes, root-aware
+- `POST /api/git/:project/discard-hunk` — discard single hunk, root-aware
+- `GET /api/git/:project/conflicts?root=ID` — list merge conflicts for one root
+- `POST /api/git/:project/resolve` — resolve merge conflict, root-aware
+- `POST /api/git/:project/commit` — create commit, supports `amend` and root scoping
 
 **git.rs** — Git history and branch action handlers:
 
-- `GET /api/git/:project/branches` — list local and remote branches
-- `POST /api/git/:project/branches` — create branch, optional checkout
-- `POST /api/git/:project/branches/checkout` — checkout branch with `normal`, `stash`, or `force`
-- `POST /api/git/:project/branches/update` — update a branch from its remote tracking branch
+- `GET /api/git/:project/branches?root=ID` — list local and remote branches for one root
+- `GET /api/git/:project/roots` — discover primary, submodule, and nested repo roots
+- `POST /api/git/:project/branches` — create branch, optional checkout, root-aware
+- `POST /api/git/:project/branches/checkout` — checkout branch with `normal`, `stash`, or `force`, root-aware
+- `POST /api/git/:project/branches/update` — update a branch from its remote tracking branch, root-aware
 - `POST /api/git/:project/cherry-pick` — cherry-pick a commit
 - `POST /api/git/:project/reset` — reset current branch with `soft`, `mixed`, `hard`, or `keep`
 - `POST /api/git/:project/undo-last-commit` — safe local commit recovery; blocks pushed/shared history and recommends revert

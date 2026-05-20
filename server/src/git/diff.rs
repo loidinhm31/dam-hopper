@@ -3,14 +3,18 @@
 /// All path arguments are relative to the project root and validated against
 /// the project root before any filesystem access (no path traversal).
 /// git2::Repository is !Sync — a new handle is opened per call.
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use git2::{DiffOptions, Repository};
 
 use crate::error::AppError;
 use crate::git::types::{
-    ConflictFile, DiffFileEntry, DiffResponse, FileDiffContent, HunkInfo, UNTRACKED_PAGE_SIZE,
+    ConflictFile, DiffFileEntry, DiffResponse, FileDiffContent, HunkInfo, SubmoduleGitlinkInfo,
+    VcsRootKind, UNTRACKED_PAGE_SIZE,
 };
+use crate::git::vcs_roots::discover_vcs_roots;
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -53,6 +57,20 @@ fn delta_status_str(status: git2::Delta) -> &'static str {
         git2::Delta::Copied => "copied",
         git2::Delta::Conflicted => "conflicted",
         _ => "unknown",
+    }
+}
+
+fn diff_entry(path: impl Into<String>, status: impl Into<String>, staged: bool) -> DiffFileEntry {
+    DiffFileEntry {
+        path: path.into(),
+        status: status.into(),
+        staged,
+        additions: 0,
+        deletions: 0,
+        old_path: None,
+        root_id: None,
+        root_path: None,
+        submodule: None,
     }
 }
 
@@ -200,18 +218,13 @@ pub fn get_diff_files(project_path: &Path) -> Result<DiffResponse, AppError> {
             untracked_total += 1;
             if untracked_total <= UNTRACKED_PAGE_SIZE {
                 if let Some(path) = entry.path() {
-                    entries.push(DiffFileEntry {
-                        path: path.to_string(),
-                        status: "added".to_string(),
-                        staged: false,
-                        additions: 0,
-                        deletions: 0,
-                        old_path: None,
-                    });
+                    entries.push(diff_entry(path, "added", false));
                 }
             }
         }
     }
+
+    append_submodule_status_entries(project_path, &mut entries)?;
 
     Ok(DiffResponse {
         entries,
@@ -253,14 +266,7 @@ pub fn get_untracked_page(
         untracked_total += 1;
         if idx >= offset && entries.len() < limit {
             if let Some(path) = entry.path() {
-                entries.push(DiffFileEntry {
-                    path: path.to_string(),
-                    status: "added".to_string(),
-                    staged: false,
-                    additions: 0,
-                    deletions: 0,
-                    old_path: None,
-                });
+                entries.push(diff_entry(path, "added", false));
             }
         }
     }
@@ -319,9 +325,86 @@ fn collect_diff_entries(
             additions: adds,
             deletions: dels,
             old_path,
+            root_id: None,
+            root_path: None,
+            submodule: None,
         });
     }
     Ok(())
+}
+
+fn append_submodule_status_entries(
+    project_path: &Path,
+    entries: &mut Vec<DiffFileEntry>,
+) -> Result<(), AppError> {
+    let submodules: HashMap<String, SubmoduleGitlinkInfo> = discover_vcs_roots(project_path)?
+        .into_iter()
+        .filter(|root| root.kind == VcsRootKind::Submodule)
+        .filter_map(|root| root.gitlink.map(|info| (root.root_id, info)))
+        .collect();
+
+    if submodules.is_empty() {
+        return Ok(());
+    }
+
+    let output = Command::new("git")
+        .args(["status", "--porcelain=v1", "--ignore-submodules=none", "-z"])
+        .current_dir(project_path)
+        .output()
+        .map_err(AppError::Io)?;
+    if !output.status.success() {
+        return Err(AppError::Git(format!(
+            "git status failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    let mut seen: HashSet<(String, bool)> = entries
+        .iter()
+        .map(|entry| (entry.path.clone(), entry.staged))
+        .collect();
+
+    for record in output.stdout.split(|byte| *byte == 0) {
+        if record.len() < 4 {
+            continue;
+        }
+        let path = String::from_utf8_lossy(&record[3..]).to_string();
+        let Some(submodule) = submodules.get(&path).cloned() else {
+            continue;
+        };
+
+        let index_status = record[0] as char;
+        let worktree_status = record[1] as char;
+        if index_status != ' ' && index_status != '?' && seen.insert((path.clone(), true)) {
+            let mut entry = diff_entry(path.clone(), porcelain_status_str(index_status), true);
+            entry.submodule = Some(submodule.clone());
+            entries.push(entry);
+        }
+        if worktree_status != ' ' && seen.insert((path.clone(), false)) {
+            let mut entry = diff_entry(path.clone(), porcelain_status_str(worktree_status), false);
+            entry.submodule = Some(submodule);
+            entries.push(entry);
+        }
+    }
+
+    for entry in entries.iter_mut() {
+        if entry.submodule.is_none() {
+            entry.submodule = submodules.get(&entry.path).cloned();
+        }
+    }
+
+    Ok(())
+}
+
+fn porcelain_status_str(status: char) -> &'static str {
+    match status {
+        'A' | '?' => "added",
+        'D' => "deleted",
+        'R' => "renamed",
+        'C' => "copied",
+        'U' => "conflicted",
+        _ => "modified",
+    }
 }
 
 /// Return HEAD blob (original) + workdir content (modified) for Monaco DiffEditor.

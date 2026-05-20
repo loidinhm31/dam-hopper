@@ -32,7 +32,10 @@ pub use types::{
     GitStatus, HunkInfo, ResetMode, SubmoduleGitlinkInfo, VcsRoot, VcsRootKind,
     VcsRootMappingState, Worktree, WorktreeAddOptions, UNTRACKED_PAGE_SIZE,
 };
-pub use vcs_roots::{discover_vcs_roots, resolve_vcs_root};
+pub use vcs_roots::{
+    discover_vcs_roots, resolve_git_path_root, resolve_git_request_root, resolve_vcs_root,
+    staged_vcs_root_ids, ResolvedGitRoot,
+};
 pub use worktree::{
     add as add_worktree, list as list_worktrees, prune as prune_worktrees,
     remove as remove_worktree,

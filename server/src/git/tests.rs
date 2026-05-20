@@ -19,7 +19,10 @@ use crate::git::types::{
 use crate::git::{
     cherry_pick_commit_files, drop_commit, drop_commit_files, revert_commit, revert_commit_files,
 };
-use crate::git::{discover_vcs_roots, resolve_vcs_root, BulkGitService, WorktreeAddOptions};
+use crate::git::{
+    discover_vcs_roots, resolve_git_path_root, resolve_vcs_root, staged_vcs_root_ids,
+    BulkGitService, WorktreeAddOptions,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -265,6 +268,71 @@ fn vcs_roots_classifies_mapped_uninitialized_and_plain_nested_roots() {
         dunce::canonicalize(path.join("tools/plain")).unwrap()
     );
     assert!(resolve_vcs_root(path, "../escape").is_err());
+}
+
+#[test]
+fn root_path_resolution_prefers_deepest_vcs_root_for_path_operations() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    make_nested_repo(&path.join("modules/child"));
+    git(&["add", "modules/child"], path);
+
+    let (root, paths) =
+        resolve_git_path_root(path, None, &["modules/child/README.md".to_string()]).unwrap();
+
+    assert_eq!(root.root_id, "modules/child");
+    assert_eq!(paths, vec!["README.md"]);
+}
+
+#[test]
+fn explicit_root_path_resolution_accepts_project_relative_child_paths() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    make_nested_repo(&path.join("modules/child"));
+    git(&["add", "modules/child"], path);
+
+    let (root, paths) = resolve_git_path_root(
+        path,
+        Some("modules/child"),
+        &["modules/child/README.md".to_string()],
+    )
+    .unwrap();
+
+    assert_eq!(root.root_id, "modules/child");
+    assert_eq!(paths, vec!["README.md"]);
+}
+
+#[test]
+fn explicit_root_path_resolution_accepts_root_relative_child_paths() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    make_nested_repo(&path.join("modules/child"));
+    git(&["add", "modules/child"], path);
+
+    let (root, paths) =
+        resolve_git_path_root(path, Some("modules/child"), &["README.md".to_string()]).unwrap();
+
+    assert_eq!(root.root_id, "modules/child");
+    assert_eq!(paths, vec!["README.md"]);
+}
+
+#[test]
+fn root_path_resolution_blocks_mixed_root_path_operations() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    make_nested_repo(&path.join("modules/child"));
+    git(&["add", "modules/child"], path);
+
+    let result = resolve_git_path_root(
+        path,
+        None,
+        &[
+            "README.md".to_string(),
+            "modules/child/README.md".to_string(),
+        ],
+    );
+
+    assert!(result.is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -513,6 +581,69 @@ fn diff_staged_new_file() {
         .unwrap();
     assert_eq!(staged.status, "added");
     assert!(staged.staged);
+}
+
+#[test]
+fn diff_includes_parent_gitlink_entry_for_dirty_submodule() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    make_nested_repo(&path.join("modules/child"));
+    git(&["add", "modules/child"], path);
+    git(&["commit", "-m", "add child submodule"], path);
+
+    std::fs::write(path.join("modules/child/README.md"), "child dirty").unwrap();
+
+    let entries = get_diff_files(path).unwrap();
+    let submodule = entries
+        .entries
+        .iter()
+        .find(|entry| entry.path == "modules/child" && !entry.staged)
+        .expect("dirty submodule should appear in parent diff");
+
+    assert_eq!(submodule.status, "modified");
+    assert_eq!(
+        submodule.submodule.as_ref().map(|info| info.path.as_str()),
+        Some("modules/child")
+    );
+}
+
+#[test]
+fn child_root_stage_does_not_stage_parent_repo() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    make_nested_repo(&path.join("modules/child"));
+    git(&["add", "modules/child"], path);
+    git(&["commit", "-m", "add child submodule"], path);
+
+    std::fs::write(path.join("modules/child/README.md"), "child staged").unwrap();
+    let (root, paths) =
+        resolve_git_path_root(path, None, &["modules/child/README.md".to_string()]).unwrap();
+    let refs: Vec<&str> = paths.iter().map(|path| path.as_str()).collect();
+
+    stage_files(&root.root_path, &refs).unwrap();
+
+    assert_eq!(get_status(&root.root_path, "child").unwrap().staged, 1);
+    assert_eq!(get_status(path, "parent").unwrap().staged, 0);
+}
+
+#[test]
+fn staged_vcs_root_ids_detects_mixed_root_staged_state() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    make_nested_repo(&path.join("modules/child"));
+    git(&["add", "modules/child"], path);
+    git(&["commit", "-m", "add child submodule"], path);
+
+    std::fs::write(path.join("parent.txt"), "parent").unwrap();
+    stage_files(path, &["parent.txt"]).unwrap();
+
+    std::fs::write(path.join("modules/child/child.txt"), "child").unwrap();
+    stage_files(&path.join("modules/child"), &["child.txt"]).unwrap();
+
+    let mut roots = staged_vcs_root_ids(path).unwrap();
+    roots.sort();
+
+    assert_eq!(roots, vec![".", "modules/child"]);
 }
 
 #[test]
