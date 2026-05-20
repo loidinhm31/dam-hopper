@@ -69,6 +69,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/git/fetch", post(git::fetch_projects))
         .route("/api/git/pull", post(git::pull_projects))
         .route("/api/git/push", post(git::push_project))
+        .route("/api/git/{project}/roots", get(git::get_vcs_roots))
         .route("/api/git/{project}/worktrees", get(git::get_worktrees))
         .route(
             "/api/git/{project}/worktrees",

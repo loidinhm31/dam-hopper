@@ -36,6 +36,50 @@ pub struct GitStatus {
     pub status_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VcsRoot {
+    pub root_id: String,
+    pub path: String,
+    pub absolute_path: String,
+    pub kind: VcsRootKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mapping_state: Option<VcsRootMappingState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gitlink: Option<SubmoduleGitlinkInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<GitStatus>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum VcsRootKind {
+    Primary,
+    Submodule,
+    NestedRepo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum VcsRootMappingState {
+    Mapped,
+    Unmapped,
+    Missing,
+    Uninitialized,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmoduleGitlinkInfo {
+    pub path: String,
+    pub object_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
 impl GitStatus {
     pub fn not_found(project_name: impl Into<String>) -> Self {
         Self {
