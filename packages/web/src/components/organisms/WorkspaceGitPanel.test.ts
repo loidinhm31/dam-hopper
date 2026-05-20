@@ -52,18 +52,18 @@ describe("WorkspaceGitPanel refresh helpers", () => {
 
     expect(refreshed).toEqual(selectedCommit);
     expect(invalidateQueries.mock.calls).toEqual([
-      [{ queryKey: ["branches", "demo-project"] }],
+      [{ queryKey: ["branches", "demo-project", "."] }],
       [{ queryKey: ["project-status", "demo-project"] }],
-      [{ queryKey: ["git-log", "demo-project"] }],
-      [{ queryKey: ["git-commit-files", "demo-project", "abc1234"] }],
+      [{ queryKey: ["git-log", "demo-project", "."] }],
+      [{ queryKey: ["git-commit-files", "demo-project", ".", "abc1234"] }],
     ]);
     expect(refetchQueries.mock.calls).toEqual([
-      [{ queryKey: ["branches", "demo-project"] }],
+      [{ queryKey: ["branches", "demo-project", "."] }],
       [{ queryKey: ["project-status", "demo-project"] }],
-      [{ queryKey: ["git-commit-files", "demo-project", "abc1234"] }],
+      [{ queryKey: ["git-commit-files", "demo-project", ".", "abc1234"] }],
     ]);
     expect(fetchQuery).toHaveBeenCalledWith({
-      queryKey: ["git-log", "demo-project", 200, 0, null],
+      queryKey: ["git-log", "demo-project", ".", 200, 0, null],
       queryFn: expect.any(Function),
     });
   });
@@ -116,12 +116,12 @@ describe("WorkspaceGitPanel refresh helpers", () => {
 
     expect(refreshed).toBeNull();
     expect(invalidateQueries.mock.calls).toEqual([
-      [{ queryKey: ["branches", "demo-project"] }],
+      [{ queryKey: ["branches", "demo-project", "."] }],
       [{ queryKey: ["project-status", "demo-project"] }],
-      [{ queryKey: ["git-log", "demo-project"] }],
+      [{ queryKey: ["git-log", "demo-project", "."] }],
     ]);
     expect(refetchQueries.mock.calls).toEqual([
-      [{ queryKey: ["branches", "demo-project"] }],
+      [{ queryKey: ["branches", "demo-project", "."] }],
       [{ queryKey: ["project-status", "demo-project"] }],
     ]);
   });
@@ -146,7 +146,7 @@ describe("WorkspaceGitPanel refresh helpers", () => {
     );
 
     expect(fetchQuery).toHaveBeenCalledWith({
-      queryKey: ["git-log", "demo-project", 200, 0, "feature/demo"],
+      queryKey: ["git-log", "demo-project", ".", 200, 0, "feature/demo"],
       queryFn: expect.any(Function),
     });
   });
@@ -154,12 +154,19 @@ describe("WorkspaceGitPanel refresh helpers", () => {
   it("follows active branch changes until the history view is pinned", () => {
     expect(
       resolveWorkspaceHistoryBranchState(
-        { project: "demo-project", branch: "main", followsActive: true },
+        {
+          project: "demo-project",
+          root: ".",
+          branch: "main",
+          followsActive: true,
+        },
         "demo-project",
+        ".",
         "release",
       ),
     ).toEqual({
       project: "demo-project",
+      root: ".",
       branch: "release",
       followsActive: true,
     });
@@ -168,16 +175,40 @@ describe("WorkspaceGitPanel refresh helpers", () => {
       resolveWorkspaceHistoryBranchState(
         {
           project: "demo-project",
+          root: ".",
           branch: "feature/demo",
           followsActive: false,
         },
         "demo-project",
+        ".",
         "release",
       ),
     ).toEqual({
       project: "demo-project",
+      root: ".",
       branch: "feature/demo",
       followsActive: false,
+    });
+  });
+
+  it("resets branch scope when the selected VCS root changes", () => {
+    expect(
+      resolveWorkspaceHistoryBranchState(
+        {
+          project: "demo-project",
+          root: ".",
+          branch: "main",
+          followsActive: false,
+        },
+        "demo-project",
+        "modules/child",
+        "child-main",
+      ),
+    ).toEqual({
+      project: "demo-project",
+      root: "modules/child",
+      branch: "child-main",
+      followsActive: true,
     });
   });
 

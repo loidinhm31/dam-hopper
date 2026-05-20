@@ -24,6 +24,7 @@ import {
 
 interface GitBranchControlProps {
   project: string;
+  root?: string;
   compact?: boolean;
   className?: string;
   showFeedback?: boolean;
@@ -65,6 +66,7 @@ export function GitBranchFeedback({
 
 export function GitBranchControl({
   project,
+  root,
   compact = false,
   className,
   showFeedback = true,
@@ -72,10 +74,10 @@ export function GitBranchControl({
   selectedBranch,
   onSelectedBranchChange,
 }: GitBranchControlProps) {
-  const { data: branches = [] } = useBranches(project);
+  const { data: branches = [] } = useBranches(project, root);
   const { data: projectStatus } = useProjectStatus(project);
-  const checkoutBranch = useGitCheckoutBranch(project);
-  const createBranch = useGitCreateBranch(project);
+  const checkoutBranch = useGitCheckoutBranch(project, root);
+  const createBranch = useGitCreateBranch(project, root);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [branchName, setBranchName] = useState("");
@@ -85,7 +87,9 @@ export function GitBranchControl({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const currentBranch = projectStatus?.branch ?? "";
+  const currentBranch =
+    branches.find((branch) => branch.isCurrent)?.name ??
+    (root && root !== "." ? "" : (projectStatus?.branch ?? ""));
   const branchValue =
     mode === "view" ? selectedBranch || currentBranch : currentBranch;
   const defaultStartPoint = useMemo(() => {

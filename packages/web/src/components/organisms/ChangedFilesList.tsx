@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ChevronRight,
   ChevronDown,
@@ -11,11 +12,8 @@ import { cn } from "@/lib/utils.js";
 import {
   useGitDiff,
   useGitUntracked,
-  useGitStage,
-  useGitUnstage,
-  useGitDiscard,
-  useGitCommit,
 } from "@/api/queries.js";
+import { api } from "@/api/client.js";
 import type { DiffFileEntry } from "@/api/client.js";
 import { FilePathLabel } from "@/components/atoms/FilePathLabel.js";
 
@@ -269,32 +267,75 @@ function GitContextMenuPopover({
   );
 }
 
+const PRIMARY_ROOT_ID = ".";
+const AGGREGATE_ROOT_ID = "*";
 const UNTRACKED_PAGE_SIZE = 500;
+
+export function entryRootId(entry: DiffFileEntry) {
+  return entry.rootId ?? PRIMARY_ROOT_ID;
+}
+
+export function entryRootLabel(entry: DiffFileEntry) {
+  return entry.rootPath ?? (entryRootId(entry) === PRIMARY_ROOT_ID ? "Project root" : entryRootId(entry));
+}
+
+export function projectPathForEntry(entry: DiffFileEntry) {
+  const rootId = entryRootId(entry);
+  if (rootId === PRIMARY_ROOT_ID || entry.path.startsWith(`${rootId}/`)) {
+    return entry.path;
+  }
+  return `${rootId}/${entry.path}`;
+}
+
+export function groupedByRoot(entries: DiffFileEntry[]) {
+  const groups = new Map<string, { label: string; entries: DiffFileEntry[] }>();
+  for (const entry of entries) {
+    const rootId = entryRootId(entry);
+    const existing = groups.get(rootId);
+    if (existing) {
+      existing.entries.push(entry);
+    } else {
+      groups.set(rootId, { label: entryRootLabel(entry), entries: [entry] });
+    }
+  }
+  return [...groups.entries()].sort(([a], [b]) => {
+    if (a === PRIMARY_ROOT_ID) return -1;
+    if (b === PRIMARY_ROOT_ID) return 1;
+    return a.localeCompare(b);
+  });
+}
+
+export function stagedRootIdsForEntries(entries: DiffFileEntry[]) {
+  return [...new Set(entries.filter((f) => f.staged).map(entryRootId))];
+}
 
 export function ChangedFilesList({
   project,
   selectedFile,
   onSelectFile,
 }: ChangedFilesListProps) {
+  const queryClient = useQueryClient();
   const [commitMsg, setCommitMsg] = useState("");
   const [amendCommit, setAmendCommit] = useState(false);
+  const [isCommitting, setIsCommitting] = useState(false);
   const [mutatingPaths, setMutatingPaths] = useState<Set<string>>(new Set());
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<GitContextMenuState | null>(
     null,
   );
-  const [discardConfirm, setDiscardConfirm] = useState<string | null>(null);
+  const [discardConfirm, setDiscardConfirm] = useState<DiffFileEntry | null>(
+    null,
+  );
   const [changesOpen, setChangesOpen] = useState(true);
   const [unversionedOpen, setUnversionedOpen] = useState(true);
   const [commitSuccess, setCommitSuccess] = useState<string | null>(null);
   const [untrackedPage, setUntrackedPage] = useState(0);
   const [extraUntracked, setExtraUntracked] = useState<DiffFileEntry[]>([]);
 
-  const { data, isLoading, isError, refetch } = useGitDiff(project);
-  const stageMutation = useGitStage(project);
-  const unstageMutation = useGitUnstage(project);
-  const discardMutation = useGitDiscard(project);
-  const commitMutation = useGitCommit(project);
+  const { data, isLoading, isError, refetch } = useGitDiff(
+    project,
+    AGGREGATE_ROOT_ID,
+  );
 
   // Guard against stale cache holding old DiffFileEntry[] shape before response format changed
   const isLegacyShape = Array.isArray(data);
@@ -311,7 +352,7 @@ export function ChangedFilesList({
     project,
     (untrackedPage + 1) * UNTRACKED_PAGE_SIZE,
     UNTRACKED_PAGE_SIZE,
-    untrackedTruncated && untrackedPage >= 0,
+    false,
   );
 
   // Accumulate loaded pages; reset when project or base diff changes
@@ -337,9 +378,22 @@ export function ChangedFilesList({
     ...entries.filter((f) => f.status === "added" && !f.staged),
     ...extraUntracked,
   ];
+  const changedFileGroups = groupedByRoot(changedFiles);
+  const unversionedFileGroups = groupedByRoot(unversionedFiles);
+  const hasMultipleUnversionedRoots = unversionedFileGroups.length > 1;
   const stagedCount = entries.filter((f) => f.staged).length;
-  const hasMoreUntracked =
-    untrackedTruncated && unversionedFiles.length < untrackedTotal;
+  const stagedRootIds = stagedRootIdsForEntries(entries);
+  const hasMixedStagedRoots = stagedRootIds.length > 1;
+  const commitRootId = stagedRootIds[0] ?? PRIMARY_ROOT_ID;
+  const hasMoreUntracked = false;
+
+  async function invalidateChanges() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["git-diff", project] }),
+      queryClient.invalidateQueries({ queryKey: ["git-untracked", project] }),
+      queryClient.invalidateQueries({ queryKey: ["project-status", project] }),
+    ]);
+  }
 
   function handleLoadMoreUntracked() {
     setUntrackedPage((p) => p + 1);
@@ -355,100 +409,107 @@ export function ChangedFilesList({
       });
   }, []);
 
-  async function handleStage(path: string) {
-    const untrack = trackMutating(path);
+  async function handleStage(entry: DiffFileEntry) {
+    const key = projectPathForEntry(entry);
+    const untrack = trackMutating(key);
     setMutationError(null);
     try {
-      await stageMutation.mutateAsync([path]);
+      await api.git.stage(project, [entry.path], entryRootId(entry));
+      await invalidateChanges();
     } catch {
-      setMutationError(`Failed to stage ${path.split("/").pop()}`);
+      setMutationError(`Failed to stage ${entry.path.split("/").pop()}`);
     } finally {
       untrack();
     }
   }
 
-  async function handleUnstage(path: string) {
-    const untrack = trackMutating(path);
+  async function handleUnstage(entry: DiffFileEntry) {
+    const key = projectPathForEntry(entry);
+    const untrack = trackMutating(key);
     setMutationError(null);
     try {
-      await unstageMutation.mutateAsync([path]);
+      await api.git.unstage(project, [entry.path], entryRootId(entry));
+      await invalidateChanges();
     } catch {
-      setMutationError(`Failed to unstage ${path.split("/").pop()}`);
+      setMutationError(`Failed to unstage ${entry.path.split("/").pop()}`);
     } finally {
       untrack();
     }
   }
 
-  async function handleDiscard(path: string) {
-    const untrack = trackMutating(path);
+  async function handleDiscard(entry: DiffFileEntry) {
+    const key = projectPathForEntry(entry);
+    const untrack = trackMutating(key);
     setMutationError(null);
     try {
-      await discardMutation.mutateAsync(path);
+      await api.git.discard(project, entry.path, entryRootId(entry));
+      await invalidateChanges();
       setDiscardConfirm(null);
     } catch {
-      setMutationError(`Failed to discard ${path.split("/").pop()}`);
+      setMutationError(`Failed to discard ${entry.path.split("/").pop()}`);
     } finally {
       untrack();
     }
   }
 
-  async function handleStageAll(paths: string[]) {
-    if (paths.length === 0) return;
+  async function handleStageAll(files: DiffFileEntry[]) {
+    if (files.length === 0) return;
     setMutationError(null);
     try {
-      await stageMutation.mutateAsync(paths);
+      await Promise.all(
+        groupedByRoot(files).map(([rootId, group]) =>
+          api.git.stage(
+            project,
+            group.entries.map((entry) => entry.path),
+            rootId,
+          ),
+        ),
+      );
+      await invalidateChanges();
     } catch {
       setMutationError("Failed to stage all");
     }
   }
 
-  async function handleUnstageAll(paths: string[]) {
-    if (paths.length === 0) return;
+  async function handleUnstageAll(files: DiffFileEntry[]) {
+    if (files.length === 0) return;
     setMutationError(null);
     try {
-      await unstageMutation.mutateAsync(paths);
+      await Promise.all(
+        groupedByRoot(files).map(([rootId, group]) =>
+          api.git.unstage(
+            project,
+            group.entries.map((entry) => entry.path),
+            rootId,
+          ),
+        ),
+      );
+      await invalidateChanges();
     } catch {
       setMutationError("Failed to unstage all");
     }
   }
 
   async function handleCommit() {
-    if (!commitMsg.trim() || stagedCount === 0) return;
+    if (!commitMsg.trim() || stagedCount === 0 || hasMixedStagedRoots) return;
     setMutationError(null);
+    setIsCommitting(true);
     try {
-      const result = await commitMutation.mutateAsync({
-        message: commitMsg,
-        amend: amendCommit,
-      });
+      const result = await api.git.commit(
+        project,
+        commitMsg,
+        amendCommit,
+        commitRootId,
+      );
+      await invalidateChanges();
       setCommitMsg("");
       setAmendCommit(false);
       setCommitSuccess(result.hash.slice(0, 7));
       setTimeout(() => setCommitSuccess(null), 3000);
     } catch (e) {
       setMutationError(e instanceof Error ? e.message : "Commit failed");
-    }
-  }
-
-  const changedStageable = changedFiles.filter(
-    (f) => f.status !== "conflicted",
-  );
-  const changedStagedCount = changedStageable.filter((f) => f.staged).length;
-  const changedCheckState: "all" | "some" | "none" =
-    changedStageable.length === 0
-      ? "none"
-      : changedStagedCount === changedStageable.length
-        ? "all"
-        : changedStagedCount > 0
-          ? "some"
-          : "none";
-
-  function handleChangesCheckAll() {
-    if (changedCheckState === "all") {
-      void handleUnstageAll(changedStageable.map((f) => f.path));
-    } else {
-      void handleStageAll(
-        changedStageable.filter((f) => !f.staged).map((f) => f.path),
-      );
+    } finally {
+      setIsCommitting(false);
     }
   }
 
@@ -526,12 +587,12 @@ export function ChangedFilesList({
         >
           <p className="text-[10px] font-medium mb-1">Discard changes to:</p>
           <p className="font-mono text-[9px] mb-2 truncate opacity-80">
-            {discardConfirm}
+            {projectPathForEntry(discardConfirm)}
           </p>
           <div className="flex gap-1.5">
             <button
               onClick={() => void handleDiscard(discardConfirm)}
-              disabled={mutatingPaths.has(discardConfirm)}
+              disabled={mutatingPaths.has(projectPathForEntry(discardConfirm))}
               className="px-2 py-0.5 text-[10px] bg-[var(--color-danger)] text-white rounded-sm hover:opacity-80 disabled:opacity-50"
             >
               Discard
@@ -557,41 +618,71 @@ export function ChangedFilesList({
           <>
             {changedFiles.length > 0 && (
               <>
-                <GitSectionHeader
-                  label="Changes"
-                  count={changedFiles.length}
-                  open={changesOpen}
-                  onToggle={() => setChangesOpen((v) => !v)}
-                  checkState={changedCheckState}
-                  onCheckAll={handleChangesCheckAll}
-                />
-                {changesOpen &&
-                  changedFiles.map((f) => (
-                    <GitFileRow
-                      key={f.path}
-                      entry={f}
-                      isSelected={selectedFile === f.path}
-                      checked={f.staged}
-                      isMutating={mutatingPaths.has(f.path)}
-                      onSelect={() =>
-                        onSelectFile(f.path, f.status === "conflicted")
-                      }
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        setContextMenu({
-                          x: e.clientX,
-                          y: e.clientY,
-                          entry: f,
-                          section: "changes",
-                        });
-                      }}
-                      onToggle={() =>
-                        void (f.staged
-                          ? handleUnstage(f.path)
-                          : handleStage(f.path))
-                      }
-                    />
-                  ))}
+                {changedFileGroups.map(([rootId, group]) => {
+                  const stageable = group.entries.filter(
+                    (f) => f.status !== "conflicted",
+                  );
+                  const staged = stageable.filter((f) => f.staged).length;
+                  const checkState: "all" | "some" | "none" =
+                    stageable.length === 0
+                      ? "none"
+                      : staged === stageable.length
+                        ? "all"
+                        : staged > 0
+                          ? "some"
+                          : "none";
+                  return (
+                    <div key={rootId}>
+                      <GitSectionHeader
+                        label={`Changes · ${group.label}`}
+                        count={group.entries.length}
+                        open={changesOpen}
+                        onToggle={() => setChangesOpen((v) => !v)}
+                        checkState={checkState}
+                        onCheckAll={() =>
+                          checkState === "all"
+                            ? void handleUnstageAll(stageable)
+                            : void handleStageAll(
+                                stageable.filter((f) => !f.staged),
+                              )
+                        }
+                      />
+                      {changesOpen &&
+                        group.entries.map((f) => {
+                          const projectPath = projectPathForEntry(f);
+                          return (
+                            <GitFileRow
+                              key={projectPath}
+                              entry={{ ...f, path: projectPath }}
+                              isSelected={selectedFile === projectPath}
+                              checked={f.staged}
+                              isMutating={mutatingPaths.has(projectPath)}
+                              onSelect={() =>
+                                onSelectFile(
+                                  projectPath,
+                                  f.status === "conflicted",
+                                )
+                              }
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                setContextMenu({
+                                  x: e.clientX,
+                                  y: e.clientY,
+                                  entry: f,
+                                  section: "changes",
+                                });
+                              }}
+                              onToggle={() =>
+                                void (f.staged
+                                  ? handleUnstage(f)
+                                  : handleStage(f))
+                              }
+                            />
+                          );
+                        })}
+                    </div>
+                  );
+                })}
               </>
             )}
 
@@ -608,7 +699,7 @@ export function ChangedFilesList({
                   onToggle={() => setUnversionedOpen((v) => !v)}
                   checkState="none"
                   onCheckAll={() =>
-                    void handleStageAll(unversionedFiles.map((f) => f.path))
+                    void handleStageAll(unversionedFiles)
                   }
                 />
                 {unversionedOpen && (
@@ -619,26 +710,40 @@ export function ChangedFilesList({
                         {untrackedTotal.toLocaleString()} unversioned files
                       </div>
                     )}
-                    {unversionedFiles.map((f) => (
-                      <GitFileRow
-                        key={f.path}
-                        entry={f}
-                        isSelected={selectedFile === f.path}
-                        checked={false}
-                        isMutating={mutatingPaths.has(f.path)}
-                        onSelect={() => onSelectFile(f.path, false)}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          setContextMenu({
-                            x: e.clientX,
-                            y: e.clientY,
-                            entry: f,
-                            section: "unversioned",
-                          });
-                        }}
-                        onToggle={() => void handleStage(f.path)}
-                      />
-                    ))}
+                    {unversionedFileGroups.map(
+                      ([rootId, group]) => (
+                        <div key={rootId}>
+                          {hasMultipleUnversionedRoots && (
+                            <div className="px-2 py-1 text-[10px] font-semibold text-[var(--color-text-muted)] bg-[var(--color-surface)]/70">
+                              {group.label}
+                            </div>
+                          )}
+                          {group.entries.map((f) => {
+                            const projectPath = projectPathForEntry(f);
+                            return (
+                              <GitFileRow
+                                key={projectPath}
+                                entry={{ ...f, path: projectPath }}
+                                isSelected={selectedFile === projectPath}
+                                checked={false}
+                                isMutating={mutatingPaths.has(projectPath)}
+                                onSelect={() => onSelectFile(projectPath, false)}
+                                onContextMenu={(e) => {
+                                  e.preventDefault();
+                                  setContextMenu({
+                                    x: e.clientX,
+                                    y: e.clientY,
+                                    entry: f,
+                                    section: "unversioned",
+                                  });
+                                }}
+                                onToggle={() => void handleStage(f)}
+                              />
+                            );
+                          })}
+                        </div>
+                      ),
+                    )}
                     {hasMoreUntracked && (
                       <button
                         onClick={handleLoadMoreUntracked}
@@ -685,14 +790,23 @@ export function ChangedFilesList({
           />
           Amend previous commit
         </label>
+        {hasMixedStagedRoots && (
+          <div className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300">
+            Commit blocked: staged files span multiple VCS roots. Unstage files
+            until one root remains.
+          </div>
+        )}
         <button
           onClick={() => void handleCommit()}
           disabled={
-            !commitMsg.trim() || stagedCount === 0 || commitMutation.isPending
+            !commitMsg.trim() ||
+            stagedCount === 0 ||
+            hasMixedStagedRoots ||
+            isCommitting
           }
           className="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 text-[11px] font-medium rounded-sm bg-[var(--color-primary)] text-white disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
         >
-          {commitMutation.isPending ? (
+          {isCommitting ? (
             <Loader2 className="h-3 w-3 animate-spin" />
           ) : (
             <Check className="h-3 w-3" />
@@ -711,9 +825,9 @@ export function ChangedFilesList({
           y={contextMenu.y}
           entry={contextMenu.entry}
           section={contextMenu.section}
-          onStage={() => void handleStage(contextMenu.entry.path)}
-          onUnstage={() => void handleUnstage(contextMenu.entry.path)}
-          onDiscard={() => setDiscardConfirm(contextMenu.entry.path)}
+          onStage={() => void handleStage(contextMenu.entry)}
+          onUnstage={() => void handleUnstage(contextMenu.entry)}
+          onDiscard={() => setDiscardConfirm(contextMenu.entry)}
           onClose={() => setContextMenu(null)}
         />
       )}

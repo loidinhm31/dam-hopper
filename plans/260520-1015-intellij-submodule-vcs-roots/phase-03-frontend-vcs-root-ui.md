@@ -10,9 +10,11 @@
 
 Date: 2026-05-20
 Priority: P1
-Implementation status: Pending
+Implementation status: Complete
 Review status: Pending
 Goal: make the Git panel usable for multi-root/submodule projects with explicit root context.
+
+Completion timestamp: 2026-05-20 12:35 Asia/Saigon
 
 ## Key Insights
 
@@ -66,16 +68,20 @@ Component changes:
 
 ## Todo List
 
-- [ ] Add root API client types.
-- [ ] Add root selector.
-- [ ] Root-scope branch/log/history views.
-- [ ] Group local changes by root.
-- [ ] Add mixed-root commit guard.
-- [ ] Add frontend tests.
+- [x] Add root API client types.
+- [x] Add root selector.
+- [x] Root-scope branch/log/history views.
+- [x] Group local changes by root.
+- [x] Add mixed-root commit guard.
+- [x] Add frontend tests.
+
+## Completion Notes
+
+Completed: 2026-05-20 12:35 Asia/Saigon
 
 ## Success Criteria
 
-- User can select `embed-app/code-notes` and see its branch/history/local changes.
+- User can select a VCS root and see its branch/history/local changes.
 - Parent root still shows gitlink rows for submodule commit changes.
 - Commit button message explains selected-root or mixed-root constraints.
 - No full page reload is used for root changes.

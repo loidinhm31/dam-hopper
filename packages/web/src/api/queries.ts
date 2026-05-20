@@ -24,6 +24,12 @@ type QueryInvalidator = Pick<
   "invalidateQueries"
 >;
 
+const DEFAULT_GIT_ROOT_ID = ".";
+
+function gitRootKey(root?: string) {
+  return root ?? DEFAULT_GIT_ROOT_ID;
+}
+
 async function reconcileAffectedEditorTabs(project: string, paths: string[]) {
   if (paths.length === 0) return;
   await useEditorStore.getState().reconcileGitMutationFiles(project, paths);
@@ -191,10 +197,19 @@ export function useWorktrees(project: string) {
   });
 }
 
-export function useBranches(project: string) {
+export function useGitRoots(project: string) {
   return useQuery({
-    queryKey: ["branches", project],
-    queryFn: () => api.git.branches(project),
+    queryKey: ["git-roots", project],
+    queryFn: () => api.git.roots(project),
+    enabled: !!project,
+  });
+}
+
+export function useBranches(project: string, root?: string) {
+  const rootKey = gitRootKey(root);
+  return useQuery({
+    queryKey: ["branches", project, rootKey],
+    queryFn: () => api.git.branches(project, root),
     enabled: !!project,
   });
 }
@@ -204,10 +219,12 @@ export function useGitLog(
   limit?: number,
   offset?: number,
   ref?: string,
+  root?: string,
 ) {
+  const rootKey = gitRootKey(root);
   return useQuery({
-    queryKey: ["git-log", project, limit, offset, ref ?? null],
-    queryFn: () => api.git.log(project, limit, offset, ref),
+    queryKey: ["git-log", project, rootKey, limit, offset, ref ?? null],
+    queryFn: () => api.git.log(project, limit, offset, ref, root),
     enabled: !!project,
   });
 }
@@ -319,10 +336,11 @@ export function useUpdateProject() {
 
 // ── Git Diff / Change Management ──────────────────────────────────────────────
 
-export function useGitDiff(project: string) {
+export function useGitDiff(project: string, root?: string) {
+  const rootKey = gitRootKey(root);
   return useQuery<DiffResponse>({
-    queryKey: ["git-diff", project],
-    queryFn: () => api.git.diff(project),
+    queryKey: ["git-diff", project, rootKey],
+    queryFn: () => api.git.diff(project, root),
     enabled: !!project,
     staleTime: 0,
   });
@@ -333,28 +351,32 @@ export function useGitUntracked(
   offset: number,
   limit: number,
   enabled: boolean,
+  root?: string,
 ) {
+  const rootKey = gitRootKey(root);
   return useQuery<DiffFileEntry[]>({
-    queryKey: ["git-untracked", project, offset, limit],
-    queryFn: () => api.git.untrackedFiles(project, offset, limit),
+    queryKey: ["git-untracked", project, rootKey, offset, limit],
+    queryFn: () => api.git.untrackedFiles(project, offset, limit, root),
     enabled: !!project && enabled,
     staleTime: 0,
   });
 }
 
-export function useGitFileDiff(project: string, path: string) {
+export function useGitFileDiff(project: string, path: string, root?: string) {
+  const rootKey = gitRootKey(root);
   return useQuery<FileDiffContent>({
-    queryKey: ["git-file-diff", project, path],
-    queryFn: () => api.git.fileDiff(project, path),
+    queryKey: ["git-file-diff", project, rootKey, path],
+    queryFn: () => api.git.fileDiff(project, path, root),
     enabled: !!project && !!path,
     staleTime: 0,
   });
 }
 
-export function useGitCommitFiles(project: string, hash: string) {
+export function useGitCommitFiles(project: string, hash: string, root?: string) {
+  const rootKey = gitRootKey(root);
   return useQuery<DiffFileEntry[]>({
-    queryKey: ["git-commit-files", project, hash],
-    queryFn: () => api.git.commitFiles(project, hash),
+    queryKey: ["git-commit-files", project, rootKey, hash],
+    queryFn: () => api.git.commitFiles(project, hash, root),
     enabled: !!project && !!hash,
     staleTime: 60_000,
   });
@@ -364,66 +386,69 @@ export function useGitCommitFileDiff(
   project: string,
   hash: string,
   path: string,
+  root?: string,
 ) {
+  const rootKey = gitRootKey(root);
   return useQuery<FileDiffContent>({
-    queryKey: ["git-commit-file-diff", project, hash, path],
-    queryFn: () => api.git.commitFileDiff(project, hash, path),
+    queryKey: ["git-commit-file-diff", project, rootKey, hash, path],
+    queryFn: () => api.git.commitFileDiff(project, hash, path, root),
     enabled: !!project && !!hash && !!path,
     staleTime: Infinity, // historical diffs are immutable
   });
 }
 
-export function useGitConflicts(project: string) {
+export function useGitConflicts(project: string, root?: string) {
+  const rootKey = gitRootKey(root);
   return useQuery<ConflictFile[]>({
-    queryKey: ["git-conflicts", project],
-    queryFn: () => api.git.conflicts(project),
+    queryKey: ["git-conflicts", project, rootKey],
+    queryFn: () => api.git.conflicts(project, root),
     enabled: !!project,
     staleTime: 0,
   });
 }
 
-export function useGitStage(project: string) {
+export function useGitStage(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (paths: string[]) => api.git.stage(project, paths),
+    mutationFn: (paths: string[]) => api.git.stage(project, paths, root),
     onSuccess: () =>
       void qc.invalidateQueries({ queryKey: ["git-diff", project] }),
   });
 }
 
-export function useGitUnstage(project: string) {
+export function useGitUnstage(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (paths: string[]) => api.git.unstage(project, paths),
+    mutationFn: (paths: string[]) => api.git.unstage(project, paths, root),
     onSuccess: () =>
       void qc.invalidateQueries({ queryKey: ["git-diff", project] }),
   });
 }
 
-export function useGitDiscard(project: string) {
+export function useGitDiscard(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (path: string) => api.git.discard(project, path),
+    mutationFn: (path: string) => api.git.discard(project, path, root),
     onSuccess: (_data, path) =>
       void invalidateGitFileOperation(qc, project, path),
   });
 }
 
-export function useGitDiscardHunk(project: string) {
+export function useGitDiscardHunk(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ path, hunkIndex }: { path: string; hunkIndex: number }) =>
-      api.git.discardHunk(project, path, hunkIndex),
+      api.git.discardHunk(project, path, hunkIndex, root),
     onSuccess: (_data, { path }) =>
       void invalidateGitFileOperation(qc, project, path),
   });
 }
 
-export function useGitResolve(project: string) {
+export function useGitResolve(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ path, content }: { path: string; content: string }) =>
-      api.git.resolve(project, path, content),
+      api.git.resolve(project, path, content, root),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["git-conflicts", project] });
       void qc.invalidateQueries({ queryKey: ["git-diff", project] });
@@ -431,7 +456,7 @@ export function useGitResolve(project: string) {
   });
 }
 
-export function useGitCommit(project: string) {
+export function useGitCommit(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -440,7 +465,7 @@ export function useGitCommit(project: string) {
     }: {
       message: string;
       amend?: boolean;
-    }) => api.git.commit(project, message, amend),
+    }) => api.git.commit(project, message, amend, root),
     onSuccess: () =>
       invalidateGitProjectQueries(qc, project, {
         includeConflicts: true,
@@ -452,14 +477,14 @@ export function useGitCommit(project: string) {
   });
 }
 
-export function useGitCreateBranch(project: string) {
+export function useGitCreateBranch(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (options: {
       name: string;
       startPoint?: string;
       checkout?: boolean;
-    }) => api.git.createBranch(project, options),
+    }) => api.git.createBranch(project, { ...options, root }),
     onSuccess: (_result, vars) =>
       invalidateGitProjectQueries(qc, project, {
         includeBranches: true,
@@ -473,7 +498,7 @@ export function useGitCreateBranch(project: string) {
   });
 }
 
-export function useGitCheckoutBranch(project: string) {
+export function useGitCheckoutBranch(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (options: {
@@ -481,7 +506,7 @@ export function useGitCheckoutBranch(project: string) {
       startPoint?: string;
       create?: boolean;
       strategy?: CheckoutStrategy;
-    }) => api.git.checkoutBranch(project, options),
+    }) => api.git.checkoutBranch(project, { ...options, root }),
     onSuccess: () =>
       invalidateGitProjectQueries(qc, project, {
         includeBranches: true,
@@ -495,74 +520,74 @@ export function useGitCheckoutBranch(project: string) {
   });
 }
 
-export function useGitCherryPick(project: string) {
+export function useGitCherryPick(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (hash: string) => api.git.cherryPick(project, hash),
+    mutationFn: (hash: string) => api.git.cherryPick(project, hash, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, project),
   });
 }
 
-export function useGitReset(project: string) {
+export function useGitReset(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash, mode }: { hash: string; mode: ResetMode }) =>
-      api.git.reset(project, hash, mode),
+      api.git.reset(project, hash, mode, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, project),
   });
 }
 
-export function useGitUndoLastCommit(project: string) {
+export function useGitUndoLastCommit(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.git.undoLastCommit(project),
+    mutationFn: () => api.git.undoLastCommit(project, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, project),
   });
 }
 
-export function useGitCherryPickCommitFiles(project: string) {
+export function useGitCherryPickCommitFiles(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash, paths }: { hash: string; paths: string[] }) =>
-      api.git.cherryPickCommitFiles(project, hash, paths),
+      api.git.cherryPickCommitFiles(project, hash, paths, root),
     onSuccess: (_result, { paths }) =>
       void invalidateGitHistoryOperation(qc, project, paths),
   });
 }
 
-export function useGitDropCommitFiles(project: string) {
+export function useGitDropCommitFiles(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash, paths }: { hash: string; paths: string[] }) =>
-      api.git.dropCommitFiles(project, hash, paths),
+      api.git.dropCommitFiles(project, hash, paths, root),
     onSuccess: (_result, { paths }) =>
       void invalidateGitHistoryOperation(qc, project, paths),
   });
 }
 
-export function useGitDropCommit(project: string) {
+export function useGitDropCommit(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash }: { hash: string }) =>
-      api.git.dropCommit(project, hash),
+      api.git.dropCommit(project, hash, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, project),
   });
 }
 
-export function useGitRevertCommit(project: string) {
+export function useGitRevertCommit(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash }: { hash: string }) =>
-      api.git.revertCommit(project, hash),
+      api.git.revertCommit(project, hash, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, project),
   });
 }
 
-export function useGitRevertCommitFiles(project: string) {
+export function useGitRevertCommitFiles(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash, paths }: { hash: string; paths: string[] }) =>
-      api.git.revertCommitFiles(project, hash, paths),
+      api.git.revertCommitFiles(project, hash, paths, root),
     onSuccess: (_result, { paths }) =>
       void invalidateGitHistoryOperation(qc, project, paths),
   });

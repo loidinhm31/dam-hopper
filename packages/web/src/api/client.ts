@@ -613,59 +613,84 @@ export const api = {
         amend,
         root,
       }),
-    cherryPick: (project: string, hash: string) =>
+    cherryPick: (project: string, hash: string, root?: string) =>
       getTransport().invoke<GitActionResult>("git:cherryPick", {
         project,
         hash,
+        root,
       }),
-    reset: (project: string, hash: string, mode: ResetMode) =>
+    reset: (project: string, hash: string, mode: ResetMode, root?: string) =>
       getTransport().invoke<GitActionResult>("git:reset", {
         project,
         hash,
         mode,
+        root,
       }),
-    undoLastCommit: (project: string) =>
+    undoLastCommit: (project: string, root?: string) =>
       getTransport().invoke<GitActionResult>("git:undoLastCommit", {
         project,
+        root,
       }),
-    commitFiles: (project: string, hash: string) =>
+    commitFiles: (project: string, hash: string, root?: string) =>
       getTransport().invoke<DiffFileEntry[]>("git:commitFiles", {
         project,
         hash,
+        root,
       }),
-    commitFileDiff: (project: string, hash: string, path: string) =>
+    commitFileDiff: (project: string, hash: string, path: string, root?: string) =>
       getTransport().invoke<FileDiffContent>("git:commitFileDiff", {
         project,
         hash,
         path,
+        root,
       }),
-    cherryPickCommitFiles: (project: string, hash: string, paths: string[]) =>
+    cherryPickCommitFiles: (
+      project: string,
+      hash: string,
+      paths: string[],
+      root?: string,
+    ) =>
       getTransport().invoke<GitActionResult>("git:cherryPickCommitFiles", {
         project,
         hash,
         paths,
+        root,
       }),
-    dropCommitFiles: (project: string, hash: string, paths: string[]) =>
+    dropCommitFiles: (
+      project: string,
+      hash: string,
+      paths: string[],
+      root?: string,
+    ) =>
       getTransport().invoke<GitActionResult>("git:dropCommitFiles", {
         project,
         hash,
         paths,
+        root,
       }),
-    dropCommit: (project: string, hash: string) =>
+    dropCommit: (project: string, hash: string, root?: string) =>
       getTransport().invoke<GitActionResult>("git:dropCommit", {
         project,
         hash,
+        root,
       }),
-    revertCommit: (project: string, hash: string) =>
+    revertCommit: (project: string, hash: string, root?: string) =>
       getTransport().invoke<GitActionResult>("git:revertCommit", {
         project,
         hash,
+        root,
       }),
-    revertCommitFiles: (project: string, hash: string, paths: string[]) =>
+    revertCommitFiles: (
+      project: string,
+      hash: string,
+      paths: string[],
+      root?: string,
+    ) =>
       getTransport().invoke<GitActionResult>("git:revertCommitFiles", {
         project,
         hash,
         paths,
+        root,
       }),
   },
   config: {
