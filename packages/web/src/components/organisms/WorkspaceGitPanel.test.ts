@@ -9,11 +9,16 @@ vi.mock("@/api/client.js", () => ({
 }));
 
 import { api } from "@/api/client.js";
+import type { VcsRoot } from "@/api/client.js";
 import {
+  describeVcsRoot,
+  formatVcsRootLabel,
+  projectRelativePathForRoot,
   refreshWorkspaceGitPanelQueries,
   resolveWorkspaceHistoryRef,
   resolveWorkspaceHistoryBranchState,
   resolveWorkspaceGitSelection,
+  workspaceGitRootOptions,
 } from "./WorkspaceGitPanel.js";
 
 const gitLogMock = vi.mocked(api.git.log);
@@ -151,6 +156,59 @@ describe("WorkspaceGitPanel refresh helpers", () => {
     });
   });
 
+  it("refreshes root-scoped history queries for a selected child root", async () => {
+    gitLogMock.mockResolvedValue([]);
+
+    const invalidateQueries = vi.fn().mockResolvedValue(undefined);
+    const refetchQueries = vi.fn().mockResolvedValue(undefined);
+    const fetchQuery = vi.fn(
+      ({ queryFn }: { queryFn: () => Promise<unknown> }) => queryFn(),
+    );
+
+    await refreshWorkspaceGitPanelQueries(
+      { invalidateQueries, refetchQueries, fetchQuery },
+      "demo-project",
+      "abc1234",
+      0,
+      "child-main",
+      "modules/child",
+    );
+
+    expect(invalidateQueries.mock.calls).toEqual([
+      [{ queryKey: ["branches", "demo-project", "modules/child"] }],
+      [{ queryKey: ["project-status", "demo-project"] }],
+      [{ queryKey: ["git-log", "demo-project", "modules/child"] }],
+      [
+        {
+          queryKey: [
+            "git-commit-files",
+            "demo-project",
+            "modules/child",
+            "abc1234",
+          ],
+        },
+      ],
+    ]);
+    expect(fetchQuery).toHaveBeenCalledWith({
+      queryKey: [
+        "git-log",
+        "demo-project",
+        "modules/child",
+        200,
+        0,
+        "child-main",
+      ],
+      queryFn: expect.any(Function),
+    });
+    expect(gitLogMock).toHaveBeenCalledWith(
+      "demo-project",
+      200,
+      0,
+      "child-main",
+      "modules/child",
+    );
+  });
+
   it("follows active branch changes until the history view is pinned", () => {
     expect(
       resolveWorkspaceHistoryBranchState(
@@ -238,5 +296,64 @@ describe("WorkspaceGitPanel refresh helpers", () => {
     ).toBe("def5678");
 
     expect(resolveWorkspaceHistoryRef([], "feature/demo")).toBe("feature/demo");
+  });
+});
+
+describe("WorkspaceGitPanel VCS root helpers", () => {
+  it("falls back to the primary root when discovery has no roots yet", () => {
+    expect(workspaceGitRootOptions([])).toEqual([
+      {
+        rootId: ".",
+        path: ".",
+        absolutePath: "",
+        kind: "primary",
+        warnings: [],
+      },
+    ]);
+  });
+
+  it("formats root selector labels and mapping state descriptions", () => {
+    const roots: VcsRoot[] = [
+      {
+        rootId: ".",
+        path: ".",
+        absolutePath: "/repo",
+        kind: "primary",
+        warnings: [],
+      },
+      {
+        rootId: "modules/child",
+        path: "modules/child",
+        absolutePath: "/repo/modules/child",
+        kind: "submodule",
+        mappingState: "unmapped",
+        warnings: ["gitlink has no matching .gitmodules path"],
+      },
+      {
+        rootId: "tools/plain",
+        path: "tools/plain",
+        absolutePath: "/repo/tools/plain",
+        kind: "nestedRepo",
+        warnings: [],
+      },
+    ];
+
+    expect(formatVcsRootLabel(roots[0])).toBe("Project root");
+    expect(formatVcsRootLabel(roots[1])).toBe("modules/child");
+    expect(describeVcsRoot(roots[1])).toBe("Unmapped");
+    expect(describeVcsRoot(roots[2])).toBe("Nested repo");
+  });
+
+  it("opens root-relative commit files as project-relative paths", () => {
+    expect(projectRelativePathForRoot("modules/child", "README.md")).toBe(
+      "modules/child/README.md",
+    );
+    expect(
+      projectRelativePathForRoot(
+        "modules/child",
+        "modules/child/README.md",
+      ),
+    ).toBe("modules/child/README.md");
+    expect(projectRelativePathForRoot(".", "README.md")).toBe("README.md");
   });
 });

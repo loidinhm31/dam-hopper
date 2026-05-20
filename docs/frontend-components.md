@@ -273,9 +273,11 @@ interface TerminalPanelProps {
 **Behavior:**
 
 - Fetches VCS roots with `useGitRoots(project)` and shows a root selector above the history controls.
+- Falls back to the primary root while discovery is loading so branch/history controls keep a stable query scope.
 - Keeps branch and history queries scoped to the selected root id.
 - Refreshes root-aware query keys for branches, history, and commit-file details.
 - Treats the selected root as the active context for commit details and double-click diff opens.
+- Converts root-relative commit file paths back to project-relative editor paths before opening diffs.
 - Exposes undo last commit and safe revert paths for local history recovery.
 - Prevents local commit drops for pushed commits and shows a shared revert recommendation instead.
 - Branch-history operations refresh Git, project status, file tree, and open editor tabs through scoped Git invalidation helpers.

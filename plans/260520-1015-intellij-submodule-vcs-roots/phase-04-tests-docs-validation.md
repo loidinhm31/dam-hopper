@@ -11,8 +11,9 @@
 
 Date: 2026-05-20
 Priority: P1
-Implementation status: Pending
-Review status: Pending
+Implementation status: Complete
+Review status: Complete
+Completed: 2026-05-20
 Goal: prove multi-root Git behavior with tests and document the new contracts.
 
 ## Key Insights
@@ -23,11 +24,11 @@ Goal: prove multi-root Git behavior with tests and document the new contracts.
 
 ## Requirements
 
-- Add backend tests using real temp Git repositories, no mocks.
-- Add frontend tests for root selector, grouped changes, and root-scoped mutations.
-- Update API and architecture docs.
-- Run Rust and web test suites.
-- Manually verify `/mnt/data/ws/sharing/glean-oak`.
+- [x] Add backend tests using real temp Git repositories, no mocks.
+- [x] Add frontend tests for root selector, grouped changes, and root-scoped mutations.
+- [x] Update API and architecture docs.
+- [x] Run Rust and web test suites.
+- [x] Manually verify `/mnt/data/ws/sharing/glean-oak`.
 
 ## Architecture
 
@@ -85,6 +86,8 @@ Documentation:
 - `cd server && cargo test git::tests::vcs_root` passes if test names are split.
 - `pnpm --filter @dam-hopper/web test` passes.
 - `glean-oak` Git panel loads and shows parent + child root states clearly.
+- Validation summary: Rust suite 286 unit tests plus integration binaries `auth_no_auth` 11, `fs_mutate` 9, `fs_sandbox` 13, `fs_upload` 6, `fs_write_streaming` 5, `ws_fs_subscribe` 5; web Vitest 28 files / 144 tests; focused `vcs_root`, `child_root`, `submodule` filters passed.
+- Review: 8.5/10, no critical/high issues, approved.
 
 ## Risk Assessment
 

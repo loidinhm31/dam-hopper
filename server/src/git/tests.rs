@@ -20,8 +20,8 @@ use crate::git::{
     cherry_pick_commit_files, drop_commit, drop_commit_files, revert_commit, revert_commit_files,
 };
 use crate::git::{
-    discover_vcs_roots, resolve_git_path_root, resolve_vcs_root, staged_vcs_root_ids,
-    BulkGitService, WorktreeAddOptions,
+    discover_vcs_roots, resolve_git_path_root, resolve_git_request_root, resolve_vcs_root,
+    staged_vcs_root_ids, BulkGitService, WorktreeAddOptions,
 };
 
 // ---------------------------------------------------------------------------
@@ -77,6 +77,16 @@ fn make_nested_repo(path: &Path) -> String {
     std::fs::create_dir_all(path).unwrap();
     init_repo_with_commit(path);
     git_output(&["rev-parse", "HEAD"], path)
+}
+
+fn make_parent_with_child_roots() -> TempDir {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    make_nested_repo(&path.join("modules/child"));
+    make_nested_repo(&path.join("modules/sibling"));
+    git(&["add", "modules/child", "modules/sibling"], path);
+    git(&["commit", "-m", "add child roots"], path);
+    repo
 }
 
 fn make_remote_clone_repo() -> (TempDir, TempDir, TempDir) {
@@ -333,6 +343,17 @@ fn root_path_resolution_blocks_mixed_root_path_operations() {
     );
 
     assert!(result.is_err());
+}
+
+#[test]
+fn vcs_root_resolution_rejects_aggregate_unknown_and_escaping_roots() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    assert!(resolve_git_request_root(path, Some("*")).is_err());
+    assert!(resolve_git_request_root(path, Some("modules/missing")).is_err());
+    assert!(resolve_git_request_root(path, Some("../escape")).is_err());
+    assert!(resolve_git_request_root(path, Some("/tmp")).is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -608,6 +629,32 @@ fn diff_includes_parent_gitlink_entry_for_dirty_submodule() {
 }
 
 #[test]
+fn submodule_vcs_root_diffs_keep_parent_gitlink_and_child_files_separate() {
+    let repo = make_parent_with_child_roots();
+    let path = repo.path();
+
+    std::fs::write(path.join("modules/child/README.md"), "child dirty").unwrap();
+
+    let parent_entries = get_diff_files(path).unwrap();
+    assert!(parent_entries.entries.iter().any(|entry| {
+        entry.path == "modules/child" && entry.submodule.is_some() && !entry.staged
+    }));
+    assert!(!parent_entries
+        .entries
+        .iter()
+        .any(|entry| entry.path == "README.md"));
+
+    let child_entries = get_diff_files(&path.join("modules/child")).unwrap();
+    let child_readme = child_entries
+        .entries
+        .iter()
+        .find(|entry| entry.path == "README.md" && !entry.staged)
+        .expect("child root should show its own file diff");
+    assert_eq!(child_readme.status, "modified");
+    assert!(child_readme.submodule.is_none());
+}
+
+#[test]
 fn child_root_stage_does_not_stage_parent_repo() {
     let repo = make_temp_repo();
     let path = repo.path();
@@ -624,6 +671,61 @@ fn child_root_stage_does_not_stage_parent_repo() {
 
     assert_eq!(get_status(&root.root_path, "child").unwrap().staged, 1);
     assert_eq!(get_status(path, "parent").unwrap().staged, 0);
+}
+
+#[test]
+fn child_root_discard_does_not_mutate_sibling_root() {
+    let repo = make_parent_with_child_roots();
+    let path = repo.path();
+
+    std::fs::write(path.join("modules/child/README.md"), "child dirty").unwrap();
+    std::fs::write(path.join("modules/sibling/README.md"), "sibling dirty").unwrap();
+
+    let (root, paths) = resolve_git_path_root(
+        path,
+        Some("modules/child"),
+        &["modules/child/README.md".to_string()],
+    )
+    .unwrap();
+    discard_file(&root.root_path, &paths[0]).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(path.join("modules/child/README.md")).unwrap(),
+        "# test"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("modules/sibling/README.md")).unwrap(),
+        "sibling dirty"
+    );
+}
+
+#[test]
+fn child_root_commit_does_not_mutate_parent_or_sibling_roots() {
+    let repo = make_parent_with_child_roots();
+    let path = repo.path();
+
+    std::fs::write(path.join("modules/child/child.txt"), "child").unwrap();
+    std::fs::write(path.join("modules/sibling/sibling.txt"), "sibling").unwrap();
+
+    let (root, paths) = resolve_git_path_root(
+        path,
+        Some("modules/child"),
+        &["modules/child/child.txt".to_string()],
+    )
+    .unwrap();
+    let refs: Vec<&str> = paths.iter().map(|path| path.as_str()).collect();
+    stage_files(&root.root_path, &refs).unwrap();
+    let hash = commit_files(&root.root_path, "child-only commit", false).unwrap();
+
+    assert!(!hash.is_empty());
+    assert_eq!(get_status(&root.root_path, "child").unwrap().staged, 0);
+    assert_eq!(get_status(path, "parent").unwrap().staged, 0);
+    assert_eq!(
+        get_status(&path.join("modules/sibling"), "sibling")
+            .unwrap()
+            .untracked,
+        1
+    );
 }
 
 #[test]
@@ -873,6 +975,41 @@ async fn checkout_branch_invalid_name_rejected() {
     .unwrap_err();
 
     assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+}
+
+#[tokio::test]
+async fn child_root_checkout_affects_only_selected_root() {
+    let repo = make_parent_with_child_roots();
+    let path = repo.path();
+    let child = path.join("modules/child");
+    let sibling = path.join("modules/sibling");
+
+    git(&["branch", "child-feature"], &child);
+    git(&["branch", "sibling-feature"], &sibling);
+
+    let result = checkout_branch(
+        &child,
+        "child-feature",
+        None,
+        false,
+        CheckoutStrategy::Normal,
+    )
+    .await
+    .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(
+        git_output(&["rev-parse", "--abbrev-ref", "HEAD"], &child),
+        "child-feature"
+    );
+    assert_eq!(
+        git_output(&["rev-parse", "--abbrev-ref", "HEAD"], &sibling),
+        "main"
+    );
+    assert_eq!(
+        git_output(&["rev-parse", "--abbrev-ref", "HEAD"], path),
+        "main"
+    );
 }
 
 #[tokio::test]
