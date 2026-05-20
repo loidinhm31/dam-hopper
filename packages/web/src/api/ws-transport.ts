@@ -578,78 +578,117 @@ function channelToEndpoint(
       };
     }
     case "git:cherryPick": {
-      const d = data as { project: string; hash: string };
+      const d = data as { project: string; hash: string; root?: string };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/cherry-pick`,
-        body: { hash: d.hash },
+        body: { hash: d.hash, root: d.root },
       };
     }
     case "git:reset": {
-      const d = data as { project: string; hash: string; mode: string };
+      const d = data as {
+        project: string;
+        hash: string;
+        mode: string;
+        root?: string;
+      };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/reset`,
-        body: { hash: d.hash, mode: d.mode },
+        body: { hash: d.hash, mode: d.mode, root: d.root },
       };
     }
     case "git:undoLastCommit": {
-      const d = data as { project: string };
+      const d = data as { project: string; root?: string };
+      const params = new URLSearchParams();
+      if (d.root) params.set("root", d.root);
+      const qs = params.toString();
       return {
         method: "POST",
-        url: `/api/git/${encodeURIComponent(d.project)}/undo-last-commit`,
+        url: `/api/git/${encodeURIComponent(d.project)}/undo-last-commit${qs ? `?${qs}` : ""}`,
       };
     }
     case "git:commitFiles": {
-      const d = data as { project: string; hash: string };
+      const d = data as { project: string; hash: string; root?: string };
+      const params = new URLSearchParams();
+      if (d.root) params.set("root", d.root);
+      const qs = params.toString();
       return {
         method: "GET",
-        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/files`,
+        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/files${qs ? `?${qs}` : ""}`,
       };
     }
     case "git:commitFileDiff": {
-      const d = data as { project: string; hash: string; path: string };
+      const d = data as {
+        project: string;
+        hash: string;
+        path: string;
+        root?: string;
+      };
+      const params = new URLSearchParams({ path: d.path });
+      if (d.root) params.set("root", d.root);
       return {
         method: "GET",
-        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/diff?path=${encodeURIComponent(d.path)}`,
+        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/diff?${params}`,
       };
     }
     case "git:cherryPickCommitFiles": {
-      const d = data as { project: string; hash: string; paths: string[] };
+      const d = data as {
+        project: string;
+        hash: string;
+        paths: string[];
+        root?: string;
+      };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/cherry-pick-files`,
-        body: { paths: d.paths },
+        body: { paths: d.paths, root: d.root },
       };
     }
     case "git:dropCommitFiles": {
-      const d = data as { project: string; hash: string; paths: string[] };
+      const d = data as {
+        project: string;
+        hash: string;
+        paths: string[];
+        root?: string;
+      };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/drop-files`,
-        body: { paths: d.paths },
+        body: { paths: d.paths, root: d.root },
       };
     }
     case "git:dropCommit": {
-      const d = data as { project: string; hash: string };
+      const d = data as { project: string; hash: string; root?: string };
+      const params = new URLSearchParams();
+      if (d.root) params.set("root", d.root);
+      const qs = params.toString();
       return {
         method: "POST",
-        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/drop`,
+        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/drop${qs ? `?${qs}` : ""}`,
       };
     }
     case "git:revertCommit": {
-      const d = data as { project: string; hash: string };
+      const d = data as { project: string; hash: string; root?: string };
+      const params = new URLSearchParams();
+      if (d.root) params.set("root", d.root);
+      const qs = params.toString();
       return {
         method: "POST",
-        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/revert`,
+        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/revert${qs ? `?${qs}` : ""}`,
       };
     }
     case "git:revertCommitFiles": {
-      const d = data as { project: string; hash: string; paths: string[] };
+      const d = data as {
+        project: string;
+        hash: string;
+        paths: string[];
+        root?: string;
+      };
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/revert-files`,
-        body: { paths: d.paths },
+        body: { paths: d.paths, root: d.root },
       };
     }
 

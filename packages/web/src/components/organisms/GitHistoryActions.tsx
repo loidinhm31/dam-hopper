@@ -403,7 +403,8 @@ export interface GitSelectedChangesOperation {
   files: DiffFileEntry[];
 }
 
-export function useGitHistoryActions(project: string) {
+export function useGitHistoryActions(project: string, root?: string) {
+  const scope = `${project}\0${root ?? "."}`;
   const [resetCommitState, setResetCommitState] = useState<{
     project: string;
     commit: GitLogEntry | null;
@@ -428,30 +429,32 @@ export function useGitHistoryActions(project: string) {
     project: string;
     value: GitHistoryActionStatus | null;
   }>({ project: "", value: null });
-  const cherryPickMutation = useGitCherryPick(project);
-  const resetMutation = useGitReset(project);
-  const undoLastCommitMutation = useGitUndoLastCommit(project);
-  const cherryPickFilesMutation = useGitCherryPickCommitFiles(project);
-  const revertFilesMutation = useGitRevertCommitFiles(project);
-  const dropFilesMutation = useGitDropCommitFiles(project);
-  const dropCommitMutation = useGitDropCommit(project);
-  const revertCommitMutation = useGitRevertCommit(project);
+  const cherryPickMutation = useGitCherryPick(project, root);
+  const resetMutation = useGitReset(project, root);
+  const undoLastCommitMutation = useGitUndoLastCommit(project, root);
+  const cherryPickFilesMutation = useGitCherryPickCommitFiles(project, root);
+  const revertFilesMutation = useGitRevertCommitFiles(project, root);
+  const dropFilesMutation = useGitDropCommitFiles(project, root);
+  const dropCommitMutation = useGitDropCommit(project, root);
+  const revertCommitMutation = useGitRevertCommit(project, root);
   const resetCommit =
-    resetCommitState.project === project ? resetCommitState.commit : null;
+    resetCommitState.project === scope ? resetCommitState.commit : null;
   const dropCommit =
-    dropCommitState.project === project ? dropCommitState.commit : null;
+    dropCommitState.project === scope ? dropCommitState.commit : null;
   const revertCommit =
-    revertCommitState.project === project ? revertCommitState.commit : null;
+    revertCommitState.project === scope ? revertCommitState.commit : null;
   const undoLastCommit =
-    undoLastCommitState.project === project ? undoLastCommitState.commit : null;
+    undoLastCommitState.project === scope
+      ? undoLastCommitState.commit
+      : null;
   const selectedChangesOperation =
-    selectedChangesState.project === project
+    selectedChangesState.project === scope
       ? selectedChangesState.operation
       : null;
-  const status = statusState.project === project ? statusState.value : null;
+  const status = statusState.project === scope ? statusState.value : null;
 
   function setStatus(value: GitHistoryActionStatus | null) {
-    setStatusState({ project, value });
+    setStatusState({ project: scope, value });
   }
 
   async function handleCherryPick(entry: GitLogEntry) {
@@ -493,7 +496,7 @@ export function useGitHistoryActions(project: string) {
         ),
       );
       if (result.ok) {
-        setResetCommitState({ project, commit: null });
+        setResetCommitState({ project: scope, commit: null });
       }
     } catch (caughtError) {
       setStatus({
@@ -520,7 +523,7 @@ export function useGitHistoryActions(project: string) {
         ),
       );
       if (result.ok) {
-        setRevertCommitState({ project, commit: null });
+        setRevertCommitState({ project: scope, commit: null });
       }
     } catch (caughtError) {
       setStatus({
@@ -548,7 +551,7 @@ export function useGitHistoryActions(project: string) {
         ),
       );
       if (result.ok) {
-        setUndoLastCommitState({ project, commit: null });
+        setUndoLastCommitState({ project: scope, commit: null });
         return targetHash;
       }
     } catch (caughtError) {
@@ -657,7 +660,7 @@ export function useGitHistoryActions(project: string) {
   ) {
     if (files.length === 0) return;
     setSelectedChangesState({
-      project,
+      project: scope,
       operation: { kind, commit, files },
     });
   }
@@ -672,7 +675,7 @@ export function useGitHistoryActions(project: string) {
           "Drop selected changes is only available for commits not pushed upstream",
         detail: "Use Revert Selected Changes for shared history.",
       });
-      setSelectedChangesState({ project, operation: null });
+      setSelectedChangesState({ project: scope, operation: null });
       return;
     }
     if (operation.kind === "drop") {
@@ -680,7 +683,7 @@ export function useGitHistoryActions(project: string) {
     } else {
       await handleRevertFiles(operation.commit, operation.files);
     }
-    setSelectedChangesState({ project, operation: null });
+    setSelectedChangesState({ project: scope, operation: null });
   }
 
   async function handleDropCommit() {
@@ -709,7 +712,7 @@ export function useGitHistoryActions(project: string) {
         ),
       );
       if (result.ok) {
-        setDropCommitState({ project, commit: null });
+        setDropCommitState({ project: scope, commit: null });
         return targetHash;
       }
     } catch (caughtError) {
@@ -750,13 +753,13 @@ export function useGitHistoryActions(project: string) {
     status,
     resetCommit,
     setDropCommit: (commit: GitLogEntry | null) =>
-      setDropCommitState({ project, commit }),
+      setDropCommitState({ project: scope, commit }),
     setRevertCommit: (commit: GitLogEntry | null) =>
-      setRevertCommitState({ project, commit }),
+      setRevertCommitState({ project: scope, commit }),
     setUndoLastCommit: (commit: GitLogEntry | null) =>
-      setUndoLastCommitState({ project, commit }),
+      setUndoLastCommitState({ project: scope, commit }),
     setResetCommit: (commit: GitLogEntry | null) =>
-      setResetCommitState({ project, commit }),
+      setResetCommitState({ project: scope, commit }),
     handleCherryPick,
     handleCherryPickFiles,
     handleDropCommit,
@@ -771,7 +774,7 @@ export function useGitHistoryActions(project: string) {
     requestRevertFiles: (commit: GitLogEntry, files: DiffFileEntry[]) =>
       requestSelectedChangesOperation("revert", commit, files),
     clearSelectedChangesOperation: () =>
-      setSelectedChangesState({ project, operation: null }),
+      setSelectedChangesState({ project: scope, operation: null }),
     clearStatus,
     resetScope,
   };

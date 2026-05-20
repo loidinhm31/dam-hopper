@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils.js";
 
 interface CommitDetailsPanelProps {
   project: string;
+  root?: string;
   commit: GitLogEntry;
   onClose: () => void;
   onFileDoubleClick: (file: DiffFileEntry) => void;
@@ -35,6 +36,7 @@ interface FileSelectionState {
 
 export function CommitDetailsPanel({
   project,
+  root,
   commit,
   onClose,
   onFileDoubleClick,
@@ -42,7 +44,11 @@ export function CommitDetailsPanel({
   onRevertSelectedChanges,
   onDropSelectedChanges,
 }: CommitDetailsPanelProps) {
-  const { data: files, isLoading } = useGitCommitFiles(project, commit.hash);
+  const { data: files, isLoading } = useGitCommitFiles(
+    project,
+    commit.hash,
+    root,
+  );
   const [selection, setSelection] = useState<FileSelectionState>({
     commitHash: commit.hash,
     paths: new Set(),

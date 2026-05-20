@@ -226,6 +226,7 @@ interface TerminalPanelProps {
 - On dirty checkout, offers normal retry, stash then checkout, force checkout, or cancel.
 - Uses `invalidateGitProjectQueries()` as the cache invalidation source of truth after mutations.
 - Branch mutations refresh `branches`, `projects`, `project-status`, and `git-log`; checkout paths also refresh `git-diff`, `git-conflicts`, and `fs-tree`.
+- Accepts an optional `root` so the selector can target a specific VCS root instead of the project default.
 
 **Dialogs:** `GitBranchControlDialogs.tsx` contains the supporting create/checkout/update dialogs.
 
@@ -248,15 +249,36 @@ interface TerminalPanelProps {
 - Opens a reset confirmation dialog for soft, mixed, hard, and keep reset modes.
 - Marks destructive history actions clearly before invoking the backend.
 - Groups history actions into safe vs rewrite actions.
-- Exposes undo last commit and safe revert paths for local history recovery.
-- Prevents local commit drops for pushed commits and shows a shared revert recommendation instead.
-- Branch-history operations refresh Git, project status, file tree, and open editor tabs through scoped Git invalidation helpers.
+- Scopes mutations by `root` and keeps action state isolated per `project + root` pair.
 
 ### GitLocalChanges
 
 **Location:** `packages/web/src/components/organisms/GitLocalChanges.tsx`
 
-**Purpose:** Shows staged and unstaged working tree changes for the active project.
+**Purpose:** Renders local diff state, stage/unstage/discard actions, and commit entry.
+
+**Behavior:**
+
+- Reads the root-aware diff query and mutation hooks.
+- Groups staged and unstaged entries by `rootId` when the diff payload includes multiple VCS roots.
+- Uses the root metadata from the server to keep submodule/gitlink rows distinct from normal files.
+- Blocks commit submission when staged entries span multiple roots, so mixed-root commits are rejected in the UI before the request is sent.
+
+### Workspace Git Panel
+
+**Location:** `packages/web/src/components/organisms/WorkspaceGitPanel.tsx`
+
+**Purpose:** Orchestrates root selection, scoped branch/history views, and the selected commit details panel.
+
+**Behavior:**
+
+- Fetches VCS roots with `useGitRoots(project)` and shows a root selector above the history controls.
+- Keeps branch and history queries scoped to the selected root id.
+- Refreshes root-aware query keys for branches, history, and commit-file details.
+- Treats the selected root as the active context for commit details and double-click diff opens.
+- Exposes undo last commit and safe revert paths for local history recovery.
+- Prevents local commit drops for pushed commits and shows a shared revert recommendation instead.
+- Branch-history operations refresh Git, project status, file tree, and open editor tabs through scoped Git invalidation helpers.
 
 ### ChangedFilesList
 

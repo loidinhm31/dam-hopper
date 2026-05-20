@@ -19,6 +19,7 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 - **Rendering Wrapper**: `packages/web/src/lib/file-decoration-icon.tsx` is a thin icon component over the registry.
 - **Shared Surfaces**: explorer tree, editor tabs, search headers, and path labels all read from the same lookup so file identity stays aligned across the UI.
 - **Workspace Terminal Layout**: `WorkspacePage` switches between IDE and terminal modes, `TerminalWorkspaceShell` renders the full-height terminal workspace with a persisted Fleet Terminal rail, and `MultiTerminalDisplay` reuses the existing terminal manager state across layout changes.
+- **Git VCS Roots**: `WorkspaceGitPanel` now loads server-reported VCS roots, scopes branch/history queries by selected root, groups local changes by `rootId`, and blocks mixed-root commits in the UI.
 
 ## Key Features
 
@@ -113,6 +114,16 @@ Infrastructure
   - Separate `Revert Selected Changes` and `Drop Selected Changes` actions
   - History context menu groups safe actions apart from rewrite actions
 - **Validation**: tests and build passed
+
+### Phase 03: Frontend VCS Root UI ✅ Complete
+
+- **Status**: Root selector and root-scoped Git UI for multi-root/submodule workspaces
+- **Features**:
+  - `WorkspaceGitPanel` root selector sourced from `git:roots`
+  - Root-aware `branches`, `git-log`, and mutation hooks
+  - Local changes grouped by `rootId` with submodule/gitlink rows kept distinct
+  - Mixed-root staged commits blocked before submit
+- **Validation**: frontend tests updated
 
 ### Phase 01: Server-Side Auth Bypass ✅ Complete
 
