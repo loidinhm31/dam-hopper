@@ -28,6 +28,13 @@ struct GitmodulesMap {
     warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ResolvedGitRoot {
+    pub root_id: String,
+    pub root_path: PathBuf,
+    pub root_path_display: String,
+}
+
 pub fn discover_vcs_roots(project_path: &Path) -> Result<Vec<VcsRoot>, AppError> {
     if !project_path.exists() {
         return Err(AppError::GitNotFound(
@@ -160,6 +167,123 @@ pub fn resolve_vcs_root(project_path: &Path, root_id: &str) -> Result<PathBuf, A
         )));
     }
     Ok(candidate)
+}
+
+pub fn resolve_git_request_root(
+    project_path: &Path,
+    requested_root: Option<&str>,
+) -> Result<ResolvedGitRoot, AppError> {
+    let root_id = requested_root
+        .map(str::trim)
+        .filter(|root| !root.is_empty())
+        .unwrap_or(".");
+    if root_id == "*" {
+        return Err(AppError::InvalidInput(
+            "aggregate VCS root is read-only".to_string(),
+        ));
+    }
+
+    let roots = discover_vcs_roots(project_path)?;
+    let root = roots
+        .iter()
+        .find(|root| root.root_id == root_id)
+        .ok_or_else(|| AppError::InvalidInput(format!("unknown VCS root: {root_id}")))?;
+    let root_path = resolve_vcs_root(project_path, &root.root_id)?;
+    Ok(ResolvedGitRoot {
+        root_id: root.root_id.clone(),
+        root_path,
+        root_path_display: root.path.clone(),
+    })
+}
+
+pub fn resolve_git_path_root(
+    project_path: &Path,
+    requested_root: Option<&str>,
+    paths: &[String],
+) -> Result<(ResolvedGitRoot, Vec<String>), AppError> {
+    if let Some(root) = requested_root
+        .map(str::trim)
+        .filter(|root| !root.is_empty())
+    {
+        let resolved = resolve_git_request_root(project_path, Some(root))?;
+        let selected_paths = paths
+            .iter()
+            .map(|path| normalize_path_for_explicit_root(&resolved.root_id, path))
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok((resolved, selected_paths));
+    }
+
+    let roots = discover_vcs_roots(project_path)?;
+    let mut selected_root_id: Option<String> = None;
+    let mut selected_paths = Vec::with_capacity(paths.len());
+
+    for path in paths {
+        let root = deepest_matching_root(&roots, path).ok_or_else(|| {
+            AppError::InvalidInput(format!("path does not match a VCS root: {path}"))
+        })?;
+        if let Some(existing) = &selected_root_id {
+            if existing != &root.root_id {
+                return Err(AppError::InvalidInput(
+                    "mixed VCS roots are not supported for one Git operation".to_string(),
+                ));
+            }
+        } else {
+            selected_root_id = Some(root.root_id.clone());
+        }
+        selected_paths.push(strip_root_prefix(&root.root_id, path)?);
+    }
+
+    let root_id = selected_root_id.unwrap_or_else(|| ".".to_string());
+    let resolved = resolve_git_request_root(project_path, Some(&root_id))?;
+    Ok((resolved, selected_paths))
+}
+
+pub fn staged_vcs_root_ids(project_path: &Path) -> Result<Vec<String>, AppError> {
+    Ok(discover_vcs_roots(project_path)?
+        .into_iter()
+        .filter(|root| {
+            root.status
+                .as_ref()
+                .map(|status| status.staged > 0)
+                .unwrap_or(false)
+        })
+        .map(|root| root.root_id)
+        .collect())
+}
+
+fn deepest_matching_root<'a>(roots: &'a [VcsRoot], path: &str) -> Option<&'a VcsRoot> {
+    roots
+        .iter()
+        .filter(|root| path_matches_root(path, &root.root_id))
+        .max_by_key(|root| root.root_id.len())
+}
+
+fn path_matches_root(path: &str, root_id: &str) -> bool {
+    if root_id == "." {
+        return true;
+    }
+    path == root_id || path.starts_with(&format!("{root_id}/"))
+}
+
+fn strip_root_prefix(root_id: &str, path: &str) -> Result<String, AppError> {
+    if root_id == "." {
+        return Ok(path.to_string());
+    }
+    path.strip_prefix(root_id)
+        .and_then(|path| path.strip_prefix('/'))
+        .map(str::to_string)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| AppError::InvalidInput(format!("path targets VCS root, not a file: {path}")))
+}
+
+fn normalize_path_for_explicit_root(root_id: &str, path: &str) -> Result<String, AppError> {
+    if root_id == "." {
+        return Ok(path.to_string());
+    }
+    if path_matches_root(path, root_id) {
+        return strip_root_prefix(root_id, path);
+    }
+    Ok(path.to_string())
 }
 
 fn read_gitlinks(project_path: &Path) -> GitlinkResult {

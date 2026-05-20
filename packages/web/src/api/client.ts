@@ -313,6 +313,31 @@ export interface BranchUpdateResult {
   reason?: string;
 }
 
+export type VcsRootKind = "primary" | "submodule" | "nestedRepo";
+export type VcsRootMappingState =
+  | "mapped"
+  | "unmapped"
+  | "missing"
+  | "uninitialized";
+
+export interface SubmoduleGitlinkInfo {
+  path: string;
+  objectId: string;
+  moduleName?: string;
+  url?: string;
+}
+
+export interface VcsRoot {
+  rootId: string;
+  path: string;
+  absolutePath: string;
+  kind: VcsRootKind;
+  mappingState?: VcsRootMappingState;
+  gitlink?: SubmoduleGitlinkInfo;
+  status?: unknown;
+  warnings: string[];
+}
+
 export type CheckoutStrategy = "normal" | "stash" | "force";
 
 export type ResetMode = "soft" | "mixed" | "hard" | "keep";
@@ -337,7 +362,8 @@ export interface GitActionResult {
     | "detached-head"
     | "pushed-commit"
     | "unreachable-commit"
-    | "root-commit";
+    | "root-commit"
+    | "mixed-vcs-roots";
   recommendation?: string;
 }
 
@@ -362,6 +388,9 @@ export interface DiffFileEntry {
   additions: number;
   deletions: number;
   oldPath?: string;
+  rootId?: string;
+  rootPath?: string;
+  submodule?: SubmoduleGitlinkInfo;
 }
 
 export interface DiffResponse {
@@ -461,10 +490,12 @@ export const api = {
       getTransport().invoke<GitOpResult[]>("git:fetch", projects),
     pull: (projects?: string[]) =>
       getTransport().invoke<GitOpResult[]>("git:pull", projects),
-    push: (project: string) =>
-      getTransport().invoke<GitOpResult>("git:push", project),
+    push: (project: string, root?: string) =>
+      getTransport().invoke<GitOpResult>("git:push", { project, root }),
     worktrees: (project: string) =>
       getTransport().invoke<Worktree[]>("git:worktrees", project),
+    roots: (project: string) =>
+      getTransport().invoke<VcsRoot[]>("git:roots", project),
     addWorktree: (
       project: string,
       options: { path: string; branch: string; createBranch?: boolean },
@@ -472,14 +503,15 @@ export const api = {
       getTransport().invoke<Worktree>("git:addWorktree", { project, options }),
     removeWorktree: (project: string, path: string) =>
       getTransport().invoke<void>("git:removeWorktree", { project, path }),
-    branches: (project: string) =>
-      getTransport().invoke<Branch[]>("git:branches", project),
+    branches: (project: string, root?: string) =>
+      getTransport().invoke<Branch[]>("git:branches", { project, root }),
     createBranch: (
       project: string,
       options: {
         name: string;
         startPoint?: string;
         checkout?: boolean;
+        root?: string;
       },
     ) =>
       getTransport().invoke<GitActionResult>("git:createBranch", {
@@ -493,59 +525,93 @@ export const api = {
         startPoint?: string;
         create?: boolean;
         strategy?: CheckoutStrategy;
+        root?: string;
       },
     ) =>
       getTransport().invoke<GitActionResult>("git:checkoutBranch", {
         project,
         options,
       }),
-    updateBranch: (project: string, branch?: string) =>
+    updateBranch: (project: string, branch?: string, root?: string) =>
       getTransport().invoke<BranchUpdateResult>("git:updateBranch", {
         project,
         branch,
+        root,
       }),
-    log: (project: string, limit?: number, offset?: number, ref?: string) =>
+    log: (
+      project: string,
+      limit?: number,
+      offset?: number,
+      ref?: string,
+      root?: string,
+    ) =>
       getTransport().invoke<GitLogEntry[]>("git:log", {
         project,
         limit,
         offset,
         ref,
+        root,
       }),
-    diff: (project: string) =>
-      getTransport().invoke<DiffResponse>("git:diff", { project }),
-    untrackedFiles: (project: string, offset: number, limit: number) =>
+    diff: (project: string, root?: string) =>
+      getTransport().invoke<DiffResponse>("git:diff", { project, root }),
+    untrackedFiles: (
+      project: string,
+      offset: number,
+      limit: number,
+      root?: string,
+    ) =>
       getTransport().invoke<DiffFileEntry[]>("git:untrackedFiles", {
         project,
         offset,
         limit,
+        root,
       }),
-    fileDiff: (project: string, path: string) =>
-      getTransport().invoke<FileDiffContent>("git:fileDiff", { project, path }),
-    stage: (project: string, paths: string[]) =>
-      getTransport().invoke<{ ok: boolean }>("git:stage", { project, paths }),
-    unstage: (project: string, paths: string[]) =>
-      getTransport().invoke<{ ok: boolean }>("git:unstage", { project, paths }),
-    discard: (project: string, path: string) =>
-      getTransport().invoke<{ ok: boolean }>("git:discard", { project, path }),
-    discardHunk: (project: string, path: string, hunkIndex: number) =>
+    fileDiff: (project: string, path: string, root?: string) =>
+      getTransport().invoke<FileDiffContent>("git:fileDiff", {
+        project,
+        path,
+        root,
+      }),
+    stage: (project: string, paths: string[], root?: string) =>
+      getTransport().invoke<{ ok: boolean }>("git:stage", {
+        project,
+        paths,
+        root,
+      }),
+    unstage: (project: string, paths: string[], root?: string) =>
+      getTransport().invoke<{ ok: boolean }>("git:unstage", {
+        project,
+        paths,
+        root,
+      }),
+    discard: (project: string, path: string, root?: string) =>
+      getTransport().invoke<{ ok: boolean }>("git:discard", {
+        project,
+        path,
+        root,
+      }),
+    discardHunk: (project: string, path: string, hunkIndex: number, root?: string) =>
       getTransport().invoke<{ ok: boolean }>("git:discardHunk", {
         project,
         path,
         hunkIndex,
+        root,
       }),
-    conflicts: (project: string) =>
-      getTransport().invoke<ConflictFile[]>("git:conflicts", { project }),
-    resolve: (project: string, path: string, content: string) =>
+    conflicts: (project: string, root?: string) =>
+      getTransport().invoke<ConflictFile[]>("git:conflicts", { project, root }),
+    resolve: (project: string, path: string, content: string, root?: string) =>
       getTransport().invoke<{ ok: boolean }>("git:resolve", {
         project,
         path,
         content,
+        root,
       }),
-    commit: (project: string, message: string, amend?: boolean) =>
+    commit: (project: string, message: string, amend?: boolean, root?: string) =>
       getTransport().invoke<{ ok: boolean; hash: string }>("git:commit", {
         project,
         message,
         amend,
+        root,
       }),
     cherryPick: (project: string, hash: string) =>
       getTransport().invoke<GitActionResult>("git:cherryPick", {

@@ -10,6 +10,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::git;
+use crate::git::{
+    discover_vcs_roots, resolve_git_path_root, resolve_git_request_root, staged_vcs_root_ids,
+};
 use crate::state::AppState;
 
 use super::error::ApiError;
@@ -21,15 +24,25 @@ use super::error::ApiError;
 pub async fn list_diff(
     State(state): State<AppState>,
     Path(project): Path<String>,
+    Query(q): Query<RootQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = state
         .project_path(&project)
         .await
         .map_err(ApiError::from_app)?;
-    let resp = tokio::task::spawn_blocking(move || git::get_diff_files(&path))
-        .await
-        .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
-        .map_err(ApiError::from_app)?;
+    let resp = tokio::task::spawn_blocking(move || {
+        if q.root.as_deref() == Some("*") {
+            aggregate_diff(&path)
+        } else {
+            let root = resolve_git_request_root(&path, q.root.as_deref())?;
+            let mut resp = git::get_diff_files(&root.root_path)?;
+            annotate_diff_response(&mut resp, &root.root_id, &root.root_path_display);
+            Ok(resp)
+        }
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+    .map_err(ApiError::from_app)?;
     Ok(Json(resp))
 }
 
@@ -42,6 +55,12 @@ pub struct UntrackedQuery {
     #[serde(default)]
     pub offset: usize,
     pub limit: Option<usize>,
+    pub root: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct RootQuery {
+    pub root: Option<String>,
 }
 
 pub async fn list_untracked(
@@ -55,10 +74,16 @@ pub async fn list_untracked(
         .map_err(ApiError::from_app)?;
     let limit = q.limit.unwrap_or(git::UNTRACKED_PAGE_SIZE);
     let offset = q.offset;
-    let resp = tokio::task::spawn_blocking(move || git::get_untracked_page(&path, offset, limit))
-        .await
-        .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
-        .map_err(ApiError::from_app)?;
+    let root = q.root;
+    let resp = tokio::task::spawn_blocking(move || {
+        let root = resolve_git_request_root(&path, root.as_deref())?;
+        let mut resp = git::get_untracked_page(&root.root_path, offset, limit)?;
+        annotate_diff_response(&mut resp, &root.root_id, &root.root_path_display);
+        Ok(resp)
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+    .map_err(ApiError::from_app)?;
     Ok(Json(resp))
 }
 
@@ -69,6 +94,7 @@ pub async fn list_untracked(
 #[derive(Deserialize)]
 pub struct FilePathQuery {
     pub path: String,
+    pub root: Option<String>,
 }
 
 pub async fn get_file_diff(
@@ -81,10 +107,14 @@ pub async fn get_file_diff(
         .await
         .map_err(ApiError::from_app)?;
     let rel = q.path;
-    let content = tokio::task::spawn_blocking(move || git::get_file_diff(&proj_path, &rel))
-        .await
-        .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
-        .map_err(ApiError::from_app)?;
+    let root = q.root;
+    let content = tokio::task::spawn_blocking(move || {
+        let (root, paths) = resolve_git_path_root(&proj_path, root.as_deref(), &[rel])?;
+        git::get_file_diff(&root.root_path, &paths[0])
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+    .map_err(ApiError::from_app)?;
     Ok(Json(content))
 }
 
@@ -95,6 +125,7 @@ pub async fn get_file_diff(
 #[derive(Deserialize)]
 pub struct PathsBody {
     pub paths: Vec<String>,
+    pub root: Option<String>,
 }
 
 pub async fn stage(
@@ -107,9 +138,11 @@ pub async fn stage(
         .await
         .map_err(ApiError::from_app)?;
     let paths = body.paths;
+    let root = body.root;
     tokio::task::spawn_blocking(move || {
+        let (root, paths) = resolve_git_path_root(&proj_path, root.as_deref(), &paths)?;
         let refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
-        git::stage_files(&proj_path, &refs)
+        git::stage_files(&root.root_path, &refs)
     })
     .await
     .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
@@ -131,9 +164,11 @@ pub async fn unstage(
         .await
         .map_err(ApiError::from_app)?;
     let paths = body.paths;
+    let root = body.root;
     tokio::task::spawn_blocking(move || {
+        let (root, paths) = resolve_git_path_root(&proj_path, root.as_deref(), &paths)?;
         let refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
-        git::unstage_files(&proj_path, &refs)
+        git::unstage_files(&root.root_path, &refs)
     })
     .await
     .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
@@ -148,6 +183,7 @@ pub async fn unstage(
 #[derive(Deserialize)]
 pub struct SinglePathBody {
     pub path: String,
+    pub root: Option<String>,
 }
 
 pub async fn discard(
@@ -160,10 +196,14 @@ pub async fn discard(
         .await
         .map_err(ApiError::from_app)?;
     let rel = body.path;
-    tokio::task::spawn_blocking(move || git::discard_file(&proj_path, &rel))
-        .await
-        .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
-        .map_err(ApiError::from_app)?;
+    let root = body.root;
+    tokio::task::spawn_blocking(move || {
+        let (root, paths) = resolve_git_path_root(&proj_path, root.as_deref(), &[rel])?;
+        git::discard_file(&root.root_path, &paths[0])
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+    .map_err(ApiError::from_app)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -176,6 +216,7 @@ pub async fn discard(
 pub struct DiscardHunkBody {
     pub path: String,
     pub hunk_index: usize,
+    pub root: Option<String>,
 }
 
 pub async fn discard_hunk(
@@ -189,10 +230,14 @@ pub async fn discard_hunk(
         .map_err(ApiError::from_app)?;
     let rel = body.path;
     let idx = body.hunk_index;
-    tokio::task::spawn_blocking(move || git::discard_hunk(&proj_path, &rel, idx))
-        .await
-        .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
-        .map_err(ApiError::from_app)?;
+    let root = body.root;
+    tokio::task::spawn_blocking(move || {
+        let (root, paths) = resolve_git_path_root(&proj_path, root.as_deref(), &[rel])?;
+        git::discard_hunk(&root.root_path, &paths[0], idx)
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+    .map_err(ApiError::from_app)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -203,15 +248,19 @@ pub async fn discard_hunk(
 pub async fn list_conflicts(
     State(state): State<AppState>,
     Path(project): Path<String>,
+    Query(q): Query<RootQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = state
         .project_path(&project)
         .await
         .map_err(ApiError::from_app)?;
-    let conflicts = tokio::task::spawn_blocking(move || git::get_conflicts(&path))
-        .await
-        .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
-        .map_err(ApiError::from_app)?;
+    let conflicts = tokio::task::spawn_blocking(move || {
+        let root = resolve_git_request_root(&path, q.root.as_deref())?;
+        git::get_conflicts(&root.root_path)
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+    .map_err(ApiError::from_app)?;
     Ok(Json(conflicts))
 }
 
@@ -223,6 +272,7 @@ pub async fn list_conflicts(
 pub struct ResolveBody {
     pub path: String,
     pub content: String,
+    pub root: Option<String>,
 }
 
 pub async fn resolve(
@@ -236,10 +286,14 @@ pub async fn resolve(
         .map_err(ApiError::from_app)?;
     let rel = body.path;
     let content = body.content;
-    tokio::task::spawn_blocking(move || git::resolve_conflict(&proj_path, &rel, &content))
-        .await
-        .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
-        .map_err(ApiError::from_app)?;
+    let root = body.root;
+    tokio::task::spawn_blocking(move || {
+        let (root, paths) = resolve_git_path_root(&proj_path, root.as_deref(), &[rel])?;
+        git::resolve_conflict(&root.root_path, &paths[0], &content)
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+    .map_err(ApiError::from_app)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -251,6 +305,7 @@ pub async fn resolve(
 pub struct CommitBody {
     pub message: String,
     pub amend: Option<bool>,
+    pub root: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -270,10 +325,17 @@ pub async fn commit(
         .map_err(ApiError::from_app)?;
     let message = body.message;
     let amend = body.amend.unwrap_or(false);
-    let hash = tokio::task::spawn_blocking(move || git::commit_files(&proj_path, &message, amend))
-        .await
-        .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
-        .map_err(ApiError::from_app)?;
+    let root = body.root;
+    let hash = tokio::task::spawn_blocking(move || {
+        if root.as_deref().is_none() {
+            reject_mixed_root_commit(&proj_path)?;
+        }
+        let root = resolve_git_request_root(&proj_path, root.as_deref())?;
+        git::commit_files(&root.root_path, &message, amend)
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+    .map_err(ApiError::from_app)?;
     Ok(Json(CommitResponse { ok: true, hash }))
 }
 
@@ -284,15 +346,24 @@ pub async fn commit(
 pub async fn get_commit_files(
     State(state): State<AppState>,
     Path((project, hash)): Path<(String, String)>,
+    Query(q): Query<RootQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = state
         .project_path(&project)
         .await
         .map_err(ApiError::from_app)?;
-    let resp = tokio::task::spawn_blocking(move || git::get_commit_files(&path, &hash))
-        .await
-        .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
-        .map_err(ApiError::from_app)?;
+    let resp = tokio::task::spawn_blocking(move || {
+        let root = resolve_git_request_root(&path, q.root.as_deref())?;
+        let mut entries = git::get_commit_files(&root.root_path, &hash)?;
+        for entry in &mut entries {
+            entry.root_id = Some(root.root_id.clone());
+            entry.root_path = Some(root.root_path_display.clone());
+        }
+        Ok(entries)
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+    .map_err(ApiError::from_app)?;
     Ok(Json(resp))
 }
 
@@ -310,10 +381,55 @@ pub async fn get_commit_file_diff(
         .await
         .map_err(ApiError::from_app)?;
     let rel = q.path;
-    let content =
-        tokio::task::spawn_blocking(move || git::get_commit_file_diff(&proj_path, &rel, &hash))
-            .await
-            .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
-            .map_err(ApiError::from_app)?;
+    let root = q.root;
+    let content = tokio::task::spawn_blocking(move || {
+        let (root, paths) = resolve_git_path_root(&proj_path, root.as_deref(), &[rel])?;
+        git::get_commit_file_diff(&root.root_path, &paths[0], &hash)
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+    .map_err(ApiError::from_app)?;
     Ok(Json(content))
+}
+
+fn aggregate_diff(
+    project_path: &std::path::Path,
+) -> Result<git::DiffResponse, crate::error::AppError> {
+    let roots = discover_vcs_roots(project_path)?;
+    let mut aggregate = git::DiffResponse {
+        entries: Vec::new(),
+        untracked_truncated: false,
+        untracked_total: 0,
+    };
+
+    for root in roots {
+        let Ok(resolved) = resolve_git_request_root(project_path, Some(&root.root_id)) else {
+            continue;
+        };
+        let mut resp = git::get_diff_files(&resolved.root_path)?;
+        annotate_diff_response(&mut resp, &resolved.root_id, &resolved.root_path_display);
+        aggregate.untracked_truncated |= resp.untracked_truncated;
+        aggregate.untracked_total += resp.untracked_total;
+        aggregate.entries.extend(resp.entries);
+    }
+
+    Ok(aggregate)
+}
+
+fn annotate_diff_response(resp: &mut git::DiffResponse, root_id: &str, root_path: &str) {
+    for entry in &mut resp.entries {
+        entry.root_id = Some(root_id.to_string());
+        entry.root_path = Some(root_path.to_string());
+    }
+}
+
+fn reject_mixed_root_commit(project_path: &std::path::Path) -> Result<(), crate::error::AppError> {
+    let staged_roots = staged_vcs_root_ids(project_path)?;
+    if staged_roots.len() > 1 {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "mixed VCS root commit blocked; select one root before committing: {}",
+            staged_roots.join(", ")
+        )));
+    }
+    Ok(())
 }

@@ -10,9 +10,11 @@
 
 Date: 2026-05-20
 Priority: P1
-Implementation status: Pending
+Implementation status: Complete
 Review status: Pending
 Goal: make existing Git APIs operate against a selected VCS root without breaking callers that omit root.
+
+Completion timestamp: 2026-05-20 11:50 Asia/Saigon
 
 ## Key Insights
 
@@ -95,3 +97,9 @@ Backend behavior:
 ## Next Steps
 
 Expose root selection and grouped status in the frontend in Phase 03.
+
+## Completion Notes
+
+- Root-aware Git APIs now resolve selected VCS roots before read and mutation ops.
+- Parent gitlink and child repo state stay isolated in backend handling.
+- Phase 03 can consume the new root-aware response shapes directly.

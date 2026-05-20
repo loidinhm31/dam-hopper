@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::IntoResponse,
     Json,
 };
@@ -11,8 +11,9 @@ use crate::git::progress::create_progress_channel;
 use crate::git::{
     add_worktree, checkout_branch, cherry_pick, cherry_pick_commit_files, create_branch,
     discover_vcs_roots, drop_commit, drop_commit_files, get_log, list_branches, list_worktrees,
-    remove_worktree, reset_to_commit, revert_commit, revert_commit_files, undo_last_commit,
-    update_branch, BulkGitService, CheckoutStrategy, ResetMode, WorktreeAddOptions,
+    remove_worktree, reset_to_commit, resolve_git_request_root, revert_commit, revert_commit_files,
+    undo_last_commit, update_branch, BulkGitService, CheckoutStrategy, ResetMode,
+    WorktreeAddOptions,
 };
 use crate::pty::EventSink as _;
 use crate::state::AppState;
@@ -85,13 +86,16 @@ pub async fn pull_projects(
 #[derive(Deserialize)]
 pub struct PushBody {
     pub project: String,
+    pub root: Option<String>,
 }
 
 pub async fn push_project(
     State(state): State<AppState>,
     Json(body): Json<PushBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let path = resolve_project_path(&state, &body.project).await?;
+    let project_path = resolve_project_path(&state, &body.project).await?;
+    let root = resolve_git_request_root(&project_path, body.root.as_deref())
+        .map_err(ApiError::from_app)?;
     let progress = Some(create_progress_channel());
 
     if let Some(ref tx) = progress {
@@ -105,7 +109,7 @@ pub async fn push_project(
         });
     }
 
-    let result = crate::git::cli_fallback::push(&path, &body.project, &progress).await;
+    let result = crate::git::cli_fallback::push(&root.root_path, &body.project, &progress).await;
     Ok(Json(result))
 }
 
@@ -194,10 +198,18 @@ pub async fn remove_worktree_route(
 pub async fn get_branches(
     State(state): State<AppState>,
     Path(project): Path<String>,
+    Query(query): Query<RootQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
-    let branches = list_branches(&path).map_err(ApiError::from_app)?;
+    let root =
+        resolve_git_request_root(&path, query.root.as_deref()).map_err(ApiError::from_app)?;
+    let branches = list_branches(&root.root_path).map_err(ApiError::from_app)?;
     Ok(Json(branches))
+}
+
+#[derive(Deserialize)]
+pub struct RootQuery {
+    pub root: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -206,6 +218,7 @@ pub struct CreateBranchBody {
     pub name: String,
     pub start_point: Option<String>,
     pub checkout: Option<bool>,
+    pub root: Option<String>,
 }
 
 pub async fn create_branch_route(
@@ -214,8 +227,9 @@ pub async fn create_branch_route(
     Json(body): Json<CreateBranchBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
+    let root = resolve_git_request_root(&path, body.root.as_deref()).map_err(ApiError::from_app)?;
     let result = create_branch(
-        &path,
+        &root.root_path,
         &body.name,
         body.start_point.as_deref(),
         body.checkout.unwrap_or(false),
@@ -232,6 +246,7 @@ pub struct CheckoutBranchBody {
     pub start_point: Option<String>,
     pub create: Option<bool>,
     pub strategy: Option<CheckoutStrategy>,
+    pub root: Option<String>,
 }
 
 pub async fn checkout_branch_route(
@@ -240,8 +255,9 @@ pub async fn checkout_branch_route(
     Json(body): Json<CheckoutBranchBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
+    let root = resolve_git_request_root(&path, body.root.as_deref()).map_err(ApiError::from_app)?;
     let result = checkout_branch(
-        &path,
+        &root.root_path,
         &body.branch,
         body.start_point.as_deref(),
         body.create.unwrap_or(false),
@@ -261,6 +277,7 @@ pub struct GetLogQuery {
     pub limit: Option<usize>,
     pub offset: Option<usize>,
     pub r#ref: Option<String>,
+    pub root: Option<String>,
 }
 
 pub async fn get_log_route(
@@ -269,15 +286,19 @@ pub async fn get_log_route(
     axum::extract::Query(query): axum::extract::Query<GetLogQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
+    let root =
+        resolve_git_request_root(&path, query.root.as_deref()).map_err(ApiError::from_app)?;
     let limit = query.limit.unwrap_or(100);
     let offset = query.offset.unwrap_or(0);
-    let log = get_log(&path, limit, offset, query.r#ref.as_deref()).map_err(ApiError::from_app)?;
+    let log = get_log(&root.root_path, limit, offset, query.r#ref.as_deref())
+        .map_err(ApiError::from_app)?;
     Ok(Json(log))
 }
 
 #[derive(Deserialize)]
 pub struct CherryPickBody {
     pub hash: String,
+    pub root: Option<String>,
 }
 
 pub async fn cherry_pick_route(
@@ -286,7 +307,8 @@ pub async fn cherry_pick_route(
     Json(body): Json<CherryPickBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
-    let result = cherry_pick(&path, &body.hash)
+    let root = resolve_git_request_root(&path, body.root.as_deref()).map_err(ApiError::from_app)?;
+    let result = cherry_pick(&root.root_path, &body.hash)
         .await
         .map_err(ApiError::from_app)?;
     Ok(Json(result))
@@ -296,6 +318,7 @@ pub async fn cherry_pick_route(
 pub struct ResetBody {
     pub hash: String,
     pub mode: ResetMode,
+    pub root: Option<String>,
 }
 
 pub async fn reset_route(
@@ -304,7 +327,8 @@ pub async fn reset_route(
     Json(body): Json<ResetBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
-    let result = reset_to_commit(&path, &body.hash, body.mode)
+    let root = resolve_git_request_root(&path, body.root.as_deref()).map_err(ApiError::from_app)?;
+    let result = reset_to_commit(&root.root_path, &body.hash, body.mode)
         .await
         .map_err(ApiError::from_app)?;
     Ok(Json(result))
@@ -313,15 +337,21 @@ pub async fn reset_route(
 pub async fn undo_last_commit_route(
     State(state): State<AppState>,
     Path(project): Path<String>,
+    Query(query): Query<RootQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
-    let result = undo_last_commit(&path).await.map_err(ApiError::from_app)?;
+    let root =
+        resolve_git_request_root(&path, query.root.as_deref()).map_err(ApiError::from_app)?;
+    let result = undo_last_commit(&root.root_path)
+        .await
+        .map_err(ApiError::from_app)?;
     Ok(Json(result))
 }
 
 #[derive(Deserialize)]
 pub struct CommitFileOperationBody {
     pub paths: Vec<String>,
+    pub root: Option<String>,
 }
 
 pub async fn cherry_pick_commit_files_route(
@@ -330,7 +360,8 @@ pub async fn cherry_pick_commit_files_route(
     Json(body): Json<CommitFileOperationBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
-    let result = cherry_pick_commit_files(&path, &hash, &body.paths)
+    let root = resolve_git_request_root(&path, body.root.as_deref()).map_err(ApiError::from_app)?;
+    let result = cherry_pick_commit_files(&root.root_path, &hash, &body.paths)
         .await
         .map_err(ApiError::from_app)?;
     Ok(Json(result))
@@ -342,7 +373,8 @@ pub async fn drop_commit_files_route(
     Json(body): Json<CommitFileOperationBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
-    let result = drop_commit_files(&path, &hash, &body.paths)
+    let root = resolve_git_request_root(&path, body.root.as_deref()).map_err(ApiError::from_app)?;
+    let result = drop_commit_files(&root.root_path, &hash, &body.paths)
         .await
         .map_err(ApiError::from_app)?;
     Ok(Json(result))
@@ -351,9 +383,12 @@ pub async fn drop_commit_files_route(
 pub async fn drop_commit_route(
     State(state): State<AppState>,
     Path((project, hash)): Path<(String, String)>,
+    Query(query): Query<RootQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
-    let result = drop_commit(&path, &hash)
+    let root =
+        resolve_git_request_root(&path, query.root.as_deref()).map_err(ApiError::from_app)?;
+    let result = drop_commit(&root.root_path, &hash)
         .await
         .map_err(ApiError::from_app)?;
     Ok(Json(result))
@@ -362,9 +397,12 @@ pub async fn drop_commit_route(
 pub async fn revert_commit_route(
     State(state): State<AppState>,
     Path((project, hash)): Path<(String, String)>,
+    Query(query): Query<RootQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
-    let result = revert_commit(&path, &hash)
+    let root =
+        resolve_git_request_root(&path, query.root.as_deref()).map_err(ApiError::from_app)?;
+    let result = revert_commit(&root.root_path, &hash)
         .await
         .map_err(ApiError::from_app)?;
     Ok(Json(result))
@@ -376,7 +414,8 @@ pub async fn revert_commit_files_route(
     Json(body): Json<CommitFileOperationBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
-    let result = revert_commit_files(&path, &hash, &body.paths)
+    let root = resolve_git_request_root(&path, body.root.as_deref()).map_err(ApiError::from_app)?;
+    let result = revert_commit_files(&root.root_path, &hash, &body.paths)
         .await
         .map_err(ApiError::from_app)?;
     Ok(Json(result))
@@ -389,6 +428,7 @@ pub async fn revert_commit_files_route(
 #[derive(Deserialize)]
 pub struct UpdateBranchBody {
     pub branch: Option<String>,
+    pub root: Option<String>,
 }
 
 pub async fn update_branch_route(
@@ -397,8 +437,9 @@ pub async fn update_branch_route(
     Json(body): Json<UpdateBranchBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
+    let root = resolve_git_request_root(&path, body.root.as_deref()).map_err(ApiError::from_app)?;
     let branch = body.branch.as_deref().unwrap_or("main");
-    let result = update_branch(&path, branch, "origin").map_err(ApiError::from_app)?;
+    let result = update_branch(&root.root_path, branch, "origin").map_err(ApiError::from_app)?;
     Ok(Json(result))
 }
 
