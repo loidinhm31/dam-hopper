@@ -16,7 +16,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { OverviewCard } from "@/components/molecules/OverviewCard.js";
 import { useProjects, useTerminalSessions } from "@/api/queries.js";
-import { useIpcEvent } from "@/hooks/useSSEEvents.js";
+import { useIpcEvent } from "@/hooks/use-sse-events.js";
 import { useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import type { SessionInfo } from "@/api/client.js";

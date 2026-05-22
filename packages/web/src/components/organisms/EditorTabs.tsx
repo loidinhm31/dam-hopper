@@ -19,13 +19,13 @@ import { ConflictDialog } from "@/components/organisms/ConflictDialog.js";
 import { EditorStatusBar } from "@/components/organisms/EditorStatusBar.js";
 import { mimeToLanguage } from "@/lib/mime-to-language.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
-import { useEncryptedWrite } from "@/hooks/useEncryptedWrite.js";
+import { useEncryptedWrite } from "@/hooks/use-encrypted-write.js";
 import { LockToggle } from "@/components/atoms/LockToggle.js";
 import {
   clampEditorTabContextMenuPosition,
   EditorTabContextMenu,
   getEditorTabContextMenuItems,
-} from "@/components/organisms/editor-tab-context-menu.js";
+} from "@/components/organisms/EditorTabContextMenu.js";
 
 const MonacoHost = lazy(() =>
   import("@/components/organisms/MonacoHost.js").then((m) => ({

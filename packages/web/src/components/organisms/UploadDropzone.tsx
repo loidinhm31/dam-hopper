@@ -1,7 +1,7 @@
 import { useState, useCallback, type DragEvent, type ReactNode } from "react";
 import { Upload } from "lucide-react";
 import { cn } from "@/lib/utils.js";
-import type { UploadProgress } from "@/hooks/useFsUpload.js";
+import type { UploadProgress } from "@/hooks/use-fs-upload.js";
 
 interface Props {
   children: ReactNode;

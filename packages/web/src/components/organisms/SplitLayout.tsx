@@ -12,7 +12,7 @@ import {
 import type { Layout } from "react-resizable-panels";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import type { DockTarget, LayoutNode } from "@/types/terminal-layout.js";
-import type { UseTerminalLayoutResult } from "@/hooks/useTerminalLayout.js";
+import type { UseTerminalLayoutResult } from "@/hooks/use-terminal-layout.js";
 import { PaneContainer } from "@/components/organisms/PaneContainer.js";
 import type { DragItem } from "@/components/organisms/TabBar.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";

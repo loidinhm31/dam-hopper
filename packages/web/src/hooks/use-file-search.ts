@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getTransport } from "@/api/transport.js";
 import type { PathSearchResponse, SearchResponse } from "@/api/fs-types.js";
-import type { SearchMode, SearchScope } from "@/stores/searchUi.js";
+import type { SearchMode, SearchScope } from "@/stores/search-ui.js";
 
 const DEBOUNCE_MS = 350;
 const MAX_QUERY_LEN = 200;

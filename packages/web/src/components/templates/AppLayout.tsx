@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { TopNav } from "@/components/organisms/TopNav.js";
-import { useSidebarCollapse } from "@/hooks/useSidebarCollapse.js";
+import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse.js";
 
 interface Props {
   children: ReactNode;

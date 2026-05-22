@@ -125,7 +125,7 @@ The `IdeShell` orchestrates the system:
 
 ### Resize Handle Hook
 
-**Location:** `packages/web/src/hooks/useResizeHandle.ts`
+**Location:** `packages/web/src/hooks/use-resize-handle.ts`
 
 **Purpose:** Shared resize state helper for workspace shell rails and split panes.
 

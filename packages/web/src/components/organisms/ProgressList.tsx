@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
-import { useIpcEvent } from "@/hooks/useSSEEvents.js";
+import { useIpcEvent } from "@/hooks/use-sse-events.js";
 import { cn } from "@/lib/utils.js";
 
 interface ProgressEntry {

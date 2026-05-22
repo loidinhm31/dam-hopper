@@ -4,7 +4,7 @@
 
 import { getTransport, reconfigureTransport } from "./transport.js";
 import { WsTransport } from "./ws-transport.js";
-import { resetTransportListeners } from "@/hooks/useSSE.js";
+import { resetTransportListeners } from "@/hooks/use-sse.js";
 
 /**
  * Reinitialize the transport with a new server URL.

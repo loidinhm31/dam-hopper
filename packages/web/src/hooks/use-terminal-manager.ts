@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   useTerminalTree,
   FREE_TERMINAL_PREFIX,
-} from "@/hooks/useTerminalTree.js";
+} from "@/hooks/use-terminal-tree.js";
 import { useTerminalSessions, useProjects } from "@/api/queries.js";
 import { api } from "@/api/client.js";
 import { generateUUID, sanitizeSessionSegment } from "@/lib/utils.js";
@@ -16,7 +16,7 @@ import {
 } from "@/lib/terminal-auto-attach.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
-import type { TreeCommand, TreeProject } from "@/hooks/useTerminalTree.js";
+import type { TreeCommand, TreeProject } from "@/hooks/use-terminal-tree.js";
 import type { SessionInfo } from "@/api/client.js";
 import type { SetURLSearchParams } from "react-router-dom";
 

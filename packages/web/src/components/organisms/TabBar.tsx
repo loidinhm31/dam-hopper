@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
-import { TerminalTabInsertionZone } from "@/components/organisms/terminal-tab-insertion-zone.js";
+import { TerminalTabInsertionZone } from "@/components/organisms/TerminalTabInsertionZone.js";
 
 export function splitActionToPaneDirection(action: "right" | "down") {
   return action === "right" ? "horizontal" : "vertical";

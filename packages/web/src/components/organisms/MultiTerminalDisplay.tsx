@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { Terminal as TerminalIcon } from "lucide-react";
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
 import { SplitLayout } from "@/components/organisms/SplitLayout.js";
-import { useTerminalLayout } from "@/hooks/useTerminalLayout.js";
+import { useTerminalLayout } from "@/hooks/use-terminal-layout.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 

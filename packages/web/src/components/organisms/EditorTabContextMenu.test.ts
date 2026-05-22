@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   clampEditorTabContextMenuPosition,
   getEditorTabContextMenuItems,
-} from "./editor-tab-context-menu.js";
+} from "./EditorTabContextMenu.js";
 
 describe("editor tab context menu helpers", () => {
   it("clamps the menu inside the viewport", () => {

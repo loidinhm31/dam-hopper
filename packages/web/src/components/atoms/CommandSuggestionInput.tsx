@@ -1,7 +1,7 @@
 import { Fragment, useRef, useState, useEffect } from "react";
 import { Search } from "lucide-react";
 import { cn } from "@/lib/utils.js";
-import { useCommandSearch } from "@/hooks/useCommandSearch.js";
+import { useCommandSearch } from "@/hooks/use-command-search.js";
 import type { CommandDefinition, CombinedSearchResult } from "@/api/client.js";
 import type { ProjectType } from "@/api/client.js";
 

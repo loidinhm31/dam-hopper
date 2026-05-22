@@ -26,8 +26,8 @@ import {
   usePorts,
   type PortEntry,
   type InstallState,
-} from "@/hooks/usePorts.js";
-import { useCopyToClipboard } from "@/hooks/useClipboard.js";
+} from "@/hooks/use-ports.js";
+import { useCopyToClipboard } from "@/hooks/use-clipboard.js";
 import { isLocalServer } from "@/api/server-config.js";
 
 // ── Warning banner ────────────────────────────────────────────────────────────

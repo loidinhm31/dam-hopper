@@ -615,12 +615,13 @@ pnpm format      # Prettier
 | Location                       | Convention     | Example                                              |
 | ------------------------------ | -------------- | ---------------------------------------------------- |
 | React component files (`.tsx`) | **PascalCase** | `FileTree.tsx`, `SearchPanel.tsx`                    |
-| Hook files (`hooks/`)          | **camelCase**  | `useFileSearch.ts`, `useFsOps.ts`                    |
+| Hook files (`hooks/`)          | **kebab-case** | `use-file-search.ts`, `use-fs-ops.ts`                |
+| Store files (`stores/`)        | **kebab-case** | `search-ui.ts`, `workspace.ts`                       |
 | Non-component TS files         | **kebab-case** | `ws-transport.ts`, `fs-types.ts`, `server-config.ts` |
 | Rust source files              | **snake_case** | `fs_subsystem.rs`, `sandbox.rs`                      |
 | Docs / command `.md` files     | **kebab-case** | `code-standards.md`, `api-reference.md`              |
 
-> **Rule of thumb:** if the file exports a JSX component → PascalCase; if it exports a React hook → camelCase; everything else → kebab-case.
+> **Rule of thumb:** component-style modules (`components/`, `contexts/`, `App.tsx`) use PascalCase; hooks, stores, and every other support module use kebab-case. Hook export names stay camelCase even when the filename is kebab-case.
 
 ### Component Structure
 
@@ -639,9 +640,9 @@ src/
 │   ├── pages/             # Full-screen route pages
 │   ├── templates/         # Page-level layout shells (IdeShell, AppLayout)
 │   └── ui/                # Low-level headless UI primitives (Select)
-├── hooks/                 # Custom React hooks (camelCase filenames)
+├── hooks/                 # Custom React hooks (kebab-case filenames)
 ├── lib/                   # Pure utilities, no React
-├── stores/                # Zustand stores
+├── stores/                # Zustand stores (kebab-case filenames)
 └── types/                 # Shared TypeScript type declarations
 ```
 
@@ -780,7 +781,7 @@ On-disk uses snake_case; serde `#[serde(rename = "...")]` handles mapping.
 - Handle loading/error states in components
 - One component per file (unless very small atoms)
 - CSS class names via Tailwind utilities
-- **File naming**: component files → PascalCase; hook files → camelCase; all other `.ts` files → kebab-case
+- **File naming**: component files → PascalCase; hook, store, and other support files → kebab-case
 
 ### Commit Messages
 

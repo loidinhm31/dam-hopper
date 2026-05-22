@@ -12,7 +12,7 @@ import {
   matchesNewTerminalShortcut,
 } from "@/lib/shortcuts.js";
 import { useSettingsStore } from "@/stores/settings.js";
-import { useTerminalSuggestions } from "@/hooks/useTerminalSuggestions.js";
+import { useTerminalSuggestions } from "@/hooks/use-terminal-suggestions.js";
 import { TerminalSuggestionOverlay } from "@/components/atoms/TerminalSuggestionOverlay.js";
 
 interface TerminalPanelProps {
