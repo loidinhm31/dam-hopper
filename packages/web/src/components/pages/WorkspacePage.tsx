@@ -32,13 +32,13 @@ import {
 } from "@/components/ui/Select.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useEditorStore } from "@/stores/editor.js";
-import { useSearchUiStore } from "@/stores/searchUi.js";
+import { useSearchUiStore } from "@/stores/search-ui.js";
 import { useSettingsStore } from "@/stores/settings.js";
-import { useTerminalManager } from "@/hooks/useTerminalManager.js";
+import { useTerminalManager } from "@/hooks/use-terminal-manager.js";
 import {
   addKeyboardShortcutListener,
   useDocumentKeyboardShortcut,
-} from "@/hooks/useShortcuts.js";
+} from "@/hooks/use-shortcuts.js";
 import { api } from "@/api/client.js";
 import {
   loadWorkspaceMode,

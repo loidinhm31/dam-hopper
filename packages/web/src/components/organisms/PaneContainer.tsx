@@ -12,11 +12,11 @@ import {
   subscribeToRegistry,
 } from "@/lib/terminal-registry.js";
 import type { PaneNode } from "@/types/terminal-layout.js";
-import type { UseTerminalLayoutResult } from "@/hooks/useTerminalLayout.js";
+import type { UseTerminalLayoutResult } from "@/hooks/use-terminal-layout.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import { TabBar } from "@/components/organisms/TabBar.js";
-import { TerminalDockPreview } from "@/components/organisms/terminal-dock-preview.js";
+import { TerminalDockPreview } from "@/components/organisms/TerminalDockPreview.js";
 
 interface PaneContainerProps {
   node: PaneNode;

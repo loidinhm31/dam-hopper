@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { useSearchUiStore } from "./searchUi.js";
+import { useSearchUiStore } from "./search-ui.js";
 
 function resetSearchUiStore() {
   useSearchUiStore.setState({
@@ -14,7 +14,7 @@ function resetSearchUiStore() {
   });
 }
 
-describe("searchUi store", () => {
+describe("search-ui store", () => {
   afterEach(resetSearchUiStore);
 
   it("keeps app-session queries separately by search mode", () => {

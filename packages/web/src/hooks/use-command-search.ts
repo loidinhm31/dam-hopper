@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import type { CombinedSearchResult } from "@/api/client.js";
 import { api } from "@/api/client.js";
-import { useCommandHistory } from "@/hooks/useCommandHistory.js";
+import { useCommandHistory } from "@/hooks/use-command-history.js";
 
 const PROJECT_BOOST = 1.5;
 

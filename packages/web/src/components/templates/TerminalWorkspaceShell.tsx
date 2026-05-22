@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { TopNav } from "@/components/organisms/TopNav.js";
-import { useResizeHandle } from "@/hooks/useResizeHandle.js";
-import { useSidebarCollapse } from "@/hooks/useSidebarCollapse.js";
+import { useResizeHandle } from "@/hooks/use-resize-handle.js";
+import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse.js";
 import { cn } from "@/lib/utils.js";
 import type { WorkspaceMode } from "@/lib/workspace-mode.js";
 

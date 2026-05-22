@@ -16,7 +16,7 @@ import {
 import { inputClass } from "@/components/atoms/Button.js";
 import { CommandSuggestionInput } from "@/components/atoms/CommandSuggestionInput.js";
 import { cn } from "@/lib/utils.js";
-import type { TreeProject, TreeCommand } from "@/hooks/useTerminalTree.js";
+import type { TreeProject, TreeCommand } from "@/hooks/use-terminal-tree.js";
 import type { SessionInfo, ProjectType } from "@/api/client.js";
 import { getSessionStatus, getStatusDotColor } from "@/lib/session-status.js";
 import { withUiConfigDefaults } from "@/lib/ui-config.js";

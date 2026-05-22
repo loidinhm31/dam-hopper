@@ -29,7 +29,7 @@ vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({ data: [{ name: "demo-project" }] }),
 }));
 
-vi.mock("@/hooks/useSSE.js", () => ({
+vi.mock("@/hooks/use-sse.js", () => ({
   useIpc: () => ({ status: "connected" }),
 }));
 

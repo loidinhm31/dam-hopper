@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { subscribeIpc, type IpcEvent } from "./useSSE.js";
+import { subscribeIpc, type IpcEvent } from "./use-sse.js";
 
 export function useIpcEvent(type: string, handler: (event: IpcEvent) => void) {
   const handlerRef = useRef(handler);

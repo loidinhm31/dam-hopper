@@ -75,7 +75,7 @@ export function getTransport(): Transport {
 /**
  * Replace the active transport with a new instance.
  * Caller is responsible for destroying the old transport to avoid WS leaks.
- * Use with resetTransportListeners() from useSSE.ts to re-register push event handlers.
+ * Use with resetTransportListeners() from use-sse.ts to re-register push event handlers.
  */
 export function reconfigureTransport(transport: Transport): void {
   _transport = transport;

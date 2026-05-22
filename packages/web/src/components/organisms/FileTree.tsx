@@ -30,9 +30,9 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { FileDecorationIcon } from "@/lib/file-decoration-icon.js";
-import { useFsSubscription } from "@/hooks/useFsSubscription.js";
-import { useFsOps } from "@/hooks/useFsOps.js";
-import { useFsUpload } from "@/hooks/useFsUpload.js";
+import { useFsSubscription } from "@/hooks/use-fs-subscription.js";
+import { useFsOps } from "@/hooks/use-fs-ops.js";
+import { useFsUpload } from "@/hooks/use-fs-upload.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 import { TreeContextMenu } from "./TreeContextMenu.js";
 import { UploadDropzone } from "./UploadDropzone.js";

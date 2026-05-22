@@ -20,7 +20,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
-import { useEncryptedWrite } from "@/hooks/useEncryptedWrite.js";
+import { useEncryptedWrite } from "@/hooks/use-encrypted-write.js";
 
 interface EncryptedUploadDialogProps {
   project: string;

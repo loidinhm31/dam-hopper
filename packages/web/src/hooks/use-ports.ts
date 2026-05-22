@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getTransport } from "../api/transport.js";
-import { subscribeIpc, hasWsStatus } from "./useSSE.js";
+import { subscribeIpc, hasWsStatus } from "./use-sse.js";
 import type { TunnelInfo, DetectedPort } from "../api/client.js";
 
 export interface InstallState {

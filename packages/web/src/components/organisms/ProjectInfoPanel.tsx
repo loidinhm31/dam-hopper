@@ -10,7 +10,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { useGitWithSshRetry } from "@/hooks/useGitWithSshRetry.js";
+import { useGitWithSshRetry } from "@/hooks/use-git-with-ssh-retry.js";
 import { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";
 import { cn } from "@/lib/utils.js";
 import { CollapsibleSection } from "@/components/atoms/CollapsibleSection.js";
@@ -25,7 +25,7 @@ import {
   useAddWorktree,
   useRemoveWorktree,
 } from "@/api/queries.js";
-import type { TreeCommand } from "@/hooks/useTerminalTree.js";
+import type { TreeCommand } from "@/hooks/use-terminal-tree.js";
 
 interface Props {
   projectName: string;

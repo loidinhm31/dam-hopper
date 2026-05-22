@@ -13,7 +13,7 @@ import {
 } from "@/api/queries.js";
 import type { GitOpResult, GitLogEntry, DiffFileEntry } from "@/api/client.js";
 import { Badge } from "@/components/atoms/Badge.js";
-import { useGitWithSshRetry } from "@/hooks/useGitWithSshRetry.js";
+import { useGitWithSshRetry } from "@/hooks/use-git-with-ssh-retry.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { cn } from "@/lib/utils.js";
 import {

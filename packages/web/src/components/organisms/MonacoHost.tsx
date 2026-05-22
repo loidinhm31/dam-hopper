@@ -13,12 +13,12 @@ import type * as monacoNs from "monaco-editor";
 import { useCallback, useEffect, useRef } from "react";
 import type { FileTier } from "@/lib/file-tier.js";
 import { useSettingsStore, clampFont } from "@/stores/settings.js";
-import { useSearchUiStore } from "@/stores/searchUi.js";
+import { useSearchUiStore } from "@/stores/search-ui.js";
 import { mimeToMonacoLanguage } from "@/lib/mime-to-language.js";
 import {
   addKeyboardShortcutListener,
   addWheelShortcutListener,
-} from "@/hooks/useShortcuts.js";
+} from "@/hooks/use-shortcuts.js";
 import { EDITOR_ZOOM_WHEEL_SHORTCUT } from "@/lib/shortcuts.js";
 
 interface MonacoHostProps {

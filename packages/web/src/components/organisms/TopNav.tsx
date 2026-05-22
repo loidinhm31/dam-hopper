@@ -4,7 +4,7 @@ import { Menu, X, ServerCog } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { ConnectionDot } from "@/components/atoms/ConnectionDot.js";
 import { Logo } from "@/components/atoms/Logo.js";
-import { useIpc } from "@/hooks/useSSE.js";
+import { useIpc } from "@/hooks/use-sse.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 import { ProjectSwitcher } from "@/components/organisms/ProjectSwitcher.js";
 import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";

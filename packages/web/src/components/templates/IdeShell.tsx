@@ -1,8 +1,8 @@
 import { useRef, useState, type ReactNode, useMemo, useEffect } from "react";
 import { TopNav } from "@/components/organisms/TopNav.js";
-import { useSidebarCollapse } from "@/hooks/useSidebarCollapse.js";
-import { useResizeHandle } from "@/hooks/useResizeHandle.js";
-import { useVerticalResizeHandle } from "@/hooks/useVerticalResizeHandle.js";
+import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse.js";
+import { useResizeHandle } from "@/hooks/use-resize-handle.js";
+import { useVerticalResizeHandle } from "@/hooks/use-vertical-resize-handle.js";
 import { cn } from "@/lib/utils.js";
 import type { ToolWindowDef } from "@/types/ide.js";
 import { ActivityBar } from "@/components/organisms/ActivityBar.js";
