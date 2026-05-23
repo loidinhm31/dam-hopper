@@ -1,14 +1,18 @@
 import { lazy, Suspense, useState } from "react";
-import { GitCommit, GitBranch, History } from "lucide-react";
+import { GitCommit, GitBranch, History, Upload } from "lucide-react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
-import { Button } from "@/components/atoms/Button.js";
+import { Button, inputClass } from "@/components/atoms/Button.js";
+import { SshRetryStatusMessage } from "@/components/atoms/SshRetryStatusMessage.js";
 import { ProgressList } from "@/components/organisms/ProgressList.js";
 import { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";
+import { GitForcePushDialog } from "@/components/organisms/GitForcePushDialog.js";
 import {
   useProjects,
   useGitFetch,
   useGitPull,
+  useGitPush,
   useGitLog,
+  useGitRoots,
   useProjectStatus,
 } from "@/api/queries.js";
 import type { GitOpResult, GitLogEntry, DiffFileEntry } from "@/api/client.js";
@@ -16,6 +20,13 @@ import { Badge } from "@/components/atoms/Badge.js";
 import { useGitWithSshRetry } from "@/hooks/use-git-with-ssh-retry.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { cn } from "@/lib/utils.js";
+import {
+  buildProjectInfoPushTarget,
+  buildProjectInfoPushTargetWithMode,
+  describeProjectInfoRoot,
+  formatProjectInfoRootLabel,
+  projectInfoRootOptions,
+} from "@/components/organisms/ProjectInfoPanel.js";
 import {
   GitDropCommitDialog,
   GitHistoryStatusBanner,
@@ -82,6 +93,226 @@ function ResultsSummary({ results }: SectionResults) {
   );
 }
 
+function BulkGitOperations({
+  selectedList,
+  projectNames,
+  selectedProjectName,
+  setFetchResults,
+  setPullResults,
+  setPushResults,
+}: {
+  selectedList: string[] | undefined;
+  projectNames: string[];
+  selectedProjectName: string | null;
+  setFetchResults: (results: GitOpResult[] | null) => void;
+  setPullResults: (results: GitOpResult[] | null) => void;
+  setPushResults: (results: GitOpResult[] | null) => void;
+}) {
+  const gitFetch = useGitFetch();
+  const gitPull = useGitPull();
+  const gitPush = useGitPush();
+  const { data: roots = [] } = useGitRoots(selectedProjectName ?? "");
+  const rootOptions = projectInfoRootOptions(roots);
+  const [selectedRootId, setSelectedRootId] = useState(".");
+  const [forcePushOpen, setForcePushOpen] = useState(false);
+  const resolvedRootId = rootOptions.some(
+    (root) => root.rootId === selectedRootId,
+  )
+    ? selectedRootId
+    : (rootOptions[0]?.rootId ?? ".");
+  const selectedRoot =
+    rootOptions.find((root) => root.rootId === resolvedRootId) ?? rootOptions[0];
+  const selectedRootLabel = selectedRoot
+    ? formatProjectInfoRootLabel(selectedRoot)
+    : "Project root";
+  const { passphraseDialogProps, statusMessage, executeWithRetry } =
+    useGitWithSshRetry();
+  const pushDisabledReason = selectedProjectName
+    ? null
+    : "Select exactly one project to push. Bulk push is deferred in this phase.";
+
+  return (
+    <>
+      <PassphraseDialog {...passphraseDialogProps} />
+      <GitForcePushDialog
+        open={forcePushOpen}
+        project={selectedProjectName ?? ""}
+        rootLabel={selectedRootLabel}
+        loading={gitPush.isPending}
+        onClose={() => setForcePushOpen(false)}
+        onConfirm={() => {
+          if (!selectedProjectName) return;
+          setForcePushOpen(false);
+          setPushResults(null);
+          void executeWithRetry(
+            { operation: "push" },
+            () =>
+              gitPush.mutateAsync(
+                buildProjectInfoPushTargetWithMode(
+                  selectedProjectName,
+                  resolvedRootId,
+                  true,
+                ),
+              ),
+          )
+            .then((result) => setPushResults(result))
+            .catch(() => {});
+        }}
+      />
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-[var(--color-text)]">
+              Bulk Fetch
+            </h2>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={gitFetch.isPending}
+              onClick={() => {
+                setFetchResults(null);
+                void executeWithRetry(
+                  { operation: "fetch" },
+                  () => gitFetch.mutateAsync(selectedList),
+                )
+                  .then((r) => setFetchResults(r))
+                  .catch(() => {});
+              }}
+            >
+              Start Fetch
+            </Button>
+          </div>
+          <ProgressList
+            initialProjects={
+              gitFetch.isPending ? (selectedList ?? projectNames) : []
+            }
+          />
+        </section>
+
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-[var(--color-text)]">
+              Bulk Pull
+            </h2>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={gitPull.isPending}
+              onClick={() => {
+                setPullResults(null);
+                void executeWithRetry(
+                  { operation: "pull" },
+                  () => gitPull.mutateAsync(selectedList),
+                )
+                  .then((r) => setPullResults(r))
+                  .catch(() => {});
+              }}
+            >
+              Start Pull
+            </Button>
+          </div>
+          <ProgressList
+            initialProjects={
+              gitPull.isPending ? (selectedList ?? projectNames) : []
+            }
+          />
+        </section>
+
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-[var(--color-text)]">
+                Push
+              </h2>
+              <p className="text-xs text-[var(--color-text-muted)]">
+                {pushDisabledReason ??
+                  "Push the selected repository root after SSH authentication succeeds."}
+              </p>
+            </div>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={gitPush.isPending}
+              disabled={!!pushDisabledReason}
+              onClick={() => {
+                if (!selectedProjectName) return;
+                setPushResults(null);
+                void executeWithRetry(
+                  { operation: "push" },
+                  () =>
+                  gitPush.mutateAsync(
+                    buildProjectInfoPushTarget(
+                      selectedProjectName,
+                      resolvedRootId,
+                    ),
+                  ),
+                )
+                  .then((result) => setPushResults(result))
+                  .catch(() => {});
+              }}
+            >
+              <Upload className="h-3 w-3" />
+              Push
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              loading={gitPush.isPending}
+              disabled={!!pushDisabledReason}
+              onClick={() => {
+                if (!selectedProjectName) return;
+                setForcePushOpen(true);
+              }}
+            >
+              <Upload className="h-3 w-3" />
+              Force Push
+            </Button>
+          </div>
+
+          {selectedProjectName && rootOptions.length > 1 && (
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-[var(--color-text-muted)]">
+                VCS Root
+              </label>
+              <select
+                value={resolvedRootId}
+                onChange={(e) => setSelectedRootId(e.target.value)}
+                className={cn(inputClass, "pr-8")}
+              >
+                {rootOptions.map((root) => (
+                  <option key={root.rootId} value={root.rootId}>
+                    {formatProjectInfoRootLabel(root)} -{" "}
+                    {describeProjectInfoRoot(root)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {selectedProjectName && (
+            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-sm text-[var(--color-text-muted)]">
+              <div className="font-medium text-[var(--color-text)]">
+                {selectedProjectName}
+              </div>
+              <div className="mt-1 text-xs">
+                Target root:{" "}
+                <span className="font-mono text-[var(--color-text)]">
+                  {formatProjectInfoRootLabel(
+                    rootOptions.find((root) => root.rootId === resolvedRootId) ??
+                      rootOptions[0],
+                  )}
+                </span>
+              </div>
+            </div>
+          )}
+
+          <SshRetryStatusMessage message={statusMessage} />
+        </section>
+      </div>
+    </>
+  );
+}
+
 export function GitPage() {
   const { data: projects = [] } = useProjects();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -91,20 +322,18 @@ export function GitPage() {
 
   const [fetchResults, setFetchResults] = useState<GitOpResult[] | null>(null);
   const [pullResults, setPullResults] = useState<GitOpResult[] | null>(null);
+  const [pushResults, setPushResults] = useState<GitOpResult[] | null>(null);
 
   const allSelected = selected.size === 0; // empty = all
   const selectedList = allSelected ? undefined : [...selected];
   const projectNames = projects.map((p) => p.name);
   const selectedProjectName = selected.size === 1 ? [...selected][0] : null;
 
-  const gitFetch = useGitFetch();
-  const gitPull = useGitPull();
   const { data: logs = [], isLoading: isGitLogLoading } = useGitLog(
     selectedProjectName ?? "",
     200,
     0,
   );
-  const { passphraseDialogProps, executeWithRetry } = useGitWithSshRetry();
   const openDiff = useEditorStore((s) => s.openDiff);
   const historyActions = useGitHistoryActions(selectedProjectName ?? "");
   const { data: projectStatus } = useProjectStatus(selectedProjectName ?? "");
@@ -155,7 +384,6 @@ export function GitPage() {
 
   return (
     <AppLayout title="Git Operations">
-      <PassphraseDialog {...passphraseDialogProps} />
       {/* Project selector */}
       <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4 mb-6">
         <p className="text-sm font-medium text-[var(--color-text)] mb-3">
@@ -192,63 +420,18 @@ export function GitPage() {
         )}
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* Fetch */}
-        <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold text-[var(--color-text)]">
-              Bulk Fetch
-            </h2>
-            <Button
-              variant="primary"
-              size="sm"
-              loading={gitFetch.isPending}
-              onClick={() => {
-                setFetchResults(null);
-                void executeWithRetry(() => gitFetch.mutateAsync(selectedList))
-                  .then((r) => setFetchResults(r))
-                  .catch(() => {});
-              }}
-            >
-              Start Fetch
-            </Button>
-          </div>
-          <ProgressList
-            initialProjects={
-              gitFetch.isPending ? (selectedList ?? projectNames) : []
-            }
-          />
-          {fetchResults && <ResultsSummary results={fetchResults} />}
-        </section>
-
-        {/* Pull */}
-        <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold text-[var(--color-text)]">
-              Bulk Pull
-            </h2>
-            <Button
-              variant="primary"
-              size="sm"
-              loading={gitPull.isPending}
-              onClick={() => {
-                setPullResults(null);
-                void executeWithRetry(() => gitPull.mutateAsync(selectedList))
-                  .then((r) => setPullResults(r))
-                  .catch(() => {});
-              }}
-            >
-              Start Pull
-            </Button>
-          </div>
-          <ProgressList
-            initialProjects={
-              gitPull.isPending ? (selectedList ?? projectNames) : []
-            }
-          />
-          {pullResults && <ResultsSummary results={pullResults} />}
-        </section>
-      </div>
+      <BulkGitOperations
+        key={selectedProjectName ?? "__all__"}
+        selectedList={selectedList}
+        projectNames={projectNames}
+        selectedProjectName={selectedProjectName}
+        setFetchResults={setFetchResults}
+        setPullResults={setPullResults}
+        setPushResults={setPushResults}
+      />
+      {fetchResults && <ResultsSummary results={fetchResults} />}
+      {pullResults && <ResultsSummary results={pullResults} />}
+      {pushResults && <ResultsSummary results={pushResults} />}
 
       {/* Git Graph View */}
       {selectedProjectName ? (

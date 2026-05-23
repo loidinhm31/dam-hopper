@@ -16,6 +16,7 @@ import {
   GitCommit,
   GitMerge,
   LayoutGrid,
+  Folder,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -226,6 +227,12 @@ export default function WorkspacePage() {
     [handleSelectProject, setActiveProject],
   );
 
+  useEffect(() => {
+    if (!selection && projectName) {
+      handleSelectProject(projectName);
+    }
+  }, [handleSelectProject, projectName, selection]);
+
   const terminalContent = useMemo(
     () => (
       <div className="flex flex-col h-full">
@@ -358,17 +365,7 @@ export default function WorkspacePage() {
         )}
 
         <div className="flex-1 min-h-0">
-          {selection?.type === "project" ? (
-            <Suspense fallback={<PanelFallback label="Loading project…" />}>
-              <ProjectInfoPanel
-                projectName={selection.name}
-                onLaunchCommand={(cmd) => {
-                  if (selection.type === "project")
-                    handleLaunchTerminal(selection.name, cmd);
-                }}
-              />
-            </Suspense>
-          ) : mountedSessions.length > 0 ? (
+          {mountedSessions.length > 0 ? (
             <Suspense fallback={<PanelFallback label="Loading terminals…" />}>
               <MultiTerminalDisplay
                 activeSessionId={activeTab}
@@ -659,13 +656,38 @@ export default function WorkspacePage() {
   const rightTools = useMemo<ToolWindowDef[]>(
     () => [
       {
+        id: "project-info",
+        label: "Project",
+        icon: Folder,
+        defaultActive: true,
+        content: projectName ? (
+          <div
+            data-testid="workspace-project-info-panel"
+            className="flex h-full min-h-0 flex-col"
+          >
+            <Suspense fallback={<PanelFallback label="Loading project…" />}>
+              <ProjectInfoPanel
+                projectName={projectName}
+                onLaunchCommand={(cmd) =>
+                  handleLaunchTerminal(projectName, cmd)
+                }
+              />
+            </Suspense>
+          </div>
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+            Select a project to inspect
+          </div>
+        ),
+      },
+      {
         id: "terminals",
         label: "Fleet Terminal",
         icon: LayoutGrid,
         content: fleetContent,
       },
     ],
-    [fleetContent],
+    [fleetContent, handleLaunchTerminal, projectName],
   );
 
   const handleTerminalWorkspaceFleetLayoutChange = useCallback(() => {

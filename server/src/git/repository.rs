@@ -1,13 +1,13 @@
-/// git2-based repository operations: status, fetch (with progress), branch listing.
+/// git2-based repository operations: status, fetch/pull/push, and branch actions.
 ///
 /// git2::Repository is !Sync — open a new handle per operation.
-/// Network operations (fetch) use SSH agent + credential helper callbacks.
-/// Push and pull delegate to cli_fallback for credential reliability.
+/// Network operations use a shared libgit2 credential callback stack.
+/// Pull still falls back to CLI when fast-forward merge application fails.
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use git2::{BranchType, Repository, StatusOptions};
+use git2::{BranchType, PackBuilderStage, PushOptions, Repository, StatusOptions};
 
 use crate::error::AppError;
 use crate::git::cli_fallback;
@@ -20,7 +20,7 @@ use crate::git::types::{
 };
 use crate::ssh::SshCredStore;
 
-fn open_repo(path: &Path) -> Result<Repository, AppError> {
+pub(crate) fn open_repo(path: &Path) -> Result<Repository, AppError> {
     Repository::open(path).map_err(|e| {
         if e.code() == git2::ErrorCode::NotFound {
             AppError::GitNotFound(path.to_string_lossy().into_owned())
@@ -28,6 +28,95 @@ fn open_repo(path: &Path) -> Result<Repository, AppError> {
             AppError::Git(e.message().to_string())
         }
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CredentialAttempt {
+    Explicit,
+    Agent,
+    Helper,
+    Default,
+}
+
+#[derive(Default)]
+struct CredentialAttemptTracker {
+    explicit_tried: bool,
+    agent_tried: bool,
+    helper_tried: bool,
+}
+
+impl CredentialAttemptTracker {
+    fn next(
+        &mut self,
+        allowed_types: git2::CredentialType,
+        has_explicit_cred: bool,
+    ) -> Option<CredentialAttempt> {
+        if has_explicit_cred
+            && allowed_types.contains(git2::CredentialType::SSH_KEY)
+            && !self.explicit_tried
+        {
+            self.explicit_tried = true;
+            return Some(CredentialAttempt::Explicit);
+        }
+
+        if allowed_types.contains(git2::CredentialType::SSH_KEY) && !self.agent_tried {
+            self.agent_tried = true;
+            return Some(CredentialAttempt::Agent);
+        }
+
+        if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) && !self.helper_tried {
+            self.helper_tried = true;
+            return Some(CredentialAttempt::Helper);
+        }
+
+        if allowed_types.contains(git2::CredentialType::DEFAULT) {
+            return Some(CredentialAttempt::Default);
+        }
+
+        None
+    }
+}
+
+fn attach_credential_callbacks(
+    callbacks: &mut git2::RemoteCallbacks<'static>,
+    ssh_cred: Option<Arc<SshCredStore>>,
+) {
+    let mut attempts = CredentialAttemptTracker::default();
+
+    callbacks.credentials(move |url, username, allowed_types| {
+        match attempts.next(allowed_types, ssh_cred.is_some()) {
+            Some(CredentialAttempt::Explicit) => {
+                let cred = ssh_cred
+                    .as_ref()
+                    .expect("explicit credential attempt requires loaded SSH credential");
+                let user = username.unwrap_or("git");
+                let pub_path = cred.public_key_path();
+                let pub_opt = pub_path.as_deref();
+                let passphrase = cred.passphrase();
+                let passphrase_opt = if passphrase.is_empty() {
+                    None
+                } else {
+                    Some(passphrase)
+                };
+                git2::Cred::ssh_key(user, pub_opt, &cred.key_path, passphrase_opt)
+            }
+            Some(CredentialAttempt::Agent) => {
+                let user = username.unwrap_or("git");
+                git2::Cred::ssh_key_from_agent(user)
+            }
+            Some(CredentialAttempt::Helper) => {
+                if let Ok(cfg) = git2::Config::open_default() {
+                    git2::Cred::credential_helper(&cfg, url, username)
+                } else if allowed_types.contains(git2::CredentialType::DEFAULT) {
+                    git2::Cred::default()
+                } else {
+                    Err(git2::Error::from_str("credential helper unavailable"))
+                }
+            }
+            Some(CredentialAttempt::Default) => git2::Cred::default(),
+            None => Err(git2::Error::from_str("no suitable credentials available")),
+        }
+    });
 }
 
 fn format_commit_time(time: &git2::Time) -> String {
@@ -257,13 +346,6 @@ pub fn get_status(project_path: &Path, project_name: &str) -> Result<GitStatus, 
     })
 }
 
-/// Build credential callbacks with attempt tracking to prevent infinite loops.
-///
-/// Credential priority:
-/// 1. Explicit key + passphrase from `SshCredStore` (set via /api/ssh/keys/load)
-/// 2. SSH agent (if running and has keys)
-/// 3. Git credential helper
-/// 4. Default (e.g. Kerberos/NTLM)
 fn make_fetch_opts<F>(
     progress_fn: F,
     ssh_cred: Option<Arc<SshCredStore>>,
@@ -272,42 +354,7 @@ where
     F: Fn(usize, usize) + Send + 'static,
 {
     let mut callbacks = git2::RemoteCallbacks::new();
-
-    let mut explicit_tried = false;
-    let mut agent_tried = false;
-    let mut cred_helper_tried = false;
-
-    callbacks.credentials(move |url, username, allowed_types| {
-        // Try the user-supplied key+passphrase first.
-        if let Some(ref cred) = ssh_cred {
-            if allowed_types.contains(git2::CredentialType::SSH_KEY) && !explicit_tried {
-                explicit_tried = true;
-                let user = username.unwrap_or("git");
-                let pub_path = cred.public_key_path();
-                let pub_opt = pub_path.as_deref();
-                // Treat empty passphrase as None — libssh2 requires None (not "") for unencrypted keys
-                let p = cred.passphrase();
-                let passphrase_opt = if p.is_empty() { None } else { Some(p) };
-                return git2::Cred::ssh_key(user, pub_opt, &cred.key_path, passphrase_opt);
-            }
-        }
-
-        if allowed_types.contains(git2::CredentialType::SSH_KEY) && !agent_tried {
-            agent_tried = true;
-            let user = username.unwrap_or("git");
-            return git2::Cred::ssh_key_from_agent(user);
-        }
-        if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) && !cred_helper_tried {
-            cred_helper_tried = true;
-            if let Ok(cfg) = git2::Config::open_default() {
-                return git2::Cred::credential_helper(&cfg, url, username);
-            }
-        }
-        if allowed_types.contains(git2::CredentialType::DEFAULT) {
-            return git2::Cred::default();
-        }
-        Err(git2::Error::from_str("no suitable credentials available"))
-    });
+    attach_credential_callbacks(&mut callbacks, ssh_cred);
 
     let progress_fn = Arc::new(progress_fn);
     callbacks.transfer_progress(move |stats| {
@@ -321,6 +368,139 @@ where
     fetch_opts.remote_callbacks(callbacks);
     fetch_opts.prune(git2::FetchPrune::On);
     fetch_opts
+}
+
+pub(crate) struct PushTarget {
+    branch_name: String,
+    remote_name: String,
+    merge_ref: String,
+    summary: String,
+}
+
+pub(crate) fn resolve_push_target(repo: &Repository) -> Result<PushTarget, AppError> {
+    let head = repo
+        .head()
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
+
+    let branch_name = head
+        .shorthand()
+        .ok_or_else(|| AppError::Git("Detached HEAD".to_string()))?
+        .to_string();
+
+    let config = repo
+        .config()
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
+
+    let remote_name = config
+        .get_string(&format!("branch.{branch_name}.remote"))
+        .map_err(|_| {
+            AppError::Git(format!(
+                "Current branch '{branch_name}' has no configured push destination (missing branch.{branch_name}.remote)"
+            ))
+        })?;
+
+    if remote_name.trim().is_empty() {
+        return Err(AppError::Git(format!(
+            "Current branch '{branch_name}' has no configured push destination (branch.{branch_name}.remote is empty)"
+        )));
+    }
+
+    let merge_ref = config
+        .get_string(&format!("branch.{branch_name}.merge"))
+        .map_err(|_| {
+            AppError::Git(format!(
+                "Current branch '{branch_name}' has no configured upstream branch (missing branch.{branch_name}.merge)"
+            ))
+        })?;
+
+    if merge_ref.trim().is_empty() {
+        return Err(AppError::Git(format!(
+            "Current branch '{branch_name}' has no configured upstream branch (branch.{branch_name}.merge is empty)"
+        )));
+    }
+
+    let remote_branch = merge_ref.strip_prefix("refs/heads/").unwrap_or(&merge_ref);
+
+    Ok(PushTarget {
+        branch_name: branch_name.clone(),
+        remote_name: remote_name.clone(),
+        merge_ref: merge_ref.clone(),
+        summary: format!("Pushed {branch_name} to {remote_name}/{remote_branch}"),
+    })
+}
+
+fn make_push_opts(
+    project_name: String,
+    progress: Option<ProgressSender>,
+    ssh_cred: Option<Arc<SshCredStore>>,
+    remote_rejection: Arc<Mutex<Option<String>>>,
+) -> PushOptions<'static> {
+    let mut callbacks = git2::RemoteCallbacks::new();
+    attach_credential_callbacks(&mut callbacks, ssh_cred);
+
+    let push_progress_project = project_name.clone();
+    let push_progress_sender = progress.clone();
+    callbacks.push_transfer_progress(move |current, total, bytes| {
+        if total > 0 {
+            let pct = (current * 100 / total).min(100) as u8;
+            emit_progress(
+                &push_progress_sender,
+                &push_progress_project,
+                "push",
+                &format!("Uploading objects: {current}/{total} ({bytes} bytes)"),
+                Some(pct),
+            );
+        }
+    });
+
+    let pack_progress_project = project_name.clone();
+    let pack_progress_sender = progress.clone();
+    callbacks.pack_progress(move |stage, current, total| {
+        if total > 0 {
+            let pct = (current * 100 / total).min(100) as u8;
+            emit_progress(
+                &pack_progress_sender,
+                &pack_progress_project,
+                "push",
+                &format!(
+                    "Packing objects ({}) {current}/{total}",
+                    format_pack_stage(stage)
+                ),
+                Some(pct),
+            );
+        }
+    });
+
+    callbacks.push_update_reference(move |refname, status| {
+        handle_push_update_reference(&remote_rejection, refname, status)
+    });
+
+    let mut push_opts = PushOptions::new();
+    push_opts.remote_callbacks(callbacks);
+    push_opts
+}
+
+fn format_pack_stage(stage: PackBuilderStage) -> &'static str {
+    match stage {
+        PackBuilderStage::AddingObjects => "adding",
+        PackBuilderStage::Deltafication => "deltafication",
+    }
+}
+
+fn handle_push_update_reference(
+    remote_rejection: &Arc<Mutex<Option<String>>>,
+    refname: &str,
+    status: Option<&str>,
+) -> Result<(), git2::Error> {
+    if let Some(status) = status {
+        let message = format!("Remote rejected {refname}: {status}");
+        *remote_rejection
+            .lock()
+            .expect("push rejection mutex poisoned") = Some(message.clone());
+        return Err(git2::Error::from_str(&message));
+    }
+
+    Ok(())
 }
 
 pub async fn fetch(
@@ -425,6 +605,114 @@ pub async fn fetch(
     }
 }
 
+async fn push_with_mode(
+    project_path: &Path,
+    project_name: &str,
+    progress: &Option<ProgressSender>,
+    ssh_cred: Option<Arc<SshCredStore>>,
+    force: bool,
+) -> GitOperationResult {
+    let start = Instant::now();
+    emit_started(progress, project_name, "push", "Pushing...");
+
+    let project_path = project_path.to_path_buf();
+    let project_name = project_name.to_string();
+    let project_name_ret = project_name.clone();
+    let progress_clone = progress.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let repo = open_repo(&project_path)?;
+        let target = resolve_push_target(&repo)?;
+        let refspec = if force {
+            format!("+refs/heads/{}:{}", target.branch_name, target.merge_ref)
+        } else {
+            format!("refs/heads/{}:{}", target.branch_name, target.merge_ref)
+        };
+
+        let mut remote = repo
+            .find_remote(&target.remote_name)
+            .map_err(|e| AppError::Git(e.message().to_string()))?;
+
+        let remote_rejection = Arc::new(Mutex::new(None::<String>));
+        let mut push_opts = make_push_opts(
+            project_name.clone(),
+            progress_clone,
+            ssh_cred,
+            Arc::clone(&remote_rejection),
+        );
+
+        remote.push(&[refspec], Some(&mut push_opts)).map_err(|e| {
+            remote_rejection
+                .lock()
+                .expect("push rejection mutex poisoned")
+                .clone()
+                .map(AppError::Git)
+                .unwrap_or_else(|| AppError::Git(e.message().to_string()))
+        })?;
+
+        Ok::<String, AppError>(target.summary)
+    })
+    .await;
+
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(Ok(summary)) => {
+            emit_completed(progress, &project_name_ret, "push", &summary);
+            GitOperationResult {
+                project_name: project_name_ret,
+                operation: GitOperation::Push,
+                success: true,
+                summary: Some(summary),
+                error: None,
+                duration_ms,
+            }
+        }
+        Ok(Err(e)) => {
+            let msg = e.to_string();
+            emit_failed(progress, &project_name_ret, "push", &msg);
+            GitOperationResult {
+                project_name: project_name_ret,
+                operation: GitOperation::Push,
+                success: false,
+                summary: None,
+                error: Some(msg),
+                duration_ms,
+            }
+        }
+        Err(e) => {
+            let msg = format!("Task panic: {e}");
+            emit_failed(progress, &project_name_ret, "push", &msg);
+            GitOperationResult {
+                project_name: project_name_ret,
+                operation: GitOperation::Push,
+                success: false,
+                summary: None,
+                error: Some(msg),
+                duration_ms,
+            }
+        }
+    }
+}
+
+pub async fn push(
+    project_path: &Path,
+    project_name: &str,
+    progress: &Option<ProgressSender>,
+    ssh_cred: Option<Arc<SshCredStore>>,
+) -> GitOperationResult {
+    push_with_mode(project_path, project_name, progress, ssh_cred, false).await
+}
+
+pub(crate) async fn force_push(
+    project_path: &Path,
+    project_name: &str,
+    progress: &Option<ProgressSender>,
+    ssh_cred: Option<Arc<SshCredStore>>,
+) -> GitOperationResult {
+    push_with_mode(project_path, project_name, progress, ssh_cred, true).await
+}
+
 pub async fn pull(
     project_path: &Path,
     project_name: &str,
@@ -484,6 +772,50 @@ pub async fn pull(
                 duration_ms,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credential_attempt_tracker_tries_loaded_key_before_agent_and_helper() {
+        let mut tracker = CredentialAttemptTracker::default();
+        let allowed = git2::CredentialType::SSH_KEY
+            | git2::CredentialType::USER_PASS_PLAINTEXT
+            | git2::CredentialType::DEFAULT;
+
+        assert_eq!(
+            tracker.next(allowed, true),
+            Some(CredentialAttempt::Explicit)
+        );
+        assert_eq!(tracker.next(allowed, true), Some(CredentialAttempt::Agent));
+        assert_eq!(tracker.next(allowed, true), Some(CredentialAttempt::Helper));
+    }
+
+    #[test]
+    fn push_update_reference_reports_remote_rejection_message() {
+        let remote_rejection = Arc::new(Mutex::new(None));
+
+        let error = handle_push_update_reference(
+            &remote_rejection,
+            "refs/heads/main",
+            Some("hook declined"),
+        )
+        .expect_err("remote rejection should become an error");
+
+        assert_eq!(
+            remote_rejection
+                .lock()
+                .expect("push rejection mutex poisoned")
+                .as_deref(),
+            Some("Remote rejected refs/heads/main: hook declined")
+        );
+        assert_eq!(
+            error.message(),
+            "Remote rejected refs/heads/main: hook declined"
+        );
     }
 }
 
@@ -995,6 +1327,7 @@ pub async fn undo_last_commit(project_path: &Path) -> Result<GitActionResult, Ap
             .map_err(|e| AppError::Git(e.message().to_string()))?;
         (commit.id().to_string(), commit.parent_count())
     };
+    let head_is_pushed = cli_fallback::is_commit_pushed(project_path, &head_hash).await?;
 
     if parent_count == 0 {
         let mut blocked = GitActionResult::blocked(
@@ -1017,7 +1350,7 @@ pub async fn undo_last_commit(project_path: &Path) -> Result<GitActionResult, Ap
         return Ok(blocked);
     }
 
-    if cli_fallback::is_commit_pushed(project_path, &head_hash).await? {
+    if head_is_pushed {
         let mut blocked = GitActionResult::blocked(
             GitBlockReason::PushedCommit,
             "undo last commit is only available for commits not pushed upstream",

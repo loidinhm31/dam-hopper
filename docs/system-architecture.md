@@ -268,6 +268,34 @@ other child-local paths.
 - Active profile ID: localStorage (survives browser close, shared across tabs)
 - Auth token: sessionStorage (cleared on tab close, isolated per tab) — password never stored
 
+### SSH Credential Persistence (Phase 02)
+
+SSH passphrases are session-only by default. Save-for-later uses the host OS credential store on Linux, not app config or browser storage.
+
+**Server behavior:**
+
+- `SshCredStore` keeps the active key path plus passphrase in memory.
+- In-memory passphrase bytes use `Zeroizing<Vec<u8>>` and are cleared on drop.
+- `POST /api/ssh/keys/load` accepts `saveForLater`.
+- `POST /api/ssh/keys/load` validates the key before any persistence attempt, so wrong passphrases never overwrite saved credentials.
+- `saved=true` means a stored credential is available after the request, not necessarily that the current request created it.
+- `GET /api/ssh/credentials` returns metadata only: `saved`, `keyPath`, `error`.
+- `DELETE /api/ssh/credentials` forgets the saved entry and clears the current session credential if it matches.
+
+**Persistence behavior:**
+
+- Saved passphrases use `secret-tool` on Linux.
+- Stored key scope is derived from workspace path + SSH key path + public-key fingerprint when available.
+- No plaintext passphrase is written to app config, localStorage, or logs.
+- API responses never include secret material, only status metadata.
+
+**Trust boundary:**
+
+- OS keyring gives encrypted-at-rest protection against disk disclosure.
+- It does not protect against a compromised same-user process or DamHopper itself while running.
+- If keyring support is unavailable, save-for-later falls back to session-only use with an error.
+- The frontend retry hook performs only one automatic retry after a successful key load and does not keep a long-lived success cache, so later SSH auth failures can reopen the prompt instead of being masked by stale session state.
+
 ### pty/ (Phase 04: Restart Engine ✅ / Phase 07: Idempotency ✅)
 
 Manages portable terminal sessions with automatic restart capabilities and idempotent creation.
@@ -494,13 +522,47 @@ Server-side OPAQUE password-authenticated key exchange for the encrypt-in-transi
 
 ### git/
 
-Git operations use `git2` for read-heavy repository inspection and real `git`
-CLI porcelain for mutating history operations where porcelain semantics matter.
-CLI calls are built with `Command::new("git").args(...)`; request data is never
-interpolated through a shell.
+Git operations use `git2` for repository inspection plus remote transport
+operations (`fetch`, `pull`, `push`). Real `git` CLI porcelain remains for
+history/worktree flows where porcelain semantics matter, and for the
+`pull --ff-only` fallback when libgit2 fetch succeeds but merge application
+should defer to Git itself. CLI calls are built with
+`Command::new("git").args(...)`; request data is never interpolated through a
+shell.
 
-**repository.rs** — Clone, push, pull, status, branch actions, reset, cherry-pick,
-and undo-last-commit.
+**repository.rs** — Shared git2 repository operations for status, branch reads,
+fetch, pull, push, log, and branch actions.
+
+**Shared remote credential callbacks** — Fetch, pull, and push now share the
+same libgit2 `RemoteCallbacks` credential priority:
+
+1. loaded `SshCredStore` key + passphrase from `POST /api/ssh/keys/load`
+2. SSH agent
+3. Git credential helper
+4. default credentials
+
+Push uses `Remote::push(...)` with pack/upload progress callbacks and
+`push_update_reference` rejection handling. The backend intentionally pushes
+only the checked-out branch to its configured upstream; missing
+`branch.<name>.remote` or `branch.<name>.merge` returns a clear server error
+instead of emulating broader `git push` inference modes.
+
+**Git push credential flow (Phase 01)** — Push is now a first-class root-aware
+operation in the UI and the backend. `ProjectInfoPanel`, `WorkspaceGitPanel`,
+and `GitPage` forward the selected VCS root through the existing push payload,
+and the server resolves that root before running the shared libgit2 push path.
+Successful pushes invalidate the broader Git cache set so branches, git log,
+project status, diffs, conflicts, file tree, and project list refresh together
+after the retry completes.
+
+**Git push and SSH retry follow-up (Phase 03)** — The web Git page now uses the
+same root-aware push path for single-project views, the SSH passphrase retry
+dialog can optionally save credentials for later, and retry status text is
+shared across the frontend instead of being duplicated per caller. The retry
+dialog loads credentials into the shared backend callback stack; it does not
+depend on CLI `ssh_askpass` helpers or TTY prompt shims. The explicit
+force-push action only changes the push refspec mode; it does not relax the
+drop/undo protections for pushed or shared history.
 
 **commit_file_ops.rs** — IntelliJ-compatible history actions:
 
@@ -581,11 +643,12 @@ HTTP request handlers + WebSocket upgrade.
 - `POST /api/git/:project/branches/update` — update a branch from its remote tracking branch, root-aware
 - `POST /api/git/:project/cherry-pick` — cherry-pick a commit
 - `POST /api/git/:project/reset` — reset current branch with `soft`, `mixed`, `hard`, or `keep`
-- `POST /api/git/:project/undo-last-commit` — safe local commit recovery; blocks pushed/shared history and recommends revert
-- `POST /api/git/:project/commit/:hash/drop` — drop an unpushed commit
-- `POST /api/git/:project/commit/:hash/drop-files` — drop selected changes from an unpushed commit
+- `POST /api/git/:project/undo-last-commit` — safe local commit recovery; blocks pushed/shared history and recommends revert for published commits
+- `POST /api/git/:project/commit/:hash/drop` — drop an unpushed commit by default; pushed/shared commits are blocked
+- `POST /api/git/:project/commit/:hash/drop-files` — drop selected changes from an unpushed commit by default; pushed/shared commits are blocked
 - `POST /api/git/:project/commit/:hash/revert` — revert a commit with an inverse commit
 - `POST /api/git/:project/commit/:hash/revert-files` — apply inverse selected-file changes to the worktree
+- `POST /api/git/push` — root-aware single-repo push; body carries `{ project, root?, force? }`
 
 **port_forward.rs** (Phase 03) — Port detection handler:
 
@@ -851,6 +914,7 @@ API layer (handlers) catch AppError → HTTP status:
 
 **Phase 03 (Complete):** IntelliJ-compatible Git actions—shared safe-vs-rewrite history menu, undo-last-commit endpoint, revert-selected-changes vs drop-selected-changes split, and pushed/shared history protections that steer users toward revert.
 **Phase 04 (Complete):** Verification and docs for real Git semantics—tests cover active-operation blocking, recovery metadata, pushed-history rewrite guards, and UI refresh behavior after history mutations.
+**Phase 01 (Complete):** Root-aware Git push and SSH retry flow—ProjectInfoPanel selects the active VCS root, push requests forward the selected root for child repos, retry results are normalized before auth detection, and successful pushes invalidate the broader Git cache set.
 
 **Phase 04 (Complete):** Monaco editor with tab mgmt + save. WS write protocol (fs:write_begin → fs:write_chunk\* → fs:write_commit). File tiering (normal <1MB, degraded 1-5MB, large ≥5MB, binary). Conflict detection via mtime. Ctrl+S save, MonacoHost, EditorTabs, LargeFileViewer, BinaryPreview, ConflictDialog components.
 

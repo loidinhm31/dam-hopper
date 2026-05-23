@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import { useGitWithSshRetry } from "@/hooks/use-git-with-ssh-retry.js";
 import { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";
+import { GitForcePushDialog } from "@/components/organisms/GitForcePushDialog.js";
+import { SshRetryStatusMessage } from "@/components/atoms/SshRetryStatusMessage.js";
 import { cn } from "@/lib/utils.js";
 import { CollapsibleSection } from "@/components/atoms/CollapsibleSection.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
@@ -19,17 +21,61 @@ import {
   useProject,
   useWorktrees,
   useBranches,
+  useGitRoots,
   useGitFetch,
   useGitPull,
   useGitPush,
   useAddWorktree,
   useRemoveWorktree,
 } from "@/api/queries.js";
+import type { VcsRoot } from "@/api/client.js";
 import type { TreeCommand } from "@/hooks/use-terminal-tree.js";
 
 interface Props {
   projectName: string;
   onLaunchCommand?: (command: TreeCommand) => void;
+}
+
+const DEFAULT_GIT_ROOT_ID = ".";
+
+export function projectInfoRootOptions(roots: VcsRoot[]): VcsRoot[] {
+  return roots.length > 0
+    ? roots
+    : [
+        {
+          rootId: DEFAULT_GIT_ROOT_ID,
+          path: ".",
+          absolutePath: "",
+          kind: "primary" as const,
+          warnings: [],
+        },
+      ];
+}
+
+export function formatProjectInfoRootLabel(root: VcsRoot) {
+  return root.rootId === DEFAULT_GIT_ROOT_ID ? "Project root" : root.path;
+}
+
+export function describeProjectInfoRoot(root: VcsRoot) {
+  if (root.kind === "primary") return "Primary";
+  if (root.mappingState === "uninitialized") return "Uninitialized";
+  if (root.mappingState === "missing") return "Missing mapping";
+  if (root.mappingState === "unmapped") return "Unmapped";
+  return root.kind === "submodule" ? "Submodule" : "Nested repo";
+}
+
+export function buildProjectInfoPushTarget(project: string, rootId: string) {
+  return buildProjectInfoPushTargetWithMode(project, rootId, false);
+}
+
+export function buildProjectInfoPushTargetWithMode(
+  project: string,
+  rootId: string,
+  force: boolean,
+) {
+  const target =
+    rootId === DEFAULT_GIT_ROOT_ID ? { project } : { project, root: rootId };
+  return force ? { ...target, force: true } : target;
 }
 
 function TypeBadge({ type }: { type: string }) {
@@ -56,15 +102,68 @@ function StatusBadge({ isClean }: { isClean: boolean }) {
 }
 
 function GitSection({ projectName }: { projectName: string }) {
-  const { data: branches = [] } = useBranches(projectName);
+  const { data: roots = [] } = useGitRoots(projectName);
+  const rootOptions = projectInfoRootOptions(roots);
+  const [selectedRootId, setSelectedRootId] = useState(DEFAULT_GIT_ROOT_ID);
+  const resolvedRootId = rootOptions.some(
+    (root) => root.rootId === selectedRootId,
+  )
+    ? selectedRootId
+    : (rootOptions[0]?.rootId ?? DEFAULT_GIT_ROOT_ID);
+  const { data: branches = [] } = useBranches(projectName, resolvedRootId);
   const gitFetch = useGitFetch();
   const gitPull = useGitPull();
   const gitPush = useGitPush();
-  const { passphraseDialogProps, executeWithRetry } = useGitWithSshRetry();
+  const [forcePushOpen, setForcePushOpen] = useState(false);
+  const { passphraseDialogProps, statusMessage, executeWithRetry } =
+    useGitWithSshRetry();
+  const selectedRoot =
+    rootOptions.find((root) => root.rootId === resolvedRootId) ?? rootOptions[0];
+  const selectedRootLabel = selectedRoot
+    ? formatProjectInfoRootLabel(selectedRoot)
+    : "Project root";
 
   return (
     <div className="px-3 py-2 space-y-2">
       <PassphraseDialog {...passphraseDialogProps} />
+      <GitForcePushDialog
+        open={forcePushOpen}
+        project={projectName}
+        rootLabel={selectedRootLabel}
+        loading={gitPush.isPending}
+        onClose={() => setForcePushOpen(false)}
+        onConfirm={() => {
+          setForcePushOpen(false);
+          void executeWithRetry({ operation: "push" }, () =>
+            gitPush.mutateAsync(
+              buildProjectInfoPushTargetWithMode(
+                projectName,
+                resolvedRootId,
+                true,
+              ),
+            ),
+          ).catch(() => {});
+        }}
+      />
+      {rootOptions.length > 1 && (
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-[var(--color-text-muted)]">
+            VCS Root
+          </label>
+          <select
+            value={resolvedRootId}
+            onChange={(e) => setSelectedRootId(e.target.value)}
+            className={cn(inputClass, "pr-8")}
+          >
+            {rootOptions.map((root) => (
+              <option key={root.rootId} value={root.rootId}>
+                {formatProjectInfoRootLabel(root)} -{" "}
+                {describeProjectInfoRoot(root)}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       {/* Actions */}
       <div className="flex gap-2 flex-wrap">
         <Button
@@ -72,7 +171,7 @@ function GitSection({ projectName }: { projectName: string }) {
           variant="secondary"
           loading={gitFetch.isPending}
           onClick={() =>
-            void executeWithRetry(() =>
+            void executeWithRetry({ operation: "fetch" }, () =>
               gitFetch.mutateAsync([projectName]),
             ).catch(() => {})
           }
@@ -85,7 +184,7 @@ function GitSection({ projectName }: { projectName: string }) {
           variant="secondary"
           loading={gitPull.isPending}
           onClick={() =>
-            void executeWithRetry(() =>
+            void executeWithRetry({ operation: "pull" }, () =>
               gitPull.mutateAsync([projectName]),
             ).catch(() => {})
           }
@@ -98,15 +197,28 @@ function GitSection({ projectName }: { projectName: string }) {
           variant="secondary"
           loading={gitPush.isPending}
           onClick={() =>
-            void executeWithRetry(() =>
-              gitPush.mutateAsync(projectName).then((r) => [r]),
+            void executeWithRetry({ operation: "push" }, () =>
+              gitPush.mutateAsync(
+                buildProjectInfoPushTarget(projectName, resolvedRootId),
+              ),
             ).catch(() => {})
           }
         >
           <Upload className="h-3 w-3" />
           Push
         </Button>
+        <Button
+          size="sm"
+          variant="danger"
+          loading={gitPush.isPending}
+          onClick={() => setForcePushOpen(true)}
+        >
+          <Upload className="h-3 w-3" />
+          Force Push
+        </Button>
       </div>
+
+      <SshRetryStatusMessage message={statusMessage} />
 
       {/* Branch list */}
       {branches.length > 0 && (
@@ -378,7 +490,7 @@ export function ProjectInfoPanel({ projectName, onLaunchCommand }: Props) {
           icon={GitBranch}
           defaultOpen={true}
         >
-          <GitSection projectName={projectName} />
+          <GitSection key={projectName} projectName={projectName} />
         </CollapsibleSection>
 
         <CollapsibleSection

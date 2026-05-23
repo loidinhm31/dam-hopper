@@ -28,6 +28,8 @@ fn make_tunnel_manager(event_sink: &BroadcastEventSink) -> TunnelSessionManager 
     TunnelSessionManager::new(Arc::new(event_sink.clone()), Arc::new(CloudflaredDriver))
 }
 
+use std::path::Path;
+use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -148,6 +150,44 @@ fn wait_for(timeout: Duration, predicate: impl Fn() -> bool) -> bool {
     false
 }
 
+fn git(args: &[&str], cwd: &Path) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("git command failed to spawn");
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn git_output(args: &[&str], cwd: &Path) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("git command failed to spawn");
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+fn init_repo_with_commit(dir: &Path) {
+    git(&["init", "-b", "main"], dir);
+    git(&["config", "user.email", "test@test.com"], dir);
+    git(&["config", "user.name", "Test"], dir);
+    std::fs::write(dir.join("README.md"), "# test").unwrap();
+    git(&["add", "."], dir);
+    git(&["commit", "-m", "init"], dir);
+}
+
 // ---------------------------------------------------------------------------
 // Health check (no auth required)
 // ---------------------------------------------------------------------------
@@ -256,6 +296,182 @@ async fn auth_status_returns_401_without_cookie() {
         .unwrap();
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn git_push_route_uses_selected_root_when_provided() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let parent = tmp.path().join("project");
+    std::fs::create_dir_all(parent.join("modules")).unwrap();
+    init_repo_with_commit(&parent);
+
+    let remote = tmp.path().join("child-remote.git");
+    let child_seed = tmp.path().join("child-seed");
+    let child = parent.join("modules/child");
+
+    std::fs::create_dir_all(&remote).unwrap();
+    std::fs::create_dir_all(&child_seed).unwrap();
+
+    git(&["init", "--bare"], &remote);
+    init_repo_with_commit(&child_seed);
+    git(
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+        &child_seed,
+    );
+    git(&["push", "-u", "origin", "main"], &child_seed);
+    git(
+        &["clone", remote.to_str().unwrap(), child.to_str().unwrap()],
+        tmp.path(),
+    );
+    git(&["config", "user.email", "test@test.com"], &child);
+    git(&["config", "user.name", "Test"], &child);
+    std::fs::write(child.join("nested.txt"), "ahead\n").unwrap();
+    git(&["add", "nested.txt"], &child);
+    git(&["commit", "-m", "child change"], &child);
+
+    {
+        let mut cfg = state.config.write().await;
+        cfg.projects.push(ProjectConfig {
+            name: "project".into(),
+            path: parent.to_string_lossy().into_owned(),
+            project_type: ProjectType::Custom,
+            services: None,
+            commands: None,
+            env_file: None,
+            tags: None,
+            terminals: vec![],
+            agents: None,
+            restart_policy: crate::config::RestartPolicy::Never,
+            restart_max_retries: 5,
+            health_check_url: None,
+        });
+    }
+
+    let without_root = post_json(
+        state.clone(),
+        "/api/git/push",
+        serde_json::json!({ "project": "project" }),
+    )
+    .await;
+    assert_eq!(without_root.status(), StatusCode::OK);
+    let without_root_body = axum::body::to_bytes(without_root.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let without_root_json: serde_json::Value = serde_json::from_slice(&without_root_body).unwrap();
+    assert_eq!(without_root_json["success"], false);
+    let without_root_error = without_root_json["error"]
+        .as_str()
+        .unwrap_or_default()
+        .to_lowercase();
+    assert!(
+        without_root_error.contains("no configured push destination")
+            || without_root_error.contains("has no upstream branch"),
+        "unexpected push failure for omitted root: {without_root_json}"
+    );
+
+    let with_root = post_json(
+        state,
+        "/api/git/push",
+        serde_json::json!({ "project": "project", "root": "modules/child" }),
+    )
+    .await;
+    assert_eq!(with_root.status(), StatusCode::OK);
+    let with_root_body = axum::body::to_bytes(with_root.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let with_root_json: serde_json::Value = serde_json::from_slice(&with_root_body).unwrap();
+    assert_eq!(with_root_json["success"], true);
+
+    let remote_head = git_output(&["rev-parse", "HEAD"], &remote);
+    let child_head = git_output(&["rev-parse", "HEAD"], &child);
+    assert_eq!(remote_head, child_head);
+}
+
+#[tokio::test]
+async fn git_push_route_force_pushes_when_explicitly_requested() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let project = tmp.path().join("project");
+    let remote = tmp.path().join("project-remote.git");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&remote).unwrap();
+
+    init_repo_with_commit(&project);
+    git(&["init", "--bare"], &remote);
+    git(
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+        &project,
+    );
+    git(&["push", "-u", "origin", "main"], &project);
+    git(&["symbolic-ref", "HEAD", "refs/heads/main"], &remote);
+
+    let clone = tmp.path().join("clone");
+    git(
+        &["clone", remote.to_str().unwrap(), clone.to_str().unwrap()],
+        tmp.path(),
+    );
+    git(&["config", "user.email", "test@test.com"], &clone);
+    git(&["config", "user.name", "Test"], &clone);
+
+    std::fs::write(clone.join("remote.txt"), "remote\n").unwrap();
+    git(&["add", "remote.txt"], &clone);
+    git(&["commit", "-m", "remote commit"], &clone);
+    git(&["push"], &clone);
+
+    std::fs::write(project.join("local.txt"), "local\n").unwrap();
+    git(&["add", "local.txt"], &project);
+    git(&["commit", "-m", "local rewrite"], &project);
+
+    {
+        let mut cfg = state.config.write().await;
+        cfg.projects.push(ProjectConfig {
+            name: "project".into(),
+            path: project.to_string_lossy().into_owned(),
+            project_type: ProjectType::Custom,
+            services: None,
+            commands: None,
+            env_file: None,
+            tags: None,
+            terminals: vec![],
+            agents: None,
+            restart_policy: crate::config::RestartPolicy::Never,
+            restart_max_retries: 5,
+            health_check_url: None,
+        });
+    }
+
+    let resp = post_json(
+        state.clone(),
+        "/api/git/push",
+        serde_json::json!({ "project": "project" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let raw = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(json["success"], false);
+
+    let resp = post_json(
+        state,
+        "/api/git/push",
+        serde_json::json!({ "project": "project", "force": true }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let raw = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(json["success"], true);
+    assert_eq!(
+        git_output(&["rev-parse", "HEAD"], &remote),
+        git_output(&["rev-parse", "HEAD"], &project)
+    );
 }
 
 // ---------------------------------------------------------------------------

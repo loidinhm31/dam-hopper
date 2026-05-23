@@ -295,6 +295,43 @@ interface TerminalPanelProps {
 - Prevents local commit drops for pushed commits and shows a shared revert recommendation instead.
 - Branch-history operations refresh Git, project status, file tree, and open editor tabs through scoped Git invalidation helpers.
 
+### Project Info Panel
+
+**Location:** `packages/web/src/components/organisms/ProjectInfoPanel.tsx`
+
+**Purpose:** Provides the project-level Git action strip used in the workspace sidebar.
+
+**Behavior:**
+
+- Fetches VCS roots with `useGitRoots(projectName)` and shows a root selector when the project exposes more than one root.
+- Falls back to the project root when discovery has not returned any roots yet, so fetch/pull/push still have a stable scope.
+- Builds the push payload from the selected root: project-root pushes stay `api.git.push(project)`, while child-root pushes pass `{ project, root }`.
+- Exposes a separate `Force Push` action that confirms before sending the same root-aware payload with `force: true`.
+- Uses force push only as an explicit publish step for an already-rewritten branch; it does not bypass the pushed-history safety guards in the history actions UI.
+- Routes fetch, pull, and push through the SSH retry hook so passphrase prompts are reused for all three actions.
+- Relies on the shared backend libgit2 credential callback path for fetch/pull/push, so retry behavior is consistent across all three operations instead of being push-specific.
+- Reuses the shared retry status banner for push completion feedback, so successful push and force-push actions confirm visibly in the same place as SSH and failure feedback.
+- Retries exactly once after a successful SSH key load; if the retry still fails with SSH auth, the hook surfaces the failure status and a later action can reopen the prompt instead of getting stuck behind stale cache state.
+- Surfaces non-auth push failures, including non-fast-forward rejections, through the shared retry status banner instead of dropping them on the floor.
+- Uses the same root labels and mapping-state descriptions as the workspace Git panel, so project-level and branch-level root selectors stay consistent.
+- Renders a root selector only when a project actually has multiple discovered roots, keeping the sidebar compact for single-root repos.
+- Keeps the root-aware project selector test-covered, including default-root fallback, child-root push payloads, and selector rendering.
+- Reuses the shared retry status model so SSH retry feedback matches the Git page and other callers.
+
+### Passphrase Dialog
+
+**Location:** `packages/web/src/components/organisms/PassphraseDialog.tsx`
+
+**Purpose:** Captures the SSH key passphrase for fetch/pull/push retries and optionally requests saved persistence.
+
+**Behavior:**
+
+- Defaults to the first discovered SSH key when one is available.
+- Keeps "Default key" explicit in the selector instead of silently binding the first discovered key into the submitted payload; the label explains that the server chooses automatically.
+- Submits `(passphrase, keyPath, saveForLater)` to the shared retry hook.
+- Resets the passphrase, selected key, and save checkbox on submit or cancel.
+- Explains that saved persistence is best-effort and session-only fallback still works when device credential storage is unavailable.
+
 ### ChangedFilesList
 
 **Location:** `packages/web/src/components/organisms/ChangedFilesList.tsx`
@@ -319,6 +356,8 @@ interface TerminalPanelProps {
 - Resets the selected commit state when project selection changes.
 - Supports file double-click diffing from the selected commit in the Git view.
 - Uses the same safe-vs-rewrite action labeling as the workspace Git panel.
+- Exposes single-project push with root-aware payload selection, matching the sidebar Git action strip.
+- Reuses the same backend credential model as the sidebar strip, so page-level push retry behavior stays aligned with fetch and pull.
 
 ---
 

@@ -80,6 +80,8 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Fetch, push, pull with progress reporting
 - Query repository status (branch, ahead/behind)
 - Support SSH key loading for authentication
+- Let push select the active VCS root in the UI so submodules and nested repos can push independently
+- Retry SSH-auth failures through the shared passphrase flow without duplicating result-shape handling
 
 **Acceptance Criteria:**
 
@@ -87,14 +89,20 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Detect SSH key requirement and prompt
 - ✓ Broadcast git progress to WebSocket
 - ✓ Handle merge conflicts gracefully
+- ✓ Project info panel can choose a VCS root before push
+- ✓ Push invalidates branch, history, status, diff, conflict, file-tree, and project data
+- ✓ Retry hook normalizes single-result and array Git responses before auth checks
+- ✓ Fetch/pull/push share one backend credential order and push reports missing-upstream configuration clearly
+- ✓ Push entrypoints now expose an explicit force-push action for intentional published-history updates
 
 **Technical Constraints:**
 
 - git2 library for operations, CLI fallback for advanced ops
-- SSH key storage in ~/.config/dam-hopper/credentials/
+- Loaded SSH keys live in-memory per server session; optional saved passphrases are delegated to the host OS credential store
 - Constant-time comparison for auth tokens
 - History mutations must distinguish safe recovery from rewrite actions
-- Pushed/shared history must prefer revert over destructive rewrite
+- Pushed/shared history must prefer revert over destructive history actions; force-push is a separate explicit push action
+- Published-history rewrite must stay opt-in and explicit when it is allowed
 
 **Phase-Based Implementation:**
 

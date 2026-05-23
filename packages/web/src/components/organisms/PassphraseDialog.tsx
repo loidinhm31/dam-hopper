@@ -5,11 +5,33 @@ import { cn } from "@/lib/utils.js";
 
 interface Props {
   open: boolean;
-  onSubmit: (passphrase: string, keyPath?: string) => void;
+  onSubmit: (
+    passphrase: string,
+    keyPath: string | undefined,
+    saveForLater: boolean,
+  ) => void;
   onCancel: () => void;
   loading?: boolean;
   error?: string;
   availableKeys?: string[];
+}
+
+export interface PassphraseDialogSubmission {
+  passphrase: string;
+  keyPath: string | undefined;
+  saveForLater: boolean;
+}
+
+export function buildPassphraseDialogSubmission(
+  passphrase: string,
+  selectedKey: string,
+  saveForLater: boolean,
+): PassphraseDialogSubmission {
+  return {
+    passphrase,
+    keyPath: selectedKey || undefined,
+    saveForLater,
+  };
 }
 
 export function PassphraseDialog({
@@ -22,8 +44,8 @@ export function PassphraseDialog({
 }: Props) {
   const [passphrase, setPassphrase] = useState("");
   const [selectedKey, setSelectedKey] = useState("");
+  const [saveForLater, setSaveForLater] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const currentSelectedKey = selectedKey || availableKeys[0] || "";
 
   // Handle focus
   useEffect(() => {
@@ -48,14 +70,25 @@ export function PassphraseDialog({
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (loading) return;
-    onSubmit(passphrase, currentSelectedKey || undefined);
+    const submission = buildPassphraseDialogSubmission(
+      passphrase,
+      selectedKey,
+      saveForLater,
+    );
+    onSubmit(
+      submission.passphrase,
+      submission.keyPath,
+      submission.saveForLater,
+    );
     setPassphrase("");
     setSelectedKey("");
+    setSaveForLater(false);
   }
 
   function handleCancel() {
     setPassphrase("");
     setSelectedKey("");
+    setSaveForLater(false);
     onCancel();
   }
 
@@ -82,8 +115,9 @@ export function PassphraseDialog({
         </div>
 
         <p className="text-xs text-[var(--color-text-muted)] mb-4">
-          Git operation failed due to SSH authentication. Enter your SSH key
-          passphrase and retry. Leave blank if the key has no passphrase.
+          Git could not authenticate with SSH. Enter the passphrase for the
+          selected private key and retry. Leave blank if the key has no
+          passphrase.
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-3">
@@ -94,12 +128,17 @@ export function PassphraseDialog({
                 SSH Key
               </label>
               <select
-                value={currentSelectedKey}
+                value={selectedKey}
                 onChange={(e) => setSelectedKey(e.target.value)}
                 disabled={loading}
                 className={cn(inputClass, "pr-8")}
               >
-                <option value="">Default key</option>
+                <option value="">
+                  Default key
+                  {availableKeys[0]
+                    ? ` (server auto-selects; first available: ~/.ssh/${availableKeys[0]})`
+                    : " (server auto-selects)"}
+                </option>
                 {availableKeys.map((k) => (
                   <option key={k} value={k}>
                     ~/.ssh/{k}
@@ -125,6 +164,22 @@ export function PassphraseDialog({
               className={inputClass}
             />
           </div>
+
+          <label className="flex items-start gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/40 px-3 py-2 text-xs text-[var(--color-text-muted)]">
+            <input
+              type="checkbox"
+              checked={saveForLater}
+              onChange={(e) => setSaveForLater(e.target.checked)}
+              disabled={loading}
+              className="mt-0.5"
+            />
+            <span>
+              Save for later when device credential storage is available.
+              <span className="block text-[11px] opacity-80">
+                Otherwise the key stays loaded for this server session only.
+              </span>
+            </span>
+          </label>
 
           {/* Error */}
           {error && (

@@ -280,14 +280,14 @@ Reset to a commit. `mode` is `soft`, `mixed`, `hard`, or `keep`.
 Drop a local, unpushed commit from the current branch history. `HEAD` drops use
 `git reset --hard <parent>` after preflight checks. Non-HEAD drops use
 `git rebase --onto <parent> <hash> <branch>`. Pushed/shared commits are blocked
-by default and should use revert. The server refuses to start a rewrite while a
-merge, rebase, or cherry-pick is already in progress and returns `recovery`
+by default and should use revert. The server refuses to start a rewrite while
+a merge, rebase, or cherry-pick is already in progress and returns `recovery`
 metadata for the active operation.
 
 **POST /api/git/{project}/commit/{hash}/drop-files**
 Drop selected file changes from an unpushed commit while preserving other files
 from that commit. This is a local-history rewrite and is blocked for pushed
-commits.
+commits by default.
 
 ```json
 { "paths": ["src/main.rs"] }
@@ -427,14 +427,19 @@ DamHopper follows IntelliJ-style Git semantics: safe operations preserve shared
 history, while rewrite operations are restricted to local commits that have not
 been pushed upstream. Recovery states are surfaced explicitly so the UI can
 offer continue/abort guidance instead of hiding active Git porcelain state.
+DamHopper does not expose a published-history rewrite override through `drop`,
+`drop-files`, or `undo-last-commit`. The dedicated push flow only publishes an
+already-rewritten branch intentionally: `POST /api/git/push` with `force: true`
+updates the configured upstream branch, but it does not relax the pushed/shared
+history guards on those local rewrite endpoints.
 
 | Operation          | History effect       | Shared-history behavior                                  |
 | ------------------ | -------------------- | -------------------------------------------------------- |
 | `revert`           | Adds inverse commit  | Allowed and recommended                                  |
 | `revert-files`     | Worktree inverse     | Allowed; selected changes stay uncommitted for review    |
-| `drop`             | Rewrites branch      | Blocked with `blockedReason: "pushed-commit"`            |
-| `drop-files`       | Rewrites branch      | Blocked with `blockedReason: "pushed-commit"`            |
-| `undo-last-commit` | Rewrites local HEAD  | Blocked when `HEAD` is reachable from upstream           |
+| `drop`             | Rewrites branch      | Blocked for pushed/shared commits; use revert instead    |
+| `drop-files`       | Rewrites branch      | Blocked for pushed/shared commits; use revert instead    |
+| `undo-last-commit` | Rewrites local HEAD  | Blocked for pushed/shared commits; use revert instead    |
 | `reset --hard`     | Rewrites local state | Allowed only after explicit request and preflight checks |
 
 Manual verification checklist for browser integrations:
@@ -692,10 +697,59 @@ Clone a repository.
 
 Body: `{ url: string, recursive?: bool }`
 
-**POST /api/git/:project/push**
+**POST /api/git/push**
 Push commits.
 
-Body: `{ branch?: string, force?: bool }`
+Route: `/api/git/push`
+
+Body: `{ project: string, root?: string, force?: boolean }`
+
+Client behavior:
+
+- Project-level pushes now use a root-aware contract in the UI. The project root still calls `api.git.push(project)`, while a selected child root calls `api.git.push(project, root)`.
+- ProjectInfoPanel, WorkspaceGitPanel, and GitPage each expose both `Push` and `Force Push` actions. The destructive button confirms first, then sends the same root-aware payload with `force: true`.
+- The shared SSH retry flow normalizes a single Git result or an array of results before checking for auth failures, so push retries follow the same path as fetch and pull.
+- Successful push operations now surface a shared status banner as well, so plain push, force push, and push-after-passphrase-retry all confirm completion in the UI.
+- Non-auth push failures now surface through the same shared status banner path, so non-fast-forward rejections are visible instead of disappearing behind an HTTP 200 response.
+- Successful pushes now invalidate the broader Git cache set on the client: branches, git log, project status, diff, conflicts, file-tree, and project list data refresh together instead of only the push caller.
+- The Git page now uses the same root-aware push path for single-project views, so a selected root is preserved consistently across page-level and sidebar-level push actions.
+- The SSH passphrase retry dialog can retry immediately or save the passphrase for later when the server and OS keyring support it.
+- Retry status messages are rendered through a shared frontend status model, so push/fetch/pull retries report the same wording and state handling.
+- The backend push path uses libgit2 `Remote::push(...)` with the same credential callback order as fetch/pull: loaded key, SSH agent, credential helper, then default credentials.
+- Push scope is intentionally narrow: the checked-out branch is pushed to its configured upstream only. If `branch.<name>.remote` or `branch.<name>.merge` is missing, the route returns a clear push error instead of inferring a destination. Setting `force: true` changes only the refspec mode; it does not broaden destination inference.
+- See `ProjectInfoPanel.test.ts` and `use-git-with-ssh-retry.test.ts` for the root-selection and retry normalization coverage added in this phase.
+
+### SSH Credential APIs
+
+**POST /api/ssh/keys/load**
+Load an SSH private key into the current DamHopper server session.
+
+Body: `{ keyPath?: string, passphrase?: string, saveForLater?: bool }`
+
+Response: `{ success: bool, saved: bool, keyPath?: string, error?: string }`
+
+Notes:
+
+- `saveForLater=true` attempts to persist the passphrase in the host OS credential store.
+- `saved=true` means a saved credential is available for that workspace/key after the call completes. It can mean the current request persisted it, or that one already existed when the key was loaded session-only.
+- Validation happens before persistence, so a wrong passphrase does not create or update a saved credential.
+- When persistence is unavailable, the key still loads for the current server session and `error` explains why the save step was skipped.
+- Responses never include the passphrase.
+- The loaded credential feeds the shared libgit2 fetch/pull/push callback path; it is not passed to a CLI askpass helper.
+
+**GET /api/ssh/credentials**
+Return saved-credential metadata for one SSH key.
+
+Query: `keyPath=basename`
+
+Response: `{ saved: bool, keyPath?: string, error?: string }`
+
+**DELETE /api/ssh/credentials**
+Forget the saved credential for one SSH key and clear the in-memory session credential when it matches.
+
+Query: `keyPath=basename`
+
+Response: `{ success: bool, forgotten: bool, error?: string }`
 
 **GET /api/git/:project/branches**
 List local and remote branches.

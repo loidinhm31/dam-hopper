@@ -167,11 +167,11 @@ function channelToEndpoint(
       const d =
         typeof data === "string"
           ? { project: data, root: undefined }
-          : (data as { project: string; root?: string });
+          : (data as { project: string; root?: string; force?: boolean });
       return {
         method: "POST",
         url: "/api/git/push",
-        body: { project: d.project, root: d.root },
+        body: { project: d.project, root: d.root, force: d.force },
       };
     }
     case "git:worktrees":
@@ -466,6 +466,26 @@ function channelToEndpoint(
       return { method: "GET", url: "/api/ssh/agent" };
     case "ssh:addKey":
       return { method: "POST", url: "/api/ssh/keys/load", body: data };
+    case "ssh:credentialStatus": {
+      const d = (data ?? {}) as { keyPath?: string };
+      const params = new URLSearchParams();
+      if (d.keyPath) params.set("keyPath", d.keyPath);
+      const qs = params.toString();
+      return {
+        method: "GET",
+        url: `/api/ssh/credentials${qs ? `?${qs}` : ""}`,
+      };
+    }
+    case "ssh:forgetCredential": {
+      const d = (data ?? {}) as { keyPath?: string };
+      const params = new URLSearchParams();
+      if (d.keyPath) params.set("keyPath", d.keyPath);
+      const qs = params.toString();
+      return {
+        method: "DELETE",
+        url: `/api/ssh/credentials${qs ? `?${qs}` : ""}`,
+      };
+    }
 
     // Git diff / change management
     case "git:diff": {

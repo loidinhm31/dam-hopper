@@ -137,6 +137,25 @@ export interface HostMetrics {
   };
 }
 
+export interface SshLoadKeyResult {
+  success: boolean;
+  saved: boolean;
+  keyPath?: string;
+  error?: string;
+}
+
+export interface SshCredentialStatus {
+  saved: boolean;
+  keyPath?: string;
+  error?: string;
+}
+
+export interface SshForgetCredentialResult {
+  success: boolean;
+  forgotten: boolean;
+  error?: string;
+}
+
 // ── Memory + Import Types ─────────────────────────────────────────────────────
 // NOTE: These mirror types from @dam-hopper/core. Duplication is intentional —
 // the web renderer runs in Chromium and cannot import Node.js core packages.
@@ -490,8 +509,8 @@ export const api = {
       getTransport().invoke<GitOpResult[]>("git:fetch", projects),
     pull: (projects?: string[]) =>
       getTransport().invoke<GitOpResult[]>("git:pull", projects),
-    push: (project: string, root?: string) =>
-      getTransport().invoke<GitOpResult>("git:push", { project, root }),
+    push: (project: string, root?: string, force?: boolean) =>
+      getTransport().invoke<GitOpResult>("git:push", { project, root, force }),
     worktrees: (project: string) =>
       getTransport().invoke<Worktree[]>("git:worktrees", project),
     roots: (project: string) =>

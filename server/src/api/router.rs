@@ -233,6 +233,10 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/ssh/keys", get(ssh::list_keys))
         .route("/api/ssh/agent", get(ssh::check_agent))
         .route("/api/ssh/keys/load", post(ssh::load_key))
+        .route(
+            "/api/ssh/credentials",
+            get(ssh::credential_status).delete(ssh::forget_credential),
+        )
         // Commands
         .route("/api/commands/search", get(commands::search_commands))
         .route("/api/commands", get(commands::list_commands))

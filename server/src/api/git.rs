@@ -84,9 +84,12 @@ pub async fn pull_projects(
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PushBody {
     pub project: String,
     pub root: Option<String>,
+    #[serde(default)]
+    pub force: bool,
 }
 
 pub async fn push_project(
@@ -94,6 +97,7 @@ pub async fn push_project(
     Json(body): Json<PushBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let project_path = resolve_project_path(&state, &body.project).await?;
+    let ssh_cred = state.ssh_creds.read().await.clone();
     let root = resolve_git_request_root(&project_path, body.root.as_deref())
         .map_err(ApiError::from_app)?;
     let progress = Some(create_progress_channel());
@@ -109,7 +113,12 @@ pub async fn push_project(
         });
     }
 
-    let result = crate::git::cli_fallback::push(&root.root_path, &body.project, &progress).await;
+    let result = if body.force {
+        crate::git::repository::force_push(&root.root_path, &body.project, &progress, ssh_cred)
+            .await
+    } else {
+        crate::git::push(&root.root_path, &body.project, &progress, ssh_cred).await
+    };
     Ok(Json(result))
 }
 
@@ -208,6 +217,7 @@ pub async fn get_branches(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RootQuery {
     pub root: Option<String>,
 }
@@ -349,6 +359,7 @@ pub async fn undo_last_commit_route(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommitFileOperationBody {
     pub paths: Vec<String>,
     pub root: Option<String>,

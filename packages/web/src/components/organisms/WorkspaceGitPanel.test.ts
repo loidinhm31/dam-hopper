@@ -1,3 +1,5 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/api/client.js", () => ({
@@ -6,6 +8,104 @@ vi.mock("@/api/client.js", () => ({
       log: vi.fn(),
     },
   },
+}));
+
+vi.mock("@tanstack/react-query", () => ({
+  useQueryClient: () => ({
+    invalidateQueries: vi.fn().mockResolvedValue(undefined),
+    refetchQueries: vi.fn().mockResolvedValue(undefined),
+    fetchQuery: vi.fn(),
+  }),
+}));
+
+vi.mock("@/api/queries.js", () => ({
+  useGitRoots: () => ({
+    data: [
+      {
+        rootId: ".",
+        path: ".",
+        absolutePath: "/repo",
+        kind: "primary",
+        warnings: [],
+      },
+    ],
+  }),
+  useBranches: () => ({
+    data: [
+      {
+        name: "main",
+        isRemote: false,
+        isCurrent: true,
+        ahead: 0,
+        behind: 0,
+        lastCommit: "abc1234",
+      },
+    ],
+  }),
+  useGitLog: () => ({ data: [], isLoading: false }),
+  useGitPush: () => ({ isPending: false, mutateAsync: vi.fn() }),
+}));
+
+vi.mock("@/hooks/use-git-with-ssh-retry.js", () => ({
+  useGitWithSshRetry: () => ({
+    passphraseDialogProps: {
+      open: false,
+      onSubmit: vi.fn(),
+      onCancel: vi.fn(),
+      loading: false,
+      error: undefined,
+      availableKeys: [],
+    },
+    statusMessage: undefined,
+    executeWithRetry: vi.fn(),
+  }),
+}));
+
+vi.mock("@/stores/editor.js", () => ({
+  useEditorStore: () => vi.fn(),
+}));
+
+vi.mock("@/components/organisms/GitLogTree.js", () => ({
+  GitLogTree: () => createElement("div", null, "GitLogTree"),
+}));
+
+vi.mock("@/components/organisms/CommitDetailsPanel.js", () => ({
+  CommitDetailsPanel: () => createElement("div", null, "CommitDetailsPanel"),
+}));
+
+vi.mock("@/components/organisms/GitBranchControl.js", () => ({
+  GitBranchControl: () => createElement("div", null, "GitBranchControl"),
+}));
+
+vi.mock("@/components/organisms/GitHistoryActions.js", () => ({
+  GitDropCommitDialog: () => null,
+  GitHistoryStatusBanner: () => null,
+  GitRevertCommitDialog: () => null,
+  GitResetDialog: () => null,
+  GitUndoLastCommitDialog: () => null,
+  useGitHistoryActions: () => ({
+    status: null,
+    resetScope: vi.fn(),
+    handleCherryPick: vi.fn(),
+    setRevertCommit: vi.fn(),
+    setUndoLastCommit: vi.fn(),
+    setDropCommit: vi.fn(),
+    setResetCommit: vi.fn(),
+    handleDropCommit: vi.fn(),
+    handleRevertCommit: vi.fn(),
+    handleUndoLastCommit: vi.fn(),
+    handleCherryPickFiles: vi.fn(),
+    handleRevertFiles: vi.fn(),
+    handleDropFiles: vi.fn(),
+    resetCommit: null,
+    dropCommit: null,
+    revertCommit: null,
+    undoLastCommit: null,
+    isDropCommitPending: false,
+    isRevertCommitPending: false,
+    isUndoLastCommitPending: false,
+    handleReset: vi.fn(),
+  }),
 }));
 
 import { api } from "@/api/client.js";
@@ -18,6 +118,7 @@ import {
   resolveWorkspaceHistoryRef,
   resolveWorkspaceHistoryBranchState,
   resolveWorkspaceGitSelection,
+  WorkspaceGitPanel,
   workspaceGitRootOptions,
 } from "./WorkspaceGitPanel.js";
 
@@ -355,5 +456,15 @@ describe("WorkspaceGitPanel VCS root helpers", () => {
       ),
     ).toBe("modules/child/README.md");
     expect(projectRelativePathForRoot(".", "README.md")).toBe("README.md");
+  });
+
+  it("renders a push action in the workspace git panel", () => {
+    const markup = renderToStaticMarkup(
+      createElement(WorkspaceGitPanel, { project: "demo-project" }),
+    );
+
+    expect(markup).toContain("Push");
+    expect(markup).toContain("History");
+    expect(markup).toContain("data-testid=\"workspace-git-push-button\"");
   });
 });
