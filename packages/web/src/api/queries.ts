@@ -523,6 +523,19 @@ export function useGitCheckoutBranch(project: string, root?: string) {
   });
 }
 
+export function useGitDeleteBranch(project: string, root?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (options: { name: string }) =>
+      api.git.deleteBranch(project, { ...options, root }),
+    onSuccess: () =>
+      invalidateGitProjectQueries(qc, project, {
+        includeBranches: true,
+        includeGitLog: true,
+      }),
+  });
+}
+
 export function useGitCherryPick(project: string, root?: string) {
   const qc = useQueryClient();
   return useMutation({

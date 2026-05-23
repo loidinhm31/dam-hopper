@@ -1109,6 +1109,41 @@ pub async fn create_branch(
     Ok(result)
 }
 
+pub async fn delete_branch(project_path: &Path, branch: &str) -> Result<GitActionResult, AppError> {
+    cli_fallback::validate_branch_name(branch)?;
+
+    {
+        let repo = open_repo(project_path)?;
+        if !branch_exists(&repo, branch, BranchType::Local) {
+            return Err(AppError::InvalidInput(format!(
+                "local branch not found: {branch}"
+            )));
+        }
+
+        let current_branch = repo
+            .head()
+            .ok()
+            .and_then(|head| head.shorthand().map(str::to_owned));
+        if current_branch.as_deref() == Some(branch) {
+            let mut result = GitActionResult::blocked(
+                GitBlockReason::CheckedOutBranch,
+                format!("Cannot delete checked out branch {branch}"),
+                "Check out a different branch before deleting this one.",
+            );
+            result.branch = Some(branch.to_string());
+            result.destructive = Some(true);
+            return Ok(result);
+        }
+    }
+
+    cli_fallback::run_git(&["branch", "-D", branch], project_path).await?;
+
+    let mut result = GitActionResult::ok(format!("Deleted branch {branch}"));
+    result.branch = Some(branch.to_string());
+    result.destructive = Some(true);
+    Ok(result)
+}
+
 pub async fn checkout_branch(
     project_path: &Path,
     branch: &str,

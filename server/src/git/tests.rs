@@ -10,8 +10,8 @@ use crate::git::diff::{
     stage_files, unstage_files,
 };
 use crate::git::repository::{
-    checkout_branch, cherry_pick, create_branch, force_push, get_log, get_status, list_branches,
-    push, reset_to_commit, undo_last_commit, update_branch,
+    checkout_branch, cherry_pick, create_branch, delete_branch, force_push, get_log, get_status,
+    list_branches, push, reset_to_commit, undo_last_commit, update_branch,
 };
 use crate::git::types::{
     CheckoutStrategy, GitProgressPhase, ResetMode, VcsRootKind, VcsRootMappingState,
@@ -503,6 +503,43 @@ fn list_branches_multiple_local() {
 
     let feat = branches.iter().find(|b| b.name == "feature/foo").unwrap();
     assert!(!feat.is_current);
+}
+
+#[tokio::test]
+async fn delete_branch_removes_non_current_local_branch() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    git(&["checkout", "-b", "feature/delete-me"], path);
+    std::fs::write(path.join("delete-me.txt"), "delete me").unwrap();
+    git(&["add", "."], path);
+    git(&["commit", "-m", "delete me"], path);
+    git(&["checkout", "main"], path);
+
+    let result = delete_branch(path, "feature/delete-me").await.unwrap();
+    let branches = list_branches(path).unwrap();
+
+    assert!(result.ok, "{result:?}");
+    assert_eq!(result.message.as_deref(), Some("Deleted branch feature/delete-me"));
+    assert!(branches.iter().all(|branch| branch.name != "feature/delete-me"));
+}
+
+#[tokio::test]
+async fn delete_branch_blocks_checked_out_branch() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    let result = delete_branch(path, "main").await.unwrap();
+
+    assert!(!result.ok, "{result:?}");
+    assert_eq!(
+        result.blocked_reason,
+        Some(crate::git::GitBlockReason::CheckedOutBranch)
+    );
+    assert_eq!(
+        result.message.as_deref(),
+        Some("Cannot delete checked out branch main")
+    );
 }
 
 // ---------------------------------------------------------------------------

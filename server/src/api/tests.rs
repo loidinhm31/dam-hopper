@@ -139,6 +139,22 @@ async fn post_json(
     router.oneshot(req).await.unwrap()
 }
 
+async fn delete_json(
+    state: AppState,
+    path: &str,
+    body: serde_json::Value,
+) -> axum::response::Response {
+    let router = build_router(state, vec![]);
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(path)
+        .header("Content-Type", "application/json")
+        .header("Cookie", auth_cookie())
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    router.oneshot(req).await.unwrap()
+}
+
 fn wait_for(timeout: Duration, predicate: impl Fn() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -1093,17 +1109,12 @@ async fn agent_store_matrix_returns_map() {
 // ---------------------------------------------------------------------------
 
 fn init_git_repo(path: &std::path::Path) {
-    let repo = git2::Repository::init(path).unwrap();
-    let sig = git2::Signature::now("test", "test@test.com").unwrap();
-    let mut index = repo.index().unwrap();
-    // Need at least one commit so we can list branches
+    git(&["init", "-b", "main"], path);
+    git(&["config", "user.email", "test@test.com"], path);
+    git(&["config", "user.name", "Test"], path);
     std::fs::write(path.join("README.md"), "# test repo").unwrap();
-    index.add_path(std::path::Path::new("README.md")).unwrap();
-    index.write().unwrap();
-    let tree_id = index.write_tree().unwrap();
-    let tree = repo.find_tree(tree_id).unwrap();
-    repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
-        .unwrap();
+    git(&["add", "README.md"], path);
+    git(&["commit", "-m", "init"], path);
 }
 
 #[tokio::test]
@@ -1168,4 +1179,28 @@ async fn git_branches_unknown_project_returns_404() {
     let state = make_state(&tmp); // no projects
     let resp = get(state, "/api/git/no-such-project/branches").await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn git_delete_branch_blocks_checked_out_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_git_repo(tmp.path());
+    git(&["checkout", "-b", "feature/delete-me"], tmp.path());
+    git(&["checkout", "main"], tmp.path());
+    let state = make_state_with_project(&tmp);
+
+    let resp = delete_json(
+        state,
+        "/api/git/test-project/branches",
+        serde_json::json!({ "name": "main" }),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["blockedReason"], "checked-out-branch");
 }

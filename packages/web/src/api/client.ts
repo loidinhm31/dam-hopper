@@ -377,6 +377,7 @@ export interface GitActionResult {
   };
   blockedReason?:
     | "active-operation"
+    | "checked-out-branch"
     | "dirty-worktree"
     | "detached-head"
     | "pushed-commit"
@@ -548,6 +549,17 @@ export const api = {
       },
     ) =>
       getTransport().invoke<GitActionResult>("git:checkoutBranch", {
+        project,
+        options,
+      }),
+    deleteBranch: (
+      project: string,
+      options: {
+        name: string;
+        root?: string;
+      },
+    ) =>
+      getTransport().invoke<GitActionResult>("git:deleteBranch", {
         project,
         options,
       }),

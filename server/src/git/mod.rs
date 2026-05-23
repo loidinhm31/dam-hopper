@@ -22,8 +22,8 @@ pub use diff::{
 };
 pub use progress::ProgressSender;
 pub use repository::{
-    checkout_branch, cherry_pick, create_branch, fetch, get_log, get_status, list_branches, pull,
-    push, reset_to_commit, undo_last_commit, update_branch,
+    checkout_branch, cherry_pick, create_branch, delete_branch, fetch, get_log, get_status,
+    list_branches, pull, push, reset_to_commit, undo_last_commit, update_branch,
 };
 pub use types::{
     BranchInfo, BranchUpdateResult, CheckoutStrategy, ConflictFile, DiffFileEntry, DiffResponse,

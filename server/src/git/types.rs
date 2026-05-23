@@ -206,6 +206,7 @@ pub enum GitRecoveryOperation {
 #[serde(rename_all = "kebab-case")]
 pub enum GitBlockReason {
     ActiveOperation,
+    CheckedOutBranch,
     DirtyWorktree,
     DetachedHead,
     PushedCommit,
