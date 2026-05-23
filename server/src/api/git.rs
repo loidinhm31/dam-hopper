@@ -10,9 +10,10 @@ use crate::git::bulk::ProjectRef;
 use crate::git::progress::create_progress_channel;
 use crate::git::{
     add_worktree, checkout_branch, cherry_pick, cherry_pick_commit_files, create_branch,
-    discover_vcs_roots, drop_commit, drop_commit_files, get_log, list_branches, list_worktrees,
-    remove_worktree, reset_to_commit, resolve_git_request_root, revert_commit, revert_commit_files,
-    undo_last_commit, update_branch, BulkGitService, CheckoutStrategy, ResetMode,
+    delete_branch, discover_vcs_roots, drop_commit, drop_commit_files, get_log, list_branches,
+    list_worktrees, remove_worktree, reset_to_commit, resolve_git_request_root, revert_commit,
+    revert_commit_files, undo_last_commit, update_branch, BulkGitService, CheckoutStrategy,
+    ResetMode,
     WorktreeAddOptions,
 };
 use crate::pty::EventSink as _;
@@ -246,6 +247,26 @@ pub async fn create_branch_route(
     )
     .await
     .map_err(ApiError::from_app)?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteBranchBody {
+    pub name: String,
+    pub root: Option<String>,
+}
+
+pub async fn delete_branch_route(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    Json(body): Json<DeleteBranchBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_project_path(&state, &project).await?;
+    let root = resolve_git_request_root(&path, body.root.as_deref()).map_err(ApiError::from_app)?;
+    let result = delete_branch(&root.root_path, &body.name)
+        .await
+        .map_err(ApiError::from_app)?;
     Ok(Json(result))
 }
 

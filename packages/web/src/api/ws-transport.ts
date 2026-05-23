@@ -240,6 +240,20 @@ function channelToEndpoint(
         body: d.options,
       };
     }
+    case "git:deleteBranch": {
+      const d = data as {
+        project: string;
+        options: {
+          name: string;
+          root?: string;
+        };
+      };
+      return {
+        method: "DELETE",
+        url: `/api/git/${encodeURIComponent(d.project)}/branches`,
+        body: d.options,
+      };
+    }
     case "git:updateBranch": {
       const d = data as { project: string; branch?: string; root?: string };
       return {

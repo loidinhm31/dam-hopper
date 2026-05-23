@@ -187,3 +187,58 @@ export function GitDirtyCheckoutDialog({
     </Dialog>
   );
 }
+
+interface GitBranchDeleteDialogProps {
+  branchName: string | null;
+  isPending: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}
+
+export function GitBranchDeleteDialog({
+  branchName,
+  isPending,
+  onClose,
+  onConfirm,
+}: GitBranchDeleteDialogProps) {
+  return (
+    <Dialog
+      open={branchName !== null}
+      onOpenChange={(open) => {
+        if (!open && !isPending) onClose();
+      }}
+    >
+      <DialogContent className="sm:max-w-[460px]">
+        <DialogHeader>
+          <DialogTitle>Delete Branch</DialogTitle>
+          <DialogDescription>
+            Delete the local branch <strong>{branchName}</strong>?
+          </DialogDescription>
+        </DialogHeader>
+        <p className="text-sm text-[var(--color-text-muted)]">
+          This force-deletes the local branch ref from this repository, even if
+          it is not fully merged. The checked-out branch cannot be deleted.
+        </p>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={isPending}
+            onClick={onClose}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="danger"
+            loading={isPending}
+            disabled={isPending || !branchName}
+            onClick={onConfirm}
+          >
+            Delete branch
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

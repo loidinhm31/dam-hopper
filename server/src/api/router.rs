@@ -81,7 +81,9 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         )
         .route(
             "/api/git/{project}/branches",
-            get(git::get_branches).post(git::create_branch_route),
+            get(git::get_branches)
+                .post(git::create_branch_route)
+                .delete(git::delete_branch_route),
         )
         .route(
             "/api/git/{project}/branches/checkout",
