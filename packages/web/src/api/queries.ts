@@ -16,6 +16,9 @@ import type {
   ResetMode,
   UiConfig,
   HostMetrics,
+  SshCredentialStatus,
+  SshForgetCredentialResult,
+  SshLoadKeyResult,
 } from "./client.js";
 import type { SessionInfo } from "@/api/client.js";
 
@@ -615,12 +618,31 @@ export function useGitPull() {
   });
 }
 
+export function resolveGitPushTarget(
+  target: string | { project: string; root?: string; force?: boolean },
+) {
+  if (typeof target === "string") {
+    return [target, undefined, undefined] as const;
+  }
+
+  return [target.project, target.root, target.force] as const;
+}
+
 export function useGitPush() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (project: string) => api.git.push(project),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["projects"] });
+    mutationFn: (target: string | { project: string; root?: string; force?: boolean }) => {
+      const [project, root, force] = resolveGitPushTarget(target);
+      return api.git.push(project, root, force);
+    },
+    onSuccess: (_result, target) => {
+      const project = typeof target === "string" ? target : target.project;
+      invalidateGitProjectQueries(qc, project, {
+        includeBranches: true,
+        includeGitLog: true,
+        includeProjects: true,
+        includeProjectStatus: true,
+      });
     },
   });
 }
@@ -644,14 +666,42 @@ export function useSshAddKey() {
     mutationFn: ({
       passphrase,
       keyPath,
+      saveForLater,
     }: {
       passphrase: string;
       keyPath?: string;
+      saveForLater?: boolean;
     }) =>
-      getTransport().invoke<{ success: boolean; error?: string }>(
+      getTransport().invoke<SshLoadKeyResult>(
         "ssh:addKey",
-        { passphrase, keyPath },
+        { passphrase, keyPath, saveForLater },
       ),
+  });
+}
+
+export function useSshCredentialStatus(keyPath?: string) {
+  return useQuery({
+    queryKey: ["ssh-credential-status", keyPath ?? ""],
+    queryFn: () =>
+      getTransport().invoke<SshCredentialStatus>("ssh:credentialStatus", {
+        keyPath,
+      }),
+    staleTime: 60_000,
+  });
+}
+
+export function useSshForgetCredential() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (keyPath?: string) =>
+      getTransport().invoke<SshForgetCredentialResult>("ssh:forgetCredential", {
+        keyPath,
+      }),
+    onSuccess: (_result, keyPath) => {
+      void qc.invalidateQueries({
+        queryKey: ["ssh-credential-status", keyPath ?? ""],
+      });
+    },
   });
 }
 

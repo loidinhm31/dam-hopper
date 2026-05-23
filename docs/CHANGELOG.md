@@ -1,5 +1,7 @@
 ## 2026-05-20
 
+- **Phase 01: Root-Aware Git Push and SSH Retry Flow.** Complete ✓ 2026-05-23. Rebuilt push on top of libgit2 so `POST /api/git/push` keeps the root-aware UI/API contract while the backend now uses `Remote::push(...)` with the same credential callback order as fetch/pull: loaded key, SSH agent, credential helper, then default credentials. `ProjectInfoPanel`, `WorkspaceGitPanel`, and `GitPage` all preserve the selected VCS root in the push payload, the shared SSH retry hook still normalizes single-result versus array Git responses before auth detection, and successful pushes still invalidate the broader Git cache set. Focused Rust coverage now includes successful local bare-remote push, missing-upstream failure, nested-root isolation, and callback-level remote rejection reporting. [See plan](../plans/260523-0355-git-push-ssh-passphrase/plan.md).
+
 - **Phase 01: Backend VCS Root Discovery.** Complete ✓ 2026-05-20. Added backend discovery for git roots under a project: the server now resolves the primary repo, nested repos, and submodule gitlinks, exposes them through `GET /api/git/{project}/roots`, and reports mapping state plus submodule metadata for client-side root selection. Invalid `.gitmodules` files are tolerated with warnings on the primary root. Tests cover mapped, unmapped, missing, uninitialized, and traversal-blocked roots.
 
 - **Phase 04: Tests Docs Validation.** Complete ✓ 2026-05-20. Validated the multi-root Git work with real repo tests and web Vitest coverage, then updated the API, system architecture, and frontend component docs for root discovery and root-scoped Git behavior. Full Rust and web suites passed; no critical review issues remained.
@@ -18,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+- Root-aware force-push support on the actual push flow. `POST /api/git/push` now accepts `force: true`, and the Push entrypoints in `ProjectInfoPanel`, `WorkspaceGitPanel`, and `GitPage` expose a confirmed `Force Push` action that reuses the same libgit2 credential callback path as normal push. This stays separate from the guarded history-rewrite endpoints: pushed/shared-history drop and undo flows still recommend revert instead of silently overriding safety checks.
+- Shared Git push feedback in the web UI. The SSH retry status banner now also confirms successful push completion, so regular push, force push, and passphrase-retry push all report a visible result after the request finishes.
 
 - **Phase 02: Terminal Workspace Shortcut Routing.** Complete ✓ 2026-05-19. Added configurable terminal workspace switching: `UiConfig` now carries `terminalWorkspaceShortcut` with default `Mod+Shift+Backquote`, the settings UI exposes a Terminal workspace row, `WorkspacePage` toggles IDE/Terminal mode from the configured shortcut, and `TerminalPanel` plus `PaneContainer` suppress that shortcut from xterm input so the binding stays global. [See plan](../plans/260519-2159-terminal-workspace-docking/phase-02-configurable-mode-shortcut.md).
 

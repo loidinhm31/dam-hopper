@@ -1,7 +1,6 @@
 /// CLI fallback operations via tokio::process::Command.
 ///
 /// Used for operations where git2 is insufficient or unreliable:
-/// - push (credential handling: SSH agent, keychain, helper chains)
 /// - pull (when ff-only merge fails, user may need to rebase/merge interactively)
 /// - worktree add/remove (git2 worktree API is incomplete)
 use std::path::Path;
@@ -154,43 +153,6 @@ async fn git_path_exists(cwd: &Path, git_path: &str) -> Result<bool, AppError> {
         .trim()
         .to_string();
     Ok(cwd.join(resolved).exists())
-}
-
-pub async fn push(
-    project_path: &Path,
-    project_name: &str,
-    progress: &Option<ProgressSender>,
-) -> GitOperationResult {
-    let start = Instant::now();
-    emit_started(progress, project_name, "push", "Pushing...");
-
-    match run_git(&["push"], project_path).await {
-        Ok(_) => {
-            let duration_ms = start.elapsed().as_millis() as u64;
-            emit_completed(progress, project_name, "push", "Push complete");
-            GitOperationResult {
-                project_name: project_name.to_string(),
-                operation: GitOperation::Push,
-                success: true,
-                summary: Some("Pushed to remote".to_string()),
-                error: None,
-                duration_ms,
-            }
-        }
-        Err(e) => {
-            let duration_ms = start.elapsed().as_millis() as u64;
-            let msg = e.to_string();
-            emit_failed(progress, project_name, "push", &msg);
-            GitOperationResult {
-                project_name: project_name.to_string(),
-                operation: GitOperation::Push,
-                success: false,
-                summary: None,
-                error: Some(msg),
-                duration_ms,
-            }
-        }
-    }
 }
 
 pub async fn pull_ff_only(

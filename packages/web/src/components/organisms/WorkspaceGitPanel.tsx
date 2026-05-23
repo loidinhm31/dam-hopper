@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronLeft, ChevronRight, RefreshCw, Upload } from "lucide-react";
 import { GitLogTree } from "@/components/organisms/GitLogTree.js";
 import { CommitDetailsPanel } from "@/components/organisms/CommitDetailsPanel.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { cn } from "@/lib/utils.js";
 import { api } from "@/api/client.js";
-import { useBranches, useGitLog, useGitRoots } from "@/api/queries.js";
+import {
+  useBranches,
+  useGitLog,
+  useGitPush,
+  useGitRoots,
+} from "@/api/queries.js";
 import type {
   Branch,
   GitLogEntry,
@@ -14,6 +19,11 @@ import type {
   VcsRoot,
 } from "@/api/client.js";
 import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
+import { Button } from "@/components/atoms/Button.js";
+import { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";
+import { GitForcePushDialog } from "@/components/organisms/GitForcePushDialog.js";
+import { SshRetryStatusMessage } from "@/components/atoms/SshRetryStatusMessage.js";
+import { useGitWithSshRetry } from "@/hooks/use-git-with-ssh-retry.js";
 import {
   GitDropCommitDialog,
   GitHistoryStatusBanner,
@@ -22,6 +32,11 @@ import {
   GitUndoLastCommitDialog,
   useGitHistoryActions,
 } from "@/components/organisms/GitHistoryActions.js";
+import {
+  buildProjectInfoPushTarget,
+  buildProjectInfoPushTargetWithMode,
+  formatProjectInfoRootLabel,
+} from "@/components/organisms/ProjectInfoPanel.js";
 
 interface WorkspaceGitPanelProps {
   project: string;
@@ -207,6 +222,10 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
   const openDiff = useEditorStore((s) => s.openDiff);
   const historyActions = useGitHistoryActions(project, selectedRootId);
   const queryClient = useQueryClient();
+  const gitPush = useGitPush();
+  const [forcePushOpen, setForcePushOpen] = useState(false);
+  const { passphraseDialogProps, statusMessage, executeWithRetry } =
+    useGitWithSshRetry();
   const offset = page * WORKSPACE_GIT_LOG_LIMIT;
   const { data: roots = [] } = useGitRoots(project);
   const { data: branches = [] } = useBranches(project, selectedRootId);
@@ -214,6 +233,9 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
   const selectedRoot =
     rootOptions.find((root) => root.rootId === selectedRootId) ??
     rootOptions[0];
+  const selectedRootLabel = selectedRoot
+    ? formatProjectInfoRootLabel(selectedRoot)
+    : "Project root";
   const activeBranch =
     branches.find((branch) => branch.isCurrent)?.name ?? "";
   const historyBranch =
@@ -322,6 +344,22 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
 
   return (
     <>
+      <PassphraseDialog {...passphraseDialogProps} />
+      <GitForcePushDialog
+        open={forcePushOpen}
+        project={project}
+        rootLabel={selectedRootLabel}
+        loading={gitPush.isPending}
+        onClose={() => setForcePushOpen(false)}
+        onConfirm={() => {
+          setForcePushOpen(false);
+          void executeWithRetry({ operation: "push" }, () =>
+            gitPush.mutateAsync(
+              buildProjectInfoPushTargetWithMode(project, selectedRootId, true),
+            ),
+          ).catch(() => {});
+        }}
+      />
       <div className="flex h-full overflow-hidden bg-[var(--color-surface)]">
         <div
           className={cn(
@@ -393,6 +431,34 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
               className="mt-2"
               status={historyActions.status}
             />
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <SshRetryStatusMessage message={statusMessage} />
+              <Button
+                size="sm"
+                variant="secondary"
+                data-testid="workspace-git-push-button"
+                loading={gitPush.isPending}
+                onClick={() =>
+                  void executeWithRetry({ operation: "push" }, () =>
+                    gitPush.mutateAsync(
+                      buildProjectInfoPushTarget(project, selectedRootId),
+                    ),
+                  ).catch(() => {})
+                }
+              >
+                <Upload className="h-3 w-3" />
+                Push
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                loading={gitPush.isPending}
+                onClick={() => setForcePushOpen(true)}
+              >
+                <Upload className="h-3 w-3" />
+                Force Push
+              </Button>
+            </div>
           </div>
           <div className="flex flex-1 min-h-0 flex-col">
             <div className="shrink-0 px-3 py-2 border-b border-[var(--color-border)] text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] bg-[var(--color-surface-2)] flex items-center justify-between gap-2">

@@ -10,8 +10,8 @@ use crate::git::diff::{
     stage_files, unstage_files,
 };
 use crate::git::repository::{
-    checkout_branch, cherry_pick, create_branch, get_log, get_status, list_branches,
-    reset_to_commit, undo_last_commit, update_branch,
+    checkout_branch, cherry_pick, create_branch, force_push, get_log, get_status, list_branches,
+    push, reset_to_commit, undo_last_commit, update_branch,
 };
 use crate::git::types::{
     CheckoutStrategy, GitProgressPhase, ResetMode, VcsRootKind, VcsRootMappingState,
@@ -101,6 +101,7 @@ fn make_remote_clone_repo() -> (TempDir, TempDir, TempDir) {
         seed.path(),
     );
     git(&["push", "-u", "origin", "main"], seed.path());
+    git(&["symbolic-ref", "HEAD", "refs/heads/main"], remote.path());
 
     git(
         &[
@@ -114,6 +115,15 @@ fn make_remote_clone_repo() -> (TempDir, TempDir, TempDir) {
     git(&["config", "user.name", "Test"], clone.path());
 
     (remote, seed, clone)
+}
+
+fn clone_repo(remote: &Path, dest: &Path) {
+    git(
+        &["clone", remote.to_str().unwrap(), dest.to_str().unwrap()],
+        Path::new("/tmp"),
+    );
+    git(&["config", "user.email", "test@test.com"], dest);
+    git(&["config", "user.name", "Test"], dest);
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +369,106 @@ fn vcs_root_resolution_rejects_aggregate_unknown_and_escaping_roots() {
 // ---------------------------------------------------------------------------
 // Branch tests
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn push_to_local_bare_remote_succeeds() {
+    let (remote, _seed, clone) = make_remote_clone_repo();
+
+    std::fs::write(clone.path().join("push.txt"), "push me\n").unwrap();
+    git(&["add", "push.txt"], clone.path());
+    git(&["commit", "-m", "push change"], clone.path());
+
+    let result = push(clone.path(), "clone", &None, None).await;
+
+    assert!(result.success, "{result:?}");
+    assert_eq!(
+        git_output(&["rev-parse", "HEAD"], remote.path()),
+        git_output(&["rev-parse", "HEAD"], clone.path())
+    );
+}
+
+#[tokio::test]
+async fn push_without_upstream_returns_clear_error() {
+    let repo = make_temp_repo();
+
+    std::fs::write(repo.path().join("local.txt"), "local only\n").unwrap();
+    git(&["add", "local.txt"], repo.path());
+    git(&["commit", "-m", "local change"], repo.path());
+
+    let result = push(repo.path(), "local", &None, None).await;
+    let error = result.error.clone().unwrap_or_default().to_lowercase();
+
+    assert!(!result.success, "{result:?}");
+    assert!(
+        error.contains("no configured push destination")
+            || error.contains("no configured upstream branch"),
+        "unexpected error: {error}"
+    );
+}
+
+#[tokio::test]
+async fn push_selected_nested_root_only_updates_that_remote() {
+    let parent = make_temp_repo();
+    let child_remote = tempfile::tempdir().unwrap();
+    let child_seed = tempfile::tempdir().unwrap();
+    let child_path = parent.path().join("modules/child");
+
+    git(&["init", "--bare"], child_remote.path());
+    init_repo_with_commit(child_seed.path());
+    git(
+        &[
+            "remote",
+            "add",
+            "origin",
+            child_remote.path().to_str().unwrap(),
+        ],
+        child_seed.path(),
+    );
+    git(&["push", "-u", "origin", "main"], child_seed.path());
+    clone_repo(child_remote.path(), &child_path);
+
+    let parent_head_before = git_output(&["rev-parse", "HEAD"], parent.path());
+
+    std::fs::write(child_path.join("nested.txt"), "nested push\n").unwrap();
+    git(&["add", "nested.txt"], &child_path);
+    git(&["commit", "-m", "nested change"], &child_path);
+
+    let result = push(&child_path, "child", &None, None).await;
+
+    assert!(result.success, "{result:?}");
+    assert_eq!(
+        git_output(&["rev-parse", "HEAD"], child_remote.path()),
+        git_output(&["rev-parse", "HEAD"], &child_path)
+    );
+    assert_eq!(
+        git_output(&["rev-parse", "HEAD"], parent.path()),
+        parent_head_before
+    );
+}
+
+#[tokio::test]
+async fn force_push_overwrites_non_fast_forward_remote_history() {
+    let (remote, seed, clone) = make_remote_clone_repo();
+
+    std::fs::write(clone.path().join("remote.txt"), "remote\n").unwrap();
+    git(&["add", "remote.txt"], clone.path());
+    git(&["commit", "-m", "remote commit"], clone.path());
+    git(&["push"], clone.path());
+
+    std::fs::write(seed.path().join("local.txt"), "local\n").unwrap();
+    git(&["add", "local.txt"], seed.path());
+    git(&["commit", "-m", "local rewrite"], seed.path());
+
+    let regular_push = push(seed.path(), "seed", &None, None).await;
+    assert!(!regular_push.success, "{regular_push:?}");
+
+    let force_result = force_push(seed.path(), "seed", &None, None).await;
+    assert!(force_result.success, "{force_result:?}");
+    assert_eq!(
+        git_output(&["rev-parse", "HEAD"], remote.path()),
+        git_output(&["rev-parse", "HEAD"], seed.path())
+    );
+}
 
 #[test]
 fn list_branches_single_main() {
