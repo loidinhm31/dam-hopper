@@ -2,6 +2,18 @@
 name = "dam-hopper-server"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "Rust backend server for the DamHopper multi-project development workspace UI"
+repository = "https://github.com/loidinhm31/dam-hopper"
+homepage = "https://github.com/loidinhm31/dam-hopper"
+documentation = "https://github.com/loidinhm31/dam-hopper/tree/main/docs"
+keywords = ["developer-tools", "workspace", "terminal", "git"]
+categories = ["development-tools"]
+exclude = [
+    "*.log",
+    "output.log",
+    "target/",
+]
 
 [[bin]]
 name = "dam-hopper-server"

@@ -248,22 +248,27 @@ cargo build --release
 ./target/release/dam-hopper-server --workspace /path/to/workspace --port 4800
 ```
 
-### Systemd Service
+### Nohup Background Server
 
-Install service file:
+Build, install under `~/.config/dam-hopper/`, and restart:
 
 ```bash
-sudo cp deploy/dam-hopper.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable dam-hopper
-sudo systemctl start dam-hopper
+pnpm build:server
+pnpm server:restart
 ```
 
-Edit `/etc/systemd/system/dam-hopper.service` to set:
+Edit `~/.config/dam-hopper/server.conf` to set:
 
-- `--workspace` path
-- `--port`
-- `--cors-origins` (if needed)
+- `DAM_HOPPER_WORKSPACE`
+- `DAM_HOPPER_HOST`
+- `DAM_HOPPER_PORT`
+- `DAM_HOPPER_CORS_ORIGINS` (if needed)
+
+Runtime files:
+
+- Binary: `~/.config/dam-hopper/bin/dam-hopper-server`
+- Log: `~/.config/dam-hopper/output.log`
+- PID: `~/.config/dam-hopper/server.pid`
 
 ## Cross-Origin Resource Sharing (CORS)
 

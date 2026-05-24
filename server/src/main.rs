@@ -72,10 +72,22 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    let gc_path = global_config_path();
+    let global_config = read_global_config_at(&gc_path)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
     // ── Workspace ─────────────────────────────────────────────────────────────
 
-    let workspace_dir = cli
-        .workspace
+    let workspace_dir = cli.workspace
+        .or_else(|| {
+            global_config
+                .defaults
+                .as_ref()
+                .and_then(|d| d.workspace.as_ref())
+                .map(PathBuf::from)
+        })
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     let config = match load_workspace_config(&workspace_dir) {
@@ -102,12 +114,6 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     };
-
-    let gc_path = global_config_path();
-    let global_config = read_global_config_at(&gc_path)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
 
     // ── Services ──────────────────────────────────────────────────────────────
 
