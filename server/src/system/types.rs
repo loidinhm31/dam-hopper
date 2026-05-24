@@ -10,6 +10,7 @@ pub struct HostMetrics {
     pub cpu: CpuMetrics,
     pub memory: MemoryMetrics,
     pub disk: DiskMetrics,
+    pub temperatures: Vec<TemperatureMetrics>,
 }
 
 #[derive(Debug, Serialize)]
@@ -47,4 +48,12 @@ pub struct DiskMetrics {
     pub available_bytes: u64,
     pub used_bytes: u64,
     pub usage_percent: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemperatureMetrics {
+    pub label: String,
+    pub celsius: f64,
+    pub source: String,
 }

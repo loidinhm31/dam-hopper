@@ -4,6 +4,7 @@ import { useHostMetrics } from "@/api/queries.js";
 import type { HostMetrics } from "@/api/client.js";
 import {
   formatBytes,
+  formatCelsius,
   formatPercent,
   formatUsage,
 } from "@/lib/host-metrics-format.js";
@@ -54,6 +55,14 @@ export function HostResourcePopover() {
 }
 
 function MetricsRows({ metrics }: { metrics: HostMetrics }) {
+  const temperatures = metrics.temperatures ?? [];
+  const hottestTemperature = temperatures.reduce<
+    HostMetrics["temperatures"][number] | null
+  >((hottest, reading) => {
+    if (!hottest || reading.celsius > hottest.celsius) return reading;
+    return hottest;
+  }, null);
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] pb-2">
@@ -88,6 +97,12 @@ function MetricsRows({ metrics }: { metrics: HostMetrics }) {
         percent={metrics.disk.usagePercent}
         detail={`${formatBytes(metrics.disk.usedBytes)} used on ${metrics.disk.mountPoint || "workspace disk"}`}
       />
+      {hottestTemperature && (
+        <TemperatureRow
+          value={formatCelsius(hottestTemperature.celsius)}
+          detail={formatTemperatureDetail(temperatures)}
+        />
+      )}
 
       {metrics.cpu.loadAverage && (
         <p className="truncate text-[10px] text-[var(--color-text-muted)]/70">
@@ -96,6 +111,24 @@ function MetricsRows({ metrics }: { metrics: HostMetrics }) {
           {metrics.cpu.loadAverage.fifteen.toFixed(2)}
         </p>
       )}
+    </div>
+  );
+}
+
+function TemperatureRow({ value, detail }: { value: string; detail: string }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-text)]">
+          Temperature
+        </span>
+        <span className="text-[11px] font-bold text-[var(--color-primary)]">
+          {value}
+        </span>
+      </div>
+      <p className="truncate text-[10px] text-[var(--color-text-muted)]">
+        {detail}
+      </p>
     </div>
   );
 }
@@ -130,4 +163,12 @@ function MetricRow({
       </p>
     </div>
   );
+}
+
+function formatTemperatureDetail(
+  temperatures: HostMetrics["temperatures"],
+): string {
+  return temperatures
+    .map((reading) => `${reading.label} ${formatCelsius(reading.celsius)}`)
+    .join(" / ");
 }
