@@ -1,5 +1,6 @@
 use std::{
     ffi::OsStr,
+    fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
@@ -8,7 +9,11 @@ use std::{
 use sysinfo::{Disks, System};
 
 mod types;
-pub use types::{CpuMetrics, DiskMetrics, HostMetrics, LoadAverageMetrics, MemoryMetrics};
+pub use types::{
+    CpuMetrics, DiskMetrics, HostMetrics, LoadAverageMetrics, MemoryMetrics, TemperatureMetrics,
+};
+
+const THERMAL_ZONE_ROOT: &str = "/sys/class/thermal";
 
 #[derive(Clone, Default)]
 pub struct HostMetricsSampler {
@@ -92,6 +97,7 @@ impl HostMetricsSampler {
                 usage_percent: usage_percent(used_memory, total_memory),
             },
             disk: disk.into_metrics(),
+            temperatures: read_thermal_zones(Path::new(THERMAL_ZONE_ROOT)),
         }
     }
 }
@@ -158,6 +164,44 @@ fn clamp_percent(value: f64) -> f64 {
 
 fn os_str_to_string(value: &OsStr) -> String {
     value.to_string_lossy().to_string()
+}
+
+fn read_thermal_zones(root: &Path) -> Vec<TemperatureMetrics> {
+    let Ok(entries) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+
+    let mut temperatures = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| read_thermal_zone(&entry.path()))
+        .collect::<Vec<_>>();
+    temperatures.sort_by(|left, right| left.label.cmp(&right.label));
+    temperatures
+}
+
+fn read_thermal_zone(path: &Path) -> Option<TemperatureMetrics> {
+    let source = path.file_name()?.to_string_lossy().to_string();
+    if !source.starts_with("thermal_zone") {
+        return None;
+    }
+
+    let raw_temp = fs::read_to_string(path.join("temp")).ok()?;
+    let milli_celsius = raw_temp.trim().parse::<f64>().ok()?;
+    if !milli_celsius.is_finite() {
+        return None;
+    }
+
+    let label = fs::read_to_string(path.join("type"))
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| source.clone());
+
+    Some(TemperatureMetrics {
+        label,
+        celsius: milli_celsius / 1000.0,
+        source,
+    })
 }
 
 #[cfg(test)]

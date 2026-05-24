@@ -188,7 +188,7 @@ export function useHostMetrics(enabled: boolean) {
     queryKey: ["system", "metrics"],
     queryFn: () => api.system.metrics(),
     enabled,
-    refetchInterval: enabled ? 5_000 : false,
+    refetchInterval: enabled ? 1_000 : false,
   });
 }
 

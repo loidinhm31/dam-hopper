@@ -24,3 +24,8 @@ export function formatUsage(usedBytes: number, totalBytes: number): string {
   if (!Number.isFinite(totalBytes) || totalBytes <= 0) return "unavailable";
   return `${formatBytes(usedBytes)} / ${formatBytes(totalBytes)}`;
 }
+
+export function formatCelsius(value: number | null | undefined): string {
+  if (!Number.isFinite(value)) return "unavailable";
+  return `${Math.round(value ?? 0)}°C`;
+}

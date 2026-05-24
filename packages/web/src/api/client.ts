@@ -135,6 +135,11 @@ export interface HostMetrics {
     usedBytes: number;
     usagePercent: number;
   };
+  temperatures: Array<{
+    label: string;
+    celsius: number;
+    source: string;
+  }>;
 }
 
 export interface SshLoadKeyResult {
