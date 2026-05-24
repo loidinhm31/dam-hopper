@@ -62,10 +62,10 @@ function splitPaneWithSession(
 
   const newPane = newPaneNode([sessionId], sessionId);
   const direction = edge === "left" || edge === "right" ? "horizontal" : "vertical";
-  const children =
+  const children: [LayoutNode, LayoutNode] =
     edge === "left" || edge === "top"
-      ? ([newPane, targetPane] as const)
-      : ([targetPane, newPane] as const);
+      ? [newPane, targetPane]
+      : [targetPane, newPane];
   const splitNode = createSplitNode(targetPane, direction, children);
   return {
     root: replaceNode(tree, paneId, splitNode) ?? tree,

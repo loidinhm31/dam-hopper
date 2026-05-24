@@ -28,13 +28,12 @@ import { PassphrasePrompt } from "@/components/molecules/PassphrasePrompt.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { matchesNewTerminalShortcut } from "@/lib/shortcuts.js";
 
-// Wire CSS var outside React so it updates synchronously with store changes
-useSettingsStore.subscribe((s) => {
+function syncFontSizeCssVar(fontSize: number): void {
   document.documentElement.style.setProperty(
     "--app-font-size",
-    `${s.systemFontSize}px`,
+    `${fontSize}px`,
   );
-});
+}
 
 const WorkspacePage = lazy(() => import("@/components/pages/WorkspacePage.js"));
 const DashboardPage = lazy(() =>
@@ -246,13 +245,21 @@ function WorkspaceGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-export function App() {
+export function DamHopperApp() {
   const qc = useQueryClient();
 
   useEffect(() => {
-    void useSettingsStore.getState().hydrate();
+    const settings = useSettingsStore.getState();
+    syncFontSizeCssVar(settings.systemFontSize);
+    const unsubscribe = useSettingsStore.subscribe((state) => {
+      syncFontSizeCssVar(state.systemFontSize);
+    });
+
+    void settings.hydrate();
     // Migrate legacy single-server config to profile system
     migrateToProfiles();
+
+    return unsubscribe;
   }, []);
 
   useEffect(() => {

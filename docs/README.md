@@ -105,7 +105,7 @@ See token at `~/.config/dam-hopper/server-token`.
 1. Find component in `packages/web/src/components/`
 2. Check [Frontend Components](./frontend-components.md) for architecture overview
 3. Review event subscriptions via [WebSocket Protocol Guide](./ws-protocol-guide.md)
-4. Trace type definitions in `packages/web/src/api/client.ts`
+4. Trace shared UI types in `packages/ui/src/api/client.ts`
 
 ### Debug Session Lifecycle
 
@@ -184,8 +184,8 @@ curl -H "Authorization: Bearer $TOKEN" \
 # Rust integration tests
 cd server && cargo test
 
-# Web build (no automated tests)
-cd packages/web && pnpm build
+# Web build (thin browser host)
+pnpm --filter @dam-hopper/web build
 ```
 
 ## Architecture at a Glance
@@ -211,6 +211,10 @@ See [System Architecture](./system-architecture.md) for detailed breakdown.
 ## File Structure
 
 ```
+apps/
+├── web/                          # Thin Vite browser host
+packages/
+├── ui/                           # Shared React UI package
 docs/
 ├── README.md                     # This file
 ├── project-overview-pdr.md       # Product requirements & roadmap
@@ -222,6 +226,8 @@ docs/
 ```
 
 Each file is self-contained but linked for cross-reference.
+
+Phase 01 of the Tauri shared-UI split is complete: the browser entrypoint now lives in `apps/web`, and the reusable UI surface lives in `packages/ui`.
 
 ## Maintenance
 

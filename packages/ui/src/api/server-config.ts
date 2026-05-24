@@ -299,13 +299,18 @@ export function deleteProfile(id: string): void {
 export function migrateToProfiles(): void {
   if (getProfiles().length > 0) return; // Already migrated
 
-  const existingUrl = localStorage.getItem(KEY_URL);
+  let existingUrl: string | null = null;
+  try {
+    existingUrl = localStorage.getItem(KEY_URL);
+  } catch {
+    return;
+  }
   const existingUsername = getAuthUsername();
 
-  if (existingUrl && existingUrl !== `${location.protocol}//${location.host}`) {
+  if (existingUrl) {
     const profile = createProfile({
       name: "Default Server",
-      url: existingUrl,
+      url: existingUrl.replace(/\/$/, ""),
       authType: "basic",
       username: existingUsername || undefined,
     });
