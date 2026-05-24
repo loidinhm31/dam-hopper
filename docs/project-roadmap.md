@@ -5,8 +5,8 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 ## Status Overview
 
 - **Current Phase:** Phase 07: Compact Top Navigation (UI/UX Redesign)
-- **Last Milestone:** Tauri v2 Shared UI Native Phase 01 workspace split completed
-- **Total Phases Completed:** 14 phases (F-01 7/7, F-08 5/6, UI/UX 1/1)
+- **Last Milestone:** Tauri v2 Shared UI Native Phase 02 shared logger/runtime utilities completed
+- **Total Phases Completed:** 15 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 2/5)
 - **Next Milestone:** Phase 06: Startup Restore — Load persisted sessions on server restart
 
 ## Roadmap Phases
@@ -206,6 +206,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [ ] Multi-workspace management UI
 
 ## Recent Milestones
+
+- **2026-05-25:** Completed Tauri v2 Shared UI Native Phase 02: Shared Logger And Runtime Utilities.
+  - ✅ Added dependency-free `@dam-hopper/shared` logger package with scoped `debug/info/warn/error` calls
+  - ✅ Added recursive sensitive metadata redaction before sink delivery, plus focused logger tests
+  - ✅ Configured web bootstrap log level from Vite env with dev `debug` and production `warn` fallback
+  - ✅ Replaced direct `console` usage in high-value transport, auth, terminal, dashboard, error-boundary, and filesystem paths
+  - ✅ Validation passed: `pnpm --filter @dam-hopper/shared test`, `pnpm --filter @dam-hopper/shared build`, `pnpm --filter @dam-hopper/ui test`, `pnpm --filter @dam-hopper/ui build`, `pnpm --filter @dam-hopper/web build`
 
 - **2026-05-24:** Completed Tauri v2 Shared UI Native Phase 01: Workspace Split.
   - ✅ Split the frontend into `apps/web` thin host and `packages/ui` shared React UI package

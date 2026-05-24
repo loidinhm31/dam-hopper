@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { logger } from "@dam-hopper/shared/logger";
 import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import type { FsOpResult } from "@/api/fs-types.js";
@@ -87,7 +88,7 @@ export function useFsOps(project: string, subscribedPath: string) {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (error) {
-      console.error("Download failed:", error);
+      logger.error("useFsOps", "download failed", { path, error });
       throw error;
     }
   }

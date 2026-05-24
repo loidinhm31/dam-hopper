@@ -29,6 +29,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@dam-hopper/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@dam-hopper/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -64,8 +67,20 @@ importers:
         specifier: ^6.0.0
         version: 6.4.1(jiti@2.6.1)(lightningcss@1.32.0)
 
+  packages/shared:
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.5
+        version: 4.1.5(vite@6.4.1(jiti@2.6.1)(lightningcss@1.32.0))
+
   packages/ui:
     dependencies:
+      '@dam-hopper/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@dnd-kit/core':
         specifier: ^6.3.1
         version: 6.3.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)

@@ -217,6 +217,22 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Storage quota: typical localStorage limit (5-10MB)
 - Profile switching instant (no network latency)
 
+### PR-008: Shared Runtime Logging Utilities
+
+**Functional Requirements:**
+
+- Provide a dependency-free logger package shared across browser packages
+- Support bootstrap-level configuration plus environment-based log-level fallback
+- Redact sensitive metadata recursively before log sink delivery by default
+- Replace direct `console` usage in high-value transport, auth, terminal, dashboard, error boundary, and filesystem flows
+
+**Acceptance Criteria:**
+
+- ✓ `configureLogger()`, `getLoggerConfig()`, `resolveLogLevel()`, and `logger.debug/info/warn/error()` exist in `packages/shared`
+- ✓ Web bootstrap chooses a log level from Vite env, with dev default `debug` and prod default `warn`
+- ✓ Sensitive metadata is redacted before sink delivery unless local diagnostics explicitly disable it
+- ✓ Shared logger is used by the high-value UI surfaces noted above
+
 ## Non-Functional Requirements
 
 ### Performance

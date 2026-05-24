@@ -1,6 +1,12 @@
-## 2026-05-20
+## 2026-05-25
+
+- **Phase 02: Shared Logger And Runtime Utilities.** Complete ✓ 2026-05-25. Added the dependency-free `@dam-hopper/shared` logger API (`configureLogger`, `getLoggerConfig`, `resolveLogLevel`, and `logger.debug/info/warn/error`) with recursive sensitive-metadata redaction before the sink, wired web bootstrap log level selection to Vite env with dev-debug / prod-warn fallback, and replaced direct `console` usage in high-value transport/auth/terminal/dashboard/error-boundary/fs paths. `packages/ui` keeps `cn` as-is. Verification passed for shared tests/build, ui tests/build, and web build.
+
+## 2026-05-23
 
 - **Phase 01: Root-Aware Git Push and SSH Retry Flow.** Complete ✓ 2026-05-23. Rebuilt push on top of libgit2 so `POST /api/git/push` keeps the root-aware UI/API contract while the backend now uses `Remote::push(...)` with the same credential callback order as fetch/pull: loaded key, SSH agent, credential helper, then default credentials. `ProjectInfoPanel`, `WorkspaceGitPanel`, and `GitPage` all preserve the selected VCS root in the push payload, the shared SSH retry hook still normalizes single-result versus array Git responses before auth detection, and successful pushes still invalidate the broader Git cache set. Focused Rust coverage now includes successful local bare-remote push, missing-upstream failure, nested-root isolation, and callback-level remote rejection reporting. [See plan](../plans/260523-0355-git-push-ssh-passphrase/plan.md).
+
+## 2026-05-20
 
 - **Phase 01: Backend VCS Root Discovery.** Complete ✓ 2026-05-20. Added backend discovery for git roots under a project: the server now resolves the primary repo, nested repos, and submodule gitlinks, exposes them through `GET /api/git/{project}/roots`, and reports mapping state plus submodule metadata for client-side root selection. Invalid `.gitmodules` files are tolerated with warnings on the primary root. Tests cover mapped, unmapped, missing, uninitialized, and traversal-blocked roots.
 

@@ -5,12 +5,13 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "outDir": "dist",
-    "rootDir": "src",
     "noEmit": true,
     "types": ["vite/client"],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "@dam-hopper/shared": ["../shared/src/index.ts"],
+      "@dam-hopper/shared/*": ["../shared/src/*"]
     }
   },
   "include": ["src"],

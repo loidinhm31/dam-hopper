@@ -11,8 +11,9 @@ import {
   RotateCw,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
-import { Button } from "@/components/atoms/Button.js";
 import { useQueryClient } from "@tanstack/react-query";
+import { logger } from "@dam-hopper/shared/logger";
+import { Button } from "@/components/atoms/Button.js";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { OverviewCard } from "@/components/molecules/OverviewCard.js";
 import { useProjects, useTerminalSessions } from "@/api/queries.js";
@@ -169,7 +170,10 @@ export function DashboardPage() {
 
   function handleKillSession(sessionId: string) {
     api.terminal.kill(sessionId).catch((err: unknown) => {
-      console.error("[DashboardPage] kill session failed", err);
+      logger.error("DashboardPage", "kill session failed", {
+        sessionId,
+        error: err,
+      });
     });
     void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
   }
