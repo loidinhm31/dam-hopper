@@ -5,7 +5,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 ## Status Overview
 
 - **Current Phase:** Phase 07: Compact Top Navigation (UI/UX Redesign)
-- **Last Milestone:** Compact Top Navigation feature completed
+- **Last Milestone:** Tauri v2 Shared UI Native Phase 01 workspace split completed
 - **Total Phases Completed:** 14 phases (F-01 7/7, F-08 5/6, UI/UX 1/1)
 - **Next Milestone:** Phase 06: Startup Restore — Load persisted sessions on server restart
 
@@ -206,6 +206,12 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [ ] Multi-workspace management UI
 
 ## Recent Milestones
+
+- **2026-05-24:** Completed Tauri v2 Shared UI Native Phase 01: Workspace Split.
+  - ✅ Split the frontend into `apps/web` thin host and `packages/ui` shared React UI package
+  - ✅ Preserved browser behavior while moving transport, components, styles, tests, and assets into the shared UI package
+  - ✅ Added package exports for `DamHopperApp` and shared styles, with the host owning transport/query bootstrapping
+  - ✅ Validation passed: `pnpm --filter @dam-hopper/web build`, `pnpm --filter @dam-hopper/web exec tsc -p tsconfig.json`, `pnpm --filter @dam-hopper/ui build`, `pnpm --filter @dam-hopper/ui test`
 
 - **2026-05-20:** Completed Terminal Workspace Docking Phase 05.
   - ✅ Verified `pnpm --filter @dam-hopper/web test`, `pnpm build`, and focused Rust `ui_config` tests

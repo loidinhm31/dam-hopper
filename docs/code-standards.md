@@ -496,11 +496,11 @@ pub fn with_persist(
 - 50 sessions: ~1.2s (acceptable, rarely occurs)
 - With parallel spawning (future): could reduce further
 
-## TypeScript Frontend (packages/web/)
+## TypeScript Frontend (`apps/web` + `packages/ui`)
 
 ### Profile Management Pattern
 
-Multi-server profile management lives in `packages/web/src/api/server-config.ts` with a client-side-only architecture.
+Multi-server profile management lives in `packages/ui/src/api/server-config.ts` with a client-side-only architecture.
 
 **Data Model:**
 
@@ -560,8 +560,8 @@ export function saveProfiles(profiles: ServerProfile[]): void {
 // Backward Compatibility
 export function migrateToProfiles(): void {
   // If profiles already exist → no-op
-  // If legacy damhopper_server_url exists and not same-origin → create "Default Server" profile
-  // Called in App.tsx at startup
+  // If legacy damhopper_server_url exists → create "Default Server" profile
+  // Called in DamHopperApp at startup
 }
 ```
 
@@ -626,7 +626,7 @@ pnpm format      # Prettier
 ### Component Structure
 
 ```
-src/
+packages/ui/src/
 ├── api/
 │   ├── client.ts          # Type definitions (mirrors Rust API)
 │   ├── fs-types.ts        # Filesystem-specific types
@@ -645,6 +645,8 @@ src/
 ├── stores/                # Zustand stores (kebab-case filenames)
 └── types/                 # Shared TypeScript type declarations
 ```
+
+`apps/web` owns browser bootstrapping only: `QueryClientProvider`, `initTransport(new WsTransport(getServerUrl()))`, DOM mount, and host Vite config. `packages/ui` owns components, hooks, stores, shared styling, assets, and tests.
 
 ### Client Types
 
@@ -806,7 +808,7 @@ Types: feat, fix, refactor, test, docs, perf, ci, chore.
 
 **Web:**
 
-- Vite output: `packages/web/dist/`
+- Vite output: `apps/web/dist/`
 - Served by Rust binary via `tower-http::ServeDir`
 
 ## Dependency Policy

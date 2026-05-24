@@ -5,7 +5,8 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Browser                                                     │
-│  ├─ React 19 SPA (packages/web/dist/)                      │
+│  ├─ Thin Vite host (apps/web/dist/)                        │
+│  ├─ Shared React UI package (packages/ui)                  │
 │  ├─ fetch(/api/*) for REST queries                         │
 │  └─ WebSocket(/ws) for terminal I/O + events               │
 └──────────────────────┬──────────────────────────────────────┘
@@ -732,11 +733,11 @@ GET /api/fs/search?project=web&q=pattern[&case=true&max=50]
 
 ## Frontend Components (Phase 06+)
 
-React 19 single-page application at `packages/web/` using Vite + Tailwind CSS.
+Frontend now uses a split host/package layout: `apps/web` is the thin Vite browser host, `packages/ui` contains the shared React UI, and `apps/native` remains a Phase 03 placeholder. The host owns DOM mount plus transport/query bootstrapping; the shared package owns components, hooks, stores, styles, assets, and tests.
 
 ### Component Architecture
 
-**TerminalPanel** (`packages/web/src/components/organisms/TerminalPanel.tsx`)
+**TerminalPanel** (`packages/ui/src/components/organisms/TerminalPanel.tsx`)
 
 - Renders single terminal session using xterm.js
 - Subscribes to Transport events: `onTerminalExit`, `onProcessRestarted`, `onTransportStatus`
@@ -746,7 +747,7 @@ React 19 single-page application at `packages/web/` using Vite + Tailwind CSS.
   - Reconnect: Dim `[Reconnecting…]` / `[Reconnected]`
 - Creates/reconnects to PTY session on mount via `terminal:spawn` command
 
-**TerminalTreeView** (`packages/web/src/components/organisms/TerminalTreeView.tsx`)
+**TerminalTreeView** (`packages/ui/src/components/organisms/TerminalTreeView.tsx`)
 
 - Sidebar tree displaying projects + commands + sessions
 - Renders `StatusDot` component (NEW: Phase 6) for each session
@@ -758,7 +759,7 @@ React 19 single-page application at `packages/web/` using Vite + Tailwind CSS.
   - ⚪ Gray: exited cleanly (exit=0)
 - Expandable profile nodes show instance children + alive count badge
 
-**DashboardPage** (`packages/web/src/components/pages/DashboardPage.tsx`)
+**DashboardPage** (`packages/ui/src/components/pages/DashboardPage.tsx`)
 
 - Main view: all sessions with metadata (uptime, exit code)
 - **SessionRow** renders:
@@ -769,7 +770,7 @@ React 19 single-page application at `packages/web/` using Vite + Tailwind CSS.
 
 ### Session Lifecycle Helpers (Phase 06)
 
-**session-status.ts** (`packages/web/src/lib/session-status.ts`)
+**session-status.ts** (`packages/ui/src/lib/session-status.ts`)
 
 - `getSessionStatus(sess: SessionInfo): "alive" | "restarting" | "crashed" | "exited"` — determines UI status
 - `getStatusDotColor(status): string` — maps status to Tailwind class
@@ -784,7 +785,7 @@ React 19 single-page application at `packages/web/` using Vite + Tailwind CSS.
 
 ### Transport Events (Phase 06)
 
-**WebSocket Transport** (`packages/web/src/api/ws-transport.ts`)
+**WebSocket Transport** (`packages/ui/src/api/ws-transport.ts`)
 
 - New event listeners (Phase 5 contract):
   - `onTerminalExit(id, callback)` — trigger exit banner, call onExit

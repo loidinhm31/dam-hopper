@@ -1,12 +1,11 @@
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { App } from "./App.js";
-import "./index.css";
-import "@xterm/xterm/css/xterm.css";
+import { DamHopperApp } from "@dam-hopper/ui";
+import "@dam-hopper/ui/styles";
 
-import { initTransport } from "./api/transport.js";
-import { WsTransport } from "./api/ws-transport.js";
-import { getServerUrl } from "./api/server-config.js";
+import { initTransport } from "@dam-hopper/ui/api/transport";
+import { WsTransport } from "@dam-hopper/ui/api/ws-transport";
+import { getServerUrl } from "@dam-hopper/ui/api/server-config";
 
 initTransport(new WsTransport(getServerUrl()));
 
@@ -21,6 +20,6 @@ const queryClient = new QueryClient({
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
-    <App />
+    <DamHopperApp />
   </QueryClientProvider>,
 );

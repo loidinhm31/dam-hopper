@@ -15,7 +15,7 @@
     "server:restart": "deploy/run-linux-nohup.sh restart --bin server/target/release/dam-hopper-server",
     "server:status": "deploy/run-linux-nohup.sh status",
     "serve": "cd server && cargo run --release",
-    "lint": "eslint packages/",
+    "lint": "eslint apps/ packages/",
     "format": "prettier --write .",
     "test": "cd server && cargo test",
     "test:run": "cd server && cargo test",
