@@ -37,6 +37,29 @@ DAM_HOPPER_WORKSPACE=/path/to/workspace ./server/target/release/dam-hopper-serve
 # Open http://localhost:4800 — token printed to terminal on startup
 ```
 
+### Linux nohup background server
+
+For day-to-day Linux use, build the server locally, copy it under `~/.config/dam-hopper/`, and run it with `nohup`:
+
+```bash
+pnpm build:server
+pnpm server:restart
+```
+
+This installs the binary at `~/.config/dam-hopper/bin/dam-hopper-server`, reads config from `~/.config/dam-hopper/server.conf`, writes logs to `~/.config/dam-hopper/output.log`, and tracks the process in `~/.config/dam-hopper/server.pid`.
+
+Manage it with:
+
+```bash
+pnpm server:status
+pnpm server:stop
+pnpm server:start
+pnpm server:restart
+tail -f ~/.config/dam-hopper/output.log
+```
+
+See [Linux Nohup Setup](./docs/linux-nohup.md) for host/port, MongoDB, Tailscale, and update details.
+
 ## Configuration
 
 Create a `dam-hopper.toml` in your workspace root:
