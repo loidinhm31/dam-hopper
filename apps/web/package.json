@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@dam-hopper/shared": "workspace:*",
     "@dam-hopper/ui": "workspace:*",
     "@tanstack/react-query": "^5.67.0",
     "react": "^19.0.0",

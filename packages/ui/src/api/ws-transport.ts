@@ -12,6 +12,7 @@
  */
 
 import type { Transport } from "./transport.js";
+import { logger } from "@dam-hopper/shared/logger";
 import {
   buildAuthHeaders,
   getAuthToken,
@@ -1109,7 +1110,7 @@ export class WsTransport implements Transport {
     this.ws = ws;
 
     ws.onopen = () => {
-      console.log("[WsTransport] Connected to", this.baseUrl);
+      logger.debug("WsTransport", "connected", { baseUrl: this.baseUrl });
       this.backoffMs = INITIAL_BACKOFF_MS;
       this.setStatus("connected");
     };
@@ -1518,9 +1519,9 @@ export class WsTransport implements Transport {
 
     ws.onclose = () => {
       if (this.closed) return;
-      console.log(
-        `[WsTransport] Disconnected — reconnecting in ${this.backoffMs}ms`,
-      );
+      logger.debug("WsTransport", "disconnected; scheduling reconnect", {
+        backoffMs: this.backoffMs,
+      });
       // Reject all pending promises immediately on disconnect. Callers receive an error
       // right away rather than waiting 15–60 s for timeouts. FS subscriptions (pendingFsReqs)
       // are also rejected — callers must re-subscribe after reconnect via fsSubscribeTree().

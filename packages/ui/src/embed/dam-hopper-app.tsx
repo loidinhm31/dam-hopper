@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
+import { logger } from "@dam-hopper/shared/logger";
 import {
   BrowserRouter,
   Routes,
@@ -144,7 +145,7 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
           setAuthToken(data.token);
         }
       } catch (err) {
-        console.error("[AuthGuard] Auto-login failed:", err);
+        logger.error("AuthGuard", "auto-login failed", { error: err });
       }
       setAutoLoginAttempted(true);
     };

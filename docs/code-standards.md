@@ -648,6 +648,8 @@ packages/ui/src/
 
 `apps/web` owns browser bootstrapping only: `QueryClientProvider`, `initTransport(new WsTransport(getServerUrl()))`, DOM mount, and host Vite config. `packages/ui` owns components, hooks, stores, shared styling, assets, and tests.
 
+`packages/shared` owns dependency-free runtime utilities used across packages. Current rule: keep logger config, level resolution, and metadata redaction centralized in `src/logger.ts`, and prefer it over ad hoc `console` calls in transport, auth, terminal, dashboard, error boundary, and filesystem code.
+
 ### Client Types
 
 Types in `src/api/client.ts` **intentionally duplicate** Rust API shapes. This keeps the web package independent — no shared TypeScript lib.

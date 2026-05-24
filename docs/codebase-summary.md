@@ -14,9 +14,12 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 
 ## Current Frontend Shared Logic
 
-- **File Decorations**: `packages/web/src/lib/file-decoration.ts` is the shared registry for file icon, badge, display-language, and Monaco-language lookup.
-- **Compatibility Layer**: `packages/web/src/lib/mime-to-language.ts` keeps MIME-only callers working while routing to the shared registry.
-- **Rendering Wrapper**: `packages/web/src/lib/file-decoration-icon.tsx` is a thin icon component over the registry.
+- **Shared Runtime Logger**: `packages/shared/src/logger.ts` centralizes `configureLogger`, `getLoggerConfig`, `resolveLogLevel`, and `logger.debug/info/warn/error`, with recursive sensitive metadata redaction before the sink.
+- **Web Bootstrap Logging**: `apps/web` resolves its bootstrap log level from Vite env, with dev defaulting to `debug` and production defaulting to `warn` when no override is set.
+- **High-Value Call Sites**: transport, auth, terminal, dashboard, error boundary, and filesystem flows now use the shared logger instead of direct `console` calls.
+- **File Decorations**: `packages/ui/src/lib/file-decoration.ts` is the shared registry for file icon, badge, display-language, and Monaco-language lookup.
+- **Compatibility Layer**: `packages/ui/src/lib/mime-to-language.ts` keeps MIME-only callers working while routing to the shared registry.
+- **Rendering Wrapper**: `packages/ui/src/lib/file-decoration-icon.tsx` is a thin icon component over the registry.
 - **Shared Surfaces**: explorer tree, editor tabs, search headers, and path labels all read from the same lookup so file identity stays aligned across the UI.
 - **Workspace Terminal Layout**: `WorkspacePage` switches between IDE and terminal modes, `TerminalWorkspaceShell` renders the full-height terminal workspace with a persisted Fleet Terminal rail, and `MultiTerminalDisplay` reuses the existing terminal manager state across layout changes.
 - **Git VCS Roots**: `WorkspaceGitPanel` now loads server-reported VCS roots, scopes branch/history queries by selected root, groups local changes by `rootId`, and blocks mixed-root commits in the UI.

@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { logger } from "@dam-hopper/shared/logger";
 import {
   useTerminalTree,
   FREE_TERMINAL_PREFIX,
@@ -427,7 +428,11 @@ export function useTerminalManager(
         openTerminalTab(cmd.sessionId, projectName, cmd.command, resolvedCwd);
       })
       .catch((err: unknown) =>
-        console.error("[useTerminalManager] failed to create terminal", err),
+        logger.error("useTerminalManager", "failed to create terminal", {
+          projectName,
+          sessionId: cmd.sessionId,
+          error: err,
+        }),
       );
   }
 
@@ -451,9 +456,15 @@ export function useTerminalManager(
         openTerminalTab(sessionId, projectName, cmd.command, cmd.cwd);
       })
       .catch((err: unknown) =>
-        console.error(
-          "[useTerminalManager] failed to launch profile instance",
-          err,
+        logger.error(
+          "useTerminalManager",
+          "failed to launch profile instance",
+          {
+            projectName,
+            profileName: cmd.profileName,
+            sessionId,
+            error: err,
+          },
         ),
       );
   }
@@ -484,7 +495,11 @@ export function useTerminalManager(
         openTerminalTab(sessionId, projectName, resolvedCommand, resolvedCwd);
       })
       .catch((err: unknown) =>
-        console.error("[useTerminalManager] failed to launch terminal", err),
+        logger.error("useTerminalManager", "failed to launch terminal", {
+          projectName,
+          sessionId,
+          error: err,
+        }),
       );
   }
 
@@ -672,10 +687,11 @@ export function useTerminalManager(
         );
       })
       .catch((err: unknown) =>
-        console.error(
-          "[useTerminalManager] failed to create free terminal",
-          err,
-        ),
+        logger.error("useTerminalManager", "failed to create free terminal", {
+          projectName: launchContext.projectName,
+          sessionId,
+          error: err,
+        }),
       );
   }
 
@@ -702,9 +718,15 @@ export function useTerminalManager(
         );
       })
       .catch((err: unknown) =>
-        console.error(
-          "[useTerminalManager] failed to create free terminal with command",
-          err,
+        logger.error(
+          "useTerminalManager",
+          "failed to create free terminal with command",
+          {
+            projectName: launchContext.projectName,
+            sessionId,
+            command,
+            error: err,
+          },
         ),
       );
   }
@@ -727,9 +749,15 @@ export function useTerminalManager(
         openTerminalTab(sessionId, projectName, command, projectPath);
       })
       .catch((err: unknown) =>
-        console.error(
-          "[useTerminalManager] failed to create suggested terminal",
-          err,
+        logger.error(
+          "useTerminalManager",
+          "failed to create suggested terminal",
+          {
+            projectName,
+            sessionId,
+            command,
+            error: err,
+          },
         ),
       );
   }
@@ -761,10 +789,12 @@ export function useTerminalManager(
         openTerminalTab(sessionId, projectName, command, projectPath);
       })
       .catch((err: unknown) =>
-        console.error(
-          "[useTerminalManager] failed to create suggested terminal",
-          err,
-        ),
+        logger.error("useTerminalManager", "failed to create shell terminal", {
+          projectName,
+          sessionId,
+          command,
+          error: err,
+        }),
       );
   }
 

@@ -7,6 +7,7 @@
 │  Browser                                                     │
 │  ├─ Thin Vite host (apps/web/dist/)                        │
 │  ├─ Shared React UI package (packages/ui)                  │
+│  ├─ Shared runtime utilities (packages/shared)             │
 │  ├─ fetch(/api/*) for REST queries                         │
 │  └─ WebSocket(/ws) for terminal I/O + events               │
 └──────────────────────┬──────────────────────────────────────┘
@@ -60,6 +61,14 @@ Handles TOML parsing, project discovery, feature flags.
 1. `--workspace` CLI flag
 2. `DAM_HOPPER_WORKSPACE` env var
 3. `~/.config/dam-hopper/config.toml` default path
+
+### shared/
+
+Dependency-free runtime helpers shared by browser packages.
+
+- `logger.ts` centralizes `configureLogger`, `getLoggerConfig`, `resolveLogLevel`, and `logger.debug/info/warn/error`
+- Sensitive metadata is redacted recursively before sink delivery by default
+- Web bootstrap reads the desired log level from Vite env and falls back to `debug` in development or `warn` in production
 
 ### persistence/ (Phase 04)
 

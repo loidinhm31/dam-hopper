@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { logger } from "@dam-hopper/shared/logger";
 import { cn } from "@/lib/utils.js";
 import { getTransport } from "@/api/transport.js";
 import { api, type SessionInfo } from "@/api/client.js";
@@ -272,8 +273,12 @@ export function TerminalPanel({
       }
 
       attachTimeout = setTimeout(() => {
-        console.warn(
-          `[TerminalPanel] terminal:attach timeout for ${safeSessionId}, creating new session`,
+        logger.warn(
+          "TerminalPanel",
+          "terminal attach timeout; creating new session",
+          {
+            sessionId: safeSessionId,
+          },
         );
         void createSession();
       }, 3000);
