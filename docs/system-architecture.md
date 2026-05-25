@@ -86,9 +86,9 @@ permissions to `core:default`.
 
 **Tauri shell:**
 
-- `apps/native/src-tauri` contains only the default Tauri builder and the main window config.
+- `apps/native/src-tauri` contains the default Tauri builder, the main window config, and the checked-in Android Studio project under `src-tauri/gen/android`.
 - No filesystem, shell, opener, HTTP, or sidecar plugin permissions are granted in Phase 03. The native CSP allows local/profile HTTP and WebSocket connections but keeps default script execution to self.
-- Native dev uses `http://localhost:1420`. Packaged desktop webview requests can present `tauri://localhost`, `http://tauri.localhost`, or `https://tauri.localhost` depending on platform/webview. DamHopper servers that enforce CORS must allow the origin used by the packaged client when it connects cross-origin.
+- Native desktop dev uses `http://localhost:1420`. Android dev uses `tauri android dev --host`, which sets `TAURI_DEV_HOST` so the Vite dev server and HMR bind to the LAN-reachable address for an emulator or physical device. Packaged desktop webview requests can present `tauri://localhost`, `http://tauri.localhost`, or `https://tauri.localhost` depending on platform/webview. DamHopper servers that enforce CORS must allow the origin used by the packaged client when it connects cross-origin.
 
 ### persistence/ (Phase 04)
 

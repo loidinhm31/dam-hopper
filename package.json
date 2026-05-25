@@ -3,6 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "android:init": "npm --prefix apps/native run tauri:android:init",
+    "android:dev": "npm --prefix apps/native run tauri:android:dev",
+    "android:build": "npm --prefix apps/native run tauri:android:build",
+    "android:run": "npm --prefix apps/native run tauri:android:run",
+    "android:studio": "npm --prefix apps/native run tauri:android:studio",
     "build": "pnpm --filter @dam-hopper/web build",
     "build:native": "pnpm --filter @dam-hopper/native build",
     "dev": "pnpm --filter @dam-hopper/web dev --host",

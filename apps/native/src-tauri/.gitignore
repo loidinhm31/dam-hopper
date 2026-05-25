@@ -1,2 +1,4 @@
 target/
-gen/
+gen/*
+!gen/android/
+!gen/android/**
