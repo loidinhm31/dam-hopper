@@ -107,6 +107,20 @@ function PanelFallback({ label = "Loading…" }: { label?: string }) {
   );
 }
 
+const IDE_COMPACT_SURFACE_IDS = [
+  "explorer",
+  "search",
+  "editor",
+  "git",
+  "project",
+] as const;
+const TERMINAL_COMPACT_SURFACE_IDS = [
+  "terminal",
+  "fleet",
+  "ports",
+  "git",
+  "project",
+] as const;
 const TERMINAL_LAYOUT_SENSITIVE_COMPACT_SURFACES = new Set(["terminal"]);
 
 function renderCompactPlaceholder(message: string) {
@@ -119,12 +133,26 @@ function renderCompactPlaceholder(message: string) {
 
 export function resolveActiveCompactSurfaceId(
   currentSurfaceId: string,
-  surfaces: Array<Pick<MobileWorkspaceSurface, "id">>,
+  surfaces: ReadonlyArray<string | Pick<MobileWorkspaceSurface, "id">>,
   fallbackSurfaceId: string,
 ) {
-  return surfaces.some((surface) => surface.id === currentSurfaceId)
+  return surfaces.some((surface) =>
+    typeof surface === "string"
+      ? surface === currentSurfaceId
+      : surface.id === currentSurfaceId,
+  )
     ? currentSurfaceId
     : fallbackSurfaceId;
+}
+
+function getCompactSurfaceIds(mode: WorkspaceMode) {
+  return mode === "terminal"
+    ? TERMINAL_COMPACT_SURFACE_IDS
+    : IDE_COMPACT_SURFACE_IDS;
+}
+
+function getDefaultCompactSurfaceId(mode: WorkspaceMode) {
+  return mode === "terminal" ? "terminal" : "editor";
 }
 
 export default function WorkspacePage() {
@@ -134,6 +162,22 @@ export default function WorkspacePage() {
     useState<WorkspaceMode>(loadWorkspaceMode);
   const [terminalLayoutRevision, setTerminalLayoutRevision] = useState(0);
   const isCompactWorkspace = useCompactWorkspace();
+  const defaultCompactSurfaceId = getDefaultCompactSurfaceId(workspaceMode);
+  const availableCompactSurfaceIds = getCompactSurfaceIds(workspaceMode);
+  const [requestedCompactSurface, setRequestedCompactSurface] = useState(
+    defaultCompactSurfaceId,
+  );
+  const activeCompactSurface = resolveActiveCompactSurfaceId(
+    requestedCompactSurface,
+    availableCompactSurfaceIds,
+    defaultCompactSurfaceId,
+  );
+  const compactTerminalLayoutRevision =
+    isCompactWorkspace &&
+    workspaceMode === "terminal" &&
+    TERMINAL_LAYOUT_SENSITIVE_COMPACT_SURFACES.has(activeCompactSurface)
+      ? terminalLayoutRevision + 1
+      : terminalLayoutRevision;
 
   const openFile = useEditorStore((s) => s.open);
   const openDiff = useEditorStore((s) => s.openDiff);
@@ -213,18 +257,32 @@ export default function WorkspacePage() {
 
   const setWorkspaceMode = useCallback((mode: WorkspaceMode) => {
     setWorkspaceModeState(mode);
+    setRequestedCompactSurface((current) =>
+      resolveActiveCompactSurfaceId(
+        current,
+        getCompactSurfaceIds(mode),
+        getDefaultCompactSurfaceId(mode),
+      ),
+    );
     saveWorkspaceMode(mode);
     setTerminalLayoutRevision((current) => current + 1);
-  }, []);
+  }, [setRequestedCompactSurface]);
 
   const toggleWorkspaceMode = useCallback(() => {
     setWorkspaceModeState((current) => {
       const next = current === "ide" ? "terminal" : "ide";
+      setRequestedCompactSurface((activeSurface) =>
+        resolveActiveCompactSurfaceId(
+          activeSurface,
+          getCompactSurfaceIds(next),
+          getDefaultCompactSurfaceId(next),
+        ),
+      );
       saveWorkspaceMode(next);
       setTerminalLayoutRevision((revision) => revision + 1);
       return next;
     });
-  }, []);
+  }, [setRequestedCompactSurface]);
 
   useEffect(
     () =>
@@ -395,7 +453,7 @@ export default function WorkspacePage() {
                 activeSessionId={activeTab}
                 mountedSessions={mountedSessions}
                 openTabs={tabsWithLiveSession}
-                layoutRevision={terminalLayoutRevision}
+                layoutRevision={compactTerminalLayoutRevision}
                 onSessionExit={handleSessionExit}
                 onNewTerminal={() => {
                   if (projectName) {
@@ -473,7 +531,7 @@ export default function WorkspacePage() {
       handleLaunchFormSubmit,
       tabsWithLiveSession,
       activeTab,
-      terminalLayoutRevision,
+      compactTerminalLayoutRevision,
       handleSelectTab,
       handleCloseTab,
       setFreeTerminalSavePrompt,
@@ -716,7 +774,7 @@ export default function WorkspacePage() {
 
   const handleTerminalWorkspaceFleetLayoutChange = useCallback(() => {
     setTerminalLayoutRevision((current) => current + 1);
-  }, []);
+  }, [setRequestedCompactSurface]);
 
   const compactGitSurface = useMemo<MobileWorkspaceSurface>(
     () => ({
@@ -868,33 +926,10 @@ export default function WorkspacePage() {
 
   const compactSurfaces =
     workspaceMode === "terminal" ? compactTerminalSurfaces : compactIdeSurfaces;
-  const defaultCompactSurfaceId =
-    workspaceMode === "terminal" ? "terminal" : "editor";
-  const [activeCompactSurface, setActiveCompactSurface] = useState(
-    defaultCompactSurfaceId,
-  );
 
-  useEffect(() => {
-    setActiveCompactSurface((current) =>
-      resolveActiveCompactSurfaceId(
-        current,
-        compactSurfaces,
-        defaultCompactSurfaceId,
-      ),
-    );
-  }, [compactSurfaces, defaultCompactSurfaceId]);
-
-  useEffect(() => {
-    const shouldRefitCompactTerminalLayout =
-      isCompactWorkspace &&
-      workspaceMode === "terminal" &&
-      TERMINAL_LAYOUT_SENSITIVE_COMPACT_SURFACES.has(activeCompactSurface);
-
-    if (!shouldRefitCompactTerminalLayout) {
-      return;
-    }
-    setTerminalLayoutRevision((current) => current + 1);
-  }, [isCompactWorkspace, activeCompactSurface, workspaceMode]);
+  const handleCompactSurfaceChange = useCallback((surfaceId: string) => {
+    setRequestedCompactSurface(surfaceId);
+  }, [setRequestedCompactSurface]);
 
   return (
     <>
@@ -902,7 +937,7 @@ export default function WorkspacePage() {
         <MobileWorkspaceShell
           surfaces={compactSurfaces}
           activeSurfaceId={activeCompactSurface}
-          onSurfaceChange={setActiveCompactSurface}
+          onSurfaceChange={handleCompactSurfaceChange}
           workspaceMode={workspaceMode}
           onWorkspaceModeChange={setWorkspaceMode}
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}

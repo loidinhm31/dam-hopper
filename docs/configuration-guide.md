@@ -27,11 +27,19 @@ tags = ["backend", "critical"]
 
 [[projects]]
 name = "web"
-path = "./packages/web"
+path = "./apps/web"
 type = "pnpm"
 build_command = "pnpm build"
 run_command = "pnpm dev"
 tags = ["frontend"]
+
+[[projects]]
+name = "native"
+path = "./apps/native"
+type = "pnpm"
+build_command = "pnpm tauri:build"
+run_command = "pnpm tauri:dev"
+tags = ["frontend", "native", "tauri"]
 
 [[projects]]
 name = "scripts"
@@ -272,7 +280,9 @@ Runtime files:
 
 ## Cross-Origin Resource Sharing (CORS)
 
-By default, CORS allows localhost:5173 (dev) and localhost:3000 (prod).
+If `--cors-origins` is omitted, the server mirrors the request `Origin` and
+allows credentials. That keeps local browser and native development flexible,
+but production deployments should usually pass an explicit allowlist.
 
 Override with `--cors-origins`:
 
@@ -282,6 +292,21 @@ cargo run -- \
   --cors-origins "https://example.com" \
   --cors-origins "http://localhost:3000"
 ```
+
+For native Tauri clients, also allow the native dev and packaged webview origins
+used by your target platform. Typical entries are:
+
+```bash
+cargo run -- \
+  --workspace /path/to/workspace \
+  --cors-origins "http://localhost:1420" \
+  --cors-origins "tauri://localhost" \
+  --cors-origins "http://tauri.localhost" \
+  --cors-origins "https://tauri.localhost"
+```
+
+Use only the origins you actually ship. Native remains a remote client; it still
+connects through saved server profiles and does not embed the DamHopper backend.
 
 ## SSH Key Management
 

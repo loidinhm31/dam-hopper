@@ -4,7 +4,9 @@
   "type": "module",
   "scripts": {
     "build": "pnpm --filter @dam-hopper/web build",
+    "build:native": "pnpm --filter @dam-hopper/native build",
     "dev": "pnpm --filter @dam-hopper/web dev --host",
+    "dev:native": "pnpm --filter @dam-hopper/native tauri:dev",
     "dev:server:no-auth": "cd server && cargo run -- --no-auth",
     "dev:server": "cd server && RUST_LOG=debug cargo run",
     "dev:server:watch": "cd server && cargo watch -x run",
@@ -19,7 +21,7 @@
     "format": "prettier --write .",
     "test": "cd server && cargo test",
     "test:run": "cd server && cargo test",
-    "check": "pnpm build && pnpm lint && cd server && cargo test"
+    "check": "pnpm build && pnpm build:native && pnpm lint && cd server && cargo test"
   },
   "engines": {
     "node": ">=20",

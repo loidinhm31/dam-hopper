@@ -1,20 +1,29 @@
 # Frontend Components
 
-Architecture and documentation for React components in the Dam Hopper web UI.
+Architecture and documentation for the shared React UI used by the DamHopper
+browser host and Tauri native host.
 
 ## Overview
 
-The frontend is a React 19 SPA (packages/web/) using:
+The frontend is split into thin hosts plus a shared React 19 UI package:
 
-- **Vite** for bundling
-- **Redux Toolkit** for state management
+- `apps/web` mounts the browser host and initializes `WsTransport(getServerUrl())`.
+- `apps/native` mounts the Tauri v2 host and uses `IdleTransport` until a server
+  profile is configured.
+- `packages/ui` owns the shared components, hooks, stores, API clients, styles,
+  and tests consumed by both hosts.
+
+Shared runtime libraries:
+
+- **Vite** for bundling hosts
+- **Zustand** for client state
 - **TanStack Query** for server state
-- **Tailwind CSS** for styling
+- **Tailwind CSS v4** for styling
 - **xterm.js** for terminal rendering
 
 ## Shared File Decorations
 
-**Location:** `packages/web/src/lib/file-decoration.ts`
+**Location:** `packages/ui/src/lib/file-decoration.ts`
 
 **Purpose:** Central source of truth for file icons, badge text, display language, and Monaco language.
 
@@ -37,7 +46,7 @@ Dam Hopper uses an extensible IDE-style Tool Window system, inspired by IntelliJ
 
 ### ActivityBar
 
-**Location:** `packages/web/src/components/organisms/ActivityBar.tsx`
+**Location:** `packages/ui/src/components/organisms/ActivityBar.tsx`
 
 **Purpose:** Renders the vertical or horizontal strip of icons used to toggle tool windows.
 
@@ -49,7 +58,7 @@ Dam Hopper uses an extensible IDE-style Tool Window system, inspired by IntelliJ
 
 ### ToolPanel
 
-**Location:** `packages/web/src/components/organisms/ToolPanel.tsx`
+**Location:** `packages/ui/src/components/organisms/ToolPanel.tsx`
 
 **Purpose:** The container for active tool content.
 
@@ -62,7 +71,7 @@ Dam Hopper uses an extensible IDE-style Tool Window system, inspired by IntelliJ
 
 ### Integration in IdeShell
 
-**Location:** `packages/web/src/components/templates/IdeShell.tsx`
+**Location:** `packages/ui/src/components/templates/IdeShell.tsx`
 
 The `IdeShell` orchestrates the system:
 
@@ -76,7 +85,7 @@ The `IdeShell` orchestrates the system:
 
 ### Workspace Mode Shell
 
-**Location:** `packages/web/src/components/pages/WorkspacePage.tsx`
+**Location:** `packages/ui/src/components/pages/WorkspacePage.tsx`
 
 **Purpose:** Owns the persisted workspace mode for the main workspace shell.
 
@@ -92,6 +101,7 @@ The `IdeShell` orchestrates the system:
 - In terminal mode, `WorkspacePage` renders a full-height terminal workspace below the top nav.
 - The same terminal manager state is reused across mode switches, so PTY lifecycle is not duplicated.
 - Terminal panes refit when switching modes or when the Fleet Terminal rail changes size/collapse state.
+- Compact view swaps to `MobileWorkspaceShell`, which shows one surface at a time with bottom-tab navigation for Explorer, Editor, Terminal, Git, Ports, and Project.
 
 **Persistence keys:**
 
@@ -99,7 +109,7 @@ The `IdeShell` orchestrates the system:
 
 ### Terminal Workspace Shell
 
-**Location:** `packages/web/src/components/templates/TerminalWorkspaceShell.tsx`
+**Location:** `packages/ui/src/components/templates/TerminalWorkspaceShell.tsx`
 
 **Purpose:** Wraps the terminal-mode workspace layout.
 
@@ -113,7 +123,7 @@ The `IdeShell` orchestrates the system:
 
 ### Multi Terminal Display
 
-**Location:** `packages/web/src/components/organisms/MultiTerminalDisplay.tsx`
+**Location:** `packages/ui/src/components/organisms/MultiTerminalDisplay.tsx`
 
 **Purpose:** Renders the active terminal panes inside the terminal workspace.
 
@@ -125,7 +135,7 @@ The `IdeShell` orchestrates the system:
 
 ### Resize Handle Hook
 
-**Location:** `packages/web/src/hooks/use-resize-handle.ts`
+**Location:** `packages/ui/src/hooks/use-resize-handle.ts`
 
 **Purpose:** Shared resize state helper for workspace shell rails and split panes.
 
@@ -140,7 +150,7 @@ The `IdeShell` orchestrates the system:
 
 ### TerminalPanel
 
-**Location:** `packages/web/src/components/organisms/TerminalPanel.tsx`
+**Location:** `packages/ui/src/components/organisms/TerminalPanel.tsx`
 
 **Purpose:** Renders a single terminal session using xterm.js. Handles lifecycle events (output, exit, restart, reconnect) and session attachment.
 
@@ -161,13 +171,13 @@ interface TerminalPanelProps {
 
 ### TerminalTreeView
 
-**Location:** `packages/web/src/components/organisms/TerminalTreeView.tsx`
+**Location:** `packages/ui/src/components/organisms/TerminalTreeView.tsx`
 
 **Purpose:** Sidebar tree showing projects and their terminal sessions.
 
 ### PortsPanel
 
-**Location:** `packages/web/src/components/organisms/PortsPanel.tsx`
+**Location:** `packages/ui/src/components/organisms/PortsPanel.tsx`
 
 **Purpose:** Combined panel for port detection, tunnel management, and confirmed session kill control for detected ports.
 
@@ -177,7 +187,7 @@ interface TerminalPanelProps {
 
 ### PaneContainer
 
-**Location:** `packages/web/src/components/organisms/PaneContainer.tsx`
+**Location:** `packages/ui/src/components/organisms/PaneContainer.tsx`
 
 **Behavior:** Suppresses the same terminal workspace shortcut inside split-pane terminal containers, matching `TerminalPanel` input handling.
 
@@ -185,11 +195,11 @@ interface TerminalPanelProps {
 
 **Locations:**
 
-- `packages/web/src/components/organisms/SplitLayout.tsx`
-- `packages/web/src/components/organisms/PaneContainer.tsx`
-- `packages/web/src/components/organisms/TabBar.tsx`
-- `packages/web/src/lib/terminal-layout-docking.ts`
-- `packages/web/src/lib/terminal-layout-tree.ts`
+- `packages/ui/src/components/organisms/SplitLayout.tsx`
+- `packages/ui/src/components/organisms/PaneContainer.tsx`
+- `packages/ui/src/components/organisms/TabBar.tsx`
+- `packages/ui/src/lib/terminal-layout-docking.ts`
+- `packages/ui/src/lib/terminal-layout-tree.ts`
 
 **Purpose:** Provides intent-based terminal docking for the terminal workspace without changing PTY lifecycle ownership.
 
@@ -210,19 +220,19 @@ interface TerminalPanelProps {
 
 ## Git Workspace Panel
 
-**Location:** `packages/web/src/components/pages/GitPage.tsx`
+**Location:** `packages/ui/src/components/pages/GitPage.tsx`
 
 **Purpose:** Primary Git workspace view for branch management, history browsing, and local change review.
 
 ### WorkspaceGitPanel
 
-**Location:** `packages/web/src/components/organisms/WorkspaceGitPanel.tsx`
+**Location:** `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx`
 
 **Purpose:** Composes the Git page into branch controls, commit history, and working tree sections.
 
 ### GitBranchControl
 
-**Location:** `packages/web/src/components/organisms/GitBranchControl.tsx`
+**Location:** `packages/ui/src/components/organisms/GitBranchControl.tsx`
 
 **Purpose:** Handles branch-focused actions such as checkout, create, and update flows.
 
@@ -245,13 +255,13 @@ interface TerminalPanelProps {
 
 ### GitLogTree
 
-**Location:** `packages/web/src/components/organisms/GitLogTree.tsx`
+**Location:** `packages/ui/src/components/organisms/GitLogTree.tsx`
 
 **Purpose:** Renders the commit history tree and anchors history actions.
 
 ### GitHistoryActions
 
-**Location:** `packages/web/src/components/organisms/GitHistoryActions.tsx`
+**Location:** `packages/ui/src/components/organisms/GitHistoryActions.tsx`
 
 **Purpose:** Provides commit-level actions from the log view.
 
@@ -266,7 +276,7 @@ interface TerminalPanelProps {
 
 ### GitLocalChanges
 
-**Location:** `packages/web/src/components/organisms/GitLocalChanges.tsx`
+**Location:** `packages/ui/src/components/organisms/GitLocalChanges.tsx`
 
 **Purpose:** Renders local diff state, stage/unstage/discard actions, and commit entry.
 
@@ -279,7 +289,7 @@ interface TerminalPanelProps {
 
 ### Workspace Git Panel
 
-**Location:** `packages/web/src/components/organisms/WorkspaceGitPanel.tsx`
+**Location:** `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx`
 
 **Purpose:** Orchestrates root selection, scoped branch/history views, and the selected commit details panel.
 
@@ -297,7 +307,7 @@ interface TerminalPanelProps {
 
 ### Project Info Panel
 
-**Location:** `packages/web/src/components/organisms/ProjectInfoPanel.tsx`
+**Location:** `packages/ui/src/components/organisms/ProjectInfoPanel.tsx`
 
 **Purpose:** Provides the project-level Git action strip used in the workspace sidebar.
 
@@ -320,7 +330,7 @@ interface TerminalPanelProps {
 
 ### Passphrase Dialog
 
-**Location:** `packages/web/src/components/organisms/PassphraseDialog.tsx`
+**Location:** `packages/ui/src/components/organisms/PassphraseDialog.tsx`
 
 **Purpose:** Captures the SSH key passphrase for fetch/pull/push retries and optionally requests saved persistence.
 
@@ -334,19 +344,19 @@ interface TerminalPanelProps {
 
 ### ChangedFilesList
 
-**Location:** `packages/web/src/components/organisms/ChangedFilesList.tsx`
+**Location:** `packages/ui/src/components/organisms/ChangedFilesList.tsx`
 
 **Purpose:** Renders the file-level change list used by the local changes view.
 
 ### FileTree integration
 
-**Location:** `packages/web/src/components/organisms/FileTree.tsx`
+**Location:** `packages/ui/src/components/organisms/FileTree.tsx`
 
 **Purpose:** Reuses shared file decorations in Git-aware file rows so file identity stays consistent across the explorer and Git views. The Explorer header area also hosts `GitBranchControl` so users can switch or create branches without leaving the file browser.
 
 ### GitPage
 
-**Location:** `packages/web/src/components/pages/GitPage.tsx`
+**Location:** `packages/ui/src/components/pages/GitPage.tsx`
 
 **Purpose:** Standalone Git operations page for bulk fetch/pull actions across selected projects, with shared commit-history and diff interactions.
 
@@ -363,7 +373,7 @@ interface TerminalPanelProps {
 
 ## Session Status Helpers
 
-**Location:** `packages/web/src/lib/session-status.ts`
+**Location:** `packages/ui/src/lib/session-status.ts`
 
 **Purpose:** Centralize session lifecycle logic.
 
