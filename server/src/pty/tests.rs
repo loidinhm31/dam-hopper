@@ -841,10 +841,16 @@ mod pty_tests {
     #[test]
     fn get_buffer_with_offset_returns_delta_when_offset_provided() {
         let mgr = make_manager();
-        mgr.create(opts("shell:offset-test2", "cat")).unwrap();
+        mgr.create(opts(
+            "shell:offset-test2",
+            "printf 'first\\n'; sleep 1; printf 'second\\n'; sleep 5",
+        ))
+        .unwrap();
 
-        // Write first chunk.
-        mgr.write("shell:offset-test2", b"first\n").unwrap();
+        // Wait for the first process-generated chunk before sampling the offset.
+        // Using `cat` here is flaky because the PTY line discipline can echo input
+        // independently of the child process, so \"first\" may appear again after
+        // we've already captured the previous offset.
         let ok1 = wait_for(Duration::from_secs(2), || {
             mgr.get_buffer("shell:offset-test2")
                 .map(|b| b.contains("first"))
@@ -858,8 +864,7 @@ mod pty_tests {
             .unwrap();
         assert!(data1.contains("first"), "first read should contain 'first'");
 
-        // Write second chunk.
-        mgr.write("shell:offset-test2", b"second\n").unwrap();
+        // Wait for the second chunk to be emitted after the captured offset.
         let ok2 = wait_for(Duration::from_secs(2), || {
             mgr.get_buffer("shell:offset-test2")
                 .map(|b| b.contains("second"))
