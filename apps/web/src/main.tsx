@@ -8,12 +8,13 @@ import { initTransport } from "@dam-hopper/ui/api/transport";
 import { WsTransport } from "@dam-hopper/ui/api/ws-transport";
 import { getServerUrl } from "@dam-hopper/ui/api/server-config";
 
-const viteEnv = import.meta["env"] as ImportMetaEnv;
+const viteEnv = (import.meta as ImportMeta & { env?: Partial<ImportMetaEnv> })
+  .env;
 
 configureLogger({
   level: resolveLogLevel(
-    viteEnv["VITE_DAM_HOPPER_LOG_LEVEL"],
-    viteEnv["DEV"] ? "debug" : "warn",
+    viteEnv?.VITE_DAM_HOPPER_LOG_LEVEL,
+    viteEnv?.DEV ? "debug" : "warn",
   ),
 });
 

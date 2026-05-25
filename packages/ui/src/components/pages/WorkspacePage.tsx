@@ -21,6 +21,7 @@ import {
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { IdeShell } from "@/components/templates/IdeShell.js";
+import { MobileWorkspaceShell } from "@/components/templates/MobileWorkspaceShell.js";
 import { TerminalWorkspaceShell } from "@/components/templates/TerminalWorkspaceShell.js";
 
 import { Button, inputClass } from "@/components/atoms/Button.js";
@@ -36,6 +37,7 @@ import { useEditorStore } from "@/stores/editor.js";
 import { useSearchUiStore } from "@/stores/search-ui.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalManager } from "@/hooks/use-terminal-manager.js";
+import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import {
   addKeyboardShortcutListener,
   useDocumentKeyboardShortcut,
@@ -110,6 +112,7 @@ export default function WorkspacePage() {
   const [workspaceMode, setWorkspaceModeState] =
     useState<WorkspaceMode>(loadWorkspaceMode);
   const [terminalLayoutRevision, setTerminalLayoutRevision] = useState(0);
+  const isCompactWorkspace = useCompactWorkspace();
 
   const openFile = useEditorStore((s) => s.open);
   const openDiff = useEditorStore((s) => s.openDiff);
@@ -694,9 +697,212 @@ export default function WorkspacePage() {
     setTerminalLayoutRevision((current) => current + 1);
   }, []);
 
+  const compactIdeSurfaces = useMemo(
+    () => [
+      {
+        id: "explorer",
+        label: "Explorer",
+        icon: Files,
+        content: (
+          <div className="flex min-h-0 flex-1 flex-col">
+            {projectName ? (
+              <Suspense fallback={<PanelFallback label="Loading files…" />}>
+                <FileTree
+                  key={projectName}
+                  project={projectName}
+                  path=""
+                  onFileOpen={handleFileOpen}
+                  onOpenTerminal={() => handleLaunchShell(projectName)}
+                  className="flex-1"
+                />
+              </Suspense>
+            ) : (
+              <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]">
+                No projects configured
+              </div>
+            )}
+          </div>
+        ),
+      },
+      {
+        id: "search",
+        label: "Search",
+        icon: Search,
+        content: projectName ? (
+          <Suspense fallback={<PanelFallback label="Loading search…" />}>
+            <SearchPanel
+              project={projectName}
+              onResultClick={(match) => {
+                closeSearch();
+                const targetProject = match.project ?? projectName;
+                if (match.project && match.project !== projectName) {
+                  setActiveProject(match.project);
+                }
+                void openFile(targetProject, {
+                  id: match.path,
+                  name: match.path.split("/").pop()!,
+                  kind: "file",
+                  size: 0,
+                  mtime: 0,
+                  isSymlink: false,
+                  children: null,
+                });
+              }}
+            />
+          </Suspense>
+        ) : (
+          <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]">
+            Select a project to search
+          </div>
+        ),
+      },
+      {
+        id: "editor",
+        label: "Editor",
+        icon: LayoutGrid,
+        content: (
+          <Suspense fallback={<PanelFallback label="Loading editor…" />}>
+            <EditorTabs project={projectName} />
+          </Suspense>
+        ),
+      },
+      {
+        id: "git",
+        label: "Git",
+        icon: GitMerge,
+        content: projectName ? (
+          <Suspense fallback={<PanelFallback label="Loading Git…" />}>
+            <WorkspaceGitPanel key={projectName} project={projectName} />
+          </Suspense>
+        ) : (
+          <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]">
+            Select a project to see Git status
+          </div>
+        ),
+      },
+      {
+        id: "project",
+        label: "Project",
+        icon: Folder,
+        content: projectName ? (
+          <Suspense fallback={<PanelFallback label="Loading project…" />}>
+            <ProjectInfoPanel
+              projectName={projectName}
+              onLaunchCommand={(cmd) => handleLaunchTerminal(projectName, cmd)}
+            />
+          </Suspense>
+        ) : (
+          <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]">
+            Select a project to inspect
+          </div>
+        ),
+      },
+    ],
+    [
+      closeSearch,
+      handleFileOpen,
+      handleLaunchShell,
+      handleLaunchTerminal,
+      openFile,
+      projectName,
+      setActiveProject,
+    ],
+  );
+
+  const compactTerminalSurfaces = useMemo(
+    () => [
+      {
+        id: "terminal",
+        label: "Terminal",
+        icon: TerminalIcon,
+        content: terminalContent,
+      },
+      {
+        id: "fleet",
+        label: "Fleet",
+        icon: LayoutGrid,
+        content: fleetContent,
+      },
+      {
+        id: "ports",
+        label: "Ports",
+        icon: Radio,
+        content: portsContent,
+      },
+      {
+        id: "git",
+        label: "Git",
+        icon: GitMerge,
+        content: projectName ? (
+          <Suspense fallback={<PanelFallback label="Loading Git…" />}>
+            <WorkspaceGitPanel key={projectName} project={projectName} />
+          </Suspense>
+        ) : (
+          <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]">
+            Select a project to see Git status
+          </div>
+        ),
+      },
+      {
+        id: "project",
+        label: "Project",
+        icon: Folder,
+        content: projectName ? (
+          <Suspense fallback={<PanelFallback label="Loading project…" />}>
+            <ProjectInfoPanel
+              projectName={projectName}
+              onLaunchCommand={(cmd) => handleLaunchTerminal(projectName, cmd)}
+            />
+          </Suspense>
+        ) : (
+          <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]">
+            Select a project to inspect
+          </div>
+        ),
+      },
+    ],
+    [fleetContent, handleLaunchTerminal, portsContent, projectName, terminalContent],
+  );
+
+  const compactSurfaces =
+    workspaceMode === "terminal" ? compactTerminalSurfaces : compactIdeSurfaces;
+  const defaultCompactSurfaceId =
+    workspaceMode === "terminal" ? "terminal" : "editor";
+  const [activeCompactSurface, setActiveCompactSurface] = useState(
+    defaultCompactSurfaceId,
+  );
+
+  useEffect(() => {
+    setActiveCompactSurface((current) =>
+      compactSurfaces.some((surface) => surface.id === current)
+        ? current
+        : defaultCompactSurfaceId,
+    );
+  }, [compactSurfaces, defaultCompactSurfaceId]);
+
+  useEffect(() => {
+    if (
+      !isCompactWorkspace ||
+      workspaceMode !== "terminal" ||
+      activeCompactSurface !== "terminal"
+    ) {
+      return;
+    }
+    setTerminalLayoutRevision((current) => current + 1);
+  }, [isCompactWorkspace, activeCompactSurface, workspaceMode]);
+
   return (
     <>
-      {workspaceMode === "terminal" ? (
+      {isCompactWorkspace ? (
+        <MobileWorkspaceShell
+          surfaces={compactSurfaces}
+          activeSurfaceId={activeCompactSurface}
+          onSurfaceChange={setActiveCompactSurface}
+          workspaceMode={workspaceMode}
+          onWorkspaceModeChange={setWorkspaceMode}
+          workspaceModeShortcutLabel={terminalWorkspaceShortcut}
+        />
+      ) : workspaceMode === "terminal" ? (
         <TerminalWorkspaceShell
           terminalContent={terminalContent}
           fleetContent={fleetContent}
@@ -724,7 +930,7 @@ export default function WorkspacePage() {
       {/* Floating search dialog */}
       {searchOpen && projectName && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
+          className="fixed inset-0 z-50 flex items-start justify-center px-3 pt-[max(8vh,var(--safe-area-top))] sm:px-4"
           onClick={closeSearch}
         >
           {/* Backdrop */}
@@ -732,7 +938,7 @@ export default function WorkspacePage() {
 
           {/* Dialog */}
           <div
-            className="relative z-10 w-full max-w-2xl mx-4 rounded-xl shadow-2xl border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden flex flex-col h-[70vh]"
+            className="dialog-viewport-fit relative z-10 flex h-[min(70vh,42rem)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <Suspense fallback={<PanelFallback label="Loading search…" />}>

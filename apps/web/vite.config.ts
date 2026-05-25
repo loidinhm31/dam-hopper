@@ -4,6 +4,9 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 const uiSrc = fileURLToPath(new URL("../../packages/ui/src", import.meta.url));
+const uiStyles = fileURLToPath(
+  new URL("../../packages/ui/src/index.css", import.meta.url),
+);
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
@@ -17,6 +20,7 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         "@": uiSrc,
+        "@dam-hopper/ui/styles": uiStyles,
       },
       dedupe: ["@tanstack/react-query", "react", "react-dom"],
     },
