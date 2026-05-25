@@ -8,8 +8,14 @@ use std::{
     time::Instant,
 };
 
-use portable_pty::{MasterPty, PtySize};
+#[cfg(unix)]
+use nix::{
+    sys::signal::{killpg, Signal},
+    unistd::Pid,
+};
+use portable_pty::{ChildKiller, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::config::schema::RestartPolicy;
 use crate::pty::buffer::ScrollbackBuffer;
@@ -139,6 +145,10 @@ pub struct LiveSession {
     /// Write end of the PTY (stdin of child process).
     writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
 
+    /// Dedicated killer handle for terminating the PTY child while the reader
+    /// thread is blocked in `wait()`.
+    child_killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
+
     /// Set to `true` to signal the reader thread to exit cleanly.
     pub shutdown: Arc<AtomicBool>,
 
@@ -151,12 +161,14 @@ impl LiveSession {
         meta: SessionMeta,
         master: Box<dyn MasterPty + Send>,
         writer: Box<dyn std::io::Write + Send>,
+        child_killer: Box<dyn ChildKiller + Send + Sync>,
         respawn_opts: RespawnOpts,
     ) -> Self {
         Self {
             buffer: Arc::new(Mutex::new(ScrollbackBuffer::new(SCROLLBACK_CAPACITY))),
             master: Arc::new(Mutex::new(master)),
             writer: Arc::new(Mutex::new(writer)),
+            child_killer: Arc::new(Mutex::new(child_killer)),
             shutdown: Arc::new(AtomicBool::new(false)),
             meta,
             respawn_opts,
@@ -184,6 +196,38 @@ impl LiveSession {
         // Relaxed is sufficient — reader thread polls this flag independently,
         // no other memory ordering guarantee is needed.
         self.shutdown.store(true, Ordering::Relaxed);
+    }
+
+    /// Best-effort forced termination for explicit user/session manager kills.
+    /// On Unix we target the full PTY process group first so backgrounded
+    /// children do not survive after the terminal is closed.
+    pub fn terminate(&self) {
+        self.signal_shutdown();
+
+        #[cfg(unix)]
+        {
+            let pgid = self.master.lock().unwrap().process_group_leader();
+            if let Some(pgid) = pgid {
+                if let Err(error) = killpg(Pid::from_raw(pgid), Signal::SIGKILL) {
+                    warn!(
+                        session_id = %self.meta.id,
+                        pgid,
+                        %error,
+                        "Failed to kill PTY process group"
+                    );
+                } else {
+                    return;
+                }
+            }
+        }
+
+        if let Err(error) = self.child_killer.lock().unwrap().kill() {
+            warn!(
+                session_id = %self.meta.id,
+                %error,
+                "Failed to kill PTY child process"
+            );
+        }
     }
 
     /// Shared buffer reference — reader thread writes here.

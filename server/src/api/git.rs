@@ -13,8 +13,7 @@ use crate::git::{
     delete_branch, discover_vcs_roots, drop_commit, drop_commit_files, get_log, list_branches,
     list_worktrees, remove_worktree, reset_to_commit, resolve_git_request_root, revert_commit,
     revert_commit_files, undo_last_commit, update_branch, BulkGitService, CheckoutStrategy,
-    ResetMode,
-    WorktreeAddOptions,
+    ResetMode, WorktreeAddOptions,
 };
 use crate::pty::EventSink as _;
 use crate::state::AppState;

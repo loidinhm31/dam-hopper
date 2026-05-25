@@ -8,6 +8,7 @@ mod pty_tests {
     use std::{
         collections::HashMap,
         ffi::OsString,
+        fs,
         sync::{Arc, Mutex},
         time::{Duration, Instant},
     };
@@ -45,6 +46,10 @@ mod pty_tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         false
+    }
+
+    fn process_exists(pid: i32) -> bool {
+        unsafe { nix::libc::kill(pid, 0) == 0 }
     }
 
     fn make_manager() -> PtySessionManager {
@@ -179,6 +184,41 @@ mod pty_tests {
         assert!(sessions
             .iter()
             .any(|s| s.id == "build:kill-test" && !s.alive));
+    }
+
+    #[test]
+    fn kill_terminates_child_process_group() {
+        let mgr = make_manager();
+        let pid_file = tempfile::NamedTempFile::new().unwrap();
+        let pid_path = pid_file.path().to_string_lossy().replace('\'', "'\\''");
+        let command = format!("sleep 60 & echo $! > '{pid_path}'; wait");
+
+        mgr.create(opts("build:kill-tree", &command)).unwrap();
+
+        let pid_ready = wait_for(Duration::from_secs(2), || {
+            fs::read_to_string(pid_file.path())
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
+        });
+        assert!(pid_ready, "background child pid should be written");
+
+        let child_pid = fs::read_to_string(pid_file.path())
+            .unwrap()
+            .trim()
+            .parse::<i32>()
+            .unwrap();
+        assert!(
+            process_exists(child_pid),
+            "background child should be alive"
+        );
+
+        mgr.kill("build:kill-tree").unwrap();
+
+        let child_gone = wait_for(Duration::from_secs(2), || !process_exists(child_pid));
+        assert!(
+            child_gone,
+            "kill should terminate the background child process, not just the PTY metadata"
+        );
     }
 
     #[test]

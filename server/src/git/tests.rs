@@ -520,8 +520,13 @@ async fn delete_branch_removes_non_current_local_branch() {
     let branches = list_branches(path).unwrap();
 
     assert!(result.ok, "{result:?}");
-    assert_eq!(result.message.as_deref(), Some("Deleted branch feature/delete-me"));
-    assert!(branches.iter().all(|branch| branch.name != "feature/delete-me"));
+    assert_eq!(
+        result.message.as_deref(),
+        Some("Deleted branch feature/delete-me")
+    );
+    assert!(branches
+        .iter()
+        .all(|branch| branch.name != "feature/delete-me"));
 }
 
 #[tokio::test]
