@@ -38,8 +38,11 @@ export function ConnectionDot({
   collapsed = false,
   devMode = false,
 }: Props) {
+  const compactTextClass = "text-[length:calc(var(--app-font-size)*0.75)]";
+  const compactLabelClass = "text-[length:calc(var(--app-font-size)*0.65)]";
+
   return (
-    <span className="flex items-center gap-1.5 text-xs tracking-wide">
+    <span className={cn("flex items-center gap-1.5 tracking-wide", compactTextClass)}>
       <span
         className={cn(
           "inline-block h-1.5 w-1.5 rounded-full shrink-0",
@@ -50,14 +53,20 @@ export function ConnectionDot({
         <>
           <span
             className={cn(
-              "uppercase text-[10px] tracking-widest",
+              "uppercase tracking-widest",
+              compactLabelClass,
               LABEL_CLASS[status],
             )}
           >
             {LABELS[status]}
           </span>
           {devMode && status === "connected" && (
-            <span className="px-1 py-0.5 text-[9px] font-semibold tracking-wider bg-yellow-500/20 text-yellow-500 rounded uppercase">
+            <span
+              className={cn(
+                "px-1 py-0.5 font-semibold tracking-wider bg-yellow-500/20 text-yellow-500 rounded uppercase",
+                "text-[length:calc(var(--app-font-size)*0.6)]",
+              )}
+            >
               DEV
             </span>
           )}

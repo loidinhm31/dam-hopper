@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+let mockCompactWorkspace = false;
 
 vi.mock("react-router-dom", () => ({
   NavLink: ({
@@ -33,6 +35,10 @@ vi.mock("@/hooks/use-sse.js", () => ({
   useIpc: () => ({ status: "connected" }),
 }));
 
+vi.mock("@/hooks/use-compact-workspace.js", () => ({
+  useCompactWorkspace: () => mockCompactWorkspace,
+}));
+
 vi.mock("@/stores/workspace.js", () => ({
   useWorkspaceStore: () => ({ activeProject: "demo-project" }),
 }));
@@ -45,12 +51,14 @@ vi.mock("@/api/server-config.js", () => ({
 
 vi.mock("@/components/organisms/GitBranchControl.js", () => ({
   GitBranchControl: ({ showFeedback = true }: { showFeedback?: boolean }) => (
-    <div data-show-feedback={String(showFeedback)} />
+    <div data-testid="git-branch-control" data-show-feedback={String(showFeedback)} />
   ),
 }));
 
 vi.mock("@/components/atoms/ConnectionDot.js", () => ({
-  ConnectionDot: () => <span>connection</span>,
+  ConnectionDot: ({ collapsed = false }: { collapsed?: boolean }) => (
+    <span data-connection-collapsed={String(collapsed)}>connection</span>
+  ),
 }));
 
 vi.mock("@/components/atoms/Logo.js", () => ({
@@ -80,11 +88,27 @@ vi.mock("@/components/organisms/HostResourcePopover.js", () => ({
 import { TopNav } from "./TopNav.js";
 
 describe("TopNav", () => {
+  beforeEach(() => {
+    mockCompactWorkspace = false;
+  });
+
   it("suppresses branch feedback in the compact branch control", () => {
     const markup = renderToStaticMarkup(
       <TopNav collapsed={false} onToggle={() => {}} />,
     );
 
     expect(markup).toContain('data-show-feedback="false"');
+  });
+
+  it("renders the project and branch toolbar in compact workspace mode", () => {
+    mockCompactWorkspace = true;
+
+    const markup = renderToStaticMarkup(
+      <TopNav collapsed={false} onToggle={() => {}} />,
+    );
+
+    expect(markup).toContain("project");
+    expect(markup).toContain('data-testid="git-branch-control"');
+    expect(markup).toContain('data-connection-collapsed="true"');
   });
 });

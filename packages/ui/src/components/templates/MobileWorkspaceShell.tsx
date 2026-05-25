@@ -32,6 +32,25 @@ export function MobileWorkspaceShell({
   const { collapsed, toggle } = useSidebarCollapse();
   const activeSurface =
     surfaces.find((surface) => surface.id === activeSurfaceId) ?? surfaces[0];
+  const hasSurfaces = surfaces.length > 0;
+
+  if (!hasSurfaces) {
+    return (
+      <div className="app-screen-height flex flex-col overflow-hidden gradient-bg">
+        <TopNav
+          collapsed={collapsed}
+          onToggle={toggle}
+          workspaceMode={workspaceMode}
+          onWorkspaceModeChange={onWorkspaceModeChange}
+          workspaceModeShortcutLabel={workspaceModeShortcutLabel}
+        />
+
+        <main className="safe-area-inline compact-scroll-region flex flex-1 items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]">
+          Workspace surfaces unavailable
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="app-screen-height flex flex-col overflow-hidden gradient-bg">
