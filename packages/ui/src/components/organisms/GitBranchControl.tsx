@@ -87,6 +87,7 @@ export function GitBranchControl({
   selectedBranch,
   onSelectedBranchChange,
 }: GitBranchControlProps) {
+  const compactTextClass = "text-[length:calc(var(--app-font-size)*0.75)]";
   const { data: branches = [] } = useBranches(project, root);
   const { data: projectStatus } = useProjectStatus(project);
   const checkoutBranch = useGitCheckoutBranch(project, root);
@@ -266,11 +267,12 @@ export function GitBranchControl({
           }}
         >
           <SelectTrigger
-          className={cn(
-            "min-w-0 h-8 text-[11px] font-bold px-3 glass-input font-sans tracking-tight",
-            compact ? "w-[200px]" : "w-[300px]",
-          )}
-        >
+            className={cn(
+              "min-w-0 h-8 font-bold px-3 glass-input font-sans tracking-tight",
+              compact && compactTextClass,
+              compact ? "w-[132px] sm:w-[168px] lg:w-[200px]" : "w-[300px] text-[11px]",
+            )}
+          >
             <SelectValue placeholder="Select branch" />
           </SelectTrigger>
           <SelectContent className="min-w-[200px]">
@@ -358,7 +360,11 @@ export function GitBranchControl({
             title="Create new branch"
           >
             <Plus className="h-4 w-4" />
-            {!compact ? <span className="ml-1">New Branch</span> : null}
+            {!compact ? (
+              <span className="ml-1">New Branch</span>
+            ) : (
+              <span className={cn("sr-only", compactTextClass)}>New Branch</span>
+            )}
           </Button>
         ) : null}
       </div>

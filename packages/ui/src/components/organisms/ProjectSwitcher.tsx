@@ -23,6 +23,7 @@ export function ProjectSwitcher({ className }: ProjectSwitcherProps) {
   });
 
   const value = activeProject ?? (projects.length > 0 ? projects[0].name : "");
+  const compactTextClass = "text-[length:calc(var(--app-font-size)*0.75)]";
 
   if (projects.length === 0) return null;
 
@@ -35,8 +36,9 @@ export function ProjectSwitcher({ className }: ProjectSwitcherProps) {
       >
         <SelectTrigger
           className={cn(
-            "min-w-0 h-8 text-[11px] font-bold px-2 glass-input font-sans tracking-tight flex-1",
-            "w-[100px] sm:w-[140px] lg:w-[180px]"
+            "min-w-0 h-8 font-bold px-2 glass-input font-sans tracking-tight flex-1",
+            compactTextClass,
+            "w-[96px] sm:w-[132px] md:w-[156px] lg:w-[180px]",
           )}
         >
           <div className="truncate text-left flex-1">

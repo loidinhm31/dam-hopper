@@ -48,4 +48,18 @@ describe("MobileWorkspaceShell", () => {
     expect(markup).toContain('hidden=""');
     expect(markup).toContain('inert=""');
   });
+
+  it("renders an empty-state fallback when no surfaces are available", () => {
+    const markup = renderToStaticMarkup(
+      <MobileWorkspaceShell
+        surfaces={[]}
+        activeSurfaceId="terminal"
+        onSurfaceChange={() => {}}
+        workspaceMode="terminal"
+        onWorkspaceModeChange={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Workspace surfaces unavailable");
+  });
 });

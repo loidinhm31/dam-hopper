@@ -50,6 +50,7 @@ import {
 } from "@/lib/workspace-mode.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 import type { ToolWindowDef } from "@/types/ide.js";
+import type { MobileWorkspaceSurface } from "@/components/templates/MobileWorkspaceShell.js";
 
 const FileTree = lazy(() =>
   import("@/components/organisms/FileTree.js").then((m) => ({
@@ -106,6 +107,26 @@ function PanelFallback({ label = "Loading…" }: { label?: string }) {
   );
 }
 
+const TERMINAL_LAYOUT_SENSITIVE_COMPACT_SURFACES = new Set(["terminal"]);
+
+function renderCompactPlaceholder(message: string) {
+  return (
+    <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]">
+      {message}
+    </div>
+  );
+}
+
+export function resolveActiveCompactSurfaceId(
+  currentSurfaceId: string,
+  surfaces: Array<Pick<MobileWorkspaceSurface, "id">>,
+  fallbackSurfaceId: string,
+) {
+  return surfaces.some((surface) => surface.id === currentSurfaceId)
+    ? currentSurfaceId
+    : fallbackSurfaceId;
+}
+
 export default function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { activeProject, setActiveProject } = useWorkspaceStore();
@@ -129,7 +150,7 @@ export default function WorkspacePage() {
         setActiveProject(null);
       }
     }
-  }, [projects, activeProject, setActiveProject]); // Added activeProject to dependencies
+  }, [projects, activeProject, setActiveProject]);
 
   const { state, derived, actions } = useTerminalManager(
     searchParams,
@@ -697,7 +718,42 @@ export default function WorkspacePage() {
     setTerminalLayoutRevision((current) => current + 1);
   }, []);
 
-  const compactIdeSurfaces = useMemo(
+  const compactGitSurface = useMemo<MobileWorkspaceSurface>(
+    () => ({
+      id: "git",
+      label: "Git",
+      icon: GitMerge,
+      content: projectName ? (
+        <Suspense fallback={<PanelFallback label="Loading Git…" />}>
+          <WorkspaceGitPanel key={projectName} project={projectName} />
+        </Suspense>
+      ) : (
+        renderCompactPlaceholder("Select a project to see Git status")
+      ),
+    }),
+    [projectName],
+  );
+
+  const compactProjectSurface = useMemo<MobileWorkspaceSurface>(
+    () => ({
+      id: "project",
+      label: "Project",
+      icon: Folder,
+      content: projectName ? (
+        <Suspense fallback={<PanelFallback label="Loading project…" />}>
+          <ProjectInfoPanel
+            projectName={projectName}
+            onLaunchCommand={(cmd) => handleLaunchTerminal(projectName, cmd)}
+          />
+        </Suspense>
+      ) : (
+        renderCompactPlaceholder("Select a project to inspect")
+      ),
+    }),
+    [handleLaunchTerminal, projectName],
+  );
+
+  const compactIdeSurfaces = useMemo<MobileWorkspaceSurface[]>(
     () => [
       {
         id: "explorer",
@@ -717,9 +773,7 @@ export default function WorkspacePage() {
                 />
               </Suspense>
             ) : (
-              <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]">
-                No projects configured
-              </div>
+              renderCompactPlaceholder("No projects configured")
             )}
           </div>
         ),
@@ -751,9 +805,7 @@ export default function WorkspacePage() {
             />
           </Suspense>
         ) : (
-          <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]">
-            Select a project to search
-          </div>
+          renderCompactPlaceholder("Select a project to search")
         ),
       },
       {
@@ -766,39 +818,12 @@ export default function WorkspacePage() {
           </Suspense>
         ),
       },
-      {
-        id: "git",
-        label: "Git",
-        icon: GitMerge,
-        content: projectName ? (
-          <Suspense fallback={<PanelFallback label="Loading Git…" />}>
-            <WorkspaceGitPanel key={projectName} project={projectName} />
-          </Suspense>
-        ) : (
-          <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]">
-            Select a project to see Git status
-          </div>
-        ),
-      },
-      {
-        id: "project",
-        label: "Project",
-        icon: Folder,
-        content: projectName ? (
-          <Suspense fallback={<PanelFallback label="Loading project…" />}>
-            <ProjectInfoPanel
-              projectName={projectName}
-              onLaunchCommand={(cmd) => handleLaunchTerminal(projectName, cmd)}
-            />
-          </Suspense>
-        ) : (
-          <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]">
-            Select a project to inspect
-          </div>
-        ),
-      },
+      compactGitSurface,
+      compactProjectSurface,
     ],
     [
+      compactGitSurface,
+      compactProjectSurface,
       closeSearch,
       handleFileOpen,
       handleLaunchShell,
@@ -809,7 +834,7 @@ export default function WorkspacePage() {
     ],
   );
 
-  const compactTerminalSurfaces = useMemo(
+  const compactTerminalSurfaces = useMemo<MobileWorkspaceSurface[]>(
     () => [
       {
         id: "terminal",
@@ -829,39 +854,16 @@ export default function WorkspacePage() {
         icon: Radio,
         content: portsContent,
       },
-      {
-        id: "git",
-        label: "Git",
-        icon: GitMerge,
-        content: projectName ? (
-          <Suspense fallback={<PanelFallback label="Loading Git…" />}>
-            <WorkspaceGitPanel key={projectName} project={projectName} />
-          </Suspense>
-        ) : (
-          <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]">
-            Select a project to see Git status
-          </div>
-        ),
-      },
-      {
-        id: "project",
-        label: "Project",
-        icon: Folder,
-        content: projectName ? (
-          <Suspense fallback={<PanelFallback label="Loading project…" />}>
-            <ProjectInfoPanel
-              projectName={projectName}
-              onLaunchCommand={(cmd) => handleLaunchTerminal(projectName, cmd)}
-            />
-          </Suspense>
-        ) : (
-          <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]">
-            Select a project to inspect
-          </div>
-        ),
-      },
+      compactGitSurface,
+      compactProjectSurface,
     ],
-    [fleetContent, handleLaunchTerminal, portsContent, projectName, terminalContent],
+    [
+      compactGitSurface,
+      compactProjectSurface,
+      fleetContent,
+      portsContent,
+      terminalContent,
+    ],
   );
 
   const compactSurfaces =
@@ -874,18 +876,21 @@ export default function WorkspacePage() {
 
   useEffect(() => {
     setActiveCompactSurface((current) =>
-      compactSurfaces.some((surface) => surface.id === current)
-        ? current
-        : defaultCompactSurfaceId,
+      resolveActiveCompactSurfaceId(
+        current,
+        compactSurfaces,
+        defaultCompactSurfaceId,
+      ),
     );
   }, [compactSurfaces, defaultCompactSurfaceId]);
 
   useEffect(() => {
-    if (
-      !isCompactWorkspace ||
-      workspaceMode !== "terminal" ||
-      activeCompactSurface !== "terminal"
-    ) {
+    const shouldRefitCompactTerminalLayout =
+      isCompactWorkspace &&
+      workspaceMode === "terminal" &&
+      TERMINAL_LAYOUT_SENSITIVE_COMPACT_SURFACES.has(activeCompactSurface);
+
+    if (!shouldRefitCompactTerminalLayout) {
       return;
     }
     setTerminalLayoutRevision((current) => current + 1);

@@ -83,6 +83,8 @@ export function WorkspaceSwitcher({
     removeMutation.error?.message;
 
   const isCompact = variant === "compact";
+  const compactTextClass = "text-[length:calc(var(--app-font-size)*0.75)]";
+  const compactMetaTextClass = "text-[length:calc(var(--app-font-size)*0.65)]";
 
   return (
     <div ref={ref} className="relative">
@@ -105,8 +107,10 @@ export function WorkspaceSwitcher({
           ) : null}
           <p
             className={cn(
-              "text-xs font-semibold text-[var(--color-text)] truncate tracking-wide",
-              isCompact ? "max-w-[80px] sm:max-w-[120px]" : "flex-1",
+              "font-semibold text-[var(--color-text)] truncate tracking-wide",
+              isCompact
+                ? `max-w-[80px] sm:max-w-[120px] ${compactTextClass}`
+                : "flex-1 text-xs",
             )}
           >
             {workspace?.name ?? "dam-hopper"}
@@ -119,7 +123,12 @@ export function WorkspaceSwitcher({
           />
         </div>
         {!isCompact && (
-          <p className="text-[10px] text-[var(--color-text-muted)]/40 truncate mt-0.5 pl-4">
+          <p
+            className={cn(
+              "truncate mt-0.5 pl-4 text-[var(--color-text-muted)]/40",
+              compactMetaTextClass,
+            )}
+          >
             {workspace?.root
               ? workspace.root.replace(/^\/(?:home|Users)\/[^/]+/, "~")
               : "~/workspace"}
@@ -131,8 +140,8 @@ export function WorkspaceSwitcher({
       {open && (
         <div
           className={cn(
-            "absolute top-full mt-1 z-50 rounded-sm glass-card-blur shadow-xl overflow-hidden",
-            isCompact ? "left-0 w-64" : "left-0 right-0",
+            "absolute top-full mt-1 z-[80] rounded-sm glass-card-blur shadow-xl overflow-hidden",
+            isCompact ? "left-0 w-[min(20rem,calc(100vw-1rem))]" : "left-0 right-0",
           )}
         >
           {/* Known workspaces */}

@@ -5,8 +5,8 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 ## Status Overview
 
 - **Current Phase:** Phase 07: Compact Top Navigation (UI/UX Redesign)
-- **Last Milestone:** Tauri v2 Shared UI Native Phase 02 shared logger/runtime utilities completed
-- **Total Phases Completed:** 15 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 2/5)
+- **Last Milestone:** Tauri v2 Shared UI Native Phase 04 responsive companion layout completed with compact workspace shell, responsive top navigation fixes, and tablet/zoom compact behavior verification
+- **Total Phases Completed:** 16 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 4/5 complete)
 - **Next Milestone:** Phase 06: Startup Restore — Load persisted sessions on server restart
 
 ## Roadmap Phases
@@ -206,6 +206,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [ ] Multi-workspace management UI
 
 ## Recent Milestones
+
+- **2026-05-25:** Completed Tauri v2 Shared UI Native Phase 04: Responsive Companion Layout.
+  - ✅ Added compact workspace responsive behavior with `MobileWorkspaceShell`, shared compact breakpoint helpers, and safe-area/dynamic-height CSS primitives
+  - ✅ Reused existing editor, terminal, fleet, ports, Git, and project surfaces without duplicating business logic or PTY lifecycle
+  - ✅ Added terminal refit/layout revision handling for compact surface switches and hardened empty-surface mobile shell behavior
+  - ✅ Fixed TopNav compact/tablet behavior, selector layering, project/branch visibility on small screens, and compact connection/status typography
+  - ✅ Validation passed: `pnpm --filter @dam-hopper/ui test`, `pnpm --filter @dam-hopper/ui build`, `pnpm build`, and `pnpm dev` boot verification
 
 - **2026-05-25:** Completed Tauri v2 Shared UI Native Phase 02: Shared Logger And Runtime Utilities.
   - ✅ Added dependency-free `@dam-hopper/shared` logger package with scoped `debug/info/warn/error` calls

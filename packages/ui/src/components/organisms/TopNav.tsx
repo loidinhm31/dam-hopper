@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils.js";
 import { ConnectionDot } from "@/components/atoms/ConnectionDot.js";
 import { Logo } from "@/components/atoms/Logo.js";
 import { useIpc } from "@/hooks/use-sse.js";
+import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 import { ProjectSwitcher } from "@/components/organisms/ProjectSwitcher.js";
 import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
@@ -40,6 +41,7 @@ export function TopNav({
 }: TopNavProps) {
   const { status } = useIpc();
   const { activeProject } = useWorkspaceStore();
+  const isCompactWorkspace = useCompactWorkspace();
   const { data: projects = [] } = useQuery({
     queryKey: ["projects"],
     queryFn: () => api.projects.list(),
@@ -53,6 +55,10 @@ export function TopNav({
   const [isDevMode, setIsDevMode] = useState(false);
 
   const activeProfile = getActiveProfile();
+  const selectedProject = activeProject ?? projects[0]?.name;
+  const showProjectToolbar = projects.length > 0 && Boolean(selectedProject);
+  const compactTextClass = "text-[length:calc(var(--app-font-size)*0.75)]";
+  const compactLabelClass = "text-[length:calc(var(--app-font-size)*0.65)]";
 
   useEffect(() => {
     let cancelled = false;
@@ -86,142 +92,202 @@ export function TopNav({
   }, [status]);
 
   return (
-    <header className="safe-area-inline shrink-0 glass-card z-50 flex h-12 items-center justify-between gap-1 overflow-hidden border-b border-[var(--color-border)] px-2 sm:gap-2 sm:px-4">
-      <div className="flex min-w-0 items-center gap-1.5 sm:gap-4">
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <Logo size="sm" />
-          <span className="text-[10px] text-[var(--color-primary)] font-bold tracking-widest opacity-70 hidden xl:inline">
-            DAM-HOPPER
-          </span>
-        </div>
-
-        <button
-          onClick={onToggle}
-          className="p-1.5 hover:bg-[var(--color-surface-2)] rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors flex-shrink-0"
-          title={collapsed ? "Show menu" : "Hide menu"}
-        >
-          {collapsed ? <Menu size={16} /> : <X size={16} />}
-        </button>
-
-        {/* Inline Menu */}
-        <nav
+    <header
+      className={cn(
+        "safe-area-inline shrink-0 glass-card z-50 overflow-visible border-b border-[var(--color-border)]",
+        isCompactWorkspace
+          ? "flex flex-col gap-2 px-2 py-2"
+          : "flex h-12 flex-row items-center justify-between gap-2 px-4 py-0",
+      )}
+    >
+      <div
+        className={cn(
+          "flex min-w-0 items-center justify-between gap-2",
+          !isCompactWorkspace && "flex-1",
+        )}
+      >
+        <div
           className={cn(
-            "flex items-center gap-1 overflow-hidden transition-all duration-300 ease-in-out",
-            collapsed
-              ? "max-w-0 opacity-0 pointer-events-none"
-              : "max-w-[120px] sm:max-w-[180px] lg:max-w-[500px] xl:max-w-[1000px] opacity-100 ml-1 sm:ml-2",
+            "flex min-w-0 items-center",
+            isCompactWorkspace ? "gap-1.5" : "gap-4",
           )}
         >
-          {BASE_NAV.map(({ to, icon: Icon, label }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === "/"}
-              className={({ isActive }) =>
-                cn(
-                  "flex items-center gap-2 rounded-sm px-2 sm:px-2.5 py-1.5 text-xs font-bold transition-all whitespace-nowrap",
-                  isActive
-                    ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)] border-b border-[var(--color-primary)]"
-                    : "text-[var(--color-text)] opacity-50 hover:opacity-100 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] border-b border-transparent",
-                )
-              }
-            >
-              <Icon className="h-3.5 w-3.5" />
-              <span className="tracking-widest text-[10px] hidden lg:inline">
-                {label}
-              </span>
-            </NavLink>
-          ))}
-        </nav>
-      </div>
-
-      <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5 sm:gap-3">
-        <div className="min-w-0 max-w-[9.5rem] sm:max-w-none">
-          <WorkspaceSwitcher variant="compact" />
-        </div>
-
-        {workspaceMode && onWorkspaceModeChange && (
-          <>
-            <div className="h-4 w-[1px] bg-[var(--color-border)] hidden md:block" />
-            <div
-              className="flex items-center rounded-sm border border-[var(--color-border)] bg-[var(--color-surface)]/60 p-0.5"
-              title={
-                workspaceModeShortcutLabel
-                  ? `Switch workspace mode (${workspaceModeShortcutLabel})`
-                  : "Switch workspace mode"
-              }
-            >
-              {(["ide", "terminal"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => onWorkspaceModeChange(mode)}
-                  aria-pressed={workspaceMode === mode}
-                  className={cn(
-                    "rounded-[3px] px-1.5 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors sm:px-2",
-                    workspaceMode === mode
-                      ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
-                      : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
-                  )}
-                >
-                  {mode === "ide" ? "IDE" : "Terminal"}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-
-        {projects.length > 0 && (
-          <>
-            <div className="h-4 w-[1px] bg-[var(--color-border)] hidden lg:block" />
-            <div className="px-1 min-w-0 flex-shrink hidden lg:block">
-              <ProjectSwitcher />
-            </div>
-
-            <div className="h-4 w-[1px] bg-[var(--color-border)] hidden xl:block" />
-            <div className="px-1 hidden xl:block">
-              <GitBranchControl
-                project={activeProject ?? projects[0].name}
-                compact
-                showFeedback={false}
-              />
-            </div>
-          </>
-        )}
-
-        <div className="h-4 w-[1px] bg-[var(--color-border)]" />
-
-        <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
-          <div className="hidden sm:block">
-            <HostResourcePopover />
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Logo size="sm" />
+            <span className="hidden text-[10px] font-bold tracking-widest text-[var(--color-primary)] opacity-70 xl:inline">
+              DAM-HOPPER
+            </span>
           </div>
 
           <button
-            onClick={() => setProfilesDialogOpen(true)}
-            className="flex items-center gap-2 px-2 py-1 rounded-sm hover:bg-[var(--color-surface-2)] transition-colors"
-            title={activeProfile?.name || "Server connection"}
+            onClick={onToggle}
+            className="flex-shrink-0 rounded-sm p-1.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+            title={collapsed ? "Show menu" : "Hide menu"}
           >
-            <ConnectionDot
-              status={status}
-              collapsed={false}
-              devMode={isDevMode}
-            />
-            {activeProfile && (
-              <span className="text-[10px] font-bold text-[var(--color-text-muted)] tracking-wider uppercase hidden xl:inline">
-                {activeProfile.name}
-              </span>
-            )}
+            {collapsed ? <Menu size={16} /> : <X size={16} />}
           </button>
 
-          <button
-            onClick={() => setProfilesDialogOpen(true)}
-            className="hidden rounded-sm p-1.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] sm:block"
-            title="Manage server connections"
+          <nav
+            className={cn(
+              "flex items-center gap-1 overflow-hidden transition-all duration-300 ease-in-out",
+              collapsed
+                ? "max-w-0 pointer-events-none opacity-0"
+                : "ml-1 max-w-[120px] opacity-100 sm:ml-2 sm:max-w-[180px] lg:max-w-[500px] xl:max-w-[1000px]",
+            )}
           >
-            <ServerCog size={16} />
-          </button>
+            {BASE_NAV.map(({ to, icon: Icon, label }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={to === "/"}
+                className={({ isActive }) =>
+                  cn(
+                    "flex items-center gap-2 rounded-sm border-b px-2 py-1.5 font-bold whitespace-nowrap transition-all sm:px-2.5",
+                    isCompactWorkspace ? compactTextClass : "text-xs",
+                    isActive
+                      ? "border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+                      : "border-transparent text-[var(--color-text)] opacity-50 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] hover:opacity-100",
+                  )
+                }
+              >
+                <Icon className="h-3.5 w-3.5" />
+                <span
+                  className={cn(
+                    "hidden tracking-widest lg:inline",
+                    isCompactWorkspace ? compactLabelClass : "text-[10px]",
+                  )}
+                >
+                  {label}
+                </span>
+              </NavLink>
+            ))}
+          </nav>
+        </div>
+
+        <div
+          className={cn(
+            "flex min-w-0 items-center justify-end",
+            isCompactWorkspace ? "gap-1.5" : "gap-3",
+          )}
+        >
+          <div className={cn("min-w-0", !isCompactWorkspace && "max-w-none", isCompactWorkspace && "max-w-[9.5rem]")}>
+            <WorkspaceSwitcher variant="compact" />
+          </div>
+
+          {workspaceMode && onWorkspaceModeChange && (
+            <>
+              <div className={cn("hidden h-4 w-[1px] bg-[var(--color-border)]", !isCompactWorkspace && "md:block")} />
+              <div
+                className="flex items-center rounded-sm border border-[var(--color-border)] bg-[var(--color-surface)]/60 p-0.5"
+                title={
+                  workspaceModeShortcutLabel
+                    ? `Switch workspace mode (${workspaceModeShortcutLabel})`
+                    : "Switch workspace mode"
+                }
+              >
+                {(["ide", "terminal"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => onWorkspaceModeChange(mode)}
+                    aria-pressed={workspaceMode === mode}
+                    className={cn(
+                      "rounded-[3px] px-1.5 py-1 font-bold uppercase tracking-wider transition-colors",
+                      !isCompactWorkspace && "sm:px-2",
+                      isCompactWorkspace ? compactLabelClass : "text-[10px]",
+                      workspaceMode === mode
+                        ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+                        : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
+                    )}
+                  >
+                    {mode === "ide" ? "IDE" : "Terminal"}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          {!isCompactWorkspace && showProjectToolbar && selectedProject && (
+            <>
+              <div className="hidden h-4 w-[1px] bg-[var(--color-border)] md:block" />
+              <div className="hidden min-w-0 md:block">
+                <ProjectSwitcher />
+              </div>
+
+              <div className="hidden h-4 w-[1px] bg-[var(--color-border)] md:block" />
+              <div className="hidden min-w-0 md:block">
+                <GitBranchControl
+                  project={selectedProject}
+                  compact
+                  showFeedback={false}
+                />
+              </div>
+            </>
+          )}
+
+          <div className="h-4 w-[1px] bg-[var(--color-border)]" />
+
+          <div
+            className={cn(
+              "flex flex-shrink-0 items-center",
+              isCompactWorkspace ? "gap-1" : "gap-2",
+            )}
+          >
+            <div className={cn("hidden", !isCompactWorkspace && "sm:block")}>
+              <HostResourcePopover />
+            </div>
+
+            <button
+              onClick={() => setProfilesDialogOpen(true)}
+              className="flex items-center gap-2 rounded-sm px-2 py-1 transition-colors hover:bg-[var(--color-surface-2)]"
+              title={activeProfile?.name || "Server connection"}
+            >
+              <ConnectionDot
+                status={status}
+                collapsed={isCompactWorkspace}
+                devMode={isDevMode}
+              />
+              {activeProfile && (
+                <span
+                  className={cn(
+                    "hidden font-bold tracking-wider text-[var(--color-text-muted)] uppercase xl:inline",
+                    isCompactWorkspace ? compactLabelClass : "text-[10px]",
+                  )}
+                >
+                  {activeProfile.name}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setProfilesDialogOpen(true)}
+              className={cn(
+                "hidden rounded-sm p-1.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
+                !isCompactWorkspace && "sm:block",
+              )}
+              title="Manage server connections"
+            >
+              <ServerCog size={16} />
+            </button>
+          </div>
         </div>
       </div>
+
+      {isCompactWorkspace && showProjectToolbar && selectedProject && (
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <ProjectSwitcher className="min-w-0" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <GitBranchControl
+              project={selectedProject}
+              compact
+              showFeedback={false}
+              className="min-w-0"
+            />
+          </div>
+        </div>
+      )}
 
       <ServerSettingsDialog
         open={serverSettingsOpen}
