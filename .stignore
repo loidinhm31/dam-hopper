@@ -46,5 +46,6 @@ target/
 **/tauri.settings.gradle
 **/.turbo
 **.turbo
-embed-app/**/apps/native/src-tauri/gen/android/tauri.settings.gradle
-embed-app/cham-lang/apps/native/src-tauri/gen/android/tauri.settings.gradle
+apps/native/src-tauri/gen/android/tauri.settings.gradle
+apps/native/src-tauri/gen/android/tauri.settings.gradle
+apps/native/src-tauri/gen/android/buildSrc/**

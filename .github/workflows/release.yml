@@ -154,7 +154,7 @@ jobs:
       - name: Regenerate Tauri app icons
         run: |
           cd apps/native
-          ./node_modules/.bin/tauri icon ./src-tauri/icon-source.svg
+          ./node_modules/.bin/tauri icon ./src-tauri/app-icon.json
 
       - name: Build Android APK
         run: |
