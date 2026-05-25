@@ -236,6 +236,7 @@ impl PtySessionManager {
             .take_writer()
             .map_err(|e| AppError::PtyError(format!("take_writer failed: {e}")))?;
 
+        let child_killer = child.clone_killer();
         let respawn_opts = opts.clone_for_respawn();
         let project_name = opts.project.clone();
         let meta = SessionMeta::new(
@@ -246,7 +247,13 @@ impl PtySessionManager {
             opts.restart_policy,
         );
 
-        let session = LiveSession::new(meta.clone(), pair.master, writer, respawn_opts);
+        let session = LiveSession::new(
+            meta.clone(),
+            pair.master,
+            writer,
+            child_killer,
+            respawn_opts,
+        );
         let buffer = session.buffer_ref();
         let shutdown = session.shutdown_ref();
 
@@ -254,9 +261,9 @@ impl PtySessionManager {
             let mut inner = self.inner.lock().unwrap();
             // TOCTOU guard: if concurrent create() already inserted this ID while
             // we were spawning, kill it and replace (matches pre-existing behavior).
-            if let Some(existing) = inner.live.get(&opts.id) {
+            if let Some(existing) = inner.live.remove(&opts.id) {
                 warn!(id = %opts.id, "Concurrent create detected, replacing existing session");
-                existing.signal_shutdown();
+                existing.terminate();
             }
             inner.dead.remove(&opts.id);
             // Clear killed flag after successful spawn:
@@ -414,7 +421,7 @@ impl PtySessionManager {
         // Mark as killed so reader thread won't restart.
         inner.killed.insert(id.to_string());
         if let Some(session) = inner.live.remove(id) {
-            session.signal_shutdown();
+            session.terminate();
         }
         inner.dead.remove(id);
         drop(inner);
@@ -460,7 +467,7 @@ impl PtySessionManager {
         let mut inner = self.inner.lock().unwrap();
         info!(count = inner.live.len(), "Disposing all PTY sessions");
         for session in inner.live.values() {
-            session.signal_shutdown();
+            session.terminate();
         }
         inner.live.clear();
         inner.dead.clear();
@@ -515,7 +522,7 @@ impl PtySessionManager {
         // Mark as killed BEFORE removing from live — reader thread checks this.
         inner.killed.insert(id.to_string());
         if let Some(session) = inner.live.remove(id) {
-            session.signal_shutdown();
+            session.terminate();
             inner
                 .dead
                 .insert(id.to_string(), DeadSession::killed(session.meta));
@@ -839,7 +846,14 @@ async fn respawn_internal(
     meta.restart_count = cmd.restart_count + 1;
     meta.last_exit_at = Some(crate::pty::session::now_ms());
 
-    let session = LiveSession::new(meta.clone(), pair.master, writer, opts.clone());
+    let child_killer = child.clone_killer();
+    let session = LiveSession::new(
+        meta.clone(),
+        pair.master,
+        writer,
+        child_killer,
+        opts.clone(),
+    );
     let buffer = session.buffer_ref();
     let shutdown = session.shutdown_ref();
 
@@ -850,6 +864,10 @@ async fn respawn_internal(
         // Remove from killed set (allow future restarts if user doesn't kill again).
         inner_guard.killed.remove(session_id);
         inner_guard.dead.remove(session_id);
+        if let Some(existing) = inner_guard.live.remove(session_id) {
+            warn!(id = %session_id, "Concurrent session detected during respawn, replacing");
+            existing.terminate();
+        }
         inner_guard.live.insert(session_id.to_string(), session);
     }
 

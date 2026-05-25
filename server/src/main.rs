@@ -80,7 +80,8 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Workspace ─────────────────────────────────────────────────────────────
 
-    let workspace_dir = cli.workspace
+    let workspace_dir = cli
+        .workspace
         .or_else(|| {
             global_config
                 .defaults
