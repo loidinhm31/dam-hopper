@@ -15,8 +15,9 @@ A web-based app for managing multi-project development environments. Manage git 
 
 ## Requirements
 
-- Rust 1.80+ (for server)
-- Node.js 20+ + pnpm 9+ (for web app development only)
+- Rust 1.80+ (for server and Tauri native builds)
+- Node.js 20+ + pnpm 9+
+- Android Studio + Android SDK/NDK + `JAVA_HOME` / `ANDROID_HOME` / `NDK_HOME` (for Android builds only)
 
 ## Installation
 
@@ -95,11 +96,24 @@ pnpm install
 # Web dev mode (Vite HMR on http://localhost:5173)
 pnpm dev
 
+# Desktop Tauri shell (Vite on http://localhost:1420)
+pnpm dev:native
+
+# One-time Android scaffold refresh for the native app
+pnpm android:init
+
+# Android emulator / device dev
+pnpm android:dev
+
+# Android release artifacts (APK + AAB)
+pnpm android:build
+
 # Rust server (requires running Rust server separately)
 cd server && cargo run -- --workspace /path/to/workspace
 
 # Build everything
 pnpm build        # web app
+pnpm build:native # desktop native host assets
 pnpm build:server # Rust release binary
 
 # Run Rust tests (121 tests)
@@ -112,6 +126,8 @@ pnpm lint
 # Format
 pnpm format
 ```
+
+The generated Android Studio project lives in `apps/native/src-tauri/gen/android`. Tauri now runs the native package's local `npm run dev` / `npm run build` hooks, so Android Studio and Gradle do not depend on a globally installed `pnpm`.
 
 ## Repository Structure
 
