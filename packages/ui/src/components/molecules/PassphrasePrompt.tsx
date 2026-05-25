@@ -166,7 +166,11 @@ export function PassphrasePrompt({ project }: PassphrasePromptProps) {
           display: flex;
           align-items: center;
           justify-content: center;
-          padding: 16px;
+          padding:
+            max(16px, env(safe-area-inset-top))
+            max(16px, env(safe-area-inset-right))
+            max(16px, env(safe-area-inset-bottom))
+            max(16px, env(safe-area-inset-left));
         }
         .pp-backdrop {
           position: absolute;
@@ -178,6 +182,8 @@ export function PassphrasePrompt({ project }: PassphrasePromptProps) {
           position: relative;
           width: 100%;
           max-width: 420px;
+          max-height: calc(100dvh - 32px);
+          overflow: auto;
           background: var(--color-surface, #1a1a2e);
           border: 1px solid var(--color-border, rgba(255,255,255,0.1));
           border-radius: 12px;

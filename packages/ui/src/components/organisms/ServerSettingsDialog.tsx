@@ -236,14 +236,14 @@ export function ServerSettingsDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
+      className="safe-area-inline safe-area-bottom fixed inset-0 z-50 flex items-center justify-center p-3"
       style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}
       onClick={(e) => {
         if (closable && e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        className="w-full max-w-md rounded-2xl border border-[var(--color-border)] shadow-2xl"
+        className="dialog-viewport-fit flex w-full max-w-md flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] shadow-2xl"
         style={{ background: "var(--color-surface)" }}
       >
         {/* Header */}

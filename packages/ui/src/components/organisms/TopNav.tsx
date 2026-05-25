@@ -86,8 +86,8 @@ export function TopNav({
   }, [status]);
 
   return (
-    <header className="shrink-0 glass-card border-b border-[var(--color-border)] px-4 h-12 flex items-center justify-between z-50 gap-2">
-      <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+    <header className="safe-area-inline shrink-0 glass-card z-50 flex h-12 items-center justify-between gap-1 overflow-hidden border-b border-[var(--color-border)] px-2 sm:gap-2 sm:px-4">
+      <div className="flex min-w-0 items-center gap-1.5 sm:gap-4">
         <div className="flex items-center gap-2 flex-shrink-0">
           <Logo size="sm" />
           <span className="text-[10px] text-[var(--color-primary)] font-bold tracking-widest opacity-70 hidden xl:inline">
@@ -135,8 +135,8 @@ export function TopNav({
         </nav>
       </div>
 
-      <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 justify-end">
-        <div className="min-w-0">
+      <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5 sm:gap-3">
+        <div className="min-w-0 max-w-[9.5rem] sm:max-w-none">
           <WorkspaceSwitcher variant="compact" />
         </div>
 
@@ -192,7 +192,9 @@ export function TopNav({
         <div className="h-4 w-[1px] bg-[var(--color-border)]" />
 
         <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
-          <HostResourcePopover />
+          <div className="hidden sm:block">
+            <HostResourcePopover />
+          </div>
 
           <button
             onClick={() => setProfilesDialogOpen(true)}
@@ -213,7 +215,7 @@ export function TopNav({
 
           <button
             onClick={() => setProfilesDialogOpen(true)}
-            className="p-1.5 hover:bg-[var(--color-surface-2)] rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            className="hidden rounded-sm p-1.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] sm:block"
             title="Manage server connections"
           >
             <ServerCog size={16} />

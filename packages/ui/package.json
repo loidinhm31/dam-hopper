@@ -9,7 +9,7 @@
   },
   "exports": {
     ".": "./src/embed/dam-hopper-app.tsx",
-    "./styles": "./src/styles.ts",
+    "./styles": "./src/index.css",
     "./api/*": "./src/api/*.ts"
   },
   "dependencies": {

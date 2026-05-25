@@ -100,8 +100,8 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-bg)]/95 backdrop-blur-md">
-      <div className="w-full max-w-2xl mx-4">
+    <div className="safe-area-inline safe-area-bottom fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-[var(--color-bg)]/95 p-3 backdrop-blur-md">
+      <div className="dialog-viewport-fit w-full max-w-2xl">
         {/* Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-[var(--color-primary)]/20 mb-4">
@@ -149,9 +149,9 @@ export function WorkspaceSetupWizard({ onComplete }: Props) {
         </div>
 
         {/* Card */}
-        <div className="glass-card rounded-2xl border border-[var(--color-border)] shadow-2xl overflow-hidden">
+        <div className="glass-card flex max-h-[calc(100dvh-10rem)] flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] shadow-2xl">
           {/* Step Content */}
-          <div className="p-6">
+          <div className="min-h-0 overflow-y-auto p-4 sm:p-6">
             {step === "path" && (
               <div className="space-y-4">
                 <div className="flex items-center gap-2 mb-4">
