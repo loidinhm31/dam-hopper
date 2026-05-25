@@ -4,8 +4,9 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Browser                                                     │
+│  Browser / Native WebView                                    │
 │  ├─ Thin Vite host (apps/web/dist/)                        │
+│  ├─ Tauri native host (apps/native)                        │
 │  ├─ Shared React UI package (packages/ui)                  │
 │  ├─ Shared runtime utilities (packages/shared)             │
 │  ├─ fetch(/api/*) for REST queries                         │
@@ -69,6 +70,25 @@ Dependency-free runtime helpers shared by browser packages.
 - `logger.ts` centralizes `configureLogger`, `getLoggerConfig`, `resolveLogLevel`, and `logger.debug/info/warn/error`
 - Sensitive metadata is redacted recursively before sink delivery by default
 - Web bootstrap reads the desired log level from Vite env and falls back to `debug` in development or `warn` in production
+
+### apps/native
+
+Tauri v2 native client that reuses the same `packages/ui` runtime as the web
+host. It is a remote client only: it does not embed the Rust server as a
+sidecar, does not rewrite PTY behavior in native code, and keeps Tauri
+permissions to `core:default`.
+
+**Frontend host:**
+
+- `apps/native/src/main.tsx` mirrors `apps/web/src/main.tsx`: configures the shared logger, initializes `WsTransport(getNativeServerUrl())` when an active profile exists, otherwise installs an idle transport for the setup screen, creates the TanStack Query client, and mounts `DamHopperApp`.
+- `apps/native/vite.config.ts` uses Tauri's fixed dev port `1420`, strict port mode, `TAURI_DEV_HOST` HMR support on port `1421`, and ignores `src-tauri` in Vite file watching.
+- The shared `ServerProfileGuard` still controls startup. If no server profile exists, the native host installs an idle transport and opens the server setup dialog instead of relying on the packaged webview's same-origin URL.
+
+**Tauri shell:**
+
+- `apps/native/src-tauri` contains only the default Tauri builder and the main window config.
+- No filesystem, shell, opener, HTTP, or sidecar plugin permissions are granted in Phase 03. The native CSP allows local/profile HTTP and WebSocket connections but keeps default script execution to self.
+- Native dev uses `http://localhost:1420`. Packaged desktop webview requests can present `tauri://localhost`, `http://tauri.localhost`, or `https://tauri.localhost` depending on platform/webview. DamHopper servers that enforce CORS must allow the origin used by the packaged client when it connects cross-origin.
 
 ### persistence/ (Phase 04)
 
@@ -237,7 +257,7 @@ other child-local paths.
 
 ### Web Frontend Shared File Decorations
 
-**Location:** `packages/web/src/lib/`
+**Location:** `packages/ui/src/lib/`
 
 - `file-decoration.ts` is the single lookup table for file icons, badge text, display language, and Monaco language.
 - Lookup order: exact filename > extension > MIME fallback > neutral default.
@@ -255,7 +275,7 @@ other child-local paths.
 
 **Client-side only** — no backend involvement. React component integration:
 
-**File:** `packages/web/src/api/server-config.ts`
+**File:** `packages/ui/src/api/server-config.ts`
 
 - `ServerProfile` interface: { id (UUID), name, url, authType, username?, createdAt (timestamp) }
 - Functions: `getProfiles()`, `saveProfiles()`, `createProfile()`, `updateProfile()`, `deleteProfile()`, `setActiveProfile()`, `getActiveProfile()`, `migrateToProfiles()`
@@ -267,10 +287,12 @@ other child-local paths.
 - `ServerProfilesDialog.tsx` (organisms/) — list profiles, switch active, delete, edit (calls callbacks to parent)
 - `Sidebar.tsx` — displays active profile name; "Change Server" button opens `ServerProfilesDialog`
 
-**Integration in App.tsx:**
+**Integration in shared UI and host bootstraps:**
 
-- Calls `migrateToProfiles()` at startup to convert legacy config
-- Sidebar triggers profile switcher dialog (with callback for page reload if needed)
+- `DamHopperApp` calls `migrateToProfiles()` at startup to convert legacy config
+- Browser host initializes `WsTransport(getServerUrl())`
+- Native host initializes `WsTransport(getNativeServerUrl())` when an active profile exists, otherwise installs `IdleTransport`
+- Sidebar triggers profile switcher dialog and the setup flow remains profile-driven in both hosts
 
 **Data Persistence:**
 
@@ -742,7 +764,7 @@ GET /api/fs/search?project=web&q=pattern[&case=true&max=50]
 
 ## Frontend Components (Phase 06+)
 
-Frontend now uses a split host/package layout: `apps/web` is the thin Vite browser host, `packages/ui` contains the shared React UI, and `apps/native` remains a Phase 03 placeholder. The host owns DOM mount plus transport/query bootstrapping; the shared package owns components, hooks, stores, styles, assets, and tests.
+Frontend now uses a split host/package layout: `apps/web` is the thin Vite browser host, `apps/native` is the implemented Tauri v2 remote client, and `packages/ui` contains the shared React UI. The hosts own DOM mount plus transport/query bootstrapping; the shared package owns components, hooks, stores, styles, assets, and tests.
 
 ### Component Architecture
 
@@ -934,10 +956,10 @@ API layer (handlers) catch AppError → HTTP status:
 
 **Phase 07 (Complete):** IDE explorer enhancements:
 
-- **Markdown split-view preview:** `MarkdownHost` + `MarkdownPreview` components in packages/web/src/components/organisms/. EditorTabs routes .md/.mdx files to MarkdownHost. Toggle modes: Edit | Split | Preview-only.
+- **Markdown split-view preview:** `MarkdownHost` + `MarkdownPreview` components in packages/ui/src/components/organisms/. EditorTabs routes .md/.mdx files to MarkdownHost. Toggle modes: Edit | Split | Preview-only.
 - **Drag-and-drop file move:** FileTree.tsx DnD via react-arborist's built-in `onMove`. Drop on dir → move into dir. Drop on file → move to file's parent. Calls existing `ops.move()` with server-side sandbox validation.
 - **Backend search API:** `GET /api/fs/search?project=X&q=QUERY[&case=bool&max=N]` in server/src/api/fs.rs. Uses `ignore` crate v0.4 for .gitignore-aware directory walking. Plain text search (regex-escaped server-side). Results capped at 1000, default 200.
-- **Frontend search panel:** New "SEARCH" tab in SidebarTabSwitcher. SearchPanel component with debounced input (useDeferredValue), results grouped by file with match highlighting. `useFileSearch` hook in packages/web/src/hooks/. Ctrl+Shift+F keyboard shortcut to focus search. Gated behind ide_explorer feature flag.
+- **Frontend search panel:** New "SEARCH" tab in SidebarTabSwitcher. SearchPanel component with debounced input (useDeferredValue), results grouped by file with match highlighting. `useFileSearch` hook in packages/ui/src/hooks/. Ctrl+Shift+F keyboard shortcut to focus search. Gated behind ide_explorer feature flag.
 
 **Phase 08 (Complete):** IDE Tool Windows Refactoring.
 Refactored `IdeShell.tsx` into a flexible, extensible "Tool Window" system.

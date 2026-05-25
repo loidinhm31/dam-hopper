@@ -5,8 +5,8 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 ## Status Overview
 
 - **Current Phase:** Phase 07: Compact Top Navigation (UI/UX Redesign)
-- **Last Milestone:** Tauri v2 Shared UI Native Phase 04 responsive companion layout completed with compact workspace shell, responsive top navigation fixes, and tablet/zoom compact behavior verification
-- **Total Phases Completed:** 16 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 4/5 complete)
+- **Last Milestone:** Tauri v2 Shared UI Native Phase 05 verification and documentation completed with split-host docs refresh, compact workspace lint fix, and blocked-manual-check notes recorded
+- **Total Phases Completed:** 17 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 5/5 complete)
 - **Next Milestone:** Phase 06: Startup Restore — Load persisted sessions on server restart
 
 ## Roadmap Phases
@@ -206,6 +206,12 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [ ] Multi-workspace management UI
 
 ## Recent Milestones
+
+- **2026-05-26:** Completed Tauri v2 Shared UI Native Phase 05: Verification And Documentation.
+  - ✅ Fixed compact workspace hook/lint regressions in `WorkspacePage` without changing desktop shell behavior
+  - ✅ Revalidated shared, UI, web, native, root build, and lint targets
+  - ✅ Updated system architecture, codebase summary, frontend components, and configuration docs for the `apps/web` + `apps/native` + `packages/ui` split
+  - ⚠️ Documented remaining manual validation blockers: Tauri Linux prerequisites, sandboxed browser probing limits, and local no-auth server env/persistence issues
 
 - **2026-05-25:** Completed Tauri v2 Shared UI Native Phase 04: Responsive Companion Layout.
   - ✅ Added compact workspace responsive behavior with `MobileWorkspaceShell`, shared compact breakpoint helpers, and safe-area/dynamic-height CSS primitives

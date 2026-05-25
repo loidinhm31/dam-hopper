@@ -496,7 +496,7 @@ pub fn with_persist(
 - 50 sessions: ~1.2s (acceptable, rarely occurs)
 - With parallel spawning (future): could reduce further
 
-## TypeScript Frontend (`apps/web` + `packages/ui`)
+## TypeScript Frontend (`apps/web`, `apps/native`, `packages/ui`)
 
 ### Profile Management Pattern
 
@@ -646,7 +646,13 @@ packages/ui/src/
 └── types/                 # Shared TypeScript type declarations
 ```
 
-`apps/web` owns browser bootstrapping only: `QueryClientProvider`, `initTransport(new WsTransport(getServerUrl()))`, DOM mount, and host Vite config. `packages/ui` owns components, hooks, stores, shared styling, assets, and tests.
+`apps/web` owns browser bootstrapping only: `QueryClientProvider`, `initTransport(new WsTransport(getServerUrl()))`, DOM mount, and host Vite config.
+
+`apps/native` owns Tauri bootstrapping only: the same `QueryClientProvider` and `DamHopperApp` mount, native Vite config on strict port `1420`, and the minimal `src-tauri` shell. It must remain a remote client; do not add backend sidecars, filesystem permissions, shell permissions, or opener/http plugins without a phase plan that justifies the native API surface.
+
+Native startup must not depend on packaged webview same-origin fallback. Use the shared server profile flow, and keep the no-profile transport idle until the shared `ServerProfileGuard` prompts for an explicit profile.
+
+`packages/ui` owns components, hooks, stores, shared styling, assets, and tests.
 
 `packages/shared` owns dependency-free runtime utilities used across packages. Current rule: keep logger config, level resolution, and metadata redaction centralized in `src/logger.ts`, and prefer it over ad hoc `console` calls in transport, auth, terminal, dashboard, error boundary, and filesystem code.
 
