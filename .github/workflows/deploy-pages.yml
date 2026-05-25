@@ -48,12 +48,12 @@ jobs:
 
       - name: 404.html Trick
         # Copy index.html to 404.html to handle client-side routing refreshes on GitHub Pages
-        run: cp packages/web/dist/index.html packages/web/dist/404.html
+        run: cp apps/web/dist/index.html apps/web/dist/404.html
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: "packages/web/dist"
+          path: "apps/web/dist"
 
       - name: Deploy to GitHub Pages
         id: deployment

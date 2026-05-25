@@ -90,7 +90,7 @@ jobs:
 
       - name: Package web dist
         run: |
-          tar czf web-dist.tar.gz -C packages/web dist
+          tar czf web-dist.tar.gz -C apps/web dist
           sha256sum web-dist.tar.gz > web-dist.tar.gz.sha256
 
       - uses: actions/upload-artifact@v4
