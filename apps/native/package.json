@@ -16,7 +16,8 @@
     "tauri:android:run": "tauri android run",
     "tauri:android:studio": "tauri android dev --open --host",
     "tauri:ios:init": "tauri ios init",
-    "tauri:ios:dev": "tauri ios dev"
+    "tauri:ios:dev": "tauri ios dev",
+    "version": "node scripts/bump-version.js"
   },
   "dependencies": {
     "@dam-hopper/shared": "workspace:*",
