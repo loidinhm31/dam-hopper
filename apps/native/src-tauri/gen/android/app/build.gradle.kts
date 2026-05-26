@@ -1,5 +1,4 @@
 import java.util.Properties
-import java.io.FileInputStream
 
 plugins {
     id("com.android.application")
@@ -14,6 +13,21 @@ val tauriProperties = Properties().apply {
     }
 }
 
+val keystoreProperties = Properties().apply {
+    val keystorePropertiesFile = rootProject.file("keystore.properties")
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
+}
+
+val releaseKeyAlias = keystoreProperties.getProperty("keyAlias")
+val releaseStoreFile = keystoreProperties.getProperty("storeFile")
+val releasePassword = keystoreProperties.getProperty("password")
+val hasReleaseKeystore =
+    !releaseKeyAlias.isNullOrBlank() &&
+    !releaseStoreFile.isNullOrBlank() &&
+    !releasePassword.isNullOrBlank()
+
 android {
     compileSdk = 36
     namespace = "com.damhopper.app"
@@ -26,22 +40,20 @@ android {
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
     signingConfigs {
-        create("release") {
-            val keystorePropertiesFile = rootProject.file("keystore.properties")
-            val keystoreProperties = Properties()
-            if (keystorePropertiesFile.exists()) {
-                keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+        if (hasReleaseKeystore) {
+            create("release") {
+                keyAlias = requireNotNull(releaseKeyAlias)
+                keyPassword = requireNotNull(releasePassword)
+                storeFile = rootProject.file(requireNotNull(releaseStoreFile))
+                storePassword = requireNotNull(releasePassword)
             }
-
-            keyAlias = keystoreProperties["keyAlias"] as String
-            keyPassword = keystoreProperties["password"] as String
-            storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
-            storePassword = keystoreProperties["password"] as String
         }
     }
     buildTypes {
         getByName("release") {
-            signingConfig = signingConfigs.getByName("release")
+            if (hasReleaseKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"

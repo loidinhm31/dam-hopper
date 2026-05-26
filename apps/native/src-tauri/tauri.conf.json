@@ -27,6 +27,22 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all"
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.icns"
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "thub.com/loidinhm31/dam-hopper/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZBMkU1NUFGNkUzRDc4REYKUldUZmVEMXVyMVV1YXVpRHlORDNqZUdPaUdlWm1ZanhmMklWUkdVSU9WZVY5ZnV3Kyt6bzlMYjgK"
+    }
   }
 }
