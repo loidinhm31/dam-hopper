@@ -2,3 +2,5 @@ target/
 gen/*
 !gen/android/
 !gen/android/**
+**.key
+**.key.pub
