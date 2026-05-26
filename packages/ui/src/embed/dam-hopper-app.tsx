@@ -28,6 +28,7 @@ import { EncryptProvider } from "@/contexts/EncryptContext.js";
 import { PassphrasePrompt } from "@/components/molecules/PassphrasePrompt.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { matchesNewTerminalShortcut } from "@/lib/shortcuts.js";
+import { normalizeRouterBasename } from "@/lib/router-basename.js";
 
 function syncFontSizeCssVar(fontSize: number): void {
   document.documentElement.style.setProperty(
@@ -248,6 +249,7 @@ function WorkspaceGuard({ children }: { children: React.ReactNode }) {
 
 export function DamHopperApp() {
   const qc = useQueryClient();
+  const routerBasename = normalizeRouterBasename(import.meta.env.BASE_URL);
 
   useEffect(() => {
     const settings = useSettingsStore.getState();
@@ -272,7 +274,7 @@ export function DamHopperApp() {
 
   return (
     <EncryptProvider>
-      <BrowserRouter basename={import.meta.env.BASE_URL}>
+      <BrowserRouter basename={routerBasename}>
         <GlobalShortcuts />
         <PassphrasePrompt />
         <ServerProfileGuard>
