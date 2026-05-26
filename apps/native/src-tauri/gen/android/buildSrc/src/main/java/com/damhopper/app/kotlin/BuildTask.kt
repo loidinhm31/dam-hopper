@@ -5,8 +5,12 @@ import org.gradle.api.GradleException
 import org.gradle.api.logging.LogLevel
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.TaskAction
+import org.gradle.process.ExecOperations
+import javax.inject.Inject
 
-open class BuildTask : DefaultTask() {
+open class BuildTask @Inject constructor(
+    private val execOperations: ExecOperations,
+) : DefaultTask() {
     @Input
     var rootDirRel: String? = null
     @Input
@@ -16,7 +20,7 @@ open class BuildTask : DefaultTask() {
 
     @TaskAction
     fun assemble() {
-        val executable = """node""";
+        val executable = "node"
         try {
             runTauriCli(executable)
         } catch (e: Exception) {
@@ -44,13 +48,13 @@ open class BuildTask : DefaultTask() {
         }
     }
 
-    fun runTauriCli(executable: String) {
+    private fun runTauriCli(executable: String) {
         val rootDirRel = rootDirRel ?: throw GradleException("rootDirRel cannot be null")
         val target = target ?: throw GradleException("target cannot be null")
         val release = release ?: throw GradleException("release cannot be null")
-        val args = listOf("../node_modules/@tauri-apps/cli/tauri.js", "android", "android-studio-script");
+        val args = listOf("../node_modules/@tauri-apps/cli/tauri.js", "android", "android-studio-script")
 
-        project.exec {
+        execOperations.exec {
             workingDir(File(project.projectDir, rootDirRel))
             executable(executable)
             args(args)
