@@ -110,6 +110,10 @@
   padding-right: max(0.5rem, var(--safe-area-right));
 }
 
+.safe-area-top {
+  padding-top: var(--safe-area-top);
+}
+
 .safe-area-bottom {
   padding-bottom: max(0.5rem, var(--safe-area-bottom));
 }

@@ -14,6 +14,9 @@ const uiStyles = fileURLToPath(
 export default defineConfig({
   base: "./",
   clearScreen: false,
+  define: {
+    __DAM_HOPPER_TAURI_PLATFORM__: JSON.stringify(tauriPlatform ?? ""),
+  },
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

@@ -98,6 +98,8 @@ describe("TopNav", () => {
     );
 
     expect(markup).toContain('data-show-feedback="false"');
+    expect(markup).toContain("safe-area-top");
+    expect(markup).toContain("min-h-12");
   });
 
   it("renders the project and branch toolbar in compact workspace mode", () => {
