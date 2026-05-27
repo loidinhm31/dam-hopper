@@ -30,10 +30,10 @@ val hasReleaseKeystore =
 
 android {
     compileSdk = 36
-    namespace = "com.damhopper.app"
+    namespace = "com.damhopper"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
-        applicationId = "com.damhopper.app"
+        applicationId = "com.damhopper"
         minSdk = 24
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()

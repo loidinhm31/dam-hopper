@@ -12,7 +12,7 @@
     "tauri:build": "tauri build",
     "tauri:android:init": "tauri android init --ci --skip-targets-install",
     "tauri:android:dev": "tauri android dev --host",
-    "tauri:android:build": "tauri android build --apk --aab",
+    "tauri:android:build": "tauri android build",
     "tauri:android:run": "tauri android run",
     "tauri:android:studio": "tauri android dev --open --host",
     "tauri:ios:init": "tauri ios init",
