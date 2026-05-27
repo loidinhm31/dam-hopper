@@ -1,4 +1,4 @@
-package com.damhopper.app
+package com.damhopper
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
