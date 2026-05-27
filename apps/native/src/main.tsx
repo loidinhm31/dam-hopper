@@ -9,6 +9,35 @@ import { WsTransport } from "@dam-hopper/ui/api/ws-transport";
 import { IdleTransport } from "./idle-transport";
 import { getNativeServerUrl } from "./native-server-url";
 
+declare const __DAM_HOPPER_TAURI_PLATFORM__: string;
+
+type DamHopperNativeDeviceKind = "desktop" | "mobile";
+
+function syncNativePlatform(): void {
+  const platform = __DAM_HOPPER_TAURI_PLATFORM__ || "";
+  if (!platform) {
+    return;
+  }
+
+  const deviceKind: DamHopperNativeDeviceKind =
+    platform === "android" || platform === "ios" ? "mobile" : "desktop";
+  const root = document.documentElement;
+  const nativeWindow = window as Window & {
+    damHopper?: {
+      deviceKind?: DamHopperNativeDeviceKind;
+      platform?: string;
+    };
+  };
+
+  root.dataset.appPlatform = platform;
+  root.dataset.deviceKind = deviceKind;
+  nativeWindow.damHopper = {
+    ...nativeWindow.damHopper,
+    platform,
+    deviceKind,
+  };
+}
+
 const viteEnv = (import.meta as ImportMeta & { env?: Record<string, unknown> })
   .env;
 
@@ -23,6 +52,7 @@ configureLogger({
 
 const serverUrl = getNativeServerUrl();
 initTransport(serverUrl ? new WsTransport(serverUrl) : new IdleTransport());
+syncNativePlatform();
 
 const queryClient = new QueryClient({
   defaultOptions: {

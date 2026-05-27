@@ -94,10 +94,10 @@ export function TopNav({
   return (
     <header
       className={cn(
-        "safe-area-inline shrink-0 glass-card z-50 overflow-visible border-b border-[var(--color-border)]",
+        "safe-area-inline safe-area-top shrink-0 glass-card z-50 overflow-visible border-b border-[var(--color-border)]",
         isCompactWorkspace
           ? "flex flex-col gap-2 px-2 py-2"
-          : "flex h-12 flex-row items-center justify-between gap-2 px-4 py-0",
+          : "flex min-h-12 flex-row items-center justify-between gap-2 px-4 py-0",
       )}
     >
       <div
