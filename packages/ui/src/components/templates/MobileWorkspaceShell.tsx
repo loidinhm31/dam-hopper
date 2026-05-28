@@ -73,7 +73,7 @@ export function MobileWorkspaceShell({
         </div>
       </div>
 
-      <main className="compact-scroll-region relative flex-1">
+      <main className="relative flex-1 overflow-hidden">
         {surfaces.map((surface) => {
           const isActive = surface.id === activeSurfaceId;
           return (

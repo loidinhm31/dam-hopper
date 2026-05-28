@@ -1,7 +1,10 @@
 import { useEffect, useRef, useCallback } from "react";
 import { Terminal as TerminalIcon } from "lucide-react";
+import { MobileTerminalAccessoryBar } from "@/components/organisms/MobileTerminalAccessoryBar.js";
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
 import { SplitLayout } from "@/components/organisms/SplitLayout.js";
+import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
+import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { useTerminalLayout } from "@/hooks/use-terminal-layout.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
@@ -35,7 +38,11 @@ export function MultiTerminalDisplay({
   layoutRevision = 0,
 }: Props) {
   const layout = useTerminalLayout();
+  const isCompactWorkspace = useCompactWorkspace();
+  const isCoarsePointer = useCoarsePointer();
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
+  const showMobileAccessoryBar =
+    isCompactWorkspace && isCoarsePointer && !!activeSessionId;
 
   // ── sync new sessions into the split layout ──────────────────────────────
   useEffect(() => {
@@ -137,16 +144,21 @@ export function MultiTerminalDisplay({
       </div>
 
       {/* Visible split layout */}
-      <SplitLayout
-        root={layout.root}
-        layout={layout}
-        mountedSessions={mountedSessions}
-        openTabs={openTabs}
-        onNewTerminal={onNewTerminal ?? (() => {})}
-        onSessionExit={onSessionExit ?? (() => {})}
-        onSelectTab={onSelectTab ?? (() => {})}
-        onCloseTab={onCloseTab ?? (() => {})}
-      />
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <SplitLayout
+          root={layout.root}
+          layout={layout}
+          mountedSessions={mountedSessions}
+          openTabs={openTabs}
+          onNewTerminal={onNewTerminal ?? (() => {})}
+          onSessionExit={onSessionExit ?? (() => {})}
+          onSelectTab={onSelectTab ?? (() => {})}
+          onCloseTab={onCloseTab ?? (() => {})}
+        />
+      </div>
+      {showMobileAccessoryBar && activeSessionId ? (
+        <MobileTerminalAccessoryBar sessionId={activeSessionId} />
+      ) : null}
     </div>
   );
 }
