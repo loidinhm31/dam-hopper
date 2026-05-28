@@ -105,11 +105,20 @@
   height: 100dvh;
 }
 
+.xterm {
+  overscroll-behavior: contain;
+}
+
+.xterm .xterm-viewport {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
 .safe-area-inline {
   padding-left: max(0.5rem, var(--safe-area-left));
   padding-right: max(0.5rem, var(--safe-area-right));
 }
-
 
 .safe-area-top {
   padding-top: var(--safe-area-top);

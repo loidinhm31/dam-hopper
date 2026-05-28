@@ -12,6 +12,7 @@ import {
   matchesKeyboardShortcut,
   matchesNewTerminalShortcut,
 } from "@/lib/shortcuts.js";
+import { bindTerminalTouchScroll } from "@/lib/terminal-touch-scroll.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalSuggestions } from "@/hooks/use-terminal-suggestions.js";
 import { TerminalSuggestionOverlay } from "@/components/atoms/TerminalSuggestionOverlay.js";
@@ -114,10 +115,6 @@ export function TerminalPanel({
     termRef.current = term;
     setTermElement(term.element ?? null);
 
-    // Register in global registry so PaneContainer can reparent the terminal element
-    registerTerminal(safeSessionId, term, fitAddon);
-    onTerminalReady?.(safeSessionId);
-
     // Flag to prevent double-output during initialization
     let hasBufferBeenWritten = false;
 
@@ -130,6 +127,12 @@ export function TerminalPanel({
     let observer: ResizeObserver | null = null;
     let fitTimer: ReturnType<typeof setTimeout> | null = null;
     let attachTimeout: ReturnType<typeof setTimeout> | null = null;
+    let releaseTouchScroll = () => {};
+
+    // Register in global registry so PaneContainer can reparent the terminal element
+    registerTerminal(safeSessionId, term, fitAddon);
+    onTerminalReady?.(safeSessionId);
+    releaseTouchScroll = bindTerminalTouchScroll(term.element ?? null);
 
     const transport = getTransport();
     transportRef.current = transport;
@@ -330,6 +333,7 @@ export function TerminalPanel({
       if (fitTimer) clearTimeout(fitTimer);
       if (attachTimeout) clearTimeout(attachTimeout);
       observer?.disconnect();
+      releaseTouchScroll();
       removeTerminal(safeSessionId);
       termRef.current = null;
       openedRef.current = false;
