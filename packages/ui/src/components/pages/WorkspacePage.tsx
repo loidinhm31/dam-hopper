@@ -48,6 +48,12 @@ import {
   saveWorkspaceMode,
   type WorkspaceMode,
 } from "@/lib/workspace-mode.js";
+import {
+  loadTerminalUsageMode,
+  saveTerminalUsageMode,
+  type TerminalUsageMode,
+} from "@/lib/terminal-usage-mode.js";
+import { cn } from "@/lib/utils.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 import type { ToolWindowDef } from "@/types/ide.js";
 import type { MobileWorkspaceSurface } from "@/components/templates/MobileWorkspaceShell.js";
@@ -71,6 +77,13 @@ const MultiTerminalDisplay = lazy(() =>
   import("@/components/organisms/MultiTerminalDisplay.js").then((m) => ({
     default: m.MultiTerminalDisplay,
   })),
+);
+const ActiveTerminalRuntimeDisplay = lazy(() =>
+  import("@/components/organisms/ActiveTerminalRuntimeDisplay.js").then(
+    (m) => ({
+      default: m.ActiveTerminalRuntimeDisplay,
+    }),
+  ),
 );
 const ProjectInfoPanel = lazy(() =>
   import("@/components/organisms/ProjectInfoPanel.js").then((m) => ({
@@ -122,6 +135,7 @@ const TERMINAL_COMPACT_SURFACE_IDS = [
   "project",
 ] as const;
 const TERMINAL_LAYOUT_SENSITIVE_COMPACT_SURFACES = new Set(["terminal"]);
+const TERMINAL_USAGE_OPTIONS: TerminalUsageMode[] = ["traditional", "runtime"];
 
 function renderCompactPlaceholder(message: string) {
   return (
@@ -160,6 +174,8 @@ export default function WorkspacePage() {
   const { activeProject, setActiveProject } = useWorkspaceStore();
   const [workspaceMode, setWorkspaceModeState] =
     useState<WorkspaceMode>(loadWorkspaceMode);
+  const [terminalUsageMode, setTerminalUsageModeState] =
+    useState<TerminalUsageMode>(loadTerminalUsageMode);
   const [terminalLayoutRevision, setTerminalLayoutRevision] = useState(0);
   const isCompactWorkspace = useCompactWorkspace();
   const defaultCompactSurfaceId = getDefaultCompactSurfaceId(workspaceMode);
@@ -255,18 +271,21 @@ export default function WorkspacePage() {
     openSearch("filename"),
   );
 
-  const setWorkspaceMode = useCallback((mode: WorkspaceMode) => {
-    setWorkspaceModeState(mode);
-    setRequestedCompactSurface((current) =>
-      resolveActiveCompactSurfaceId(
-        current,
-        getCompactSurfaceIds(mode),
-        getDefaultCompactSurfaceId(mode),
-      ),
-    );
-    saveWorkspaceMode(mode);
-    setTerminalLayoutRevision((current) => current + 1);
-  }, [setRequestedCompactSurface]);
+  const setWorkspaceMode = useCallback(
+    (mode: WorkspaceMode) => {
+      setWorkspaceModeState(mode);
+      setRequestedCompactSurface((current) =>
+        resolveActiveCompactSurfaceId(
+          current,
+          getCompactSurfaceIds(mode),
+          getDefaultCompactSurfaceId(mode),
+        ),
+      );
+      saveWorkspaceMode(mode);
+      setTerminalLayoutRevision((current) => current + 1);
+    },
+    [setRequestedCompactSurface],
+  );
 
   const toggleWorkspaceMode = useCallback(() => {
     setWorkspaceModeState((current) => {
@@ -283,6 +302,15 @@ export default function WorkspacePage() {
       return next;
     });
   }, [setRequestedCompactSurface]);
+
+  const setTerminalUsageMode = useCallback((mode: TerminalUsageMode) => {
+    setTerminalUsageModeState((current) => {
+      if (current === mode) return current;
+      saveTerminalUsageMode(mode);
+      setTerminalLayoutRevision((revision) => revision + 1);
+      return mode;
+    });
+  }, []);
 
   useEffect(
     () =>
@@ -315,9 +343,53 @@ export default function WorkspacePage() {
     }
   }, [handleSelectProject, projectName, selection]);
 
+  const handleOpenCurrentTerminal = useCallback(() => {
+    if (projectName) {
+      handleLaunchShell(projectName);
+    } else {
+      handleAddFreeTerminal();
+    }
+  }, [handleAddFreeTerminal, handleLaunchShell, projectName]);
+
   const terminalContent = useMemo(
     () => (
       <div className="flex flex-col h-full">
+        <div className="flex h-10 shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <TerminalIcon className="h-4 w-4 shrink-0 text-[var(--color-text-muted)]" />
+            <span className="truncate text-xs font-semibold text-[var(--color-text)]">
+              Terminal
+            </span>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <div className="flex rounded-sm border border-[var(--color-border)] bg-[var(--color-background)] p-0.5">
+              {TERMINAL_USAGE_OPTIONS.map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setTerminalUsageMode(mode)}
+                  className={cn(
+                    "rounded-[3px] px-2 py-1 text-[11px] font-medium capitalize transition-colors",
+                    terminalUsageMode === mode
+                      ? "bg-[var(--color-primary)] text-white"
+                      : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
+                  )}
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={handleOpenCurrentTerminal}
+              title="Open terminal"
+              className="rounded-sm p-1.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
         {freeTerminalSavePrompt && projects.length > 0 && (
           <div className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
             <p className="text-xs font-medium text-[var(--color-text)] mb-2">
@@ -447,7 +519,21 @@ export default function WorkspacePage() {
         )}
 
         <div className="flex-1 min-h-0">
-          {mountedSessions.length > 0 ? (
+          {terminalUsageMode === "runtime" ? (
+            <Suspense fallback={<PanelFallback label="Loading runtime…" />}>
+              <ActiveTerminalRuntimeDisplay
+                activeSessionId={activeTab}
+                mountedSessions={mountedSessions}
+                openTabs={tabsWithLiveSession}
+                currentProjectName={projectName}
+                layoutRevision={compactTerminalLayoutRevision}
+                onSessionExit={handleSessionExit}
+                onNewProjectTerminal={handleLaunchShell}
+                onNewFreeTerminal={handleAddFreeTerminal}
+                onSelectTab={handleSelectTab}
+              />
+            </Suspense>
+          ) : mountedSessions.length > 0 ? (
             <Suspense fallback={<PanelFallback label="Loading terminals…" />}>
               <MultiTerminalDisplay
                 activeSessionId={activeTab}
@@ -455,13 +541,7 @@ export default function WorkspacePage() {
                 openTabs={tabsWithLiveSession}
                 layoutRevision={compactTerminalLayoutRevision}
                 onSessionExit={handleSessionExit}
-                onNewTerminal={() => {
-                  if (projectName) {
-                    handleLaunchShell(projectName);
-                  } else {
-                    handleAddFreeTerminal();
-                  }
-                }}
+                onNewTerminal={handleOpenCurrentTerminal}
                 onSelectTab={handleSelectTab}
                 onCloseTab={handleCloseTab}
               />
@@ -479,7 +559,7 @@ export default function WorkspacePage() {
                 <Button
                   variant="primary"
                   size="sm"
-                  onClick={() => handleAddFreeTerminal()}
+                  onClick={handleOpenCurrentTerminal}
                 >
                   Open Terminal
                 </Button>
@@ -508,7 +588,7 @@ export default function WorkspacePage() {
                   <Button
                     variant="primary"
                     size="sm"
-                    onClick={() => handleLaunchShell(projectName)}
+                    onClick={handleOpenCurrentTerminal}
                   >
                     <Plus className="h-3.5 w-3.5" />
                     Open Terminal
@@ -529,6 +609,9 @@ export default function WorkspacePage() {
       handleSaveFreeTerminalToProject,
       launchForm,
       handleLaunchFormSubmit,
+      terminalUsageMode,
+      setTerminalUsageMode,
+      handleOpenCurrentTerminal,
       tabsWithLiveSession,
       activeTab,
       compactTerminalLayoutRevision,
@@ -536,8 +619,6 @@ export default function WorkspacePage() {
       handleCloseTab,
       setFreeTerminalSavePrompt,
       setLaunchForm,
-      selection,
-      handleLaunchTerminal,
       mountedSessions,
       handleSessionExit,
       handleAddFreeTerminal,
@@ -927,9 +1008,12 @@ export default function WorkspacePage() {
   const compactSurfaces =
     workspaceMode === "terminal" ? compactTerminalSurfaces : compactIdeSurfaces;
 
-  const handleCompactSurfaceChange = useCallback((surfaceId: string) => {
-    setRequestedCompactSurface(surfaceId);
-  }, [setRequestedCompactSurface]);
+  const handleCompactSurfaceChange = useCallback(
+    (surfaceId: string) => {
+      setRequestedCompactSurface(surfaceId);
+    },
+    [setRequestedCompactSurface],
+  );
 
   return (
     <>
