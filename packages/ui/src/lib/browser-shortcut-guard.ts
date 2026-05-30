@@ -13,6 +13,8 @@ const BLOCKED_BROWSER_SHORTCUTS = [
   "Mod+KeyP",
 ] as const;
 
+export type BrowserShortcutSuppression = "none" | "prevent-default" | "block";
+
 export function matchesTerminalCopyShortcut(event: ShortcutKeyEvent) {
   return (
     event.type === "keydown" &&
@@ -35,11 +37,20 @@ export function shouldSuppressBrowserShortcut(
   event: KeyboardEvent,
   target: EventTarget | null = event.target,
 ) {
-  if (matchesTerminalCopyShortcut(event) && isTerminalSurfaceTarget(target)) {
-    return false;
+  return getBrowserShortcutSuppression(event, target) !== "none";
+}
+
+export function getBrowserShortcutSuppression(
+  event: KeyboardEvent,
+  target: EventTarget | null = event.target,
+): BrowserShortcutSuppression {
+  if (matchesTerminalCopyShortcut(event)) {
+    return isTerminalSurfaceTarget(target) ? "prevent-default" : "block";
   }
 
   return BLOCKED_BROWSER_SHORTCUTS.some((shortcut) =>
     matchesKeyboardShortcut(shortcut, event),
-  );
+  )
+    ? "block"
+    : "none";
 }
