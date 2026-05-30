@@ -7,6 +7,7 @@ import {
 
 interface Props {
   activeSessionId: string | null;
+  disableReorder?: boolean;
   dragState:
     | { type: "group"; id: string }
     | { type: "item"; id: string; groupId: string }
@@ -25,10 +26,12 @@ interface Props {
   ) => void;
   onStartTunnel: (port: number, label: string) => Promise<void>;
   onStopTunnel: (id: string) => Promise<void>;
+  touchOptimized?: boolean;
 }
 
 export function TerminalRuntimeNavigatorGroup({
   activeSessionId,
+  disableReorder = false,
   dragState,
   group,
   onSelectSession,
@@ -39,6 +42,7 @@ export function TerminalRuntimeNavigatorGroup({
   onSetDragState,
   onStartTunnel,
   onStopTunnel,
+  touchOptimized = false,
 }: Props) {
   const canLaunchInGroup =
     !group.isFreeGroup &&
@@ -47,14 +51,19 @@ export function TerminalRuntimeNavigatorGroup({
 
   return (
     <section
-      draggable
-      onDragStart={() => onSetDragState({ type: "group", id: group.id })}
+      draggable={!disableReorder}
+      onDragStart={() => {
+        if (disableReorder) return;
+        onSetDragState({ type: "group", id: group.id });
+      }}
       onDragEnd={() => onSetDragState(null)}
       onDragOver={(event) => {
+        if (disableReorder) return;
         if (dragState?.type !== "group" || dragState.id === group.id) return;
         event.preventDefault();
       }}
       onDrop={(event) => {
+        if (disableReorder) return;
         if (dragState?.type !== "group" || dragState.id === group.id) return;
         event.preventDefault();
         onMoveGroup(dragState.id, group.id);
@@ -82,6 +91,7 @@ export function TerminalRuntimeNavigatorGroup({
           <TerminalRuntimeNavigatorItem
             key={item.id}
             activeSessionId={activeSessionId}
+            disableReorder={disableReorder}
             dragState={dragState}
             item={item}
             onCloseSession={onCloseSession}
@@ -90,6 +100,7 @@ export function TerminalRuntimeNavigatorGroup({
             onSetDragState={onSetDragState}
             onStartTunnel={onStartTunnel}
             onStopTunnel={onStopTunnel}
+            touchOptimized={touchOptimized}
           />
         ))}
       </div>

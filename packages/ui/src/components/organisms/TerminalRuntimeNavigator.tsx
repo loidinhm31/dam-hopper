@@ -2,10 +2,15 @@ import { useState } from "react";
 import { Plus, Terminal as TerminalIcon } from "lucide-react";
 import { TerminalRuntimeNavigatorGroup } from "@/components/organisms/TerminalRuntimeNavigatorGroup.js";
 import type { RuntimeTreeGroup } from "@/lib/terminal-runtime-tree.js";
+import { cn } from "@/lib/utils.js";
 
 interface Props {
   activeSessionId: string | null;
   groups: RuntimeTreeGroup[];
+  width?: number;
+  className?: string;
+  disableReorder?: boolean;
+  touchOptimized?: boolean;
   onSelectSession?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
   onNewProjectTerminal?: (projectName: string) => void;
@@ -19,6 +24,10 @@ interface Props {
 export function TerminalRuntimeNavigator({
   activeSessionId,
   groups,
+  width,
+  className,
+  disableReorder = false,
+  touchOptimized = false,
   onSelectSession,
   onCloseSession,
   onNewProjectTerminal,
@@ -33,7 +42,13 @@ export function TerminalRuntimeNavigator({
   >(null);
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)]">
+    <aside
+      style={width ? { width } : undefined}
+      className={cn(
+        "flex shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)]",
+        className,
+      )}
+    >
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-3">
         <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
           Runtime
@@ -53,6 +68,7 @@ export function TerminalRuntimeNavigator({
             <TerminalRuntimeNavigatorGroup
               key={group.id}
               activeSessionId={activeSessionId}
+              disableReorder={disableReorder}
               dragState={dragState}
               group={group}
               onCloseSession={onCloseSession}
@@ -63,6 +79,7 @@ export function TerminalRuntimeNavigator({
               onSetDragState={setDragState}
               onStartTunnel={onStartTunnel}
               onStopTunnel={onStopTunnel}
+              touchOptimized={touchOptimized}
             />
           ))
         ) : (
