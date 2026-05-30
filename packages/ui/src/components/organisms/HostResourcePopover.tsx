@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Activity, AlertTriangle, Loader2 } from "lucide-react";
 import { useHostMetrics } from "@/api/queries.js";
 import type { HostMetrics } from "@/api/client.js";
+import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import {
   formatBytes,
   formatCelsius,
@@ -11,12 +12,40 @@ import {
 import { cn } from "@/lib/utils.js";
 
 export function HostResourcePopover() {
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
   const [open, setOpen] = useState(false);
+  const [panelTop, setPanelTop] = useState(64);
+  const isCompactWorkspace = useCompactWorkspace();
   const { data, isLoading, isError } = useHostMetrics(open);
+
+  useEffect(() => {
+    if (!open || !isCompactWorkspace) {
+      return;
+    }
+
+    const updatePanelPosition = () => {
+      const rect = buttonRef.current?.getBoundingClientRect();
+      if (!rect) {
+        return;
+      }
+
+      setPanelTop(Math.round(rect.bottom + 8));
+    };
+
+    updatePanelPosition();
+    window.addEventListener("resize", updatePanelPosition);
+    window.addEventListener("scroll", updatePanelPosition, true);
+
+    return () => {
+      window.removeEventListener("resize", updatePanelPosition);
+      window.removeEventListener("scroll", updatePanelPosition, true);
+    };
+  }, [open, isCompactWorkspace]);
 
   return (
     <div className="relative">
       <button
+        ref={buttonRef}
         onClick={() => setOpen((value) => !value)}
         className={cn(
           "p-1.5 rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors",
@@ -32,7 +61,10 @@ export function HostResourcePopover() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-9 z-[60] w-80 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl glass-card-blur p-3">
+        <div
+          className="fixed left-1/2 top-0 z-[60] w-[min(20rem,calc(100vw-1rem))] -translate-x-1/2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 shadow-xl glass-card-blur sm:absolute sm:left-auto sm:right-0 sm:top-9 sm:w-80 sm:translate-x-0"
+          style={isCompactWorkspace ? { top: panelTop } : undefined}
+        >
           {isLoading && (
             <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
               <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--color-primary)]" />
