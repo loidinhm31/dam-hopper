@@ -1,11 +1,17 @@
 import { useEffect } from "react";
-import { shouldSuppressBrowserShortcut } from "@/lib/browser-shortcut-guard.js";
+import { getBrowserShortcutSuppression } from "@/lib/browser-shortcut-guard.js";
 
 export function useBrowserShortcutGuard() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !shouldSuppressBrowserShortcut(event)) return;
+      if (event.defaultPrevented) return;
+
+      const suppression = getBrowserShortcutSuppression(event);
+      if (suppression === "none") return;
+
       event.preventDefault();
+      if (suppression === "prevent-default") return;
+
       event.stopPropagation();
       event.stopImmediatePropagation?.();
     };

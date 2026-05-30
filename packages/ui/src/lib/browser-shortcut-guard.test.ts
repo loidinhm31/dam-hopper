@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { shouldSuppressBrowserShortcut } from "./browser-shortcut-guard.js";
+import {
+  getBrowserShortcutSuppression,
+  shouldSuppressBrowserShortcut,
+} from "./browser-shortcut-guard.js";
 
 function keydown(
   overrides: Partial<KeyboardEvent> & { code: string },
@@ -31,12 +34,20 @@ describe("shouldSuppressBrowserShortcut", () => {
   });
 
   it("preserves terminal copy when focus is inside xterm", () => {
+    const terminalTarget = { closest: () => ({}) } as unknown as EventTarget;
+
     expect(
       shouldSuppressBrowserShortcut(
         keydown({ code: "KeyC", ctrlKey: true, shiftKey: true }),
-        { closest: () => ({}) } as unknown as EventTarget,
+        terminalTarget,
       ),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      getBrowserShortcutSuppression(
+        keydown({ code: "KeyC", ctrlKey: true, shiftKey: true }),
+        terminalTarget,
+      ),
+    ).toBe("prevent-default");
   });
 
   it("suppresses terminal copy outside xterm", () => {
@@ -45,5 +56,10 @@ describe("shouldSuppressBrowserShortcut", () => {
         keydown({ code: "KeyC", ctrlKey: true, shiftKey: true }),
       ),
     ).toBe(true);
+    expect(
+      getBrowserShortcutSuppression(
+        keydown({ code: "KeyC", ctrlKey: true, shiftKey: true }),
+      ),
+    ).toBe("block");
   });
 });
