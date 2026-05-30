@@ -57,6 +57,28 @@ const DARK_THEME = {
   brightWhite: "#ffffff",
 };
 
+function syncNativeKeyboardSuppression(
+  term: Terminal | null,
+  shouldSuppress: boolean,
+) {
+  if (!term) return;
+
+  term.options.disableStdin = shouldSuppress;
+  const textarea = term.textarea;
+  if (!textarea) return;
+
+  if (shouldSuppress) {
+    textarea.inputMode = "none";
+    textarea.setAttribute("inputmode", "none");
+    textarea.tabIndex = -1;
+    textarea.blur();
+  } else {
+    textarea.inputMode = "text";
+    textarea.removeAttribute("inputmode");
+    textarea.tabIndex = 0;
+  }
+}
+
 export function TerminalPanel({
   sessionId,
   project,
@@ -113,6 +135,7 @@ export function TerminalPanel({
 
     // Expose terminal instance and element for suggestions hook + portal
     termRef.current = term;
+    syncNativeKeyboardSuppression(term, suppressAutoFocus);
     setTermElement(term.element ?? null);
 
     // Flag to prevent double-output during initialization
@@ -316,6 +339,10 @@ export function TerminalPanel({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intentionally run once per mount — use key prop to force remount
+
+  useEffect(() => {
+    syncNativeKeyboardSuppression(termRef.current, suppressAutoFocus);
+  }, [suppressAutoFocus, termElement]);
 
   const { state: suggestionsState, acceptSuggestion } = suggestions;
 
