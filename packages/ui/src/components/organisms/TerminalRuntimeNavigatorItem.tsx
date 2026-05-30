@@ -15,6 +15,7 @@ import type {
 
 interface Props {
   activeSessionId: string | null;
+  disableReorder?: boolean;
   dragState:
     | { type: "group"; id: string }
     | { type: "item"; id: string; groupId: string }
@@ -31,6 +32,7 @@ interface Props {
   ) => void;
   onStartTunnel: (port: number, label: string) => Promise<void>;
   onStopTunnel: (id: string) => Promise<void>;
+  touchOptimized?: boolean;
 }
 
 function RuntimePortChip({
@@ -92,6 +94,7 @@ function RuntimeSessionLeaf({
   onCloseSession,
   onStartTunnel,
   onStopTunnel,
+  touchOptimized = false,
 }: {
   active: boolean;
   session: RuntimeSessionItem;
@@ -99,6 +102,7 @@ function RuntimeSessionLeaf({
   onCloseSession?: (sessionId: string) => void;
   onStartTunnel: (port: number, label: string) => Promise<void>;
   onStopTunnel: (id: string) => Promise<void>;
+  touchOptimized?: boolean;
 }) {
   return (
     <div
@@ -115,6 +119,7 @@ function RuntimeSessionLeaf({
       className={cn(
         "cursor-pointer rounded-sm px-1.5 py-1 outline-none",
         "focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]/60",
+        touchOptimized && "min-h-11 py-2 text-sm",
         active ? "bg-[var(--color-primary)]/10 text-[var(--color-text)]" : "",
       )}
     >
@@ -161,6 +166,7 @@ function RuntimeSessionLeaf({
 
 export function TerminalRuntimeNavigatorItem({
   activeSessionId,
+  disableReorder = false,
   dragState,
   item,
   onSelectSession,
@@ -169,6 +175,7 @@ export function TerminalRuntimeNavigatorItem({
   onSetDragState,
   onStartTunnel,
   onStopTunnel,
+  touchOptimized = false,
 }: Props) {
   const isTopLevelActive =
     item.kind === "session"
@@ -179,8 +186,9 @@ export function TerminalRuntimeNavigatorItem({
 
   return (
     <div
-      draggable
+      draggable={!disableReorder}
       onDragStart={(event) => {
+        if (disableReorder) return;
         event.stopPropagation();
         onSetDragState({ type: "item", id: item.id, groupId: item.groupId });
       }}
@@ -189,6 +197,7 @@ export function TerminalRuntimeNavigatorItem({
         onSetDragState(null);
       }}
       onDragOver={(event) => {
+        if (disableReorder) return;
         if (
           dragState?.type !== "item" ||
           dragState.groupId !== item.groupId ||
@@ -199,6 +208,7 @@ export function TerminalRuntimeNavigatorItem({
         event.preventDefault();
       }}
       onDrop={(event) => {
+        if (disableReorder) return;
         if (
           dragState?.type !== "item" ||
           dragState.groupId !== item.groupId ||
@@ -212,6 +222,7 @@ export function TerminalRuntimeNavigatorItem({
       }}
       className={cn(
         "rounded-sm border border-transparent px-2 py-1.5 text-xs transition-colors",
+        touchOptimized && "py-2 text-sm",
         isTopLevelActive
           ? "bg-[var(--color-primary)]/12 text-[var(--color-text)]"
           : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)]",
@@ -225,6 +236,7 @@ export function TerminalRuntimeNavigatorItem({
           onCloseSession={onCloseSession}
           onStartTunnel={onStartTunnel}
           onStopTunnel={onStopTunnel}
+          touchOptimized={touchOptimized}
         />
       ) : item.kind === "service-group" ? (
         <>
@@ -247,6 +259,7 @@ export function TerminalRuntimeNavigatorItem({
                 onCloseSession={onCloseSession}
                 onStartTunnel={onStartTunnel}
                 onStopTunnel={onStopTunnel}
+                touchOptimized={touchOptimized}
               />
             ))}
           </div>
