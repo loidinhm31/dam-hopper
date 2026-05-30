@@ -15,6 +15,7 @@ import {
   isAdHocProjectTerminal,
   parseTerminalSessionId,
 } from "@/lib/terminal-auto-attach.js";
+import { upsertMountedSession } from "@/lib/terminal-mounted-sessions.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TreeCommand, TreeProject } from "@/hooks/use-terminal-tree.js";
@@ -271,11 +272,7 @@ export function useTerminalManager(
     });
 
     setMountedSessions((prev) => {
-      const existing = prev.find((s) => s.sessionId === sessionId);
-      if (existing) {
-        return [existing, ...prev.filter((s) => s.sessionId !== sessionId)];
-      }
-      return [{ sessionId, project, command, cwd }, ...prev];
+      return upsertMountedSession(prev, { sessionId, project, command, cwd });
     });
 
     setActiveTab(sessionId);
@@ -803,16 +800,13 @@ export function useTerminalManager(
     setSelection({ type: "terminal", sessionId });
 
     setMountedSessions((prev) => {
-      const existing = prev.find((s) => s.sessionId === sessionId);
-      if (existing) {
-        return [existing, ...prev.filter((s) => s.sessionId !== sessionId)];
-      }
       const meta = findSessionMeta(sessionId, tree, sessionMap);
       if (meta) {
-        return [
-          { sessionId, project: meta.project, command: meta.command },
-          ...prev,
-        ];
+        return upsertMountedSession(prev, {
+          sessionId,
+          project: meta.project,
+          command: meta.command,
+        });
       }
       return prev;
     });

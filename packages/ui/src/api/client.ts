@@ -301,6 +301,8 @@ export interface UiConfig {
   terminalOrder?: string[];
   projectOrder?: string[];
   projectCommandOrder?: Record<string, string[]>;
+  runtimeGroupOrder?: string[];
+  runtimeItemOrder?: Record<string, string[]>;
 }
 
 export interface GlobalConfig {

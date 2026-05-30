@@ -8,10 +8,7 @@ import { getTransport } from "@/api/transport.js";
 import { api, type SessionInfo } from "@/api/client.js";
 import { registerTerminal, removeTerminal } from "@/lib/terminal-registry.js";
 import { recordCommand } from "@/lib/command-history.js";
-import {
-  matchesKeyboardShortcut,
-  matchesNewTerminalShortcut,
-} from "@/lib/shortcuts.js";
+import { handleSharedTerminalKeyEvent } from "@/lib/terminal-keyboard-shortcuts.js";
 import { bindTerminalTouchScroll } from "@/lib/terminal-touch-scroll.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalSuggestions } from "@/hooks/use-terminal-suggestions.js";
@@ -205,39 +202,14 @@ export function TerminalPanel({
 
     // 7. Custom keyboard shortcuts
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
-      if (
-        e.ctrlKey &&
-        e.shiftKey &&
-        e.code === "KeyC" &&
-        e.type === "keydown"
-      ) {
-        const sel = term.getSelection();
-        if (sel) void navigator.clipboard.writeText(sel);
-        return false;
-      }
-      if (
-        e.type === "keydown" &&
-        matchesKeyboardShortcut(
-          useSettingsStore.getState().terminalWorkspaceShortcut,
-          e,
-        )
-      ) {
-        return false;
-      }
-      if (matchesNewTerminalShortcut(e)) {
-        return false;
-      }
-      if (
-        e.shiftKey &&
-        !e.ctrlKey &&
-        !e.altKey &&
-        e.code === "Enter" &&
-        e.type === "keydown"
-      ) {
-        onNewTerminal?.();
-        return false;
-      }
-      return true;
+      return handleSharedTerminalKeyEvent(e, {
+        workspaceShortcut: useSettingsStore.getState().terminalWorkspaceShortcut,
+        onCopySelection: () => {
+          const selection = term.getSelection();
+          if (selection) void navigator.clipboard.writeText(selection);
+        },
+        onNewTerminal,
+      });
     });
 
     // Initial fit — container may be hidden (display:none); FitAddon safely no-ops if dims=0

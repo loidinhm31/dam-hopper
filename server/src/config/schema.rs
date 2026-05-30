@@ -372,6 +372,10 @@ pub struct UiConfig {
     pub project_order: Vec<String>,
     #[serde(default, alias = "project_command_order")]
     pub project_command_order: std::collections::HashMap<String, Vec<String>>,
+    #[serde(default, alias = "runtime_group_order")]
+    pub runtime_group_order: Vec<String>,
+    #[serde(default, alias = "runtime_item_order")]
+    pub runtime_item_order: std::collections::HashMap<String, Vec<String>>,
 }
 
 fn default_true() -> bool {
@@ -392,6 +396,8 @@ impl Default for UiConfig {
             terminal_order: vec![],
             project_order: vec![],
             project_command_order: std::collections::HashMap::new(),
+            runtime_group_order: vec![],
+            runtime_item_order: std::collections::HashMap::new(),
         }
     }
 }

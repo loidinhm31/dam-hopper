@@ -15,6 +15,8 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   terminalOrder: [],
   projectOrder: [],
   projectCommandOrder: {},
+  runtimeGroupOrder: [],
+  runtimeItemOrder: {},
   searchTextShortcut: DEFAULT_SEARCH_TEXT_SHORTCUT,
   searchFilenameShortcut: DEFAULT_SEARCH_FILENAME_SHORTCUT,
   terminalWorkspaceShortcut: DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
@@ -28,6 +30,9 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
     projectOrder: ui?.projectOrder ?? DEFAULT_UI_CONFIG.projectOrder,
     projectCommandOrder:
       ui?.projectCommandOrder ?? DEFAULT_UI_CONFIG.projectCommandOrder,
+    runtimeGroupOrder:
+      ui?.runtimeGroupOrder ?? DEFAULT_UI_CONFIG.runtimeGroupOrder,
+    runtimeItemOrder: ui?.runtimeItemOrder ?? DEFAULT_UI_CONFIG.runtimeItemOrder,
     searchTextShortcut: formatShortcut(
       ui?.searchTextShortcut ?? DEFAULT_UI_CONFIG.searchTextShortcut,
     ),
