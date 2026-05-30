@@ -9,6 +9,7 @@ import {
   MOBILE_TERMINAL_KEYS,
   type MobileTerminalKeyId,
 } from "@/lib/mobile-terminal-keys.js";
+import { useSettingsStore } from "@/stores/settings.js";
 
 const KEY_ICONS: Partial<Record<MobileTerminalKeyId, LucideIcon>> = {
   up: ArrowUp,
@@ -28,6 +29,17 @@ function preventDefault(event: { preventDefault: () => void }) {
 export function MobileTerminalSpecialKeys({
   onPress,
 }: MobileTerminalSpecialKeysProps) {
+  const { mobileCustomKeyboardFontSize, mobileCustomKeyboardPadding } =
+    useSettingsStore();
+  const keyHeight = Math.max(
+    34,
+    mobileCustomKeyboardFontSize + mobileCustomKeyboardPadding * 2,
+  );
+  const verticalPadding = Math.max(
+    2,
+    Math.round(mobileCustomKeyboardPadding / 2),
+  );
+
   return (
     <div className="grid grid-cols-4 gap-1 pb-2">
       {MOBILE_TERMINAL_KEYS.map((key) => {
@@ -42,7 +54,13 @@ export function MobileTerminalSpecialKeys({
             }}
             title={key.title}
             aria-label={key.title}
-            className="flex h-10 min-w-0 items-center justify-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 text-[11px] font-semibold text-[var(--color-text)] transition-colors active:bg-[var(--color-border)]"
+            className="flex min-w-0 items-center justify-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] font-semibold text-[var(--color-text)] transition-colors active:bg-[var(--color-border)]"
+            style={{
+              fontSize: mobileCustomKeyboardFontSize,
+              minHeight: keyHeight,
+              paddingInline: mobileCustomKeyboardPadding,
+              paddingBlock: verticalPadding,
+            }}
           >
             {Icon ? <Icon className="h-4 w-4 shrink-0" /> : null}
             {!Icon ? <span className="truncate">{key.label}</span> : null}

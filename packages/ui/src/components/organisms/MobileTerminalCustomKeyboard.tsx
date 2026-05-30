@@ -4,6 +4,7 @@ import {
   type CustomMobileTerminalKey,
 } from "@/lib/mobile-terminal-keyboard-layout.js";
 import { cn } from "@/lib/utils.js";
+import { useSettingsStore } from "@/stores/settings.js";
 
 interface MobileTerminalCustomKeyboardProps {
   isShiftActive: boolean;
@@ -25,6 +26,16 @@ export function MobileTerminalCustomKeyboard({
   const rows = isSymbolLayer
     ? CUSTOM_MOBILE_TERMINAL_SYMBOL_ROWS
     : CUSTOM_MOBILE_TERMINAL_KEY_ROWS;
+  const { mobileCustomKeyboardFontSize, mobileCustomKeyboardPadding } =
+    useSettingsStore();
+  const keyHeight = Math.max(
+    34,
+    mobileCustomKeyboardFontSize + mobileCustomKeyboardPadding * 2,
+  );
+  const verticalPadding = Math.max(
+    2,
+    Math.round(mobileCustomKeyboardPadding / 2),
+  );
 
   return (
     <div className="grid gap-1 pb-2">
@@ -47,12 +58,18 @@ export function MobileTerminalCustomKeyboard({
                 aria-label={key.title}
                 aria-pressed={key.kind === "toggle" ? isActive : undefined}
                 className={cn(
-                  "flex h-9 min-w-0 items-center justify-center rounded-md border px-1.5 text-[11px] font-semibold transition-colors active:bg-[var(--color-border)]",
+                  "flex min-w-0 items-center justify-center rounded-md border font-semibold transition-colors active:bg-[var(--color-border)]",
                   key.wide ? "flex-[2.4]" : "flex-1",
                   isActive
                     ? "border-[var(--color-primary)]/40 bg-[var(--color-primary)]/14 text-[var(--color-primary)]"
                     : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)]",
                 )}
+                style={{
+                  fontSize: mobileCustomKeyboardFontSize,
+                  minHeight: keyHeight,
+                  paddingInline: mobileCustomKeyboardPadding,
+                  paddingBlock: verticalPadding,
+                }}
               >
                 <span className="truncate">{key.label}</span>
               </button>

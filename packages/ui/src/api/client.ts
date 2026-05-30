@@ -299,6 +299,8 @@ export interface UiConfig {
   terminalSuggestionsEnabled?: boolean;
   explorerShowHidden?: boolean;
   mobileCustomKeyboardEnabled?: boolean;
+  mobileCustomKeyboardFontSize?: number;
+  mobileCustomKeyboardPadding?: number;
   terminalOrder?: string[];
   projectOrder?: string[];
   projectCommandOrder?: Record<string, string[]>;

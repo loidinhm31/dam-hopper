@@ -334,6 +334,12 @@ fn default_search_filename_shortcut() -> String {
 fn default_terminal_workspace_shortcut() -> String {
     "Mod+Shift+Backquote".to_string()
 }
+fn default_mobile_custom_keyboard_font_size() -> u16 {
+    11
+}
+fn default_mobile_custom_keyboard_padding() -> u16 {
+    6
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -372,6 +378,18 @@ pub struct UiConfig {
         alias = "mobileCustomKeyboardEnabled"
     )]
     pub mobile_custom_keyboard_enabled: bool,
+    #[serde(
+        default = "default_mobile_custom_keyboard_font_size",
+        alias = "mobile_custom_keyboard_font_size",
+        alias = "mobileCustomKeyboardFontSize"
+    )]
+    pub mobile_custom_keyboard_font_size: u16,
+    #[serde(
+        default = "default_mobile_custom_keyboard_padding",
+        alias = "mobile_custom_keyboard_padding",
+        alias = "mobileCustomKeyboardPadding"
+    )]
+    pub mobile_custom_keyboard_padding: u16,
     #[serde(default, alias = "terminal_order")]
     pub terminal_order: Vec<String>,
     #[serde(default, alias = "project_order")]
@@ -400,6 +418,8 @@ impl Default for UiConfig {
             terminal_suggestions_enabled: true,
             explorer_show_hidden: false,
             mobile_custom_keyboard_enabled: true,
+            mobile_custom_keyboard_font_size: default_mobile_custom_keyboard_font_size(),
+            mobile_custom_keyboard_padding: default_mobile_custom_keyboard_padding(),
             terminal_order: vec![],
             project_order: vec![],
             project_command_order: std::collections::HashMap::new(),
@@ -416,9 +436,32 @@ impl UiConfig {
         Self::validate_font_size(self.editor_font_size)
     }
 
+    pub fn validate_mobile_keyboard_sizes(&self) -> Result<(), String> {
+        Self::validate_mobile_keyboard_font_size(self.mobile_custom_keyboard_font_size)?;
+        Self::validate_mobile_keyboard_padding(self.mobile_custom_keyboard_padding)
+    }
+
     pub fn validate_font_size(size: u16) -> Result<(), String> {
         if !(10..=32).contains(&size) {
             return Err(format!("Font size {size} out of range [10, 32]"));
+        }
+        Ok(())
+    }
+
+    pub fn validate_mobile_keyboard_font_size(size: u16) -> Result<(), String> {
+        if !(9..=18).contains(&size) {
+            return Err(format!(
+                "Mobile keyboard font size {size} out of range [9, 18]"
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate_mobile_keyboard_padding(size: u16) -> Result<(), String> {
+        if !(2..=14).contains(&size) {
+            return Err(format!(
+                "Mobile keyboard padding {size} out of range [2, 14]"
+            ));
         }
         Ok(())
     }

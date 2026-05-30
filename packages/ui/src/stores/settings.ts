@@ -10,9 +10,27 @@ import { withUiConfigDefaults } from "@/lib/ui-config.js";
 
 const FONT_MIN = 10;
 const FONT_MAX = 32;
+const KEYBOARD_FONT_MIN = 9;
+const KEYBOARD_FONT_MAX = 18;
+const KEYBOARD_PADDING_MIN = 2;
+const KEYBOARD_PADDING_MAX = 14;
 
 export function clampFont(size: number): number {
   return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(size)));
+}
+
+function clampKeyboardFont(size: number): number {
+  return Math.min(
+    KEYBOARD_FONT_MAX,
+    Math.max(KEYBOARD_FONT_MIN, Math.round(size)),
+  );
+}
+
+function clampKeyboardPadding(size: number): number {
+  return Math.min(
+    KEYBOARD_PADDING_MAX,
+    Math.max(KEYBOARD_PADDING_MIN, Math.round(size)),
+  );
 }
 
 interface SettingsState {
@@ -25,6 +43,8 @@ interface SettingsState {
   terminalSuggestionsEnabled: boolean;
   explorerShowHidden: boolean;
   mobileCustomKeyboardEnabled: boolean;
+  mobileCustomKeyboardFontSize: number;
+  mobileCustomKeyboardPadding: number;
   hydrated: boolean;
 
   hydrate: () => Promise<void>;
@@ -41,6 +61,8 @@ interface SettingsState {
         | "terminalSuggestionsEnabled"
         | "explorerShowHidden"
         | "mobileCustomKeyboardEnabled"
+        | "mobileCustomKeyboardFontSize"
+        | "mobileCustomKeyboardPadding"
       >
     >,
   ) => void;
@@ -57,6 +79,8 @@ interface SettingsState {
         | "terminalSuggestionsEnabled"
         | "explorerShowHidden"
         | "mobileCustomKeyboardEnabled"
+        | "mobileCustomKeyboardFontSize"
+        | "mobileCustomKeyboardPadding"
       >
     >,
   ) => void;
@@ -74,6 +98,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   terminalSuggestionsEnabled: true,
   explorerShowHidden: false,
   mobileCustomKeyboardEnabled: true,
+  mobileCustomKeyboardFontSize: 11,
+  mobileCustomKeyboardPadding: 6,
   hydrated: false,
 
   hydrate: async () => {
@@ -90,6 +116,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         terminalSuggestionsEnabled: ui.terminalSuggestionsEnabled ?? true,
         explorerShowHidden: ui.explorerShowHidden ?? false,
         mobileCustomKeyboardEnabled: ui.mobileCustomKeyboardEnabled ?? true,
+        mobileCustomKeyboardFontSize: ui.mobileCustomKeyboardFontSize ?? 11,
+        mobileCustomKeyboardPadding: ui.mobileCustomKeyboardPadding ?? 6,
         hydrated: true,
       });
     } catch {
@@ -119,6 +147,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (partial.mobileCustomKeyboardEnabled !== undefined)
       clamped.mobileCustomKeyboardEnabled =
         partial.mobileCustomKeyboardEnabled;
+    if (partial.mobileCustomKeyboardFontSize !== undefined)
+      clamped.mobileCustomKeyboardFontSize = clampKeyboardFont(
+        partial.mobileCustomKeyboardFontSize,
+      );
+    if (partial.mobileCustomKeyboardPadding !== undefined)
+      clamped.mobileCustomKeyboardPadding = clampKeyboardPadding(
+        partial.mobileCustomKeyboardPadding,
+      );
     set(clamped);
   },
 
@@ -137,6 +173,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         terminalSuggestionsEnabled,
         explorerShowHidden,
         mobileCustomKeyboardEnabled,
+        mobileCustomKeyboardFontSize,
+        mobileCustomKeyboardPadding,
       } = get();
       void api.globalConfig.updateUi({
         systemFontSize,
@@ -148,6 +186,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         terminalSuggestionsEnabled,
         explorerShowHidden,
         mobileCustomKeyboardEnabled,
+        mobileCustomKeyboardFontSize,
+        mobileCustomKeyboardPadding,
       });
     }, 500);
   },
