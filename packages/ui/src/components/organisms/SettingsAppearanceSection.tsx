@@ -10,6 +10,7 @@ export function SettingsAppearanceSection() {
     editorZoomWheelEnabled,
     terminalSuggestionsEnabled,
     explorerShowHidden,
+    mobileCustomKeyboardEnabled,
     saveDebounced,
   } = useSettingsStore();
 
@@ -73,6 +74,20 @@ export function SettingsAppearanceSection() {
           checked={terminalSuggestionsEnabled}
           onCheckedChange={(checked) =>
             saveDebounced({ terminalSuggestionsEnabled: checked })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Custom mobile terminal keyboard"
+        description="Use the compact in-app keyboard instead of opening the device keyboard"
+      >
+        <Switch
+          checked={mobileCustomKeyboardEnabled}
+          onCheckedChange={(checked) =>
+            saveDebounced({ mobileCustomKeyboardEnabled: checked })
           }
         />
       </SettingRow>

@@ -28,6 +28,7 @@ interface LayoutTreeProps {
   onSessionExit: (sessionId: string) => void;
   onSelectTab: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
+  suppressTerminalFocus?: boolean;
 }
 
 function LayoutTree({
@@ -39,6 +40,7 @@ function LayoutTree({
   onSessionExit,
   onSelectTab,
   onCloseTab,
+  suppressTerminalFocus = false,
 }: LayoutTreeProps) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -77,6 +79,7 @@ function LayoutTree({
         onSessionExit={onSessionExit}
         onSelectTab={onSelectTab}
         onCloseTab={onCloseTab}
+        suppressTerminalFocus={suppressTerminalFocus}
       />
     );
   }
@@ -97,6 +100,7 @@ function LayoutTree({
           onSessionExit={onSessionExit}
           onSelectTab={onSelectTab}
           onCloseTab={onCloseTab}
+          suppressTerminalFocus={suppressTerminalFocus}
         />
       </Panel>
       <Separator className="bg-[var(--color-border)] hover:bg-[var(--color-primary)] transition-colors data-[orientation=vertical]:w-px data-[orientation=vertical]:cursor-col-resize data-[orientation=horizontal]:h-px data-[orientation=horizontal]:cursor-row-resize" />
@@ -110,6 +114,7 @@ function LayoutTree({
           onSessionExit={onSessionExit}
           onSelectTab={onSelectTab}
           onCloseTab={onCloseTab}
+          suppressTerminalFocus={suppressTerminalFocus}
         />
       </Panel>
     </Group>
@@ -125,6 +130,7 @@ export interface SplitLayoutProps {
   onSessionExit: (sessionId: string) => void;
   onSelectTab: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
+  suppressTerminalFocus?: boolean;
 }
 
 function parseDockTarget(id: string): DockTarget | null {
@@ -161,6 +167,7 @@ export function SplitLayout({
   onSessionExit,
   onSelectTab,
   onCloseTab,
+  suppressTerminalFocus = false,
 }: SplitLayoutProps) {
   // ── dnd-kit drag sensors (8px activation so clicks still work) ──────────
   const sensors = useSensors(
@@ -251,6 +258,7 @@ export function SplitLayout({
           onSessionExit={onSessionExit}
           onSelectTab={onSelectTab}
           onCloseTab={onCloseTab}
+          suppressTerminalFocus={suppressTerminalFocus}
         />
       </div>
       {/* Drag overlay: floating tab label following the pointer */}

@@ -298,6 +298,7 @@ export interface UiConfig {
   terminalWorkspaceShortcut: string;
   terminalSuggestionsEnabled?: boolean;
   explorerShowHidden?: boolean;
+  mobileCustomKeyboardEnabled?: boolean;
   terminalOrder?: string[];
   projectOrder?: string[];
   projectCommandOrder?: Record<string, string[]>;

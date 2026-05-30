@@ -5,6 +5,7 @@ import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
 import { SplitLayout } from "@/components/organisms/SplitLayout.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
+import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalLayout } from "@/hooks/use-terminal-layout.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
@@ -40,9 +41,14 @@ export function MultiTerminalDisplay({
   const layout = useTerminalLayout();
   const isCompactWorkspace = useCompactWorkspace();
   const isCoarsePointer = useCoarsePointer();
+  const mobileCustomKeyboardEnabled = useSettingsStore(
+    (state) => state.mobileCustomKeyboardEnabled,
+  );
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
   const showMobileAccessoryBar =
     isCompactWorkspace && isCoarsePointer && !!activeSessionId;
+  const suppressTerminalFocus =
+    showMobileAccessoryBar && mobileCustomKeyboardEnabled;
 
   // ── sync new sessions into the split layout ──────────────────────────────
   useEffect(() => {
@@ -139,6 +145,7 @@ export function MultiTerminalDisplay({
             onExit={() => onSessionExit?.(s.sessionId)}
             onNewTerminal={onNewTerminal}
             onTerminalReady={handleTerminalReady}
+            suppressAutoFocus={suppressTerminalFocus}
           />
         ))}
       </div>
@@ -154,6 +161,7 @@ export function MultiTerminalDisplay({
           onSessionExit={onSessionExit ?? (() => {})}
           onSelectTab={onSelectTab ?? (() => {})}
           onCloseTab={onCloseTab ?? (() => {})}
+          suppressTerminalFocus={suppressTerminalFocus}
         />
       </div>
       {showMobileAccessoryBar && activeSessionId ? (

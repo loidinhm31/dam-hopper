@@ -555,6 +555,7 @@ fn ui_config_serde_roundtrip() {
             terminal_workspace_shortcut: "Ctrl+Shift+Backquote".to_string(),
             terminal_suggestions_enabled: true,
             explorer_show_hidden: false,
+            mobile_custom_keyboard_enabled: false,
             terminal_order: vec!["term1".to_string(), "term2".to_string()],
             project_order: vec!["proj1".to_string()],
             project_command_order: {
@@ -581,6 +582,7 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(ui.search_text_shortcut, "Ctrl+Alt+KeyS");
     assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
     assert_eq!(ui.terminal_workspace_shortcut, "Ctrl+Shift+Backquote");
+    assert!(!ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.terminal_order, vec!["term1", "term2"]);
     assert_eq!(ui.project_order, vec!["proj1"]);
     assert_eq!(
@@ -604,6 +606,7 @@ editor_zoom_wheel_enabled = true
 search_text_shortcut = "Ctrl+Shift+KeyF"
 search_filename_shortcut = "Ctrl+KeyP"
 terminal_workspace_shortcut = "Ctrl+Shift+Backquote"
+mobile_custom_keyboard_enabled = false
 "#;
 
     let loaded: GlobalConfig = toml::from_str(toml).unwrap();
@@ -611,6 +614,7 @@ terminal_workspace_shortcut = "Ctrl+Shift+Backquote"
     assert_eq!(ui.search_text_shortcut, "Ctrl+Shift+KeyF");
     assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
     assert_eq!(ui.terminal_workspace_shortcut, "Ctrl+Shift+Backquote");
+    assert!(!ui.mobile_custom_keyboard_enabled);
 }
 
 #[test]
