@@ -113,4 +113,34 @@ describe("TopNav", () => {
     expect(markup).toContain('data-testid="git-branch-control"');
     expect(markup).toContain('data-connection-collapsed="true"');
   });
+
+  it("renders a wrapped mobile nav grid when compact mode is expanded", () => {
+    mockCompactWorkspace = true;
+
+    const markup = renderToStaticMarkup(
+      <TopNav collapsed={false} onToggle={() => {}} />,
+    );
+
+    expect(markup).toContain("grid-cols-2");
+    expect(markup).toContain("sm:hidden");
+    expect(markup).toContain("col-span-2");
+    expect(markup).toContain('data-mobile-menu-open="true"');
+    expect(markup).toContain("resources");
+    expect(markup).toContain("Manage server connections");
+    expect(markup).toContain("Local");
+    expect(markup).toContain('data-mobile-visible="true"');
+  });
+
+  it("hides compact utility rows until the mobile menu is opened", () => {
+    mockCompactWorkspace = true;
+
+    const markup = renderToStaticMarkup(
+      <TopNav collapsed={true} onToggle={() => {}} />,
+    );
+
+    expect(markup).not.toContain("grid-cols-2");
+    expect(markup).toContain('data-mobile-menu-open="false"');
+    expect(markup).toContain("hidden sm:flex");
+    expect(markup).toContain('data-mobile-visible="false"');
+  });
 });
