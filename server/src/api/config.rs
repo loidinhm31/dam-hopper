@@ -120,6 +120,9 @@ pub async fn update_global_ui(
         new_ui
             .validate_font_sizes()
             .map_err(|e| ApiError::from_app(AppError::InvalidInput(e)))?;
+        new_ui
+            .validate_mobile_keyboard_sizes()
+            .map_err(|e| ApiError::from_app(AppError::InvalidInput(e)))?;
         gc.ui = Some(new_ui);
     }
 

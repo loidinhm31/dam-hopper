@@ -1,10 +1,12 @@
-import { clampFont } from "@/stores/settings.js";
-
 interface NumberStepperProps {
   value: number;
   onChange: (value: number) => void;
   min?: number;
   max?: number;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(value)));
 }
 
 export function NumberStepper({ value, onChange, min = 10, max = 32 }: NumberStepperProps) {
@@ -29,7 +31,7 @@ export function NumberStepper({ value, onChange, min = 10, max = 32 }: NumberSte
         }}
         onBlur={(e) => {
           const n = parseInt(e.target.value, 10);
-          onChange(isNaN(n) ? value : clampFont(n));
+          onChange(isNaN(n) ? value : clampNumber(n, min, max));
         }}
         className="w-14 text-center rounded border border-[var(--color-border)] bg-[var(--color-input)] text-[var(--color-text)] text-sm px-2 py-1 focus:outline-none focus:border-[var(--color-primary)] focus:ring-1 focus:ring-[var(--color-primary)]"
       />

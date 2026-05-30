@@ -536,6 +536,9 @@ fn ui_config_defaults() {
     assert_eq!(ui.search_text_shortcut, "Mod+Shift+KeyF");
     assert_eq!(ui.search_filename_shortcut, "DoubleShift");
     assert_eq!(ui.terminal_workspace_shortcut, "Mod+Shift+Backquote");
+    assert!(ui.mobile_custom_keyboard_enabled);
+    assert_eq!(ui.mobile_custom_keyboard_font_size, 11);
+    assert_eq!(ui.mobile_custom_keyboard_padding, 6);
 }
 
 #[test]
@@ -556,6 +559,8 @@ fn ui_config_serde_roundtrip() {
             terminal_suggestions_enabled: true,
             explorer_show_hidden: false,
             mobile_custom_keyboard_enabled: false,
+            mobile_custom_keyboard_font_size: 13,
+            mobile_custom_keyboard_padding: 8,
             terminal_order: vec!["term1".to_string(), "term2".to_string()],
             project_order: vec!["proj1".to_string()],
             project_command_order: {
@@ -583,6 +588,8 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
     assert_eq!(ui.terminal_workspace_shortcut, "Ctrl+Shift+Backquote");
     assert!(!ui.mobile_custom_keyboard_enabled);
+    assert_eq!(ui.mobile_custom_keyboard_font_size, 13);
+    assert_eq!(ui.mobile_custom_keyboard_padding, 8);
     assert_eq!(ui.terminal_order, vec!["term1", "term2"]);
     assert_eq!(ui.project_order, vec!["proj1"]);
     assert_eq!(
@@ -607,6 +614,8 @@ search_text_shortcut = "Ctrl+Shift+KeyF"
 search_filename_shortcut = "Ctrl+KeyP"
 terminal_workspace_shortcut = "Ctrl+Shift+Backquote"
 mobile_custom_keyboard_enabled = false
+mobile_custom_keyboard_font_size = 14
+mobile_custom_keyboard_padding = 9
 "#;
 
     let loaded: GlobalConfig = toml::from_str(toml).unwrap();
@@ -615,6 +624,8 @@ mobile_custom_keyboard_enabled = false
     assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
     assert_eq!(ui.terminal_workspace_shortcut, "Ctrl+Shift+Backquote");
     assert!(!ui.mobile_custom_keyboard_enabled);
+    assert_eq!(ui.mobile_custom_keyboard_font_size, 14);
+    assert_eq!(ui.mobile_custom_keyboard_padding, 9);
 }
 
 #[test]
@@ -683,4 +694,28 @@ fn ui_config_validate_font_sizes_checks_both_fields() {
         ..UiConfig::default()
     };
     assert!(bad_editor.validate_font_sizes().is_err());
+}
+
+#[test]
+fn validate_mobile_keyboard_sizes_checks_font_and_padding() {
+    let valid = UiConfig {
+        mobile_custom_keyboard_font_size: 12,
+        mobile_custom_keyboard_padding: 6,
+        ..UiConfig::default()
+    };
+    assert!(valid.validate_mobile_keyboard_sizes().is_ok());
+
+    let bad_font = UiConfig {
+        mobile_custom_keyboard_font_size: 24,
+        mobile_custom_keyboard_padding: 6,
+        ..UiConfig::default()
+    };
+    assert!(bad_font.validate_mobile_keyboard_sizes().is_err());
+
+    let bad_padding = UiConfig {
+        mobile_custom_keyboard_font_size: 12,
+        mobile_custom_keyboard_padding: 1,
+        ..UiConfig::default()
+    };
+    assert!(bad_padding.validate_mobile_keyboard_sizes().is_err());
 }

@@ -11,6 +11,8 @@ export function SettingsAppearanceSection() {
     terminalSuggestionsEnabled,
     explorerShowHidden,
     mobileCustomKeyboardEnabled,
+    mobileCustomKeyboardFontSize,
+    mobileCustomKeyboardPadding,
     saveDebounced,
   } = useSettingsStore();
 
@@ -88,6 +90,38 @@ export function SettingsAppearanceSection() {
           checked={mobileCustomKeyboardEnabled}
           onCheckedChange={(checked) =>
             saveDebounced({ mobileCustomKeyboardEnabled: checked })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Mobile keyboard font size"
+        description="Range: 9-18 px"
+      >
+        <NumberStepper
+          value={mobileCustomKeyboardFontSize}
+          min={9}
+          max={18}
+          onChange={(value) =>
+            saveDebounced({ mobileCustomKeyboardFontSize: value })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Mobile keyboard padding"
+        description="Range: 2-14 px"
+      >
+        <NumberStepper
+          value={mobileCustomKeyboardPadding}
+          min={2}
+          max={14}
+          onChange={(value) =>
+            saveDebounced({ mobileCustomKeyboardPadding: value })
           }
         />
       </SettingRow>

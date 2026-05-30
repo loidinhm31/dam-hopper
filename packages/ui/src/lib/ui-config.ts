@@ -13,6 +13,8 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   terminalSuggestionsEnabled: true,
   explorerShowHidden: false,
   mobileCustomKeyboardEnabled: true,
+  mobileCustomKeyboardFontSize: 11,
+  mobileCustomKeyboardPadding: 6,
   terminalOrder: [],
   projectOrder: [],
   projectCommandOrder: {},
@@ -37,6 +39,12 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
     mobileCustomKeyboardEnabled:
       ui?.mobileCustomKeyboardEnabled ??
       DEFAULT_UI_CONFIG.mobileCustomKeyboardEnabled,
+    mobileCustomKeyboardFontSize:
+      ui?.mobileCustomKeyboardFontSize ??
+      DEFAULT_UI_CONFIG.mobileCustomKeyboardFontSize,
+    mobileCustomKeyboardPadding:
+      ui?.mobileCustomKeyboardPadding ??
+      DEFAULT_UI_CONFIG.mobileCustomKeyboardPadding,
     searchTextShortcut: formatShortcut(
       ui?.searchTextShortcut ?? DEFAULT_UI_CONFIG.searchTextShortcut,
     ),

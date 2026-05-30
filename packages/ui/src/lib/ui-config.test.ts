@@ -8,6 +8,8 @@ describe("withUiConfigDefaults", () => {
     expect(ui.searchFilenameShortcut).toBe("DoubleShift");
     expect(ui.terminalWorkspaceShortcut).toBe("Mod+Shift+Backquote");
     expect(ui.mobileCustomKeyboardEnabled).toBe(true);
+    expect(ui.mobileCustomKeyboardFontSize).toBe(11);
+    expect(ui.mobileCustomKeyboardPadding).toBe(6);
     expect(ui.runtimeGroupOrder).toEqual([]);
     expect(ui.runtimeItemOrder).toEqual({});
   });
@@ -21,6 +23,8 @@ describe("withUiConfigDefaults", () => {
       searchTextShortcut: "ctrl+shift+p",
       terminalWorkspaceShortcut: "ctrl+shift+backquote",
       mobileCustomKeyboardEnabled: false,
+      mobileCustomKeyboardFontSize: 14,
+      mobileCustomKeyboardPadding: 9,
     });
 
     expect(ui.editorFontSize).toBe(18);
@@ -31,5 +35,7 @@ describe("withUiConfigDefaults", () => {
     expect(ui.searchFilenameShortcut).toBe("DoubleShift");
     expect(ui.terminalWorkspaceShortcut).toBe("Ctrl+Shift+Backquote");
     expect(ui.mobileCustomKeyboardEnabled).toBe(false);
+    expect(ui.mobileCustomKeyboardFontSize).toBe(14);
+    expect(ui.mobileCustomKeyboardPadding).toBe(9);
   });
 });
