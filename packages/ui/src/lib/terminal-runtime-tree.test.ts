@@ -27,19 +27,36 @@ function port(portNumber: number, overrides: Partial<PortEntry> = {}): PortEntry
 }
 
 describe("buildRuntimeTree", () => {
-  it("builds combined terminal and port items", () => {
+  it("groups port-backed terminals into one project service node", () => {
     const groups = buildRuntimeTree({
-      terminals: [terminal("terminal:web:_:1", "web"), terminal("run:api", "api")],
-      tabs: [tab("terminal:web:_:1", "web:bash", 10), tab("run:api", "api:run", 20)],
-      ports: [port(5173, { sessionId: "terminal:web:_:1", project: "web" })],
+      terminals: [
+        terminal("terminal:web:_:1", "web"),
+        terminal("terminal:web:_:2", "web", "node alt.js"),
+        terminal("free:shell", "web", "bash"),
+      ],
+      tabs: [
+        tab("terminal:web:_:1", "web:one", 10),
+        tab("terminal:web:_:2", "web:two", 20),
+        tab("free:shell", "web:shell", 30),
+      ],
+      ports: [
+        port(3001, { sessionId: "terminal:web:_:1", project: "web" }),
+        port(3002, { sessionId: "terminal:web:_:2", project: "web" }),
+      ],
     });
 
-    expect(groups.map((group) => group.name)).toEqual(["web", "api"]);
+    expect(groups.map((group) => group.name)).toEqual(["web"]);
     expect(groups[0]?.items).toMatchObject([
       {
+        kind: "service-group",
+        sessions: [
+          { sessionId: "terminal:web:_:1", ports: [{ port: 3001 }] },
+          { sessionId: "terminal:web:_:2", ports: [{ port: 3002 }] },
+        ],
+      },
+      {
         kind: "session",
-        sessionId: "terminal:web:_:1",
-        ports: [{ port: 5173 }],
+        sessionId: "free:shell",
       },
     ]);
   });
@@ -67,32 +84,39 @@ describe("buildRuntimeTree", () => {
         tab("terminal:web:_:1", "web:bash", 20),
         tab("terminal:api:_:1", "api:bash", 10),
       ],
-      ports: [],
+      ports: [port(3001, { project: "web", sessionId: "terminal:web:_:1" })],
       projectOrder: ["api", "web"],
       runtimeGroupOrder: ["web", "api"],
-      runtimeItemOrder: { web: ["session:terminal:web:_:1"] },
+      runtimeItemOrder: { web: ["services:web"] },
     });
 
     expect(groups.map((group) => group.id)).toEqual(["web", "api"]);
-    expect(groups[0]?.items[0]?.id).toBe("session:terminal:web:_:1");
+    expect(groups[0]?.items[0]?.id).toBe("services:web");
   });
 
-  it("falls back to startedAt for sessions and port number for orphan ports", () => {
+  it("falls back to service group first, then sessions, then orphan ports", () => {
     const groups = buildRuntimeTree({
       terminals: [
         terminal("terminal:web:_:1", "web"),
         terminal("terminal:web:_:2", "web"),
+        terminal("free:web-shell", "web"),
       ],
       tabs: [
         tab("terminal:web:_:1", "web:one", 30),
         tab("terminal:web:_:2", "web:two", 10),
+        tab("free:web-shell", "web:shell", 20),
       ],
-      ports: [port(6000, { project: "web" }), port(3000, { project: "web" })],
+      ports: [
+        port(5000, { project: "web", sessionId: "terminal:web:_:1" }),
+        port(6000, { project: "web" }),
+        port(3000, { project: "web" }),
+      ],
     });
 
     expect(groups[0]?.items.map((item) => item.id)).toEqual([
+      "services:web",
       "session:terminal:web:_:2",
-      "session:terminal:web:_:1",
+      "session:free:web-shell",
       "port:web:3000",
       "port:web:6000",
     ]);
