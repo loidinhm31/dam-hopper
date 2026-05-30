@@ -1,9 +1,20 @@
-import { Circle, Cloud, ExternalLink, Radio, Terminal as TerminalIcon, X } from "lucide-react";
+import {
+  Circle,
+  Cloud,
+  ExternalLink,
+  Radio,
+  Terminal as TerminalIcon,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/utils.js";
-import type { RuntimePort, RuntimeTreeItem } from "@/lib/terminal-runtime-tree.js";
+import type {
+  RuntimePort,
+  RuntimeSessionItem,
+  RuntimeTreeItem,
+} from "@/lib/terminal-runtime-tree.js";
 
 interface Props {
-  active: boolean;
+  activeSessionId: string | null;
   dragState:
     | { type: "group"; id: string }
     | { type: "item"; id: string; groupId: string }
@@ -74,8 +85,82 @@ function RuntimePortChip({
   );
 }
 
-export function TerminalRuntimeNavigatorItem({
+function RuntimeSessionLeaf({
   active,
+  session,
+  onSelectSession,
+  onCloseSession,
+  onStartTunnel,
+  onStopTunnel,
+}: {
+  active: boolean;
+  session: RuntimeSessionItem;
+  onSelectSession?: (sessionId: string) => void;
+  onCloseSession?: (sessionId: string) => void;
+  onStartTunnel: (port: number, label: string) => Promise<void>;
+  onStopTunnel: (id: string) => Promise<void>;
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      title={session.cwd ? `cwd: ${session.cwd}` : session.sessionId}
+      onClick={() => onSelectSession?.(session.sessionId)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelectSession?.(session.sessionId);
+        }
+      }}
+      className={cn(
+        "cursor-pointer rounded-sm px-1.5 py-1 outline-none",
+        "focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]/60",
+        active ? "bg-[var(--color-primary)]/10 text-[var(--color-text)]" : "",
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={cn(
+            "h-1.5 w-1.5 shrink-0 rounded-full",
+            session.alive === false
+              ? "bg-[var(--color-warning)]"
+              : "bg-[var(--color-success)]",
+          )}
+        />
+        <div className="flex min-w-0 flex-1 items-center gap-2 text-left">
+          <TerminalIcon className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 truncate font-mono">{session.label}</span>
+        </div>
+        <button
+          type="button"
+          title="Close terminal (terminates process)"
+          onClick={(event) => {
+            event.stopPropagation();
+            onCloseSession?.(session.sessionId);
+          }}
+          className="rounded-sm p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+      {session.ports.length > 0 ? (
+        <div className="mt-1 flex flex-wrap gap-1 pl-5">
+          {session.ports.map((port) => (
+            <RuntimePortChip
+              key={`${session.sessionId}:${port.port}`}
+              port={port}
+              onStartTunnel={onStartTunnel}
+              onStopTunnel={onStopTunnel}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function TerminalRuntimeNavigatorItem({
+  activeSessionId,
   dragState,
   item,
   onSelectSession,
@@ -85,7 +170,12 @@ export function TerminalRuntimeNavigatorItem({
   onStartTunnel,
   onStopTunnel,
 }: Props) {
-  const ports = item.kind === "session" ? item.ports : item.ports;
+  const isTopLevelActive =
+    item.kind === "session"
+      ? item.sessionId === activeSessionId
+      : item.kind === "service-group"
+        ? item.sessions.some((session) => session.sessionId === activeSessionId)
+        : false;
 
   return (
     <div
@@ -122,63 +212,64 @@ export function TerminalRuntimeNavigatorItem({
       }}
       className={cn(
         "rounded-sm border border-transparent px-2 py-1.5 text-xs transition-colors",
-        active
+        isTopLevelActive
           ? "bg-[var(--color-primary)]/12 text-[var(--color-text)]"
           : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)]",
       )}
     >
-      <div className="flex items-center gap-2">
-        <span
-          className={cn(
-            "h-1.5 w-1.5 shrink-0 rounded-full",
-            item.kind === "session" && item.alive === false
-              ? "bg-[var(--color-warning)]"
-              : "bg-[var(--color-success)]",
-          )}
+      {item.kind === "session" ? (
+        <RuntimeSessionLeaf
+          active={item.sessionId === activeSessionId}
+          session={item}
+          onSelectSession={onSelectSession}
+          onCloseSession={onCloseSession}
+          onStartTunnel={onStartTunnel}
+          onStopTunnel={onStopTunnel}
         />
-        {item.kind === "session" ? (
-          <button
-            type="button"
-            onClick={() => onSelectSession?.(item.sessionId)}
-            title={item.cwd ? `cwd: ${item.cwd}` : item.sessionId}
-            className="flex min-w-0 flex-1 items-center gap-2 text-left"
-          >
-            <TerminalIcon className="h-3.5 w-3.5 shrink-0" />
-            <span className="min-w-0 truncate font-mono">{item.label}</span>
-          </button>
-        ) : (
-          <>
+      ) : item.kind === "service-group" ? (
+        <>
+          <div className="flex items-center gap-2">
+            <Circle className="h-3.5 w-3.5 shrink-0 fill-[var(--color-primary)] text-[var(--color-primary)]" />
+            <span className="min-w-0 flex-1 truncate font-medium text-[var(--color-text)]">
+              {item.label}
+            </span>
+            <span className="text-[10px] text-[var(--color-text-muted)]">
+              {item.sessions.length}
+            </span>
+          </div>
+          <div className="mt-1 space-y-1 pl-3">
+            {item.sessions.map((session) => (
+              <RuntimeSessionLeaf
+                key={session.sessionId}
+                active={session.sessionId === activeSessionId}
+                session={session}
+                onSelectSession={onSelectSession}
+                onCloseSession={onCloseSession}
+                onStartTunnel={onStartTunnel}
+                onStopTunnel={onStopTunnel}
+              />
+            ))}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="flex items-center gap-2">
             <Circle className="h-3.5 w-3.5 shrink-0 fill-[var(--color-primary)] text-[var(--color-primary)]" />
             <span className="font-mono text-[var(--color-text)]">:{item.port}</span>
             <span className="truncate">Detached port</span>
-          </>
-        )}
-        {item.kind === "session" ? (
-          <button
-            type="button"
-            title="Close terminal (terminates process)"
-            onClick={(event) => {
-              event.stopPropagation();
-              onCloseSession?.(item.sessionId);
-            }}
-            className="rounded-sm p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-          >
-            <X className="h-3 w-3" />
-          </button>
-        ) : null}
-      </div>
-      {ports.length > 0 ? (
-        <div className="mt-1 flex flex-wrap gap-1 pl-5">
-          {ports.map((port) => (
-            <RuntimePortChip
-              key={`${item.id}:${port.port}`}
-              port={port}
-              onStartTunnel={onStartTunnel}
-              onStopTunnel={onStopTunnel}
-            />
-          ))}
-        </div>
-      ) : null}
+          </div>
+          <div className="mt-1 flex flex-wrap gap-1 pl-5">
+            {item.ports.map((port) => (
+              <RuntimePortChip
+                key={`${item.id}:${port.port}`}
+                port={port}
+                onStartTunnel={onStartTunnel}
+                onStopTunnel={onStopTunnel}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

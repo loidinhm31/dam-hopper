@@ -31,6 +31,15 @@ export interface RuntimeSessionItem {
   ports: RuntimePort[];
 }
 
+export interface RuntimeServiceGroupItem {
+  kind: "service-group";
+  id: string;
+  groupId: string;
+  label: string;
+  sessions: RuntimeSessionItem[];
+  startedAt: number;
+}
+
 export interface RuntimePortItem {
   kind: "port";
   id: string;
@@ -39,7 +48,10 @@ export interface RuntimePortItem {
   ports: [RuntimePort];
 }
 
-export type RuntimeTreeItem = RuntimeSessionItem | RuntimePortItem;
+export type RuntimeTreeItem =
+  | RuntimeSessionItem
+  | RuntimeServiceGroupItem
+  | RuntimePortItem;
 
 export interface RuntimeTreeGroup {
   id: string;
@@ -154,12 +166,15 @@ function sortItems(group: MutableGroup, runtimeItemOrder: Record<string, string[
     }
 
     if (left.kind !== right.kind) {
-      return left.kind === "session" ? -1 : 1;
+      const rank = { "service-group": 0, session: 1, port: 2 };
+      return rank[left.kind] - rank[right.kind];
     }
 
-    return left.kind === "session"
-      ? left.startedAt - (right as RuntimeSessionItem).startedAt
-      : left.port - (right as RuntimePortItem).port;
+    if (left.kind === "port") {
+      return left.port - (right as RuntimePortItem).port;
+    }
+
+    return left.startedAt - (right as RuntimeSessionItem | RuntimeServiceGroupItem).startedAt;
   });
 }
 
@@ -174,6 +189,7 @@ export function buildRuntimeTree({
   const groups = new Map<string, MutableGroup>();
   const tabById = new Map(tabs.map((tab) => [tab.sessionId, tab]));
   const sessionItems = new Map<string, RuntimeSessionItem>();
+  const orphanPortsByGroup = new Map<string, RuntimePortItem[]>();
 
   terminals.forEach((terminal, index) => {
     const id = groupKey(terminal.project, terminal.sessionId);
@@ -207,25 +223,56 @@ export function buildRuntimeTree({
     }
 
     const id = groupKey(port.project ?? "", port.sessionId ?? undefined);
-    const group = ensureGroup(groups, id);
-    group.items.push({
+    ensureGroup(groups, id);
+    const groupPorts = orphanPortsByGroup.get(id) ?? [];
+    groupPorts.push({
       kind: "port",
       id: `port:${id}:${port.port}`,
       groupId: id,
       port: port.port,
-      ports: [toRuntimePort(port, group.name)],
+      ports: [toRuntimePort(port, groupName(id))],
     });
+    orphanPortsByGroup.set(id, groupPorts);
   }
 
-  const sortedGroups = sortGroups(
-    [...groups.values()],
-    projectOrder,
-    runtimeGroupOrder,
-  );
+  for (const group of groups.values()) {
+    const serviceSessions: RuntimeSessionItem[] = [];
+    const shellSessions: RuntimeSessionItem[] = [];
+
+    for (const session of sessionItems.values()) {
+      if (session.groupId !== group.id) continue;
+      if (session.ports.length > 0) serviceSessions.push(session);
+      else shellSessions.push(session);
+    }
+
+    group.items = [];
+
+    if (serviceSessions.length > 0) {
+      serviceSessions.sort((left, right) => left.startedAt - right.startedAt);
+      group.items.push({
+        kind: "service-group",
+        id: `services:${group.id}`,
+        groupId: group.id,
+        label: "Running ports",
+        sessions: serviceSessions,
+        startedAt: serviceSessions[0]?.startedAt ?? Number.MAX_SAFE_INTEGER,
+      });
+    }
+
+    shellSessions.sort((left, right) => left.startedAt - right.startedAt);
+    group.items.push(...shellSessions);
+    group.items.push(...(orphanPortsByGroup.get(group.id) ?? []));
+  }
+
+  const sortedGroups = sortGroups([...groups.values()], projectOrder, runtimeGroupOrder);
   for (const group of sortedGroups) {
     for (const item of group.items) {
       if (item.kind === "session") {
         item.ports.sort((left, right) => left.port - right.port);
+      } else if (item.kind === "service-group") {
+        for (const session of item.sessions) {
+          session.ports.sort((left, right) => left.port - right.port);
+        }
       }
     }
     sortItems(group, runtimeItemOrder);

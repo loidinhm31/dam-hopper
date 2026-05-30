@@ -4,6 +4,9 @@ import { TerminalRuntimeNavigatorItem } from "./TerminalRuntimeNavigatorItem.js"
 
 function findElementByTitle(node: unknown, title: string): Record<string, unknown> | null {
   if (!isValidElement(node)) return null;
+  if (typeof node.type === "function") {
+    return findElementByTitle(node.type(node.props), title);
+  }
   if ((node.props as { title?: string }).title === title) {
     return node.props as Record<string, unknown>;
   }
@@ -18,7 +21,7 @@ describe("TerminalRuntimeNavigatorItem", () => {
   it("routes the close button to the existing close flow", () => {
     const onCloseSession = vi.fn();
     const tree = TerminalRuntimeNavigatorItem({
-      active: true,
+      activeSessionId: "web",
       dragState: null,
       item: {
         kind: "session",

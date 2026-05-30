@@ -81,7 +81,7 @@ export function TerminalRuntimeNavigatorGroup({
         {group.items.map((item) => (
           <TerminalRuntimeNavigatorItem
             key={item.id}
-            active={item.kind === "session" && item.sessionId === activeSessionId}
+            activeSessionId={activeSessionId}
             dragState={dragState}
             item={item}
             onCloseSession={onCloseSession}
