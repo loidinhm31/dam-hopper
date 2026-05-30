@@ -528,6 +528,7 @@ export default function WorkspacePage() {
                 currentProjectName={projectName}
                 layoutRevision={compactTerminalLayoutRevision}
                 onSessionExit={handleSessionExit}
+                onCloseSession={handleCloseTab}
                 onNewProjectTerminal={handleLaunchShell}
                 onNewFreeTerminal={handleAddFreeTerminal}
                 onSelectTab={handleSelectTab}

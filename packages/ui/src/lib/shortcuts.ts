@@ -22,6 +22,7 @@ export interface ParsedShortcut extends ShortcutMods {
 }
 
 export interface ShortcutKeyEvent {
+  type?: string;
   code: string;
   key: string;
   ctrlKey: boolean;

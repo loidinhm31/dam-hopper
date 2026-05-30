@@ -2,10 +2,7 @@ import { memo, useState, useEffect, useRef } from "react";
 import { useDndMonitor } from "@dnd-kit/core";
 import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils.js";
-import {
-  matchesKeyboardShortcut,
-  matchesNewTerminalShortcut,
-} from "@/lib/shortcuts.js";
+import { handleSharedTerminalKeyEvent } from "@/lib/terminal-keyboard-shortcuts.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import {
   terminalRegistry,
@@ -204,46 +201,14 @@ export const PaneContainer = memo(function PaneContainer({
         return false;
       }
 
-      // Ctrl+Shift+C → copy selection
-      if (
-        e.ctrlKey &&
-        e.shiftKey &&
-        e.code === "KeyC" &&
-        e.type === "keydown"
-      ) {
-        const sel = terminal.getSelection();
-        if (sel) void navigator.clipboard.writeText(sel);
-        return false;
-      }
-
-      if (
-        e.type === "keydown" &&
-        matchesKeyboardShortcut(
-          useSettingsStore.getState().terminalWorkspaceShortcut,
-          e,
-        )
-      ) {
-        return false;
-      }
-
-      // Ctrl+` → global shortcut, don't forward
-      if (matchesNewTerminalShortcut(e)) {
-        return false;
-      }
-
-      // Shift+Enter → open new terminal
-      if (
-        e.shiftKey &&
-        !e.ctrlKey &&
-        !e.altKey &&
-        e.code === "Enter" &&
-        e.type === "keydown"
-      ) {
-        onNewTerminal();
-        return false;
-      }
-
-      return true;
+      return handleSharedTerminalKeyEvent(e, {
+        workspaceShortcut: useSettingsStore.getState().terminalWorkspaceShortcut,
+        onCopySelection: () => {
+          const selection = terminal.getSelection();
+          if (selection) void navigator.clipboard.writeText(selection);
+        },
+        onNewTerminal,
+      });
     });
 
     // Focus terminal when pane receives focus

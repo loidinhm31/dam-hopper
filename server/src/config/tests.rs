@@ -562,6 +562,12 @@ fn ui_config_serde_roundtrip() {
                 m.insert("proj1".to_string(), vec!["cmd1".to_string()]);
                 m
             },
+            runtime_group_order: vec!["proj1".to_string(), "__free__".to_string()],
+            runtime_item_order: {
+                let mut m = std::collections::HashMap::new();
+                m.insert("proj1".to_string(), vec!["session:term1".to_string()]);
+                m
+            },
         }),
         server: crate::config::ServerConfig::default(),
     };
@@ -580,6 +586,11 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(
         ui.project_command_order.get("proj1").unwrap(),
         &vec!["cmd1"]
+    );
+    assert_eq!(ui.runtime_group_order, vec!["proj1", "__free__"]);
+    assert_eq!(
+        ui.runtime_item_order.get("proj1").unwrap(),
+        &vec!["session:term1"]
     );
 }
 
@@ -600,6 +611,25 @@ terminal_workspace_shortcut = "Ctrl+Shift+Backquote"
     assert_eq!(ui.search_text_shortcut, "Ctrl+Shift+KeyF");
     assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
     assert_eq!(ui.terminal_workspace_shortcut, "Ctrl+Shift+Backquote");
+}
+
+#[test]
+fn ui_config_serde_aliases_runtime_order_fields() {
+    let toml = r#"
+[ui]
+runtime_group_order = ["web", "__free__"]
+
+[ui.runtime_item_order]
+web = ["session:web", "port:web:5173"]
+"#;
+
+    let loaded: GlobalConfig = toml::from_str(toml).unwrap();
+    let ui = loaded.ui.unwrap();
+    assert_eq!(ui.runtime_group_order, vec!["web", "__free__"]);
+    assert_eq!(
+        ui.runtime_item_order.get("web").unwrap(),
+        &vec!["session:web", "port:web:5173"]
+    );
 }
 
 #[test]
