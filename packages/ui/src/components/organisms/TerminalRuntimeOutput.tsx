@@ -4,6 +4,7 @@ import { MobileTerminalAccessoryBar } from "@/components/organisms/MobileTermina
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
+import { useSettingsStore } from "@/stores/settings.js";
 import {
   subscribeToRegistry,
   terminalRegistry,
@@ -31,8 +32,13 @@ export function TerminalRuntimeOutput({
   const fitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isCompactWorkspace = useCompactWorkspace();
   const isCoarsePointer = useCoarsePointer();
+  const mobileCustomKeyboardEnabled = useSettingsStore(
+    (state) => state.mobileCustomKeyboardEnabled,
+  );
   const showMobileAccessoryBar =
     isCompactWorkspace && isCoarsePointer && !!activeSessionId;
+  const suppressTerminalFocus =
+    showMobileAccessoryBar && mobileCustomKeyboardEnabled;
 
   const reparentActiveTerminal = useCallback(() => {
     const host = hostRef.current;
@@ -59,12 +65,12 @@ export function TerminalRuntimeOutput({
         fitTimerRef.current = setTimeout(() => {
           requestAnimationFrame(() => {
             entry.fitAddon.fit();
-            entry.terminal.focus();
+            if (!suppressTerminalFocus) entry.terminal.focus();
           });
         }, 150);
       }
     }
-  }, [activeSessionId, mountedSessions]);
+  }, [activeSessionId, mountedSessions, suppressTerminalFocus]);
 
   useEffect(() => {
     reparentActiveTerminal();
@@ -87,13 +93,13 @@ export function TerminalRuntimeOutput({
       const entry = terminalRegistry.get(activeSessionId);
       try {
         entry?.fitAddon.fit();
-        entry?.terminal.focus();
+        if (!suppressTerminalFocus) entry?.terminal.focus();
       } catch {
         /* terminal may be disposed */
       }
     }, 180);
     return () => clearTimeout(timer);
-  }, [activeSessionId, layoutRevision]);
+  }, [activeSessionId, layoutRevision, suppressTerminalFocus]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -138,6 +144,7 @@ export function TerminalRuntimeOutput({
             onExit={() => onSessionExit?.(session.sessionId)}
             onNewTerminal={onNewTerminal}
             onTerminalReady={handleTerminalReady}
+            suppressAutoFocus={suppressTerminalFocus}
           />
         ))}
       </div>
@@ -148,7 +155,9 @@ export function TerminalRuntimeOutput({
         onClick={() => {
           if (!activeSessionId) return;
           onSelectActive?.(activeSessionId);
-          terminalRegistry.get(activeSessionId)?.terminal.focus();
+          if (!suppressTerminalFocus) {
+            terminalRegistry.get(activeSessionId)?.terminal.focus();
+          }
         }}
       >
         {!activeSessionId && (

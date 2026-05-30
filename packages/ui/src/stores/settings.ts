@@ -24,6 +24,7 @@ interface SettingsState {
   terminalWorkspaceShortcut: string;
   terminalSuggestionsEnabled: boolean;
   explorerShowHidden: boolean;
+  mobileCustomKeyboardEnabled: boolean;
   hydrated: boolean;
 
   hydrate: () => Promise<void>;
@@ -39,6 +40,7 @@ interface SettingsState {
         | "terminalWorkspaceShortcut"
         | "terminalSuggestionsEnabled"
         | "explorerShowHidden"
+        | "mobileCustomKeyboardEnabled"
       >
     >,
   ) => void;
@@ -54,6 +56,7 @@ interface SettingsState {
         | "terminalWorkspaceShortcut"
         | "terminalSuggestionsEnabled"
         | "explorerShowHidden"
+        | "mobileCustomKeyboardEnabled"
       >
     >,
   ) => void;
@@ -70,6 +73,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   terminalWorkspaceShortcut: "Mod+Shift+Backquote",
   terminalSuggestionsEnabled: true,
   explorerShowHidden: false,
+  mobileCustomKeyboardEnabled: true,
   hydrated: false,
 
   hydrate: async () => {
@@ -85,6 +89,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         terminalWorkspaceShortcut: ui.terminalWorkspaceShortcut,
         terminalSuggestionsEnabled: ui.terminalSuggestionsEnabled ?? true,
         explorerShowHidden: ui.explorerShowHidden ?? false,
+        mobileCustomKeyboardEnabled: ui.mobileCustomKeyboardEnabled ?? true,
         hydrated: true,
       });
     } catch {
@@ -111,6 +116,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.terminalSuggestionsEnabled = partial.terminalSuggestionsEnabled;
     if (partial.explorerShowHidden !== undefined)
       clamped.explorerShowHidden = partial.explorerShowHidden;
+    if (partial.mobileCustomKeyboardEnabled !== undefined)
+      clamped.mobileCustomKeyboardEnabled =
+        partial.mobileCustomKeyboardEnabled;
     set(clamped);
   },
 
@@ -128,6 +136,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         terminalWorkspaceShortcut,
         terminalSuggestionsEnabled,
         explorerShowHidden,
+        mobileCustomKeyboardEnabled,
       } = get();
       void api.globalConfig.updateUi({
         systemFontSize,
@@ -138,6 +147,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         terminalWorkspaceShortcut,
         terminalSuggestionsEnabled,
         explorerShowHidden,
+        mobileCustomKeyboardEnabled,
       });
     }, 500);
   },

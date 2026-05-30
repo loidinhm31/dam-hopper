@@ -29,6 +29,8 @@ interface TerminalPanelProps {
   onNewTerminal?: () => void;
   /** Called after the xterm Terminal instance is opened and registered; used by PaneContainer to reparent */
   onTerminalReady?: (sessionId: string) => void;
+  /** Prevents mobile browsers from opening the native keyboard through xterm focus */
+  suppressAutoFocus?: boolean;
   className?: string;
 }
 
@@ -63,6 +65,7 @@ export function TerminalPanel({
   onExit,
   onNewTerminal,
   onTerminalReady,
+  suppressAutoFocus = false,
   className,
 }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -216,7 +219,7 @@ export function TerminalPanel({
     // Now safe because resize listener is already registered above.
     const mountRafId = requestAnimationFrame(() => {
       fitAddon.fit();
-      term.focus();
+      if (!suppressAutoFocus) term.focus();
     });
 
     const { cols, rows } = term;

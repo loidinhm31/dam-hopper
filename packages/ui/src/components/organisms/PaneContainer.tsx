@@ -24,6 +24,7 @@ interface PaneContainerProps {
   onSessionExit: (sessionId: string) => void;
   onSelectTab: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
+  suppressTerminalFocus?: boolean;
 }
 
 export const PaneContainer = memo(function PaneContainer({
@@ -33,6 +34,7 @@ export const PaneContainer = memo(function PaneContainer({
   onNewTerminal,
   onSelectTab,
   onCloseTab,
+  suppressTerminalFocus = false,
 }: PaneContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -76,7 +78,7 @@ export const PaneContainer = memo(function PaneContainer({
           fitTimerRef.current = setTimeout(() => {
             requestAnimationFrame(() => {
               entry.fitAddon.fit();
-              entry.terminal.focus();
+              if (!suppressTerminalFocus) entry.terminal.focus();
             });
           }, 150); // Increased delay for stability
         }
@@ -137,7 +139,7 @@ export const PaneContainer = memo(function PaneContainer({
           if (prev.activeSessionId) {
             onSelectTab(prev.activeSessionId);
             const prevEntry = terminalRegistry.get(prev.activeSessionId);
-            prevEntry?.terminal.focus();
+            if (!suppressTerminalFocus) prevEntry?.terminal.focus();
           }
         }
         return false;
@@ -159,7 +161,7 @@ export const PaneContainer = memo(function PaneContainer({
           if (next.activeSessionId) {
             onSelectTab(next.activeSessionId);
             const nextEntry = terminalRegistry.get(next.activeSessionId);
-            nextEntry?.terminal.focus();
+            if (!suppressTerminalFocus) nextEntry?.terminal.focus();
           }
         }
         return false;
@@ -212,7 +214,7 @@ export const PaneContainer = memo(function PaneContainer({
     });
 
     // Focus terminal when pane receives focus
-    if (isFocused) {
+    if (isFocused && !suppressTerminalFocus) {
       terminal.focus();
     }
 
@@ -233,6 +235,7 @@ export const PaneContainer = memo(function PaneContainer({
     layout,
     onNewTerminal,
     onSelectTab,
+    suppressTerminalFocus,
   ]);
 
   // ── resize observer → fit active terminal ───────────────────────────────
@@ -298,7 +301,9 @@ export const PaneContainer = memo(function PaneContainer({
           layout.setFocusedPaneId(node.id);
           if (node.activeSessionId) {
             onSelectTab(node.activeSessionId);
-            terminalRegistry.get(node.activeSessionId)?.terminal.focus();
+            if (!suppressTerminalFocus) {
+              terminalRegistry.get(node.activeSessionId)?.terminal.focus();
+            }
           }
         }}
       >

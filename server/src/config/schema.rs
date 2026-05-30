@@ -366,6 +366,12 @@ pub struct UiConfig {
     pub terminal_suggestions_enabled: bool,
     #[serde(default, alias = "explorer_show_hidden", alias = "explorerShowHidden")]
     pub explorer_show_hidden: bool,
+    #[serde(
+        default = "default_true",
+        alias = "mobile_custom_keyboard_enabled",
+        alias = "mobileCustomKeyboardEnabled"
+    )]
+    pub mobile_custom_keyboard_enabled: bool,
     #[serde(default, alias = "terminal_order")]
     pub terminal_order: Vec<String>,
     #[serde(default, alias = "project_order")]
@@ -393,6 +399,7 @@ impl Default for UiConfig {
             terminal_workspace_shortcut: default_terminal_workspace_shortcut(),
             terminal_suggestions_enabled: true,
             explorer_show_hidden: false,
+            mobile_custom_keyboard_enabled: true,
             terminal_order: vec![],
             project_order: vec![],
             project_command_order: std::collections::HashMap::new(),

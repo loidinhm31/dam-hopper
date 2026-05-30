@@ -12,6 +12,7 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   editorZoomWheelEnabled: true,
   terminalSuggestionsEnabled: true,
   explorerShowHidden: false,
+  mobileCustomKeyboardEnabled: true,
   terminalOrder: [],
   projectOrder: [],
   projectCommandOrder: {},
@@ -33,6 +34,9 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
     runtimeGroupOrder:
       ui?.runtimeGroupOrder ?? DEFAULT_UI_CONFIG.runtimeGroupOrder,
     runtimeItemOrder: ui?.runtimeItemOrder ?? DEFAULT_UI_CONFIG.runtimeItemOrder,
+    mobileCustomKeyboardEnabled:
+      ui?.mobileCustomKeyboardEnabled ??
+      DEFAULT_UI_CONFIG.mobileCustomKeyboardEnabled,
     searchTextShortcut: formatShortcut(
       ui?.searchTextShortcut ?? DEFAULT_UI_CONFIG.searchTextShortcut,
     ),
