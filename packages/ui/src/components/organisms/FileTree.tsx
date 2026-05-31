@@ -42,6 +42,15 @@ import { LockToggle } from "@/components/atoms/LockToggle.js";
 import { EncryptedUploadDialog } from "@/components/organisms/EncryptedUploadDialog.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useSettingsStore } from "@/stores/settings.js";
+import { useEditorStore } from "@/stores/editor.js";
+import { useGitDiff } from "@/api/queries.js";
+import {
+  buildGitFileStateIndex,
+  gitStateTitle,
+  gitStatusClassName,
+  gitStatusShortLabel,
+  type GitFileState,
+} from "@/lib/git-file-state.js";
 
 // ---------------------------------------------------------------------------
 // File icon mapping
@@ -85,6 +94,9 @@ function getNodeDecorationPath(node: FsArborNode): string {
 
 interface NodeRendererWithContextProps extends NodeRendererProps<FsArborNode> {
   onContextMenu: (e: React.MouseEvent, node: NodeApi<FsArborNode>) => void;
+  gitState?: GitFileState;
+  hasChangedDescendant?: boolean;
+  onOpenDiff?: (state: GitFileState) => void;
 }
 
 function NodeRenderer({
@@ -92,6 +104,9 @@ function NodeRenderer({
   style,
   dragHandle,
   onContextMenu,
+  gitState,
+  hasChangedDescendant,
+  onOpenDiff,
 }: NodeRendererWithContextProps) {
   if (isLoadingSentinel(node.data.id)) {
     return (
@@ -157,11 +172,36 @@ function NodeRenderer({
         {node.data.name}
       </span>
 
-      {isLarge && (
-        <span className="ml-auto shrink-0 text-[10px] text-[var(--color-text-muted)] opacity-60">
-          {(node.data.size / (1024 * 1024)).toFixed(0)}MB
-        </span>
-      )}
+      <span className="ml-auto flex shrink-0 items-center gap-1">
+        {isDir && hasChangedDescendant && (
+          <span
+            className="h-1.5 w-1.5 rounded-full bg-[var(--color-primary)]"
+            title="Contains changed files"
+          />
+        )}
+        {!isDir && gitState && (
+          <button
+            type="button"
+            className={cn(
+              "h-4 min-w-4 rounded-[2px] border px-0.5 text-[9px] font-black leading-none",
+              gitStatusClassName(gitState),
+            )}
+            title={`Open diff: ${gitStateTitle(gitState)}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenDiff?.(gitState);
+            }}
+            aria-label={`Open diff for ${node.data.name}`}
+          >
+            {gitStatusShortLabel(gitState)}
+          </button>
+        )}
+        {isLarge && (
+          <span className="text-[10px] text-[var(--color-text-muted)] opacity-60">
+            {(node.data.size / (1024 * 1024)).toFixed(0)}MB
+          </span>
+        )}
+      </span>
     </div>
   );
 }
@@ -208,6 +248,8 @@ export function FileTree({
     project,
     path,
   );
+  const { data: gitDiff } = useGitDiff(project, "*");
+  const openDiff = useEditorStore((s) => s.openDiff);
   const ops = useFsOps(project, path);
   const { progress, upload, clearProgress } = useFsUpload(project, path);
   const { isEncryptEnabled } = useEncryptMode();
@@ -246,6 +288,10 @@ export function FileTree({
         ? (data?.nodes ?? [])
         : (data?.nodes ?? []).filter((n) => !n.name.startsWith(".")),
     [data, showHidden],
+  );
+  const gitIndex = useMemo(
+    () => buildGitFileStateIndex(gitDiff?.entries),
+    [gitDiff],
   );
 
   // Stable reference — react-arborist uses this to build its internal flat list.
@@ -351,7 +397,9 @@ export function FileTree({
 
   function handleUploadHere() {
     if (!menu) return;
-    setUploadDir(menu.node.kind === "dir" ? menu.node.id : parentDir(menu.node.id));
+    setUploadDir(
+      menu.node.kind === "dir" ? menu.node.id : parentDir(menu.node.id),
+    );
     fileInputRef.current?.click();
   }
 
@@ -516,7 +564,26 @@ export function FileTree({
               width={treeBodyWidth || undefined}
             >
               {(props) => (
-                <NodeRenderer {...props} onContextMenu={handleContextMenu} />
+                <NodeRenderer
+                  {...props}
+                  gitState={gitIndex.files.get(props.node.data.id)}
+                  hasChangedDescendant={gitIndex.changedDirs.has(
+                    props.node.data.id,
+                  )}
+                  onOpenDiff={(state) =>
+                    openDiff(
+                      project,
+                      state.path,
+                      state.status,
+                      state.additions,
+                      state.deletions,
+                      undefined,
+                      state.rootId,
+                      state.rootRelativePath,
+                    )
+                  }
+                  onContextMenu={handleContextMenu}
+                />
               )}
             </Tree>
           )}

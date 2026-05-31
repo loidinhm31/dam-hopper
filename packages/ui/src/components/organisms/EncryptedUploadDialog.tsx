@@ -11,6 +11,7 @@
  *   onSuccess — Called when upload completes with new mtime
  */
 import { useCallback, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Upload,
   ShieldCheck,
@@ -21,6 +22,7 @@ import {
 } from "lucide-react";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useEncryptedWrite } from "@/hooks/use-encrypted-write.js";
+import { invalidateGitFileOperation } from "@/api/queries.js";
 
 interface EncryptedUploadDialogProps {
   project: string;
@@ -45,6 +47,7 @@ export function EncryptedUploadDialog({
   // Always encrypted — caller must only render this dialog when Lock mode is ON
   const { getPassphrase, promptPassphrase, setPassphrase } = useEncryptMode();
   const { uploadFile } = useEncryptedWrite();
+  const queryClient = useQueryClient();
 
   const [files, setFiles] = useState<FileStatus[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -123,6 +126,8 @@ export function EncryptedUploadDialog({
         );
 
         if (result.ok) {
+          const path = dir ? `${dir}/${file.name}` : file.name;
+          void invalidateGitFileOperation(queryClient, project, path);
           setFiles((prev) =>
             prev.map((f, idx) =>
               idx === i ? { ...f, state: "done", progress: 100 } : f,
@@ -165,6 +170,7 @@ export function EncryptedUploadDialog({
     setPassphrase,
     uploadFile,
     onSuccess,
+    queryClient,
   ]);
 
   const removeFile = (i: number) => {

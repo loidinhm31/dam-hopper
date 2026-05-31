@@ -441,12 +441,23 @@ export interface HunkInfo {
   header: string;
 }
 
+export interface GitLineChange {
+  kind: "added" | "modified" | "deleted";
+  line: number;
+  length: number;
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+}
+
 export interface FileDiffContent {
   path: string;
   original?: string;
   modified?: string;
   language: string;
   hunks: HunkInfo[];
+  lineChanges: GitLineChange[];
   isBinary: boolean;
 }
 
@@ -634,7 +645,12 @@ export const api = {
         path,
         root,
       }),
-    discardHunk: (project: string, path: string, hunkIndex: number, root?: string) =>
+    discardHunk: (
+      project: string,
+      path: string,
+      hunkIndex: number,
+      root?: string,
+    ) =>
       getTransport().invoke<{ ok: boolean }>("git:discardHunk", {
         project,
         path,
@@ -650,7 +666,12 @@ export const api = {
         content,
         root,
       }),
-    commit: (project: string, message: string, amend?: boolean, root?: string) =>
+    commit: (
+      project: string,
+      message: string,
+      amend?: boolean,
+      root?: string,
+    ) =>
       getTransport().invoke<{ ok: boolean; hash: string }>("git:commit", {
         project,
         message,
@@ -681,7 +702,12 @@ export const api = {
         hash,
         root,
       }),
-    commitFileDiff: (project: string, hash: string, path: string, root?: string) =>
+    commitFileDiff: (
+      project: string,
+      hash: string,
+      path: string,
+      root?: string,
+    ) =>
       getTransport().invoke<FileDiffContent>("git:commitFileDiff", {
         project,
         hash,

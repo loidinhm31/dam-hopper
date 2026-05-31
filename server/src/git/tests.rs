@@ -914,6 +914,7 @@ fn get_file_diff_returns_original_and_modified() {
     assert_eq!(diff.modified.as_deref(), Some("new content\n"));
     assert!(!diff.is_binary);
     assert!(!diff.hunks.is_empty());
+    assert!(!diff.line_changes.is_empty());
 }
 
 #[test]
@@ -926,6 +927,111 @@ fn get_file_diff_new_file_has_no_original() {
     let diff = get_file_diff(path, "brand-new.txt").unwrap();
     assert!(diff.original.is_none());
     assert!(diff.modified.is_some());
+}
+
+#[test]
+fn get_file_diff_line_changes_for_added_file() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("added.txt"), "one\ntwo\n").unwrap();
+
+    let diff = get_file_diff(path, "added.txt").unwrap();
+    assert_eq!(diff.line_changes.len(), 1);
+    let change = &diff.line_changes[0];
+    assert_eq!(change.kind, "added");
+    assert_eq!(change.line, 1);
+    assert_eq!(change.length, 2);
+    assert_eq!(change.old_lines, 0);
+    assert_eq!(change.new_start, 1);
+    assert_eq!(change.new_lines, 2);
+}
+
+#[test]
+fn get_file_diff_line_changes_for_modified_line() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("README.md"), "# changed").unwrap();
+
+    let diff = get_file_diff(path, "README.md").unwrap();
+    assert_eq!(diff.line_changes.len(), 1);
+    let change = &diff.line_changes[0];
+    assert_eq!(change.kind, "modified");
+    assert_eq!(change.line, 1);
+    assert_eq!(change.length, 1);
+    assert_eq!(change.old_start, 1);
+    assert_eq!(change.old_lines, 1);
+    assert_eq!(change.new_start, 1);
+    assert_eq!(change.new_lines, 1);
+}
+
+#[test]
+fn get_file_diff_line_changes_for_deleted_line() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("lines.txt"), "a\nb\nc\n").unwrap();
+    git(&["add", "lines.txt"], path);
+    git(&["commit", "-m", "add lines"], path);
+
+    std::fs::write(path.join("lines.txt"), "a\nc\n").unwrap();
+
+    let diff = get_file_diff(path, "lines.txt").unwrap();
+    assert_eq!(diff.line_changes.len(), 1);
+    let change = &diff.line_changes[0];
+    assert_eq!(change.kind, "deleted");
+    assert_eq!(change.line, 2);
+    assert_eq!(change.length, 1);
+    assert_eq!(change.old_start, 2);
+    assert_eq!(change.old_lines, 1);
+    assert_eq!(change.new_start, 2);
+    assert_eq!(change.new_lines, 0);
+}
+
+#[test]
+fn get_file_diff_line_changes_for_mixed_hunk() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("mixed.txt"), "a\nb\nc\nd\n").unwrap();
+    git(&["add", "mixed.txt"], path);
+    git(&["commit", "-m", "add mixed"], path);
+
+    std::fs::write(path.join("mixed.txt"), "a\nB\nc\nx\nd\n").unwrap();
+
+    let diff = get_file_diff(path, "mixed.txt").unwrap();
+    let kinds: Vec<&str> = diff
+        .line_changes
+        .iter()
+        .map(|change| change.kind.as_str())
+        .collect();
+    assert_eq!(kinds, vec!["modified", "added"]);
+    assert_eq!(diff.line_changes[0].line, 2);
+    assert_eq!(diff.line_changes[1].line, 4);
+}
+
+#[test]
+fn get_file_diff_line_changes_empty_for_binary_file() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    std::fs::write(path.join("blob.bin"), b"\0one").unwrap();
+    git(&["add", "blob.bin"], path);
+    git(&["commit", "-m", "add binary"], path);
+    std::fs::write(path.join("blob.bin"), b"\0two").unwrap();
+
+    let diff = get_file_diff(path, "blob.bin").unwrap();
+    assert!(diff.is_binary);
+    assert!(diff.line_changes.is_empty());
+}
+
+#[test]
+fn get_file_diff_line_changes_empty_for_clean_file() {
+    let repo = make_temp_repo();
+
+    let diff = get_file_diff(repo.path(), "README.md").unwrap();
+    assert!(diff.line_changes.is_empty());
 }
 
 #[test]

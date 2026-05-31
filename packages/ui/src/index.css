@@ -128,6 +128,42 @@
   padding-bottom: max(0.5rem, var(--safe-area-bottom));
 }
 
+.git-line-change-added {
+  background: rgba(34, 197, 94, 0.1);
+  border-left: 2px solid var(--color-success);
+}
+
+.git-line-change-modified {
+  background: rgba(59, 130, 246, 0.1);
+  border-left: 2px solid var(--color-primary);
+}
+
+.git-line-change-deleted {
+  background: rgba(248, 113, 113, 0.1);
+  border-left: 2px solid var(--color-danger);
+}
+
+.git-glyph-change::before {
+  content: "";
+  display: block;
+  width: 4px;
+  height: 16px;
+  margin-left: 5px;
+  border-radius: 2px;
+}
+
+.git-glyph-change-added::before {
+  background: var(--color-success);
+}
+
+.git-glyph-change-modified::before {
+  background: var(--color-primary);
+}
+
+.git-glyph-change-deleted::before {
+  background: var(--color-danger);
+}
+
 .compact-scroll-region {
   min-height: 0;
   overflow: auto;
@@ -136,8 +172,13 @@
 }
 
 .dialog-viewport-fit {
-  max-width: min(42rem, calc(100vw - 1rem - var(--safe-area-left) - var(--safe-area-right)));
-  max-height: calc(100dvh - 1rem - var(--safe-area-top) - var(--safe-area-bottom));
+  max-width: min(
+    42rem,
+    calc(100vw - 1rem - var(--safe-area-left) - var(--safe-area-right))
+  );
+  max-height: calc(
+    100dvh - 1rem - var(--safe-area-top) - var(--safe-area-bottom)
+  );
 }
 
 /* ── Keyframes ── */

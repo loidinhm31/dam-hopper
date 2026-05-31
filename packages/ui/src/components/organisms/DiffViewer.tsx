@@ -41,6 +41,8 @@ interface DiffViewerProps {
   additions: number;
   deletions: number;
   commitHash?: string;
+  gitRootId?: string;
+  diffPath?: string;
   onClose: () => void;
 }
 
@@ -83,13 +85,21 @@ export function DiffViewer({
   additions,
   deletions,
   commitHash,
+  gitRootId,
+  diffPath,
   onClose,
 }: DiffViewerProps) {
-  const localDiff = useGitFileDiff(project, commitHash ? "" : filePath);
+  const root = gitRootId && gitRootId !== "." ? gitRootId : undefined;
+  const localDiff = useGitFileDiff(
+    project,
+    commitHash ? "" : (diffPath ?? filePath),
+    root,
+  );
   const commitDiff = useGitCommitFileDiff(
     project,
     commitHash ?? "",
-    commitHash ? filePath : "",
+    commitHash ? (diffPath ?? filePath) : "",
+    root,
   );
 
   const { data, isLoading, isError } = commitHash ? commitDiff : localDiff;
@@ -263,9 +273,8 @@ export function DiffViewer({
       setSaveState("idle");
       setIsDirty(false);
       void qc.invalidateQueries({ queryKey: ["git-diff", project] });
-      void qc.invalidateQueries({
-        queryKey: ["git-file-diff", project, filePath],
-      });
+      void qc.invalidateQueries({ queryKey: ["git-file-diff", project] });
+      void qc.invalidateQueries({ queryKey: ["project-status", project] });
     } catch (e) {
       setSaveState("error");
       setSaveError(e instanceof Error ? e.message : String(e));

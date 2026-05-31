@@ -33,4 +33,31 @@ describe("EditorTab", () => {
     expect(markup).toContain("text-indigo-300");
     expect(markup).toContain("Unsaved changes");
   });
+
+  it("renders git state without replacing the dirty indicator", () => {
+    const markup = renderToStaticMarkup(
+      <EditorTab
+        name="app.ts"
+        path="src/app.ts"
+        active
+        dirty
+        gitState={{
+          path: "src/app.ts",
+          rootRelativePath: "src/app.ts",
+          rootId: ".",
+          status: "modified",
+          stagedState: "mixed",
+          additions: 2,
+          deletions: 1,
+          hasConflict: false,
+        }}
+        onClick={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Unsaved changes");
+    expect(markup).toContain("Open diff: modified, staged + unstaged, +2 -1");
+    expect(markup).toContain("±");
+  });
 });

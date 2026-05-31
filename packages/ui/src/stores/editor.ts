@@ -42,6 +42,8 @@ export interface Tab {
   additions?: number;
   deletions?: number;
   commitHash?: string;
+  gitRootId?: string;
+  diffPath?: string;
   /** Whether the tab metadata was restored but content still needs to be loaded from server. */
   hydrated?: boolean;
 }
@@ -58,13 +60,15 @@ interface EditorState {
     additions: number,
     deletions: number,
     commitHash?: string,
+    gitRootId?: string,
+    diffPath?: string,
   ) => void;
   close: (key: string) => void;
   closeOthers: (project: string, key: string) => void;
   closeAll: (project: string) => void;
   setActive: (project: string, key: string | null) => void;
   setContent: (key: string, content: string) => void;
-  save: (key: string) => Promise<void>;
+  save: (key: string) => Promise<boolean>;
   forceOverwrite: (key: string) => Promise<void>;
   reloadTab: (key: string) => Promise<void>;
   clearConflict: (key: string) => void;
@@ -112,6 +116,8 @@ export const useEditorStore = create<EditorState>()(
         additions: number,
         deletions: number,
         commitHash?: string,
+        gitRootId?: string,
+        diffPath?: string,
       ) => {
         const prefix = commitHash ? `diff::${commitHash}` : "diff";
         const key = `${prefix}::${project}::${path}`;
@@ -143,6 +149,8 @@ export const useEditorStore = create<EditorState>()(
           additions,
           deletions,
           commitHash,
+          gitRootId,
+          diffPath,
         };
 
         set((s) => ({
@@ -351,7 +359,7 @@ export const useEditorStore = create<EditorState>()(
           tab.tier === "binary" ||
           tab.tier === "large"
         )
-          return;
+          return false;
 
         set((s) => ({
           tabs: s.tabs.map((t) => (t.key === key ? { ...t, saving: true } : t)),
@@ -378,8 +386,9 @@ export const useEditorStore = create<EditorState>()(
                       mtime: result.newMtime,
                     }
                   : t,
-              ),
+                ),
             }));
+            return true;
           } else if (!result.ok && result.conflict) {
             set((s) => ({
               tabs: s.tabs.map((t) =>
@@ -410,6 +419,7 @@ export const useEditorStore = create<EditorState>()(
             ),
           }));
         }
+        return false;
       },
 
       // ---------------------------------------------------------------------------

@@ -11,8 +11,8 @@ use git2::{DiffOptions, Repository};
 
 use crate::error::AppError;
 use crate::git::types::{
-    ConflictFile, DiffFileEntry, DiffResponse, FileDiffContent, HunkInfo, SubmoduleGitlinkInfo,
-    VcsRootKind, UNTRACKED_PAGE_SIZE,
+    ConflictFile, DiffFileEntry, DiffResponse, FileDiffContent, GitLineChange, HunkInfo,
+    SubmoduleGitlinkInfo, VcsRootKind, UNTRACKED_PAGE_SIZE,
 };
 use crate::git::vcs_roots::discover_vcs_roots;
 
@@ -130,6 +130,14 @@ fn is_binary_content(bytes: &[u8]) -> bool {
     bytes.contains(&0)
 }
 
+fn text_line_count(text: &str) -> u32 {
+    if text.is_empty() {
+        0
+    } else {
+        text.lines().count().max(1) as u32
+    }
+}
+
 /// Read the blob for `rel_path` at HEAD. Returns `None` if file is new (no HEAD blob).
 fn read_head_blob(repo: &Repository, rel_path: &str) -> Result<Option<Vec<u8>>, AppError> {
     let head_tree = match repo.head().ok().and_then(|h| h.peel_to_tree().ok()) {
@@ -166,6 +174,120 @@ fn extract_hunks(patch: &git2::Patch) -> Result<Vec<HunkInfo>, AppError> {
         });
     }
     Ok(hunks)
+}
+
+#[derive(Debug, Clone)]
+struct PendingLineChange {
+    old_start: u32,
+    new_start: u32,
+    old_lines: u32,
+    new_lines: u32,
+}
+
+fn push_line_change(out: &mut Vec<GitLineChange>, pending: Option<PendingLineChange>) {
+    let Some(change) = pending else {
+        return;
+    };
+    if change.old_lines == 0 && change.new_lines == 0 {
+        return;
+    }
+
+    let kind = match (change.old_lines > 0, change.new_lines > 0) {
+        (false, true) => "added",
+        (true, false) => "deleted",
+        (true, true) => "modified",
+        (false, false) => return,
+    };
+    let line = if change.new_lines > 0 {
+        change.new_start
+    } else {
+        change.new_start.max(1)
+    };
+    let length = if change.new_lines > 0 {
+        change.new_lines
+    } else {
+        1
+    };
+
+    out.push(GitLineChange {
+        kind: kind.to_string(),
+        line,
+        length,
+        old_start: change.old_start.max(1),
+        old_lines: change.old_lines,
+        new_start: change.new_start.max(1),
+        new_lines: change.new_lines,
+    });
+}
+
+fn start_pending_change(pending: &mut Option<PendingLineChange>, old_start: u32, new_start: u32) {
+    if pending.is_none() {
+        *pending = Some(PendingLineChange {
+            old_start: old_start.max(1),
+            new_start: new_start.max(1),
+            old_lines: 0,
+            new_lines: 0,
+        });
+    }
+}
+
+/// Build contiguous line markers from a git2 Patch for editor gutter/overview UI.
+fn extract_line_changes(patch: &git2::Patch) -> Result<Vec<GitLineChange>, AppError> {
+    let mut changes = Vec::new();
+
+    for hunk_index in 0..patch.num_hunks() {
+        let (hunk, line_count) = patch
+            .hunk(hunk_index)
+            .map_err(|e| AppError::Git(e.message().to_string()))?;
+        let mut pending: Option<PendingLineChange> = None;
+        let mut last_old = hunk.old_start().saturating_sub(1);
+        let mut last_new = hunk.new_start().saturating_sub(1);
+
+        for line_index in 0..line_count {
+            let line = patch
+                .line_in_hunk(hunk_index, line_index)
+                .map_err(|e| AppError::Git(e.message().to_string()))?;
+
+            match line.origin() {
+                ' ' | '\n' => {
+                    push_line_change(&mut changes, pending.take());
+                    if let Some(old_lineno) = line.old_lineno() {
+                        last_old = old_lineno;
+                    }
+                    if let Some(new_lineno) = line.new_lineno() {
+                        last_new = new_lineno;
+                    }
+                }
+                '+' => {
+                    let new_lineno = line.new_lineno().unwrap_or(last_new.saturating_add(1));
+                    start_pending_change(&mut pending, last_old.saturating_add(1), new_lineno);
+                    if let Some(change) = pending.as_mut() {
+                        change.new_lines += 1;
+                    }
+                    last_new = new_lineno;
+                }
+                '-' => {
+                    let old_lineno = line.old_lineno().unwrap_or(last_old.saturating_add(1));
+                    start_pending_change(&mut pending, old_lineno, last_new.saturating_add(1));
+                    if let Some(change) = pending.as_mut() {
+                        change.old_lines += 1;
+                    }
+                    last_old = old_lineno;
+                }
+                _ => {}
+            }
+        }
+
+        push_line_change(&mut changes, pending.take());
+    }
+
+    Ok(changes)
+}
+
+fn extract_patch_metadata(
+    patch: &git2::Patch,
+) -> Result<(Vec<HunkInfo>, Vec<GitLineChange>), AppError> {
+    Ok((extract_hunks(patch)?, extract_line_changes(patch)?))
 }
 
 // ---------------------------------------------------------------------------
@@ -448,6 +570,7 @@ pub fn get_file_diff(project_path: &Path, rel_path: &str) -> Result<FileDiffCont
             modified: None,
             language: detect_language(rel_path),
             hunks: vec![],
+            line_changes: vec![],
             is_binary: true,
         });
     }
@@ -455,8 +578,24 @@ pub fn get_file_diff(project_path: &Path, rel_path: &str) -> Result<FileDiffCont
     let original = original_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
     let modified = modified_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
 
-    // Compute hunks from workdir diff
-    let hunks = compute_hunks_for_file(&repo, rel_path)?;
+    // Compute markers from workdir diff.
+    let (hunks, mut line_changes) = compute_patch_metadata_for_file(&repo, rel_path)?;
+    if original.is_none() && line_changes.is_empty() {
+        if let Some(modified_text) = modified.as_deref() {
+            let new_lines = text_line_count(modified_text);
+            if new_lines > 0 {
+                line_changes.push(GitLineChange {
+                    kind: "added".to_string(),
+                    line: 1,
+                    length: new_lines,
+                    old_start: 1,
+                    old_lines: 0,
+                    new_start: 1,
+                    new_lines,
+                });
+            }
+        }
+    }
 
     Ok(FileDiffContent {
         path: rel_path.to_string(),
@@ -464,34 +603,39 @@ pub fn get_file_diff(project_path: &Path, rel_path: &str) -> Result<FileDiffCont
         modified,
         language: detect_language(rel_path),
         hunks,
+        line_changes,
         is_binary: false,
     })
 }
 
-/// Compute hunks using HEAD→workdir diff (consistent with get_file_diff's original/modified view).
+/// Compute patch metadata using HEAD→workdir diff (consistent with get_file_diff's original/modified view).
 ///
 /// Uses diff_tree_to_workdir_with_index so hunk indices match what the client
 /// sees in Monaco DiffEditor, even when some changes are staged.
-fn compute_hunks_for_file(repo: &Repository, rel_path: &str) -> Result<Vec<HunkInfo>, AppError> {
+fn compute_patch_metadata_for_file(
+    repo: &Repository,
+    rel_path: &str,
+) -> Result<(Vec<HunkInfo>, Vec<GitLineChange>), AppError> {
     let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
     let mut opts = DiffOptions::new();
     opts.pathspec(rel_path);
+    opts.include_untracked(true);
 
     let diff = repo
         .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))
         .map_err(|e| AppError::Git(e.message().to_string()))?;
 
     if diff.deltas().count() == 0 {
-        return Ok(vec![]);
+        return Ok((vec![], vec![]));
     }
 
     if let Some(patch) =
         git2::Patch::from_diff(&diff, 0).map_err(|e| AppError::Git(e.message().to_string()))?
     {
-        return extract_hunks(&patch);
+        return extract_patch_metadata(&patch);
     }
 
-    Ok(vec![])
+    Ok((vec![], vec![]))
 }
 
 /// Stage files into the index.
@@ -924,6 +1068,7 @@ pub fn get_commit_file_diff(
             modified: None,
             language: detect_language(rel_path),
             hunks: vec![],
+            line_changes: vec![],
             is_binary: true,
         });
     }
@@ -942,16 +1087,16 @@ pub fn get_commit_file_diff(
         )
         .map_err(|e| AppError::Git(e.message().to_string()))?;
 
-    let hunks = if diff.deltas().count() > 0 {
+    let (hunks, line_changes) = if diff.deltas().count() > 0 {
         if let Some(patch) =
             git2::Patch::from_diff(&diff, 0).map_err(|e| AppError::Git(e.message().to_string()))?
         {
-            extract_hunks(&patch)?
+            extract_patch_metadata(&patch)?
         } else {
-            vec![]
+            (vec![], vec![])
         }
     } else {
-        vec![]
+        (vec![], vec![])
     };
 
     Ok(FileDiffContent {
@@ -960,6 +1105,7 @@ pub fn get_commit_file_diff(
         modified,
         language: detect_language(rel_path),
         hunks,
+        line_changes,
         is_binary: false,
     })
 }
