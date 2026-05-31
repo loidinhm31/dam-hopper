@@ -27,6 +27,7 @@ import {
   FolderOpen,
   Loader2,
   Upload,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { FileDecorationIcon } from "@/lib/file-decoration-icon.js";
@@ -244,10 +245,15 @@ export function FileTree({
 }: FileTreeProps) {
   const { explorerShowHidden: showHidden, saveDebounced } = useSettingsStore();
   const [encUploadOpen, setEncUploadOpen] = useState(false);
-  const { data, isLoading, isError, error, loadChildren } = useFsSubscription(
-    project,
-    path,
-  );
+  const {
+    data,
+    isLoading,
+    isError,
+    error,
+    loadChildren,
+    refetch,
+    isFetching,
+  } = useFsSubscription(project, path);
   const { data: gitDiff } = useGitDiff(project, "*");
   const openDiff = useEditorStore((s) => s.openDiff);
   const ops = useFsOps(project, path);
@@ -491,18 +497,30 @@ export function FileTree({
               Explorer
             </span>
           </div>
-          <button
-            onClick={() => saveDebounced({ explorerShowHidden: !showHidden })}
-            title={showHidden ? "Hide dotfiles" : "Show dotfiles"}
-            className={cn(
-              "shrink-0 text-[10px] px-1.5 py-0.5 rounded-sm transition-colors",
-              showHidden
-                ? "text-[var(--color-primary)] bg-[var(--color-primary)]/10"
-                : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
-            )}
-          >
-            .*
-          </button>
+          <div className="flex items-center gap-0.5 shrink-0">
+            <button
+              onClick={() => void refetch()}
+              title="Refresh file tree"
+              disabled={isFetching}
+              className="shrink-0 p-1 rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
+            >
+              <RefreshCw
+                className={cn("h-3 w-3", isFetching && "animate-spin")}
+              />
+            </button>
+            <button
+              onClick={() => saveDebounced({ explorerShowHidden: !showHidden })}
+              title={showHidden ? "Hide dotfiles" : "Show dotfiles"}
+              className={cn(
+                "shrink-0 text-[10px] px-1.5 py-0.5 rounded-sm transition-colors",
+                showHidden
+                  ? "text-[var(--color-primary)] bg-[var(--color-primary)]/10"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
+              )}
+            >
+              .*
+            </button>
+          </div>
         </div>
 
         {/* Project label */}
