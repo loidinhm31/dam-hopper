@@ -1,12 +1,13 @@
 import { useEffect, useRef, useCallback } from "react";
 import { Terminal as TerminalIcon } from "lucide-react";
 import { MobileTerminalAccessoryBar } from "@/components/organisms/MobileTerminalAccessoryBar.js";
-import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
+import { TerminalKeepAliveHost } from "@/components/organisms/TerminalKeepAliveHost.js";
 import { SplitLayout } from "@/components/organisms/SplitLayout.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalLayout } from "@/hooks/use-terminal-layout.js";
+import { fitAllTerminals } from "@/lib/terminal-fit-scheduler.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 
@@ -26,6 +27,7 @@ interface Props {
   onSelectTab?: (sessionId: string) => void;
   onCloseTab?: (sessionId: string) => void;
   layoutRevision?: number;
+  renderTerminals?: boolean;
 }
 
 export function MultiTerminalDisplay({
@@ -37,6 +39,7 @@ export function MultiTerminalDisplay({
   onSelectTab,
   onCloseTab,
   layoutRevision = 0,
+  renderTerminals = true,
 }: Props) {
   const layout = useTerminalLayout();
   const isCompactWorkspace = useCompactWorkspace();
@@ -86,23 +89,14 @@ export function MultiTerminalDisplay({
   }, [activeSessionId, layout.root]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── called by TerminalPanel after term.open() + registerTerminal() ────────
-  // PaneContainer has its own 150ms retry timer so no forced re-render needed.
+  // PaneContainer subscribes to the registry, so no forced re-render is needed.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleTerminalReady = useCallback((_: string) => {}, []);
 
   // Mode switches and Fleet rail resize-end events change the pane host size
   // outside SplitLayout's drag/drop path, so refit registered terminals once.
   useEffect(() => {
-    const timer = setTimeout(() => {
-      for (const [, entry] of terminalRegistry) {
-        try {
-          entry.fitAddon.fit();
-        } catch {
-          /* terminal may be disposed */
-        }
-      }
-    }, 180);
-    return () => clearTimeout(timer);
+    fitAllTerminals(terminalRegistry.values());
   }, [layoutRevision]);
 
   if (mountedSessions.length === 0 || !activeSessionId) {
@@ -116,39 +110,15 @@ export function MultiTerminalDisplay({
 
   return (
     <div className="relative h-full flex flex-col">
-      {/*
-        Hidden keep-alive container: TerminalPanel instances are mounted here
-        so they manage PTY lifecycle. Their terminal elements are reparented
-        into the visible PaneContainer divs by PaneContainer's useEffect.
-        Rendered FIRST so their useEffects run before PaneContainer's.
-      */}
-      <div
-        aria-hidden="true"
-        style={{
-          position: "absolute",
-          visibility: "hidden",
-          pointerEvents: "none",
-          width: 1024,
-          height: 768,
-          overflow: "hidden",
-          top: -10000, // Move far off-screen instead of just 1x1
-          left: -10000,
-        }}
-      >
-        {mountedSessions.map((s) => (
-          <TerminalPanel
-            key={s.sessionId}
-            sessionId={s.sessionId}
-            project={s.project}
-            command={s.command}
-            cwd={s.cwd}
-            onExit={() => onSessionExit?.(s.sessionId)}
-            onNewTerminal={onNewTerminal}
-            onTerminalReady={handleTerminalReady}
-            suppressAutoFocus={suppressTerminalFocus}
-          />
-        ))}
-      </div>
+      {renderTerminals && (
+        <TerminalKeepAliveHost
+          mountedSessions={mountedSessions}
+          onSessionExit={onSessionExit}
+          onNewTerminal={onNewTerminal}
+          onTerminalReady={handleTerminalReady}
+          suppressAutoFocus={suppressTerminalFocus}
+        />
+      )}
 
       {/* Visible split layout */}
       <div className="min-h-0 flex-1 overflow-hidden">

@@ -7,6 +7,11 @@ import { cn } from "@/lib/utils.js";
 import { getTransport } from "@/api/transport.js";
 import { api, type SessionInfo } from "@/api/client.js";
 import { registerTerminal, removeTerminal } from "@/lib/terminal-registry.js";
+import {
+  cancelScheduledTerminalFit,
+  scheduleTerminalFit,
+} from "@/lib/terminal-fit-scheduler.js";
+import { activateTerminalWebglRenderer } from "@/lib/terminal-renderer.js";
 import { recordCommand } from "@/lib/command-history.js";
 import { handleSharedTerminalKeyEvent } from "@/lib/terminal-keyboard-shortcuts.js";
 import { bindTerminalTouchScroll } from "@/lib/terminal-touch-scroll.js";
@@ -31,6 +36,8 @@ interface TerminalPanelProps {
   onTerminalReady?: (sessionId: string) => void;
   /** Prevents mobile browsers from opening the native keyboard through xterm focus */
   suppressAutoFocus?: boolean;
+  /** Disables xterm text input for mobile custom-keyboard mode */
+  suppressNativeKeyboard?: boolean;
   className?: string;
 }
 
@@ -88,6 +95,7 @@ export function TerminalPanel({
   onNewTerminal,
   onTerminalReady,
   suppressAutoFocus = false,
+  suppressNativeKeyboard = suppressAutoFocus,
   className,
 }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -132,10 +140,11 @@ export function TerminalPanel({
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(container);
+    const renderer = activateTerminalWebglRenderer(term);
 
     // Expose terminal instance and element for suggestions hook + portal
     termRef.current = term;
-    syncNativeKeyboardSuppression(term, suppressAutoFocus);
+    syncNativeKeyboardSuppression(term, suppressNativeKeyboard);
     setTermElement(term.element ?? null);
 
     // Flag to prevent double-output during initialization
@@ -148,12 +157,11 @@ export function TerminalPanel({
     let unsubBuffer: (() => void) | null = null;
     let inputDisposable: { dispose: () => void } | null = null;
     let observer: ResizeObserver | null = null;
-    let fitTimer: ReturnType<typeof setTimeout> | null = null;
     let attachTimeout: ReturnType<typeof setTimeout> | null = null;
     let releaseTouchScroll = () => {};
 
     // Register in global registry so PaneContainer can reparent the terminal element
-    registerTerminal(safeSessionId, term, fitAddon);
+    const terminalEntry = registerTerminal(safeSessionId, term, fitAddon);
     onTerminalReady?.(safeSessionId);
     releaseTouchScroll = bindTerminalTouchScroll(term.element ?? null);
 
@@ -240,10 +248,7 @@ export function TerminalPanel({
 
     // Initial fit — container may be hidden (display:none); FitAddon safely no-ops if dims=0
     // Now safe because resize listener is already registered above.
-    const mountRafId = requestAnimationFrame(() => {
-      fitAddon.fit();
-      if (!suppressAutoFocus) term.focus();
-    });
+    scheduleTerminalFit(terminalEntry, { focus: !suppressAutoFocus });
 
     const { cols, rows } = term;
     const finalCols = cols > 1 ? cols : 120;
@@ -299,10 +304,7 @@ export function TerminalPanel({
       .then(() => {
         // Fallback ResizeObserver: fires when this hidden container changes size.
         observer = new ResizeObserver(() => {
-          if (fitTimer) clearTimeout(fitTimer);
-          fitTimer = setTimeout(() => {
-            fitAddon.fit();
-          }, 200);
+          scheduleTerminalFit(terminalEntry);
         });
         observer.observe(container);
 
@@ -322,27 +324,27 @@ export function TerminalPanel({
       });
 
     return () => {
-      cancelAnimationFrame(mountRafId);
       unsubData?.();
       unsubExit?.();
       unsubRestart?.();
       unsubBuffer?.();
       inputDisposable?.dispose();
-      if (fitTimer) clearTimeout(fitTimer);
       if (attachTimeout) clearTimeout(attachTimeout);
       observer?.disconnect();
       releaseTouchScroll();
+      cancelScheduledTerminalFit(terminalEntry);
       removeTerminal(safeSessionId);
       termRef.current = null;
       openedRef.current = false;
+      renderer.dispose();
       term.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intentionally run once per mount — use key prop to force remount
 
   useEffect(() => {
-    syncNativeKeyboardSuppression(termRef.current, suppressAutoFocus);
-  }, [suppressAutoFocus, termElement]);
+    syncNativeKeyboardSuppression(termRef.current, suppressNativeKeyboard);
+  }, [suppressNativeKeyboard, termElement]);
 
   const { state: suggestionsState, acceptSuggestion } = suggestions;
 
