@@ -28,6 +28,7 @@ interface ActiveTerminalRuntimeDisplayProps {
   openTabs: TabEntry[];
   currentProjectName?: string | null;
   layoutRevision?: number;
+  renderTerminals?: boolean;
   onSessionExit?: (sessionId: string) => void;
   onNewProjectTerminal?: (projectName: string) => void;
   onNewFreeTerminal?: () => void;
@@ -41,6 +42,7 @@ export function ActiveTerminalRuntimeDisplay({
   openTabs,
   currentProjectName,
   layoutRevision = 0,
+  renderTerminals = true,
   onSessionExit,
   onNewProjectTerminal,
   onNewFreeTerminal,
@@ -136,6 +138,7 @@ export function ActiveTerminalRuntimeDisplay({
             activeSessionId={activeSessionId}
             mountedSessions={mountedSessions}
             layoutRevision={layoutRevision}
+            renderTerminals={renderTerminals}
             onSessionExit={onSessionExit}
             onNewTerminal={handleNewTerminal}
             onSelectActive={onSelectTab}
@@ -202,6 +205,7 @@ export function ActiveTerminalRuntimeDisplay({
           activeSessionId={activeSessionId}
           mountedSessions={mountedSessions}
           layoutRevision={layoutRevision}
+          renderTerminals={renderTerminals}
           onSessionExit={onSessionExit}
           onNewTerminal={handleNewTerminal}
           onSelectActive={onSelectTab}

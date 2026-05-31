@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef } from "react";
 import { Terminal as TerminalIcon } from "lucide-react";
 import { MobileTerminalAccessoryBar } from "@/components/organisms/MobileTerminalAccessoryBar.js";
-import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
+import { TerminalKeepAliveHost } from "@/components/organisms/TerminalKeepAliveHost.js";
 import { TerminalScrollButtons } from "@/components/organisms/TerminalScrollButtons.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { cn } from "@/lib/utils.js";
 import { useSettingsStore } from "@/stores/settings.js";
+import { attachTerminalsToHost } from "@/lib/terminal-host-attachment.js";
+import { scheduleTerminalFit } from "@/lib/terminal-fit-scheduler.js";
 import {
   subscribeToRegistry,
   terminalRegistry,
@@ -17,6 +19,7 @@ interface TerminalRuntimeOutputProps {
   activeSessionId: string | null;
   mountedSessions: MountedSession[];
   layoutRevision?: number;
+  renderTerminals?: boolean;
   onSessionExit?: (sessionId: string) => void;
   onNewTerminal?: () => void;
   onSelectActive?: (sessionId: string) => void;
@@ -26,12 +29,12 @@ export function TerminalRuntimeOutput({
   activeSessionId,
   mountedSessions,
   layoutRevision = 0,
+  renderTerminals = true,
   onSessionExit,
   onNewTerminal,
   onSelectActive,
 }: TerminalRuntimeOutputProps) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const fitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isCompactWorkspace = useCompactWorkspace();
   const isCoarsePointer = useCoarsePointer();
   const { mobileCustomKeyboardEnabled, terminalScrollButtonsEnabled } =
@@ -45,32 +48,12 @@ export function TerminalRuntimeOutput({
     const host = hostRef.current;
     if (!host) return;
 
-    for (const session of mountedSessions) {
-      const entry = terminalRegistry.get(session.sessionId);
-      const element = entry?.terminal.element;
-      if (!entry || !element) continue;
-
-      const isActive = session.sessionId === activeSessionId;
-      if (isActive && element.parentElement !== host) {
-        host.appendChild(element);
-      }
-
-      element.style.display = isActive ? "block" : "none";
-      element.style.width = "100%";
-      element.style.height = "100%";
-      element.style.position = "absolute";
-      element.style.inset = "0";
-
-      if (isActive) {
-        if (fitTimerRef.current) clearTimeout(fitTimerRef.current);
-        fitTimerRef.current = setTimeout(() => {
-          requestAnimationFrame(() => {
-            entry.fitAddon.fit();
-            if (!suppressTerminalFocus) entry.terminal.focus();
-          });
-        }, 150);
-      }
-    }
+    attachTerminalsToHost({
+      host,
+      sessionIds: mountedSessions.map((session) => session.sessionId),
+      activeSessionId,
+      suppressTerminalFocus,
+    });
   }, [activeSessionId, mountedSessions, suppressTerminalFocus]);
 
   useEffect(() => {
@@ -82,24 +65,14 @@ export function TerminalRuntimeOutput({
         reparentActiveTerminal();
       }
     });
-    return () => {
-      unsubscribe();
-      if (fitTimerRef.current) clearTimeout(fitTimerRef.current);
-    };
+    return unsubscribe;
   }, [mountedSessions, reparentActiveTerminal]);
 
   useEffect(() => {
     if (!activeSessionId) return;
-    const timer = setTimeout(() => {
-      const entry = terminalRegistry.get(activeSessionId);
-      try {
-        entry?.fitAddon.fit();
-        if (!suppressTerminalFocus) entry?.terminal.focus();
-      } catch {
-        /* terminal may be disposed */
-      }
-    }, 180);
-    return () => clearTimeout(timer);
+    scheduleTerminalFit(terminalRegistry.get(activeSessionId), {
+      focus: !suppressTerminalFocus,
+    });
   }, [activeSessionId, layoutRevision, suppressTerminalFocus]);
 
   useEffect(() => {
@@ -107,10 +80,7 @@ export function TerminalRuntimeOutput({
     if (!host) return;
     const observer = new ResizeObserver(() => {
       if (!activeSessionId) return;
-      if (fitTimerRef.current) clearTimeout(fitTimerRef.current);
-      fitTimerRef.current = setTimeout(() => {
-        terminalRegistry.get(activeSessionId)?.fitAddon.fit();
-      }, 100);
+      scheduleTerminalFit(terminalRegistry.get(activeSessionId));
     });
     observer.observe(host);
     return () => observer.disconnect();
@@ -122,33 +92,15 @@ export function TerminalRuntimeOutput({
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
-      <div
-        aria-hidden="true"
-        style={{
-          position: "absolute",
-          visibility: "hidden",
-          pointerEvents: "none",
-          width: 1024,
-          height: 768,
-          overflow: "hidden",
-          top: -10000,
-          left: -10000,
-        }}
-      >
-        {mountedSessions.map((session) => (
-          <TerminalPanel
-            key={session.sessionId}
-            sessionId={session.sessionId}
-            project={session.project}
-            command={session.command}
-            cwd={session.cwd}
-            onExit={() => onSessionExit?.(session.sessionId)}
-            onNewTerminal={onNewTerminal}
-            onTerminalReady={handleTerminalReady}
-            suppressAutoFocus={suppressTerminalFocus}
-          />
-        ))}
-      </div>
+      {renderTerminals && (
+        <TerminalKeepAliveHost
+          mountedSessions={mountedSessions}
+          onSessionExit={onSessionExit}
+          onNewTerminal={onNewTerminal}
+          onTerminalReady={handleTerminalReady}
+          suppressAutoFocus={suppressTerminalFocus}
+        />
+      )}
 
       <div
         ref={hostRef}

@@ -15,6 +15,7 @@ import type { DockTarget, LayoutNode } from "@/types/terminal-layout.js";
 import type { UseTerminalLayoutResult } from "@/hooks/use-terminal-layout.js";
 import { PaneContainer } from "@/components/organisms/PaneContainer.js";
 import type { DragItem } from "@/components/organisms/TabBar.js";
+import { fitAllTerminals } from "@/lib/terminal-fit-scheduler.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
@@ -174,15 +175,6 @@ export function SplitLayout({
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
   );
 
-  // ── timer ref for post-drag fit() — cleaned up on unmount ───────────────
-  const fitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (fitTimerRef.current) clearTimeout(fitTimerRef.current);
-    },
-    [],
-  );
-
   // ── active drag state for DragOverlay label ──────────────────────────────
   const [activeDragMeta, setActiveDragMeta] = useState<{
     label: string;
@@ -225,17 +217,7 @@ export function SplitLayout({
       );
       if (!changed) return;
 
-      // Fit all registered terminals 150ms after state settles
-      if (fitTimerRef.current) clearTimeout(fitTimerRef.current);
-      fitTimerRef.current = setTimeout(() => {
-        for (const [, entry] of terminalRegistry) {
-          try {
-            entry.fitAddon.fit();
-          } catch {
-            /* terminal may be disposed */
-          }
-        }
-      }, 150);
+      fitAllTerminals(terminalRegistry.values());
     },
     [layout],
   );

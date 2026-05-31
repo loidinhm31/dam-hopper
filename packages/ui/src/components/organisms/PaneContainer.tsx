@@ -3,6 +3,8 @@ import { useDndMonitor } from "@dnd-kit/core";
 import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { handleSharedTerminalKeyEvent } from "@/lib/terminal-keyboard-shortcuts.js";
+import { attachTerminalsToHost } from "@/lib/terminal-host-attachment.js";
+import { scheduleTerminalFit } from "@/lib/terminal-fit-scheduler.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import {
   terminalRegistry,
@@ -37,7 +39,6 @@ export const PaneContainer = memo(function PaneContainer({
   suppressTerminalFocus = false,
 }: PaneContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const fitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isFocused = layout.focusedPaneId === node.id;
 
   // Track drag state to show/hide drop zones
@@ -54,35 +55,12 @@ export const PaneContainer = memo(function PaneContainer({
     if (!container) return;
 
     const doReparent = () => {
-      for (const sessionId of node.sessionIds) {
-        const entry = terminalRegistry.get(sessionId);
-        if (!entry?.terminal.element) continue;
-
-        const el = entry.terminal.element;
-        const isActive = sessionId === node.activeSessionId;
-
-        // Move element into this container if not already here
-        if (el.parentElement !== container) {
-          container.appendChild(el);
-        }
-
-        // Show/hide via display toggling (keeps terminal alive while hidden)
-        el.style.display = isActive ? "block" : "none";
-        el.style.width = "100%";
-        el.style.height = "100%";
-        el.style.position = "absolute";
-        el.style.inset = "0";
-
-        if (isActive) {
-          if (fitTimerRef.current) clearTimeout(fitTimerRef.current);
-          fitTimerRef.current = setTimeout(() => {
-            requestAnimationFrame(() => {
-              entry.fitAddon.fit();
-              if (!suppressTerminalFocus) entry.terminal.focus();
-            });
-          }, 150); // Increased delay for stability
-        }
-      }
+      attachTerminalsToHost({
+        host: container,
+        sessionIds: node.sessionIds,
+        activeSessionId: node.activeSessionId,
+        suppressTerminalFocus,
+      });
     };
 
     // Initial reparent attempt
@@ -95,11 +73,8 @@ export const PaneContainer = memo(function PaneContainer({
       }
     });
 
-    return () => {
-      unsubscribe();
-      if (fitTimerRef.current) clearTimeout(fitTimerRef.current);
-    };
-  }, [node.sessionIds, node.activeSessionId]);
+    return unsubscribe;
+  }, [node.sessionIds, node.activeSessionId, suppressTerminalFocus]);
 
   // ── install keyboard handler on active terminal ──────────────────────────
   useEffect(() => {
@@ -245,18 +220,11 @@ export const PaneContainer = memo(function PaneContainer({
 
     const observer = new ResizeObserver(() => {
       if (!node.activeSessionId) return;
-      if (fitTimerRef.current) clearTimeout(fitTimerRef.current);
-      fitTimerRef.current = setTimeout(() => {
-        const entry = terminalRegistry.get(node.activeSessionId!);
-        entry?.fitAddon.fit();
-      }, 100);
+      scheduleTerminalFit(terminalRegistry.get(node.activeSessionId));
     });
 
     observer.observe(container);
-    return () => {
-      observer.disconnect();
-      if (fitTimerRef.current) clearTimeout(fitTimerRef.current);
-    };
+    return () => observer.disconnect();
   }, [node.activeSessionId]);
 
   // ── derive tab entries for this pane ────────────────────────────────────

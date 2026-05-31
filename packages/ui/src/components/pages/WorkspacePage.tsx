@@ -85,6 +85,11 @@ const ActiveTerminalRuntimeDisplay = lazy(() =>
     }),
   ),
 );
+const TerminalKeepAliveHost = lazy(() =>
+  import("@/components/organisms/TerminalKeepAliveHost.js").then((m) => ({
+    default: m.TerminalKeepAliveHost,
+  })),
+);
 const ProjectInfoPanel = lazy(() =>
   import("@/components/organisms/ProjectInfoPanel.js").then((m) => ({
     default: m.ProjectInfoPanel,
@@ -519,6 +524,18 @@ export default function WorkspacePage() {
         )}
 
         <div className="flex-1 min-h-0">
+          {mountedSessions.length > 0 && (
+            <Suspense fallback={null}>
+              <TerminalKeepAliveHost
+                mountedSessions={mountedSessions}
+                onSessionExit={handleSessionExit}
+                onNewTerminal={handleOpenCurrentTerminal}
+                suppressAutoFocus
+                suppressNativeKeyboard={false}
+              />
+            </Suspense>
+          )}
+
           {terminalUsageMode === "runtime" ? (
             <Suspense fallback={<PanelFallback label="Loading runtime…" />}>
               <ActiveTerminalRuntimeDisplay
@@ -527,6 +544,7 @@ export default function WorkspacePage() {
                 openTabs={tabsWithLiveSession}
                 currentProjectName={projectName}
                 layoutRevision={compactTerminalLayoutRevision}
+                renderTerminals={false}
                 onSessionExit={handleSessionExit}
                 onCloseSession={handleCloseTab}
                 onNewProjectTerminal={handleLaunchShell}
@@ -541,6 +559,7 @@ export default function WorkspacePage() {
                 mountedSessions={mountedSessions}
                 openTabs={tabsWithLiveSession}
                 layoutRevision={compactTerminalLayoutRevision}
+                renderTerminals={false}
                 onSessionExit={handleSessionExit}
                 onNewTerminal={handleOpenCurrentTerminal}
                 onSelectTab={handleSelectTab}

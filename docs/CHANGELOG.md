@@ -1,3 +1,9 @@
+## 2026-05-31
+
+- **Shared terminal rendering and resize smoothing.** Added WebGL2-backed xterm rendering across browser, desktop Tauri, and Android WebView hosts with quiet DOM-renderer fallback when unsupported, initialization fails, or the WebGL context is lost. Centralized animation-frame terminal fitting and host attachment to coalesce live-resize work while preserving split-pane docking, tab keep-alive behavior, and mobile native-keyboard focus suppression.
+
+- **Terminal mode switching buffer readability fix.** Kept xterm instances mounted across Traditional ↔ Runtime terminal view switches so historical output is not replayed and rewrapped at a different width during Runtime navigator resizing.
+
 ## 2026-05-25
 
 - **Phase 04: Responsive Companion Layout.** Complete ✓ 2026-05-25. Added the compact responsive workspace shell with shared media-query helpers, safe-area/dynamic-height CSS primitives, mobile/tablet surface switching, and terminal refit handling for hidden-panel transitions. Reused the existing editor, terminal, fleet, ports, Git, and project surfaces without duplicating business logic. Hardened `MobileWorkspaceShell` for empty-surface fallback, improved TopNav selector layering and compact/tablet behavior, and aligned compact navigation behavior with zoomed and iPad-sized layouts. Validation passed for `pnpm --filter @dam-hopper/ui test`, `pnpm --filter @dam-hopper/ui build`, `pnpm build`, and `pnpm dev` startup verification. [See plan](../plans/260524-2238-tauri-v2-shared-ui-native/phase-04-responsive-companion-layout.md).
