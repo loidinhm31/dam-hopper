@@ -583,11 +583,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_paths_respects_gitignore_and_truncates() {
+    async fn search_paths_respects_gitignore() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::write(root.join(".gitignore"), "ignored.txt\n").unwrap();
         std::fs::write(root.join("ignored.txt"), "").unwrap();
+        std::fs::write(root.join("match.txt"), "").unwrap();
+
+        let (matches, truncated) = search_paths(root, ".txt", false, 20).await.unwrap();
+
+        assert!(!truncated);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path, "match.txt");
+        assert!(!matches.iter().any(|m| m.path == "ignored.txt"));
+    }
+
+    #[tokio::test]
+    async fn search_paths_truncates_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
         for i in 0..5 {
             std::fs::write(root.join(format!("match-{i}.txt")), "").unwrap();
         }
@@ -596,7 +610,6 @@ mod tests {
 
         assert!(truncated);
         assert_eq!(matches.len(), 3);
-        assert!(!matches.iter().any(|m| m.path == "ignored.txt"));
     }
 }
 
