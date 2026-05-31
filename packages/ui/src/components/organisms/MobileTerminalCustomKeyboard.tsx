@@ -26,8 +26,11 @@ export function MobileTerminalCustomKeyboard({
   const rows = isSymbolLayer
     ? CUSTOM_MOBILE_TERMINAL_SYMBOL_ROWS
     : CUSTOM_MOBILE_TERMINAL_KEY_ROWS;
-  const { mobileCustomKeyboardFontSize, mobileCustomKeyboardPadding } =
-    useSettingsStore();
+  const {
+    mobileCustomKeyboardFontSize,
+    mobileCustomKeyboardPadding,
+    mobileCustomKeyboardRowGap,
+  } = useSettingsStore();
   const keyHeight = Math.max(
     34,
     mobileCustomKeyboardFontSize + mobileCustomKeyboardPadding * 2,
@@ -38,7 +41,7 @@ export function MobileTerminalCustomKeyboard({
   );
 
   return (
-    <div className="grid gap-1 pb-2">
+    <div className="grid pb-2" style={{ rowGap: mobileCustomKeyboardRowGap }}>
       {rows.map((row, index) => (
         <div key={index} className="flex gap-1">
           {row.map((key) => {

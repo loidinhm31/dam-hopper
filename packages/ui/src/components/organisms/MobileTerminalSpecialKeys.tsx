@@ -29,8 +29,11 @@ function preventDefault(event: { preventDefault: () => void }) {
 export function MobileTerminalSpecialKeys({
   onPress,
 }: MobileTerminalSpecialKeysProps) {
-  const { mobileCustomKeyboardFontSize, mobileCustomKeyboardPadding } =
-    useSettingsStore();
+  const {
+    mobileCustomKeyboardFontSize,
+    mobileCustomKeyboardPadding,
+    mobileCustomKeyboardRowGap,
+  } = useSettingsStore();
   const keyHeight = Math.max(
     34,
     mobileCustomKeyboardFontSize + mobileCustomKeyboardPadding * 2,
@@ -41,7 +44,10 @@ export function MobileTerminalSpecialKeys({
   );
 
   return (
-    <div className="grid grid-cols-4 gap-1 pb-2">
+    <div
+      className="grid grid-cols-4 gap-x-1 pb-2"
+      style={{ rowGap: mobileCustomKeyboardRowGap }}
+    >
       {MOBILE_TERMINAL_KEYS.map((key) => {
         const Icon = KEY_ICONS[key.id];
         return (
