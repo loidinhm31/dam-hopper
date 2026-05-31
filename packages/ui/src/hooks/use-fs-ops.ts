@@ -4,6 +4,7 @@ import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import type { FsOpResult } from "@/api/fs-types.js";
 import { getServerUrl, getAuthToken } from "@/api/server-config.js";
+import { invalidateGitFileOperation } from "@/api/queries.js";
 
 /**
  * Wraps transport.fsOp with query cache invalidation after each mutation.
@@ -20,25 +21,39 @@ export function useFsOps(project: string, subscribedPath: string) {
     });
   }
 
+  function invalidateGit(path: string) {
+    void invalidateGitFileOperation(qc, project, path);
+  }
+
   function transport(): WsTransport {
     return getTransport() as WsTransport;
   }
 
   async function createFile(path: string): Promise<FsOpResult> {
     const result = await transport().fsOp("create_file", { project, path });
-    if (result.ok) invalidateTree();
+    if (result.ok) {
+      invalidateTree();
+      invalidateGit(path);
+    }
     return result;
   }
 
   async function createDir(path: string): Promise<FsOpResult> {
     const result = await transport().fsOp("create_dir", { project, path });
-    if (result.ok) invalidateTree();
+    if (result.ok) {
+      invalidateTree();
+      invalidateGit(path);
+    }
     return result;
   }
 
   async function rename(path: string, newPath: string): Promise<FsOpResult> {
     const result = await transport().fsOp("rename", { project, path, newPath });
-    if (result.ok) invalidateTree();
+    if (result.ok) {
+      invalidateTree();
+      invalidateGit(path);
+      invalidateGit(newPath);
+    }
     return result;
   }
 
@@ -51,13 +66,20 @@ export function useFsOps(project: string, subscribedPath: string) {
       path,
       forceGit,
     });
-    if (result.ok) invalidateTree();
+    if (result.ok) {
+      invalidateTree();
+      invalidateGit(path);
+    }
     return result;
   }
 
   async function move(path: string, newPath: string): Promise<FsOpResult> {
     const result = await transport().fsOp("move", { project, path, newPath });
-    if (result.ok) invalidateTree();
+    if (result.ok) {
+      invalidateTree();
+      invalidateGit(path);
+      invalidateGit(newPath);
+    }
     return result;
   }
 

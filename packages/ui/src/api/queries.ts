@@ -49,7 +49,7 @@ export async function invalidateGitFileOperation(
 ) {
   await Promise.all([
     qc.invalidateQueries({ queryKey: ["git-diff", project] }),
-    qc.invalidateQueries({ queryKey: ["git-file-diff", project, path] }),
+    qc.invalidateQueries({ queryKey: ["git-file-diff", project] }),
     qc.invalidateQueries({ queryKey: ["project-status", project] }),
     reconcileAffectedEditorTabs(project, [path]),
   ]);
@@ -64,9 +64,7 @@ export async function invalidateGitHistoryOperation(
     qc.invalidateQueries({ queryKey: ["git-diff", project] }),
     qc.invalidateQueries({ queryKey: ["git-conflicts", project] }),
     qc.invalidateQueries({ queryKey: ["project-status", project] }),
-    ...affectedPaths.map((path) =>
-      qc.invalidateQueries({ queryKey: ["git-file-diff", project, path] }),
-    ),
+    qc.invalidateQueries({ queryKey: ["git-file-diff", project] }),
     reconcileAffectedEditorTabs(project, affectedPaths),
   ]);
 }
@@ -375,7 +373,11 @@ export function useGitFileDiff(project: string, path: string, root?: string) {
   });
 }
 
-export function useGitCommitFiles(project: string, hash: string, root?: string) {
+export function useGitCommitFiles(
+  project: string,
+  hash: string,
+  root?: string,
+) {
   const rootKey = gitRootKey(root);
   return useQuery<DiffFileEntry[]>({
     queryKey: ["git-commit-files", project, rootKey, hash],
@@ -644,7 +646,9 @@ export function resolveGitPushTarget(
 export function useGitPush() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (target: string | { project: string; root?: string; force?: boolean }) => {
+    mutationFn: (
+      target: string | { project: string; root?: string; force?: boolean },
+    ) => {
       const [project, root, force] = resolveGitPushTarget(target);
       return api.git.push(project, root, force);
     },
@@ -685,10 +689,11 @@ export function useSshAddKey() {
       keyPath?: string;
       saveForLater?: boolean;
     }) =>
-      getTransport().invoke<SshLoadKeyResult>(
-        "ssh:addKey",
-        { passphrase, keyPath, saveForLater },
-      ),
+      getTransport().invoke<SshLoadKeyResult>("ssh:addKey", {
+        passphrase,
+        keyPath,
+        saveForLater,
+      }),
   });
 }
 

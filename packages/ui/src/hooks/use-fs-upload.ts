@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
+import { invalidateGitFileOperation } from "@/api/queries.js";
 
 export interface UploadProgress {
   filename: string;
@@ -45,6 +46,8 @@ export function useFsUpload(project: string, subscribedPath: string) {
           void qc.invalidateQueries({
             queryKey: ["fs-tree", project, subscribedPath],
           });
+          const path = dir ? `${dir}/${file.name}` : file.name;
+          void invalidateGitFileOperation(qc, project, path);
         } else {
           setProgress({
             filename: file.name,

@@ -1,12 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 import type * as monacoNs from "monaco-editor";
+import type { GitFileState } from "@/lib/git-file-state.js";
+import {
+  gitStateTitle,
+  gitStatusClassName,
+  gitStatusShortLabel,
+} from "@/lib/git-file-state.js";
+import { cn } from "@/lib/utils.js";
 
 interface EditorStatusBarProps {
   editor: monacoNs.editor.IStandaloneCodeEditor | null;
   language: string;
+  gitState?: GitFileState;
+  onGitIndicatorClick?: () => void;
 }
 
-export function EditorStatusBar({ editor, language }: EditorStatusBarProps) {
+export function EditorStatusBar({
+  editor,
+  language,
+  gitState,
+  onGitIndicatorClick,
+}: EditorStatusBarProps) {
   const [position, setPosition] = useState(() => {
     if (editor) {
       const pos = editor.getPosition();
@@ -72,6 +86,23 @@ export function EditorStatusBar({ editor, language }: EditorStatusBarProps) {
       )}
       <span className="opacity-40">•</span>
       <span>{language}</span>
+      {gitState && (
+        <>
+          <span className="opacity-40">•</span>
+          <button
+            type="button"
+            onClick={onGitIndicatorClick}
+            className={cn(
+              "rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-none hover:bg-[var(--color-surface)]",
+              gitStatusClassName(gitState),
+            )}
+            title={`Open diff: ${gitStateTitle(gitState)}`}
+          >
+            {gitStatusShortLabel(gitState)} +{gitState.additions} -
+            {gitState.deletions}
+          </button>
+        </>
+      )}
     </div>
   );
 }

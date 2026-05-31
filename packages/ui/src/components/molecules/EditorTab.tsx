@@ -2,6 +2,12 @@ import type { MouseEventHandler } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { FileDecorationIcon } from "@/lib/file-decoration-icon.js";
+import type { GitFileState } from "@/lib/git-file-state.js";
+import {
+  gitStateTitle,
+  gitStatusClassName,
+  gitStatusShortLabel,
+} from "@/lib/git-file-state.js";
 
 interface EditorTabProps {
   name: string;
@@ -11,6 +17,8 @@ interface EditorTabProps {
   onClick: () => void;
   onClose: () => void;
   onContextMenu?: MouseEventHandler<HTMLDivElement>;
+  gitState?: GitFileState;
+  onGitIndicatorClick?: () => void;
 }
 
 export function EditorTab({
@@ -21,6 +29,8 @@ export function EditorTab({
   onClick,
   onClose,
   onContextMenu,
+  gitState,
+  onGitIndicatorClick,
 }: EditorTabProps) {
   return (
     <div
@@ -43,6 +53,23 @@ export function EditorTab({
           className="h-1.5 w-1.5 rounded-full bg-[var(--color-primary)] shrink-0"
           title="Unsaved changes"
         />
+      )}
+      {gitState && (
+        <button
+          type="button"
+          className={cn(
+            "h-4 min-w-4 shrink-0 rounded-[2px] border px-0.5 text-[9px] font-black leading-none",
+            gitStatusClassName(gitState),
+          )}
+          title={`Open diff: ${gitStateTitle(gitState)}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onGitIndicatorClick?.();
+          }}
+          aria-label={`Open diff for ${name}`}
+        >
+          {gitStatusShortLabel(gitState)}
+        </button>
       )}
       <button
         type="button"

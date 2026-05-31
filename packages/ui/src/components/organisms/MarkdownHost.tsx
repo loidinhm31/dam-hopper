@@ -8,6 +8,7 @@ import { lazy, Suspense, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import type { FileTier } from "@/lib/file-tier.js";
+import type { GitLineChange } from "@/api/client.js";
 import { MarkdownPreview } from "./MarkdownPreview.js";
 
 const MonacoHost = lazy(() =>
@@ -20,6 +21,7 @@ type MarkdownMode = "edit" | "split" | "preview";
 
 interface MarkdownHostProps {
   tabKey: string;
+  path?: string;
   content: string;
   tier: FileTier;
   mime?: string;
@@ -27,6 +29,8 @@ interface MarkdownHostProps {
   onChange: (value: string) => void;
   onSave: () => void;
   onViewStateChange: (vs: unknown) => void;
+  lineChanges?: GitLineChange[];
+  onGitIndicatorClick?: () => void;
 }
 
 const MODES: { id: MarkdownMode; label: string }[] = [
@@ -44,6 +48,7 @@ const editorFallback = (
 
 export function MarkdownHost({
   tabKey,
+  path,
   content,
   tier,
   mime,
@@ -51,6 +56,8 @@ export function MarkdownHost({
   onChange,
   onSave,
   onViewStateChange,
+  lineChanges,
+  onGitIndicatorClick,
 }: MarkdownHostProps) {
   const [mode, setMode] = useState<MarkdownMode>("split");
 
@@ -89,6 +96,7 @@ export function MarkdownHost({
             <Suspense fallback={editorFallback}>
               <MonacoHost
                 tabKey={tabKey}
+                path={path}
                 content={content}
                 tier={tier}
                 mime={mime}
@@ -96,6 +104,8 @@ export function MarkdownHost({
                 onChange={onChange}
                 onSave={onSave}
                 onViewStateChange={onViewStateChange}
+                lineChanges={lineChanges}
+                onGitIndicatorClick={onGitIndicatorClick}
               />
             </Suspense>
           </div>

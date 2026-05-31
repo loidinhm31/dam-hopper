@@ -347,7 +347,23 @@ pub struct FileDiffContent {
     pub modified: Option<String>,
     pub language: String,
     pub hunks: Vec<HunkInfo>,
+    pub line_changes: Vec<GitLineChange>,
     pub is_binary: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLineChange {
+    /// "added" | "modified" | "deleted"
+    pub kind: String,
+    /// 1-based line in the modified file where the marker should render.
+    pub line: u32,
+    /// Number of modified-side lines covered; deleted blocks use 1 for a visible marker.
+    pub length: u32,
+    pub old_start: u32,
+    pub old_lines: u32,
+    pub new_start: u32,
+    pub new_lines: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

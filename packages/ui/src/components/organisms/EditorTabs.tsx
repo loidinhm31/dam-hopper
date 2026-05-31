@@ -10,6 +10,7 @@
 import { lazy, Suspense, useState, useEffect, useCallback } from "react";
 import type * as monacoNs from "monaco-editor";
 import { FileCode, Loader2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEditorStore } from "@/stores/editor.js";
 import { EditorTab } from "@/components/molecules/EditorTab.js";
 import { LargeFileViewer } from "@/components/organisms/LargeFileViewer.js";
@@ -21,6 +22,12 @@ import { mimeToLanguage } from "@/lib/mime-to-language.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useEncryptedWrite } from "@/hooks/use-encrypted-write.js";
 import { LockToggle } from "@/components/atoms/LockToggle.js";
+import {
+  invalidateGitFileOperation,
+  useGitDiff,
+  useGitFileDiff,
+} from "@/api/queries.js";
+import { buildGitFileStateIndex } from "@/lib/git-file-state.js";
 import {
   clampEditorTabContextMenuPosition,
   EditorTabContextMenu,
@@ -40,10 +47,12 @@ const MarkdownHost = lazy(() =>
 );
 
 export function EditorTabs({ project }: { project: string | null }) {
+  const queryClient = useQueryClient();
   const {
     tabs,
     activeKeys,
     setActive,
+    openDiff,
     close,
     closeOthers,
     closeAll,
@@ -74,13 +83,18 @@ export function EditorTabs({ project }: { project: string | null }) {
     x: number;
     y: number;
   } | null>(null);
+  const { data: gitDiff } = useGitDiff(project ?? "", "*");
 
   const handleSave = useCallback(
     async (key: string) => {
-      if (!project || !isEncryptEnabled(project)) {
-        return save(key);
-      }
       const tab = tabs.find((t) => t.key === key);
+      if (!project || !isEncryptEnabled(project)) {
+        const saved = await save(key);
+        if (saved && tab?.path) {
+          await invalidateGitFileOperation(queryClient, tab.project, tab.path);
+        }
+        return;
+      }
       if (!tab) return;
       if (!tab.path) return save(key);
 
@@ -106,10 +120,12 @@ export function EditorTabs({ project }: { project: string | null }) {
       );
       if (result.ok) {
         markSaved(key, result.newMtime ?? tab.mtime);
+        await invalidateGitFileOperation(queryClient, project, tab.path);
       }
     },
     [
       project,
+      queryClient,
       isEncryptEnabled,
       getPassphrase,
       getSession,
@@ -125,6 +141,34 @@ export function EditorTabs({ project }: { project: string | null }) {
   const projectTabs = project ? tabs.filter((t) => t.project === project) : [];
   const activeKey = project ? activeKeys[project] : null;
   const activeTab = projectTabs.find((t) => t.key === activeKey) ?? null;
+  const gitIndex = buildGitFileStateIndex(gitDiff?.entries);
+  const activeGitState =
+    activeTab && activeTab.tier !== "diff"
+      ? gitIndex.files.get(activeTab.path)
+      : undefined;
+  const activeDiffRoot =
+    activeGitState?.rootId && activeGitState.rootId !== "."
+      ? activeGitState.rootId
+      : undefined;
+  const activeFileDiff = useGitFileDiff(
+    project ?? "",
+    activeGitState?.rootRelativePath ?? "",
+    activeDiffRoot,
+  );
+  const activeLineChanges = activeFileDiff.data?.lineChanges ?? [];
+  const openActiveDiff = useCallback(() => {
+    if (!project || !activeGitState) return;
+    openDiff(
+      project,
+      activeGitState.path,
+      activeGitState.status,
+      activeGitState.additions,
+      activeGitState.deletions,
+      undefined,
+      activeGitState.rootId,
+      activeGitState.rootRelativePath,
+    );
+  }, [activeGitState, openDiff, project]);
   const contextTab =
     contextMenu && project
       ? (projectTabs.find((tab) => tab.key === contextMenu.key) ?? null)
@@ -176,6 +220,23 @@ export function EditorTabs({ project }: { project: string | null }) {
               path={tab.path}
               active={tab.key === activeKey}
               dirty={tab.dirty}
+              gitState={
+                tab.tier === "diff" ? undefined : gitIndex.files.get(tab.path)
+              }
+              onGitIndicatorClick={() => {
+                const state = gitIndex.files.get(tab.path);
+                if (!project || !state) return;
+                openDiff(
+                  project,
+                  state.path,
+                  state.status,
+                  state.additions,
+                  state.deletions,
+                  undefined,
+                  state.rootId,
+                  state.rootRelativePath,
+                );
+              }}
               onClick={() => project && setActive(project, tab.key)}
               onClose={() => close(tab.key)}
               onContextMenu={(event) => {
@@ -241,6 +302,8 @@ export function EditorTabs({ project }: { project: string | null }) {
               additions={activeTab.additions ?? 0}
               deletions={activeTab.deletions ?? 0}
               commitHash={activeTab.commitHash}
+              gitRootId={activeTab.gitRootId}
+              diffPath={activeTab.diffPath}
               onClose={() => close(activeTab.key)}
             />
           ) : activeTab.tier === "large" ? (
@@ -261,6 +324,7 @@ export function EditorTabs({ project }: { project: string | null }) {
             >
               <MarkdownHost
                 tabKey={activeTab.key}
+                path={activeTab.path}
                 content={activeTab.content}
                 tier={activeTab.tier}
                 mime={activeTab.mime}
@@ -268,6 +332,8 @@ export function EditorTabs({ project }: { project: string | null }) {
                 onChange={(val) => setContent(activeTab.key, val)}
                 onSave={() => void handleSave(activeTab.key)}
                 onViewStateChange={(vs) => saveViewState(activeTab.key, vs)}
+                lineChanges={activeLineChanges}
+                onGitIndicatorClick={openActiveDiff}
               />
             </Suspense>
           ) : (
@@ -290,6 +356,8 @@ export function EditorTabs({ project }: { project: string | null }) {
                 onSave={() => void handleSave(activeTab.key)}
                 onViewStateChange={(vs) => saveViewState(activeTab.key, vs)}
                 onEditorReady={setActiveEditor}
+                lineChanges={activeLineChanges}
+                onGitIndicatorClick={openActiveDiff}
               />
             </Suspense>
           )}
@@ -335,6 +403,8 @@ export function EditorTabs({ project }: { project: string | null }) {
             <EditorStatusBar
               editor={activeEditor}
               language={mimeToLanguage(activeTab.mime, activeTab.path)}
+              gitState={activeGitState}
+              onGitIndicatorClick={openActiveDiff}
             />
           )}
       </div>

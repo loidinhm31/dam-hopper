@@ -20,6 +20,11 @@ import {
   addWheelShortcutListener,
 } from "@/hooks/use-shortcuts.js";
 import { EDITOR_ZOOM_WHEEL_SHORTCUT } from "@/lib/shortcuts.js";
+import type { GitLineChange } from "@/api/client.js";
+import {
+  findGitLineChangeAtLine,
+  gitLineChangesToDecorationDescriptors,
+} from "@/lib/git-line-decorations.js";
 
 interface MonacoHostProps {
   tabKey: string;
@@ -34,6 +39,8 @@ interface MonacoHostProps {
   onEditorReady?: (
     editor: monacoNs.editor.IStandaloneCodeEditor | null,
   ) => void;
+  lineChanges?: GitLineChange[];
+  onGitIndicatorClick?: () => void;
 }
 
 export function MonacoHost({
@@ -47,10 +54,15 @@ export function MonacoHost({
   onSave,
   onViewStateChange,
   onEditorReady,
+  lineChanges,
+  onGitIndicatorClick,
 }: MonacoHostProps) {
   const editorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof monacoNs | null>(null);
   const viewStateRef = useRef<unknown>(viewState);
+  const lineChangesRef = useRef<GitLineChange[]>(lineChanges ?? []);
+  const onGitIndicatorClickRef = useRef(onGitIndicatorClick);
+  const gitDecorationIdsRef = useRef<string[]>([]);
   const wheelEnabledRef = useRef(
     useSettingsStore.getState().editorZoomWheelEnabled,
   );
@@ -60,6 +72,11 @@ export function MonacoHost({
   useEffect(() => {
     onSaveRef.current = onSave;
   });
+
+  useEffect(() => {
+    lineChangesRef.current = lineChanges ?? [];
+    onGitIndicatorClickRef.current = onGitIndicatorClick;
+  }, [lineChanges, onGitIndicatorClick]);
 
   // Persist latest viewState ref so blur handler always saves current state
   useEffect(() => {
@@ -82,6 +99,21 @@ export function MonacoHost({
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
         onSaveRef.current(),
       );
+
+      editor.onMouseDown((event) => {
+        const targetLine = event.target.position?.lineNumber;
+        if (!targetLine) return;
+        const targetType = event.target.type;
+        const isGitGutterTarget =
+          targetType === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN ||
+          targetType === monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS;
+        if (
+          isGitGutterTarget &&
+          findGitLineChangeAtLine(lineChangesRef.current, targetLine)
+        ) {
+          onGitIndicatorClickRef.current?.();
+        }
+      });
 
       onEditorReady?.(editor);
 
@@ -156,6 +188,36 @@ export function MonacoHost({
     editor.restoreViewState(viewState as monacoNs.editor.ICodeEditorViewState);
   }, [tabKey, viewState]);
 
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return;
+    const decorations = gitLineChangesToDecorationDescriptors(lineChanges).map(
+      (descriptor) => ({
+        range: new monaco.Range(
+          descriptor.startLineNumber,
+          1,
+          descriptor.endLineNumber,
+          1,
+        ),
+        options: {
+          isWholeLine: true,
+          className: descriptor.className,
+          glyphMarginClassName: descriptor.glyphMarginClassName,
+          hoverMessage: { value: descriptor.hoverMessage },
+          overviewRuler: {
+            color: descriptor.overviewRulerColor,
+            position: monaco.editor.OverviewRulerLane.Right,
+          },
+        },
+      }),
+    );
+    gitDecorationIdsRef.current = editor.deltaDecorations(
+      gitDecorationIdsRef.current,
+      decorations,
+    );
+  }, [lineChanges, tabKey]);
+
   // Subscribe to settings store — update Monaco font + keep wheel flag in sync
   useEffect(() => {
     const unsub = useSettingsStore.subscribe((s) => {
@@ -167,6 +229,7 @@ export function MonacoHost({
       onEditorReady?.(null);
       const ed = editorRef.current;
       if (ed) {
+        ed.deltaDecorations(gitDecorationIdsRef.current, []);
         (ed as unknown as { _roCleanup?: () => void })._roCleanup?.();
         (ed as unknown as { _wheelCleanup?: () => void })._wheelCleanup?.();
       }
@@ -189,6 +252,7 @@ export function MonacoHost({
         fontSize: initialFontSize,
         fontFamily: "JetBrains Mono, Fira Code, Cascadia Code, monospace",
         lineNumbers: "on",
+        glyphMargin: true,
         minimap: { enabled: !isDegraded },
         folding: !isDegraded,
         scrollBeyondLastLine: false,
