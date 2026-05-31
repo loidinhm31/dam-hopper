@@ -539,6 +539,7 @@ fn ui_config_defaults() {
     assert!(ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 11);
     assert_eq!(ui.mobile_custom_keyboard_padding, 6);
+    assert_eq!(ui.mobile_custom_keyboard_row_gap, 4);
 }
 
 #[test]
@@ -561,6 +562,7 @@ fn ui_config_serde_roundtrip() {
             mobile_custom_keyboard_enabled: false,
             mobile_custom_keyboard_font_size: 13,
             mobile_custom_keyboard_padding: 8,
+            mobile_custom_keyboard_row_gap: 5,
             terminal_order: vec!["term1".to_string(), "term2".to_string()],
             project_order: vec!["proj1".to_string()],
             project_command_order: {
@@ -574,7 +576,9 @@ fn ui_config_serde_roundtrip() {
                 m.insert("proj1".to_string(), vec!["session:term1".to_string()]);
                 m
             },
-        }),
+            terminal_scroll_buttons_enabled: false,
+            terminal_scroll_step: 3,
+            }),
         server: crate::config::ServerConfig::default(),
     };
 
@@ -590,6 +594,7 @@ fn ui_config_serde_roundtrip() {
     assert!(!ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 13);
     assert_eq!(ui.mobile_custom_keyboard_padding, 8);
+    assert_eq!(ui.mobile_custom_keyboard_row_gap, 5);
     assert_eq!(ui.terminal_order, vec!["term1", "term2"]);
     assert_eq!(ui.project_order, vec!["proj1"]);
     assert_eq!(
@@ -616,6 +621,7 @@ terminal_workspace_shortcut = "Ctrl+Shift+Backquote"
 mobile_custom_keyboard_enabled = false
 mobile_custom_keyboard_font_size = 14
 mobile_custom_keyboard_padding = 9
+mobile_custom_keyboard_row_gap = 6
 "#;
 
     let loaded: GlobalConfig = toml::from_str(toml).unwrap();
@@ -626,6 +632,7 @@ mobile_custom_keyboard_padding = 9
     assert!(!ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 14);
     assert_eq!(ui.mobile_custom_keyboard_padding, 9);
+    assert_eq!(ui.mobile_custom_keyboard_row_gap, 6);
 }
 
 #[test]
@@ -701,6 +708,7 @@ fn validate_mobile_keyboard_sizes_checks_font_and_padding() {
     let valid = UiConfig {
         mobile_custom_keyboard_font_size: 12,
         mobile_custom_keyboard_padding: 6,
+        mobile_custom_keyboard_row_gap: 4,
         ..UiConfig::default()
     };
     assert!(valid.validate_mobile_keyboard_sizes().is_ok());
@@ -708,6 +716,7 @@ fn validate_mobile_keyboard_sizes_checks_font_and_padding() {
     let bad_font = UiConfig {
         mobile_custom_keyboard_font_size: 24,
         mobile_custom_keyboard_padding: 6,
+        mobile_custom_keyboard_row_gap: 4,
         ..UiConfig::default()
     };
     assert!(bad_font.validate_mobile_keyboard_sizes().is_err());
@@ -715,7 +724,16 @@ fn validate_mobile_keyboard_sizes_checks_font_and_padding() {
     let bad_padding = UiConfig {
         mobile_custom_keyboard_font_size: 12,
         mobile_custom_keyboard_padding: 1,
+        mobile_custom_keyboard_row_gap: 4,
         ..UiConfig::default()
     };
     assert!(bad_padding.validate_mobile_keyboard_sizes().is_err());
+
+    let bad_row_gap = UiConfig {
+        mobile_custom_keyboard_font_size: 12,
+        mobile_custom_keyboard_padding: 6,
+        mobile_custom_keyboard_row_gap: 1,
+        ..UiConfig::default()
+    };
+    assert!(bad_row_gap.validate_mobile_keyboard_sizes().is_err());
 }

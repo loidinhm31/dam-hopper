@@ -14,6 +14,8 @@ const KEYBOARD_FONT_MIN = 9;
 const KEYBOARD_FONT_MAX = 18;
 const KEYBOARD_PADDING_MIN = 2;
 const KEYBOARD_PADDING_MAX = 14;
+const KEYBOARD_ROW_GAP_MIN = 2;
+const KEYBOARD_ROW_GAP_MAX = 12;
 
 export function clampFont(size: number): number {
   return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(size)));
@@ -33,6 +35,13 @@ function clampKeyboardPadding(size: number): number {
   );
 }
 
+function clampKeyboardRowGap(size: number): number {
+  return Math.min(
+    KEYBOARD_ROW_GAP_MAX,
+    Math.max(KEYBOARD_ROW_GAP_MIN, Math.round(size)),
+  );
+}
+
 interface SettingsState {
   systemFontSize: number;
   editorFontSize: number;
@@ -41,10 +50,13 @@ interface SettingsState {
   searchFilenameShortcut: string;
   terminalWorkspaceShortcut: string;
   terminalSuggestionsEnabled: boolean;
+  terminalScrollButtonsEnabled: boolean;
+  terminalScrollStep: number;
   explorerShowHidden: boolean;
   mobileCustomKeyboardEnabled: boolean;
   mobileCustomKeyboardFontSize: number;
   mobileCustomKeyboardPadding: number;
+  mobileCustomKeyboardRowGap: number;
   hydrated: boolean;
 
   hydrate: () => Promise<void>;
@@ -59,10 +71,13 @@ interface SettingsState {
         | "searchFilenameShortcut"
         | "terminalWorkspaceShortcut"
         | "terminalSuggestionsEnabled"
+        | "terminalScrollButtonsEnabled"
+        | "terminalScrollStep"
         | "explorerShowHidden"
         | "mobileCustomKeyboardEnabled"
         | "mobileCustomKeyboardFontSize"
         | "mobileCustomKeyboardPadding"
+        | "mobileCustomKeyboardRowGap"
       >
     >,
   ) => void;
@@ -77,10 +92,13 @@ interface SettingsState {
         | "searchFilenameShortcut"
         | "terminalWorkspaceShortcut"
         | "terminalSuggestionsEnabled"
+        | "terminalScrollButtonsEnabled"
+        | "terminalScrollStep"
         | "explorerShowHidden"
         | "mobileCustomKeyboardEnabled"
         | "mobileCustomKeyboardFontSize"
         | "mobileCustomKeyboardPadding"
+        | "mobileCustomKeyboardRowGap"
       >
     >,
   ) => void;
@@ -96,10 +114,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   searchFilenameShortcut: "DoubleShift",
   terminalWorkspaceShortcut: "Mod+Shift+Backquote",
   terminalSuggestionsEnabled: true,
+  terminalScrollButtonsEnabled: false,
+  terminalScrollStep: 3,
   explorerShowHidden: false,
   mobileCustomKeyboardEnabled: true,
   mobileCustomKeyboardFontSize: 11,
   mobileCustomKeyboardPadding: 6,
+  mobileCustomKeyboardRowGap: 4,
   hydrated: false,
 
   hydrate: async () => {
@@ -114,10 +135,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         searchFilenameShortcut: ui.searchFilenameShortcut,
         terminalWorkspaceShortcut: ui.terminalWorkspaceShortcut,
         terminalSuggestionsEnabled: ui.terminalSuggestionsEnabled ?? true,
+        terminalScrollButtonsEnabled: ui.terminalScrollButtonsEnabled ?? false,
+        terminalScrollStep: ui.terminalScrollStep ?? 3,
         explorerShowHidden: ui.explorerShowHidden ?? false,
         mobileCustomKeyboardEnabled: ui.mobileCustomKeyboardEnabled ?? true,
         mobileCustomKeyboardFontSize: ui.mobileCustomKeyboardFontSize ?? 11,
         mobileCustomKeyboardPadding: ui.mobileCustomKeyboardPadding ?? 6,
+        mobileCustomKeyboardRowGap: ui.mobileCustomKeyboardRowGap ?? 4,
         hydrated: true,
       });
     } catch {
@@ -142,6 +166,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.terminalWorkspaceShortcut = partial.terminalWorkspaceShortcut;
     if (partial.terminalSuggestionsEnabled !== undefined)
       clamped.terminalSuggestionsEnabled = partial.terminalSuggestionsEnabled;
+    if (partial.terminalScrollButtonsEnabled !== undefined)
+      clamped.terminalScrollButtonsEnabled = partial.terminalScrollButtonsEnabled;
+    if (partial.terminalScrollStep !== undefined)
+      clamped.terminalScrollStep = Math.min(50, Math.max(1, partial.terminalScrollStep));
     if (partial.explorerShowHidden !== undefined)
       clamped.explorerShowHidden = partial.explorerShowHidden;
     if (partial.mobileCustomKeyboardEnabled !== undefined)
@@ -154,6 +182,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (partial.mobileCustomKeyboardPadding !== undefined)
       clamped.mobileCustomKeyboardPadding = clampKeyboardPadding(
         partial.mobileCustomKeyboardPadding,
+      );
+    if (partial.mobileCustomKeyboardRowGap !== undefined)
+      clamped.mobileCustomKeyboardRowGap = clampKeyboardRowGap(
+        partial.mobileCustomKeyboardRowGap,
       );
     set(clamped);
   },
@@ -171,10 +203,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         searchFilenameShortcut,
         terminalWorkspaceShortcut,
         terminalSuggestionsEnabled,
+        terminalScrollButtonsEnabled,
+        terminalScrollStep,
         explorerShowHidden,
         mobileCustomKeyboardEnabled,
         mobileCustomKeyboardFontSize,
         mobileCustomKeyboardPadding,
+        mobileCustomKeyboardRowGap,
       } = get();
       void api.globalConfig.updateUi({
         systemFontSize,
@@ -184,10 +219,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         searchFilenameShortcut,
         terminalWorkspaceShortcut,
         terminalSuggestionsEnabled,
+        terminalScrollButtonsEnabled,
+        terminalScrollStep,
         explorerShowHidden,
         mobileCustomKeyboardEnabled,
         mobileCustomKeyboardFontSize,
         mobileCustomKeyboardPadding,
+        mobileCustomKeyboardRowGap,
       });
     }, 500);
   },

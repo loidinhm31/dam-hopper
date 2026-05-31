@@ -9,10 +9,13 @@ export function SettingsAppearanceSection() {
     editorFontSize,
     editorZoomWheelEnabled,
     terminalSuggestionsEnabled,
+    terminalScrollButtonsEnabled,
+    terminalScrollStep,
     explorerShowHidden,
     mobileCustomKeyboardEnabled,
     mobileCustomKeyboardFontSize,
     mobileCustomKeyboardPadding,
+    mobileCustomKeyboardRowGap,
     saveDebounced,
   } = useSettingsStore();
 
@@ -83,6 +86,34 @@ export function SettingsAppearanceSection() {
       <div className="border-t border-[var(--color-border)]" />
 
       <SettingRow
+        title="Show terminal scroll buttons"
+        description="Show floating scroll buttons in the terminal for easier navigation"
+      >
+        <Switch
+          checked={terminalScrollButtonsEnabled}
+          onCheckedChange={(checked) =>
+            saveDebounced({ terminalScrollButtonsEnabled: checked })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Terminal scroll step"
+        description="Number of lines to scroll per button click (1–50)"
+      >
+        <NumberStepper
+          value={terminalScrollStep}
+          min={1}
+          max={50}
+          onChange={(v) => saveDebounced({ terminalScrollStep: v })}
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
         title="Custom mobile terminal keyboard"
         description="Use the compact in-app keyboard instead of opening the device keyboard"
       >
@@ -122,6 +153,22 @@ export function SettingsAppearanceSection() {
           max={14}
           onChange={(value) =>
             saveDebounced({ mobileCustomKeyboardPadding: value })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Mobile keyboard row gap"
+        description="Range: 2-12 px"
+      >
+        <NumberStepper
+          value={mobileCustomKeyboardRowGap}
+          min={2}
+          max={12}
+          onChange={(value) =>
+            saveDebounced({ mobileCustomKeyboardRowGap: value })
           }
         />
       </SettingRow>

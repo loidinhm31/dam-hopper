@@ -10,6 +10,8 @@ describe("withUiConfigDefaults", () => {
     expect(ui.mobileCustomKeyboardEnabled).toBe(true);
     expect(ui.mobileCustomKeyboardFontSize).toBe(11);
     expect(ui.mobileCustomKeyboardPadding).toBe(6);
+    expect(ui.mobileCustomKeyboardRowGap).toBe(4);
+    expect(ui.terminalScrollButtonsEnabled).toBe(false);
     expect(ui.runtimeGroupOrder).toEqual([]);
     expect(ui.runtimeItemOrder).toEqual({});
   });
@@ -25,6 +27,7 @@ describe("withUiConfigDefaults", () => {
       mobileCustomKeyboardEnabled: false,
       mobileCustomKeyboardFontSize: 14,
       mobileCustomKeyboardPadding: 9,
+      mobileCustomKeyboardRowGap: 7,
     });
 
     expect(ui.editorFontSize).toBe(18);
@@ -37,5 +40,6 @@ describe("withUiConfigDefaults", () => {
     expect(ui.mobileCustomKeyboardEnabled).toBe(false);
     expect(ui.mobileCustomKeyboardFontSize).toBe(14);
     expect(ui.mobileCustomKeyboardPadding).toBe(9);
+    expect(ui.mobileCustomKeyboardRowGap).toBe(7);
   });
 });
