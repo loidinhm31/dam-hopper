@@ -340,6 +340,9 @@ fn default_mobile_custom_keyboard_font_size() -> u16 {
 fn default_mobile_custom_keyboard_padding() -> u16 {
     6
 }
+fn default_mobile_custom_keyboard_row_gap() -> u16 {
+    4
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -390,6 +393,12 @@ pub struct UiConfig {
         alias = "mobileCustomKeyboardPadding"
     )]
     pub mobile_custom_keyboard_padding: u16,
+    #[serde(
+        default = "default_mobile_custom_keyboard_row_gap",
+        alias = "mobile_custom_keyboard_row_gap",
+        alias = "mobileCustomKeyboardRowGap"
+    )]
+    pub mobile_custom_keyboard_row_gap: u16,
     #[serde(default, alias = "terminal_order")]
     pub terminal_order: Vec<String>,
     #[serde(default, alias = "project_order")]
@@ -400,6 +409,14 @@ pub struct UiConfig {
     pub runtime_group_order: Vec<String>,
     #[serde(default, alias = "runtime_item_order")]
     pub runtime_item_order: std::collections::HashMap<String, Vec<String>>,
+    #[serde(default, alias = "terminal_scroll_buttons_enabled", alias = "terminalScrollButtonsEnabled")]
+    pub terminal_scroll_buttons_enabled: bool,
+    #[serde(default = "default_terminal_scroll_step", alias = "terminal_scroll_step", alias = "terminalScrollStep")]
+    pub terminal_scroll_step: u16,
+}
+
+fn default_terminal_scroll_step() -> u16 {
+    3
 }
 
 fn default_true() -> bool {
@@ -420,11 +437,14 @@ impl Default for UiConfig {
             mobile_custom_keyboard_enabled: true,
             mobile_custom_keyboard_font_size: default_mobile_custom_keyboard_font_size(),
             mobile_custom_keyboard_padding: default_mobile_custom_keyboard_padding(),
+            mobile_custom_keyboard_row_gap: default_mobile_custom_keyboard_row_gap(),
             terminal_order: vec![],
             project_order: vec![],
             project_command_order: std::collections::HashMap::new(),
             runtime_group_order: vec![],
             runtime_item_order: std::collections::HashMap::new(),
+            terminal_scroll_buttons_enabled: false,
+            terminal_scroll_step: default_terminal_scroll_step(),
         }
     }
 }
@@ -438,7 +458,8 @@ impl UiConfig {
 
     pub fn validate_mobile_keyboard_sizes(&self) -> Result<(), String> {
         Self::validate_mobile_keyboard_font_size(self.mobile_custom_keyboard_font_size)?;
-        Self::validate_mobile_keyboard_padding(self.mobile_custom_keyboard_padding)
+        Self::validate_mobile_keyboard_padding(self.mobile_custom_keyboard_padding)?;
+        Self::validate_mobile_keyboard_row_gap(self.mobile_custom_keyboard_row_gap)
     }
 
     pub fn validate_font_size(size: u16) -> Result<(), String> {
@@ -461,6 +482,15 @@ impl UiConfig {
         if !(2..=14).contains(&size) {
             return Err(format!(
                 "Mobile keyboard padding {size} out of range [2, 14]"
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate_mobile_keyboard_row_gap(size: u16) -> Result<(), String> {
+        if !(2..=12).contains(&size) {
+            return Err(format!(
+                "Mobile keyboard row gap {size} out of range [2, 12]"
             ));
         }
         Ok(())

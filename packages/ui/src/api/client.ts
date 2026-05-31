@@ -297,10 +297,13 @@ export interface UiConfig {
   searchFilenameShortcut: string;
   terminalWorkspaceShortcut: string;
   terminalSuggestionsEnabled?: boolean;
+  terminalScrollButtonsEnabled?: boolean;
+  terminalScrollStep?: number;
   explorerShowHidden?: boolean;
   mobileCustomKeyboardEnabled?: boolean;
   mobileCustomKeyboardFontSize?: number;
   mobileCustomKeyboardPadding?: number;
+  mobileCustomKeyboardRowGap?: number;
   terminalOrder?: string[];
   projectOrder?: string[];
   projectCommandOrder?: Record<string, string[]>;

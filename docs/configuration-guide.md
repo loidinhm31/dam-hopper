@@ -132,12 +132,14 @@ The global UI config includes the terminal workspace shortcut used by `Workspace
 | Field                     | Type   | Default                    | Notes |
 | ------------------------- | ------ | -------------------------- | ----- |
 | terminalWorkspaceShortcut  | string | `Mod+Shift+Backquote`      | Global IDE/Terminal mode toggle shortcut |
+| terminalScrollButtonsEnabled | bool   | `false`                    | Show floating Page Up/Down buttons in terminal |
 
 Example:
 
 ```toml
 [ui]
 terminalWorkspaceShortcut = "Mod+Shift+Backquote"
+terminalScrollButtonsEnabled = false
 ```
 
 The shortcut is normalized by the client config layer, and terminal panels treat it as a non-text global shortcut.

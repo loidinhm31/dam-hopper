@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef } from "react";
 import { Terminal as TerminalIcon } from "lucide-react";
 import { MobileTerminalAccessoryBar } from "@/components/organisms/MobileTerminalAccessoryBar.js";
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
+import { TerminalScrollButtons } from "@/components/organisms/TerminalScrollButtons.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
+import { cn } from "@/lib/utils.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import {
   subscribeToRegistry,
@@ -32,9 +34,8 @@ export function TerminalRuntimeOutput({
   const fitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isCompactWorkspace = useCompactWorkspace();
   const isCoarsePointer = useCoarsePointer();
-  const mobileCustomKeyboardEnabled = useSettingsStore(
-    (state) => state.mobileCustomKeyboardEnabled,
-  );
+  const { mobileCustomKeyboardEnabled, terminalScrollButtonsEnabled } =
+    useSettingsStore();
   const showMobileAccessoryBar =
     isCompactWorkspace && isCoarsePointer && !!activeSessionId;
   const suppressTerminalFocus =
@@ -165,6 +166,12 @@ export function TerminalRuntimeOutput({
             <TerminalIcon className="h-10 w-10 opacity-20" />
             <p className="text-sm">Select a terminal to view output</p>
           </div>
+        )}
+        {activeSessionId && terminalScrollButtonsEnabled && (
+          <TerminalScrollButtons
+            sessionId={activeSessionId}
+            className={cn(showMobileAccessoryBar && "bottom-2")}
+          />
         )}
       </div>
 

@@ -11,10 +11,13 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   editorFontSize: 14,
   editorZoomWheelEnabled: true,
   terminalSuggestionsEnabled: true,
+  terminalScrollButtonsEnabled: false,
+  terminalScrollStep: 3,
   explorerShowHidden: false,
   mobileCustomKeyboardEnabled: true,
   mobileCustomKeyboardFontSize: 11,
   mobileCustomKeyboardPadding: 6,
+  mobileCustomKeyboardRowGap: 4,
   terminalOrder: [],
   projectOrder: [],
   projectCommandOrder: {},
@@ -36,6 +39,8 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
     runtimeGroupOrder:
       ui?.runtimeGroupOrder ?? DEFAULT_UI_CONFIG.runtimeGroupOrder,
     runtimeItemOrder: ui?.runtimeItemOrder ?? DEFAULT_UI_CONFIG.runtimeItemOrder,
+    terminalScrollStep:
+      ui?.terminalScrollStep ?? DEFAULT_UI_CONFIG.terminalScrollStep,
     mobileCustomKeyboardEnabled:
       ui?.mobileCustomKeyboardEnabled ??
       DEFAULT_UI_CONFIG.mobileCustomKeyboardEnabled,
@@ -45,6 +50,9 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
     mobileCustomKeyboardPadding:
       ui?.mobileCustomKeyboardPadding ??
       DEFAULT_UI_CONFIG.mobileCustomKeyboardPadding,
+    mobileCustomKeyboardRowGap:
+      ui?.mobileCustomKeyboardRowGap ??
+      DEFAULT_UI_CONFIG.mobileCustomKeyboardRowGap,
     searchTextShortcut: formatShortcut(
       ui?.searchTextShortcut ?? DEFAULT_UI_CONFIG.searchTextShortcut,
     ),
