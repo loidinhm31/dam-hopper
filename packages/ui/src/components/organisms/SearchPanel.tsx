@@ -8,6 +8,17 @@ import type { PathSearchMatch, SearchMatch } from "@/api/fs-types.js";
 
 type SearchResultItem = SearchMatch | PathSearchMatch;
 
+function isContentSearchMatch(match: SearchResultItem): match is SearchMatch {
+  return (
+    typeof (match as SearchMatch).text === "string" &&
+    typeof (match as SearchMatch).line === "number"
+  );
+}
+
+function isPathSearchMatch(match: SearchResultItem): match is PathSearchMatch {
+  return typeof match.path === "string" && !isContentSearchMatch(match);
+}
+
 interface SearchPanelProps {
   project: string;
   onResultClick: (match: SearchResultItem) => void;
@@ -50,6 +61,20 @@ export function SearchPanel({
   const { caseSensitive, setCaseSensitive, data, isLoading, isError } =
     useFileSearch(project, scope, mode, query);
 
+  const contentMatches = useMemo(
+    () =>
+      mode === "content"
+        ? (data?.matches ?? []).filter(isContentSearchMatch)
+        : [],
+    [data?.matches, mode],
+  );
+
+  const pathMatches = useMemo(
+    () =>
+      mode === "filename" ? (data?.matches ?? []).filter(isPathSearchMatch) : [],
+    [data?.matches, mode],
+  );
+
   // Reopening search selects the saved keyword so typing replaces it.
   useEffect(() => {
     if (consumeOpenSelection && consumeSelectOnOpen()) {
@@ -61,21 +86,22 @@ export function SearchPanel({
 
   // Group matches by file path
   const grouped = useMemo(() => {
-    if (mode !== "content" || !data?.matches.length) return [];
+    if (contentMatches.length === 0) return [];
     const map = new Map<string, SearchMatch[]>();
-    for (const m of data.matches as SearchMatch[]) {
+    for (const m of contentMatches) {
       const arr = map.get(m.path) ?? [];
       arr.push(m);
       map.set(m.path, arr);
     }
     return Array.from(map.entries());
-  }, [data?.matches, mode]);
+  }, [contentMatches]);
 
-  const totalMatches = data?.matches.length ?? 0;
+  const totalMatches =
+    mode === "content" ? contentMatches.length : pathMatches.length;
   const fileCount =
     mode === "content"
       ? grouped.length
-      : new Set((data?.matches ?? []).map((m) => m.path)).size;
+      : new Set(pathMatches.map((match) => match.path)).size;
 
   function highlightMatch(text: string, q: string, isCaseSensitive: boolean) {
     if (!q) return <span>{text}</span>;
@@ -229,9 +255,9 @@ export function SearchPanel({
 
       {/* Results */}
       <div className="flex-1 overflow-auto min-h-0">
-        {mode === "filename" && data?.matches.length ? (
+        {mode === "filename" && pathMatches.length ? (
           <div>
-            {(data.matches as PathSearchMatch[]).map((match) => {
+            {pathMatches.map((match) => {
               const key = `${match.project ?? ""}:${match.path}`;
               return (
                 <button

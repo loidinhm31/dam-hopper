@@ -38,7 +38,23 @@ export const useSearchUiStore = create<SearchUiState>((set, get) => ({
           ? state.queries
           : { ...state.queries, [mode]: query },
     })),
-  setMode: (mode) => set({ mode, selectOnOpen: true }),
+  setMode: (mode) =>
+    set((state) => {
+      if (state.mode === mode) {
+        return { selectOnOpen: true };
+      }
+
+      const nextQuery =
+        state.queries[mode].length > 0
+          ? state.queries[mode]
+          : state.queries[state.mode];
+
+      return {
+        mode,
+        selectOnOpen: true,
+        queries: { ...state.queries, [mode]: nextQuery },
+      };
+    }),
   setQuery: (mode, query) =>
     set((state) => ({ queries: { ...state.queries, [mode]: query } })),
   setScope: (scope) => set({ scope }),
