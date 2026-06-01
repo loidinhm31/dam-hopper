@@ -49,4 +49,29 @@ describe("search-ui store", () => {
     expect(state.queries.content).toBe("selected");
     expect(state.selectOnOpen).toBe(true);
   });
+
+  it("reuses the active query when switching to a mode with no query yet", () => {
+    const store = useSearchUiStore.getState();
+    store.setQuery("filename", "EventValidator");
+    store.setMode("filename");
+    store.setMode("content");
+
+    expect(useSearchUiStore.getState().queries).toEqual({
+      content: "EventValidator",
+      filename: "EventValidator",
+    });
+  });
+
+  it("preserves an existing query when switching modes", () => {
+    const store = useSearchUiStore.getState();
+    store.setQuery("filename", "EventValidator");
+    store.setQuery("content", "validator.ts");
+    store.setMode("filename");
+    store.setMode("content");
+
+    expect(useSearchUiStore.getState().queries).toEqual({
+      content: "validator.ts",
+      filename: "EventValidator",
+    });
+  });
 });
