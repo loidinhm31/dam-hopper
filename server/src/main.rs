@@ -134,11 +134,11 @@ async fn main() -> anyhow::Result<()> {
         PathBuf::from(&config.server.session_db_path)
     };
 
-    let (persist_tx, session_store) = {
+    let (persist_tx, session_store, persist_worker_handle) = {
         let parent = db_path.parent().unwrap_or(&db_path);
         if let Err(e) = std::fs::create_dir_all(parent) {
             tracing::warn!(error = %e, path = %parent.display(), "Failed to create session DB directory");
-            (None, None)
+            (None, None, None)
         } else {
             match dam_hopper_server::persistence::SessionStore::open(&db_path) {
                 Ok(store) => {
@@ -147,15 +147,15 @@ async fn main() -> anyhow::Result<()> {
                     let (tx, rx) = std::sync::mpsc::sync_channel(256);
                     let worker =
                         dam_hopper_server::persistence::PersistWorker::new(rx, store_arc.clone());
-                    std::thread::Builder::new()
+                    let handle = std::thread::Builder::new()
                         .name("persist-worker".to_string())
                         .spawn(move || worker.run())
                         .expect("Failed to spawn persist worker thread");
-                    (Some(tx), Some(store_arc))
+                    (Some(tx), Some(store_arc), Some(handle))
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, path = %db_path.display(), "Failed to open session DB");
-                    (None, None)
+                    (None, None, None)
                 }
             }
         }
@@ -168,11 +168,41 @@ async fn main() -> anyhow::Result<()> {
     );
     pty_manager.spawn_cleanup_task();
 
+    let tunnel_driver = std::sync::Arc::new(CloudflaredDriver);
+    let tunnel_manager =
+        TunnelSessionManager::new(std::sync::Arc::new(event_sink.clone()), tunnel_driver);
+
+    // ── Port forward manager ──────────────────────────────────────────────────
+    let port_forward_manager = std::sync::Arc::new(
+        PortForwardManager::new(std::sync::Arc::new(event_sink.clone()))
+            .with_tunnel_manager(tunnel_manager.clone())
+            .with_session_store(session_store.clone()),
+    );
+
+    // Wire port_forward_manager into pty_manager before restore so relaunched
+    // sessions scan stdout immediately.
+    {
+        let mut cell = pty_manager.port_forward_manager.write().unwrap();
+        *cell = Some(std::sync::Arc::clone(&port_forward_manager));
+    }
+
     // ── Restore sessions from persistence (Phase 06) ──────────────────────────
     if let Some(store) = &session_store {
         match dam_hopper_server::persistence::restore_sessions(store, &pty_manager, &config).await {
             Ok(count) => {
                 tracing::info!(count, "Restored sessions from persistence");
+                let live_session_ids = pty_manager
+                    .list()
+                    .into_iter()
+                    .filter(|session| session.alive)
+                    .map(|session| session.id)
+                    .collect::<Vec<_>>();
+                let seeded = port_forward_manager
+                    .seed_persisted_candidates(&live_session_ids)
+                    .await;
+                if seeded > 0 {
+                    tracing::info!(seeded, "Seeded persisted port candidates");
+                }
             }
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to restore sessions from persistence");
@@ -225,22 +255,6 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    let tunnel_driver = std::sync::Arc::new(CloudflaredDriver);
-    let tunnel_manager =
-        TunnelSessionManager::new(std::sync::Arc::new(event_sink.clone()), tunnel_driver);
-
-    // ── Port forward manager ──────────────────────────────────────────────────
-    let port_forward_manager = std::sync::Arc::new(
-        PortForwardManager::new(std::sync::Arc::new(event_sink.clone()))
-            .with_tunnel_manager(tunnel_manager.clone()),
-    );
-
-    // Wire port_forward_manager into pty_manager so reader threads can scan stdout.
-    {
-        let mut cell = pty_manager.port_forward_manager.write().unwrap();
-        *cell = Some(std::sync::Arc::clone(&port_forward_manager));
-    }
-
     // Load (or generate) OPAQUE server keypair — persisted to ~/.config/dam-hopper/opaque-server-setup
     let opaque_server_setup =
         load_or_create_server_setup().expect("Failed to load or create OPAQUE server setup");
@@ -250,7 +264,7 @@ async fn main() -> anyhow::Result<()> {
         workspace_dir.clone(),
         config,
         global_config,
-        pty_manager,
+        pty_manager.clone(),
         agent_store,
         event_sink,
         token,
@@ -301,9 +315,15 @@ async fn main() -> anyhow::Result<()> {
     // Reap all tunnel children before exit — no orphaned cloudflared processes.
     tunnel_manager_shutdown.dispose_all().await;
 
-    // Graceful shutdown: drop persist_tx to signal worker thread, then wait for clean exit
-    // When persist_tx is dropped here, worker detects channel disconnect and flushes all pending buffers
+    // Graceful shutdown: snapshot live PTY buffers, ask the worker to flush, then wait.
+    pty_manager.snapshot_live_buffers();
+    if let Some(tx) = &persist_tx {
+        let _ = tx.send(dam_hopper_server::persistence::PersistCmd::Shutdown);
+    }
     drop(persist_tx);
+    if let Some(handle) = persist_worker_handle {
+        let _ = handle.join();
+    }
     tracing::info!("Server shutdown complete");
 
     Ok(())

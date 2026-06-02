@@ -53,7 +53,12 @@ export interface Transport {
   /** Terminal buffer subscription (response to terminal:attach). Returns unsubscribe fn. */
   onTerminalBuffer?(
     id: string,
-    cb: (buffer: { data: string; offset: number }) => void,
+    cb: (buffer: {
+      data: string;
+      offset: number;
+      reset: boolean;
+      truncated: boolean;
+    }) => void,
   ): () => void;
 
   /** Connection status subscription. Returns unsubscribe fn. */

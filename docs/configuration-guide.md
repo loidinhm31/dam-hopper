@@ -146,11 +146,10 @@ The shortcut is normalized by the client config layer, and terminal panels treat
 
 ### Server Configuration
 
-Optional: configure session persistence and TTL settings for server restart recovery.
+Optional: configure SQLite path and retention for terminal restart recovery. Session persistence is always enabled when the database can be opened.
 
 ```toml
 [server]
-session_persistence = false  # Enable SQLite session persistence (default: false)
 session_db_path = "~/.config/dam-hopper/sessions.db"  # Database file location
 session_buffer_ttl_hours = 24  # TTL for dead session buffers in hours (default: 24)
 ```
@@ -159,7 +158,6 @@ session_buffer_ttl_hours = 24  # TTL for dead session buffers in hours (default:
 
 | Field                    | Type   | Default                          | Notes                                                                                  |
 | ------------------------ | ------ | -------------------------------- | -------------------------------------------------------------------------------------- |
-| session_persistence      | bool   | false                            | Enable to persist session metadata + scrollback buffers across server restarts         |
 | session_db_path          | string | ~/.config/dam-hopper/sessions.db | SQLite database path (supports ~ expansion); must be on local filesystem               |
 | session_buffer_ttl_hours | u64    | 24                               | Hours before dead session buffers are auto-deleted; prevents unbounded database growth |
 
@@ -169,16 +167,17 @@ session_buffer_ttl_hours = 24  # TTL for dead session buffers in hours (default:
 
 ```toml
 [server]
-session_persistence = true
 session_db_path = "~/.local/share/dam-hopper/sessions.db"
 session_buffer_ttl_hours = 48
 ```
 
-When enabled:
+When the database opens successfully:
 
 - Session metadata (id, project, command, cwd, restart_policy, etc.) is saved to SQLite
-- Session scrollback buffers (PTY output) are persisted with the session
-- On server restart, sessions can be restored from the database
+- Up to 1 MB of terminal scrollback is retained per session
+- Any browser connected to the same server can resume live sessions
+- On DamHopper server restart, sessions that were alive are relaunched and restored scrollback is replayed
+- Exact shell/process memory continuity is not guaranteed across server or host restart
 - Dead sessions are kept for 60 seconds to allow reconnection; buffers are cleaned up per TTL
 
 ## Global Configuration (~/.config/dam-hopper/config.toml)

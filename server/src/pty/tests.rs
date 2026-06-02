@@ -16,6 +16,7 @@ mod pty_tests {
     use std::sync::OnceLock;
 
     use crate::config::schema::{RestartPolicy, DEFAULT_RESTART_MAX_RETRIES};
+    use crate::persistence::{PersistCmd, PersistWorker, SessionStore};
     use crate::pty::{
         event_sink::{EventSink, NoopEventSink},
         manager::{build_child_env_from_parent_snapshot, PtyCreateOpts, PtySessionManager},
@@ -829,11 +830,13 @@ mod pty_tests {
         assert!(ok, "buffer should contain 'hello' within 2s");
 
         // Get full buffer (no offset).
-        let (data, offset) = mgr
+        let replay = mgr
             .get_buffer_with_offset("shell:offset-test1", None)
             .unwrap();
-        assert!(data.contains("hello"), "data should contain 'hello'");
-        assert!(offset > 0, "offset should be > 0 after writing data");
+        assert!(replay.data.contains("hello"), "data should contain 'hello'");
+        assert!(replay.offset > 0, "offset should be > 0 after writing data");
+        assert!(replay.reset);
+        assert!(!replay.truncated);
 
         mgr.remove("shell:offset-test1").unwrap();
     }
@@ -859,10 +862,15 @@ mod pty_tests {
         assert!(ok1, "buffer should contain 'first'");
 
         // Get current offset.
-        let (data1, offset1) = mgr
+        let replay1 = mgr
             .get_buffer_with_offset("shell:offset-test2", None)
             .unwrap();
-        assert!(data1.contains("first"), "first read should contain 'first'");
+        assert!(
+            replay1.data.contains("first"),
+            "first read should contain 'first'"
+        );
+        assert!(replay1.reset);
+        let offset1 = replay1.offset;
 
         // Wait for the second chunk to be emitted after the captured offset.
         let ok2 = wait_for(Duration::from_secs(2), || {
@@ -873,15 +881,18 @@ mod pty_tests {
         assert!(ok2, "buffer should contain 'second'");
 
         // Get delta (from previous offset).
-        let (data2, offset2) = mgr
+        let replay2 = mgr
             .get_buffer_with_offset("shell:offset-test2", Some(offset1))
             .unwrap();
+        let data2 = replay2.data;
         assert!(data2.contains("second"), "delta should contain 'second'");
         assert!(
             !data2.contains("first"),
             "delta should NOT contain 'first' (already seen)"
         );
-        assert!(offset2 > offset1, "offset should have advanced");
+        assert!(replay2.offset > offset1, "offset should have advanced");
+        assert!(!replay2.reset);
+        assert!(!replay2.truncated);
 
         mgr.remove("shell:offset-test2").unwrap();
     }
@@ -925,5 +936,82 @@ mod pty_tests {
             result.is_err(),
             "should return error for nonexistent session"
         );
+    }
+
+    #[test]
+    fn short_output_is_persisted_on_session_exit() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let store = Arc::new(SessionStore::open(temp.path()).unwrap());
+        let (tx, rx) = std::sync::mpsc::sync_channel(256);
+        let worker = PersistWorker::new(rx, store.clone());
+        let handle = std::thread::spawn(move || worker.run());
+
+        let mgr = test_rt().block_on(async {
+            PtySessionManager::with_persist(
+                Arc::new(NoopEventSink),
+                Some(tx.clone()),
+                Some(store.clone()),
+            )
+        });
+        mgr.create(opts("shell:short-persist", "printf short-output"))
+            .unwrap();
+
+        let exited = wait_for(Duration::from_secs(3), || {
+            mgr.list()
+                .iter()
+                .any(|session| session.id == "shell:short-persist" && !session.alive)
+        });
+        assert!(exited, "short-output session should exit");
+
+        tx.send(PersistCmd::Shutdown).unwrap();
+        handle.join().unwrap();
+
+        let (data, total_written) = store
+            .load_buffer("shell:short-persist")
+            .unwrap()
+            .expect("short-output buffer should be persisted");
+        let text = String::from_utf8_lossy(&data);
+        assert!(text.contains("short-output"), "persisted text: {text:?}");
+        assert!(total_written >= "short-output".len() as u64);
+    }
+
+    #[test]
+    fn live_buffers_are_snapshotted_before_shutdown() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let store = Arc::new(SessionStore::open(temp.path()).unwrap());
+        let (tx, rx) = std::sync::mpsc::sync_channel(256);
+        let worker = PersistWorker::new(rx, store.clone());
+        let handle = std::thread::spawn(move || worker.run());
+
+        let mgr = test_rt().block_on(async {
+            PtySessionManager::with_persist(
+                Arc::new(NoopEventSink),
+                Some(tx.clone()),
+                Some(store.clone()),
+            )
+        });
+        mgr.create(opts("shell:shutdown-snapshot", "cat")).unwrap();
+        mgr.write("shell:shutdown-snapshot", b"shutdown-output\n")
+            .unwrap();
+
+        let buffered = wait_for(Duration::from_secs(2), || {
+            mgr.get_buffer("shell:shutdown-snapshot")
+                .map(|buffer| buffer.contains("shutdown-output"))
+                .unwrap_or(false)
+        });
+        assert!(buffered, "live buffer should receive test output");
+
+        mgr.snapshot_live_buffers();
+        tx.send(PersistCmd::Shutdown).unwrap();
+        handle.join().unwrap();
+
+        let (data, _) = store
+            .load_buffer("shell:shutdown-snapshot")
+            .unwrap()
+            .expect("shutdown snapshot should persist buffer");
+        let text = String::from_utf8_lossy(&data);
+        assert!(text.contains("shutdown-output"), "persisted text: {text:?}");
+
+        mgr.remove("shell:shutdown-snapshot").unwrap();
     }
 }

@@ -121,6 +121,9 @@ pub async fn remove_session(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     state.pty_manager.remove(&id).map_err(ApiError::from_app)?;
+    if let Some(pfm) = &state.port_forward_manager {
+        pfm.remove_session_ports(&id).await;
+    }
     Ok((StatusCode::NO_CONTENT, ()))
 }
 

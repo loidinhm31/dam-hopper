@@ -409,9 +409,17 @@ pub struct UiConfig {
     pub runtime_group_order: Vec<String>,
     #[serde(default, alias = "runtime_item_order")]
     pub runtime_item_order: std::collections::HashMap<String, Vec<String>>,
-    #[serde(default, alias = "terminal_scroll_buttons_enabled", alias = "terminalScrollButtonsEnabled")]
+    #[serde(
+        default,
+        alias = "terminal_scroll_buttons_enabled",
+        alias = "terminalScrollButtonsEnabled"
+    )]
     pub terminal_scroll_buttons_enabled: bool,
-    #[serde(default = "default_terminal_scroll_step", alias = "terminal_scroll_step", alias = "terminalScrollStep")]
+    #[serde(
+        default = "default_terminal_scroll_step",
+        alias = "terminal_scroll_step",
+        alias = "terminalScrollStep"
+    )]
     pub terminal_scroll_step: u16,
 }
 

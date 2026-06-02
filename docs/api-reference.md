@@ -80,24 +80,23 @@ Response: `{ "ok": true }`
 
 ## Session Persistence API (Phase 05)
 
-Terminal session buffers and metadata can be persisted to SQLite for durable recovery across server restarts. Requires `session_persistence = true` in `dam-hopper.toml`.
+Terminal session buffers and metadata are persisted to SQLite when the configured database can be opened. This supports live cross-device resume and DamHopper server-restart relaunch with recovered scrollback; it does not preserve exact shell/process memory across server or host restart.
 
 ### Configuration
 
 ```toml
 [server]
-session_persistence = true                          # Enable persistence
-persistence_db_path = "~/.config/dam-hopper/sessions.db"  # Database path (supports ~)
+session_db_path = "~/.config/dam-hopper/sessions.db"       # Database path (supports ~)
 session_buffer_ttl_hours = 720                       # 30-day retention (default)
 ```
 
 ### How Persistence Works
 
 1. **Automatic**: When session is created, it's recorded to SQLite along with environment
-2. **Batched**: Buffer snapshots sent every 16KB (throttled, non-blocking)
-3. **Non-blocking**: Uses `try_send()` on bounded channel — PTY reader never waits
-4. **Flushed**: Every 5 seconds OR on session exit (immediate)
-5. **Recoverable**: On server restart, clients can reconnect to recreate original buffer
+2. **Batched**: Buffer snapshots sent every 16KB during output (throttled)
+3. **Final snapshots**: Session exit and graceful server shutdown persist the latest buffer, including output under 16KB
+4. **Recoverable**: Up to 1 MB of retained scrollback is replayed on attach
+5. **Relaunched**: Sessions alive before DamHopper server shutdown are relaunched on restart
 
 ### Affected Endpoints
 
@@ -1087,14 +1086,16 @@ Protocol: JSON frames. Client sends commands via `{kind:}` envelope, server broa
 
 - `{ kind: "terminal:spawn", project, profile, env_overrides? }` → server responds with `{ kind: "terminal:spawned", id, ... }`
 - `{ kind: "terminal:write", id, data }` — send input
-- `{ kind: "terminal:attach", id, from_offset? }` — request buffer replay (Phase 02+); server responds with `{ kind: "terminal:buffer", id, data, offset }`
+- `{ kind: "terminal:attach", id, from_offset? }` — request buffer replay (Phase 02+); server responds with `{ kind: "terminal:buffer", id, data, offset, reset, truncated }`
   - `from_offset` (optional) — client's last received byte offset for delta sync
-  - Server sends full buffer if `from_offset` omitted or too old (evicted)
+  - Server sends full buffer with `reset=true` if `from_offset` is omitted
+  - Server sends full buffer with `reset=true` and `truncated=true` if `from_offset` is too old (evicted)
+  - Server sends a delta with `reset=false` when the requested offset is retained
   - Server sends empty `data` if `from_offset` equals current offset (no new content)
   - Error case: session not found → no response; client should timeout and create new session
 - `{ kind: "terminal:kill", id }` — terminate session
 - `{ kind: "terminal:output", id, chunk }` — server pushes PTY output
-- `{ kind: "terminal:buffer", id, data, offset }` — server response to `terminal:attach` with buffer content + current offset (Phase 02+)
+- `{ kind: "terminal:buffer", id, data, offset, reset, truncated }` — server response to `terminal:attach` with buffer content, current offset, and replay instructions
 - `{ kind: "terminal:exited", id, code }` — session ended
 
 **File Tree Subscription (Phase 03):**

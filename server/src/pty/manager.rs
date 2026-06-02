@@ -46,6 +46,14 @@ const SAFE_BASELINE_ENV_VARS: &[&str] = &[
     "COLORTERM",
 ];
 
+#[derive(Debug)]
+pub struct TerminalBufferReplay {
+    pub data: String,
+    pub offset: u64,
+    pub reset: bool,
+    pub truncated: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Restart engine types
 // ---------------------------------------------------------------------------
@@ -238,12 +246,15 @@ impl PtySessionManager {
 
         let child_killer = child.clone_killer();
         let respawn_opts = opts.clone_for_respawn();
+        let RespawnOpts {
+            env: persisted_env, ..
+        } = respawn_opts.clone();
         let project_name = opts.project.clone();
         let meta = SessionMeta::new(
             opts.id.clone(),
-            opts.project,
-            opts.command,
-            opts.cwd,
+            opts.project.clone(),
+            opts.command.clone(),
+            opts.cwd.clone(),
             opts.restart_policy,
         );
 
@@ -272,6 +283,20 @@ impl PtySessionManager {
             // This ensures create() is fully idempotent across race conditions.
             inner.killed.remove(&opts.id);
             inner.live.insert(opts.id.clone(), session);
+        }
+
+        // Persist metadata before the reader starts so fast commands cannot
+        // flush output before the SQLite session row exists.
+        if let Some(tx) = &self.persist_tx {
+            if let Err(e) = tx.send(crate::persistence::PersistCmd::SessionCreated {
+                meta: meta.clone(),
+                env: persisted_env,
+                cols: opts.cols,
+                rows: opts.rows,
+                restart_max_retries: opts.restart_max_retries,
+            }) {
+                warn!("Failed to persist SessionCreated: {}", e);
+            }
         }
 
         // Spawn dedicated reader thread — portable-pty reads are blocking.
@@ -304,19 +329,6 @@ impl PtySessionManager {
                 );
             })
             .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
-
-        // Send SessionCreated to persist worker (if enabled)
-        if let Some(tx) = &self.persist_tx {
-            if let Err(e) = tx.try_send(crate::persistence::PersistCmd::SessionCreated {
-                meta: meta.clone(),
-                env: opts.env.clone(),
-                cols: opts.cols,
-                rows: opts.rows,
-                restart_max_retries: opts.restart_max_retries,
-            }) {
-                warn!("Persist queue full, dropping SessionCreated: {}", e);
-            }
-        }
 
         self.sink.send_terminal_changed();
         info!(id = %opts.id, "PTY session created");
@@ -367,14 +379,19 @@ impl PtySessionManager {
         &self,
         id: &str,
         from_offset: Option<u64>,
-    ) -> Result<(String, u64), AppError> {
+    ) -> Result<TerminalBufferReplay, AppError> {
         let inner = self.inner.lock().unwrap();
 
         // Try in-memory first (live sessions)
         if let Some(session) = inner.live.get(id) {
             let buf = session.buffer.lock().unwrap();
-            let (data, offset) = buf.read_from(from_offset);
-            return Ok((String::from_utf8_lossy(data).into_owned(), offset));
+            let replay = buf.read_replay(from_offset);
+            return Ok(TerminalBufferReplay {
+                data: String::from_utf8_lossy(replay.data).into_owned(),
+                offset: replay.offset,
+                reset: replay.reset,
+                truncated: replay.truncated,
+            });
         }
 
         // Release lock before slow I/O
@@ -386,7 +403,22 @@ impl PtySessionManager {
                 .load_buffer(id)
                 .map_err(|e| AppError::PersistenceError(e.to_string()))?
             {
-                return Ok((String::from_utf8_lossy(&data).into_owned(), total_written));
+                let buffer_start_offset = total_written.saturating_sub(data.len() as u64);
+                let (slice, reset, truncated) = match from_offset {
+                    None => (&data[..], true, false),
+                    Some(offset) if offset < buffer_start_offset => (&data[..], true, true),
+                    Some(offset) if offset > total_written => (&data[..], true, false),
+                    Some(offset) => {
+                        let skip = (offset - buffer_start_offset) as usize;
+                        (&data[skip.min(data.len())..], false, false)
+                    }
+                };
+                return Ok(TerminalBufferReplay {
+                    data: String::from_utf8_lossy(slice).into_owned(),
+                    offset: total_written,
+                    reset,
+                    truncated,
+                });
             }
         }
 
@@ -411,7 +443,11 @@ impl PtySessionManager {
             .live
             .get(id)
             .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
-        session.buffer.lock().unwrap().hydrate(data, total_written);
+        session
+            .buffer
+            .lock()
+            .unwrap()
+            .hydrate_prefix(data, total_written);
         Ok(())
     }
 
@@ -471,6 +507,38 @@ impl PtySessionManager {
         }
         inner.live.clear();
         inner.dead.clear();
+    }
+
+    /// Persist full snapshots for all live sessions before graceful shutdown.
+    pub fn snapshot_live_buffers(&self) {
+        let snapshots = {
+            let inner = self.inner.lock().unwrap();
+            inner
+                .live
+                .iter()
+                .map(|(id, session)| {
+                    let (data, total_written) = session.buffer.lock().unwrap().snapshot();
+                    (id.clone(), data, total_written)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        if snapshots.is_empty() {
+            return;
+        }
+
+        if let Some(tx) = &self.persist_tx {
+            for (session_id, data, total_written) in snapshots {
+                if let Err(e) = tx.send(crate::persistence::PersistCmd::BufferUpdate {
+                    session_id: session_id.clone(),
+                    data,
+                    total_written,
+                }) {
+                    warn!(session_id, "Failed to persist shutdown snapshot: {}", e);
+                    break;
+                }
+            }
+        }
     }
 
     /// Spawn a tokio task that sweeps expired dead-session tombstones every 30s.
@@ -575,7 +643,7 @@ fn reader_thread(
                     bytes_since_snapshot += n;
 
                     // Send buffer update to persist worker (if enabled)
-                    // Throttle: only snapshot every 16KB to reduce memory churn from 256KB copies
+                    // Throttle: only snapshot every 16KB to reduce memory churn from 1MB copies
                     if bytes_since_snapshot >= SNAPSHOT_THRESHOLD {
                         if let Some(tx) = &persist_tx {
                             let (snapshot_data, total_written) = buf.snapshot();
@@ -623,9 +691,18 @@ fn reader_thread(
     let exit_code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(0);
     info!(id = %session_id, exit_code, "PTY session exited");
 
-    // Send SessionExited to persist worker for immediate flush (if enabled)
+    // Send a final full snapshot before SessionExited so short-output sessions
+    // (<16KB) survive server restart.
     if let Some(tx) = &persist_tx {
-        if let Err(e) = tx.try_send(crate::persistence::PersistCmd::SessionExited {
+        let (data, total_written) = buffer.lock().unwrap().snapshot();
+        if let Err(e) = tx.send(crate::persistence::PersistCmd::BufferUpdate {
+            session_id: session_id.clone(),
+            data,
+            total_written,
+        }) {
+            warn!(session_id = %session_id, "Failed to send final buffer snapshot: {}", e);
+        }
+        if let Err(e) = tx.send(crate::persistence::PersistCmd::SessionExited {
             session_id: session_id.clone(),
         }) {
             warn!(session_id = %session_id, "Persist queue full, dropping SessionExited: {}", e);
@@ -875,17 +952,14 @@ async fn respawn_internal(
     // when the previous run exited; without this, restore after a server restart
     // would skip the re-spawned session.
     if let Some(tx) = &persist_tx {
-        if let Err(e) = tx.try_send(crate::persistence::PersistCmd::SessionCreated {
+        if let Err(e) = tx.send(crate::persistence::PersistCmd::SessionCreated {
             meta: meta.clone(),
             env: opts.env.clone(),
             cols: opts.cols,
             rows: opts.rows,
             restart_max_retries: opts.restart_max_retries,
         }) {
-            warn!(
-                "Persist queue full, dropping SessionCreated (respawn): {}",
-                e
-            );
+            warn!("Failed to persist SessionCreated (respawn): {}", e);
         }
     }
 

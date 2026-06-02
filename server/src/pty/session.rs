@@ -20,7 +20,7 @@ use tracing::warn;
 use crate::config::schema::RestartPolicy;
 use crate::pty::buffer::ScrollbackBuffer;
 
-pub const SCROLLBACK_CAPACITY: usize = 256 * 1024;
+pub const SCROLLBACK_CAPACITY: usize = 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Session type

@@ -15,6 +15,10 @@ import { activateTerminalWebglRenderer } from "@/lib/terminal-renderer.js";
 import { recordCommand } from "@/lib/command-history.js";
 import { handleSharedTerminalKeyEvent } from "@/lib/terminal-keyboard-shortcuts.js";
 import { bindTerminalTouchScroll } from "@/lib/terminal-touch-scroll.js";
+import {
+  applyTerminalBufferReplay,
+  utf8ByteLength,
+} from "@/lib/terminal-buffer-replay.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalSuggestions } from "@/hooks/use-terminal-suggestions.js";
 import { TerminalSuggestionOverlay } from "@/components/atoms/TerminalSuggestionOverlay.js";
@@ -106,6 +110,10 @@ export function TerminalPanel({
   const [attachState, setAttachState] = useState<
     "idle" | "attaching" | "attached" | "creating"
   >("idle");
+  const attachStateRef = useRef(attachState);
+  useEffect(() => {
+    attachStateRef.current = attachState;
+  }, [attachState]);
   sessionIdRef.current = safeSessionId;
 
   // Terminal instance ref — set after term.open(), used by useTerminalSuggestions
@@ -149,12 +157,14 @@ export function TerminalPanel({
 
     // Flag to prevent double-output during initialization
     let hasBufferBeenWritten = false;
+    let lastServerOffset = 0;
 
     // Track all cleanups so the effect return can always run them
     let unsubData: (() => void) | null = null;
     let unsubExit: (() => void) | null = null;
     let unsubRestart: (() => void) | null = null;
     let unsubBuffer: (() => void) | null = null;
+    let unsubStatus: (() => void) | null = null;
     let inputDisposable: { dispose: () => void } | null = null;
     let observer: ResizeObserver | null = null;
     let attachTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -174,16 +184,15 @@ export function TerminalPanel({
       // Only write stream data if we've already handled the initial buffer
       if (hasBufferBeenWritten) {
         term.write(data);
+        lastServerOffset += utf8ByteLength(data);
         suggestionsRef.current.notifyOutput();
       }
     });
 
     // 2. Handle PTY buffer (response to terminal:attach)
     if (transport.onTerminalBuffer) {
-      unsubBuffer = transport.onTerminalBuffer(safeSessionId, ({ data }) => {
-        // Clear terminal and write buffer
-        term.clear();
-        term.write(data);
+      unsubBuffer = transport.onTerminalBuffer(safeSessionId, (replay) => {
+        lastServerOffset = applyTerminalBufferReplay(term, replay);
         hasBufferBeenWritten = true;
         setAttachState("attached");
         if (attachTimeout) {
@@ -237,7 +246,8 @@ export function TerminalPanel({
     // 7. Custom keyboard shortcuts
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
       return handleSharedTerminalKeyEvent(e, {
-        workspaceShortcut: useSettingsStore.getState().terminalWorkspaceShortcut,
+        workspaceShortcut:
+          useSettingsStore.getState().terminalWorkspaceShortcut,
         onCopySelection: () => {
           const selection = term.getSelection();
           if (selection) void navigator.clipboard.writeText(selection);
@@ -272,10 +282,10 @@ export function TerminalPanel({
     };
 
     // Helper: Attach to existing session
-    const attachToSession = () => {
+    const attachToSession = (fromOffset?: number) => {
       setAttachState("attaching");
       if (transport.terminalAttach) {
-        transport.terminalAttach(safeSessionId);
+        transport.terminalAttach(safeSessionId, fromOffset);
       }
 
       attachTimeout = setTimeout(() => {
@@ -289,6 +299,18 @@ export function TerminalPanel({
         void createSession();
       }, 3000);
     };
+
+    if (transport.onStatusChange) {
+      unsubStatus = transport.onStatusChange((status) => {
+        if (
+          status === "connected" &&
+          hasBufferBeenWritten &&
+          attachStateRef.current === "attached"
+        ) {
+          attachToSession(lastServerOffset);
+        }
+      });
+    }
 
     // Start initialization flow
     api.workspace
@@ -328,6 +350,7 @@ export function TerminalPanel({
       unsubExit?.();
       unsubRestart?.();
       unsubBuffer?.();
+      unsubStatus?.();
       inputDisposable?.dispose();
       if (attachTimeout) clearTimeout(attachTimeout);
       observer?.disconnect();

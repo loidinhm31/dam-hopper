@@ -92,9 +92,9 @@ permissions to `core:default`.
 
 ### persistence/ (Phase 04)
 
-SQLite-backed session persistence infrastructure for surviving server restarts.
+SQLite-backed session persistence infrastructure for live resume and server-restart relaunch.
 
-**Disabled by default** — enable via `[server] session_persistence = true` in dam-hopper.toml.
+Persistence is always enabled when the configured SQLite database can be opened. It does not preserve exact shell/process memory across DamHopper server or host restart.
 
 **Schema (001_initial.sql):**
 
@@ -102,6 +102,7 @@ SQLite-backed session persistence infrastructure for surviving server restarts.
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | sessions        | Session metadata: id, project, command, cwd, session_type, restart_policy, restart_max_retries, env_json, cols, rows, created_at, updated_at |
 | session_buffers | Scrollback buffers: session_id, data (BLOB), total_written, updated_at                                                                       |
+| persisted_ports | Stdout-detected safe port candidates: session_id, port, project, updated_at                                                                  |
 
 Indexes on `project` and `updated_at` for efficient queries.
 
@@ -426,7 +427,7 @@ Enables efficient delta replay for WebSocket reconnections. ScrollbackBuffer tra
 
 - `total_written: u64` — monotonic counter tracking all bytes ever written (survives eviction)
 - `current_offset() → u64` — returns total bytes written, used for client checkpoint
-- `read_from(Option<u64>) → (&[u8], u64)` — returns (delta bytes or full buffer if unavailable, current offset)
+- `read_replay(Option<u64>) → BufferReplay` — returns data, current offset, `reset`, and `truncated`
 - Ring buffer algorithm unchanged; offset tracking has zero performance cost
 
 **Delta Replay Logic**:
@@ -434,7 +435,7 @@ Enables efficient delta replay for WebSocket reconnections. ScrollbackBuffer tra
 1. Client requests bytes from stored offset
 2. Server calculates buffer start offset: `total_written - buffer.len()`
 3. If requested offset within buffer: return delta (new bytes since offset)
-4. If requested offset too old (evicted): return full buffer as fallback
+4. If requested offset too old (evicted): return full buffer with `reset=true`, `truncated=true`
 5. If requested offset = current: return empty slice (no new data)
 
 **Phase 02: Protocol Messages**
@@ -443,7 +444,7 @@ New WebSocket protocol messages enable explicit buffer attachment:
 
 **manager.rs** — `PtySessionManager` enhancements:
 
-- `get_buffer_with_offset(id: &str, from_offset: Option<u64>) → Result<(String, u64), AppError>` — returns (utf8-lossy buffer data, current offset)
+- `get_buffer_with_offset(id: &str, from_offset: Option<u64>) → Result<TerminalBufferReplay, AppError>` — returns utf8-lossy data, current offset, reset, and truncated
 - Error handling: returns `SessionNotFound` if session not in live map
 - Integration with existing session lifecycle: returned data respects current buffer state
 
@@ -452,7 +453,7 @@ New WebSocket protocol messages enable explicit buffer attachment:
 - `ClientMsg::TermAttach { id, from_offset }` — client requests buffer replay
 - Handler calls `get_buffer_with_offset()` → sends `ServerMsg::TermBuffer`
 - Error behavior: session not found → logs warning, no response (client creates new session via `terminal:spawn`)
-- Response `ServerMsg::TermBuffer { id, data, offset }` — contains base64-encoded delta or full buffer
+- Response `ServerMsg::TermBuffer { id, data, offset, reset, truncated }` — contains delta or full buffer plus client replay instructions
 
 **Use Case (Phase 02+)**: On WebSocket reconnect, client sends `terminal:attach` with last stored offset instead of requesting full buffer, reducing data transfer by ~90% in typical scenarios.
 
@@ -465,7 +466,7 @@ New WebSocket protocol messages enable explicit buffer attachment:
 **Buffer States:**
 
 - Empty buffer (no writes yet) → offset = 0, data = ""
-- Old offset (evicted from ring buffer) → fallback to full buffer
+- Old offset (evicted from ring buffer) → fallback to full buffer with `truncated=true`
 - Current offset → data = "" (no new content)
 - Mid-range offset → data = delta (new bytes since offset)
 

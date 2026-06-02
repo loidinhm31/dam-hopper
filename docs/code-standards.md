@@ -353,7 +353,6 @@ fn create_during_backoff_cancels_pending_restart() {
 
 ```toml
 [server]
-session_persistence = true                                  # Enable/disable persistence
 session_db_path = "~/.config/dam-hopper/sessions.db"       # SQLite file location
 session_buffer_ttl_hours = 24                              # Cleanup old buffers after 24h
 

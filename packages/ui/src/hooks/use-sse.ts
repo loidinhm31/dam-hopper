@@ -86,6 +86,17 @@ export function hasWsStatus(t: unknown): t is HasWsStatus {
   );
 }
 
+export function handleIpcStatusChange(
+  status: IpcStatus,
+  setStatus: (status: IpcStatus) => void,
+  invalidateTerminalSessions: () => void,
+): void {
+  setStatus(status);
+  if (status === "connected") {
+    invalidateTerminalSessions();
+  }
+}
+
 export function useIpc(): { status: IpcStatus } {
   const qc = useQueryClient();
 
@@ -137,11 +148,15 @@ export function useIpc(): { status: IpcStatus } {
     try {
       const t = getTransport();
       if (!hasWsStatus(t)) return;
-      return t.onStatusChange(setWsStatus);
+      return t.onStatusChange((status) =>
+        handleIpcStatusChange(status as IpcStatus, setWsStatus, () => {
+          void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+        }),
+      );
     } catch {
       return;
     }
-  }, []);
+  }, [qc]);
 
   return { status: wsStatus };
 }
