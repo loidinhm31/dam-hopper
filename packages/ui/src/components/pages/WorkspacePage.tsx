@@ -23,6 +23,7 @@ import { useQuery } from "@tanstack/react-query";
 import { IdeShell } from "@/components/templates/IdeShell.js";
 import { MobileWorkspaceShell } from "@/components/templates/MobileWorkspaceShell.js";
 import { TerminalWorkspaceShell } from "@/components/templates/TerminalWorkspaceShell.js";
+import { TerminalFloatingFilePanel } from "@/components/organisms/TerminalFloatingFilePanel.js";
 
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
@@ -38,6 +39,7 @@ import { useSearchUiStore } from "@/stores/search-ui.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalManager } from "@/hooks/use-terminal-manager.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
+import { useResizeHandle } from "@/hooks/use-resize-handle.js";
 import {
   addKeyboardShortcutListener,
   useDocumentKeyboardShortcut,
@@ -53,8 +55,17 @@ import {
   saveTerminalUsageMode,
   type TerminalUsageMode,
 } from "@/lib/terminal-usage-mode.js";
+import {
+  loadTerminalFilePanelOpen,
+  saveTerminalFilePanelOpen,
+  shouldAutoOpenTerminalFilePanel,
+  TERMINAL_FILE_PANEL_TREE_DEFAULT_WIDTH,
+  TERMINAL_FILE_PANEL_TREE_MAX_WIDTH,
+  TERMINAL_FILE_PANEL_TREE_MIN_WIDTH,
+  TERMINAL_FILE_PANEL_TREE_WIDTH_KEY,
+} from "@/lib/terminal-floating-file-panel-state.js";
 import { cn } from "@/lib/utils.js";
-import type { FsArborNode } from "@/api/fs-types.js";
+import type { FsArborNode, PathSearchMatch, SearchMatch } from "@/api/fs-types.js";
 import type { ToolWindowDef } from "@/types/ide.js";
 import type { MobileWorkspaceSurface } from "@/components/templates/MobileWorkspaceShell.js";
 
@@ -174,6 +185,18 @@ function getDefaultCompactSurfaceId(mode: WorkspaceMode) {
   return mode === "terminal" ? "terminal" : "editor";
 }
 
+function buildSearchMatchFileNode(path: string): FsArborNode {
+  return {
+    id: path,
+    name: path.split("/").pop() ?? path,
+    kind: "file",
+    size: 0,
+    mtime: 0,
+    isSymlink: false,
+    children: null,
+  };
+}
+
 export default function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { activeProject, setActiveProject } = useWorkspaceStore();
@@ -181,6 +204,11 @@ export default function WorkspacePage() {
     useState<WorkspaceMode>(loadWorkspaceMode);
   const [terminalUsageMode, setTerminalUsageModeState] =
     useState<TerminalUsageMode>(loadTerminalUsageMode);
+  const [terminalFilePanelOpen, setTerminalFilePanelOpenState] = useState(
+    loadTerminalFilePanelOpen,
+  );
+  const [terminalFilePanelEditorFocusSignal, setTerminalFilePanelEditorFocusSignal] =
+    useState(0);
   const [terminalLayoutRevision, setTerminalLayoutRevision] = useState(0);
   const isCompactWorkspace = useCompactWorkspace();
   const defaultCompactSurfaceId = getDefaultCompactSurfaceId(workspaceMode);
@@ -199,6 +227,16 @@ export default function WorkspacePage() {
     TERMINAL_LAYOUT_SENSITIVE_COMPACT_SURFACES.has(activeCompactSurface)
       ? terminalLayoutRevision + 1
       : terminalLayoutRevision;
+  const {
+    width: terminalFileTreeWidth,
+    handleProps: terminalFileTreeResizeHandleProps,
+    isDragging: isTerminalFileTreeResizing,
+  } = useResizeHandle({
+    min: TERMINAL_FILE_PANEL_TREE_MIN_WIDTH,
+    max: TERMINAL_FILE_PANEL_TREE_MAX_WIDTH,
+    defaultWidth: TERMINAL_FILE_PANEL_TREE_DEFAULT_WIDTH,
+    storageKey: TERMINAL_FILE_PANEL_TREE_WIDTH_KEY,
+  });
 
   const openFile = useEditorStore((s) => s.open);
   const openDiff = useEditorStore((s) => s.openDiff);
@@ -317,6 +355,19 @@ export default function WorkspacePage() {
     });
   }, []);
 
+  const setTerminalFilePanelOpen = useCallback((open: boolean) => {
+    setTerminalFilePanelOpenState(open);
+    saveTerminalFilePanelOpen(open);
+  }, []);
+
+  const toggleTerminalFilePanel = useCallback(() => {
+    setTerminalFilePanelOpenState((current) => {
+      const next = !current;
+      saveTerminalFilePanelOpen(next);
+      return next;
+    });
+  }, []);
+
   useEffect(
     () =>
       addKeyboardShortcutListener(
@@ -327,11 +378,45 @@ export default function WorkspacePage() {
     [toggleWorkspaceMode],
   );
 
+  const openWorkspaceFile = useCallback(
+    (targetProject: string, node: FsArborNode) => {
+      if (shouldAutoOpenTerminalFilePanel(workspaceMode, isCompactWorkspace)) {
+        setTerminalFilePanelOpen(true);
+        setTerminalFilePanelEditorFocusSignal((current) => current + 1);
+      }
+      return openFile(targetProject, node);
+    },
+    [
+      isCompactWorkspace,
+      openFile,
+      setTerminalFilePanelOpen,
+      workspaceMode,
+    ],
+  );
+
   const handleFileOpen = useCallback(
     (node: FsArborNode) => {
-      if (projectName) void openFile(projectName, node);
+      if (projectName) void openWorkspaceFile(projectName, node);
     },
-    [projectName, openFile],
+    [openWorkspaceFile, projectName],
+  );
+
+  const handleSearchResultOpen = useCallback(
+    (
+      match: SearchMatch | PathSearchMatch,
+      options?: {
+        closeSearch?: boolean;
+      },
+    ) => {
+      const targetProject = match.project ?? projectName;
+      if (!targetProject) return;
+      if (options?.closeSearch) closeSearch();
+      if (match.project && match.project !== projectName) {
+        setActiveProject(match.project);
+      }
+      void openWorkspaceFile(targetProject, buildSearchMatchFileNode(match.path));
+    },
+    [closeSearch, openWorkspaceFile, projectName, setActiveProject],
   );
 
   const handleSelectProjectInTree = useCallback(
@@ -384,6 +469,24 @@ export default function WorkspacePage() {
                 </button>
               ))}
             </div>
+            <button
+              type="button"
+              onClick={toggleTerminalFilePanel}
+              title={
+                terminalFilePanelOpen ? "Hide files panel" : "Show files panel"
+              }
+              aria-label={
+                terminalFilePanelOpen ? "Hide files panel" : "Show files panel"
+              }
+              className={cn(
+                "rounded-sm p-1.5 transition-colors",
+                terminalFilePanelOpen
+                  ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+                  : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
+              )}
+            >
+              <Files className="h-4 w-4" />
+            </button>
             <button
               type="button"
               onClick={handleOpenCurrentTerminal}
@@ -644,6 +747,8 @@ export default function WorkspacePage() {
       handleAddFreeTerminal,
       projectName,
       handleLaunchShell,
+      terminalFilePanelOpen,
+      toggleTerminalFilePanel,
       workspaceMode,
     ],
   );
@@ -722,21 +827,7 @@ export default function WorkspacePage() {
           <Suspense fallback={<PanelFallback label="Loading search…" />}>
             <SearchPanel
               project={projectName}
-              onResultClick={(match) => {
-                const targetProject = match.project ?? projectName;
-                if (match.project && match.project !== projectName) {
-                  setActiveProject(match.project);
-                }
-                void openFile(targetProject, {
-                  id: match.path,
-                  name: match.path.split("/").pop()!,
-                  kind: "file",
-                  size: 0,
-                  mtime: 0,
-                  isSymlink: false,
-                  children: null,
-                });
-              }}
+              onResultClick={handleSearchResultOpen}
             />
           </Suspense>
         ) : (
@@ -829,8 +920,7 @@ export default function WorkspacePage() {
       handleFileOpen,
       handleLaunchShell,
       openDiff,
-      openFile,
-      setActiveProject,
+      handleSearchResultOpen,
       terminalContent,
       portsContent,
     ],
@@ -875,7 +965,7 @@ export default function WorkspacePage() {
 
   const handleTerminalWorkspaceFleetLayoutChange = useCallback(() => {
     setTerminalLayoutRevision((current) => current + 1);
-  }, [setRequestedCompactSurface]);
+  }, []);
 
   const compactGitSurface = useMemo<MobileWorkspaceSurface>(
     () => ({
@@ -945,22 +1035,9 @@ export default function WorkspacePage() {
           <Suspense fallback={<PanelFallback label="Loading search…" />}>
             <SearchPanel
               project={projectName}
-              onResultClick={(match) => {
-                closeSearch();
-                const targetProject = match.project ?? projectName;
-                if (match.project && match.project !== projectName) {
-                  setActiveProject(match.project);
-                }
-                void openFile(targetProject, {
-                  id: match.path,
-                  name: match.path.split("/").pop()!,
-                  kind: "file",
-                  size: 0,
-                  mtime: 0,
-                  isSymlink: false,
-                  children: null,
-                });
-              }}
+              onResultClick={(match) =>
+                handleSearchResultOpen(match, { closeSearch: true })
+              }
             />
           </Suspense>
         ) : (
@@ -983,13 +1060,10 @@ export default function WorkspacePage() {
     [
       compactGitSurface,
       compactProjectSurface,
-      closeSearch,
       handleFileOpen,
       handleLaunchShell,
-      handleLaunchTerminal,
-      openFile,
+      handleSearchResultOpen,
       projectName,
-      setActiveProject,
     ],
   );
 
@@ -1035,6 +1109,51 @@ export default function WorkspacePage() {
     [setRequestedCompactSurface],
   );
 
+  const terminalFilePanelContent = useMemo(
+    () => (
+      <TerminalFloatingFilePanel
+        open={terminalFilePanelOpen}
+        treeWidth={terminalFileTreeWidth}
+        isDragging={isTerminalFileTreeResizing}
+        focusEditorSignal={terminalFilePanelEditorFocusSignal}
+        treeResizeHandleProps={terminalFileTreeResizeHandleProps}
+        explorerContent={
+          projectName ? (
+            <Suspense fallback={<PanelFallback label="Loading files…" />}>
+              <FileTree
+                key={`terminal-panel-${projectName}`}
+                project={projectName}
+                path=""
+                onFileOpen={handleFileOpen}
+                onOpenTerminal={() => handleLaunchShell(projectName)}
+                className="flex-1"
+              />
+            </Suspense>
+          ) : (
+            renderCompactPlaceholder("No projects configured")
+          )
+        }
+        editorContent={
+          <Suspense fallback={<PanelFallback label="Loading editor…" />}>
+            <EditorTabs project={projectName} />
+          </Suspense>
+        }
+        onClose={() => setTerminalFilePanelOpen(false)}
+      />
+    ),
+    [
+      handleFileOpen,
+      handleLaunchShell,
+      isTerminalFileTreeResizing,
+      projectName,
+      setTerminalFilePanelOpen,
+      terminalFilePanelEditorFocusSignal,
+      terminalFilePanelOpen,
+      terminalFileTreeResizeHandleProps,
+      terminalFileTreeWidth,
+    ],
+  );
+
   return (
     <>
       {isCompactWorkspace ? (
@@ -1049,6 +1168,7 @@ export default function WorkspacePage() {
       ) : workspaceMode === "terminal" ? (
         <TerminalWorkspaceShell
           terminalContent={terminalContent}
+          terminalOverlayContent={terminalFilePanelContent}
           fleetContent={fleetContent}
           portsContent={portsContent}
           workspaceMode={workspaceMode}
@@ -1090,22 +1210,9 @@ export default function WorkspacePage() {
                 project={projectName}
                 inputRef={searchInputRef}
                 onClose={closeSearch}
-                onResultClick={(match) => {
-                  closeSearch();
-                  const targetProject = match.project ?? projectName;
-                  if (match.project && match.project !== projectName) {
-                    setActiveProject(match.project);
-                  }
-                  void openFile(targetProject, {
-                    id: match.path,
-                    name: match.path.split("/").pop()!,
-                    kind: "file",
-                    size: 0,
-                    mtime: 0,
-                    isSymlink: false,
-                    children: null,
-                  });
-                }}
+                onResultClick={(match) =>
+                  handleSearchResultOpen(match, { closeSearch: true })
+                }
               />
             </Suspense>
           </div>
