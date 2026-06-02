@@ -674,6 +674,7 @@ pub async fn search_files(
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true)
+            .require_git(false)
             .build()
             .filter_map(|e| e.ok())
         {
@@ -760,6 +761,7 @@ pub async fn search_paths(
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true)
+            .require_git(false)
             .build()
             .filter_map(|e| e.ok())
         {

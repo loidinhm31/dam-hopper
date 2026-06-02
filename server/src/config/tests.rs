@@ -578,7 +578,7 @@ fn ui_config_serde_roundtrip() {
             },
             terminal_scroll_buttons_enabled: false,
             terminal_scroll_step: 3,
-            }),
+        }),
         server: crate::config::ServerConfig::default(),
     };
 

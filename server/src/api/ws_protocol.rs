@@ -229,6 +229,10 @@ pub enum ServerMsg {
         data: String,
         /// Current buffer byte offset (client stores for next attach)
         offset: u64,
+        /// True when `data` is a full snapshot and client must clear first.
+        reset: bool,
+        /// True when requested offset was older than retained scrollback tail.
+        truncated: bool,
     },
 
     // Terminal exit — enhanced with restart metadata

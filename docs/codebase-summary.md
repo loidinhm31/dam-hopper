@@ -145,8 +145,8 @@ Infrastructure
 - **Features**:
   - SQLite-backed `SessionStore` for session metadata and scrollback buffers
   - Two-table schema: `sessions` (metadata) and `session_buffers` (output)
-  - Configuration section `[server]` with three settings:
-    - `session_persistence` (bool, default false)
+  - Persistence is always enabled when the SQLite database opens
+  - Configuration section `[server]` with two settings:
     - `session_db_path` (string, default ~/.config/dam-hopper/sessions.db)
     - `session_buffer_ttl_hours` (u64, default 24)
   - 0o600 Unix file permissions for security

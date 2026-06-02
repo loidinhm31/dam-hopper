@@ -278,12 +278,13 @@ mod tests {
         // Give the freshly-spawned `true` process a moment, then read the buffer.
         // Hydrated bytes must appear at the start regardless of what the new
         // process prints.
-        let (data, _) = pty_manager
+        let replay = pty_manager
             .get_buffer_with_offset("test-hydrate", None)
             .unwrap();
         assert!(
-            data.contains("pre-restart history"),
-            "expected hydrated buffer in {data:?}"
+            replay.data.contains("pre-restart history"),
+            "expected hydrated buffer in {:?}",
+            replay.data
         );
     }
 

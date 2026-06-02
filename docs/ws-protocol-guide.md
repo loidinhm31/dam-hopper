@@ -21,7 +21,7 @@ All messages use JSON with `kind` tag (not legacy `type`). Phase 02 hard-cut fro
 | `terminal:spawn`  | `project, profile, env_overrides?` | `terminal:spawned { id, ... }`                     |
 | `terminal:write`  | `id, data`                         | (no response; server queues)                       |
 | `terminal:resize` | `id, cols, rows`                   | (ACK implicit)                                     |
-| `terminal:attach` | `id, from_offset?`                 | `terminal:buffer { id, data, offset }` (Phase 02+) |
+| `terminal:attach` | `id, from_offset?`                 | `terminal:buffer { id, data, offset, reset, truncated }` |
 | `terminal:kill`   | `id`                               | (ACK implicit)                                     |
 
 #### Terminal Attach (Phase 02+)
@@ -50,15 +50,19 @@ Request buffer replay from a session (for reconnection or delta sync):
   "kind": "terminal:buffer",
   "id": "uuid",
   "data": "base64_encoded_content",
-  "offset": 5120
+  "offset": 5120,
+  "reset": false,
+  "truncated": false
 }
 ```
 
 **Fields:**
 
 - `id` — Echo of request session ID
-- `data` — Base64-encoded buffer content (delta if `from_offset` provided; full otherwise). Lossy UTF-8 decoding used.
+- `data` — Buffer content (delta if `reset=false`; full snapshot if `reset=true`). Lossy UTF-8 decoding used.
 - `offset` — Current buffer byte offset. Client stores this for next attach.
+- `reset` — Clear the terminal before writing `data` when true; append `data` when false.
+- `truncated` — Requested offset was older than the retained 1 MB tail, so the response is the newest available full snapshot.
 
 **Error behavior:** If session not found, server logs warning and sends no response. Client should interpret timeout as session dead and create new session via `terminal:spawn`.
 
@@ -72,7 +76,7 @@ Request buffer replay from a session (for reconnection or delta sync):
 2. Frontend queries `terminal:list` to check if session exists
 3. If session found → call `terminalAttach()` without `from_offset` (initial attach) or with stored offset (delta attach)
 4. Register `onTerminalBuffer()` listener BEFORE sending attach request
-5. On buffer response → clear xterm display and write replayed content
+5. On buffer response → clear xterm only when `reset=true`; otherwise append the delta
 6. Timeout fallback (3s): if no buffer response, create new session via `terminal:spawn`
 
 **UI States:**
@@ -193,21 +197,25 @@ Response to `terminal:attach` request. Contains accumulated buffer content for r
   "kind": "terminal:buffer",
   "id": "uuid",
   "data": "base64_encoded_buffer_content",
-  "offset": 5120
+  "offset": 5120,
+  "reset": true,
+  "truncated": false
 }
 ```
 
 **Fields:**
 
 - `id` — Session UUID
-- `data` — Base64-encoded buffer content (delta or full depending on `from_offset`). Entire content is lossy UTF-8.
+- `data` — Buffer content (delta or full depending on `reset`). Entire content is lossy UTF-8.
 - `offset` — Current accumulated byte offset (monotonically increasing counter). Client stores for next attach to request delta only.
+- `reset` — Clear terminal before writing when true; append when false.
+- `truncated` — True when the requested offset has been evicted from the retained 1 MB scrollback.
 
 **Buffer Management:**
 
 - Server maintains a ring buffer (scrollback) for each live session.
 - `offset` field points to total bytes written since session creation (survives buffer eviction).
-- On attach with `from_offset` older than buffer start: fallback to full buffer.
+- On attach with `from_offset` older than buffer start: fallback to full buffer with `reset=true`, `truncated=true`.
 - On attach with `from_offset` = current offset: returns empty `data` (no new content).
 
 ### Terminal Events

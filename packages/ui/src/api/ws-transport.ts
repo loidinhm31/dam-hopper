@@ -805,7 +805,14 @@ export class WsTransport implements Transport {
   /** sessionId → buffer callbacks (for terminal:attach response) */
   private bufferListeners = new Map<
     string,
-    Set<(buffer: { data: string; offset: number }) => void>
+    Set<
+      (buffer: {
+        data: string;
+        offset: number;
+        reset: boolean;
+        truncated: boolean;
+      }) => void
+    >
   >();
   /** sub_id → overflow callbacks */
   private fsOverflowListeners = new Map<
@@ -1122,6 +1129,8 @@ export class WsTransport implements Transport {
           id?: string;
           data?: string;
           offset?: number;
+          reset?: boolean;
+          truncated?: boolean;
           exitCode?: number | null;
           willRestart?: boolean;
           restartIn?: number;
@@ -1164,6 +1173,8 @@ export class WsTransport implements Transport {
                 cb({
                   data: msg.data ?? "",
                   offset: msg.offset ?? 0,
+                  reset: msg.reset ?? true,
+                  truncated: msg.truncated ?? false,
                 }),
               );
             }
@@ -1682,7 +1693,12 @@ export class WsTransport implements Transport {
 
   onTerminalBuffer(
     id: string,
-    cb: (buffer: { data: string; offset: number }) => void,
+    cb: (buffer: {
+      data: string;
+      offset: number;
+      reset: boolean;
+      truncated: boolean;
+    }) => void,
   ): () => void {
     if (!this.bufferListeners.has(id)) this.bufferListeners.set(id, new Set());
     this.bufferListeners.get(id)!.add(cb);

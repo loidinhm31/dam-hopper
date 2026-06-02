@@ -28,6 +28,13 @@ pub struct PersistedSession {
     pub rows: u16,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistedPort {
+    pub session_id: String,
+    pub port: u16,
+    pub project: Option<String>,
+}
+
 impl SessionStore {
     /// Opens or creates the SQLite database at the given path.
     /// Runs migrations automatically.
@@ -66,6 +73,7 @@ impl SessionStore {
         if has_alive == 0 {
             conn.execute_batch(include_str!("migrations/002_alive.sql"))?;
         }
+        conn.execute_batch(include_str!("migrations/003_persisted_ports.sql"))?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -243,10 +251,68 @@ impl SessionStore {
     pub fn delete_session(&self, id: &str) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
 
+        conn.execute(
+            "DELETE FROM persisted_ports WHERE session_id = ?1",
+            params![id],
+        )?;
         // session_buffers has ON DELETE CASCADE, so this removes both
         conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
 
         Ok(())
+    }
+
+    pub fn save_detected_port(
+        &self,
+        session_id: &str,
+        port: u16,
+        project: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO persisted_ports (session_id, port, project, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![session_id, port as i64, project, now_ms() as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_detected_port(&self, session_id: &str, port: u16) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM persisted_ports WHERE session_id = ?1 AND port = ?2",
+            params![session_id, port as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_detected_ports_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM persisted_ports WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_detected_ports(&self) -> Result<Vec<PersistedPort>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT session_id, port, project FROM persisted_ports ORDER BY updated_at DESC",
+        )?;
+        let ports = stmt
+            .query_map([], |row| {
+                let port: i64 = row.get(1)?;
+                Ok(PersistedPort {
+                    session_id: row.get(0)?,
+                    port: port as u16,
+                    project: row.get(2)?,
+                })
+            })?
+            .collect();
+        ports
     }
 
     /// Removes expired session buffers (older than TTL).
@@ -362,6 +428,34 @@ mod tests {
 
         let buffer = store.load_buffer("test-session-1").unwrap();
         assert!(buffer.is_none());
+    }
+
+    #[test]
+    fn save_load_and_delete_detected_ports() {
+        let (store, _temp) = create_test_store();
+
+        store
+            .save_detected_port("session-a", 5173, Some("web"))
+            .unwrap();
+        store.save_detected_port("session-b", 8080, None).unwrap();
+
+        let ports = store.load_detected_ports().unwrap();
+        assert_eq!(ports.len(), 2);
+        assert!(ports.contains(&PersistedPort {
+            session_id: "session-a".to_string(),
+            port: 5173,
+            project: Some("web".to_string()),
+        }));
+
+        store.delete_detected_port("session-a", 5173).unwrap();
+        let ports = store.load_detected_ports().unwrap();
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].session_id, "session-b");
+
+        store
+            .delete_detected_ports_for_session("session-b")
+            .unwrap();
+        assert!(store.load_detected_ports().unwrap().is_empty());
     }
 
     #[test]

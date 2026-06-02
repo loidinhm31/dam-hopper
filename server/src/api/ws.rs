@@ -265,11 +265,13 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             }
             ClientMsg::TermAttach { id, from_offset } => {
                 match state.pty_manager.get_buffer_with_offset(&id, from_offset) {
-                    Ok((data, offset)) => {
+                    Ok(replay) => {
                         let msg = ServerMsg::TermBuffer {
                             id: id.clone(),
-                            data,
-                            offset,
+                            data: replay.data,
+                            offset: replay.offset,
+                            reset: replay.reset,
+                            truncated: replay.truncated,
                         };
                         if let Ok(json) = serde_json::to_string(&msg) {
                             if let Err(e) = pty_tx.send(WireMsg::Text(json)).await {

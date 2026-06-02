@@ -127,7 +127,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 - [x] Monotonic byte counter `total_written: u64` to track cumulative bytes written
 - [x] `current_offset()` method for client checkpoint storage
-- [x] `read_from(Option<u64>)` method for efficient delta replay
+- [x] replay API with `reset`/`truncated` metadata for efficient delta replay
 - [x] O(1) delta calculation with zero overhead
 - [x] Graceful fallback to full buffer when offset evicted
 - [x] 5 new unit tests + 4 existing tests (9/9 passing)
@@ -155,7 +155,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [x] Added rusqlite dependency
 - [x] Created persistence module with SessionStore CRUD operations
 - [x] Created SQL schema with sessions and session_buffers tables
-- [x] Added ServerConfig to config schema with session_persistence, session_db_path, session_buffer_ttl_hours
+- [x] Added ServerConfig to config schema with session_db_path and session_buffer_ttl_hours
 - [x] Parse [server] section in config loader
 - [x] Initialize SessionStore in main.rs when enabled
 - [x] 6 unit tests passing (all CRUD operations covered)
@@ -321,7 +321,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **2026-04-17:** Completed Phase 01: Buffer Offset Tracking (F-08 Terminal Session Persistence).
   - ✅ Monotonic byte counter `total_written: u64` tracks cumulative bytes written
   - ✅ `current_offset()` method returns checkpoint for client storage
-  - ✅ `read_from(Option<u64>)` method provides delta replay API
+  - ✅ Replay API provides delta/full snapshot metadata
   - ✅ O(1) delta calculation, zero performance overhead
   - ✅ Graceful fallback to full buffer when offset evicted
   - ✅ 9/9 tests passing (5 new + 4 existing)

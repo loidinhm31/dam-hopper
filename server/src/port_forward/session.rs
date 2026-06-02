@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::time::{Duration, Instant};
 
 /// How the port was first detected.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -28,6 +29,8 @@ pub struct DetectedPort {
     pub project: Option<String>,
     pub detected_via: DetectedVia,
     pub state: PortState,
+    #[serde(skip)]
+    pub provisional_until: Option<Instant>,
 }
 
 impl DetectedPort {
@@ -38,6 +41,29 @@ impl DetectedPort {
             project,
             detected_via: DetectedVia::StdoutRegex,
             state: PortState::Provisional,
+            provisional_until: None,
         }
+    }
+
+    pub fn new_seeded_provisional(
+        port: u16,
+        session_id: String,
+        project: Option<String>,
+        grace: Duration,
+    ) -> Self {
+        Self {
+            port,
+            session_id,
+            project,
+            detected_via: DetectedVia::StdoutRegex,
+            state: PortState::Provisional,
+            provisional_until: Some(Instant::now() + grace),
+        }
+    }
+
+    pub fn is_in_grace(&self) -> bool {
+        self.provisional_until
+            .map(|until| Instant::now() < until)
+            .unwrap_or(false)
     }
 }
