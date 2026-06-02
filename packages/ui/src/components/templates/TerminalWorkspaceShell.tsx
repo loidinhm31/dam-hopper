@@ -25,6 +25,7 @@ function saveFleetCollapsed(collapsed: boolean) {
 
 export function TerminalWorkspaceShell({
   terminalContent,
+  terminalOverlayContent,
   fleetContent,
   portsContent,
   workspaceMode,
@@ -33,6 +34,7 @@ export function TerminalWorkspaceShell({
   onFleetLayoutChange,
 }: {
   terminalContent: ReactNode;
+  terminalOverlayContent?: ReactNode;
   fleetContent: ReactNode;
   portsContent?: ReactNode;
   workspaceMode: WorkspaceMode;
@@ -84,8 +86,9 @@ export function TerminalWorkspaceShell({
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           {terminalContent}
+          {terminalOverlayContent}
         </main>
 
         {!fleetCollapsed && (

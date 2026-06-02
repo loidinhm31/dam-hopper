@@ -3,8 +3,24 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WorkspacePage, { resolveActiveCompactSurfaceId } from "./WorkspacePage.js";
 import { COMPACT_WORKSPACE_QUERY } from "@/hooks/compact-workspace-media-query.js";
+import { TERMINAL_FILE_PANEL_OPEN_KEY } from "@/lib/terminal-floating-file-panel-state.js";
 
 let mockWorkspaceMode: "ide" | "terminal" = "ide";
+let lastTerminalWorkspaceShellProps: Record<string, unknown> | null = null;
+const localStorageState = new Map<string, string>();
+
+const localStorageMock = {
+  getItem: vi.fn((key: string) => localStorageState.get(key) ?? null),
+  setItem: vi.fn((key: string, value: string) => {
+    localStorageState.set(key, value);
+  }),
+  removeItem: vi.fn((key: string) => {
+    localStorageState.delete(key);
+  }),
+  clear: vi.fn(() => {
+    localStorageState.clear();
+  }),
+};
 
 vi.mock("react-router-dom", () => ({
   useSearchParams: () => [new URLSearchParams(), vi.fn()],
@@ -19,7 +35,10 @@ vi.mock("@/components/templates/IdeShell.js", () => ({
 }));
 
 vi.mock("@/components/templates/TerminalWorkspaceShell.js", () => ({
-  TerminalWorkspaceShell: () => <div data-shell="terminal-shell" />,
+  TerminalWorkspaceShell: (props: Record<string, unknown>) => {
+    lastTerminalWorkspaceShellProps = props;
+    return <div data-shell="terminal-shell" />;
+  },
 }));
 
 vi.mock("@/components/organisms/TopNav.js", () => ({
@@ -156,6 +175,13 @@ function stubMatchMedia(matches: boolean) {
 describe("WorkspacePage", () => {
   beforeEach(() => {
     mockWorkspaceMode = "ide";
+    lastTerminalWorkspaceShellProps = null;
+    localStorageState.clear();
+    localStorageMock.getItem.mockClear();
+    localStorageMock.setItem.mockClear();
+    localStorageMock.removeItem.mockClear();
+    localStorageMock.clear.mockClear();
+    vi.stubGlobal("localStorage", localStorageMock);
   });
 
   afterEach(() => {
@@ -196,6 +222,34 @@ describe("WorkspacePage", () => {
 
     expect(markup).toContain('data-shell="ide-shell"');
     expect(markup).not.toContain("IDE companion");
+  });
+
+  it("keeps the desktop terminal shell on wide viewports and exposes the files toggle", () => {
+    stubMatchMedia(false);
+    mockWorkspaceMode = "terminal";
+
+    const markup = renderToStaticMarkup(<WorkspacePage />);
+    const terminalMarkup = renderToStaticMarkup(
+      <>{lastTerminalWorkspaceShellProps?.terminalContent as ReactNode}</>,
+    );
+
+    expect(markup).toContain('data-shell="terminal-shell"');
+    expect(lastTerminalWorkspaceShellProps?.terminalOverlayContent).toBeTruthy();
+    expect(terminalMarkup).toContain("Show files panel");
+  });
+
+  it("restores the floating file panel state in desktop terminal mode", () => {
+    stubMatchMedia(false);
+    mockWorkspaceMode = "terminal";
+    localStorage.setItem(TERMINAL_FILE_PANEL_OPEN_KEY, "true");
+
+    renderToStaticMarkup(<WorkspacePage />);
+    const overlayMarkup = renderToStaticMarkup(
+      <>{lastTerminalWorkspaceShellProps?.terminalOverlayContent as ReactNode}</>,
+    );
+
+    expect(overlayMarkup).toContain("Workspace Files");
+    expect(overlayMarkup).toContain("Close files panel");
   });
 
   it("falls back to a valid compact surface when the current one disappears", () => {
