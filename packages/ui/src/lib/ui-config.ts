@@ -2,6 +2,7 @@ import type { UiConfig } from "@/api/client.js";
 import {
   DEFAULT_SEARCH_FILENAME_SHORTCUT,
   DEFAULT_SEARCH_TEXT_SHORTCUT,
+  DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
   DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
   formatShortcut,
 } from "@/lib/shortcuts.js";
@@ -26,6 +27,7 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   searchTextShortcut: DEFAULT_SEARCH_TEXT_SHORTCUT,
   searchFilenameShortcut: DEFAULT_SEARCH_FILENAME_SHORTCUT,
   terminalWorkspaceShortcut: DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+  terminalFilePanelShortcut: DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
 };
 
 export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
@@ -62,6 +64,10 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
     terminalWorkspaceShortcut: formatShortcut(
       ui?.terminalWorkspaceShortcut ??
         DEFAULT_UI_CONFIG.terminalWorkspaceShortcut,
+    ),
+    terminalFilePanelShortcut: formatShortcut(
+      ui?.terminalFilePanelShortcut ??
+        DEFAULT_UI_CONFIG.terminalFilePanelShortcut,
     ),
   };
 }

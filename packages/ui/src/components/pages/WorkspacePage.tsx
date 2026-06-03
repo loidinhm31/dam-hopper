@@ -307,12 +307,19 @@ export default function WorkspacePage() {
   const terminalWorkspaceShortcut = useSettingsStore(
     (s) => s.terminalWorkspaceShortcut,
   );
+  const terminalFilePanelShortcut = useSettingsStore(
+    (s) => s.terminalFilePanelShortcut,
+  );
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useDocumentKeyboardShortcut(searchTextShortcut, () => openSearch("content"));
   useDocumentKeyboardShortcut(searchFilenameShortcut, () =>
     openSearch("filename"),
   );
+  useDocumentKeyboardShortcut(terminalFilePanelShortcut, () => {
+    if (workspaceMode !== "terminal" || isCompactWorkspace) return;
+    toggleTerminalFilePanel();
+  });
 
   const setWorkspaceMode = useCallback(
     (mode: WorkspaceMode) => {

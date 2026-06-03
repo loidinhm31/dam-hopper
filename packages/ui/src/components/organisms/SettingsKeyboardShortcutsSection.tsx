@@ -5,6 +5,7 @@ import { useSettingsStore } from "@/stores/settings.js";
 import {
   DEFAULT_SEARCH_FILENAME_SHORTCUT,
   DEFAULT_SEARCH_TEXT_SHORTCUT,
+  DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
   DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
   DoubleShiftDetector,
   displayShortcut,
@@ -100,6 +101,7 @@ export function SettingsKeyboardShortcutsSection() {
     searchTextShortcut,
     searchFilenameShortcut,
     terminalWorkspaceShortcut,
+    terminalFilePanelShortcut,
     saveDebounced,
   } = useSettingsStore();
 
@@ -142,6 +144,21 @@ export function SettingsKeyboardShortcutsSection() {
           defaultValue={DEFAULT_TERMINAL_WORKSPACE_SHORTCUT}
           onChange={(shortcut) =>
             saveDebounced({ terminalWorkspaceShortcut: shortcut })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="File panel"
+        description="Open or close the floating file explorer"
+      >
+        <ShortcutCapture
+          value={terminalFilePanelShortcut}
+          defaultValue={DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT}
+          onChange={(shortcut) =>
+            saveDebounced({ terminalFilePanelShortcut: shortcut })
           }
         />
       </SettingRow>
