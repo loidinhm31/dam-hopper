@@ -136,6 +136,7 @@ const settingsStore = {
   searchTextShortcut: "mod+shift+f",
   searchFilenameShortcut: "mod+p",
   terminalWorkspaceShortcut: "mod+`",
+  terminalFilePanelShortcut: "mod+shift+e",
 };
 
 const terminalActions = {

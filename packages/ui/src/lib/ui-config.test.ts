@@ -7,6 +7,7 @@ describe("withUiConfigDefaults", () => {
     expect(ui.searchTextShortcut).toBe("Mod+Shift+KeyF");
     expect(ui.searchFilenameShortcut).toBe("DoubleShift");
     expect(ui.terminalWorkspaceShortcut).toBe("Mod+Shift+Backquote");
+    expect(ui.terminalFilePanelShortcut).toBe("Mod+Shift+KeyE");
     expect(ui.mobileCustomKeyboardEnabled).toBe(true);
     expect(ui.mobileCustomKeyboardFontSize).toBe(11);
     expect(ui.mobileCustomKeyboardPadding).toBe(6);
@@ -24,6 +25,7 @@ describe("withUiConfigDefaults", () => {
       runtimeItemOrder: { web: ["session:one"] },
       searchTextShortcut: "ctrl+shift+p",
       terminalWorkspaceShortcut: "ctrl+shift+backquote",
+      terminalFilePanelShortcut: "ctrl+shift+e",
       mobileCustomKeyboardEnabled: false,
       mobileCustomKeyboardFontSize: 14,
       mobileCustomKeyboardPadding: 9,
@@ -37,6 +39,7 @@ describe("withUiConfigDefaults", () => {
     expect(ui.searchTextShortcut).toBe("Ctrl+Shift+KeyP");
     expect(ui.searchFilenameShortcut).toBe("DoubleShift");
     expect(ui.terminalWorkspaceShortcut).toBe("Ctrl+Shift+Backquote");
+    expect(ui.terminalFilePanelShortcut).toBe("Ctrl+Shift+KeyE");
     expect(ui.mobileCustomKeyboardEnabled).toBe(false);
     expect(ui.mobileCustomKeyboardFontSize).toBe(14);
     expect(ui.mobileCustomKeyboardPadding).toBe(9);

@@ -7,6 +7,12 @@
 import { create } from "zustand";
 import { api } from "@/api/client.js";
 import { withUiConfigDefaults } from "@/lib/ui-config.js";
+import {
+  DEFAULT_SEARCH_FILENAME_SHORTCUT,
+  DEFAULT_SEARCH_TEXT_SHORTCUT,
+  DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
+  DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+} from "@/lib/shortcuts.js";
 
 const FONT_MIN = 10;
 const FONT_MAX = 32;
@@ -49,6 +55,7 @@ interface SettingsState {
   searchTextShortcut: string;
   searchFilenameShortcut: string;
   terminalWorkspaceShortcut: string;
+  terminalFilePanelShortcut: string;
   terminalSuggestionsEnabled: boolean;
   terminalScrollButtonsEnabled: boolean;
   terminalScrollStep: number;
@@ -70,6 +77,7 @@ interface SettingsState {
         | "searchTextShortcut"
         | "searchFilenameShortcut"
         | "terminalWorkspaceShortcut"
+        | "terminalFilePanelShortcut"
         | "terminalSuggestionsEnabled"
         | "terminalScrollButtonsEnabled"
         | "terminalScrollStep"
@@ -91,6 +99,7 @@ interface SettingsState {
         | "searchTextShortcut"
         | "searchFilenameShortcut"
         | "terminalWorkspaceShortcut"
+        | "terminalFilePanelShortcut"
         | "terminalSuggestionsEnabled"
         | "terminalScrollButtonsEnabled"
         | "terminalScrollStep"
@@ -110,9 +119,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   systemFontSize: 14,
   editorFontSize: 14,
   editorZoomWheelEnabled: true,
-  searchTextShortcut: "Mod+Shift+KeyF",
-  searchFilenameShortcut: "DoubleShift",
-  terminalWorkspaceShortcut: "Mod+Shift+Backquote",
+  searchTextShortcut: DEFAULT_SEARCH_TEXT_SHORTCUT,
+  searchFilenameShortcut: DEFAULT_SEARCH_FILENAME_SHORTCUT,
+  terminalWorkspaceShortcut: DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+  terminalFilePanelShortcut: DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
   terminalSuggestionsEnabled: true,
   terminalScrollButtonsEnabled: false,
   terminalScrollStep: 3,
@@ -134,6 +144,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         searchTextShortcut: ui.searchTextShortcut,
         searchFilenameShortcut: ui.searchFilenameShortcut,
         terminalWorkspaceShortcut: ui.terminalWorkspaceShortcut,
+        terminalFilePanelShortcut: ui.terminalFilePanelShortcut,
         terminalSuggestionsEnabled: ui.terminalSuggestionsEnabled ?? true,
         terminalScrollButtonsEnabled: ui.terminalScrollButtonsEnabled ?? false,
         terminalScrollStep: ui.terminalScrollStep ?? 3,
@@ -164,6 +175,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.searchFilenameShortcut = partial.searchFilenameShortcut;
     if (partial.terminalWorkspaceShortcut !== undefined)
       clamped.terminalWorkspaceShortcut = partial.terminalWorkspaceShortcut;
+    if (partial.terminalFilePanelShortcut !== undefined)
+      clamped.terminalFilePanelShortcut = partial.terminalFilePanelShortcut;
     if (partial.terminalSuggestionsEnabled !== undefined)
       clamped.terminalSuggestionsEnabled = partial.terminalSuggestionsEnabled;
     if (partial.terminalScrollButtonsEnabled !== undefined)
@@ -202,6 +215,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         searchTextShortcut,
         searchFilenameShortcut,
         terminalWorkspaceShortcut,
+        terminalFilePanelShortcut,
         terminalSuggestionsEnabled,
         terminalScrollButtonsEnabled,
         terminalScrollStep,
@@ -218,6 +232,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         searchTextShortcut,
         searchFilenameShortcut,
         terminalWorkspaceShortcut,
+        terminalFilePanelShortcut,
         terminalSuggestionsEnabled,
         terminalScrollButtonsEnabled,
         terminalScrollStep,

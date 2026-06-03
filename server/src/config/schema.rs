@@ -334,6 +334,9 @@ fn default_search_filename_shortcut() -> String {
 fn default_terminal_workspace_shortcut() -> String {
     "Mod+Shift+Backquote".to_string()
 }
+fn default_terminal_file_panel_shortcut() -> String {
+    "Mod+Shift+KeyE".to_string()
+}
 fn default_mobile_custom_keyboard_font_size() -> u16 {
     11
 }
@@ -371,6 +374,11 @@ pub struct UiConfig {
         alias = "terminal_workspace_shortcut"
     )]
     pub terminal_workspace_shortcut: String,
+    #[serde(
+        default = "default_terminal_file_panel_shortcut",
+        alias = "terminal_file_panel_shortcut"
+    )]
+    pub terminal_file_panel_shortcut: String,
     #[serde(default = "default_true", alias = "terminal_suggestions_enabled")]
     pub terminal_suggestions_enabled: bool,
     #[serde(default, alias = "explorer_show_hidden", alias = "explorerShowHidden")]
@@ -440,6 +448,7 @@ impl Default for UiConfig {
             search_text_shortcut: default_search_text_shortcut(),
             search_filename_shortcut: default_search_filename_shortcut(),
             terminal_workspace_shortcut: default_terminal_workspace_shortcut(),
+            terminal_file_panel_shortcut: default_terminal_file_panel_shortcut(),
             terminal_suggestions_enabled: true,
             explorer_show_hidden: false,
             mobile_custom_keyboard_enabled: true,
