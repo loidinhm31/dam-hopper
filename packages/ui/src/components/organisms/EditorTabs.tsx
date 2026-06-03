@@ -7,7 +7,7 @@
  * - MonacoHost / MarkdownHost are lazy-loaded (dynamic import) to keep the main chunk clean.
  * - ConflictDialog is shown when save returns a conflict.
  */
-import { lazy, Suspense, useState, useEffect, useCallback } from "react";
+import { lazy, Suspense, useState, useEffect, useCallback, useRef } from "react";
 import type * as monacoNs from "monaco-editor";
 import { FileCode, Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -47,6 +47,7 @@ const MarkdownHost = lazy(() =>
 );
 
 export function EditorTabs({ project }: { project: string | null }) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
   const {
     tabs,
@@ -205,7 +206,7 @@ export function EditorTabs({ project }: { project: string | null }) {
   }
 
   return (
-    <div className="h-full flex flex-col glass-card">
+    <div ref={containerRef} className="relative h-full flex flex-col glass-card">
       {/* Tab bar */}
       <div className="shrink-0 flex items-stretch border-b border-[var(--color-border)] bg-[var(--color-surface-2)]">
         <div
@@ -241,11 +242,13 @@ export function EditorTabs({ project }: { project: string | null }) {
               onClose={() => close(tab.key)}
               onContextMenu={(event) => {
                 event.preventDefault();
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                if (!containerRect) return;
                 const position = clampEditorTabContextMenuPosition(
-                  event.clientX,
-                  event.clientY,
-                  window.innerWidth,
-                  window.innerHeight,
+                  event.clientX - containerRect.left,
+                  event.clientY - containerRect.top,
+                  containerRect.width,
+                  containerRect.height,
                 );
                 setContextMenu({
                   key: tab.key,

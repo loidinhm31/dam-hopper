@@ -76,7 +76,7 @@ export function EditorTabContextMenu({
   const style = useMemo(
     () =>
       ({
-        position: "fixed",
+        position: "absolute",
         top: y,
         left: x,
         zIndex: 70,
