@@ -87,7 +87,7 @@ export function SettingsAppearanceSection() {
 
       <SettingRow
         title="Show terminal scroll buttons"
-        description="Show floating scroll buttons in the terminal for easier navigation"
+        description="Show floating terminal buttons for step scroll and jump-to-edge navigation"
       >
         <Switch
           checked={terminalScrollButtonsEnabled}
@@ -101,7 +101,7 @@ export function SettingsAppearanceSection() {
 
       <SettingRow
         title="Terminal scroll step"
-        description="Number of lines to scroll per button click (1–50)"
+        description="Number of lines to scroll for the step up/down buttons (1–50)"
       >
         <NumberStepper
           value={terminalScrollStep}
