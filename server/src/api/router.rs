@@ -128,6 +128,10 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             get(git_diff::get_commit_files),
         )
         .route(
+            "/api/git/{project}/commit/{hash}/message",
+            get(git::get_commit_message_route).post(git::edit_commit_message_route),
+        )
+        .route(
             "/api/git/{project}/commit/{hash}/diff",
             get(git_diff::get_commit_file_diff),
         )

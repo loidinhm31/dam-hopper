@@ -66,7 +66,12 @@ vi.mock("@/stores/editor.js", () => ({
 }));
 
 vi.mock("@/components/organisms/GitLogTree.js", () => ({
-  GitLogTree: () => createElement("div", null, "GitLogTree"),
+  GitLogTree: (props: { onEditCommitMessage?: unknown }) =>
+    createElement(
+      "div",
+      null,
+      props.onEditCommitMessage ? "GitLogTree:edit-message" : "GitLogTree",
+    ),
 }));
 
 vi.mock("@/components/organisms/CommitDetailsPanel.js", () => ({
@@ -79,6 +84,7 @@ vi.mock("@/components/organisms/GitBranchControl.js", () => ({
 
 vi.mock("@/components/organisms/GitHistoryActions.js", () => ({
   GitDropCommitDialog: () => null,
+  GitEditCommitMessageDialog: () => null,
   GitHistoryStatusBanner: () => null,
   GitRevertCommitDialog: () => null,
   GitResetDialog: () => null,
@@ -90,8 +96,10 @@ vi.mock("@/components/organisms/GitHistoryActions.js", () => ({
     setRevertCommit: vi.fn(),
     setUndoLastCommit: vi.fn(),
     setDropCommit: vi.fn(),
+    setEditCommit: vi.fn(),
     setResetCommit: vi.fn(),
     handleDropCommit: vi.fn(),
+    handleEditCommitMessage: vi.fn(),
     handleRevertCommit: vi.fn(),
     handleUndoLastCommit: vi.fn(),
     handleCherryPickFiles: vi.fn(),
@@ -99,9 +107,14 @@ vi.mock("@/components/organisms/GitHistoryActions.js", () => ({
     handleDropFiles: vi.fn(),
     resetCommit: null,
     dropCommit: null,
+    editCommit: null,
+    editCommitMessage: undefined,
+    editCommitMessageLoading: false,
+    editCommitMessageError: undefined,
     revertCommit: null,
     undoLastCommit: null,
     isDropCommitPending: false,
+    isEditCommitMessagePending: false,
     isRevertCommitPending: false,
     isUndoLastCommitPending: false,
     handleReset: vi.fn(),
@@ -465,6 +478,7 @@ describe("WorkspaceGitPanel VCS root helpers", () => {
 
     expect(markup).toContain("Push");
     expect(markup).toContain("History");
+    expect(markup).toContain("GitLogTree:edit-message");
     expect(markup).toContain("data-testid=\"workspace-git-push-button\"");
   });
 });

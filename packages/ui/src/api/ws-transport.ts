@@ -653,6 +653,29 @@ function channelToEndpoint(
         url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/files${qs ? `?${qs}` : ""}`,
       };
     }
+    case "git:commitMessage": {
+      const d = data as { project: string; hash: string; root?: string };
+      const params = new URLSearchParams();
+      if (d.root) params.set("root", d.root);
+      const qs = params.toString();
+      return {
+        method: "GET",
+        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/message${qs ? `?${qs}` : ""}`,
+      };
+    }
+    case "git:editCommitMessage": {
+      const d = data as {
+        project: string;
+        hash: string;
+        message: string;
+        root?: string;
+      };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/message`,
+        body: { message: d.message, root: d.root },
+      };
+    }
     case "git:commitFileDiff": {
       const d = data as {
         project: string;

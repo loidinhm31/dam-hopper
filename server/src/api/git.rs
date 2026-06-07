@@ -3,17 +3,17 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::git::bulk::ProjectRef;
 use crate::git::progress::create_progress_channel;
 use crate::git::{
     add_worktree, checkout_branch, cherry_pick, cherry_pick_commit_files, create_branch,
-    delete_branch, discover_vcs_roots, drop_commit, drop_commit_files, get_log, list_branches,
-    list_worktrees, remove_worktree, reset_to_commit, resolve_git_request_root, revert_commit,
-    revert_commit_files, undo_last_commit, update_branch, BulkGitService, CheckoutStrategy,
-    ResetMode, WorktreeAddOptions,
+    delete_branch, discover_vcs_roots, drop_commit, drop_commit_files, edit_commit_message,
+    get_commit_message, get_log, list_branches, list_worktrees, remove_worktree, reset_to_commit,
+    resolve_git_request_root, revert_commit, revert_commit_files, undo_last_commit, update_branch,
+    BulkGitService, CheckoutStrategy, ResetMode, WorktreeAddOptions,
 };
 use crate::pty::EventSink as _;
 use crate::state::AppState;
@@ -420,6 +420,42 @@ pub async fn drop_commit_route(
     let root =
         resolve_git_request_root(&path, query.root.as_deref()).map_err(ApiError::from_app)?;
     let result = drop_commit(&root.root_path, &hash)
+        .await
+        .map_err(ApiError::from_app)?;
+    Ok(Json(result))
+}
+
+#[derive(Serialize)]
+pub struct CommitMessageResponse {
+    pub message: String,
+}
+
+#[derive(Deserialize)]
+pub struct EditCommitMessageBody {
+    pub message: String,
+    pub root: Option<String>,
+}
+
+pub async fn get_commit_message_route(
+    State(state): State<AppState>,
+    Path((project, hash)): Path<(String, String)>,
+    Query(query): Query<RootQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_project_path(&state, &project).await?;
+    let root =
+        resolve_git_request_root(&path, query.root.as_deref()).map_err(ApiError::from_app)?;
+    let message = get_commit_message(&root.root_path, &hash).map_err(ApiError::from_app)?;
+    Ok(Json(CommitMessageResponse { message }))
+}
+
+pub async fn edit_commit_message_route(
+    State(state): State<AppState>,
+    Path((project, hash)): Path<(String, String)>,
+    Json(body): Json<EditCommitMessageBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_project_path(&state, &project).await?;
+    let root = resolve_git_request_root(&path, body.root.as_deref()).map_err(ApiError::from_app)?;
+    let result = edit_commit_message(&root.root_path, &hash, &body.message)
         .await
         .map_err(ApiError::from_app)?;
     Ok(Json(result))

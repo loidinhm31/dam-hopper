@@ -401,6 +401,10 @@ export interface GitActionResult {
   recommendation?: string;
 }
 
+export interface CommitMessageResponse {
+  message: string;
+}
+
 export interface GitLogEntry {
   hash: string;
   parents: string[];
@@ -701,6 +705,24 @@ export const api = {
       getTransport().invoke<DiffFileEntry[]>("git:commitFiles", {
         project,
         hash,
+        root,
+      }),
+    commitMessage: (project: string, hash: string, root?: string) =>
+      getTransport().invoke<CommitMessageResponse>("git:commitMessage", {
+        project,
+        hash,
+        root,
+      }),
+    editCommitMessage: (
+      project: string,
+      hash: string,
+      message: string,
+      root?: string,
+    ) =>
+      getTransport().invoke<GitActionResult>("git:editCommitMessage", {
+        project,
+        hash,
+        message,
         root,
       }),
     commitFileDiff: (

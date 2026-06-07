@@ -2,8 +2,10 @@ import { useCallback, useState } from "react";
 import {
   useGitCherryPick,
   useGitCherryPickCommitFiles,
+  useGitCommitMessage,
   useGitDropCommit,
   useGitDropCommitFiles,
+  useGitEditCommitMessage,
   useGitRevertCommit,
   useGitRevertCommitFiles,
   useGitReset,
@@ -249,6 +251,119 @@ export function GitDropCommitDialog({
   );
 }
 
+export function canSubmitEditedCommitMessage(
+  message: string,
+  originalMessage: string | undefined,
+  loading: boolean,
+) {
+  return !loading && message.trim().length > 0 && message !== originalMessage;
+}
+
+interface GitEditCommitMessageDialogProps {
+  commit: GitLogEntry | null;
+  originalMessage?: string;
+  loading: boolean;
+  saving: boolean;
+  error?: string;
+  onClose: () => void;
+  onConfirm: (message: string) => void;
+}
+
+export function GitEditCommitMessageDialog({
+  commit,
+  originalMessage,
+  loading,
+  saving,
+  error,
+  onClose,
+  onConfirm,
+}: GitEditCommitMessageDialogProps) {
+  const isHead =
+    commit?.refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD ->")) ??
+    false;
+
+  return (
+    <Dialog open={commit !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-[560px]">
+        <DialogHeader>
+          <DialogTitle>Edit Commit Message</DialogTitle>
+          <DialogDescription>
+            Change the full message for{" "}
+            <strong>{commit?.hash.slice(0, 7)}</strong>.
+          </DialogDescription>
+        </DialogHeader>
+        <GitEditCommitMessageForm
+          key={`${commit?.hash ?? ""}\0${originalMessage ?? ""}`}
+          originalMessage={originalMessage}
+          loading={loading}
+          saving={saving}
+          error={error}
+          isHead={isHead}
+          onClose={onClose}
+          onConfirm={onConfirm}
+        />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function GitEditCommitMessageForm({
+  originalMessage,
+  loading,
+  saving,
+  error,
+  isHead,
+  onClose,
+  onConfirm,
+}: Omit<GitEditCommitMessageDialogProps, "commit"> & { isHead: boolean }) {
+  const [message, setMessage] = useState(originalMessage ?? "");
+
+  return (
+    <>
+      <textarea
+        aria-label="Commit message"
+        value={message}
+        disabled={loading || saving}
+        onChange={(event) => setMessage(event.target.value)}
+        className="min-h-40 w-full resize-y rounded border border-[var(--color-border)] bg-[var(--color-background)] px-3 py-2 font-mono text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]/60 disabled:opacity-60"
+        placeholder={loading ? "Loading commit message..." : "Commit message"}
+      />
+      {error ? (
+        <div className="text-xs text-[var(--color-danger)]">{error}</div>
+      ) : (
+        <div className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          {isHead
+            ? "This rewrites the selected local commit hash."
+            : "Editing an older commit rewrites that commit and all descendant hashes."}
+        </div>
+      )}
+      <DialogFooter>
+        <Button
+          type="button"
+          variant="ghost"
+          disabled={saving}
+          onClick={onClose}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          variant="danger"
+          loading={saving}
+          disabled={
+            saving ||
+            Boolean(error) ||
+            !canSubmitEditedCommitMessage(message, originalMessage, loading)
+          }
+          onClick={() => onConfirm(message)}
+        >
+          Edit Commit Message
+        </Button>
+      </DialogFooter>
+    </>
+  );
+}
+
 interface GitRevertCommitDialogProps {
   commit: GitLogEntry | null;
   loading: boolean;
@@ -413,6 +528,10 @@ export function useGitHistoryActions(project: string, root?: string) {
     project: string;
     commit: GitLogEntry | null;
   }>({ project: "", commit: null });
+  const [editCommitState, setEditCommitState] = useState<{
+    project: string;
+    commit: GitLogEntry | null;
+  }>({ project: "", commit: null });
   const [revertCommitState, setRevertCommitState] = useState<{
     project: string;
     commit: GitLogEntry | null;
@@ -436,11 +555,14 @@ export function useGitHistoryActions(project: string, root?: string) {
   const revertFilesMutation = useGitRevertCommitFiles(project, root);
   const dropFilesMutation = useGitDropCommitFiles(project, root);
   const dropCommitMutation = useGitDropCommit(project, root);
+  const editCommitMutation = useGitEditCommitMessage(project, root);
   const revertCommitMutation = useGitRevertCommit(project, root);
   const resetCommit =
     resetCommitState.project === scope ? resetCommitState.commit : null;
   const dropCommit =
     dropCommitState.project === scope ? dropCommitState.commit : null;
+  const editCommit =
+    editCommitState.project === scope ? editCommitState.commit : null;
   const revertCommit =
     revertCommitState.project === scope ? revertCommitState.commit : null;
   const undoLastCommit =
@@ -452,6 +574,11 @@ export function useGitHistoryActions(project: string, root?: string) {
       ? selectedChangesState.operation
       : null;
   const status = statusState.project === scope ? statusState.value : null;
+  const commitMessageQuery = useGitCommitMessage(
+    project,
+    editCommit?.hash ?? "",
+    root,
+  );
 
   function setStatus(value: GitHistoryActionStatus | null) {
     setStatusState({ project: scope, value });
@@ -727,6 +854,48 @@ export function useGitHistoryActions(project: string, root?: string) {
     return null;
   }
 
+  async function handleEditCommitMessage(message: string) {
+    if (!project || !editCommit) return null;
+    const targetHash = editCommit.hash;
+    if (editCommit.isPushed) {
+      setStatus({
+        kind: "blocked",
+        message:
+          "Edit Commit Message is only available for commits not pushed upstream",
+        detail: "Use a new commit for shared history.",
+      });
+      return null;
+    }
+
+    setStatus(null);
+    try {
+      const result = await editCommitMutation.mutateAsync({
+        hash: targetHash,
+        message,
+      });
+      setStatus(
+        formatGitActionStatus(
+          result,
+          `Edited commit message for ${targetHash.slice(0, 7)}`,
+          `Edit Commit Message failed for ${targetHash.slice(0, 7)}`,
+        ),
+      );
+      if (result.ok) {
+        setEditCommitState({ project: scope, commit: null });
+        return targetHash;
+      }
+    } catch (caughtError) {
+      setStatus({
+        kind: "error",
+        message:
+          caughtError instanceof Error
+            ? caughtError.message
+            : "Edit Commit Message failed",
+      });
+    }
+    return null;
+  }
+
   const clearStatus = useCallback(() => {
     setStatusState((current) => ({ ...current, value: null }));
   }, []);
@@ -734,6 +903,7 @@ export function useGitHistoryActions(project: string, root?: string) {
   const resetScope = useCallback(() => {
     setResetCommitState((current) => ({ ...current, commit: null }));
     setDropCommitState((current) => ({ ...current, commit: null }));
+    setEditCommitState((current) => ({ ...current, commit: null }));
     setRevertCommitState((current) => ({ ...current, commit: null }));
     setUndoLastCommitState((current) => ({ ...current, commit: null }));
     setSelectedChangesState((current) => ({ ...current, operation: null }));
@@ -743,6 +913,14 @@ export function useGitHistoryActions(project: string, root?: string) {
   return {
     dropCommit,
     isDropCommitPending: dropCommitMutation.isPending,
+    editCommit,
+    editCommitMessage: commitMessageQuery.data,
+    editCommitMessageLoading: commitMessageQuery.isLoading,
+    editCommitMessageError:
+      commitMessageQuery.error instanceof Error
+        ? commitMessageQuery.error.message
+        : undefined,
+    isEditCommitMessagePending: editCommitMutation.isPending,
     revertCommit,
     isRevertCommitPending: revertCommitMutation.isPending,
     undoLastCommit,
@@ -754,6 +932,8 @@ export function useGitHistoryActions(project: string, root?: string) {
     resetCommit,
     setDropCommit: (commit: GitLogEntry | null) =>
       setDropCommitState({ project: scope, commit }),
+    setEditCommit: (commit: GitLogEntry | null) =>
+      setEditCommitState({ project: scope, commit }),
     setRevertCommit: (commit: GitLogEntry | null) =>
       setRevertCommitState({ project: scope, commit }),
     setUndoLastCommit: (commit: GitLogEntry | null) =>
@@ -763,6 +943,7 @@ export function useGitHistoryActions(project: string, root?: string) {
     handleCherryPick,
     handleCherryPickFiles,
     handleDropCommit,
+    handleEditCommitMessage,
     handleDropFiles,
     handleRevertCommit,
     handleRevertFiles,

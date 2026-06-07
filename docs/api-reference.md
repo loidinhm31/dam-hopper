@@ -283,6 +283,26 @@ by default and should use revert. The server refuses to start a rewrite while
 a merge, rebase, or cherry-pick is already in progress and returns `recovery`
 metadata for the active operation.
 
+**GET /api/git/{project}/commit/{hash}/message**
+Return the complete commit message, including its body. Use the optional
+`root` query parameter to target a nested VCS root.
+
+```json
+{ "message": "Subject\n\nDetailed body" }
+```
+
+**POST /api/git/{project}/commit/{hash}/message**
+Edit the message of any unpushed commit reachable from the checked-out branch.
+The JSON body accepts `message` and optional `root`. Empty messages, dirty
+worktrees, detached HEAD, active Git operations, unreachable commits, and
+pushed commits are rejected. Editing `HEAD` amends it in place; editing an
+older commit, including a root commit, rewrites that commit and replays its
+descendants with merge topology preserved.
+
+```json
+{ "message": "New subject\n\nNew body", "root": "modules/child" }
+```
+
 **POST /api/git/{project}/commit/{hash}/drop-files**
 Drop selected file changes from an unpushed commit while preserving other files
 from that commit. This is a local-history rewrite and is blocked for pushed
@@ -427,10 +447,10 @@ history, while rewrite operations are restricted to local commits that have not
 been pushed upstream. Recovery states are surfaced explicitly so the UI can
 offer continue/abort guidance instead of hiding active Git porcelain state.
 DamHopper does not expose a published-history rewrite override through `drop`,
-`drop-files`, or `undo-last-commit`. The dedicated push flow only publishes an
-already-rewritten branch intentionally: `POST /api/git/push` with `force: true`
-updates the configured upstream branch, but it does not relax the pushed/shared
-history guards on those local rewrite endpoints.
+`drop-files`, `message`, or `undo-last-commit`. The dedicated push flow only
+publishes an already-rewritten branch intentionally: `POST /api/git/push` with
+`force: true` updates the configured upstream branch, but it does not relax the
+pushed/shared history guards on those local rewrite endpoints.
 
 | Operation          | History effect       | Shared-history behavior                                  |
 | ------------------ | -------------------- | -------------------------------------------------------- |
@@ -438,6 +458,7 @@ history guards on those local rewrite endpoints.
 | `revert-files`     | Worktree inverse     | Allowed; selected changes stay uncommitted for review    |
 | `drop`             | Rewrites branch      | Blocked for pushed/shared commits; use revert instead    |
 | `drop-files`       | Rewrites branch      | Blocked for pushed/shared commits; use revert instead    |
+| `message`          | Rewrites commit      | Blocked for pushed/shared commits                        |
 | `undo-last-commit` | Rewrites local HEAD  | Blocked for pushed/shared commits; use revert instead    |
 | `reset --hard`     | Rewrites local state | Allowed only after explicit request and preflight checks |
 

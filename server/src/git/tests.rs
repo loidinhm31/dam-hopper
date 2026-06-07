@@ -17,7 +17,8 @@ use crate::git::types::{
     CheckoutStrategy, GitProgressPhase, ResetMode, VcsRootKind, VcsRootMappingState,
 };
 use crate::git::{
-    cherry_pick_commit_files, drop_commit, drop_commit_files, revert_commit, revert_commit_files,
+    cherry_pick_commit_files, drop_commit, drop_commit_files, edit_commit_message,
+    get_commit_message, revert_commit, revert_commit_files,
 };
 use crate::git::{
     discover_vcs_roots, resolve_git_path_root, resolve_git_request_root, resolve_vcs_root,
@@ -1592,6 +1593,154 @@ async fn drop_commit_conflict_returns_recoverable_rebase_state() {
     assert_eq!(result.conflict, Some(true));
     assert_eq!(
         result.recovery.as_ref().map(|r| &r.operation),
+        Some(&crate::git::GitRecoveryOperation::Rebase)
+    );
+}
+
+#[tokio::test]
+async fn edit_commit_message_amends_head_and_preserves_tree_and_author() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let old_hash = git_output(&["rev-parse", "HEAD"], path);
+    let old_tree = git_output(&["rev-parse", "HEAD^{tree}"], path);
+    let old_author = git_output(&["log", "-1", "--format=%an <%ae>"], path);
+
+    let result = edit_commit_message(path, &old_hash, "new subject\n\nnew body")
+        .await
+        .unwrap();
+    let new_hash = result.hash.as_deref().unwrap();
+
+    assert!(result.ok);
+    assert_ne!(new_hash, old_hash);
+    assert_eq!(git_output(&["rev-parse", "HEAD^{tree}"], path), old_tree);
+    assert_eq!(
+        git_output(&["log", "-1", "--format=%an <%ae>"], path),
+        old_author
+    );
+    assert_eq!(
+        get_commit_message(path, new_hash).unwrap(),
+        "new subject\n\nnew body\n"
+    );
+}
+
+#[tokio::test]
+async fn edit_commit_message_rewrites_older_commit_and_descendants() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let root_hash = git_output(&["rev-parse", "HEAD"], path);
+    std::fs::write(path.join("child.txt"), "child\n").unwrap();
+    git(&["add", "child.txt"], path);
+    git(&["commit", "-m", "child"], path);
+    let old_head = git_output(&["rev-parse", "HEAD"], path);
+    let old_tree = git_output(&["rev-parse", "HEAD^{tree}"], path);
+
+    let result = edit_commit_message(path, &root_hash, "edited root")
+        .await
+        .unwrap();
+
+    assert!(result.ok);
+    assert_ne!(git_output(&["rev-parse", "HEAD"], path), old_head);
+    assert_eq!(git_output(&["rev-parse", "HEAD^{tree}"], path), old_tree);
+    assert_eq!(
+        git_output(&["log", "--format=%s", "--reverse"], path),
+        "edited root\nchild"
+    );
+    assert_eq!(git_output(&["branch", "--show-current"], path), "main");
+}
+
+#[tokio::test]
+async fn edit_commit_message_rejects_empty_dirty_pushed_and_active_operation() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let hash = git_output(&["rev-parse", "HEAD"], path);
+    assert!(edit_commit_message(path, &hash, " \n").await.is_err());
+
+    std::fs::write(path.join("dirty.txt"), "dirty\n").unwrap();
+    let dirty = edit_commit_message(path, &hash, "new").await.unwrap();
+    assert_eq!(
+        dirty.blocked_reason,
+        Some(crate::git::GitBlockReason::DirtyWorktree)
+    );
+    std::fs::remove_file(path.join("dirty.txt")).unwrap();
+
+    let (_remote, seed, _clone) = make_remote_clone_repo();
+    let pushed_hash = git_output(&["rev-parse", "HEAD"], seed.path());
+    let pushed = edit_commit_message(seed.path(), &pushed_hash, "new")
+        .await
+        .unwrap();
+    assert_eq!(
+        pushed.blocked_reason,
+        Some(crate::git::GitBlockReason::PushedCommit)
+    );
+
+    std::fs::create_dir(path.join(".git/rebase-merge")).unwrap();
+    let active = edit_commit_message(path, &hash, "new").await.unwrap();
+    assert_eq!(
+        active.blocked_reason,
+        Some(crate::git::GitBlockReason::ActiveOperation)
+    );
+}
+
+#[tokio::test]
+async fn edit_commit_message_rejects_detached_and_unreachable_commits() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let main_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    git(&["checkout", "-b", "other"], path);
+    std::fs::write(path.join("other.txt"), "other\n").unwrap();
+    git(&["add", "other.txt"], path);
+    git(&["commit", "-m", "other"], path);
+    let other_hash = git_output(&["rev-parse", "HEAD"], path);
+    git(&["checkout", "main"], path);
+
+    let unreachable = edit_commit_message(path, &other_hash, "new").await.unwrap();
+    assert_eq!(
+        unreachable.blocked_reason,
+        Some(crate::git::GitBlockReason::UnreachableCommit)
+    );
+
+    git(&["checkout", "--detach", &main_hash], path);
+    let detached = edit_commit_message(path, &main_hash, "new").await.unwrap();
+    assert_eq!(
+        detached.blocked_reason,
+        Some(crate::git::GitBlockReason::DetachedHead)
+    );
+}
+
+#[tokio::test]
+async fn edit_commit_message_conflict_returns_recoverable_rebase_state() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let root_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    git(&["checkout", "-b", "side"], path);
+    std::fs::write(path.join("README.md"), "side\n").unwrap();
+    git(&["add", "README.md"], path);
+    git(&["commit", "-m", "side change"], path);
+
+    git(&["checkout", "main"], path);
+    std::fs::write(path.join("README.md"), "main\n").unwrap();
+    git(&["add", "README.md"], path);
+    git(&["commit", "-m", "main change"], path);
+    let merge = Command::new("git")
+        .args(["merge", "side"])
+        .current_dir(path)
+        .output()
+        .expect("git merge failed to spawn");
+    assert!(!merge.status.success(), "merge should conflict");
+    std::fs::write(path.join("README.md"), "resolved\n").unwrap();
+    git(&["add", "README.md"], path);
+    git(&["commit", "-m", "resolved merge"], path);
+
+    let result = edit_commit_message(path, &root_hash, "edited root")
+        .await
+        .unwrap();
+
+    assert!(!result.ok);
+    assert_eq!(result.conflict, Some(true));
+    assert_eq!(
+        result.recovery.as_ref().map(|state| &state.operation),
         Some(&crate::git::GitRecoveryOperation::Rebase)
     );
 }

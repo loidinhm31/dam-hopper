@@ -79,3 +79,49 @@ describe("WsTransport terminalAttach", () => {
     transport.destroy();
   });
 });
+
+describe("WsTransport commit message endpoints", () => {
+  it("loads and edits the full commit message with root scope", async () => {
+    installMockWebSocket();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: "subject\n\nbody" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("git:commitMessage", {
+      project: "demo",
+      hash: "abc123",
+      root: "modules/child",
+    });
+    await transport.invoke("git:editCommitMessage", {
+      project: "demo",
+      hash: "abc123",
+      message: "subject\n\nbody",
+      root: "modules/child",
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/git/demo/commit/abc123/message?root=modules%2Fchild",
+    );
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        message: "subject\n\nbody",
+        root: "modules/child",
+      }),
+    });
+    transport.destroy();
+  });
+});

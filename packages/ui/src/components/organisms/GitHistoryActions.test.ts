@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { describe, expect, it } from "vitest";
 import {
+  canSubmitEditedCommitMessage,
   formatGitActionStatus,
   GitHistoryStatusBanner,
 } from "./GitHistoryActions.js";
@@ -85,5 +86,23 @@ describe("formatGitActionStatus", () => {
     expect(markup).toContain("Rebase stopped on conflicts");
     expect(markup).toContain("Resolve the active operation before continuing.");
     expect(markup).toContain("border-[var(--color-danger)]");
+  });
+});
+
+describe("canSubmitEditedCommitMessage", () => {
+  it("blocks loading, empty, and unchanged messages", () => {
+    expect(canSubmitEditedCommitMessage("subject", "subject", false)).toBe(
+      false,
+    );
+    expect(canSubmitEditedCommitMessage(" \n", "subject", false)).toBe(false);
+    expect(canSubmitEditedCommitMessage("changed", "subject", true)).toBe(
+      false,
+    );
+  });
+
+  it("accepts a changed multiline message", () => {
+    expect(
+      canSubmitEditedCommitMessage("subject\n\nbody", "subject", false),
+    ).toBe(true);
   });
 });

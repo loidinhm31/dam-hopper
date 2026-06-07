@@ -26,6 +26,7 @@ import { SshRetryStatusMessage } from "@/components/atoms/SshRetryStatusMessage.
 import { useGitWithSshRetry } from "@/hooks/use-git-with-ssh-retry.js";
 import {
   GitDropCommitDialog,
+  GitEditCommitMessageDialog,
   GitHistoryStatusBanner,
   GitRevertCommitDialog,
   GitResetDialog,
@@ -311,6 +312,14 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
     );
   };
 
+  const handleEditCommitMessageConfirm = async (message: string) => {
+    const editedHash = await historyActions.handleEditCommitMessage(message);
+    if (!editedHash) return;
+    setSelectedCommit((current) =>
+      current?.hash === editedHash ? null : current,
+    );
+  };
+
   const handleRefresh = async () => {
     if (isRefreshing) return;
 
@@ -523,6 +532,11 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
                 onDropCommit={
                   isViewingActiveBranch ? historyActions.setDropCommit : undefined
                 }
+                onEditCommitMessage={
+                  isViewingActiveBranch
+                    ? historyActions.setEditCommit
+                    : undefined
+                }
                 onReset={
                   isViewingActiveBranch ? historyActions.setResetCommit : undefined
                 }
@@ -565,6 +579,15 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
         loading={historyActions.isDropCommitPending}
         onClose={() => historyActions.setDropCommit(null)}
         onConfirm={() => void handleDropCommitConfirm()}
+      />
+      <GitEditCommitMessageDialog
+        commit={historyActions.editCommit}
+        originalMessage={historyActions.editCommitMessage}
+        loading={historyActions.editCommitMessageLoading}
+        saving={historyActions.isEditCommitMessagePending}
+        error={historyActions.editCommitMessageError}
+        onClose={() => historyActions.setEditCommit(null)}
+        onConfirm={(message) => void handleEditCommitMessageConfirm(message)}
       />
       <GitRevertCommitDialog
         commit={historyActions.revertCommit}
