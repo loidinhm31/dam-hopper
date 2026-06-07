@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   clampHistoryContextMenuPosition,
   getDropCommitMenuState,
+  getEditCommitMessageMenuState,
   getUndoLastCommitMenuState,
   isHeadCommit,
 } from "./GitLogTree.js";
@@ -13,6 +14,18 @@ describe("GitLogTree helpers", () => {
       title: "Drop commit is only available for commits not pushed upstream",
     });
     expect(getDropCommitMenuState({ isPushed: false })).toEqual({
+      disabled: false,
+      title: undefined,
+    });
+  });
+
+  it("enables Edit Commit Message only for unpushed commits", () => {
+    expect(getEditCommitMessageMenuState({ isPushed: true })).toEqual({
+      disabled: true,
+      title:
+        "Edit Commit Message is only available for commits not pushed upstream",
+    });
+    expect(getEditCommitMessageMenuState({ isPushed: false })).toEqual({
       disabled: false,
       title: undefined,
     });
@@ -49,7 +62,7 @@ describe("GitLogTree helpers", () => {
   it("clamps the history context menu inside the viewport", () => {
     expect(clampHistoryContextMenuPosition(1200, 900, 1280, 960)).toEqual({
       x: 1090,
-      y: 734,
+      y: 706,
     });
     expect(clampHistoryContextMenuPosition(120, 80, 1280, 960)).toEqual({
       x: 120,

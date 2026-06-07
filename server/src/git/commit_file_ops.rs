@@ -160,6 +160,7 @@ async fn preflight_history_rewrite(
     project_path: &Path,
     hash: &str,
     root_message: &str,
+    allow_root: bool,
 ) -> Result<Option<GitActionResult>, AppError> {
     let parent_count = {
         let repo = git2::Repository::open(project_path)
@@ -176,6 +177,13 @@ async fn preflight_history_rewrite(
         );
         blocked.recovery = Some(recovery);
         return Ok(Some(blocked));
+    }
+    if cli_fallback::current_branch(project_path).await.is_err() {
+        return Ok(Some(GitActionResult::blocked(
+            GitBlockReason::DetachedHead,
+            "history rewrite requires a checked-out branch",
+            "check out a branch before rewriting commits",
+        )));
     }
     if !cli_fallback::is_clean_worktree(project_path).await? {
         return Ok(Some(GitActionResult::blocked(
@@ -198,7 +206,7 @@ async fn preflight_history_rewrite(
             "use revert for pushed/shared history",
         )));
     }
-    if parent_count == 0 {
+    if parent_count == 0 && !allow_root {
         return Ok(Some(GitActionResult::blocked(
             GitBlockReason::RootCommit,
             root_message,
@@ -272,6 +280,7 @@ pub async fn drop_commit_files(
         project_path,
         hash,
         "drop selected changes is not supported for root commits",
+        false,
     )
     .await?
     {
@@ -400,6 +409,7 @@ pub async fn drop_commit(project_path: &Path, hash: &str) -> Result<GitActionRes
         project_path,
         hash,
         "drop commit is not supported for root commits",
+        false,
     )
     .await?
     {
@@ -447,6 +457,118 @@ pub async fn drop_commit(project_path: &Path, hash: &str) -> Result<GitActionRes
             message: Some(stderr),
             branch: Some(branch),
             hash: Some(hash.to_string()),
+            stashed: None,
+            conflict: Some(true),
+            dirty: Some(true),
+            destructive: Some(true),
+            recovery: cli_fallback::active_git_operation(project_path)
+                .await
+                .ok()
+                .flatten(),
+            blocked_reason: None,
+            recommendation: Some("resolve rebase conflicts, then continue or abort".to_string()),
+        }),
+        Err(err) => Err(err),
+    }
+}
+
+pub fn get_commit_message(project_path: &Path, hash: &str) -> Result<String, AppError> {
+    let repo =
+        git2::Repository::open(project_path).map_err(|e| AppError::Git(e.message().to_string()))?;
+    let commit = validate_commit(&repo, hash)?;
+    Ok(String::from_utf8_lossy(commit.message_bytes()).into_owned())
+}
+
+pub async fn edit_commit_message(
+    project_path: &Path,
+    hash: &str,
+    message: &str,
+) -> Result<GitActionResult, AppError> {
+    if message.trim().is_empty() {
+        return Err(AppError::InvalidInput(
+            "commit message cannot be empty".to_string(),
+        ));
+    }
+    {
+        let repo = git2::Repository::open(project_path)
+            .map_err(|e| AppError::Git(e.message().to_string()))?;
+        validate_commit(&repo, hash)?;
+    }
+    if let Some(mut blocked) = preflight_history_rewrite(project_path, hash, "", true).await? {
+        blocked.hash = Some(hash.to_string());
+        return Ok(blocked);
+    }
+
+    let branch = cli_fallback::current_branch(project_path).await?;
+    let head = cli_fallback::head_hash(project_path).await?;
+
+    if head == hash {
+        cli_fallback::run_git(&["commit", "--amend", "-m", message], project_path).await?;
+        let new_hash = cli_fallback::head_hash(project_path).await?;
+        return Ok(GitActionResult {
+            ok: true,
+            message: Some(format!("Edited commit message for {}", &hash[..7])),
+            branch: Some(branch),
+            hash: Some(new_hash),
+            stashed: None,
+            conflict: Some(false),
+            dirty: Some(false),
+            destructive: Some(true),
+            recovery: None,
+            blocked_reason: None,
+            recommendation: None,
+        });
+    }
+
+    cli_fallback::run_git(&["checkout", "--detach", hash], project_path).await?;
+    if let Err(err) =
+        cli_fallback::run_git(&["commit", "--amend", "-m", message], project_path).await
+    {
+        let _ = cli_fallback::run_git(&["checkout", &branch], project_path).await;
+        return Err(err);
+    }
+    let new_hash = match cli_fallback::head_hash(project_path).await {
+        Ok(new_hash) => new_hash,
+        Err(err) => {
+            let _ = cli_fallback::run_git(&["checkout", &branch], project_path).await;
+            return Err(err);
+        }
+    };
+    if let Err(err) = cli_fallback::run_git(&["checkout", &branch], project_path).await {
+        return Err(err);
+    }
+
+    match cli_fallback::run_git(
+        &[
+            "rebase",
+            "--rebase-merges",
+            "--onto",
+            &new_hash,
+            hash,
+            &branch,
+        ],
+        project_path,
+    )
+    .await
+    {
+        Ok(_) => Ok(GitActionResult {
+            ok: true,
+            message: Some(format!("Edited commit message for {}", &hash[..7])),
+            branch: Some(branch),
+            hash: Some(new_hash),
+            stashed: None,
+            conflict: Some(false),
+            dirty: Some(false),
+            destructive: Some(true),
+            recovery: None,
+            blocked_reason: None,
+            recommendation: None,
+        }),
+        Err(AppError::Git(stderr)) => Ok(GitActionResult {
+            ok: false,
+            message: Some(stderr),
+            branch: Some(branch),
+            hash: Some(new_hash),
             stashed: None,
             conflict: Some(true),
             dirty: Some(true),

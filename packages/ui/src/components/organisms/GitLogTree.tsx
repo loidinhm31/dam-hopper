@@ -26,6 +26,7 @@ interface GitLogTreeProps {
   onCherryPick?: (entry: GitLogEntry) => void;
   onRevertCommit?: (entry: GitLogEntry) => void;
   onUndoLastCommit?: (entry: GitLogEntry) => void;
+  onEditCommitMessage?: (entry: GitLogEntry) => void;
   onReset?: (entry: GitLogEntry) => void;
   onDropCommit?: (entry: GitLogEntry) => void;
 }
@@ -49,6 +50,17 @@ export function getDropCommitMenuState(entry: Pick<GitLogEntry, "isPushed">) {
     disabled: entry.isPushed,
     title: entry.isPushed
       ? "Drop commit is only available for commits not pushed upstream"
+      : undefined,
+  };
+}
+
+export function getEditCommitMessageMenuState(
+  entry: Pick<GitLogEntry, "isPushed">,
+) {
+  return {
+    disabled: entry.isPushed,
+    title: entry.isPushed
+      ? "Edit Commit Message is only available for commits not pushed upstream"
       : undefined,
   };
 }
@@ -83,7 +95,7 @@ export function clampHistoryContextMenuPosition(
 ) {
   return {
     x: Math.min(x, windowWidth - 190),
-    y: Math.min(y, windowHeight - 226),
+    y: Math.min(y, windowHeight - 254),
   };
 }
 
@@ -95,6 +107,7 @@ function HistoryContextMenu({
   onCherryPick,
   onRevertCommit,
   onUndoLastCommit,
+  onEditCommitMessage,
   onReset,
   onDropCommit,
   onClose,
@@ -106,6 +119,7 @@ function HistoryContextMenu({
   onCherryPick?: (entry: GitLogEntry) => void;
   onRevertCommit?: (entry: GitLogEntry) => void;
   onUndoLastCommit?: (entry: GitLogEntry) => void;
+  onEditCommitMessage?: (entry: GitLogEntry) => void;
   onReset?: (entry: GitLogEntry) => void;
   onDropCommit?: (entry: GitLogEntry) => void;
   onClose: () => void;
@@ -116,8 +130,10 @@ function HistoryContextMenu({
     isHead,
     isPushed: entry.isPushed,
   });
+  const editCommitMessageState = getEditCommitMessageMenuState(entry);
   const resetDisabled = !onReset;
   const undoDisabled = undoLastCommitState.disabled || !onUndoLastCommit;
+  const editDisabled = editCommitMessageState.disabled || !onEditCommitMessage;
   const dropDisabled = dropCommitState.disabled || !onDropCommit;
 
   useEffect(() => {
@@ -175,6 +191,23 @@ function HistoryContextMenu({
       <div className="px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
         Rewrite actions
       </div>
+      <button
+        type="button"
+        disabled={editDisabled}
+        title={
+          editCommitMessageState.title ??
+          (!onEditCommitMessage
+            ? "Edit Commit Message is only available while viewing the checked-out branch"
+            : undefined)
+        }
+        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+        onClick={() => {
+          onEditCommitMessage?.(entry);
+          onClose();
+        }}
+      >
+        Edit Commit Message
+      </button>
       <button
         type="button"
         disabled={undoDisabled}
@@ -237,6 +270,7 @@ export function GitLogTree({
   onCherryPick,
   onRevertCommit,
   onUndoLastCommit,
+  onEditCommitMessage,
   onReset,
   onDropCommit,
 }: GitLogTreeProps) {
@@ -496,6 +530,7 @@ export function GitLogTree({
           onCherryPick={onCherryPick}
           onRevertCommit={onRevertCommit}
           onUndoLastCommit={onUndoLastCommit}
+          onEditCommitMessage={onEditCommitMessage}
           onReset={onReset}
           onDropCommit={onDropCommit}
           onClose={() => setContextMenu(null)}

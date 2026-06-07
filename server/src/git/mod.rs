@@ -13,7 +13,8 @@ mod tests;
 
 pub use bulk::BulkGitService;
 pub use commit_file_ops::{
-    cherry_pick_commit_files, drop_commit, drop_commit_files, revert_commit, revert_commit_files,
+    cherry_pick_commit_files, drop_commit, drop_commit_files, edit_commit_message,
+    get_commit_message, revert_commit, revert_commit_files,
 };
 pub use diff::{
     commit_files, discard_file, discard_hunk, get_commit_file_diff, get_commit_files,

@@ -37,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- IntelliJ-style **Edit Commit Message** for any unpushed commit reachable from
+  the checked-out branch. Added full-message read and guarded message-rewrite
+  REST APIs, root-commit and descendant replay support, shared Git history UI
+  wiring, multiline editing, and pushed/non-active-branch availability guards.
+
 - **Phase 01: Workspace Split.** Complete ✓ 2026-05-24. Split the web frontend into a thin `apps/web` Vite host plus a shared `packages/ui` React package, preserving current browser behavior while moving shared components, hooks, styles, tests, assets, and transport-facing UI code behind explicit UI package exports. No native behavior was added yet in this phase. [See plan](../plans/260524-2238-tauri-v2-shared-ui-native/phase-01-workspace-split.md).
 
 - Root-aware force-push support on the actual push flow. `POST /api/git/push` now accepts `force: true`, and the Push entrypoints in `ProjectInfoPanel`, `WorkspaceGitPanel`, and `GitPage` expose a confirmed `Force Push` action that reuses the same libgit2 credential callback path as normal push. This stays separate from the guarded history-rewrite endpoints: pushed/shared-history drop and undo flows still recommend revert instead of silently overriding safety checks.

@@ -29,6 +29,7 @@ import {
 } from "@/components/organisms/ProjectInfoPanel.js";
 import {
   GitDropCommitDialog,
+  GitEditCommitMessageDialog,
   GitHistoryStatusBanner,
   GitRevertCommitDialog,
   GitResetDialog,
@@ -374,6 +375,14 @@ export function GitPage() {
     );
   }
 
+  async function handleEditCommitMessageConfirm(message: string) {
+    const editedHash = await historyActions.handleEditCommitMessage(message);
+    if (!editedHash) return;
+    setSelectedCommit((current) =>
+      current?.hash === editedHash ? null : current,
+    );
+  }
+
   async function handleUndoLastCommitConfirm() {
     const undoneHash = await historyActions.handleUndoLastCommit();
     if (!undoneHash) return;
@@ -489,6 +498,7 @@ export function GitPage() {
                       onRevertCommit={historyActions.setRevertCommit}
                       onUndoLastCommit={historyActions.setUndoLastCommit}
                       onDropCommit={historyActions.setDropCommit}
+                      onEditCommitMessage={historyActions.setEditCommit}
                       onReset={historyActions.setResetCommit}
                     />
                   </Suspense>
@@ -541,6 +551,15 @@ export function GitPage() {
         loading={historyActions.isDropCommitPending}
         onClose={() => historyActions.setDropCommit(null)}
         onConfirm={() => void handleDropCommitConfirm()}
+      />
+      <GitEditCommitMessageDialog
+        commit={historyActions.editCommit}
+        originalMessage={historyActions.editCommitMessage}
+        loading={historyActions.editCommitMessageLoading}
+        saving={historyActions.isEditCommitMessagePending}
+        error={historyActions.editCommitMessageError}
+        onClose={() => historyActions.setEditCommit(null)}
+        onConfirm={(message) => void handleEditCommitMessageConfirm(message)}
       />
       <GitRevertCommitDialog
         commit={historyActions.revertCommit}

@@ -387,6 +387,21 @@ export function useGitCommitFiles(
   });
 }
 
+export function useGitCommitMessage(
+  project: string,
+  hash: string,
+  root?: string,
+) {
+  const rootKey = gitRootKey(root);
+  return useQuery<string>({
+    queryKey: ["git-commit-message", project, rootKey, hash],
+    queryFn: async () =>
+      (await api.git.commitMessage(project, hash, root)).message,
+    enabled: !!project && !!hash,
+    staleTime: Infinity,
+  });
+}
+
 export function useGitCommitFileDiff(
   project: string,
   hash: string,
@@ -588,6 +603,15 @@ export function useGitDropCommit(project: string, root?: string) {
   return useMutation({
     mutationFn: ({ hash }: { hash: string }) =>
       api.git.dropCommit(project, hash, root),
+    onSuccess: () => void invalidateGitBranchOperation(qc, project),
+  });
+}
+
+export function useGitEditCommitMessage(project: string, root?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ hash, message }: { hash: string; message: string }) =>
+      api.git.editCommitMessage(project, hash, message, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, project),
   });
 }

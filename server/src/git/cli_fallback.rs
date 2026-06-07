@@ -88,18 +88,18 @@ pub(crate) async fn is_clean_worktree(cwd: &Path) -> Result<bool, AppError> {
 }
 
 pub(crate) async fn active_git_operation(cwd: &Path) -> Result<Option<GitRecoveryState>, AppError> {
-    if git_path_exists(cwd, "MERGE_HEAD").await? {
-        return Ok(Some(GitRecoveryState {
-            operation: GitRecoveryOperation::Merge,
-            can_abort: true,
-            can_continue: false,
-        }));
-    }
     if git_path_exists(cwd, "rebase-merge").await? || git_path_exists(cwd, "rebase-apply").await? {
         return Ok(Some(GitRecoveryState {
             operation: GitRecoveryOperation::Rebase,
             can_abort: true,
             can_continue: true,
+        }));
+    }
+    if git_path_exists(cwd, "MERGE_HEAD").await? {
+        return Ok(Some(GitRecoveryState {
+            operation: GitRecoveryOperation::Merge,
+            can_abort: true,
+            can_continue: false,
         }));
     }
     if git_path_exists(cwd, "CHERRY_PICK_HEAD").await? {
