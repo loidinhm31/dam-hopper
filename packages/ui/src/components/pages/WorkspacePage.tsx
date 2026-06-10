@@ -832,10 +832,7 @@ export default function WorkspacePage() {
         icon: Search,
         content: projectName ? (
           <Suspense fallback={<PanelFallback label="Loading search…" />}>
-            <SearchPanel
-              project={projectName}
-              onResultClick={handleSearchResultOpen}
-            />
+            <SearchPanel project={projectName} onResultClick={handleSearchResultOpen} />
           </Suspense>
         ) : (
           <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
@@ -1042,9 +1039,8 @@ export default function WorkspacePage() {
           <Suspense fallback={<PanelFallback label="Loading search…" />}>
             <SearchPanel
               project={projectName}
-              onResultClick={(match) =>
-                handleSearchResultOpen(match, { closeSearch: true })
-              }
+              closeOnResultClick
+              onResultClick={handleSearchResultOpen}
             />
           </Suspense>
         ) : (
@@ -1215,11 +1211,10 @@ export default function WorkspacePage() {
             <Suspense fallback={<PanelFallback label="Loading search…" />}>
               <SearchPanel
                 project={projectName}
+                closeOnResultClick
                 inputRef={searchInputRef}
                 onClose={closeSearch}
-                onResultClick={(match) =>
-                  handleSearchResultOpen(match, { closeSearch: true })
-                }
+                onResultClick={handleSearchResultOpen}
               />
             </Suspense>
           </div>

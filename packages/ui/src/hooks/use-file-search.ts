@@ -1,7 +1,13 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getTransport } from "@/api/transport.js";
 import type { PathSearchResponse, SearchResponse } from "@/api/fs-types.js";
+import {
+  isContentSearchMatch,
+  isPathSearchMatch,
+  sortContentSearchMatches,
+  sortPathSearchMatches,
+} from "@/lib/search-matches.js";
 import type { SearchMode, SearchScope } from "@/stores/search-ui.js";
 
 const DEBOUNCE_MS = 350;
@@ -24,7 +30,7 @@ export function useFileSearch(
   const trimmedQuery = debouncedQuery.slice(0, MAX_QUERY_LEN);
   const isWorkspace = scope === "workspace";
 
-  const { data, isLoading, isError } = useQuery<
+  const { data, isLoading, isError, refetch } = useQuery<
     SearchResponse | PathSearchResponse
   >({
     queryKey: [
@@ -49,11 +55,32 @@ export function useFileSearch(
     placeholderData: (prev) => prev,
   });
 
+  const sortedData = useMemo(() => {
+    if (!data) return undefined;
+
+    if (mode === "content") {
+      return {
+        ...(data as SearchResponse),
+        matches: sortContentSearchMatches(
+          (data as SearchResponse).matches.filter(isContentSearchMatch),
+        ),
+      };
+    }
+
+    return {
+      ...(data as PathSearchResponse),
+      matches: sortPathSearchMatches(
+        (data as PathSearchResponse).matches.filter(isPathSearchMatch),
+      ),
+    };
+  }, [data, mode]);
+
   return {
     caseSensitive,
     setCaseSensitive,
-    data,
+    data: sortedData,
     isLoading,
     isError,
+    refetch,
   };
 }
