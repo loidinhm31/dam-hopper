@@ -1,27 +1,32 @@
-import { useRef, useMemo, useEffect } from "react";
-import { Loader2, CaseSensitive, AlertTriangle, X } from "lucide-react";
-import { cn } from "@/lib/utils.js";
-import { FileDecorationIcon } from "@/lib/file-decoration-icon.js";
+import { useEffect, useMemo, useRef } from "react";
+import {
+  AlertTriangle,
+  CaseSensitive,
+  Loader2,
+  Replace,
+  X,
+} from "lucide-react";
 import { useFileSearch } from "@/hooks/use-file-search.js";
 import { useSearchUiStore } from "@/stores/search-ui.js";
+import type { SearchResultItem } from "@/lib/search-matches.js";
+import {
+  groupContentSearchMatches,
+  isContentSearchMatch,
+  isPathSearchMatch,
+  sortContentSearchMatches,
+} from "@/lib/search-matches.js";
+import { SearchPanelResults } from "@/components/organisms/SearchPanelResults.js";
+import { useSearchPanelReplace } from "@/hooks/use-search-panel-replace.js";
 import type { PathSearchMatch, SearchMatch } from "@/api/fs-types.js";
-
-type SearchResultItem = SearchMatch | PathSearchMatch;
-
-function isContentSearchMatch(match: SearchResultItem): match is SearchMatch {
-  return (
-    typeof (match as SearchMatch).text === "string" &&
-    typeof (match as SearchMatch).line === "number"
-  );
-}
-
-function isPathSearchMatch(match: SearchResultItem): match is PathSearchMatch {
-  return typeof match.path === "string" && !isContentSearchMatch(match);
-}
+import { cn } from "@/lib/utils.js";
 
 interface SearchPanelProps {
   project: string;
-  onResultClick: (match: SearchResultItem) => void;
+  onResultClick: (
+    match: SearchResultItem,
+    options?: { closeSearch?: boolean },
+  ) => void;
+  closeOnResultClick?: boolean;
   onClose?: () => void;
   inputRef?: React.RefObject<HTMLInputElement | null>;
   consumeOpenSelection?: boolean;
@@ -30,52 +35,65 @@ interface SearchPanelProps {
 export function SearchPanel({
   project,
   onResultClick,
+  closeOnResultClick = false,
   onClose,
   inputRef,
   consumeOpenSelection = Boolean(onClose),
 }: SearchPanelProps) {
   const localInputRef = useRef<HTMLInputElement>(null);
   const resolvedRef = inputRef ?? localInputRef;
-
   const {
     scope,
     setScope,
     mode,
     setMode,
     queries,
+    replaceQuery,
     setQuery,
+    setReplaceQuery,
     selectOnOpen: shouldSelectOnOpen,
     consumeSelectOnOpen,
   } = useSearchUiStore();
   const query = queries[mode];
-
-  useEffect(() => {
-    if (!onClose) return;
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose!();
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
-  const { caseSensitive, setCaseSensitive, data, isLoading, isError } =
+  const { caseSensitive, setCaseSensitive, data, isLoading, isError, refetch } =
     useFileSearch(project, scope, mode, query);
 
   const contentMatches = useMemo(
     () =>
       mode === "content"
-        ? (data?.matches ?? []).filter(isContentSearchMatch)
+        ? ((data?.matches ?? []) as SearchResultItem[]).filter(isContentSearchMatch)
         : [],
     [data?.matches, mode],
   );
-
   const pathMatches = useMemo(
     () =>
-      mode === "filename" ? (data?.matches ?? []).filter(isPathSearchMatch) : [],
+      mode === "filename"
+        ? ((data?.matches ?? []) as SearchResultItem[]).filter(isPathSearchMatch)
+        : [],
     [data?.matches, mode],
   );
+  const groupedContentMatches = useMemo(
+    () => groupContentSearchMatches(contentMatches),
+    [contentMatches],
+  );
+  const totalMatches =
+    mode === "content" ? contentMatches.length : pathMatches.length;
+  const fileCount =
+    mode === "content"
+      ? groupedContentMatches.length
+      : new Set(pathMatches.map((match) => match.path)).size;
 
-  // Reopening search selects the saved keyword so typing replaces it.
+  useEffect(() => {
+    if (!onClose) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose?.();
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   useEffect(() => {
     if (consumeOpenSelection && consumeSelectOnOpen()) {
       setTimeout(() => resolvedRef.current?.select(), 20);
@@ -84,54 +102,41 @@ export function SearchPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, consumeOpenSelection, shouldSelectOnOpen]);
 
-  // Group matches by file path
-  const grouped = useMemo(() => {
-    if (contentMatches.length === 0) return [];
-    const map = new Map<string, SearchMatch[]>();
-    for (const m of contentMatches) {
-      const arr = map.get(m.path) ?? [];
-      arr.push(m);
-      map.set(m.path, arr);
-    }
-    return Array.from(map.entries());
-  }, [contentMatches]);
+  const refreshContentMatches = async () => {
+    const refreshed = await refetch();
+    const matches = (refreshed.data?.matches ?? []) as SearchResultItem[];
+    return sortContentSearchMatches(matches.filter(isContentSearchMatch));
+  };
 
-  const totalMatches =
-    mode === "content" ? contentMatches.length : pathMatches.length;
-  const fileCount =
-    mode === "content"
-      ? grouped.length
-      : new Set(pathMatches.map((match) => match.path)).size;
+  const {
+    selectedMatchKey,
+    isReplacing,
+    warning,
+    error,
+    replaceDisabled,
+    selectMatch,
+    replaceNext,
+  } = useSearchPanelReplace({
+    project,
+    matches: contentMatches,
+    searchQuery: queries.content,
+    replaceQuery,
+    caseSensitive,
+    refreshMatches: refreshContentMatches,
+    openMatch: (match, options) => onResultClick(match, options),
+  });
 
-  function highlightMatch(text: string, q: string, isCaseSensitive: boolean) {
-    if (!q) return <span>{text}</span>;
-    const flags = isCaseSensitive ? "g" : "gi";
-    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const parts = text.split(new RegExp(`(${escaped})`, flags));
-    return (
-      <>
-        {parts.map((part, i) => {
-          const matches = isCaseSensitive
-            ? part === q
-            : part.toLowerCase() === q.toLowerCase();
-          return matches ? (
-            <mark
-              key={i}
-              className="bg-[var(--color-primary)]/25 text-[var(--color-primary)] rounded-sm px-0.5"
-            >
-              {part}
-            </mark>
-          ) : (
-            <span key={i}>{part}</span>
-          );
-        })}
-      </>
-    );
-  }
+  const handleContentMatchClick = (match: SearchMatch) => {
+    selectMatch(match);
+    onResultClick(match, { closeSearch: closeOnResultClick });
+  };
+
+  const handlePathMatchClick = (match: PathSearchMatch) => {
+    onResultClick(match, { closeSearch: closeOnResultClick });
+  };
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header row */}
       <div className="shrink-0 flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)]">
         <span className="text-[11px] font-semibold tracking-widest text-[var(--color-text-muted)] uppercase">
           {mode === "content" ? "Search Contents" : "Find File"}
@@ -146,43 +151,41 @@ export function SearchPanel({
         )}
       </div>
 
-      {/* Scope toggle */}
       <div className="shrink-0 px-3 pt-2">
         <div className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden text-[11px] font-medium mr-2">
-          {(["content", "filename"] as const).map((m) => (
+          {(["content", "filename"] as const).map((nextMode) => (
             <button
-              key={m}
-              onClick={() => setMode(m)}
+              key={nextMode}
+              onClick={() => setMode(nextMode)}
               className={cn(
                 "px-3 py-1 transition-colors capitalize",
-                mode === m
+                mode === nextMode
                   ? "bg-[var(--color-primary)] text-white"
                   : "bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
               )}
             >
-              {m === "content" ? "Contents" : "Files"}
+              {nextMode === "content" ? "Contents" : "Files"}
             </button>
           ))}
         </div>
         <div className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden text-[11px] font-medium">
-          {(["project", "workspace"] as const).map((s) => (
+          {(["project", "workspace"] as const).map((nextScope) => (
             <button
-              key={s}
-              onClick={() => setScope(s)}
+              key={nextScope}
+              onClick={() => setScope(nextScope)}
               className={cn(
                 "px-3 py-1 transition-colors capitalize",
-                scope === s
+                scope === nextScope
                   ? "bg-[var(--color-primary)] text-white"
                   : "bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
               )}
             >
-              {s}
+              {nextScope}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Search input */}
       <div className="shrink-0 px-3 py-2 border-b border-[var(--color-border)] space-y-1.5">
         <div className="flex items-center gap-1.5">
           <input
@@ -199,11 +202,11 @@ export function SearchPanel({
                   : "Search file contents…"
             }
             value={query}
-            onChange={(e) => setQuery(mode, e.target.value)}
+            onChange={(event) => setQuery(mode, event.target.value)}
             className="flex-1 text-xs px-2 py-1.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)] transition-colors"
           />
           <button
-            onClick={() => setCaseSensitive((v) => !v)}
+            onClick={() => setCaseSensitive((value) => !value)}
             title="Case sensitive"
             className={cn(
               "p-1.5 rounded transition-colors shrink-0",
@@ -216,7 +219,36 @@ export function SearchPanel({
           </button>
         </div>
 
-        {/* Status line */}
+        {mode === "content" && (
+          <div className="flex items-center gap-1.5">
+            <input
+              type="text"
+              placeholder="Replace with…"
+              value={replaceQuery}
+              onChange={(event) => setReplaceQuery(event.target.value)}
+              className="flex-1 text-xs px-2 py-1.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)] transition-colors"
+            />
+            <button
+              type="button"
+              onClick={() => void replaceNext()}
+              disabled={replaceDisabled}
+              className={cn(
+                "shrink-0 inline-flex items-center gap-1 rounded px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+                replaceDisabled
+                  ? "cursor-not-allowed bg-[var(--color-surface-2)] text-[var(--color-text-muted)]"
+                  : "bg-[var(--color-primary)] text-white hover:opacity-90",
+              )}
+            >
+              {isReplacing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Replace className="h-3.5 w-3.5" />
+              )}
+              Replace Next
+            </button>
+          </div>
+        )}
+
         {query.length >= 2 && (
           <div className="text-[10px] text-[var(--color-text-muted)] flex items-center gap-1.5">
             {isLoading ? (
@@ -246,6 +278,19 @@ export function SearchPanel({
             ) : null}
           </div>
         )}
+
+        {warning && (
+          <div className="flex items-start gap-1.5 text-[10px] text-amber-400">
+            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+            <span>{warning}</span>
+          </div>
+        )}
+        {error && (
+          <div className="flex items-start gap-1.5 text-[10px] text-[var(--color-danger)]">
+            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
         {query.length > 0 && query.length < 2 && (
           <p className="text-[10px] text-[var(--color-text-muted)]">
             Type at least 2 characters
@@ -253,94 +298,19 @@ export function SearchPanel({
         )}
       </div>
 
-      {/* Results */}
       <div className="flex-1 overflow-auto min-h-0">
-        {mode === "filename" && pathMatches.length ? (
-          <div>
-            {pathMatches.map((match) => {
-              const key = `${match.project ?? ""}:${match.path}`;
-              return (
-                <button
-                  key={key}
-                  onClick={() => onResultClick(match)}
-                  className="w-full text-left flex items-center gap-2 px-3 py-2 hover:bg-[var(--color-surface-2)] transition-colors"
-                >
-                  {match.project && scope === "workspace" && (
-                    <span className="shrink-0 px-1.5 py-0.5 rounded-sm bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-mono text-[9px]">
-                      {match.project}
-                    </span>
-                  )}
-                  <FileDecorationIcon
-                    pathOrName={match.path}
-                    className="h-3.5 w-3.5 shrink-0"
-                  />
-                  <span className="min-w-0 truncate text-[11px] font-mono text-[var(--color-text)]">
-                    {highlightMatch(match.path, query, caseSensitive)}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        ) : grouped.length > 0 ? (
-          grouped.map(([filePath, fileMatches]) => {
-            const projectBadge =
-              scope === "workspace" ? fileMatches[0].project : undefined;
-            return (
-              <div
-                key={`${projectBadge ?? ""}:${filePath}`}
-                className="border-b border-[var(--color-border)]/40 last:border-0"
-              >
-                {/* File header */}
-                <div
-                  className="sticky top-0 px-2 py-1 bg-[var(--color-surface-2)] text-[10px] font-semibold text-[var(--color-text-muted)] tracking-wide truncate cursor-pointer hover:text-[var(--color-text)] transition-colors flex items-center gap-1.5"
-                  title={filePath}
-                  onClick={() => onResultClick(fileMatches[0])}
-                >
-                  {projectBadge && (
-                    <span className="shrink-0 px-1.5 py-0.5 rounded-sm bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-mono text-[9px] tracking-normal">
-                      {projectBadge}
-                    </span>
-                  )}
-                  <FileDecorationIcon
-                    pathOrName={filePath}
-                    className="h-3.5 w-3.5"
-                  />
-                  <span className="truncate">{filePath}</span>
-                </div>
-                {/* Match lines */}
-                {fileMatches.map((m, i) => (
-                  <button
-                    key={i}
-                    onClick={() => onResultClick(m)}
-                    className="w-full text-left flex items-start gap-2 px-3 py-1 hover:bg-[var(--color-surface-2)] transition-colors group"
-                  >
-                    <span className="shrink-0 text-[10px] text-[var(--color-text-muted)] font-mono w-8 text-right mt-0.5">
-                      {m.line}
-                    </span>
-                    <span className="text-[11px] font-mono text-[var(--color-text)] truncate leading-5">
-                      {highlightMatch(m.text.trimStart(), query, caseSensitive)}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            );
-          })
-        ) : (
-          !isLoading &&
-          query.length >= 2 &&
-          data && (
-            <div className="flex items-center justify-center h-20 text-xs text-[var(--color-text-muted)]">
-              No results for &ldquo;{query}&rdquo;
-            </div>
-          )
-        )}
-
-        {/* Empty state */}
-        {query.length < 2 && (
-          <div className="flex items-center justify-center h-24 text-xs text-[var(--color-text-muted)] opacity-60">
-            {mode === "content" ? "Search file contents" : "Find files by name"}
-          </div>
-        )}
+        <SearchPanelResults
+          mode={mode}
+          scope={scope}
+          query={query}
+          caseSensitive={caseSensitive}
+          isLoading={isLoading}
+          groupedContentMatches={groupedContentMatches}
+          pathMatches={pathMatches}
+          selectedMatchKey={selectedMatchKey}
+          onResultClick={handlePathMatchClick}
+          onContentMatchClick={handleContentMatchClick}
+        />
       </div>
     </div>
   );

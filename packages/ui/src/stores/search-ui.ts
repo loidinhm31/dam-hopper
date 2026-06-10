@@ -9,11 +9,13 @@ interface SearchUiState {
   open: boolean;
   mode: SearchMode;
   queries: SearchQueries;
+  replaceQuery: string;
   selectOnOpen: boolean;
   scope: SearchScope;
   openWith: (mode?: SearchMode, query?: string) => void;
   setMode: (mode: SearchMode) => void;
   setQuery: (mode: SearchMode, query: string) => void;
+  setReplaceQuery: (query: string) => void;
   setScope: (scope: SearchScope) => void;
   consumeSelectOnOpen: () => boolean;
   close: () => void;
@@ -26,6 +28,7 @@ export const useSearchUiStore = create<SearchUiState>((set, get) => ({
     content: "",
     filename: "",
   },
+  replaceQuery: "",
   selectOnOpen: false,
   scope: "project",
   openWith: (mode = "content", query) =>
@@ -57,6 +60,7 @@ export const useSearchUiStore = create<SearchUiState>((set, get) => ({
     }),
   setQuery: (mode, query) =>
     set((state) => ({ queries: { ...state.queries, [mode]: query } })),
+  setReplaceQuery: (replaceQuery) => set({ replaceQuery }),
   setScope: (scope) => set({ scope }),
   consumeSelectOnOpen: () => {
     const shouldSelect = get().selectOnOpen;

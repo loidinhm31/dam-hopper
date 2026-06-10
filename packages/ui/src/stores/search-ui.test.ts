@@ -9,6 +9,7 @@ function resetSearchUiStore() {
       content: "",
       filename: "",
     },
+    replaceQuery: "",
     selectOnOpen: false,
     scope: "project",
   });
@@ -73,5 +74,17 @@ describe("search-ui store", () => {
       content: "validator.ts",
       filename: "EventValidator",
     });
+  });
+
+  it("keeps replaceQuery across mode switches and close/reopen", () => {
+    const store = useSearchUiStore.getState();
+    store.setReplaceQuery("updated-token");
+    store.setMode("filename");
+    store.close();
+    store.openWith("content");
+
+    const state = useSearchUiStore.getState();
+    expect(state.replaceQuery).toBe("updated-token");
+    expect(state.mode).toBe("content");
   });
 });
