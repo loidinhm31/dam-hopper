@@ -16,6 +16,7 @@ import {
 import { inputClass } from "@/components/atoms/Button.js";
 import { CommandSuggestionInput } from "@/components/atoms/CommandSuggestionInput.js";
 import { cn } from "@/lib/utils.js";
+import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import type { TreeProject, TreeCommand } from "@/hooks/use-terminal-tree.js";
 import type { SessionInfo, ProjectType } from "@/api/client.js";
 import { getSessionStatus, getStatusDotColor } from "@/lib/session-status.js";
@@ -100,11 +101,27 @@ function handleEditorKeyDown(
   }
 }
 
+function rowActionsClass(isCoarsePointer: boolean) {
+  return cn(
+    "flex items-center gap-0.5 transition-opacity shrink-0",
+    isCoarsePointer ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+  );
+}
+
+function rowActionButtonClass(isCoarsePointer: boolean, toneClass: string) {
+  return cn(
+    "rounded transition-colors",
+    isCoarsePointer ? "flex h-8 w-8 items-center justify-center" : "p-0.5",
+    toneClass,
+  );
+}
+
 function CommandRow({
   cmd,
   isSelected,
   isEditing,
   canEdit,
+  isCoarsePointer,
   onSelect,
   onLaunch,
   onKill,
@@ -121,6 +138,7 @@ function CommandRow({
   isSelected: boolean;
   isEditing: boolean;
   canEdit: boolean;
+  isCoarsePointer: boolean;
   onSelect: () => void;
   onLaunch: () => void;
   onKill: () => void;
@@ -162,7 +180,7 @@ function CommandRow({
       <Terminal className="h-3 w-3 shrink-0 opacity-60" />
       <span className="flex-1 truncate font-mono">{cmd.label ?? cmd.key}</span>
 
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+      <div className={rowActionsClass(isCoarsePointer)}>
         {canEdit && onEdit && (
           <button
             type="button"
@@ -172,7 +190,7 @@ function CommandRow({
             }}
             title="Edit command"
             className={cn(
-              "rounded p-0.5 transition-colors",
+              rowActionButtonClass(isCoarsePointer, ""),
               isEditing
                 ? "bg-[var(--color-primary)]/20 text-[var(--color-primary)] opacity-100"
                 : "hover:bg-[var(--color-primary)]/20 hover:text-[var(--color-primary)]",
@@ -189,7 +207,10 @@ function CommandRow({
               onLaunch();
             }}
             title={`Launch ${cmd.key}`}
-            className="rounded p-0.5 hover:bg-green-500/20 hover:text-green-500 transition-colors"
+            className={rowActionButtonClass(
+              isCoarsePointer,
+              "hover:bg-green-500/20 hover:text-green-500",
+            )}
           >
             <Play className="h-3 w-3" />
           </button>
@@ -202,7 +223,10 @@ function CommandRow({
               onKill();
             }}
             title={`Kill ${cmd.key}`}
-            className="rounded p-0.5 hover:bg-red-500/20 hover:text-red-500 transition-colors"
+            className={rowActionButtonClass(
+              isCoarsePointer,
+              "hover:bg-red-500/20 hover:text-red-500",
+            )}
           >
             <Square className="h-3 w-3" />
           </button>
@@ -283,12 +307,14 @@ function InstanceRow({
   session,
   index,
   isSelected,
+  isCoarsePointer,
   onSelect,
   onKill,
 }: {
   session: SessionInfo;
   index: number;
   isSelected: boolean;
+  isCoarsePointer: boolean;
   onSelect: () => void;
   onKill: () => void;
 }) {
@@ -315,7 +341,15 @@ function InstanceRow({
             onKill();
           }}
           title="Kill instance"
-          className="rounded p-0.5 opacity-0 group-hover:opacity-100 hover:bg-red-500/20 hover:text-red-500 transition-colors"
+          className={cn(
+            rowActionButtonClass(
+              isCoarsePointer,
+              "hover:bg-red-500/20 hover:text-red-500",
+            ),
+            isCoarsePointer
+              ? "opacity-100"
+              : "opacity-0 group-hover:opacity-100",
+          )}
         >
           <Square className="h-3 w-3" />
         </button>
@@ -329,6 +363,7 @@ function FreeTerminalRow({
   session,
   label,
   isSelected,
+  isCoarsePointer,
   onSelect,
   onKill,
   onRemove,
@@ -344,6 +379,7 @@ function FreeTerminalRow({
   session: SessionInfo;
   label: string;
   isSelected: boolean;
+  isCoarsePointer: boolean;
   onSelect: () => void;
   onKill: () => void;
   onRemove: () => void;
@@ -379,7 +415,7 @@ function FreeTerminalRow({
       <StatusDot session={session} />
       <Terminal className="h-3 w-3 shrink-0 opacity-60" />
       <span className="flex-1 truncate font-mono">{label}</span>
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+      <div className={rowActionsClass(isCoarsePointer)}>
         {session.command && (
           <button
             type="button"
@@ -388,7 +424,10 @@ function FreeTerminalRow({
               onSave();
             }}
             title="Save to project profile"
-            className="rounded p-0.5 hover:bg-[var(--color-primary)]/20 hover:text-[var(--color-primary)] transition-colors"
+            className={rowActionButtonClass(
+              isCoarsePointer,
+              "hover:bg-[var(--color-primary)]/20 hover:text-[var(--color-primary)]",
+            )}
           >
             <Save className="h-3 w-3" />
           </button>
@@ -401,7 +440,10 @@ function FreeTerminalRow({
               onKill();
             }}
             title="Kill terminal"
-            className="rounded p-0.5 hover:bg-amber-500/20 hover:text-amber-500 transition-colors"
+            className={rowActionButtonClass(
+              isCoarsePointer,
+              "hover:bg-amber-500/20 hover:text-amber-500",
+            )}
           >
             <Square className="h-3 w-3" />
           </button>
@@ -413,7 +455,10 @@ function FreeTerminalRow({
             onRemove();
           }}
           title="Remove terminal"
-          className="rounded p-0.5 hover:bg-red-500/20 hover:text-red-500 transition-colors"
+          className={rowActionButtonClass(
+            isCoarsePointer,
+            "hover:bg-red-500/20 hover:text-red-500",
+          )}
         >
           <X className="h-3 w-3" />
         </button>
@@ -504,6 +549,7 @@ function ProfileRow({
   selectedId,
   isExpanded,
   isEditing,
+  isCoarsePointer,
   editor,
   onToggle,
   onSelectInstance,
@@ -523,6 +569,7 @@ function ProfileRow({
   selectedId: string | null;
   isExpanded: boolean;
   isEditing: boolean;
+  isCoarsePointer: boolean;
   editor?: React.ReactNode;
   onToggle: () => void;
   onSelectInstance: (sessionId: string) => void;
@@ -574,7 +621,7 @@ function ProfileRow({
             {aliveCount}
           </span>
         )}
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+        <div className={rowActionsClass(isCoarsePointer)}>
           <button
             type="button"
             onClick={(e) => {
@@ -583,7 +630,7 @@ function ProfileRow({
             }}
             title="Edit profile"
             className={cn(
-              "rounded p-0.5 transition-colors",
+              rowActionButtonClass(isCoarsePointer, ""),
               isEditing
                 ? "bg-[var(--color-primary)]/20 text-[var(--color-primary)] opacity-100"
                 : "hover:bg-[var(--color-primary)]/20 hover:text-[var(--color-primary)]",
@@ -598,7 +645,10 @@ function ProfileRow({
               onLaunchInstance();
             }}
             title="Launch new instance"
-            className="rounded p-0.5 hover:bg-green-500/20 hover:text-green-500 transition-colors"
+            className={rowActionButtonClass(
+              isCoarsePointer,
+              "hover:bg-green-500/20 hover:text-green-500",
+            )}
           >
             <Play className="h-3 w-3" />
           </button>
@@ -609,7 +659,10 @@ function ProfileRow({
               onDelete();
             }}
             title="Delete profile"
-            className="rounded p-0.5 hover:bg-red-500/20 hover:text-red-500 transition-colors"
+            className={rowActionButtonClass(
+              isCoarsePointer,
+              "hover:bg-red-500/20 hover:text-red-500",
+            )}
           >
             <Trash2 className="h-3 w-3" />
           </button>
@@ -626,6 +679,7 @@ function ProfileRow({
               session={session}
               index={i}
               isSelected={selectedId === `terminal:${session.id}`}
+              isCoarsePointer={isCoarsePointer}
               onSelect={() => onSelectInstance(session.id)}
               onKill={() => onKillInstance(session.id)}
             />
@@ -665,6 +719,7 @@ export function TerminalTreeView({
 }: Props) {
   const { data: globalConfig } = useGlobalConfig();
   const updateUi = useUpdateUiConfig();
+  const isCoarsePointer = useCoarsePointer();
 
   const [activeSuggestionProject, setActiveSuggestionProject] = useState<
     string | null
@@ -1061,6 +1116,7 @@ export function TerminalTreeView({
                 session={session}
                 label={`Terminal ${index + 1}`}
                 isSelected={selectedId === `terminal:${session.id}`}
+                isCoarsePointer={isCoarsePointer}
                 onSelect={() => onSelectFreeTerminal(session.id)}
                 onKill={() => onKillFreeTerminal(session.id)}
                 onRemove={() => onRemoveFreeTerminal(session.id)}
@@ -1160,6 +1216,7 @@ export function TerminalTreeView({
                         selectedId={selectedId}
                         isExpanded={expandedProfiles.has(profileKey)}
                         isEditing={!!isEditing}
+                        isCoarsePointer={isCoarsePointer}
                         editor={
                           isEditing && editState?.kind === "profile" ? (
                             <ProfileEditorRow
@@ -1242,6 +1299,7 @@ export function TerminalTreeView({
                         isSelected={selectedId === `terminal:${cmd.sessionId}`}
                         isEditing={!!isEditing}
                         canEdit={canEdit}
+                        isCoarsePointer={isCoarsePointer}
                         onSelect={() => onSelectTerminal(cmd.sessionId)}
                         onLaunch={() => onLaunchTerminal(project.name, cmd)}
                         onKill={() => onKillTerminal(cmd.sessionId)}
