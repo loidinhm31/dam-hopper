@@ -8,6 +8,7 @@ import { create } from "zustand";
 import { api } from "@/api/client.js";
 import { withUiConfigDefaults } from "@/lib/ui-config.js";
 import {
+  DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
   DEFAULT_SEARCH_FILENAME_SHORTCUT,
   DEFAULT_SEARCH_TEXT_SHORTCUT,
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
@@ -56,6 +57,7 @@ interface SettingsState {
   searchFilenameShortcut: string;
   terminalWorkspaceShortcut: string;
   terminalFilePanelShortcut: string;
+  revealActiveFileShortcut: string;
   terminalSuggestionsEnabled: boolean;
   terminalScrollButtonsEnabled: boolean;
   terminalScrollStep: number;
@@ -78,6 +80,7 @@ interface SettingsState {
         | "searchFilenameShortcut"
         | "terminalWorkspaceShortcut"
         | "terminalFilePanelShortcut"
+        | "revealActiveFileShortcut"
         | "terminalSuggestionsEnabled"
         | "terminalScrollButtonsEnabled"
         | "terminalScrollStep"
@@ -100,6 +103,7 @@ interface SettingsState {
         | "searchFilenameShortcut"
         | "terminalWorkspaceShortcut"
         | "terminalFilePanelShortcut"
+        | "revealActiveFileShortcut"
         | "terminalSuggestionsEnabled"
         | "terminalScrollButtonsEnabled"
         | "terminalScrollStep"
@@ -123,6 +127,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   searchFilenameShortcut: DEFAULT_SEARCH_FILENAME_SHORTCUT,
   terminalWorkspaceShortcut: DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
   terminalFilePanelShortcut: DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
+  revealActiveFileShortcut: DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
   terminalSuggestionsEnabled: true,
   terminalScrollButtonsEnabled: false,
   terminalScrollStep: 3,
@@ -145,6 +150,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         searchFilenameShortcut: ui.searchFilenameShortcut,
         terminalWorkspaceShortcut: ui.terminalWorkspaceShortcut,
         terminalFilePanelShortcut: ui.terminalFilePanelShortcut,
+        revealActiveFileShortcut: ui.revealActiveFileShortcut,
         terminalSuggestionsEnabled: ui.terminalSuggestionsEnabled ?? true,
         terminalScrollButtonsEnabled: ui.terminalScrollButtonsEnabled ?? false,
         terminalScrollStep: ui.terminalScrollStep ?? 3,
@@ -177,6 +183,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.terminalWorkspaceShortcut = partial.terminalWorkspaceShortcut;
     if (partial.terminalFilePanelShortcut !== undefined)
       clamped.terminalFilePanelShortcut = partial.terminalFilePanelShortcut;
+    if (partial.revealActiveFileShortcut !== undefined)
+      clamped.revealActiveFileShortcut = partial.revealActiveFileShortcut;
     if (partial.terminalSuggestionsEnabled !== undefined)
       clamped.terminalSuggestionsEnabled = partial.terminalSuggestionsEnabled;
     if (partial.terminalScrollButtonsEnabled !== undefined)
@@ -216,6 +224,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         searchFilenameShortcut,
         terminalWorkspaceShortcut,
         terminalFilePanelShortcut,
+        revealActiveFileShortcut,
         terminalSuggestionsEnabled,
         terminalScrollButtonsEnabled,
         terminalScrollStep,
@@ -233,6 +242,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         searchFilenameShortcut,
         terminalWorkspaceShortcut,
         terminalFilePanelShortcut,
+        revealActiveFileShortcut,
         terminalSuggestionsEnabled,
         terminalScrollButtonsEnabled,
         terminalScrollStep,

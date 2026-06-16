@@ -3,6 +3,7 @@ import { RotateCcw } from "lucide-react";
 import { SettingRow } from "@/components/molecules/SettingRow.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import {
+  DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
   DEFAULT_SEARCH_FILENAME_SHORTCUT,
   DEFAULT_SEARCH_TEXT_SHORTCUT,
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
@@ -102,6 +103,7 @@ export function SettingsKeyboardShortcutsSection() {
     searchFilenameShortcut,
     terminalWorkspaceShortcut,
     terminalFilePanelShortcut,
+    revealActiveFileShortcut,
     saveDebounced,
   } = useSettingsStore();
 
@@ -159,6 +161,21 @@ export function SettingsKeyboardShortcutsSection() {
           defaultValue={DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT}
           onChange={(shortcut) =>
             saveDebounced({ terminalFilePanelShortcut: shortcut })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Reveal active file"
+        description="Reveal the active editor file in Explorer"
+      >
+        <ShortcutCapture
+          value={revealActiveFileShortcut}
+          defaultValue={DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT}
+          onChange={(shortcut) =>
+            saveDebounced({ revealActiveFileShortcut: shortcut })
           }
         />
       </SettingRow>

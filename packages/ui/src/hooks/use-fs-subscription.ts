@@ -122,7 +122,6 @@ export function useFsSubscription(project: string, path: string) {
       off();
       (getTransport() as WsTransport).fsUnsubscribeTree(subId);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subId, project, path, qc]);
 
   /** Load children for a dir node and splice them into the cached tree. */
@@ -145,6 +144,8 @@ export function useFsSubscription(project: string, path: string) {
       if (!prev) return prev;
       return { ...prev, nodes: spliceChildren(prev.nodes, nodeId, children) };
     });
+
+    return children;
   }
 
   return { ...query, loadChildren };

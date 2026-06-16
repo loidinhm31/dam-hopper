@@ -24,6 +24,7 @@ describe("handleSharedTerminalKeyEvent", () => {
         key({ code: "KeyC", ctrlKey: true, shiftKey: true }),
         {
           workspaceShortcut: "Mod+Shift+Backquote",
+          revealActiveFileShortcut: "Alt+F1",
           onCopySelection,
         },
       ),
@@ -35,6 +36,7 @@ describe("handleSharedTerminalKeyEvent", () => {
     expect(
       handleSharedTerminalKeyEvent(key({ code: "Backquote", ctrlKey: true }), {
         workspaceShortcut: "Mod+Shift+Backquote",
+        revealActiveFileShortcut: "Alt+F1",
         onCopySelection: vi.fn(),
       }),
     ).toBe(false);
@@ -43,6 +45,17 @@ describe("handleSharedTerminalKeyEvent", () => {
         key({ code: "Backquote", ctrlKey: true, shiftKey: true }),
         {
           workspaceShortcut: "Ctrl+Shift+Backquote",
+          revealActiveFileShortcut: "Alt+F1",
+          onCopySelection: vi.fn(),
+        },
+      ),
+    ).toBe(false);
+    expect(
+      handleSharedTerminalKeyEvent(
+        key({ code: "F1", key: "F1", altKey: true }),
+        {
+          workspaceShortcut: "Ctrl+Shift+Backquote",
+          revealActiveFileShortcut: "Alt+F1",
           onCopySelection: vi.fn(),
         },
       ),

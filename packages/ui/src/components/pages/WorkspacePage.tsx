@@ -68,6 +68,10 @@ import { cn } from "@/lib/utils.js";
 import type { FsArborNode, PathSearchMatch, SearchMatch } from "@/api/fs-types.js";
 import type { ToolWindowDef } from "@/types/ide.js";
 import type { MobileWorkspaceSurface } from "@/components/templates/MobileWorkspaceShell.js";
+import type { ActivateToolRequest } from "@/lib/reveal-active-file.js";
+import type { FileTreeRevealRequest } from "@/lib/file-tree-reveal.js";
+import { resolveRevealActiveFileOutcome } from "@/lib/reveal-active-file.js";
+export { resolveRevealActiveFileOutcome };
 
 const FileTree = lazy(() =>
   import("@/components/organisms/FileTree.js").then((m) => ({
@@ -207,9 +211,14 @@ export default function WorkspacePage() {
   const [terminalFilePanelOpen, setTerminalFilePanelOpenState] = useState(
     loadTerminalFilePanelOpen,
   );
+  const [fileTreeRevealRequest, setFileTreeRevealRequest] =
+    useState<FileTreeRevealRequest | null>(null);
+  const [ideLeftTopToolRequest, setIdeLeftTopToolRequest] =
+    useState<ActivateToolRequest | null>(null);
   const [terminalFilePanelEditorFocusSignal, setTerminalFilePanelEditorFocusSignal] =
     useState(0);
   const [terminalLayoutRevision, setTerminalLayoutRevision] = useState(0);
+  const revealRequestNonceRef = useRef(0);
   const isCompactWorkspace = useCompactWorkspace();
   const defaultCompactSurfaceId = getDefaultCompactSurfaceId(workspaceMode);
   const availableCompactSurfaceIds = getCompactSurfaceIds(workspaceMode);
@@ -312,6 +321,19 @@ export default function WorkspacePage() {
   );
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  const setTerminalFilePanelOpen = useCallback((open: boolean) => {
+    setTerminalFilePanelOpenState(open);
+    saveTerminalFilePanelOpen(open);
+  }, []);
+
+  const toggleTerminalFilePanel = useCallback(() => {
+    setTerminalFilePanelOpenState((current) => {
+      const next = !current;
+      saveTerminalFilePanelOpen(next);
+      return next;
+    });
+  }, []);
+
   useDocumentKeyboardShortcut(searchTextShortcut, () => openSearch("content"));
   useDocumentKeyboardShortcut(searchFilenameShortcut, () =>
     openSearch("filename"),
@@ -320,6 +342,40 @@ export default function WorkspacePage() {
     if (workspaceMode !== "terminal" || isCompactWorkspace) return;
     toggleTerminalFilePanel();
   });
+
+  const handleRevealActiveFile = useCallback(() => {
+    const activePath =
+      projectName === null
+        ? null
+        : useEditorStore.getState().getActiveTab(projectName)?.path ?? null;
+    const nonce = revealRequestNonceRef.current + 1;
+    const outcome = resolveRevealActiveFileOutcome({
+      projectName,
+      path: activePath,
+      nonce,
+      workspaceMode,
+      isCompactWorkspace,
+    });
+    if (!outcome) return;
+
+    revealRequestNonceRef.current = nonce;
+    if (outcome.compactSurfaceId) {
+      setRequestedCompactSurface(outcome.compactSurfaceId);
+    }
+    if (outcome.leftTopToolRequest) {
+      setIdeLeftTopToolRequest(outcome.leftTopToolRequest);
+    }
+    if (outcome.openTerminalFilePanel) {
+      setTerminalFilePanelOpen(true);
+    }
+    setFileTreeRevealRequest(outcome.revealRequest);
+  }, [
+    isCompactWorkspace,
+    projectName,
+    setRequestedCompactSurface,
+    setTerminalFilePanelOpen,
+    workspaceMode,
+  ]);
 
   const setWorkspaceMode = useCallback(
     (mode: WorkspaceMode) => {
@@ -362,19 +418,6 @@ export default function WorkspacePage() {
     });
   }, []);
 
-  const setTerminalFilePanelOpen = useCallback((open: boolean) => {
-    setTerminalFilePanelOpenState(open);
-    saveTerminalFilePanelOpen(open);
-  }, []);
-
-  const toggleTerminalFilePanel = useCallback(() => {
-    setTerminalFilePanelOpenState((current) => {
-      const next = !current;
-      saveTerminalFilePanelOpen(next);
-      return next;
-    });
-  }, []);
-
   useEffect(
     () =>
       addKeyboardShortcutListener(
@@ -383,6 +426,15 @@ export default function WorkspacePage() {
         toggleWorkspaceMode,
       ),
     [toggleWorkspaceMode],
+  );
+  useEffect(
+    () =>
+      addKeyboardShortcutListener(
+        window,
+        () => useSettingsStore.getState().revealActiveFileShortcut,
+        handleRevealActiveFile,
+      ),
+    [handleRevealActiveFile],
   );
 
   const openWorkspaceFile = useCallback(
@@ -856,6 +908,11 @@ export default function WorkspacePage() {
                   onFileOpen={handleFileOpen}
                   onOpenTerminal={() => handleLaunchShell(projectName)}
                   className="flex-1"
+                  revealRequest={
+                    fileTreeRevealRequest?.project === projectName
+                      ? fileTreeRevealRequest
+                      : null
+                  }
                 />
               </Suspense>
             ) : (
@@ -925,6 +982,7 @@ export default function WorkspacePage() {
       handleLaunchShell,
       openDiff,
       handleSearchResultOpen,
+      fileTreeRevealRequest,
       terminalContent,
       portsContent,
     ],
@@ -1023,6 +1081,11 @@ export default function WorkspacePage() {
                   onFileOpen={handleFileOpen}
                   onOpenTerminal={() => handleLaunchShell(projectName)}
                   className="flex-1"
+                  revealRequest={
+                    fileTreeRevealRequest?.project === projectName
+                      ? fileTreeRevealRequest
+                      : null
+                  }
                 />
               </Suspense>
             ) : (
@@ -1066,6 +1129,7 @@ export default function WorkspacePage() {
       handleFileOpen,
       handleLaunchShell,
       handleSearchResultOpen,
+      fileTreeRevealRequest,
       projectName,
     ],
   );
@@ -1130,6 +1194,11 @@ export default function WorkspacePage() {
                 onFileOpen={handleFileOpen}
                 onOpenTerminal={() => handleLaunchShell(projectName)}
                 className="flex-1"
+                revealRequest={
+                  fileTreeRevealRequest?.project === projectName
+                    ? fileTreeRevealRequest
+                    : null
+                }
               />
             </Suspense>
           ) : (
@@ -1150,6 +1219,7 @@ export default function WorkspacePage() {
       isTerminalFileTreeResizing,
       projectName,
       setTerminalFilePanelOpen,
+      fileTreeRevealRequest,
       terminalFilePanelEditorFocusSignal,
       terminalFilePanelOpen,
       terminalFileTreeResizeHandleProps,
@@ -1186,6 +1256,7 @@ export default function WorkspacePage() {
           workspaceMode={workspaceMode}
           onWorkspaceModeChange={setWorkspaceMode}
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}
+          activateLeftTopToolRequest={ideLeftTopToolRequest}
           editor={
             <Suspense fallback={<PanelFallback label="Loading editor…" />}>
               <EditorTabs project={projectName} />

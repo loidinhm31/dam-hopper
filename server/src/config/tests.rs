@@ -537,6 +537,7 @@ fn ui_config_defaults() {
     assert_eq!(ui.search_filename_shortcut, "DoubleShift");
     assert_eq!(ui.terminal_workspace_shortcut, "Mod+Shift+Backquote");
     assert_eq!(ui.terminal_file_panel_shortcut, "Mod+Shift+KeyE");
+    assert_eq!(ui.reveal_active_file_shortcut, "Alt+F1");
     assert!(ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 11);
     assert_eq!(ui.mobile_custom_keyboard_padding, 6);
@@ -559,6 +560,7 @@ fn ui_config_serde_roundtrip() {
             search_filename_shortcut: "Ctrl+KeyP".to_string(),
             terminal_workspace_shortcut: "Ctrl+Shift+Backquote".to_string(),
             terminal_file_panel_shortcut: "Ctrl+Shift+KeyE".to_string(),
+            reveal_active_file_shortcut: "Alt+F1".to_string(),
             terminal_suggestions_enabled: true,
             explorer_show_hidden: false,
             mobile_custom_keyboard_enabled: false,
@@ -594,6 +596,7 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
     assert_eq!(ui.terminal_workspace_shortcut, "Ctrl+Shift+Backquote");
     assert_eq!(ui.terminal_file_panel_shortcut, "Ctrl+Shift+KeyE");
+    assert_eq!(ui.reveal_active_file_shortcut, "Alt+F1");
     assert!(!ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 13);
     assert_eq!(ui.mobile_custom_keyboard_padding, 8);
@@ -622,6 +625,7 @@ search_text_shortcut = "Ctrl+Shift+KeyF"
 search_filename_shortcut = "Ctrl+KeyP"
 terminal_workspace_shortcut = "Ctrl+Shift+Backquote"
 terminal_file_panel_shortcut = "Ctrl+Shift+KeyE"
+reveal_active_file_shortcut = "Alt+F1"
 mobile_custom_keyboard_enabled = false
 mobile_custom_keyboard_font_size = 14
 mobile_custom_keyboard_padding = 9
@@ -634,6 +638,7 @@ mobile_custom_keyboard_row_gap = 6
     assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
     assert_eq!(ui.terminal_workspace_shortcut, "Ctrl+Shift+Backquote");
     assert_eq!(ui.terminal_file_panel_shortcut, "Ctrl+Shift+KeyE");
+    assert_eq!(ui.reveal_active_file_shortcut, "Alt+F1");
     assert!(!ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 14);
     assert_eq!(ui.mobile_custom_keyboard_padding, 9);

@@ -1,25 +1,6 @@
 import { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { Tree } from "react-arborist";
-import type { NodeApi, NodeRendererProps } from "react-arborist";
-
-const LOADING_SENTINEL_PREFIX = "__loading__:" as const;
-
-function loadingSentinel(parentId: string): FsArborNode {
-  return {
-    id: `${LOADING_SENTINEL_PREFIX}${parentId}`,
-    name: "",
-    kind: "file",
-    size: 0,
-    mtime: 0,
-    isSymlink: false,
-    children: null,
-  };
-}
-
-function isLoadingSentinel(id: string) {
-  return id.startsWith(LOADING_SENTINEL_PREFIX);
-}
-
+import type { NodeApi, NodeRendererProps, TreeApi } from "react-arborist";
 import {
   ChevronRight,
   ChevronDown,
@@ -52,6 +33,28 @@ import {
   gitStatusShortLabel,
   type GitFileState,
 } from "@/lib/git-file-state.js";
+import {
+  revealFileTreePath,
+  type FileTreeRevealRequest,
+} from "@/lib/file-tree-reveal.js";
+
+const LOADING_SENTINEL_PREFIX = "__loading__:" as const;
+
+function loadingSentinel(parentId: string): FsArborNode {
+  return {
+    id: `${LOADING_SENTINEL_PREFIX}${parentId}`,
+    name: "",
+    kind: "file",
+    size: 0,
+    mtime: 0,
+    isSymlink: false,
+    children: null,
+  };
+}
+
+function isLoadingSentinel(id: string) {
+  return id.startsWith(LOADING_SENTINEL_PREFIX);
+}
 
 // ---------------------------------------------------------------------------
 // File icon mapping
@@ -217,6 +220,7 @@ interface FileTreeProps {
   onFileOpen?: (node: FsArborNode) => void;
   onOpenTerminal?: () => void;
   className?: string;
+  revealRequest?: FileTreeRevealRequest | null;
 }
 
 interface ContextMenuState {
@@ -242,6 +246,7 @@ export function FileTree({
   onFileOpen,
   onOpenTerminal,
   className,
+  revealRequest,
 }: FileTreeProps) {
   const { explorerShowHidden: showHidden, saveDebounced } = useSettingsStore();
   const [encUploadOpen, setEncUploadOpen] = useState(false);
@@ -272,6 +277,8 @@ export function FileTree({
   const [opError, setOpError] = useState<string | null>(null);
   const [uploadDir, setUploadDir] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const treeRef = useRef<TreeApi<FsArborNode> | undefined>(undefined);
+  const handledRevealNonceRef = useRef<number | null>(null);
 
   // Track dirs the user has expanded so we can auto-reload them after a refetch
   // wipes children back to null.
@@ -287,6 +294,28 @@ export function FileTree({
       void loadChildren(id);
     }
   }, [data, loadChildren]);
+
+  useEffect(() => {
+    if (!revealRequest || handledRevealNonceRef.current === revealRequest.nonce) {
+      return;
+    }
+    if (revealRequest.project !== project) return;
+    if (!data || !treeRef.current) return;
+
+    let cancelled = false;
+    void revealFileTreePath({
+      path: revealRequest.path,
+      nodes: data.nodes,
+      tree: treeRef.current,
+      loadChildren,
+    }).finally(() => {
+      if (!cancelled) handledRevealNonceRef.current = revealRequest.nonce;
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [data, loadChildren, project, revealRequest]);
 
   const visibleNodes = useMemo(
     () =>
@@ -558,6 +587,7 @@ export function FileTree({
           )}
           {data && (
             <Tree<FsArborNode>
+              ref={treeRef}
               data={visibleNodes}
               childrenAccessor={childrenAccessor}
               openByDefault={false}

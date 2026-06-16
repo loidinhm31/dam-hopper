@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode, useMemo, useEffect } from "react";
+import { useState, type ReactNode, useMemo, useEffect } from "react";
 import { TopNav } from "@/components/organisms/TopNav.js";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
@@ -26,6 +26,7 @@ export function IdeShell({
   workspaceMode,
   onWorkspaceModeChange,
   workspaceModeShortcutLabel,
+  activateLeftTopToolRequest,
 }: {
   leftTools: ToolWindowDef[];
   rightTools: ToolWindowDef[];
@@ -33,6 +34,7 @@ export function IdeShell({
   workspaceMode?: WorkspaceMode;
   onWorkspaceModeChange?: (mode: WorkspaceMode) => void;
   workspaceModeShortcutLabel?: string;
+  activateLeftTopToolRequest?: { nonce: number; toolId: string } | null;
 }) {
   const { collapsed, toggle } = useSidebarCollapse();
 
@@ -129,7 +131,6 @@ export function IdeShell({
       return stored === "null" ? null : stored;
     },
   );
-
   const activeLeftTopTool = useMemo(
     () => leftTools.find((t) => t.id === activeLeftTopId),
     [leftTools, activeLeftTopId],
@@ -171,6 +172,16 @@ export function IdeShell({
       activeRightBottomId === null ? "null" : activeRightBottomId,
     );
   }, [activeRightBottomId]);
+  useEffect(() => {
+    if (!activateLeftTopToolRequest) return;
+    const requestedTool = leftTools.find(
+      (entry) => entry.id === activateLeftTopToolRequest.toolId,
+    );
+    if (!requestedTool || requestedTool.position === "bottom") return;
+    // This request prop is an intentional imperative bridge from WorkspacePage.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setActiveLeftTopId(activateLeftTopToolRequest.toolId);
+  }, [activateLeftTopToolRequest, leftTools]);
 
   function handleToggleLeft(id: string) {
     const tool = leftTools.find((t) => t.id === id);

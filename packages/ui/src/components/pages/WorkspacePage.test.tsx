@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import WorkspacePage, { resolveActiveCompactSurfaceId } from "./WorkspacePage.js";
+import WorkspacePage, {
+  resolveActiveCompactSurfaceId,
+  resolveRevealActiveFileOutcome,
+} from "./WorkspacePage.js";
 import { COMPACT_WORKSPACE_QUERY } from "@/hooks/compact-workspace-media-query.js";
 import { TERMINAL_FILE_PANEL_OPEN_KEY } from "@/lib/terminal-floating-file-panel-state.js";
 
@@ -137,6 +140,7 @@ const settingsStore = {
   searchFilenameShortcut: "mod+p",
   terminalWorkspaceShortcut: "mod+`",
   terminalFilePanelShortcut: "mod+shift+e",
+  revealActiveFileShortcut: "alt+f1",
 };
 
 const terminalActions = {
@@ -269,5 +273,74 @@ describe("WorkspacePage", () => {
         "terminal",
       ),
     ).toBe("terminal");
+  });
+
+  it("resolves reveal-active-file behavior for desktop IDE mode", () => {
+    expect(
+      resolveRevealActiveFileOutcome({
+        projectName: "demo-project",
+        path: "src/App.tsx",
+        nonce: 4,
+        workspaceMode: "ide",
+        isCompactWorkspace: false,
+      }),
+    ).toEqual({
+      revealRequest: {
+        project: "demo-project",
+        path: "src/App.tsx",
+        nonce: 4,
+      },
+      leftTopToolRequest: { toolId: "explorer", nonce: 4 },
+    });
+  });
+
+  it("resolves reveal-active-file behavior for desktop terminal mode", () => {
+    expect(
+      resolveRevealActiveFileOutcome({
+        projectName: "demo-project",
+        path: "src/App.tsx",
+        nonce: 7,
+        workspaceMode: "terminal",
+        isCompactWorkspace: false,
+      }),
+    ).toEqual({
+      revealRequest: {
+        project: "demo-project",
+        path: "src/App.tsx",
+        nonce: 7,
+      },
+      openTerminalFilePanel: true,
+    });
+  });
+
+  it("no-ops for compact terminal mode because no explorer surface exists", () => {
+    expect(
+      resolveRevealActiveFileOutcome({
+        projectName: "demo-project",
+        path: "src/App.tsx",
+        nonce: 9,
+        workspaceMode: "terminal",
+        isCompactWorkspace: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("scopes reveal requests to the originating project", () => {
+    expect(
+      resolveRevealActiveFileOutcome({
+        projectName: "demo-project",
+        path: "src/App.tsx",
+        nonce: 11,
+        workspaceMode: "ide",
+        isCompactWorkspace: true,
+      }),
+    ).toEqual({
+      revealRequest: {
+        project: "demo-project",
+        path: "src/App.tsx",
+        nonce: 11,
+      },
+      compactSurfaceId: "explorer",
+    });
   });
 });
