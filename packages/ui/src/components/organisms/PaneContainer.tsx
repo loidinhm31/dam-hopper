@@ -180,6 +180,8 @@ export const PaneContainer = memo(function PaneContainer({
 
       return handleSharedTerminalKeyEvent(e, {
         workspaceShortcut: useSettingsStore.getState().terminalWorkspaceShortcut,
+        revealActiveFileShortcut:
+          useSettingsStore.getState().revealActiveFileShortcut,
         onCopySelection: () => {
           const selection = terminal.getSelection();
           if (selection) void navigator.clipboard.writeText(selection);

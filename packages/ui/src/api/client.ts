@@ -297,6 +297,7 @@ export interface UiConfig {
   searchFilenameShortcut: string;
   terminalWorkspaceShortcut: string;
   terminalFilePanelShortcut: string;
+  revealActiveFileShortcut: string;
   terminalSuggestionsEnabled?: boolean;
   terminalScrollButtonsEnabled?: boolean;
   terminalScrollStep?: number;

@@ -28,6 +28,7 @@ describe("shortcuts", () => {
   it("parses and formats keyboard, wheel, and DoubleShift shortcuts", () => {
     expect(formatShortcut("mod+shift+f")).toBe("Mod+Shift+KeyF");
     expect(formatShortcut("mod+shift+backquote")).toBe("Mod+Shift+Backquote");
+    expect(formatShortcut("alt+f1")).toBe("Alt+F1");
     expect(parseShortcut("Mod+Wheel")?.kind).toBe("wheel");
     expect(formatShortcut("DoubleShift")).toBe("DoubleShift");
   });
@@ -38,6 +39,7 @@ describe("shortcuts", () => {
     expect(displayShortcut("Mod+Shift+Backquote", false)).toBe(
       "Ctrl+Shift+Backquote",
     );
+    expect(displayShortcut("Alt+F1", false)).toBe("Alt+F1");
   });
 
   it("validates wheel modifiers", () => {
