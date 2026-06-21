@@ -2,6 +2,7 @@ import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { fixBrokenXtermRequestMode } from "../../packages/ui/build/fix-broken-xterm-request-mode";
 
 const tauriDevHost = process.env["TAURI_DEV_HOST"];
 const tauriPlatform = process.env["TAURI_ENV_PLATFORM"];
@@ -17,7 +18,7 @@ export default defineConfig({
   define: {
     __DAM_HOPPER_TAURI_PLATFORM__: JSON.stringify(tauriPlatform ?? ""),
   },
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), fixBrokenXtermRequestMode()],
   resolve: {
     alias: {
       "@": uiSrc,
