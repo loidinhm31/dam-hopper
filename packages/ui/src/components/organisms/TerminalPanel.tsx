@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { logger } from "@dam-hopper/shared/logger";
 import { cn } from "@/lib/utils.js";
 import { getTransport } from "@/api/transport.js";
@@ -148,6 +149,16 @@ export function TerminalPanel({
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(container);
+
+    // Align xterm.js Unicode width tables with backend CLI tools (e.g. agy).
+    // Without this, ⚡ (U+26A1, East Asian Width = Ambiguous) is rendered as 2 cells
+    // by xterm.js but counted as 1 cell by the backend readline/wcwidth — causing:
+    //   1. ANSI escape sequence corruption (⚡r, ⚡n, ⚡A… printed literally)
+    //   2. Cursor drift while typing (text visually leads cursor by N cells)
+    const unicode11Addon = new Unicode11Addon();
+    term.loadAddon(unicode11Addon);
+    term.unicode.activeVersion = "11";
+
     const renderer = activateTerminalWebglRenderer(term);
 
     // Expose terminal instance and element for suggestions hook + portal
