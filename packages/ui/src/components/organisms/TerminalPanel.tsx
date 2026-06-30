@@ -144,6 +144,7 @@ export function TerminalPanel({
       lineHeight: 1.4,
       scrollback: 5000,
       convertEol: true,
+      allowProposedApi: true,
     });
 
     const fitAddon = new FitAddon();
