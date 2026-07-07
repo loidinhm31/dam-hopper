@@ -106,6 +106,8 @@ This phase does not expose a backend export endpoint yet.
 
 Protected local export for backend diagnostics. The endpoint reads from the local JSONL store and does not upload data anywhere. The UI entry point is Settings > Maintenance > Export Diagnostics.
 
+Request and response payloads use camelCase on the wire. The request accepts `frontend` and also the legacy `frontendSnapshot` alias.
+
 **POST /api/diagnostics/export**
 
 Auth: Bearer token required.
@@ -117,8 +119,14 @@ Default request body used by the UI:
   "windowMinutes": 60,
   "includeTerminalOutput": true,
   "terminalTailBytes": 65536,
-  "terminalIds": ["session-id"],
-  "frontend": { "snapshot": "canonical frontend payload" }
+  "frontend": {
+    "manifest": { "schemaVersion": 1 },
+    "logs": [],
+    "browserErrors": [],
+    "currentRoute": null,
+    "profile": null,
+    "transportStatus": null
+  }
 }
 ```
 
@@ -129,6 +137,7 @@ Request fields:
 - `terminalTailBytes` - requested tail size; UI defaults to `65536`
 - `terminalIds` - optional terminal session filter; `terminals.sessions` and `terminals.tails` are scoped to these ids when present
 - `frontend` - canonical frontend snapshot payload from the browser export path
+- `frontendSnapshot` - legacy alias accepted by the server for compatibility
 
 Response schema version: `1`
 
@@ -166,6 +175,7 @@ Notes:
 - storage path is `~/.config/dam-hopper/diagnostics/backend-log.jsonl`
 - `terminals.tails` contains capped per-session tails when `includeTerminalOutput=true`
 - downloads use the filename pattern `dam-hopper-diagnostics-{timestamp}.json`
+- bundles are generated locally and downloaded by the browser; there is no server-side bundle archive
 - terminal tails can still contain sensitive local/dev output even after best-effort redaction; review before sharing the exported JSON
 - when `terminalIds` is provided, backend events with `sessionId` are scoped to those ids while global events remain included
 

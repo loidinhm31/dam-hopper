@@ -17,6 +17,30 @@ class MemoryStorage {
   }
 }
 
+class MemoryWindow {
+  private listeners = new Map<string, Set<(event: Event) => void>>();
+
+  public addEventListener(type: string, listener: (event: Event) => void): void {
+    const listeners = this.listeners.get(type) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  public removeEventListener(type: string, listener: (event: Event) => void): void {
+    const listeners = this.listeners.get(type);
+    listeners?.delete(listener);
+    if (listeners?.size === 0) {
+      this.listeners.delete(type);
+    }
+  }
+
+  public dispatch(type: string, event: Event): void {
+    for (const listener of this.listeners.get(type) ?? []) {
+      listener(event);
+    }
+  }
+}
+
 describe("DiagnosticsClient", () => {
   it("persists entries and restores them after reload", () => {
     const storage = new MemoryStorage();
@@ -81,6 +105,25 @@ describe("DiagnosticsClient", () => {
     ]);
   });
 
+  it("trims the oldest entries to stay within the storage byte budget", () => {
+    const client = new DiagnosticsClient({
+      storage: new MemoryStorage(),
+      browserWindow: null,
+      now: () => 1_000,
+      maxEntries: 10,
+      maxStorageBytes: 250,
+    });
+
+    client.record("custom", "test", "first", { note: "x".repeat(80) });
+    client.record("custom", "test", "second", { note: "y".repeat(80) });
+    client.record("custom", "test", "third", { note: "z".repeat(80) });
+
+    const messages = client.snapshot().logs.map((entry) => entry.message);
+    expect(messages.length).toBeLessThan(3);
+    expect(messages).not.toContain("first");
+    expect(messages.at(-1)).toBe("third");
+  });
+
   it("falls back to an empty ring when stored data is malformed", () => {
     const storage = new MemoryStorage();
     storage.setItem("damhopper_diagnostics_frontend_v1", "{bad json");
@@ -138,6 +181,57 @@ describe("DiagnosticsClient", () => {
     expect(client.snapshot().browserErrors[0].metadata).toMatchObject({
       error: {
         message: "bad secret=[REDACTED]",
+      },
+    });
+  });
+
+  it("captures browser error and rejection events through initialize()", () => {
+    const browserWindow = new MemoryWindow();
+    const client = new DiagnosticsClient({
+      storage: new MemoryStorage(),
+      browserWindow,
+      now: () => 1_000,
+    });
+
+    client.initialize();
+    browserWindow.dispatch(
+      "error",
+      {
+        message: "render failed",
+        filename: "app.tsx",
+        lineno: 10,
+        colno: 4,
+        error: new Error("password=hunter2"),
+      } as Event,
+    );
+    browserWindow.dispatch(
+      "unhandledrejection",
+      {
+        reason: new Error("password=hunter2"),
+      } as Event,
+    );
+    client.dispose();
+    browserWindow.dispatch(
+      "error",
+      {
+        message: "should be ignored",
+      } as Event,
+    );
+
+    const snapshot = client.snapshot();
+    expect(snapshot.browserErrors).toHaveLength(2);
+    expect(snapshot.browserErrors.map((entry) => entry.type)).toEqual([
+      "browser.error",
+      "browser.unhandledrejection",
+    ]);
+    expect(snapshot.browserErrors[0].metadata).toMatchObject({
+      error: {
+        message: "password=[REDACTED]",
+      },
+    });
+    expect(snapshot.browserErrors[1].metadata).toMatchObject({
+      reason: {
+        message: "password=[REDACTED]",
       },
     });
   });

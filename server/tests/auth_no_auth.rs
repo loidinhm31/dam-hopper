@@ -235,6 +235,34 @@ async fn test_no_auth_bypasses_middleware() {
     );
 }
 
+#[tokio::test]
+async fn test_no_auth_allows_diagnostics_export() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = create_no_auth_state(tmp.path().to_path_buf());
+    let app = dam_hopper_server::api::build_router(state, vec![]);
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/diagnostics/export")
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "Diagnostics export should be accessible in no-auth mode"
+    );
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["diagnosticSchemaVersion"], 1);
+}
+
 // ---------------------------------------------------------------------------
 // Normal auth mode tests (regression check)
 // ---------------------------------------------------------------------------
