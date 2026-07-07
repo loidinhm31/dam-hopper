@@ -7,6 +7,10 @@ import "@dam-hopper/ui/styles";
 import { initTransport } from "@dam-hopper/ui/api/transport";
 import { WsTransport } from "@dam-hopper/ui/api/ws-transport";
 import { getServerUrl } from "@dam-hopper/ui/api/server-config";
+import {
+  initializeClientDiagnostics,
+  setClientTransportStatus,
+} from "@dam-hopper/ui/diagnostics-client";
 
 const viteEnv = (import.meta as ImportMeta & { env?: Partial<ImportMetaEnv> })
   .env;
@@ -17,8 +21,12 @@ configureLogger({
     viteEnv?.DEV ? "debug" : "warn",
   ),
 });
+initializeClientDiagnostics();
 
-initTransport(new WsTransport(getServerUrl()));
+const transport = new WsTransport(getServerUrl());
+setClientTransportStatus(transport.getStatus());
+transport.onStatusChange(setClientTransportStatus);
+initTransport(transport);
 
 const queryClient = new QueryClient({
   defaultOptions: {

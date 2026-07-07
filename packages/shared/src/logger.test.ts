@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  addLoggerSink,
   configureLogger,
   getLoggerConfig,
   logger,
@@ -77,6 +78,55 @@ describe("logger", () => {
     logger.info("debug", "raw metadata", { token: "abc123" });
 
     expect(entries[0].metadata).toEqual({ token: "abc123" });
+  });
+
+  it("fans out to additional sinks and removes them with the unsubscribe helper", () => {
+    const primaryEntries: LogEntry[] = [];
+    const diagnosticsEntries: LogEntry[] = [];
+    configureLogger({
+      level: "debug",
+      sink: (entry) => primaryEntries.push(entry),
+    });
+    const removeSink = addLoggerSink((entry) => diagnosticsEntries.push(entry));
+
+    logger.warn("fanout", "first", { token: "secret" });
+    removeSink();
+    logger.warn("fanout", "second");
+
+    expect(primaryEntries.map((entry) => entry.message)).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(diagnosticsEntries).toHaveLength(1);
+    expect(diagnosticsEntries[0].metadata).toEqual({ token: "[REDACTED]" });
+  });
+
+  it("continues delivering logs when one sink throws", () => {
+    const primaryEntries: LogEntry[] = [];
+    const diagnosticsEntries: LogEntry[] = [];
+    configureLogger({
+      level: "debug",
+      sink: () => {
+        throw new Error("sink failed");
+      },
+    });
+    const removeSink = addLoggerSink((entry) => diagnosticsEntries.push(entry));
+
+    logger.error("fanout", "survived");
+    removeSink();
+
+    configureLogger({
+      level: "debug",
+      sink: (entry) => primaryEntries.push(entry),
+    });
+    logger.error("fanout", "after remove");
+
+    expect(diagnosticsEntries.map((entry) => entry.message)).toEqual([
+      "survived",
+    ]);
+    expect(primaryEntries.map((entry) => entry.message)).toEqual([
+      "after remove",
+    ]);
   });
 
   it("resolves known log levels and falls back for invalid values", () => {

@@ -30,6 +30,7 @@ import { useBrowserShortcutGuard } from "@/hooks/use-browser-shortcut-guard.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { matchesNewTerminalShortcut } from "@/lib/shortcuts.js";
 import { normalizeRouterBasename } from "@/lib/router-basename.js";
+import { recordClientRoute } from "@/lib/diagnostics-client.js";
 
 function syncFontSizeCssVar(fontSize: number): void {
   document.documentElement.style.setProperty(
@@ -89,6 +90,21 @@ function GlobalShortcuts() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [activeProject, navigate]);
+
+  return null;
+}
+
+function RouteDiagnostics() {
+  const location = useLocation();
+
+  useEffect(() => {
+    recordClientRoute({
+      path: location.pathname,
+      search: location.search,
+      hash: location.hash,
+      href: `${location.pathname}${location.search}${location.hash}`,
+    });
+  }, [location.hash, location.pathname, location.search]);
 
   return null;
 }
@@ -278,6 +294,7 @@ export function DamHopperApp() {
     <EncryptProvider>
       <BrowserRouter basename={routerBasename}>
         <GlobalShortcuts />
+        <RouteDiagnostics />
         <PassphrasePrompt />
         <ServerProfileGuard>
           <AuthGuard>

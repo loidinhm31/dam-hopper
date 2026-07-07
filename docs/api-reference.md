@@ -78,6 +78,30 @@ Clear authentication session.
 
 Response: `{ "ok": true }`
 
+## Frontend Diagnostics Snapshot (Phase 01)
+
+Phase 01 adds a client-side diagnostics ring for local troubleshooting. It is written by the browser host before app render and stored in `localStorage` only.
+
+**Storage key:** `damhopper_diagnostics_frontend_v1`
+
+**Captured signals:**
+
+- shared logger entries delivered through logger sink fanout
+- browser `error` events
+- browser `unhandledrejection` events
+- React error boundary failures
+- route changes
+- WebSocket transport status changes
+
+**Retention / cap behavior:**
+
+- entries are kept in a bounded ring buffer
+- old entries are dropped by age first, then by count
+- storage usage is capped at a small fixed budget
+- if browser storage is unavailable or full, capture degrades to memory-only best effort
+
+This phase does not expose a backend export endpoint yet.
+
 ## Session Persistence API (Phase 05)
 
 Terminal session buffers and metadata are persisted to SQLite when the configured database can be opened. This supports live cross-device resume and DamHopper server-restart relaunch with recovered scrollback; it does not preserve exact shell/process memory across server or host restart.
