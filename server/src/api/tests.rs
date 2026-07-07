@@ -11,6 +11,7 @@ use crate::{
         DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo,
     },
     crypto::DamHopperOpaqueSuite,
+    diagnostics::{now_ms, DiagnosticEvent, DiagnosticStore},
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
@@ -28,6 +29,7 @@ fn make_tunnel_manager(event_sink: &BroadcastEventSink) -> TunnelSessionManager 
     TunnelSessionManager::new(Arc::new(event_sink.clone()), Arc::new(CloudflaredDriver))
 }
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -80,6 +82,7 @@ fn make_state(tmp: &TempDir) -> AppState {
         tunnel_manager,
         None,
         test_opaque_setup(),
+        DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
     )
     .expect("make_state failed")
 }
@@ -134,6 +137,21 @@ async fn post_json(
         .uri(path)
         .header("Content-Type", "application/json")
         .header("Cookie", auth_cookie())
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    router.oneshot(req).await.unwrap()
+}
+
+async fn post_json_without_auth(
+    state: AppState,
+    path: &str,
+    body: serde_json::Value,
+) -> axum::response::Response {
+    let router = build_router(state, vec![]);
+    let req = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("Content-Type", "application/json")
         .body(Body::from(body.to_string()))
         .unwrap();
     router.oneshot(req).await.unwrap()
@@ -284,6 +302,81 @@ async fn system_metrics_returns_sane_json() {
     assert!(json["disk"]["mountPoint"].as_str().is_some());
     assert!(json["disk"]["usagePercent"].as_f64().unwrap() >= 0.0);
     assert!(json["temperatures"].as_array().is_some());
+}
+
+#[tokio::test]
+async fn diagnostics_export_requires_auth() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let resp =
+        post_json_without_auth(state, "/api/diagnostics/export", serde_json::json!({})).await;
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn diagnostics_export_returns_bundle_and_redacts_backend_events() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    state.diagnostics.record_event(DiagnosticEvent {
+        timestamp_ms: now_ms(),
+        level: "WARN".to_string(),
+        source: "test".to_string(),
+        message: "failed with Bearer super-secret-token".to_string(),
+        fields: BTreeMap::from([("api_key".to_string(), "abc123".to_string())]),
+    });
+
+    let resp = post_json(
+        state,
+        "/api/diagnostics/export",
+        serde_json::json!({
+            "windowMinutes": 60,
+            "frontendSnapshot": {
+                "logs": [{ "message": "client-side context" }]
+            }
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains("super-secret-token"));
+    assert!(!body_text.contains("abc123"));
+
+    let json: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(json["diagnosticSchemaVersion"], 1);
+    assert_eq!(json["scope"]["windowMinutes"], 60);
+    assert_eq!(
+        json["frontend"]["logs"][0]["message"],
+        "client-side context"
+    );
+    assert!(json["backend"]["events"].as_array().unwrap().len() >= 1);
+    assert!(json["system"]["sampledAt"].as_u64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn diagnostics_export_reports_effective_clamped_window() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let resp = post_json(
+        state,
+        "/api/diagnostics/export",
+        serde_json::json!({ "windowMinutes": 120 }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["scope"]["windowMinutes"], 60);
+    assert_eq!(json["manifest"]["retentionMinutes"], 60);
 }
 
 #[tokio::test]
@@ -762,6 +855,7 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         tunnel_manager,
         None,
         test_opaque_setup(),
+        DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
     )
     .expect("make_state_with_project failed")
 }
@@ -803,6 +897,7 @@ fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> Ap
         tunnel_manager,
         None,
         test_opaque_setup(),
+        DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
     )
     .expect("make_state_with_project_env_file failed")
 }

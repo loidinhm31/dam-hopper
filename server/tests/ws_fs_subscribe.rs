@@ -16,6 +16,7 @@ use dam_hopper_server::{
         DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo,
     },
     crypto::DamHopperOpaqueSuite,
+    diagnostics::DiagnosticStore,
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
@@ -83,6 +84,7 @@ fn make_test_state(tmp: &TempDir) -> AppState {
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(workspace_dir.clone());
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
+    let diagnostics = DiagnosticStore::new(workspace_dir.join("diagnostics.jsonl"));
 
     AppState::new(
         workspace_dir,
@@ -98,6 +100,7 @@ fn make_test_state(tmp: &TempDir) -> AppState {
         tunnel_manager,
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
+        diagnostics,
     )
     .expect("make_test_state failed")
 }

@@ -16,8 +16,9 @@ const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 use crate::state::AppState;
 
 use super::{
-    agent_import, agent_memory, agent_store, auth, commands, config, fs as fs_api, git, git_diff,
-    port_forward as port_forward_api, settings, ssh, system, terminal, tunnel, workspace, ws,
+    agent_import, agent_memory, agent_store, auth, commands, config, diagnostics, fs as fs_api,
+    git, git_diff, port_forward as port_forward_api, settings, ssh, system, terminal, tunnel,
+    workspace, ws,
 };
 
 /// Build the full Axum router with auth middleware, CORS, and all routes.
@@ -177,6 +178,11 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/ports", get(port_forward_api::list_ports))
         // Host system metrics
         .route("/api/system/metrics", get(system::get_metrics))
+        // Diagnostics
+        .route(
+            "/api/diagnostics/export",
+            post(diagnostics::export_diagnostics),
+        )
         // Agent Store — static paths before dynamic
         .route("/api/agent-store/matrix", get(agent_store::get_matrix))
         .route("/api/agent-store/scan", get(agent_store::scan))

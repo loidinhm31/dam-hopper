@@ -102,6 +102,59 @@ The browser host now initializes a diagnostics client before React render. This 
 
 Phase 01 is client-side only. It does not add a backend export endpoint yet.
 
+### backend diagnostics store + export (Phase 02)
+
+The server now keeps a local-only diagnostics store for backend events and exposes a protected export endpoint for debugging.
+
+**Storage model:**
+
+- JSONL file under the config dir: `~/.config/dam-hopper/diagnostics/backend-log.jsonl`
+- file mode is `0600` on Unix
+- retention window is 60 minutes
+- compaction keeps the newest in-window events and drops older ones
+- storage is local only; there is no remote upload path
+
+**Privacy model:**
+
+- event message text and fields are redacted before persist
+- redaction is best effort, not a hard privacy boundary
+- export also returns the already-redacted backend events
+
+**Export API:**
+
+- `POST /api/diagnostics/export`
+- protected by auth like other backend routes
+- response schema version is `1`
+- top-level export sections:
+  - `scope`
+  - `manifest`
+  - `frontend`
+  - `backend`
+  - `terminals`
+  - `system`
+
+**Scope fields:**
+
+- `window_minutes`
+- `include_terminal_output`
+- `terminal_tail_bytes`
+- `terminal_ids`
+
+**Manifest fields:**
+
+- `backend_event_count`
+- `terminal_session_count`
+- `retention_minutes`
+- `storage` = `localConfigJsonl`
+- `dropped_persist_events`
+- `persist_error_count`
+
+**Terminal tails:**
+
+- `terminals.sessions` includes detailed session snapshots
+- `terminals.tails` is currently a placeholder empty array
+- terminal tail bytes are accepted in the request but not populated yet; later phase will wire the actual tail data
+
 ### apps/native
 
 Tauri v2 native client that reuses the same `packages/ui` runtime as the web

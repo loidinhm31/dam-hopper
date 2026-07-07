@@ -1,13 +1,14 @@
 use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use dam_hopper_server::{
     agent_store::AgentStoreService,
     api::build_router,
     config::{global_config_path, load_workspace_config, read_global_config_at},
     crypto::load_or_create_server_setup,
+    diagnostics::{DiagnosticStore, DiagnosticTracingLayer},
     fs::FsSubsystem,
     port_forward::{proc_poll_loop, PortForwardManager},
     probe_inotify_limit,
@@ -50,10 +51,11 @@ const TOKEN_CAPACITY: usize = 512;
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
-    fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+    let diagnostics = DiagnosticStore::default();
+    tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with(fmt::layer())
+        .with(DiagnosticTracingLayer::new(diagnostics.clone()))
         .init();
 
     let cli = Cli::parse();
@@ -274,6 +276,7 @@ async fn main() -> anyhow::Result<()> {
         tunnel_manager,
         Some(port_forward_manager.clone()),
         opaque_server_setup,
+        diagnostics,
     )?;
 
     let tunnel_manager_shutdown = state.tunnel_manager.clone();

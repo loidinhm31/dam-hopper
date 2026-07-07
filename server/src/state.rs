@@ -10,6 +10,7 @@ use crate::agent_store::AgentStoreService;
 use crate::commands::CommandRegistry;
 use crate::config::{DamHopperConfig, GlobalConfig};
 use crate::crypto::{DamHopperOpaqueSuite, OpaqueRegistrations};
+use crate::diagnostics::DiagnosticStore;
 use crate::error::AppError;
 use crate::fs::FsSubsystem;
 use crate::port_forward::PortForwardManager;
@@ -65,6 +66,8 @@ pub struct AppState {
     pub opaque_registrations: OpaqueRegistrations,
     /// Host metrics sampler with retained sysinfo state for CPU deltas.
     pub host_metrics: HostMetricsSampler,
+    /// Backend diagnostics ring and JSONL persistence handle.
+    pub diagnostics: DiagnosticStore,
 }
 
 impl AppState {
@@ -98,6 +101,7 @@ impl AppState {
         tunnel_manager: TunnelSessionManager,
         port_forward_manager: Option<Arc<PortForwardManager>>,
         opaque_server_setup: ServerSetup<DamHopperOpaqueSuite>,
+        diagnostics: DiagnosticStore,
     ) -> anyhow::Result<Self> {
         // Production safety guards for no-auth mode
         if no_auth {
@@ -150,6 +154,7 @@ impl AppState {
             opaque_server_setup: Arc::new(opaque_server_setup),
             opaque_registrations: OpaqueRegistrations::default(),
             host_metrics: HostMetricsSampler::new(),
+            diagnostics,
         })
     }
 }

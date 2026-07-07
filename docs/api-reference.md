@@ -102,6 +102,70 @@ Phase 01 adds a client-side diagnostics ring for local troubleshooting. It is wr
 
 This phase does not expose a backend export endpoint yet.
 
+## Backend Diagnostics Export (Phase 02)
+
+Protected local export for backend diagnostics. The endpoint reads from the local JSONL store and does not upload data anywhere.
+
+**POST /api/diagnostics/export**
+
+Auth: Bearer token required.
+
+Request body is optional:
+
+```json
+{
+  "windowMinutes": 60,
+  "includeTerminalOutput": true,
+  "terminalTailBytes": 65536,
+  "terminalIds": ["session-id"],
+  "frontend": { "any": "frontend snapshot payload" }
+}
+```
+
+Request fields:
+
+- `windowMinutes` - requested lookback window; server clamps to 60 minutes max
+- `includeTerminalOutput` - request terminal data in export
+- `terminalTailBytes` - requested tail size for later terminal output support
+- `terminalIds` - optional terminal session filter
+- `frontend` - optional frontend snapshot payload
+
+Response schema version: `1`
+
+Top-level response sections:
+
+- `diagnosticSchemaVersion`
+- `generatedAt`
+- `scope`
+- `manifest`
+- `frontend`
+- `backend`
+- `terminals`
+- `system`
+
+`scope` fields:
+
+- `windowMinutes`
+- `includeTerminalOutput`
+- `terminalTailBytes`
+- `terminalIds`
+
+`manifest` fields:
+
+- `backendEventCount`
+- `terminalSessionCount`
+- `retentionMinutes`
+- `storage` = `localConfigJsonl`
+- `droppedPersistEvents`
+- `persistErrorCount`
+
+Notes:
+
+- backend events are redacted before persist and export
+- retention is 60 minutes
+- storage path is `~/.config/dam-hopper/diagnostics/backend-log.jsonl`
+- `terminals.tails` is currently an empty placeholder array
+
 ## Session Persistence API (Phase 05)
 
 Terminal session buffers and metadata are persisted to SQLite when the configured database can be opened. This supports live cross-device resume and DamHopper server-restart relaunch with recovered scrollback; it does not preserve exact shell/process memory across server or host restart.

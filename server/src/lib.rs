@@ -3,6 +3,7 @@ pub mod api;
 pub mod commands;
 pub mod config;
 pub mod crypto;
+pub mod diagnostics;
 pub mod error;
 pub mod fs;
 pub mod git;

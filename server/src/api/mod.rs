@@ -4,6 +4,7 @@ pub mod agent_store;
 pub mod auth;
 pub mod commands;
 pub mod config;
+pub mod diagnostics;
 pub mod error;
 pub mod fs;
 pub mod git;
