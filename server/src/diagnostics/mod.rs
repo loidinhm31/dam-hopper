@@ -8,5 +8,5 @@ pub use store::{default_diagnostics_log_path, now_ms, DiagnosticStore};
 pub use tracing_layer::DiagnosticTracingLayer;
 pub use types::{
     BackendDiagnostics, DiagnosticEvent, DiagnosticExportManifest, DiagnosticExportRequest,
-    DiagnosticExportResponse, DiagnosticScope, TerminalDiagnostics,
+    DiagnosticExportResponse, DiagnosticScope, TerminalDiagnostics, TerminalTail,
 };

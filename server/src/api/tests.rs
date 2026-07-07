@@ -380,6 +380,147 @@ async fn diagnostics_export_reports_effective_clamped_window() {
 }
 
 #[tokio::test]
+async fn diagnostics_export_includes_live_terminal_tail() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    state
+        .pty_manager
+        .create(crate::pty::manager::PtyCreateOpts {
+            id: "shell:diag-export".to_string(),
+            command: "printf 'token=secret123\\n'; sleep 5".to_string(),
+            cwd: tmp.path().display().to_string(),
+            env: std::collections::HashMap::new(),
+            cols: 80,
+            rows: 24,
+            project: Some("demo".to_string()),
+            restart_policy: crate::config::schema::RestartPolicy::Never,
+            restart_max_retries: 0,
+        })
+        .unwrap();
+
+    assert!(wait_for(Duration::from_secs(3), || {
+        state
+            .pty_manager
+            .get_buffer("shell:diag-export")
+            .map(|buffer| buffer.contains("secret123"))
+            .unwrap_or(false)
+    }));
+
+    let resp = post_json(
+        state,
+        "/api/diagnostics/export",
+        serde_json::json!({
+            "terminalIds": ["shell:diag-export"],
+            "terminalTailBytes": 4096,
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let sessions = json["terminals"]["sessions"].as_array().unwrap();
+    let tails = json["terminals"]["tails"].as_array().unwrap();
+
+    assert!(sessions.iter().any(|session| {
+        session["id"] == "shell:diag-export"
+            && session["alive"] == true
+            && session["buffer_bytes"].is_number()
+    }));
+    assert!(tails.iter().any(|tail| {
+        tail["sessionId"] == "shell:diag-export"
+            && tail["source"] == "live"
+            && tail["tail"].as_str().is_some_and(|value| value.contains("[REDACTED]"))
+            && tail["tail"].as_str().is_some_and(|value| !value.contains("secret123"))
+    }));
+}
+
+#[tokio::test]
+async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    state.diagnostics.record_event(DiagnosticEvent {
+        timestamp_ms: now_ms(),
+        level: "INFO".to_string(),
+        source: "pty".to_string(),
+        message: "terminal.a".to_string(),
+        fields: BTreeMap::from([("sessionId".to_string(), "shell:diag-a".to_string())]),
+    });
+    state.diagnostics.record_event(DiagnosticEvent {
+        timestamp_ms: now_ms(),
+        level: "INFO".to_string(),
+        source: "pty".to_string(),
+        message: "terminal.b".to_string(),
+        fields: BTreeMap::from([("sessionId".to_string(), "shell:diag-b".to_string())]),
+    });
+    state.diagnostics.record_event(DiagnosticEvent {
+        timestamp_ms: now_ms(),
+        level: "INFO".to_string(),
+        source: "system".to_string(),
+        message: "global".to_string(),
+        fields: BTreeMap::new(),
+    });
+
+    for id in ["shell:diag-a", "shell:diag-b"] {
+        state
+            .pty_manager
+            .create(crate::pty::manager::PtyCreateOpts {
+                id: id.to_string(),
+                command: "sleep 5".to_string(),
+                cwd: tmp.path().display().to_string(),
+                env: std::collections::HashMap::new(),
+                cols: 80,
+                rows: 24,
+                project: Some("demo".to_string()),
+                restart_policy: crate::config::schema::RestartPolicy::Never,
+                restart_max_retries: 0,
+            })
+            .unwrap();
+    }
+
+    assert!(wait_for(Duration::from_secs(2), || {
+        let sessions = state.pty_manager.list_detailed();
+        sessions.iter().any(|s| s.meta.id == "shell:diag-a")
+            && sessions.iter().any(|s| s.meta.id == "shell:diag-b")
+    }));
+
+    let resp = post_json(
+        state.clone(),
+        "/api/diagnostics/export",
+        serde_json::json!({
+            "terminalIds": ["shell:diag-a"],
+            "includeTerminalOutput": false,
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let backend_events = json["backend"]["events"].as_array().unwrap();
+    let sessions = json["terminals"]["sessions"].as_array().unwrap();
+    assert_eq!(
+        json["manifest"]["backendEventCount"].as_u64(),
+        Some(backend_events.len() as u64)
+    );
+    assert_eq!(json["manifest"]["terminalSessionCount"], 1);
+    assert!(backend_events.iter().any(|event| event["message"] == "terminal.a"));
+    assert!(backend_events.iter().any(|event| event["message"] == "global"));
+    assert!(!backend_events.iter().any(|event| event["message"] == "terminal.b"));
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0]["id"], "shell:diag-a");
+
+    state.pty_manager.kill("shell:diag-a").unwrap();
+    state.pty_manager.kill("shell:diag-b").unwrap();
+}
+
+#[tokio::test]
 async fn login_returns_401_without_db() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);

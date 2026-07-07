@@ -244,7 +244,15 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         let parsed: ClientMsg = match serde_json::from_str(&text) {
             Ok(m) => m,
             Err(e) => {
-                debug!(error = %e, raw = %text, "WS message parse error");
+                debug!(error = %e, "WS message parse error");
+                state.diagnostics.record_terminal_event(
+                    "ws",
+                    "ws.parse_error",
+                    std::collections::BTreeMap::from([
+                        ("error".into(), e.to_string()),
+                        // Do NOT store raw text — may contain user input/secrets.
+                    ]),
+                );
                 continue;
             }
         };
@@ -254,16 +262,47 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // Terminal
             // -----------------------------------------------------------
             ClientMsg::TermWrite { id, data } => {
+                // Record byte count only — never the raw input data (Phase 03 security).
+                state.diagnostics.record_terminal_event(
+                    "ws",
+                    "terminal.write",
+                    std::collections::BTreeMap::from([
+                        ("sessionId".into(), id.clone()),
+                        ("bytes".into(), data.len().to_string()),
+                    ]),
+                );
                 if let Err(e) = state.pty_manager.write(&id, data.as_bytes()) {
                     debug!(id = %id, error = %e, "PTY write error");
                 }
             }
             ClientMsg::TermResize { id, cols, rows } => {
+                state.diagnostics.record_terminal_event(
+                    "ws",
+                    "terminal.resize",
+                    std::collections::BTreeMap::from([
+                        ("sessionId".into(), id.clone()),
+                        ("cols".into(), cols.to_string()),
+                        ("rows".into(), rows.to_string()),
+                    ]),
+                );
                 if let Err(e) = state.pty_manager.resize(&id, cols, rows) {
                     debug!(id = %id, error = %e, "PTY resize error");
                 }
             }
             ClientMsg::TermAttach { id, from_offset } => {
+                state.diagnostics.record_terminal_event(
+                    "ws",
+                    "terminal.attach",
+                    std::collections::BTreeMap::from([
+                        ("sessionId".into(), id.clone()),
+                        (
+                            "fromOffset".into(),
+                            from_offset
+                                .map(|v| v.to_string())
+                                .unwrap_or_else(|| "none".into()),
+                        ),
+                    ]),
+                );
                 match state.pty_manager.get_buffer_with_offset(&id, from_offset) {
                     Ok(replay) => {
                         let msg = ServerMsg::TermBuffer {
@@ -281,6 +320,14 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }
                     Err(e) => {
                         warn!(id = %id, error = %e, "terminal:attach failed");
+                        state.diagnostics.record_terminal_event(
+                            "ws",
+                            "terminal.attach_failed",
+                            std::collections::BTreeMap::from([
+                                ("sessionId".into(), id.clone()),
+                                ("error".into(), e.to_string()),
+                            ]),
+                        );
                         // No response — client should detect via timeout and create new session
                     }
                 }

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{BTreeMap, HashSet, VecDeque},
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, Write},
     path::PathBuf,
@@ -98,6 +98,23 @@ impl DiagnosticStore {
                 self.dropped_persist_events.fetch_add(1, Ordering::Relaxed);
             }
         }
+    }
+
+    /// Convenience helper for terminal/transport instrumentation (Phase 03).
+    /// Builds a redacted INFO-level event with the given source and fields.
+    pub fn record_terminal_event(
+        &self,
+        source: &str,
+        message: &str,
+        fields: BTreeMap<String, String>,
+    ) {
+        self.record_event(DiagnosticEvent {
+            timestamp_ms: now_ms(),
+            level: "INFO".to_string(),
+            source: source.to_string(),
+            message: message.to_string(),
+            fields,
+        });
     }
 
     pub fn recent_events(&self, window_minutes: u64) -> Vec<DiagnosticEvent> {
@@ -341,4 +358,23 @@ mod tests {
         assert!(!compacted.contains("old"));
         assert!(compacted.contains("fresh"));
     }
+
+    #[test]
+    fn record_terminal_event_redacts_and_stores() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DiagnosticStore::new(dir.path().join("diag.jsonl"));
+        let mut fields = BTreeMap::new();
+        fields.insert("sessionId".into(), "shell:test".into());
+        fields.insert("token".into(), "secret-value".into());
+        store.record_terminal_event("pty", "terminal.create", fields);
+
+        let events = store.recent_events(60);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].source, "pty");
+        assert_eq!(events[0].message, "terminal.create");
+        // Sensitive field should be redacted.
+        assert_eq!(events[0].fields.get("token"), Some(&"[REDACTED]".to_string()));
+        assert_eq!(events[0].fields.get("sessionId"), Some(&"shell:test".to_string()));
+    }
+
 }

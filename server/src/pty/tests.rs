@@ -21,6 +21,7 @@ mod pty_tests {
         event_sink::{EventSink, NoopEventSink},
         manager::{build_child_env_from_parent_snapshot, PtyCreateOpts, PtySessionManager},
     };
+    use crate::diagnostics::DiagnosticStore;
 
     // Shared multi-thread Tokio runtime for tests. PtySessionManager::new
     // calls tokio::spawn (supervisor loop) which requires an active runtime.
@@ -1014,4 +1015,294 @@ mod pty_tests {
 
         mgr.remove("shell:shutdown-snapshot").unwrap();
     }
+
+    // -----------------------------------------------------------------------
+    // Phase 03: Diagnostic lifecycle events + terminal tail
+    // -----------------------------------------------------------------------
+
+    fn make_manager_with_diag(store: &DiagnosticStore) -> PtySessionManager {
+        let mgr = test_rt().block_on(async {
+            PtySessionManager::new(Arc::new(NoopEventSink))
+        });
+        mgr.set_diagnostics(store.clone());
+        mgr
+    }
+
+    #[test]
+    fn terminal_create_event_recorded_in_diagnostics() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DiagnosticStore::new(dir.path().join("diag.jsonl"));
+        let mgr = make_manager_with_diag(&store);
+
+        mgr.create(opts("shell:diag-create", "echo hello")).unwrap();
+        // Give the reader thread a moment to process.
+        wait_for(Duration::from_secs(2), || {
+            mgr.get_buffer("shell:diag-create")
+                .map(|b| b.contains("hello"))
+                .unwrap_or(false)
+        });
+
+        let events = store.recent_events(60);
+        let create_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.message == "terminal.create")
+            .collect();
+        assert!(
+            create_events.iter().any(|e| e.fields.get("sessionId")
+                .is_some_and(|v| v == "shell:diag-create")),
+            "terminal.create event should be recorded with sessionId"
+        );
+
+        mgr.remove("shell:diag-create").unwrap();
+    }
+
+    #[test]
+    fn terminal_kill_event_recorded_in_diagnostics() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DiagnosticStore::new(dir.path().join("diag.jsonl"));
+        let mgr = make_manager_with_diag(&store);
+
+        mgr.create(opts("shell:diag-kill", "sleep 30")).unwrap();
+        mgr.kill("shell:diag-kill").unwrap();
+
+        let events = store.recent_events(60);
+        assert!(
+            events.iter().any(|e| {
+                e.message == "terminal.kill"
+                    && e.fields.get("sessionId").is_some_and(|v| v == "shell:diag-kill")
+            }),
+            "terminal.kill event should be recorded"
+        );
+
+        mgr.remove("shell:diag-kill").unwrap();
+    }
+
+    #[test]
+    fn terminal_exit_event_recorded_with_exit_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DiagnosticStore::new(dir.path().join("diag.jsonl"));
+        let mgr = make_manager_with_diag(&store);
+
+        mgr.create(opts("shell:diag-exit", "exit 1")).unwrap();
+        // Wait for the process to exit.
+        wait_for(Duration::from_secs(3), || {
+            mgr.list().iter().all(|s| s.id != "shell:diag-exit" || !s.alive)
+        });
+
+        let events = store.recent_events(60);
+        let exit_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.message == "terminal.exit")
+            .collect();
+        assert!(
+            exit_events.iter().any(|e| {
+                e.fields.get("sessionId").is_some_and(|v| v == "shell:diag-exit")
+                    && e.fields.get("exitCode").is_some_and(|v| v == "1")
+            }),
+            "terminal.exit event should be recorded with exitCode=1, events: {:?}",
+            exit_events.iter().map(|e| &e.fields).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn terminal_tail_returns_capped_redacted_live_buffer() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DiagnosticStore::new(dir.path().join("diag.jsonl"));
+        let mgr = make_manager_with_diag(&store);
+
+        // Produce output containing a secret pattern that should be redacted.
+        mgr.create(opts("shell:diag-tail", "echo 'token=secret123'; sleep 5")).unwrap();
+        wait_for(Duration::from_secs(3), || {
+            mgr.get_buffer("shell:diag-tail")
+                .map(|b| b.contains("secret123"))
+                .unwrap_or(false)
+        });
+
+        let tail = mgr.terminal_tail("shell:diag-tail", 1024);
+        assert!(tail.is_some(), "terminal_tail should return Some for live session");
+        let tail = tail.unwrap();
+        assert_eq!(tail.source, "live");
+        assert_eq!(tail.session_id, "shell:diag-tail");
+        // The secret value should be redacted.
+        assert!(
+            !tail.tail.contains("secret123"),
+            "tail should be redacted, got: {}",
+            tail.tail
+        );
+        assert!(tail.tail.contains("[REDACTED]"));
+
+        mgr.remove("shell:diag-tail").unwrap();
+    }
+
+    #[test]
+    fn terminal_tail_caps_to_max_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DiagnosticStore::new(dir.path().join("diag.jsonl"));
+        let mgr = make_manager_with_diag(&store);
+
+        // Produce ~2KB of output (40 lines × ~50 chars).
+        mgr.create(opts(
+            "shell:diag-cap",
+            "for i in $(seq 1 40); do echo \"line-$i-0123456789abcdef\"; done; sleep 5",
+        ))
+        .unwrap();
+        wait_for(Duration::from_secs(3), || {
+            mgr.get_buffer("shell:diag-cap")
+                .map(|b| b.contains("line-40"))
+                .unwrap_or(false)
+        });
+
+        // Request only 100 bytes — tail should be capped.
+        let tail = mgr.terminal_tail("shell:diag-cap", 100);
+        assert!(tail.is_some());
+        let tail = tail.unwrap();
+        assert!(
+            tail.tail_bytes <= 100,
+            "tail_bytes ({}) should be <= 100",
+            tail.tail_bytes
+        );
+
+        mgr.remove("shell:diag-cap").unwrap();
+    }
+
+    #[test]
+    fn terminal_tail_returns_none_for_unknown_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DiagnosticStore::new(dir.path().join("diag.jsonl"));
+        let mgr = make_manager_with_diag(&store);
+
+        let tail = mgr.terminal_tail("nonexistent", 1024);
+        assert!(tail.is_none(), "terminal_tail should return None for unknown session");
+    }
+
+    #[test]
+    fn terminal_tail_falls_back_to_persisted_buffer_after_exit() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let store = Arc::new(SessionStore::open(temp.path()).unwrap());
+        let (tx, rx) = std::sync::mpsc::sync_channel(256);
+        let worker = PersistWorker::new(rx, store.clone());
+        let handle = std::thread::spawn(move || worker.run());
+
+        let diag_store = DiagnosticStore::new(temp.path().with_extension("jsonl"));
+        let mgr = test_rt().block_on(async {
+            PtySessionManager::with_persist(
+                Arc::new(NoopEventSink),
+                Some(tx.clone()),
+                Some(store.clone()),
+            )
+        });
+        mgr.set_diagnostics(diag_store);
+
+        mgr.create(opts("shell:diag-persisted-tail", "printf 'token=secret123'"))
+            .unwrap();
+        let exited = wait_for(Duration::from_secs(3), || {
+            mgr.list()
+                .iter()
+                .any(|session| session.id == "shell:diag-persisted-tail" && !session.alive)
+        });
+        assert!(exited, "persisted-tail session should exit");
+
+        tx.send(PersistCmd::Shutdown).unwrap();
+        handle.join().unwrap();
+
+        let tail = mgr
+            .terminal_tail("shell:diag-persisted-tail", 1024)
+            .expect("terminal_tail should use persisted buffer");
+        assert_eq!(tail.source, "persisted");
+        assert!(tail.tail.contains("[REDACTED]"));
+        assert!(!tail.tail.contains("secret123"));
+    }
+
+    #[test]
+    fn list_detailed_includes_dead_sessions_for_export_consistency() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DiagnosticStore::new(dir.path().join("diag.jsonl"));
+        let mgr = make_manager_with_diag(&store);
+
+        mgr.create(opts("shell:diag-dead-detail", "printf 'done\\n'"))
+            .unwrap();
+        wait_for(Duration::from_secs(3), || {
+            mgr.list()
+                .iter()
+                .any(|session| session.id == "shell:diag-dead-detail" && !session.alive)
+        });
+
+        let details = mgr.list_detailed();
+        assert!(details.iter().any(|detail| {
+            detail.meta.id == "shell:diag-dead-detail"
+                && !detail.meta.alive
+                && detail.buffer_bytes == 0
+        }));
+    }
+
+    #[test]
+    fn terminal_respawn_failures_are_recorded_in_diagnostics() {
+        let dir = tempfile::tempdir().unwrap();
+        let diag_store = DiagnosticStore::new(dir.path().join("diag.jsonl"));
+        let mgr = make_manager_with_diag(&diag_store);
+        let shell_path = dir.path().join("respawn-shell.sh");
+        fs::write(&shell_path, "#!/bin/sh\nexit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&shell_path).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&shell_path, perms).unwrap();
+        }
+
+        let shell_value = shell_path.to_string_lossy().into_owned();
+        let PtyCreateOpts {
+            id,
+            command,
+            cwd,
+            env: base_env,
+            cols,
+            rows,
+            project,
+            ..
+        } = opts("shell:diag-respawn-fail", "");
+        let create_opts = PtyCreateOpts {
+            id,
+            command,
+            cwd,
+            env: base_env
+                .into_iter()
+                .chain([("SHELL".into(), shell_value)])
+                .collect(),
+            cols,
+            rows,
+            project,
+            restart_policy: RestartPolicy::Always,
+            restart_max_retries: 1,
+        };
+
+        mgr.create(create_opts).unwrap();
+        fs::remove_file(&shell_path).unwrap();
+
+        let recorded = wait_for(Duration::from_secs(5), || {
+            diag_store.recent_events(60).iter().any(|event| {
+                event.message == "terminal.respawn_failed"
+                    && event
+                        .fields
+                        .get("sessionId")
+                        .is_some_and(|value| value == "shell:diag-respawn-fail")
+            })
+        });
+        assert!(recorded, "respawn failure should be recorded");
+
+        let events = diag_store.recent_events(60);
+        let failure = events
+            .iter()
+            .find(|event| event.message == "terminal.respawn_failed")
+            .expect("respawn failure event should exist");
+        assert_eq!(
+            failure.fields.get("restartCount"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            failure.fields.get("restartPolicy"),
+            Some(&"Always".to_string())
+        );
+    }
+
 }
