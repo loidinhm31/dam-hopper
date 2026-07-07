@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WsTransport } from "./ws-transport.js";
 
 class MockWebSocket {
@@ -37,6 +37,7 @@ function installMockWebSocket() {
 
 afterEach(() => {
   sockets.length = 0;
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -121,6 +122,185 @@ describe("WsTransport commit message endpoints", () => {
         message: "subject\n\nbody",
         root: "modules/child",
       }),
+    });
+    transport.destroy();
+  });
+});
+
+const diagCalls: Array<{
+  type: string;
+  scope: string;
+  message: string;
+  metadata?: unknown;
+}> = [];
+
+vi.mock("@/lib/diagnostics-client.js", () => ({
+  recordClientDiagnostic: (
+    type: string,
+    scope: string,
+    message: string,
+    metadata?: unknown,
+  ) => {
+    diagCalls.push({ type, scope, message, metadata });
+  },
+}));
+
+describe("WsTransport diagnostics", () => {
+  beforeEach(() => {
+    diagCalls.length = 0;
+  });
+
+  it("records status change on connect", () => {
+    installMockWebSocket();
+    const transport = new WsTransport("http://localhost:4800");
+    const socket = sockets[0];
+
+    // Simulate open
+    socket.onopen?.();
+
+    const statusEvents = diagCalls.filter((c) =>
+      c.message.startsWith("status:"),
+    );
+    expect(statusEvents.length).toBeGreaterThan(0);
+    expect(statusEvents.some((e) => e.message === "status:connected")).toBe(true);
+    transport.destroy();
+  });
+
+  it("records reconnect backoff on disconnect", () => {
+    installMockWebSocket();
+    const transport = new WsTransport("http://localhost:4800");
+    const socket = sockets[0];
+
+    socket.onopen?.();
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:output",
+        id: "session-1",
+        data: "tail",
+      }),
+    });
+    diagCalls.length = 0; // reset after connect
+    socket.onclose?.();
+
+    const disconnectedStatus = diagCalls.find(
+      (c) => c.message === "status:disconnected",
+    );
+    const reconnectEvents = diagCalls.filter(
+      (c) => c.message === "reconnect_scheduled",
+    );
+    expect(disconnectedStatus?.metadata).toMatchObject({
+      messageKindCounts: { "terminal:output": 1 },
+    });
+    expect(reconnectEvents.length).toBe(1);
+    expect(reconnectEvents[0].metadata).toMatchObject({ backoffMs: 1000 });
+    transport.destroy();
+  });
+
+  it("records parse error on malformed message", () => {
+    installMockWebSocket();
+    const transport = new WsTransport("http://localhost:4800");
+    const socket = sockets[0];
+
+    socket.onopen?.();
+    diagCalls.length = 0;
+    // Send malformed JSON
+    socket.onmessage?.({ data: "not-json" });
+
+    const parseErrors = diagCalls.filter((c) => c.message === "ws.parse_error");
+    expect(parseErrors.length).toBe(1);
+    transport.destroy();
+  });
+
+  it("records websocket errors with aggregated message counts", () => {
+    installMockWebSocket();
+    const transport = new WsTransport("http://localhost:4800");
+    const socket = sockets[0];
+
+    socket.onopen?.();
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:buffer",
+        id: "session-1",
+        data: "",
+        offset: 0,
+        reset: false,
+        truncated: false,
+      }),
+    });
+    diagCalls.length = 0;
+    socket.onerror?.();
+
+    const errorEvent = diagCalls.find((c) => c.message === "ws.error");
+    expect(errorEvent?.metadata).toMatchObject({
+      messageKindCounts: { "terminal:buffer": 1 },
+    });
+    transport.destroy();
+  });
+
+  it("resets message counts after reconnect", () => {
+    vi.useFakeTimers();
+    installMockWebSocket();
+    const transport = new WsTransport("http://localhost:4800");
+    const firstSocket = sockets[0];
+
+    firstSocket.onopen?.();
+    firstSocket.onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:output",
+        id: "session-1",
+        data: "tail",
+      }),
+    });
+    firstSocket.onclose?.();
+
+    diagCalls.length = 0;
+    vi.advanceTimersByTime(1000);
+
+    const secondSocket = sockets[1];
+    const connectingStatus = diagCalls.find(
+      (c) => c.message === "status:connecting",
+    );
+    secondSocket.onopen?.();
+
+    const connectedStatus = diagCalls.find(
+      (c) => c.message === "status:connected",
+    );
+    expect(connectingStatus?.metadata).toMatchObject({ messageKindCounts: {} });
+    expect(connectedStatus?.metadata).toMatchObject({ messageKindCounts: {} });
+    transport.destroy();
+  });
+
+  it("records dispatch errors separately from parse errors", () => {
+    installMockWebSocket();
+    const transport = new WsTransport("http://localhost:4800");
+    const socket = sockets[0];
+
+    transport.onTerminalBuffer("session-1", () => {
+      throw new Error("listener boom");
+    });
+
+    socket.onopen?.();
+    diagCalls.length = 0;
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:buffer",
+        id: "session-1",
+        data: "",
+        offset: 0,
+        reset: false,
+        truncated: false,
+      }),
+    });
+
+    expect(diagCalls.filter((c) => c.message === "ws.parse_error")).toHaveLength(
+      0,
+    );
+    const dispatchErrors = diagCalls.filter(
+      (c) => c.message === "ws.dispatch_error",
+    );
+    expect(dispatchErrors).toHaveLength(1);
+    expect(dispatchErrors[0].metadata).toMatchObject({
+      kind: "terminal:buffer",
     });
     transport.destroy();
   });

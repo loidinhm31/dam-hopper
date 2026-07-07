@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     ffi::OsString,
     io::Read as _,
     sync::{atomic::Ordering, Arc, Mutex},
@@ -12,11 +12,12 @@ use tracing::{debug, info, warn};
 
 use crate::{
     config::schema::RestartPolicy,
+    diagnostics::{redact_diagnostic_text, DiagnosticStore, TerminalTail},
     error::AppError,
     port_forward::PortForwardManager,
     pty::{
         event_sink::EventSink,
-        session::{DeadSession, LiveSession, RespawnOpts, SessionMeta},
+        session::{DeadSession, LiveSession, RespawnOpts, SessionMeta, SessionType},
     },
 };
 
@@ -134,6 +135,9 @@ pub struct PtySessionManager {
     /// Port forward manager — set after construction via `set_port_forward_manager`.
     /// Shared with supervisor_loop so restarted sessions also get stdout scanning.
     pub port_forward_manager: Arc<std::sync::RwLock<Option<Arc<PortForwardManager>>>>,
+    /// Backend diagnostics store — set after construction via `set_diagnostics`.
+    /// Reader threads and lifecycle methods record terminal events here (Phase 03).
+    diagnostics: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
 }
 
 struct Inner {
@@ -181,12 +185,14 @@ impl PtySessionManager {
             persist_tx,
             session_store,
             port_forward_manager: Arc::new(std::sync::RwLock::new(None)),
+            diagnostics: Arc::new(std::sync::RwLock::new(None)),
         };
 
         // Spawn the supervisor task that handles respawn requests.
         let inner_clone = Arc::clone(&manager.inner);
         let sink_clone = Arc::clone(&sink);
         let pfm_cell = Arc::clone(&manager.port_forward_manager);
+        let diag_cell = Arc::clone(&manager.diagnostics);
         tokio::spawn(supervisor_loop(
             respawn_rx,
             inner_clone,
@@ -194,9 +200,26 @@ impl PtySessionManager {
             respawn_tx_clone,
             persist_tx_clone,
             pfm_cell,
+            diag_cell,
         ));
 
         manager
+    }
+
+    /// Wire the backend diagnostics store after construction (Phase 03).
+    /// Matches the `set_port_forward_manager` pattern — avoids breaking existing
+    /// `PtySessionManager::new` callers in tests.
+    pub fn set_diagnostics(&self, store: DiagnosticStore) {
+        let mut cell = self.diagnostics.write().unwrap();
+        *cell = Some(store);
+    }
+
+    /// Best-effort diagnostic event recording. Clones the cheap Arc-backed store
+    /// out of the RwLock so no lock is held during `record_event`.
+    fn record_diag(&self, source: &str, message: &str, fields: BTreeMap<String, String>) {
+        if let Some(store) = self.diagnostics.read().unwrap().clone() {
+            store.record_terminal_event(source, message, fields);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -228,10 +251,21 @@ impl PtySessionManager {
         apply_child_env(&mut cmd, &opts.env);
         // Log env keys only — values may contain secrets (API keys, tokens).
         debug!(id = %opts.id, env_keys = ?opts.env.keys().collect::<Vec<_>>(), "Spawning PTY");
+        let session_id_for_diag = opts.id.clone();
         let child = pair
             .slave
             .spawn_command(cmd)
-            .map_err(|e| AppError::PtyError(format!("spawn failed: {e}")))?;
+            .map_err(|e| {
+                let error = format!("spawn failed: {e}");
+                let mut fields = BTreeMap::new();
+                fields.insert("sessionId".into(), session_id_for_diag.clone());
+                fields.insert("error".into(), error.clone());
+                if let Some(project) = &opts.project {
+                    fields.insert("project".into(), project.clone());
+                }
+                self.record_diag("pty", "terminal.spawn_failed", fields);
+                AppError::PtyError(error)
+            })?;
 
         // portable-pty requires clone_reader before take_writer
         let reader = pair
@@ -285,6 +319,26 @@ impl PtySessionManager {
             inner.live.insert(opts.id.clone(), session);
         }
 
+        // Record terminal lifecycle event for diagnostics (Phase 03).
+        // Env keys only — values may contain secrets; cwd is a path, not a secret.
+        {
+            let mut fields = BTreeMap::new();
+            fields.insert("sessionId".into(), opts.id.clone());
+            fields.insert("sessionType".into(), format!("{:?}", SessionType::from_id(&opts.id)));
+            fields.insert("cwd".into(), opts.cwd.clone());
+            fields.insert("cols".into(), opts.cols.to_string());
+            fields.insert("rows".into(), opts.rows.to_string());
+            fields.insert(
+                "envKeys".into(),
+                opts.env.keys().cloned().collect::<Vec<_>>().join(","),
+            );
+            fields.insert("restartPolicy".into(), format!("{:?}", opts.restart_policy));
+            if let Some(project) = &opts.project {
+                fields.insert("project".into(), project.clone());
+            }
+            self.record_diag("pty", "terminal.create", fields);
+        }
+
         // Persist metadata before the reader starts so fast commands cannot
         // flush output before the SQLite session row exists.
         if let Some(tx) = &self.persist_tx {
@@ -309,6 +363,7 @@ impl PtySessionManager {
         let persist_tx = self.persist_tx.clone();
         let port_forward_manager = self.port_forward_manager.read().unwrap().clone();
         let rt_handle = tokio::runtime::Handle::try_current().ok();
+        let diag_store = self.diagnostics.read().unwrap().clone();
 
         std::thread::Builder::new()
             .name(format!("pty-reader:{session_id}"))
@@ -326,6 +381,7 @@ impl PtySessionManager {
                     port_forward_manager,
                     project_name,
                     rt_handle,
+                    diag_store,
                 );
             })
             .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
@@ -425,7 +481,57 @@ impl PtySessionManager {
         Err(AppError::SessionNotFound(id.to_string()))
     }
 
+    /// Returns a capped terminal scrollback tail for diagnostics export (Phase 03).
+    /// Tries the in-memory live buffer first, falls back to the persisted buffer
+    /// for dead sessions. The returned text is redacted and capped to `max_bytes`.
+    /// Returns `None` if the session has no buffer (live or persisted).
+    pub fn terminal_tail(&self, id: &str, max_bytes: usize) -> Option<TerminalTail> {
+        // Try in-memory live buffer first.
+        {
+            let inner = self.inner.lock().unwrap();
+            if let Some(session) = inner.live.get(id) {
+                let buf = session.buffer.lock().unwrap();
+                let (data, total_written) = buf.read_from(None);
+                let start = data.len().saturating_sub(max_bytes);
+                let tail_bytes = data.len() - start;
+                let tail = redact_diagnostic_text(
+                    &String::from_utf8_lossy(&data[start..]),
+                );
+                return Some(TerminalTail {
+                    session_id: id.to_string(),
+                    tail,
+                    tail_bytes,
+                    total_written,
+                    source: "live".to_string(),
+                });
+            }
+        }
+
+        // Fallback to persistence (dead sessions).
+        if let Some(store) = &self.session_store {
+            if let Ok(Some((data, total_written))) = store.load_buffer(id) {
+                let start = data.len().saturating_sub(max_bytes);
+                let tail_bytes = data.len() - start;
+                let tail = redact_diagnostic_text(&String::from_utf8_lossy(&data[start..]));
+                return Some(TerminalTail {
+                    session_id: id.to_string(),
+                    tail,
+                    tail_bytes,
+                    total_written,
+                    source: "persisted".to_string(),
+                });
+            }
+        }
+
+        None
+    }
+
     pub fn kill(&self, id: &str) -> Result<(), AppError> {
+        self.record_diag(
+            "pty",
+            "terminal.kill",
+            BTreeMap::from([("sessionId".into(), id.to_string())]),
+        );
         self.kill_internal(id);
         Ok(())
     }
@@ -456,11 +562,25 @@ impl PtySessionManager {
         let mut inner = self.inner.lock().unwrap();
         // Mark as killed so reader thread won't restart.
         inner.killed.insert(id.to_string());
-        if let Some(session) = inner.live.remove(id) {
+        // Terminate live session (if any) and record whether it was alive.
+        let was_live = if let Some(session) = inner.live.remove(id) {
             session.terminate();
-        }
+            true
+        } else {
+            false
+        };
         inner.dead.remove(id);
         drop(inner);
+
+        // Record user-requested removal for diagnostics (Phase 03).
+        self.record_diag(
+            "pty",
+            "terminal.remove",
+            BTreeMap::from([
+                ("sessionId".into(), id.to_string()),
+                ("wasLive".into(), was_live.to_string()),
+            ]),
+        );
 
         // Send SessionRemoved to persist worker (if enabled)
         if let Some(tx) = &self.persist_tx {
@@ -488,14 +608,19 @@ impl PtySessionManager {
 
     pub fn list_detailed(&self) -> Vec<SessionDetail> {
         let inner = self.inner.lock().unwrap();
-        inner
+        let mut result: Vec<SessionDetail> = inner
             .live
             .values()
             .map(|s| SessionDetail {
                 meta: s.meta.clone(),
                 buffer_bytes: s.buffer.lock().unwrap().len(),
             })
-            .collect()
+            .collect();
+        result.extend(inner.dead.values().map(|d| SessionDetail {
+            meta: d.meta.clone(),
+            buffer_bytes: 0,
+        }));
+        result
     }
 
     /// Dispose all sessions — call on graceful shutdown.
@@ -615,7 +740,19 @@ fn reader_thread(
     port_forward_manager: Option<Arc<PortForwardManager>>,
     project: Option<String>,
     rt_handle: Option<tokio::runtime::Handle>,
+    diag_store: Option<DiagnosticStore>,
 ) {
+    // Local helper to record a terminal lifecycle event from the reader thread.
+    let record_diag = |message: &str, mut fields: BTreeMap<String, String>| {
+        if let Some(store) = &diag_store {
+            fields.insert("sessionId".into(), session_id.clone());
+            if let Some(project) = &project {
+                fields.insert("project".into(), project.clone());
+            }
+            store.record_terminal_event("pty", message, fields);
+        }
+    };
+
     let mut chunk = vec![0u8; 4096];
     // Throttle buffer snapshots: only send to persist worker every 16KB to reduce memory churn.
     // Performance: reduces snapshot frequency from ~100/sec to ~6/sec on fast terminals (16x improvement).
@@ -633,6 +770,7 @@ fn reader_thread(
             Ok(0) => {
                 // EOF — process exited
                 debug!(id = %session_id, "PTY reader: EOF");
+                record_diag("terminal.eof", BTreeMap::new());
                 break;
             }
             Ok(n) => {
@@ -676,10 +814,18 @@ fn reader_thread(
             }
             Err(e) if is_eof_error(&e) => {
                 debug!(id = %session_id, "PTY reader: connection closed");
+                record_diag(
+                    "terminal.eof",
+                    BTreeMap::from([("reason".into(), e.to_string())]),
+                );
                 break;
             }
             Err(e) => {
                 warn!(id = %session_id, error = %e, "PTY reader: read error");
+                record_diag(
+                    "terminal.read_error",
+                    BTreeMap::from([("error".into(), e.to_string())]),
+                );
                 break;
             }
         }
@@ -742,6 +888,22 @@ fn reader_thread(
             tombstone.restart_in_ms = restart_in_ms;
             inner_guard.dead.insert(session_id.clone(), tombstone);
 
+            // Record exit + restart decision for diagnostics (Phase 03).
+            record_diag(
+                "terminal.exit",
+                BTreeMap::from([
+                    ("exitCode".into(), exit_code.to_string()),
+                    ("wasKilled".into(), was_killed.to_string()),
+                    ("willRestart".into(), will_restart.to_string()),
+                    ("restartCount".into(), restart_count.to_string()),
+                    (
+                        "restartInMs".into(),
+                        restart_in_ms.unwrap_or(0).to_string(),
+                    ),
+                    ("restartPolicy".into(), format!("{policy:?}")),
+                ]),
+            );
+
             (
                 respawn_opts,
                 next_restart_count,
@@ -751,6 +913,16 @@ fn reader_thread(
             )
         } else {
             // Session already removed (concurrent kill) — no restart.
+            // Still record the exit for diagnostics context.
+            record_diag(
+                "terminal.exit",
+                BTreeMap::from([
+                    ("exitCode".into(), exit_code.to_string()),
+                    ("wasKilled".into(), "true".into()),
+                    ("willRestart".into(), "false".into()),
+                    ("note".into(), "session already removed".into()),
+                ]),
+            );
             (
                 RespawnOpts {
                     id: session_id.clone(),
@@ -808,9 +980,13 @@ async fn supervisor_loop(
     respawn_tx: mpsc::Sender<RespawnCmd>,
     persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     pfm_cell: Arc<std::sync::RwLock<Option<Arc<PortForwardManager>>>>,
+    diag_cell: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
 ) {
     while let Some(cmd) = respawn_rx.recv().await {
         let session_id = cmd.id.clone();
+        let restart_attempt = cmd.restart_count + 1;
+        let restart_policy = format!("{:?}", cmd.respawn_opts.restart_policy);
+        let project = cmd.respawn_opts.project.clone();
 
         // Wait for backoff delay.
         if cmd.delay_ms > 0 {
@@ -835,6 +1011,7 @@ async fn supervisor_loop(
         );
 
         let pfm = pfm_cell.read().unwrap().clone();
+        let diag_store = diag_cell.read().unwrap().clone();
         if let Err(e) = respawn_internal(
             &session_id,
             cmd,
@@ -843,10 +1020,23 @@ async fn supervisor_loop(
             &respawn_tx,
             persist_tx.clone(),
             pfm,
+            diag_store.clone(),
         )
         .await
         {
             warn!(id = %session_id, error = %e, "Respawn failed");
+            if let Some(store) = &diag_store {
+                let mut fields = BTreeMap::from([
+                    ("sessionId".into(), session_id.clone()),
+                    ("restartCount".into(), restart_attempt.to_string()),
+                    ("restartPolicy".into(), restart_policy.clone()),
+                    ("error".into(), e.to_string()),
+                ]);
+                if let Some(project) = &project {
+                    fields.insert("project".into(), project.clone());
+                }
+                store.record_terminal_event("pty", "terminal.respawn_failed", fields);
+            }
         } else {
             sink.send_terminal_changed();
         }
@@ -863,6 +1053,7 @@ async fn respawn_internal(
     respawn_tx: &mpsc::Sender<RespawnCmd>,
     persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     port_forward_manager: Option<Arc<PortForwardManager>>,
+    diag_store: Option<DiagnosticStore>,
 ) -> Result<(), AppError> {
     let opts = &cmd.respawn_opts;
 
@@ -987,6 +1178,7 @@ async fn respawn_internal(
                 port_forward_manager,
                 project_name,
                 rt_handle,
+                diag_store,
             );
         })
         .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;

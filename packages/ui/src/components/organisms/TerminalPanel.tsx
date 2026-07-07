@@ -20,6 +20,7 @@ import {
   applyTerminalBufferReplay,
   utf8ByteLength,
 } from "@/lib/terminal-buffer-replay.js";
+import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalSuggestions } from "@/hooks/use-terminal-suggestions.js";
 import { TerminalSuggestionOverlay } from "@/components/atoms/TerminalSuggestionOverlay.js";
@@ -169,6 +170,7 @@ export function TerminalPanel({
 
     // Flag to prevent double-output during initialization
     let hasBufferBeenWritten = false;
+    let recordedSuppressedOutput = false;
     let lastServerOffset = 0;
 
     // Track all cleanups so the effect return can always run them
@@ -198,6 +200,18 @@ export function TerminalPanel({
         term.write(data);
         lastServerOffset += utf8ByteLength(data);
         suggestionsRef.current.notifyOutput();
+      } else if (!recordedSuppressedOutput) {
+        recordedSuppressedOutput = true;
+        recordClientDiagnostic(
+          "transport",
+          "terminal-panel",
+          "stream_suppressed_before_buffer",
+          {
+            sessionId: safeSessionId,
+            bytes: utf8ByteLength(data),
+            attachState: attachStateRef.current,
+          },
+        );
       }
     });
 
@@ -205,6 +219,13 @@ export function TerminalPanel({
     if (transport.onTerminalBuffer) {
       unsubBuffer = transport.onTerminalBuffer(safeSessionId, (replay) => {
         lastServerOffset = applyTerminalBufferReplay(term, replay);
+        recordClientDiagnostic("transport", "terminal-panel", "buffer_replay", {
+          sessionId: safeSessionId,
+          offset: replay.offset,
+          reset: replay.reset,
+          truncated: replay.truncated,
+          hadSuppressedOutput: recordedSuppressedOutput,
+        });
         hasBufferBeenWritten = true;
         setAttachState("attached");
         if (attachTimeout) {
@@ -281,6 +302,10 @@ export function TerminalPanel({
     // Helper: Create a new session
     const createSession = () => {
       setAttachState("creating");
+      recordClientDiagnostic("transport", "terminal-panel", "terminal.create", {
+        sessionId: safeSessionId,
+        project,
+      });
       return transport
         .invoke<string>("terminal:create", {
           id: safeSessionId,
@@ -298,6 +323,10 @@ export function TerminalPanel({
     // Helper: Attach to existing session
     const attachToSession = (fromOffset?: number) => {
       setAttachState("attaching");
+      recordClientDiagnostic("transport", "terminal-panel", "terminal.attach", {
+        sessionId: safeSessionId,
+        fromOffset,
+      });
       if (transport.terminalAttach) {
         transport.terminalAttach(safeSessionId, fromOffset);
       }
@@ -309,6 +338,12 @@ export function TerminalPanel({
           {
             sessionId: safeSessionId,
           },
+        );
+        recordClientDiagnostic(
+          "transport",
+          "terminal-panel",
+          "terminal.attach_timeout",
+          { sessionId: safeSessionId },
         );
         void createSession();
       }, 3000);

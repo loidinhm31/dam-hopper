@@ -87,6 +87,18 @@ pub struct TerminalDiagnostics {
     pub tails: Vec<serde_json::Value>,
 }
 
+/// Capped terminal scrollback tail for diagnostics export (Phase 03).
+/// `source` is "live" (in-memory buffer) or "persisted" (SQLite fallback).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalTail {
+    pub session_id: String,
+    pub tail: String,
+    pub tail_bytes: usize,
+    pub total_written: u64,
+    pub source: String,
+}
+
 fn default_window_minutes() -> u64 {
     60
 }

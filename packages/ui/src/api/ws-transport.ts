@@ -24,6 +24,7 @@ import type {
   ServerTreeNode,
   FsEventDto,
 } from "./fs-types.js";
+import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 
 type Callback = (...args: unknown[]) => void;
 
@@ -790,6 +791,8 @@ export class WsTransport implements Transport {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private backoffMs = INITIAL_BACKOFF_MS;
   private closed = false;
+  /** Aggregated message-kind counters for diagnostics (Phase 03). */
+  private messageKindCounts = new Map<string, number>();
 
   private wsStatus: WsStatus = "connecting";
   private statusListeners = new Set<(status: WsStatus) => void>();
@@ -997,8 +1000,15 @@ export class WsTransport implements Transport {
     this.connect();
   }
 
+  private messageKindCountsSnapshot(): Record<string, number> {
+    return Object.fromEntries(this.messageKindCounts);
+  }
+
   private setStatus(status: WsStatus): void {
     this.wsStatus = status;
+    recordClientDiagnostic("transport", "ws-transport", `status:${status}`, {
+      messageKindCounts: this.messageKindCountsSnapshot(),
+    });
     this.statusListeners.forEach((cb) => cb(status));
   }
 
@@ -1118,6 +1128,7 @@ export class WsTransport implements Transport {
 
   private connect(): void {
     if (this.closed) return;
+    this.messageKindCounts.clear();
     this.setStatus("connecting");
 
     let wsProto: string;
@@ -1146,42 +1157,50 @@ export class WsTransport implements Transport {
     };
 
     ws.onmessage = (event) => {
+      let msg: {
+        kind: string;
+        id?: string;
+        data?: string;
+        offset?: number;
+        reset?: boolean;
+        truncated?: boolean;
+        exitCode?: number | null;
+        willRestart?: boolean;
+        restartIn?: number;
+        restartCount?: number;
+        previousExitCode?: number | null;
+        payload?: unknown;
+        req_id?: number;
+        sub_id?: number;
+        nodes?: ServerTreeNode[];
+        event?: FsEventDto;
+        code?: string;
+        message?: string;
+        ok?: boolean;
+        mime?: string;
+        binary?: boolean;
+        mtime?: number;
+        size?: number;
+        write_id?: number;
+        seq?: number;
+        new_mtime?: number;
+        conflict?: boolean;
+        error?: string;
+        session_id?: string;
+      };
       try {
-        const msg = JSON.parse(event.data as string) as {
-          kind: string;
-          id?: string;
-          data?: string;
-          offset?: number;
-          reset?: boolean;
-          truncated?: boolean;
-          exitCode?: number | null;
-          willRestart?: boolean;
-          restartIn?: number;
-          restartCount?: number;
-          previousExitCode?: number | null;
-          payload?: unknown;
-          req_id?: number;
-          sub_id?: number;
-          nodes?: ServerTreeNode[];
-          event?: FsEventDto;
-          code?: string;
-          message?: string;
-          // read result
-          ok?: boolean;
-          mime?: string;
-          binary?: boolean;
-          mtime?: number;
-          size?: number;
-          // write
-          write_id?: number;
-          seq?: number;
-          new_mtime?: number;
-          conflict?: boolean;
-          error?: string;
-          // OPAQUE auth
-          session_id?: string;
-        };
+        msg = JSON.parse(event.data as string) as typeof msg;
+      } catch (error) {
+        recordClientDiagnostic("transport", "ws-transport", "ws.parse_error", {
+          error: String(error),
+        });
+        return;
+      }
 
+      const kind = msg.kind ?? "unknown";
+      this.messageKindCounts.set(kind, (this.messageKindCounts.get(kind) ?? 0) + 1);
+
+      try {
         switch (msg.kind) {
           case "terminal:output":
             if (msg.id)
@@ -1546,8 +1565,13 @@ export class WsTransport implements Transport {
             this.eventListeners.get(msg.kind)?.forEach((cb) => cb(payload));
           }
         }
-      } catch {
-        // ignore malformed messages
+      } catch (error) {
+        recordClientDiagnostic(
+          "transport",
+          "ws-transport",
+          "ws.dispatch_error",
+          { kind, error: String(error) },
+        );
       }
     };
 
@@ -1565,6 +1589,9 @@ export class WsTransport implements Transport {
     };
 
     ws.onerror = () => {
+      recordClientDiagnostic("transport", "ws-transport", "ws.error", {
+        messageKindCounts: this.messageKindCountsSnapshot(),
+      });
       this.setStatus("error");
       ws.close();
     };
@@ -1572,6 +1599,9 @@ export class WsTransport implements Transport {
 
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return;
+    recordClientDiagnostic("transport", "ws-transport", "reconnect_scheduled", {
+      backoffMs: this.backoffMs,
+    });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS);

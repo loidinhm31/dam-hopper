@@ -103,6 +103,8 @@ impl AppState {
         opaque_server_setup: ServerSetup<DamHopperOpaqueSuite>,
         diagnostics: DiagnosticStore,
     ) -> anyhow::Result<Self> {
+        pty_manager.set_diagnostics(diagnostics.clone());
+
         // Production safety guards for no-auth mode
         if no_auth {
             // Prevent accidental deployment with no-auth + MongoDB configured

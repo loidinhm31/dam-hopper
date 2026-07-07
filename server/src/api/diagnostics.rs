@@ -19,10 +19,26 @@ pub async fn export_diagnostics(
     let system = state.host_metrics.sample(&workspace_root);
     let diagnostics = state.diagnostics.clone();
     let window_minutes = request.window_minutes;
-    let backend_events =
+    let scoped_terminal_ids: Option<Vec<String>> = request
+        .terminal_ids
+        .as_ref()
+        .filter(|ids| !ids.is_empty())
+        .cloned();
+    let backend_events = {
+        let scoped_terminal_ids = scoped_terminal_ids.clone();
         tokio::task::spawn_blocking(move || diagnostics.recent_events(window_minutes))
             .await
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|event| {
+                scoped_terminal_ids.as_ref().is_none_or(|ids| {
+                    event.fields
+                        .get("sessionId")
+                        .is_none_or(|session_id| ids.iter().any(|id| id == session_id))
+                })
+            })
+            .collect::<Vec<_>>()
+    };
     let effective_window_minutes = state
         .diagnostics
         .effective_window_minutes(request.window_minutes);
@@ -31,8 +47,37 @@ pub async fn export_diagnostics(
         .pty_manager
         .list_detailed()
         .into_iter()
+        .filter(|session| {
+            scoped_terminal_ids
+                .as_ref()
+                .is_none_or(|ids| ids.iter().any(|id| id == &session.meta.id))
+        })
         .filter_map(|session| serde_json::to_value(session).ok())
         .collect::<Vec<_>>();
+
+    // Build terminal tails (Phase 03): capped + redacted scrollback tail per session.
+    let terminal_tails: Vec<Value> = if request.include_terminal_output {
+        // Determine which session IDs to collect tails for.
+        let known_ids: Vec<String> = match &scoped_terminal_ids {
+            Some(ids) => ids.clone(),
+            // Default: all known sessions (live + dead tombstones).
+            _ => state
+                .pty_manager
+                .list()
+                .into_iter()
+                .map(|meta| meta.id)
+                .collect(),
+        };
+        let max_bytes = request.terminal_tail_bytes;
+        let pty_manager = state.pty_manager.clone();
+        known_ids
+            .iter()
+            .filter_map(|id| pty_manager.terminal_tail(id, max_bytes))
+            .filter_map(|tail| serde_json::to_value(tail).ok())
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     Json(DiagnosticExportResponse {
         diagnostic_schema_version: 1,
@@ -57,7 +102,7 @@ pub async fn export_diagnostics(
         },
         terminals: TerminalDiagnostics {
             sessions: terminal_sessions,
-            tails: Vec::new(),
+            tails: terminal_tails,
         },
         system,
     })
