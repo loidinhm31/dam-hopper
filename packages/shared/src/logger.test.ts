@@ -80,7 +80,7 @@ describe("logger", () => {
     expect(entries[0].metadata).toEqual({ token: "abc123" });
   });
 
-  it("fans out to additional sinks and removes them with the unsubscribe helper", () => {
+  it("fans out one redacted entry to the primary and diagnostics sinks", () => {
     const primaryEntries: LogEntry[] = [];
     const diagnosticsEntries: LogEntry[] = [];
     configureLogger({
@@ -93,10 +93,8 @@ describe("logger", () => {
     removeSink();
     logger.warn("fanout", "second");
 
-    expect(primaryEntries.map((entry) => entry.message)).toEqual([
-      "first",
-      "second",
-    ]);
+    expect(primaryEntries.map((entry) => entry.message)).toEqual(["first", "second"]);
+    expect(primaryEntries[0].metadata).toEqual({ token: "[REDACTED]" });
     expect(diagnosticsEntries).toHaveLength(1);
     expect(diagnosticsEntries[0].metadata).toEqual({ token: "[REDACTED]" });
   });

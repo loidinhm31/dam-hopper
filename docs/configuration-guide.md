@@ -180,6 +180,18 @@ When the database opens successfully:
 - Exact shell/process memory continuity is not guaranteed across server or host restart
 - Dead sessions are kept for 60 seconds to allow reconnection; buffers are cleaned up per TTL
 
+### Diagnostics Storage
+
+Diagnostics export does not currently add user-configurable knobs to `dam-hopper.toml`.
+
+The export API is local-only, uses camelCase on the wire, and accepts `frontend` plus the legacy `frontendSnapshot` alias.
+
+- Backend diagnostics are stored locally at `~/.config/dam-hopper/diagnostics/backend-log.jsonl`
+- The backend log keeps a 60-minute retention window and uses restricted `0o600` file permissions on Unix
+- Frontend diagnostics stay in browser `localStorage` under `damhopper_diagnostics_frontend_v1`
+- Exported JSON bundles are created only when the user triggers Settings > Maintenance > Export Diagnostics
+- Terminal tails are included by default and may still contain sensitive local/dev output even after best-effort redaction
+
 ## Global Configuration (~/.config/dam-hopper/config.toml)
 
 Store global defaults:

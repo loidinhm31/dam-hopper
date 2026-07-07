@@ -102,9 +102,9 @@ The browser host now initializes a diagnostics client before React render. This 
 
 Phase 01 is client-side only. It does not add a backend export endpoint yet.
 
-### backend diagnostics store + export (Phase 04)
+### backend diagnostics store + export (Phases 02-04)
 
-The server now keeps a local-only diagnostics store for backend events and exposes a protected export endpoint for debugging.
+The server now keeps a local-only diagnostics store for backend events and exposes a protected export endpoint for debugging. Request/response payloads use camelCase on the wire.
 
 **Storage model:**
 
@@ -125,6 +125,7 @@ The server now keeps a local-only diagnostics store for backend events and expos
 - `POST /api/diagnostics/export`
 - protected by auth like other backend routes
 - invoked by Settings > Maintenance > Export Diagnostics in the UI
+- request accepts `frontend` and also the legacy `frontendSnapshot` alias
 - response schema version is `1`
 - top-level export sections:
   - `scope`
@@ -136,26 +137,26 @@ The server now keeps a local-only diagnostics store for backend events and expos
 
 **Scope fields:**
 
-- `window_minutes`
-- `include_terminal_output`
-- `terminal_tail_bytes`
-- `terminal_ids`
-- UI defaults: 60-minute window, terminal tails included, `terminal_tail_bytes=65536`
+- `windowMinutes`
+- `includeTerminalOutput`
+- `terminalTailBytes`
+- `terminalIds`
+- UI defaults: 60-minute window, terminal tails included, `terminalTailBytes=65536`
 
 **Manifest fields:**
 
-- `backend_event_count`
-- `terminal_session_count`
-- `retention_minutes`
+- `backendEventCount`
+- `terminalSessionCount`
+- `retentionMinutes`
 - `storage` = `localConfigJsonl`
-- `dropped_persist_events`
-- `persist_error_count`
+- `droppedPersistEvents`
+- `persistErrorCount`
 
 **Terminal tails:**
 
 - `terminals.sessions` includes detailed session snapshots
-- `terminals.tails` includes capped per-session scrollback tails when `include_terminal_output=true`
-- `terminal_tail_bytes` controls how much tail data is returned per session
+- `terminals.tails` includes capped per-session scrollback tails when `includeTerminalOutput=true`
+- `terminalTailBytes` controls how much tail data is returned per session
 - exported files use `dam-hopper-diagnostics-{timestamp}.json`
 - terminal tails may still contain sensitive local/dev output even after best-effort redaction; exported bundles should be reviewed before sharing
 
