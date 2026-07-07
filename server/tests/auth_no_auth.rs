@@ -10,6 +10,7 @@ use dam_hopper_server::{
     agent_store::AgentStoreService,
     config::{DamHopperConfig, FeaturesConfig, GlobalConfig, WorkspaceInfo},
     crypto::DamHopperOpaqueSuite,
+    diagnostics::DiagnosticStore,
     fs::FsSubsystem,
     pty::{BroadcastEventSink, PtySessionManager},
     state::AppState,
@@ -65,6 +66,7 @@ fn create_no_auth_state(workspace_root: PathBuf) -> AppState {
     std::env::remove_var("ENVIRONMENT");
 
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
+    let diagnostics = DiagnosticStore::new(workspace_root.join("diagnostics.jsonl"));
     let state = AppState::new(
         workspace_root,
         config,
@@ -79,6 +81,7 @@ fn create_no_auth_state(workspace_root: PathBuf) -> AppState {
         tunnel_manager,
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
+        diagnostics,
     )
     .expect("Failed to create no-auth AppState in test");
 
@@ -117,6 +120,7 @@ fn create_normal_auth_state(workspace_root: PathBuf) -> AppState {
     let fs = FsSubsystem::new(workspace_root.clone());
 
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
+    let diagnostics = DiagnosticStore::new(workspace_root.join("diagnostics.jsonl"));
     AppState::new(
         workspace_root,
         config,
@@ -131,6 +135,7 @@ fn create_normal_auth_state(workspace_root: PathBuf) -> AppState {
         tunnel_manager,
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
+        diagnostics,
     )
     .expect("Failed to create normal auth AppState in test")
 }
@@ -346,6 +351,7 @@ async fn test_no_auth_with_mongodb_fails() {
     let mock_db = Some(mongodb_client.database("test"));
 
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
+    let diagnostics = DiagnosticStore::new(workspace_root.join("diagnostics.jsonl"));
     let result = AppState::new(
         workspace_root,
         config,
@@ -360,6 +366,7 @@ async fn test_no_auth_with_mongodb_fails() {
         tunnel_manager,
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
+        diagnostics,
     );
 
     assert!(
@@ -408,6 +415,7 @@ async fn test_no_auth_in_production_env_fails() {
     let fs = FsSubsystem::new(workspace_root.clone());
 
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
+    let diagnostics = DiagnosticStore::new(workspace_root.join("diagnostics.jsonl"));
     let result = AppState::new(
         workspace_root,
         config,
@@ -422,6 +430,7 @@ async fn test_no_auth_in_production_env_fails() {
         tunnel_manager,
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
+        diagnostics,
     );
 
     // Clean up environment variable
