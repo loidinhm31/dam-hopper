@@ -4,14 +4,13 @@ import {
   useConfig,
   useUpdateConfig,
   useClearCache,
-  useExportDiagnostics,
   useResetWorkspace,
   useExportSettings,
   useImportSettings,
 } from "@/api/queries.js";
 import { SettingsAppearanceSection } from "@/components/organisms/SettingsAppearanceSection.js";
 import { SettingsKeyboardShortcutsSection } from "@/components/organisms/SettingsKeyboardShortcutsSection.js";
-import { exportDiagnosticsBundle } from "@/lib/diagnostics-export.js";
+import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
 
 const ConfigEditor = lazy(() =>
   import("@/components/organisms/ConfigEditor.js").then((m) => ({
@@ -40,7 +39,6 @@ export function SettingsPage() {
   } = useUpdateConfig();
 
   const clearCache = useClearCache();
-  const exportDiagnostics = useExportDiagnostics();
   const resetWorkspace = useResetWorkspace();
   const exportSettings = useExportSettings();
   const importSettings = useImportSettings();
@@ -48,8 +46,6 @@ export function SettingsPage() {
   const [clearMsg, setClearMsg] = useState<string | null>(null);
   const [clearErr, setClearErr] = useState<string | null>(null);
   const [resetErr, setResetErr] = useState<string | null>(null);
-  const [diagnosticsMsg, setDiagnosticsMsg] = useState<string | null>(null);
-  const [diagnosticsErr, setDiagnosticsErr] = useState<string | null>(null);
   const [exportMsg, setExportMsg] = useState<string | null>(null);
   const [exportErr, setExportErr] = useState<string | null>(null);
   const [importMsg, setImportMsg] = useState<string | null>(null);
@@ -103,23 +99,6 @@ export function SettingsPage() {
     }, 5000);
   }
 
-  async function handleExportDiagnostics() {
-    setDiagnosticsMsg(null);
-    setDiagnosticsErr(null);
-    try {
-      const fileName = await exportDiagnosticsBundle((request) =>
-        exportDiagnostics.mutateAsync(request),
-      );
-      setDiagnosticsMsg(`Downloaded ${fileName}`);
-    } catch (err) {
-      setDiagnosticsErr(err instanceof Error ? err.message : String(err));
-    }
-    setTimeout(() => {
-      setDiagnosticsMsg(null);
-      setDiagnosticsErr(null);
-    }, 5000);
-  }
-
   async function handleImport() {
     setImportMsg(null);
     setImportErr(null);
@@ -140,7 +119,20 @@ export function SettingsPage() {
   }
 
   return (
-    <AppLayout title="Settings">
+    <AppLayout
+      title="Settings"
+      actions={
+        <DiagnosticsExportButton
+          compact
+          terminalIds={[]}
+          scope={{
+            page: "settings",
+            route: "/settings",
+            frontendScopes: ["SettingsPage", "settings"],
+          }}
+        />
+      }
+    >
       <div className="max-w-3xl space-y-10">
         <section>
           <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">
@@ -241,30 +233,19 @@ export function SettingsPage() {
                   Export Diagnostics
                 </p>
                 <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                  Download a local JSON bundle with the last 60 minutes of
-                  frontend, backend, WebSocket, system, and recent terminal
-                  output tails for debugging.
+                  Download a scoped local JSON bundle. Use the page header to
+                  choose a short window and keep noisy data down.
                 </p>
-                {diagnosticsMsg && (
-                  <p className="text-xs text-[var(--color-success)] mt-1">
-                    ✓ {diagnosticsMsg}
-                  </p>
-                )}
-                {diagnosticsErr && (
-                  <p className="text-xs text-[var(--color-danger)] mt-1">
-                    ✗ {diagnosticsErr}
-                  </p>
-                )}
               </div>
-              <button
-                className="btn-bracket shrink-0"
-                onClick={() => void handleExportDiagnostics()}
-                disabled={exportDiagnostics.isPending}
-              >
-                {exportDiagnostics.isPending
-                  ? "Exporting…"
-                  : "Export Diagnostics"}
-              </button>
+              <DiagnosticsExportButton
+                className="shrink-0 justify-end"
+                terminalIds={[]}
+                scope={{
+                  page: "settings",
+                  route: "/settings",
+                  frontendScopes: ["SettingsPage", "settings"],
+                }}
+              />
             </div>
 
             <div className="border-t border-[var(--color-border)]" />

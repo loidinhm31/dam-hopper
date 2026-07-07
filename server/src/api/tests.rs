@@ -433,8 +433,12 @@ async fn diagnostics_export_includes_live_terminal_tail() {
     assert!(tails.iter().any(|tail| {
         tail["sessionId"] == "shell:diag-export"
             && tail["source"] == "live"
-            && tail["tail"].as_str().is_some_and(|value| value.contains("[REDACTED]"))
-            && tail["tail"].as_str().is_some_and(|value| !value.contains("secret123"))
+            && tail["tail"]
+                .as_str()
+                .is_some_and(|value| value.contains("[REDACTED]"))
+            && tail["tail"]
+                .as_str()
+                .is_some_and(|value| !value.contains("secret123"))
     }));
 }
 
@@ -510,11 +514,43 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
         Some(backend_events.len() as u64)
     );
     assert_eq!(json["manifest"]["terminalSessionCount"], 1);
-    assert!(backend_events.iter().any(|event| event["message"] == "terminal.a"));
-    assert!(backend_events.iter().any(|event| event["message"] == "global"));
-    assert!(!backend_events.iter().any(|event| event["message"] == "terminal.b"));
+    assert!(backend_events
+        .iter()
+        .any(|event| event["message"] == "terminal.a"));
+    assert!(backend_events
+        .iter()
+        .any(|event| event["message"] == "global"));
+    assert!(!backend_events
+        .iter()
+        .any(|event| event["message"] == "terminal.b"));
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0]["id"], "shell:diag-a");
+
+    let resp = post_json(
+        state.clone(),
+        "/api/diagnostics/export",
+        serde_json::json!({
+            "terminalIds": [],
+            "includeTerminalOutput": true,
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let backend_events = json["backend"]["events"].as_array().unwrap();
+    assert_eq!(json["scope"]["terminalIds"].as_array().unwrap().len(), 0);
+    assert_eq!(json["terminals"]["sessions"].as_array().unwrap().len(), 0);
+    assert_eq!(json["terminals"]["tails"].as_array().unwrap().len(), 0);
+    assert!(backend_events
+        .iter()
+        .any(|event| event["message"] == "global"));
+    assert!(!backend_events
+        .iter()
+        .any(|event| event["message"] == "terminal.a"));
 
     state.pty_manager.kill("shell:diag-a").unwrap();
     state.pty_manager.kill("shell:diag-b").unwrap();

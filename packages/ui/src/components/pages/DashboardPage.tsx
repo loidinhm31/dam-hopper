@@ -16,9 +16,10 @@ import { logger } from "@dam-hopper/shared/logger";
 import { Button } from "@/components/atoms/Button.js";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { OverviewCard } from "@/components/molecules/OverviewCard.js";
+import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
 import { useProjects, useTerminalSessions } from "@/api/queries.js";
 import { useIpcEvent } from "@/hooks/use-sse-events.js";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import type { SessionInfo } from "@/api/client.js";
 import { api } from "@/api/client.js";
@@ -141,6 +142,14 @@ export function DashboardPage() {
   const clean = projects.filter((p) => p.status?.isClean === true).length;
   const dirty = projects.filter((p) => p.status?.isClean === false).length;
   const aliveSessions = sessions.filter((s) => s.alive);
+  const aliveTerminalOptions = useMemo(
+    () =>
+      aliveSessions.map((session) => ({
+        id: session.id,
+        label: `${session.project ?? "free"} · ${session.command}`,
+      })),
+    [aliveSessions],
+  );
 
   useIpcEvent("*", (e) => {
     const msg =
@@ -179,7 +188,23 @@ export function DashboardPage() {
   }
 
   return (
-    <AppLayout title="Dashboard">
+    <AppLayout
+      title="Dashboard"
+      actions={
+        <DiagnosticsExportButton
+          compact
+          terminalIds={aliveSessions.map((session) => session.id)}
+          terminalOptions={aliveTerminalOptions}
+          defaultTerminalLabel="All active terminals"
+          scope={{
+            page: "dashboard",
+            route: "/",
+            terminalIds: aliveSessions.map((session) => session.id),
+            frontendScopes: ["DashboardPage", "dashboard"],
+          }}
+        />
+      }
+    >
       {/* Overview cards */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 mb-5">
         <Link

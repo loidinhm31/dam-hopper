@@ -32,6 +32,7 @@ export function TerminalWorkspaceShell({
   onWorkspaceModeChange,
   workspaceModeShortcutLabel,
   onFleetLayoutChange,
+  toolbarActions,
 }: {
   terminalContent: ReactNode;
   terminalOverlayContent?: ReactNode;
@@ -41,6 +42,7 @@ export function TerminalWorkspaceShell({
   onWorkspaceModeChange: (mode: WorkspaceMode) => void;
   workspaceModeShortcutLabel?: string;
   onFleetLayoutChange?: () => void;
+  toolbarActions?: ReactNode;
 }) {
   const { collapsed, toggle } = useSidebarCollapse();
   const [fleetCollapsed, setFleetCollapsed] = useState(loadFleetCollapsed);
@@ -84,6 +86,11 @@ export function TerminalWorkspaceShell({
         onWorkspaceModeChange={onWorkspaceModeChange}
         workspaceModeShortcutLabel={workspaceModeShortcutLabel}
       />
+      {toolbarActions && (
+        <div className="flex h-10 shrink-0 items-center justify-end border-b border-[var(--color-border)] bg-[var(--color-surface)]/30 px-3">
+          {toolbarActions}
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">

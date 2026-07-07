@@ -1,7 +1,29 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { exportDiagnosticsBundle } from "./diagnostics-export.js";
 
-const snapshot = { manifest: { entryCount: 1 } };
+const snapshot = {
+  manifest: {
+    schemaVersion: 1,
+    storageKey: "damhopper_diagnostics_frontend_v1",
+    retentionMinutes: 60,
+    maxEntries: 1_000,
+    maxStorageBytes: 512 * 1024,
+    entryCount: 1,
+  },
+  logs: [
+    {
+      timestamp: "2026-07-07T18:29:00.000Z",
+      timestampMs: new Date(2026, 6, 7, 18, 29, 0).getTime(),
+      type: "log",
+      scope: "SettingsPage",
+      message: "settings event",
+    },
+  ],
+  browserErrors: [],
+  currentRoute: null,
+  profile: null,
+  transportStatus: null,
+} as const;
 
 vi.mock("./diagnostics-client.js", () => ({
   getClientDiagnosticsSnapshot: () => snapshot,

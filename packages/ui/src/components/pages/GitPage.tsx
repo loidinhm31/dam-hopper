@@ -4,6 +4,7 @@ import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import { SshRetryStatusMessage } from "@/components/atoms/SshRetryStatusMessage.js";
 import { ProgressList } from "@/components/organisms/ProgressList.js";
+import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
 import { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";
 import { GitForcePushDialog } from "@/components/organisms/GitForcePushDialog.js";
 import {
@@ -392,7 +393,22 @@ export function GitPage() {
   }
 
   return (
-    <AppLayout title="Git Operations">
+    <AppLayout
+      title="Git Operations"
+      actions={
+        <DiagnosticsExportButton
+          compact
+          terminalIds={[]}
+          includeTerminalOutput={false}
+          scope={{
+            page: "git",
+            route: "/git",
+            project: selectedProjectName,
+            frontendScopes: ["GitPage", "git"],
+          }}
+        />
+      }
+    >
       {/* Project selector */}
       <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4 mb-6">
         <p className="text-sm font-medium text-[var(--color-text)] mb-3">

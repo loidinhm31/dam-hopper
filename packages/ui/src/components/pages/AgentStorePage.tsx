@@ -6,6 +6,7 @@ import { ItemDetail } from "@/components/organisms/ItemDetail.js";
 import { DistributionMatrix } from "@/components/organisms/DistributionMatrix.js";
 import { ShipDialog } from "@/components/organisms/ShipDialog.js";
 import { HealthStatus } from "@/components/organisms/HealthStatus.js";
+import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
 import {
   useAgentStoreItems,
   useAgentStoreMatrix,
@@ -59,7 +60,21 @@ export function AgentStorePage() {
   const hasError = itemsError || matrixError || projectsError;
 
   return (
-    <AppLayout title="Agent Store">
+    <AppLayout
+      title="Agent Store"
+      actions={
+        <DiagnosticsExportButton
+          compact
+          terminalIds={[]}
+          includeTerminalOutput={false}
+          scope={{
+            page: "agent-store",
+            route: "/agent-store",
+            frontendScopes: ["AgentStorePage", "agent-store"],
+          }}
+        />
+      }
+    >
       <div className="flex flex-col gap-4">
         {/* Tab bar + action */}
         <div className="flex items-center gap-4">
