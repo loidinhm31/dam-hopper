@@ -816,6 +816,13 @@ export function useImportSettings() {
   });
 }
 
+export function useExportDiagnostics() {
+  return useMutation({
+    mutationFn: (request: Parameters<typeof api.diagnostics.export>[0]) =>
+      api.diagnostics.export(request),
+  });
+}
+
 // ── Agent Store ────────────────────────────────────────────────────────────────
 
 export function useAgentStoreItems(category?: AgentItemCategory) {

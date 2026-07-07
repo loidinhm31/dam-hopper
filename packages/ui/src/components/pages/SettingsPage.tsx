@@ -4,12 +4,14 @@ import {
   useConfig,
   useUpdateConfig,
   useClearCache,
+  useExportDiagnostics,
   useResetWorkspace,
   useExportSettings,
   useImportSettings,
 } from "@/api/queries.js";
 import { SettingsAppearanceSection } from "@/components/organisms/SettingsAppearanceSection.js";
 import { SettingsKeyboardShortcutsSection } from "@/components/organisms/SettingsKeyboardShortcutsSection.js";
+import { exportDiagnosticsBundle } from "@/lib/diagnostics-export.js";
 
 const ConfigEditor = lazy(() =>
   import("@/components/organisms/ConfigEditor.js").then((m) => ({
@@ -38,6 +40,7 @@ export function SettingsPage() {
   } = useUpdateConfig();
 
   const clearCache = useClearCache();
+  const exportDiagnostics = useExportDiagnostics();
   const resetWorkspace = useResetWorkspace();
   const exportSettings = useExportSettings();
   const importSettings = useImportSettings();
@@ -45,6 +48,8 @@ export function SettingsPage() {
   const [clearMsg, setClearMsg] = useState<string | null>(null);
   const [clearErr, setClearErr] = useState<string | null>(null);
   const [resetErr, setResetErr] = useState<string | null>(null);
+  const [diagnosticsMsg, setDiagnosticsMsg] = useState<string | null>(null);
+  const [diagnosticsErr, setDiagnosticsErr] = useState<string | null>(null);
   const [exportMsg, setExportMsg] = useState<string | null>(null);
   const [exportErr, setExportErr] = useState<string | null>(null);
   const [importMsg, setImportMsg] = useState<string | null>(null);
@@ -95,6 +100,23 @@ export function SettingsPage() {
     setTimeout(() => {
       setExportMsg(null);
       setExportErr(null);
+    }, 5000);
+  }
+
+  async function handleExportDiagnostics() {
+    setDiagnosticsMsg(null);
+    setDiagnosticsErr(null);
+    try {
+      const fileName = await exportDiagnosticsBundle((request) =>
+        exportDiagnostics.mutateAsync(request),
+      );
+      setDiagnosticsMsg(`Downloaded ${fileName}`);
+    } catch (err) {
+      setDiagnosticsErr(err instanceof Error ? err.message : String(err));
+    }
+    setTimeout(() => {
+      setDiagnosticsMsg(null);
+      setDiagnosticsErr(null);
     }, 5000);
   }
 
@@ -208,6 +230,40 @@ export function SettingsPage() {
                 disabled={clearCache.isPending}
               >
                 {clearCache.isPending ? "Clearing…" : "Revalidate"}
+              </button>
+            </div>
+
+            <div className="border-t border-[var(--color-border)]" />
+
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-[var(--color-text)]">
+                  Export Diagnostics
+                </p>
+                <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
+                  Download a local JSON bundle with the last 60 minutes of
+                  frontend, backend, WebSocket, system, and recent terminal
+                  output tails for debugging.
+                </p>
+                {diagnosticsMsg && (
+                  <p className="text-xs text-[var(--color-success)] mt-1">
+                    ✓ {diagnosticsMsg}
+                  </p>
+                )}
+                {diagnosticsErr && (
+                  <p className="text-xs text-[var(--color-danger)] mt-1">
+                    ✗ {diagnosticsErr}
+                  </p>
+                )}
+              </div>
+              <button
+                className="btn-bracket shrink-0"
+                onClick={() => void handleExportDiagnostics()}
+                disabled={exportDiagnostics.isPending}
+              >
+                {exportDiagnostics.isPending
+                  ? "Exporting…"
+                  : "Export Diagnostics"}
               </button>
             </div>
 

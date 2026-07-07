@@ -102,15 +102,15 @@ Phase 01 adds a client-side diagnostics ring for local troubleshooting. It is wr
 
 This phase does not expose a backend export endpoint yet.
 
-## Backend Diagnostics Export (Phase 03)
+## Backend Diagnostics Export (Phase 04)
 
-Protected local export for backend diagnostics. The endpoint reads from the local JSONL store and does not upload data anywhere.
+Protected local export for backend diagnostics. The endpoint reads from the local JSONL store and does not upload data anywhere. The UI entry point is Settings > Maintenance > Export Diagnostics.
 
 **POST /api/diagnostics/export**
 
 Auth: Bearer token required.
 
-Request body is optional:
+Default request body used by the UI:
 
 ```json
 {
@@ -118,17 +118,17 @@ Request body is optional:
   "includeTerminalOutput": true,
   "terminalTailBytes": 65536,
   "terminalIds": ["session-id"],
-  "frontend": { "any": "frontend snapshot payload" }
+  "frontend": { "snapshot": "canonical frontend payload" }
 }
 ```
 
 Request fields:
 
-- `windowMinutes` - requested lookback window; server clamps to 60 minutes max
-- `includeTerminalOutput` - request terminal data in export
-- `terminalTailBytes` - requested tail size for later terminal output support
+- `windowMinutes` - requested lookback window; UI defaults to 60 minutes and the server clamps to 60 minutes max
+- `includeTerminalOutput` - request terminal data in export; UI defaults to `true`
+- `terminalTailBytes` - requested tail size; UI defaults to `65536`
 - `terminalIds` - optional terminal session filter; `terminals.sessions` and `terminals.tails` are scoped to these ids when present
-- `frontend` - optional frontend snapshot payload
+- `frontend` - canonical frontend snapshot payload from the browser export path
 
 Response schema version: `1`
 
@@ -165,6 +165,8 @@ Notes:
 - retention is 60 minutes
 - storage path is `~/.config/dam-hopper/diagnostics/backend-log.jsonl`
 - `terminals.tails` contains capped per-session tails when `includeTerminalOutput=true`
+- downloads use the filename pattern `dam-hopper-diagnostics-{timestamp}.json`
+- terminal tails can still contain sensitive local/dev output even after best-effort redaction; review before sharing the exported JSON
 - when `terminalIds` is provided, backend events with `sessionId` are scoped to those ids while global events remain included
 
 ## Session Persistence API (Phase 05)

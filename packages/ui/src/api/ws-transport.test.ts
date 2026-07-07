@@ -127,6 +127,80 @@ describe("WsTransport commit message endpoints", () => {
   });
 });
 
+describe("WsTransport diagnostics export endpoint", () => {
+  it("posts the diagnostics export request to the protected API route", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          diagnosticSchemaVersion: 1,
+          generatedAt: 1,
+          scope: {
+            windowMinutes: 60,
+            includeTerminalOutput: true,
+            terminalTailBytes: 65536,
+            terminalIds: null,
+          },
+          manifest: {
+            backendEventCount: 0,
+            terminalSessionCount: 0,
+            retentionMinutes: 60,
+            storage: "localConfigJsonl",
+            droppedPersistEvents: 0,
+            persistErrorCount: 0,
+          },
+          frontend: {},
+          backend: { events: [] },
+          terminals: { sessions: [], tails: [] },
+          system: {
+            sampledAt: 1,
+            uptimeSeconds: 1,
+            cpu: { usagePercent: 0, logicalCoreCount: 1 },
+            memory: {
+              totalBytes: 1,
+              usedBytes: 1,
+              availableBytes: 0,
+              usagePercent: 100,
+            },
+            disk: {
+              name: "/",
+              mountPoint: "/",
+              totalBytes: 1,
+              availableBytes: 0,
+              usedBytes: 1,
+              usagePercent: 100,
+            },
+            temperatures: [],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("diagnostics:export", {
+      windowMinutes: 15,
+      frontend: { logs: [] },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:4800/api/diagnostics/export",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          windowMinutes: 15,
+          frontend: { logs: [] },
+        }),
+      }),
+    );
+    transport.destroy();
+  });
+});
+
 const diagCalls: Array<{
   type: string;
   scope: string;
