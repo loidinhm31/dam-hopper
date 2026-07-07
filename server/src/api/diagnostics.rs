@@ -19,11 +19,9 @@ pub async fn export_diagnostics(
     let system = state.host_metrics.sample(&workspace_root);
     let diagnostics = state.diagnostics.clone();
     let window_minutes = request.window_minutes;
-    let scoped_terminal_ids: Option<Vec<String>> = request
-        .terminal_ids
-        .as_ref()
-        .filter(|ids| !ids.is_empty())
-        .cloned();
+    // Preserve the distinction between omitted terminalIds (default/all) and
+    // an explicit empty list (no terminal sessions or tails).
+    let scoped_terminal_ids: Option<Vec<String>> = request.terminal_ids.clone();
     let backend_events = {
         let scoped_terminal_ids = scoped_terminal_ids.clone();
         tokio::task::spawn_blocking(move || diagnostics.recent_events(window_minutes))
@@ -32,7 +30,8 @@ pub async fn export_diagnostics(
             .into_iter()
             .filter(|event| {
                 scoped_terminal_ids.as_ref().is_none_or(|ids| {
-                    event.fields
+                    event
+                        .fields
                         .get("sessionId")
                         .is_none_or(|session_id| ids.iter().any(|id| id == session_id))
                 })

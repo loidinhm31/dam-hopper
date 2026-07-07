@@ -19,6 +19,7 @@ interface MobileWorkspaceShellProps {
   workspaceMode: WorkspaceMode;
   onWorkspaceModeChange: (mode: WorkspaceMode) => void;
   workspaceModeShortcutLabel?: string;
+  toolbarActions?: ReactNode;
 }
 
 export function MobileWorkspaceShell({
@@ -28,6 +29,7 @@ export function MobileWorkspaceShell({
   workspaceMode,
   onWorkspaceModeChange,
   workspaceModeShortcutLabel,
+  toolbarActions,
 }: MobileWorkspaceShellProps) {
   const { collapsed, toggle } = useSidebarCollapse();
   const activeSurface =
@@ -71,6 +73,7 @@ export function MobileWorkspaceShell({
             {workspaceMode === "ide" ? "IDE companion" : "Terminal companion"}
           </p>
         </div>
+        {toolbarActions && <div className="shrink-0">{toolbarActions}</div>}
       </div>
 
       <main className="relative flex-1 overflow-hidden">

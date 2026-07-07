@@ -31,6 +31,10 @@ vi.mock("react-router-dom", () => ({
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({ data: [{ name: "demo-project" }] }),
+  useMutation: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
 }));
 
 vi.mock("@/components/templates/IdeShell.js", () => ({
@@ -107,6 +111,7 @@ vi.mock("@/hooks/use-terminal-manager.js", () => ({
       isLoading: false,
       tabsWithLiveSession: [],
       selectedId: null,
+      sessionMap: new Map(),
     },
     actions: terminalActions,
   }),

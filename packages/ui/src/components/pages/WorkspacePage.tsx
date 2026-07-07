@@ -24,6 +24,7 @@ import { IdeShell } from "@/components/templates/IdeShell.js";
 import { MobileWorkspaceShell } from "@/components/templates/MobileWorkspaceShell.js";
 import { TerminalWorkspaceShell } from "@/components/templates/TerminalWorkspaceShell.js";
 import { TerminalFloatingFilePanel } from "@/components/organisms/TerminalFloatingFilePanel.js";
+import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
 
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
@@ -275,8 +276,14 @@ export default function WorkspacePage() {
     freeTerminalSavePrompt,
     selection,
   } = state;
-  const { tree, freeTerminals, isLoading, tabsWithLiveSession, selectedId } =
-    derived;
+  const {
+    tree,
+    freeTerminals,
+    isLoading,
+    tabsWithLiveSession,
+    selectedId,
+    sessionMap,
+  } = derived;
   const {
     handleSelectProject,
     handleSelectTerminal,
@@ -303,6 +310,54 @@ export default function WorkspacePage() {
 
   const projectName =
     activeProject ?? (projects.length > 0 ? projects[0].name : null);
+  const workspaceTerminalIds = useMemo(() => {
+    if (!projectName) return [];
+    const activeSession = activeTab ? sessionMap.get(activeTab) : null;
+    if (activeTab && activeSession?.project === projectName) {
+      return [activeTab];
+    }
+
+    const ids = mountedSessions
+      .filter((session) => session.project === projectName)
+      .map((session) => session.sessionId);
+    return [...new Set(ids)];
+  }, [activeTab, mountedSessions, projectName, sessionMap]);
+  const workspaceTerminalOptions = useMemo(() => {
+    if (!projectName) return [];
+    return Array.from(sessionMap.values())
+      .filter((session) => session.project === projectName)
+      .map((session) => ({
+        id: session.id,
+        label: `${session.command}${session.alive ? "" : " (exited)"}`,
+      }));
+  }, [projectName, sessionMap]);
+  const defaultWorkspaceTerminalLabel =
+    workspaceTerminalIds.length === 1
+      ? "Current terminal"
+      : workspaceTerminalIds.length > 1
+        ? "Open project terminals"
+        : "No terminals";
+  const workspaceDiagnosticsAction = (
+    <DiagnosticsExportButton
+      compact
+      terminalIds={workspaceTerminalIds}
+      terminalOptions={workspaceTerminalOptions}
+      defaultTerminalLabel={defaultWorkspaceTerminalLabel}
+      showTerminalSelector
+      scope={{
+        page: "workspace",
+        route: "/workspace",
+        project: projectName,
+        terminalIds: workspaceTerminalIds,
+        frontendScopes: [
+          "WorkspacePage",
+          "TerminalPanel",
+          "terminal-panel",
+          "workspace",
+        ],
+      }}
+    />
+  );
 
   const {
     open: searchOpen,
@@ -1237,6 +1292,7 @@ export default function WorkspacePage() {
           workspaceMode={workspaceMode}
           onWorkspaceModeChange={setWorkspaceMode}
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}
+          toolbarActions={workspaceDiagnosticsAction}
         />
       ) : workspaceMode === "terminal" ? (
         <TerminalWorkspaceShell
@@ -1248,6 +1304,7 @@ export default function WorkspacePage() {
           onWorkspaceModeChange={setWorkspaceMode}
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}
           onFleetLayoutChange={handleTerminalWorkspaceFleetLayoutChange}
+          toolbarActions={workspaceDiagnosticsAction}
         />
       ) : (
         <IdeShell
@@ -1257,6 +1314,7 @@ export default function WorkspacePage() {
           onWorkspaceModeChange={setWorkspaceMode}
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}
           activateLeftTopToolRequest={ideLeftTopToolRequest}
+          toolbarActions={workspaceDiagnosticsAction}
           editor={
             <Suspense fallback={<PanelFallback label="Loading editor…" />}>
               <EditorTabs project={projectName} />

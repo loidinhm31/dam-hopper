@@ -27,6 +27,7 @@ export function IdeShell({
   onWorkspaceModeChange,
   workspaceModeShortcutLabel,
   activateLeftTopToolRequest,
+  toolbarActions,
 }: {
   leftTools: ToolWindowDef[];
   rightTools: ToolWindowDef[];
@@ -35,6 +36,7 @@ export function IdeShell({
   onWorkspaceModeChange?: (mode: WorkspaceMode) => void;
   workspaceModeShortcutLabel?: string;
   activateLeftTopToolRequest?: { nonce: number; toolId: string } | null;
+  toolbarActions?: ReactNode;
 }) {
   const { collapsed, toggle } = useSidebarCollapse();
 
@@ -216,6 +218,11 @@ export function IdeShell({
         onWorkspaceModeChange={onWorkspaceModeChange}
         workspaceModeShortcutLabel={workspaceModeShortcutLabel}
       />
+      {toolbarActions && (
+        <div className="flex h-10 shrink-0 items-center justify-end border-b border-[var(--color-border)] bg-[var(--color-surface)]/30 px-3">
+          {toolbarActions}
+        </div>
+      )}
 
       <div className="flex-1 flex min-w-0 overflow-hidden">
         {/* ── Left Activity Bar ────────────────────────────────────────── */}

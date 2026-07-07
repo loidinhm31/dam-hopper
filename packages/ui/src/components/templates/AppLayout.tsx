@@ -5,9 +5,10 @@ import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse.js";
 interface Props {
   children: ReactNode;
   title?: string;
+  actions?: ReactNode;
 }
 
-export function AppLayout({ children, title }: Props) {
+export function AppLayout({ children, title, actions }: Props) {
   const { collapsed, toggle } = useSidebarCollapse();
 
   return (
@@ -26,6 +27,7 @@ export function AppLayout({ children, title }: Props) {
             <span className="text-[var(--color-text-muted)]/30 text-[10px] hidden sm:inline">
               ~/dam-hopper/{title.toLowerCase()}
             </span>
+            {actions && <div className="ml-auto flex items-center">{actions}</div>}
           </header>
         )}
         <main className="flex-1 overflow-y-auto">
