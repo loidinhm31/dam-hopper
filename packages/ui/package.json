@@ -10,7 +10,8 @@
   "exports": {
     ".": "./src/embed/dam-hopper-app.tsx",
     "./styles": "./src/index.css",
-    "./api/*": "./src/api/*.ts"
+    "./api/*": "./src/api/*.ts",
+    "./diagnostics-client": "./src/lib/diagnostics-client.ts"
   },
   "dependencies": {
     "@dam-hopper/shared": "workspace:*",

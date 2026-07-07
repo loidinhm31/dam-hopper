@@ -6,6 +6,10 @@ import "@dam-hopper/ui/styles";
 
 import { initTransport } from "@dam-hopper/ui/api/transport";
 import { WsTransport } from "@dam-hopper/ui/api/ws-transport";
+import {
+  initializeClientDiagnostics,
+  setClientTransportStatus,
+} from "@dam-hopper/ui/diagnostics-client";
 import { IdleTransport } from "./idle-transport";
 import { getNativeServerUrl } from "./native-server-url";
 
@@ -49,9 +53,17 @@ configureLogger({
     viteEnv?.DEV === true ? "debug" : "warn",
   ),
 });
+initializeClientDiagnostics();
 
 const serverUrl = getNativeServerUrl();
-initTransport(serverUrl ? new WsTransport(serverUrl) : new IdleTransport());
+if (serverUrl) {
+  const transport = new WsTransport(serverUrl);
+  setClientTransportStatus(transport.getStatus());
+  transport.onStatusChange(setClientTransportStatus);
+  initTransport(transport);
+} else {
+  initTransport(new IdleTransport());
+}
 syncNativePlatform();
 
 const queryClient = new QueryClient({

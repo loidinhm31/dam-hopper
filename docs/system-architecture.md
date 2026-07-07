@@ -68,8 +68,39 @@ Handles TOML parsing, project discovery, feature flags.
 Dependency-free runtime helpers shared by browser packages.
 
 - `logger.ts` centralizes `configureLogger`, `getLoggerConfig`, `resolveLogLevel`, and `logger.debug/info/warn/error`
+- Phase 01 adds `addLoggerSink()` fanout. The primary sink stays in place, and extra sinks are isolated so one sink failure cannot break the app path
 - Sensitive metadata is redacted recursively before sink delivery by default
 - Web bootstrap reads the desired log level from Vite env and falls back to `debug` in development or `warn` in production
+
+### frontend diagnostics (Phase 01)
+
+The browser host now initializes a diagnostics client before React render. This creates a local-only ring buffer for client-side troubleshooting and keeps the capture path active from app startup onward.
+
+**Host init flow:**
+
+1. `apps/web/src/main.tsx` calls `initializeClientDiagnostics()` before `createRoot(...).render(...)`
+2. `WsTransport` status changes are fed into the diagnostics client
+3. `RouteDiagnostics` in `packages/ui/src/embed/dam-hopper-app.tsx` records route changes
+4. `ErrorBoundary` records React render failures
+5. Window `error` and `unhandledrejection` events are captured
+
+**Stored signals:**
+
+- shared logger entries via logger sink fanout
+- browser runtime errors
+- unhandled promise rejections
+- React error boundary failures
+- route changes
+- WebSocket transport status changes
+
+**Storage model:**
+
+- persisted in `localStorage` under `damhopper_diagnostics_frontend_v1`
+- bounded ring buffer, trimmed by time and entry count
+- storage budget is capped at a small fixed size; oldest entries are dropped first when the cap is hit
+- diagnostics stay best-effort if browser storage is blocked or full
+
+Phase 01 is client-side only. It does not add a backend export endpoint yet.
 
 ### apps/native
 

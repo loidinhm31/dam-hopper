@@ -50,12 +50,21 @@ let config: LoggerConfig = {
   sink: consoleSink,
 };
 
+let extraSinks: LoggerSink[] = [];
+
 export function configureLogger(nextConfig: LoggerConfigInput): void {
   config = { ...config, ...nextConfig };
 }
 
 export function getLoggerConfig(): LoggerConfig {
   return { ...config };
+}
+
+export function addLoggerSink(sink: LoggerSink): () => void {
+  extraSinks = [...extraSinks, sink];
+  return () => {
+    extraSinks = extraSinks.filter((candidate) => candidate !== sink);
+  };
 }
 
 export function resolveLogLevel(
@@ -122,6 +131,20 @@ function redactValue(
   return redacted;
 }
 
+export function redactLogMetadata(metadata: unknown): unknown {
+  return redactValue(metadata);
+}
+
+function deliverToSinks(entry: LogEntry): void {
+  for (const sink of [config.sink, ...extraSinks]) {
+    try {
+      sink(entry);
+    } catch {
+      // Logging must never break the application path.
+    }
+  }
+}
+
 function emit(
   level: Exclude<LogLevel, "silent">,
   scope: string,
@@ -129,11 +152,13 @@ function emit(
   metadata?: unknown,
 ): void {
   if (!shouldLog(level)) return;
-  config.sink({
+  deliverToSinks({
     level,
     scope,
     message,
-    metadata: config.redactSensitiveData ? redactValue(metadata) : metadata,
+    metadata: config.redactSensitiveData
+      ? redactLogMetadata(metadata)
+      : metadata,
     timestamp: new Date(),
   });
 }
