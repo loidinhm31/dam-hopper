@@ -307,6 +307,8 @@ function channelToEndpoint(
       return { method: "GET", url: "/api/settings/export" };
     case "settings:import":
       return { method: "POST", url: "/api/settings/import", body: data };
+    case "diagnostics:export":
+      return { method: "POST", url: "/api/diagnostics/export", body: data };
 
     // Commands
     case "commands:search": {

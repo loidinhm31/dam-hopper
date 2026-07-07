@@ -170,6 +170,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Structured error responses
 - CORS configurable per deployment
 - Content negotiation for binary vs. text responses
+- Diagnostics export from Settings > Maintenance with canonical frontend snapshot payload and capped terminal tails
 
 **Acceptance Criteria:**
 
@@ -177,12 +178,14 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Constant-time comparison prevents timing attacks
 - ✓ Errors return JSON with status code
 - ✓ Binary files detected, not force-decoded as text
+- ✓ Export Diagnostics downloads `dam-hopper-diagnostics-{timestamp}.json`
 
 **Non-Functional Requirements:**
 
 - Token generation on first start
 - Store token securely (0600 file permissions)
 - Log auth failures without leaking tokens
+- Diagnostics exports include recent terminal output tails by default and must be reviewed before sharing
 
 ### PR-007: Multi-Server Profile Management (Phase 2)
 

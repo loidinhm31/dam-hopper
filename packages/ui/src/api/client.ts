@@ -142,6 +142,58 @@ export interface HostMetrics {
   }>;
 }
 
+export interface DiagnosticExportRequest {
+  windowMinutes?: number;
+  includeTerminalOutput?: boolean;
+  terminalTailBytes?: number;
+  terminalIds?: string[];
+  frontend?: unknown;
+}
+
+export interface DiagnosticEvent {
+  timestampMs: number;
+  level: string;
+  source: string;
+  message: string;
+  fields: Record<string, string>;
+}
+
+export interface DiagnosticExportScope {
+  windowMinutes: number;
+  includeTerminalOutput: boolean;
+  terminalTailBytes: number;
+  terminalIds?: string[] | null;
+}
+
+export interface DiagnosticExportManifest {
+  backendEventCount: number;
+  terminalSessionCount: number;
+  retentionMinutes: number;
+  storage: string;
+  droppedPersistEvents: number;
+  persistErrorCount: number;
+}
+
+export interface BackendDiagnosticsExport {
+  events: DiagnosticEvent[];
+}
+
+export interface TerminalDiagnosticsExport {
+  sessions: unknown[];
+  tails: unknown[];
+}
+
+export interface DiagnosticExportResponse {
+  diagnosticSchemaVersion: 1;
+  generatedAt: number;
+  scope: DiagnosticExportScope;
+  manifest: DiagnosticExportManifest;
+  frontend: unknown;
+  backend: BackendDiagnosticsExport;
+  terminals: TerminalDiagnosticsExport;
+  system: HostMetrics;
+}
+
 export interface SshLoadKeyResult {
   success: boolean;
   saved: boolean;
@@ -807,6 +859,13 @@ export const api = {
       ),
     importConfig: () =>
       getTransport().invoke<{ imported: boolean }>("settings:import"),
+  },
+  diagnostics: {
+    export: (request: DiagnosticExportRequest) =>
+      getTransport().invoke<DiagnosticExportResponse>(
+        "diagnostics:export",
+        request,
+      ),
   },
   commands: {
     search: (query: string, projectType?: string, limit?: number) =>

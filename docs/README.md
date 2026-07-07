@@ -129,6 +129,13 @@ See [Frontend Components](./frontend-components.md#data-flow-terminal-lifecycle)
 - ✓ Wired WebSocket event handlers for lifecycle events
 - ✓ Added query invalidation on process restart
 
+**Phase 04 (Complete ✓):**
+
+- ✓ Added Settings > Maintenance > Export Diagnostics
+- ✓ Export bundles include canonical frontend snapshot data and capped terminal tails
+- ✓ Downloads use `dam-hopper-diagnostics-{timestamp}.json`
+- ✓ Docs and API reference updated with review-before-sharing privacy note
+
 **Phase 05 (Complete ✓):**
 
 - ✓ Backend: Enhanced `terminal:exit` with willRestart/restartInMs/restartCount
