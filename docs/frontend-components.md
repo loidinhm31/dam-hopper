@@ -40,6 +40,31 @@ Shared runtime libraries:
 - `file-decoration-icon.tsx` only renders the shared lookup result.
 - Git change rows can reuse the same lookup for file identity while keeping VCS badges separate.
 
+## Terminal Agent Notifications
+
+**Locations:**
+
+- `packages/ui/src/lib/agent-command-recognizer.ts`
+- `packages/ui/src/lib/terminal-notification-signal-parser.ts`
+- `packages/ui/src/lib/browser-notification-service.ts`
+- `packages/ui/src/lib/agent-activity-tracker.ts`
+
+**Purpose:** Pure frontend pipeline for xterm-driven agent notifications. It stays UI-side, has no server dependency, and is unit-test friendly.
+
+**Flow:**
+
+1. `recognizeAgentCommand()` extracts the executable token from a submitted terminal command and matches it against enabled literal or regex agent patterns.
+2. `AgentActivityTracker` watches submitted commands, output, user input, and terminal exit state to decide when to emit activity events.
+3. `terminal-notification-signal-parser.ts` normalizes BEL and OSC-based terminal signals into a shared `TerminalAgentNotification` shape.
+4. `BrowserNotificationService` gates browser delivery by permission, rate limit, and support checks, then dispatches native `Notification` objects.
+
+**Behavior notes:**
+
+- Parsing is defensive: control sequences are stripped, titles/bodies are capped, and invalid regex patterns fail closed.
+- Notifications are deduped per `sessionId` + `source` with a default 30s rate limit.
+- Quiet tracking is optional; when enabled it emits a "may need attention" notification after configurable inactivity.
+- Terminal exit notifications are separate from quiet notifications and use the same shared notification shape.
+
 ## IDE Tool Window System
 
 Dam Hopper uses an extensible IDE-style Tool Window system, inspired by IntelliJ IDEA.

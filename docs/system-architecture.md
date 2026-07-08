@@ -72,6 +72,17 @@ Dependency-free runtime helpers shared by browser packages.
 - Sensitive metadata is redacted recursively before sink delivery by default
 - Web bootstrap reads the desired log level from Vite env and falls back to `debug` in development or `warn` in production
 
+### xterm agent notifications (Phase 2)
+
+Pure frontend notification pipeline in `packages/ui/src/lib/`:
+
+- `agent-command-recognizer.ts` identifies tracked agent commands from terminal input
+- `agent-activity-tracker.ts` turns command/output/exit events into activity state changes
+- `terminal-notification-signal-parser.ts` converts BEL and OSC terminal signals into normalized notification events
+- `browser-notification-service.ts` applies permission, rate-limit, and delivery guards before creating browser `Notification` objects
+
+This path is intentionally UI-only. It has no server/API dependency and is covered by unit tests around parsing, recognition, tracking, and notification gating.
+
 ### frontend diagnostics (Phase 01)
 
 The browser host now initializes a diagnostics client before React render. This creates a local-only ring buffer for client-side troubleshooting and keeps the capture path active from app startup onward.
