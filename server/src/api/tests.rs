@@ -142,6 +142,38 @@ async fn post_json(
     router.oneshot(req).await.unwrap()
 }
 
+async fn put_json(
+    state: AppState,
+    path: &str,
+    body: serde_json::Value,
+) -> axum::response::Response {
+    let router = build_router(state, vec![]);
+    let req = Request::builder()
+        .method("PUT")
+        .uri(path)
+        .header("Content-Type", "application/json")
+        .header("Cookie", auth_cookie())
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    router.oneshot(req).await.unwrap()
+}
+
+async fn patch_json(
+    state: AppState,
+    path: &str,
+    body: serde_json::Value,
+) -> axum::response::Response {
+    let router = build_router(state, vec![]);
+    let req = Request::builder()
+        .method("PATCH")
+        .uri(path)
+        .header("Content-Type", "application/json")
+        .header("Cookie", auth_cookie())
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    router.oneshot(req).await.unwrap()
+}
+
 async fn post_json_without_auth(
     state: AppState,
     path: &str,
@@ -858,6 +890,110 @@ async fn config_get_returns_workspace_name() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["workspace"]["name"], "test-workspace");
+}
+
+#[tokio::test]
+async fn config_update_persists_camel_case_project_fields_as_toml_schema() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let resp = put_json(
+        state.clone(),
+        "/api/config",
+        serde_json::json!({
+            "workspace": { "name": "test-workspace", "root": "." },
+            "projects": [{
+                "name": "test-project",
+                "path": ".",
+                "type": "cargo",
+                "envFile": ".env",
+                "services": [{
+                    "name": "default",
+                    "buildCommand": "cargo build",
+                    "runCommand": "cargo run"
+                }],
+                "restartPolicy": "on-failure",
+                "restartMaxRetries": 7,
+                "healthCheckUrl": "http://localhost:4800/health"
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let written = std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap();
+    assert!(written.contains("env_file = \".env\""));
+    assert!(written.contains("build_command = \"cargo build\""));
+    assert!(written.contains("run_command = \"cargo run\""));
+    assert!(written.contains("restart = \"on-failure\""));
+    assert!(written.contains("restart_max_retries = 7"));
+    assert!(written.contains("health_check_url = \"http://localhost:4800/health\""));
+    assert!(!written.contains("envFile"));
+    assert!(!written.contains("buildCommand"));
+    assert!(!written.contains("restartPolicy"));
+
+    let resp = get(state, "/api/config").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["projects"][0]["envFile"], ".env");
+    assert_eq!(
+        json["projects"][0]["services"][0]["runCommand"],
+        "cargo run"
+    );
+}
+
+#[tokio::test]
+async fn config_patch_project_persists_camel_case_project_fields_as_toml_schema() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    std::fs::write(
+        tmp.path().join("dam-hopper.toml"),
+        r#"
+[workspace]
+name = "test-workspace"
+
+[[projects]]
+name = "test-project"
+path = "."
+type = "cargo"
+envFile = "ignored.env"
+restartPolicy = "never"
+"#,
+    )
+    .unwrap();
+
+    let resp = patch_json(
+        state.clone(),
+        "/api/config/projects/test-project",
+        serde_json::json!({
+            "envFile": ".env",
+            "services": [{
+                "name": "default",
+                "runCommand": "cargo run"
+            }],
+            "restartPolicy": "always"
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let written = std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap();
+    assert!(written.contains("env_file = \".env\""));
+    assert!(written.contains("run_command = \"cargo run\""));
+    assert!(written.contains("restart = \"always\""));
+    assert!(!written.contains("envFile"));
+    assert!(!written.contains("restartPolicy"));
+
+    let resp = get(state, "/api/config").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["projects"][0]["envFile"], ".env");
 }
 
 // ---------------------------------------------------------------------------

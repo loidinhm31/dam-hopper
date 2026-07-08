@@ -252,20 +252,17 @@ impl PtySessionManager {
         // Log env keys only — values may contain secrets (API keys, tokens).
         debug!(id = %opts.id, env_keys = ?opts.env.keys().collect::<Vec<_>>(), "Spawning PTY");
         let session_id_for_diag = opts.id.clone();
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| {
-                let error = format!("spawn failed: {e}");
-                let mut fields = BTreeMap::new();
-                fields.insert("sessionId".into(), session_id_for_diag.clone());
-                fields.insert("error".into(), error.clone());
-                if let Some(project) = &opts.project {
-                    fields.insert("project".into(), project.clone());
-                }
-                self.record_diag("pty", "terminal.spawn_failed", fields);
-                AppError::PtyError(error)
-            })?;
+        let child = pair.slave.spawn_command(cmd).map_err(|e| {
+            let error = format!("spawn failed: {e}");
+            let mut fields = BTreeMap::new();
+            fields.insert("sessionId".into(), session_id_for_diag.clone());
+            fields.insert("error".into(), error.clone());
+            if let Some(project) = &opts.project {
+                fields.insert("project".into(), project.clone());
+            }
+            self.record_diag("pty", "terminal.spawn_failed", fields);
+            AppError::PtyError(error)
+        })?;
 
         // portable-pty requires clone_reader before take_writer
         let reader = pair
@@ -324,7 +321,10 @@ impl PtySessionManager {
         {
             let mut fields = BTreeMap::new();
             fields.insert("sessionId".into(), opts.id.clone());
-            fields.insert("sessionType".into(), format!("{:?}", SessionType::from_id(&opts.id)));
+            fields.insert(
+                "sessionType".into(),
+                format!("{:?}", SessionType::from_id(&opts.id)),
+            );
             fields.insert("cwd".into(), opts.cwd.clone());
             fields.insert("cols".into(), opts.cols.to_string());
             fields.insert("rows".into(), opts.rows.to_string());
@@ -494,9 +494,7 @@ impl PtySessionManager {
                 let (data, total_written) = buf.read_from(None);
                 let start = data.len().saturating_sub(max_bytes);
                 let tail_bytes = data.len() - start;
-                let tail = redact_diagnostic_text(
-                    &String::from_utf8_lossy(&data[start..]),
-                );
+                let tail = redact_diagnostic_text(&String::from_utf8_lossy(&data[start..]));
                 return Some(TerminalTail {
                     session_id: id.to_string(),
                     tail,
@@ -896,10 +894,7 @@ fn reader_thread(
                     ("wasKilled".into(), was_killed.to_string()),
                     ("willRestart".into(), will_restart.to_string()),
                     ("restartCount".into(), restart_count.to_string()),
-                    (
-                        "restartInMs".into(),
-                        restart_in_ms.unwrap_or(0).to_string(),
-                    ),
+                    ("restartInMs".into(), restart_in_ms.unwrap_or(0).to_string()),
                     ("restartPolicy".into(), format!("{policy:?}")),
                 ]),
             );

@@ -184,6 +184,12 @@ export function TerminalPanel({
     let attachTimeout: ReturnType<typeof setTimeout> | null = null;
     let releaseTouchScroll = () => {};
 
+    const clearAttachTimeout = () => {
+      if (!attachTimeout) return;
+      clearTimeout(attachTimeout);
+      attachTimeout = null;
+    };
+
     // Register in global registry so PaneContainer can reparent the terminal element
     const terminalEntry = registerTerminal(safeSessionId, term, fitAddon);
     onTerminalReady?.(safeSessionId);
@@ -228,10 +234,7 @@ export function TerminalPanel({
         });
         hasBufferBeenWritten = true;
         setAttachState("attached");
-        if (attachTimeout) {
-          clearTimeout(attachTimeout);
-          attachTimeout = null;
-        }
+        clearAttachTimeout();
       });
     }
 
@@ -327,11 +330,12 @@ export function TerminalPanel({
         sessionId: safeSessionId,
         fromOffset,
       });
-      if (transport.terminalAttach) {
-        transport.terminalAttach(safeSessionId, fromOffset);
-      }
-
+      clearAttachTimeout();
       attachTimeout = setTimeout(() => {
+        attachTimeout = null;
+        if (hasBufferBeenWritten || attachStateRef.current === "attached") {
+          return;
+        }
         logger.warn(
           "TerminalPanel",
           "terminal attach timeout; creating new session",
@@ -347,6 +351,10 @@ export function TerminalPanel({
         );
         void createSession();
       }, 3000);
+
+      if (transport.terminalAttach) {
+        transport.terminalAttach(safeSessionId, fromOffset);
+      }
     };
 
     if (transport.onStatusChange) {
@@ -401,7 +409,7 @@ export function TerminalPanel({
       unsubBuffer?.();
       unsubStatus?.();
       inputDisposable?.dispose();
-      if (attachTimeout) clearTimeout(attachTimeout);
+      clearAttachTimeout();
       observer?.disconnect();
       releaseTouchScroll();
       cancelScheduledTerminalFit(terminalEntry);
