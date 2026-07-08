@@ -47,8 +47,8 @@ export interface Transport {
   /** Fire-and-forget terminal resize */
   terminalResize(id: string, cols: number, rows: number): void;
 
-  /** Fire-and-forget terminal attach (for reconnect with buffer replay) */
-  terminalAttach?(id: string, fromOffset?: number): void;
+  /** Terminal attach for reconnect with buffer replay. Return false if not sent. */
+  terminalAttach?(id: string, fromOffset?: number): boolean | void;
 
   /** Terminal buffer subscription (response to terminal:attach). Returns unsubscribe fn. */
   onTerminalBuffer?(

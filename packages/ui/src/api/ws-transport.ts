@@ -1200,7 +1200,10 @@ export class WsTransport implements Transport {
       }
 
       const kind = msg.kind ?? "unknown";
-      this.messageKindCounts.set(kind, (this.messageKindCounts.get(kind) ?? 0) + 1);
+      this.messageKindCounts.set(
+        kind,
+        (this.messageKindCounts.get(kind) ?? 0) + 1,
+      );
 
       try {
         switch (msg.kind) {
@@ -1734,16 +1737,19 @@ export class WsTransport implements Transport {
     }
   }
 
-  terminalAttach(id: string, fromOffset?: number): void {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(
-        JSON.stringify({
-          kind: "terminal:attach",
-          id,
-          from_offset: fromOffset ?? null,
-        }),
-      );
+  terminalAttach(id: string, fromOffset?: number): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      return false;
     }
+
+    this.ws.send(
+      JSON.stringify({
+        kind: "terminal:attach",
+        id,
+        from_offset: fromOffset ?? null,
+      }),
+    );
+    return true;
   }
 
   onTerminalBuffer(

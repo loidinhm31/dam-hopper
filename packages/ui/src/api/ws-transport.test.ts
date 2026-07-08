@@ -47,13 +47,25 @@ describe("WsTransport terminalAttach", () => {
     const transport = new WsTransport("http://localhost:4800");
     const socket = sockets[0];
 
-    transport.terminalAttach("session-1", 42);
+    expect(transport.terminalAttach("session-1", 42)).toBe(true);
 
     expect(JSON.parse(socket.sent[0])).toEqual({
       kind: "terminal:attach",
       id: "session-1",
       from_offset: 42,
     });
+    transport.destroy();
+  });
+
+  it("returns false without sending when websocket is not open", () => {
+    installMockWebSocket();
+    const transport = new WsTransport("http://localhost:4800");
+    const socket = sockets[0];
+    socket.readyState = 0;
+
+    expect(transport.terminalAttach("session-1", 42)).toBe(false);
+    expect(socket.sent).toEqual([]);
+
     transport.destroy();
   });
 
@@ -236,7 +248,9 @@ describe("WsTransport diagnostics", () => {
       c.message.startsWith("status:"),
     );
     expect(statusEvents.length).toBeGreaterThan(0);
-    expect(statusEvents.some((e) => e.message === "status:connected")).toBe(true);
+    expect(statusEvents.some((e) => e.message === "status:connected")).toBe(
+      true,
+    );
     transport.destroy();
   });
 
@@ -366,9 +380,9 @@ describe("WsTransport diagnostics", () => {
       }),
     });
 
-    expect(diagCalls.filter((c) => c.message === "ws.parse_error")).toHaveLength(
-      0,
-    );
+    expect(
+      diagCalls.filter((c) => c.message === "ws.parse_error"),
+    ).toHaveLength(0);
     const dispatchErrors = diagCalls.filter(
       (c) => c.message === "ws.dispatch_error",
     );
