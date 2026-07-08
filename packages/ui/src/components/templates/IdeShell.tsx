@@ -9,7 +9,11 @@ import { ActivityBar } from "@/components/organisms/ActivityBar.js";
 import { SidebarTopGroup } from "@/components/organisms/SidebarTopGroup.js";
 import { SidebarBottomGroup } from "@/components/organisms/SidebarBottomGroup.js";
 import type { WorkspaceMode } from "@/lib/workspace-mode.js";
-import { resolveBottomPanelLayout } from "@/lib/ide-shell-layout.js";
+import {
+  resolveBottomPanelLayout,
+  resolveMaximizeToggle,
+  resolveTopToolToggle,
+} from "@/lib/ide-shell-layout.js";
 
 const TREE_WIDTH_KEY = "dam-hopper:ide-tree-width";
 const TERMINAL_TREE_WIDTH_KEY = "dam-hopper:ide-terminal-tree-width";
@@ -175,33 +179,6 @@ export function IdeShell({
       activeRightBottomId === null ? "null" : activeRightBottomId,
     );
   }, [activeRightBottomId]);
-  useEffect(() => {
-    if (!activateLeftTopToolRequest) return;
-    const requestedTool = leftTools.find(
-      (entry) => entry.id === activateLeftTopToolRequest.toolId,
-    );
-    if (!requestedTool || requestedTool.position === "bottom") return;
-    // This request prop is an intentional imperative bridge from WorkspacePage.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setActiveLeftTopId(activateLeftTopToolRequest.toolId);
-  }, [activateLeftTopToolRequest, leftTools]);
-
-  function handleToggleLeft(id: string) {
-    const tool = leftTools.find((t) => t.id === id);
-    if (!tool) return;
-    const isTop = !tool.position || tool.position === "top";
-    if (isTop) setActiveLeftTopId((curr) => (curr === id ? null : id));
-    else setActiveLeftBottomId((curr) => (curr === id ? null : id));
-  }
-
-  function handleToggleRight(id: string) {
-    const tool = rightTools.find((t) => t.id === id);
-    if (!tool) return;
-    const isTop = !tool.position || tool.position === "top";
-    if (isTop) setActiveRightTopId((curr) => (curr === id ? null : id));
-    else setActiveRightBottomId((curr) => (curr === id ? null : id));
-  }
-
   // Session-only maximize state for the bottom tool panel (not persisted).
   const [bottomMaximized, setBottomMaximized] = useState(false);
   const closeLeftBottom = () => {
@@ -212,6 +189,66 @@ export function IdeShell({
     setActiveRightBottomId(null);
     setBottomMaximized(false);
   };
+  const toggleBottomMaximize = () => {
+    const outcome = resolveMaximizeToggle({ bottomMaximized });
+    setBottomMaximized(outcome.nextBottomMaximized);
+    if (outcome.clearTopActive) {
+      // Entering maximize: unselect active top tools on both sides so the
+      // activity bar no longer highlights them while the bottom panel covers
+      // the top area. Selecting a top tool again restores the normal layout.
+      setActiveLeftTopId(null);
+      setActiveRightTopId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!activateLeftTopToolRequest) return;
+    const requestedTool = leftTools.find(
+      (entry) => entry.id === activateLeftTopToolRequest.toolId,
+    );
+    if (!requestedTool || requestedTool.position === "bottom") return;
+    // This request prop is an intentional imperative bridge from WorkspacePage.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setActiveLeftTopId(activateLeftTopToolRequest.toolId);
+    // Revealing a file needs the normal (non-maximized) layout; drop maximize
+    // if active. Uses a functional update so the effect deps stay stable.
+    setBottomMaximized((v) => (v ? false : v));
+  }, [activateLeftTopToolRequest, leftTools]);
+
+  function handleToggleLeft(id: string) {
+    const tool = leftTools.find((t) => t.id === id);
+    if (!tool) return;
+    const isTop = !tool.position || tool.position === "top";
+    if (isTop) {
+      const outcome = resolveTopToolToggle({
+        currentActiveId: activeLeftTopId,
+        clickedId: id,
+        bottomMaximized,
+      });
+      setActiveLeftTopId(outcome.nextActiveId);
+      // Reopening a top tool restores the normal (non-maximized) layout.
+      if (outcome.revertMaximize) setBottomMaximized(false);
+    } else {
+      setActiveLeftBottomId((curr) => (curr === id ? null : id));
+    }
+  }
+
+  function handleToggleRight(id: string) {
+    const tool = rightTools.find((t) => t.id === id);
+    if (!tool) return;
+    const isTop = !tool.position || tool.position === "top";
+    if (isTop) {
+      const outcome = resolveTopToolToggle({
+        currentActiveId: activeRightTopId,
+        clickedId: id,
+        bottomMaximized,
+      });
+      setActiveRightTopId(outcome.nextActiveId);
+      if (outcome.revertMaximize) setBottomMaximized(false);
+    } else {
+      setActiveRightBottomId((curr) => (curr === id ? null : id));
+    }
+  }
 
   const isDragging = isLeftDragging || isRightDragging || isBottomDragging;
 
@@ -322,7 +359,7 @@ export function IdeShell({
                       onClose={closeLeftBottom}
                       maximizable
                       isMaximized={bottomMaximized}
-                      onToggleMaximize={() => setBottomMaximized((v) => !v)}
+                      onToggleMaximize={toggleBottomMaximize}
                     />
                   </div>
                 )}
@@ -336,7 +373,7 @@ export function IdeShell({
                       onClose={closeRightBottom}
                       maximizable
                       isMaximized={bottomMaximized}
-                      onToggleMaximize={() => setBottomMaximized((v) => !v)}
+                      onToggleMaximize={toggleBottomMaximize}
                     />
                   </div>
                 )}
