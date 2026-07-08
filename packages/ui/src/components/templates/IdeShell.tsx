@@ -201,6 +201,17 @@ export function IdeShell({
     else setActiveRightBottomId((curr) => (curr === id ? null : id));
   }
 
+  // Session-only maximize state for the bottom tool panel (not persisted).
+  const [bottomMaximized, setBottomMaximized] = useState(false);
+  const closeLeftBottom = () => {
+    setActiveLeftBottomId(null);
+    setBottomMaximized(false);
+  };
+  const closeRightBottom = () => {
+    setActiveRightBottomId(null);
+    setBottomMaximized(false);
+  };
+
   const isDragging = isLeftDragging || isRightDragging || isBottomDragging;
 
   return (
@@ -236,7 +247,12 @@ export function IdeShell({
 
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           {/* ── Top area: Sidebars + Editor ───────────────────────────── */}
-          <div className="flex-1 flex min-w-0 overflow-hidden">
+          <div
+            className={cn(
+              "flex-1 flex min-w-0 overflow-hidden",
+              bottomMaximized && "hidden",
+            )}
+          >
             {activeLeftTopTool && (
               <>
                 <div
@@ -285,22 +301,35 @@ export function IdeShell({
 
           {/* ── Bottom Panel Area ────────────────────────────────────── */}
           {(activeLeftBottomTool || activeRightBottomTool) && (
-            <div className="shrink-0 flex flex-col bg-[var(--color-surface)]">
+            <div
+              className={cn(
+                "flex flex-col bg-[var(--color-surface)]",
+                bottomMaximized ? "flex-1" : "shrink-0",
+              )}
+            >
+              {!bottomMaximized && (
+                <div
+                  {...bottomResizeProps}
+                  className="h-1 shrink-0 cursor-row-resize group relative hover:bg-[var(--color-primary)]/20"
+                >
+                  <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-0.5 bg-[var(--color-primary)]/50 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+              )}
               <div
-                {...bottomResizeProps}
-                className="h-1 shrink-0 cursor-row-resize group relative hover:bg-[var(--color-primary)]/20"
-              >
-                <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-0.5 bg-[var(--color-primary)]/50 opacity-0 group-hover:opacity-100 transition-opacity" />
-              </div>
-              <div
-                style={{ height: bottomHeight }}
-                className="flex border-t border-[var(--color-border)] overflow-hidden"
+                style={bottomMaximized ? undefined : { height: bottomHeight }}
+                className={cn(
+                  "flex border-t border-[var(--color-border)] overflow-hidden",
+                  bottomMaximized && "flex-1",
+                )}
               >
                 {activeLeftBottomTool && (
                   <div className="flex-1 min-w-0 flex flex-col">
                     <SidebarBottomGroup
                       tool={activeLeftBottomTool}
-                      onClose={() => setActiveLeftBottomId(null)}
+                      onClose={closeLeftBottom}
+                      maximizable
+                      isMaximized={bottomMaximized}
+                      onToggleMaximize={() => setBottomMaximized((v) => !v)}
                     />
                   </div>
                 )}
@@ -311,7 +340,10 @@ export function IdeShell({
                   <div className="flex-1 min-w-0 flex flex-col">
                     <SidebarBottomGroup
                       tool={activeRightBottomTool}
-                      onClose={() => setActiveRightBottomId(null)}
+                      onClose={closeRightBottom}
+                      maximizable
+                      isMaximized={bottomMaximized}
+                      onToggleMaximize={() => setBottomMaximized((v) => !v)}
                     />
                   </div>
                 )}
