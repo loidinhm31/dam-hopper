@@ -7,7 +7,10 @@ use super::{
     },
     parser::{read_config, write_config},
     presets::{get_effective_command, get_preset},
-    schema::{CommandKind, GlobalConfig, KnownWorkspace, ProjectType, RestartPolicy, UiConfig},
+    schema::{
+        AgentCommandPattern, AgentCommandPatternKind, CommandKind, GlobalConfig, KnownWorkspace,
+        ProjectType, RestartPolicy, TerminalAgentKind, TerminalAgentNotificationPolicy, UiConfig,
+    },
 };
 
 // ──────────────────────────────────────────────
@@ -374,6 +377,38 @@ fn global_config_roundtrip() {
 }
 
 #[test]
+fn global_config_writes_snake_case_ui_and_server_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("dam-hopper").join("config.toml");
+
+    let cfg = GlobalConfig {
+        defaults: Some(super::schema::GlobalDefaults {
+            workspace: Some("/tmp/ws".to_string()),
+        }),
+        workspaces: None,
+        ui: Some(UiConfig {
+            terminal_agent_notifications_enabled: true,
+            terminal_agent_quiet_timeout_ms: 45_000,
+            ..UiConfig::default()
+        }),
+        server: crate::config::ServerConfig {
+            session_db_path: "/tmp/sessions.db".to_string(),
+            session_buffer_ttl_hours: 12,
+        },
+    };
+
+    write_global_config_at(&cfg_path, &cfg).unwrap();
+    let written = std::fs::read_to_string(&cfg_path).unwrap();
+
+    assert!(written.contains("terminal_agent_notifications_enabled = true"));
+    assert!(written.contains("terminal_agent_quiet_timeout_ms = 45000"));
+    assert!(written.contains("session_db_path = \"/tmp/sessions.db\""));
+    assert!(written.contains("session_buffer_ttl_hours = 12"));
+    assert!(!written.contains("terminalAgentNotificationsEnabled"));
+    assert!(!written.contains("sessionDbPath"));
+}
+
+#[test]
 fn global_config_corrupted_returns_none() {
     let dir = tempfile::tempdir().unwrap();
     let cfg_path = dir.path().join("config.toml");
@@ -538,6 +573,16 @@ fn ui_config_defaults() {
     assert_eq!(ui.terminal_workspace_shortcut, "Mod+Shift+Backquote");
     assert_eq!(ui.terminal_file_panel_shortcut, "Mod+Shift+KeyE");
     assert_eq!(ui.reveal_active_file_shortcut, "Alt+F1");
+    assert!(!ui.terminal_agent_notifications_enabled);
+    assert_eq!(
+        ui.terminal_agent_notification_policy,
+        TerminalAgentNotificationPolicy::Always
+    );
+    assert!(ui.terminal_agent_signals_enabled);
+    assert!(ui.terminal_agent_quiet_tracking_enabled);
+    assert_eq!(ui.terminal_agent_quiet_timeout_ms, 30_000);
+    assert_eq!(ui.terminal_agent_command_patterns.len(), 4);
+    assert_eq!(ui.terminal_agent_command_patterns[0].pattern, "codex");
     assert!(ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 11);
     assert_eq!(ui.mobile_custom_keyboard_padding, 6);
@@ -562,6 +607,29 @@ fn ui_config_serde_roundtrip() {
             terminal_file_panel_shortcut: "Ctrl+Shift+KeyE".to_string(),
             reveal_active_file_shortcut: "Alt+F1".to_string(),
             terminal_suggestions_enabled: true,
+            terminal_agent_notifications_enabled: true,
+            terminal_agent_notification_policy: TerminalAgentNotificationPolicy::Always,
+            terminal_agent_signals_enabled: false,
+            terminal_agent_quiet_tracking_enabled: false,
+            terminal_agent_quiet_timeout_ms: 45_000,
+            terminal_agent_command_patterns: vec![
+                AgentCommandPattern {
+                    id: "codex".to_string(),
+                    label: "Codex".to_string(),
+                    kind: AgentCommandPatternKind::Literal,
+                    pattern: "codex".to_string(),
+                    agent: TerminalAgentKind::Codex,
+                    enabled: true,
+                },
+                AgentCommandPattern {
+                    id: "code-alias".to_string(),
+                    label: "Codex Alias".to_string(),
+                    kind: AgentCommandPatternKind::Regex,
+                    pattern: "^CODEX[A-Z]+$".to_string(),
+                    agent: TerminalAgentKind::Codex,
+                    enabled: true,
+                },
+            ],
             explorer_show_hidden: false,
             mobile_custom_keyboard_enabled: false,
             mobile_custom_keyboard_font_size: 13,
@@ -597,6 +665,19 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(ui.terminal_workspace_shortcut, "Ctrl+Shift+Backquote");
     assert_eq!(ui.terminal_file_panel_shortcut, "Ctrl+Shift+KeyE");
     assert_eq!(ui.reveal_active_file_shortcut, "Alt+F1");
+    assert!(ui.terminal_agent_notifications_enabled);
+    assert_eq!(
+        ui.terminal_agent_notification_policy,
+        TerminalAgentNotificationPolicy::Always
+    );
+    assert!(!ui.terminal_agent_signals_enabled);
+    assert!(!ui.terminal_agent_quiet_tracking_enabled);
+    assert_eq!(ui.terminal_agent_quiet_timeout_ms, 45_000);
+    assert_eq!(ui.terminal_agent_command_patterns.len(), 2);
+    assert_eq!(
+        ui.terminal_agent_command_patterns[1].kind,
+        AgentCommandPatternKind::Regex
+    );
     assert!(!ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 13);
     assert_eq!(ui.mobile_custom_keyboard_padding, 8);
@@ -626,10 +707,23 @@ search_filename_shortcut = "Ctrl+KeyP"
 terminal_workspace_shortcut = "Ctrl+Shift+Backquote"
 terminal_file_panel_shortcut = "Ctrl+Shift+KeyE"
 reveal_active_file_shortcut = "Alt+F1"
+terminal_agent_notifications_enabled = true
+terminal_agent_notification_policy = "always"
+terminal_agent_signals_enabled = false
+terminal_agent_quiet_tracking_enabled = false
+terminal_agent_quiet_timeout_ms = 45000
 mobile_custom_keyboard_enabled = false
 mobile_custom_keyboard_font_size = 14
 mobile_custom_keyboard_padding = 9
 mobile_custom_keyboard_row_gap = 6
+
+[[ui.terminal_agent_command_patterns]]
+id = "codex"
+label = "Codex"
+kind = "literal"
+pattern = "codex"
+agent = "codex"
+enabled = true
 "#;
 
     let loaded: GlobalConfig = toml::from_str(toml).unwrap();
@@ -639,6 +733,15 @@ mobile_custom_keyboard_row_gap = 6
     assert_eq!(ui.terminal_workspace_shortcut, "Ctrl+Shift+Backquote");
     assert_eq!(ui.terminal_file_panel_shortcut, "Ctrl+Shift+KeyE");
     assert_eq!(ui.reveal_active_file_shortcut, "Alt+F1");
+    assert!(ui.terminal_agent_notifications_enabled);
+    assert_eq!(
+        ui.terminal_agent_notification_policy,
+        TerminalAgentNotificationPolicy::Always
+    );
+    assert!(!ui.terminal_agent_signals_enabled);
+    assert!(!ui.terminal_agent_quiet_tracking_enabled);
+    assert_eq!(ui.terminal_agent_quiet_timeout_ms, 45_000);
+    assert_eq!(ui.terminal_agent_command_patterns.len(), 1);
     assert!(!ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 14);
     assert_eq!(ui.mobile_custom_keyboard_padding, 9);
@@ -677,6 +780,45 @@ fn global_config_without_ui_section_parses_ok() {
         loaded.defaults.unwrap().workspace.as_deref(),
         Some("/tmp/ws")
     );
+}
+
+#[test]
+fn global_config_read_normalizes_or_resets_invalid_notification_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    std::fs::write(
+        &cfg_path,
+        r#"
+[ui]
+system_font_size = 18
+terminal_agent_notifications_enabled = true
+
+[[ui.terminal_agent_command_patterns]]
+id = " codex "
+label = " Codex "
+kind = "literal"
+pattern = " codex "
+agent = "codex"
+enabled = true
+
+[[ui.terminal_agent_command_patterns]]
+id = "codex"
+label = "Duplicate"
+kind = "literal"
+pattern = "codexnsb"
+agent = "codex"
+enabled = true
+"#,
+    )
+    .unwrap();
+
+    let loaded = read_global_config_at(&cfg_path).unwrap().unwrap();
+    let ui = loaded.ui.unwrap();
+    assert_eq!(ui.system_font_size, 18);
+    assert!(!ui.terminal_agent_notifications_enabled);
+    assert_eq!(ui.terminal_agent_quiet_timeout_ms, 30_000);
+    assert_eq!(ui.terminal_agent_command_patterns.len(), 4);
+    assert_eq!(ui.terminal_agent_command_patterns[0].id, "codex");
 }
 
 #[test]
@@ -746,4 +888,102 @@ fn validate_mobile_keyboard_sizes_checks_font_and_padding() {
         ..UiConfig::default()
     };
     assert!(bad_row_gap.validate_mobile_keyboard_sizes().is_err());
+}
+
+#[test]
+fn validate_terminal_agent_notification_settings_accepts_defaults() {
+    assert!(
+        UiConfig::default()
+            .validate_terminal_agent_notification_settings()
+            .is_ok()
+    );
+}
+
+#[test]
+fn validate_terminal_agent_notification_settings_rejects_timeout_out_of_range() {
+    let bad_timeout = UiConfig {
+        terminal_agent_quiet_timeout_ms: 4_999,
+        ..UiConfig::default()
+    };
+    assert!(
+        bad_timeout
+            .validate_terminal_agent_notification_settings()
+            .is_err()
+    );
+
+    let too_large_timeout = UiConfig {
+        terminal_agent_quiet_timeout_ms: 600_001,
+        ..UiConfig::default()
+    };
+    assert!(
+        too_large_timeout
+            .validate_terminal_agent_notification_settings()
+            .is_err()
+    );
+}
+
+#[test]
+fn validate_terminal_agent_notification_settings_rejects_invalid_patterns() {
+    let bad_regex = UiConfig {
+        terminal_agent_command_patterns: vec![AgentCommandPattern {
+            id: "broken".to_string(),
+            label: "Broken".to_string(),
+            kind: AgentCommandPatternKind::Regex,
+            pattern: "(".to_string(),
+            agent: TerminalAgentKind::Unknown,
+            enabled: true,
+        }],
+        ..UiConfig::default()
+    };
+    assert!(
+        bad_regex
+            .validate_terminal_agent_notification_settings()
+            .is_err()
+    );
+
+    let too_many_patterns = UiConfig {
+        terminal_agent_command_patterns: (0..33)
+            .map(|index| AgentCommandPattern {
+                id: format!("pattern-{index}"),
+                label: format!("Pattern {index}"),
+                kind: AgentCommandPatternKind::Literal,
+                pattern: format!("agent-{index}"),
+                agent: TerminalAgentKind::Unknown,
+                enabled: true,
+            })
+            .collect(),
+        ..UiConfig::default()
+    };
+    assert!(
+        too_many_patterns
+            .validate_terminal_agent_notification_settings()
+            .is_err()
+    );
+
+    let duplicate_ids = UiConfig {
+        terminal_agent_command_patterns: vec![
+            AgentCommandPattern {
+                id: "codex".to_string(),
+                label: "Codex".to_string(),
+                kind: AgentCommandPatternKind::Literal,
+                pattern: "codex".to_string(),
+                agent: TerminalAgentKind::Codex,
+                enabled: true,
+            },
+            AgentCommandPattern {
+                id: "codex".to_string(),
+                label: "Codex Alias".to_string(),
+                kind: AgentCommandPatternKind::Literal,
+                pattern: "codexnsb".to_string(),
+                agent: TerminalAgentKind::Codex,
+                enabled: true,
+            },
+        ],
+        ..UiConfig::default()
+    };
+    assert!(
+        duplicate_ids
+            .validate_terminal_agent_notification_settings()
+            .is_err()
+    );
 }

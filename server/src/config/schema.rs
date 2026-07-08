@@ -341,6 +341,15 @@ fn default_terminal_file_panel_shortcut() -> String {
 fn default_reveal_active_file_shortcut() -> String {
     "Alt+F1".to_string()
 }
+fn default_terminal_agent_notifications_enabled() -> bool {
+    false
+}
+fn default_terminal_agent_notification_policy() -> TerminalAgentNotificationPolicy {
+    TerminalAgentNotificationPolicy::Always
+}
+fn default_terminal_agent_quiet_timeout_ms() -> u32 {
+    30_000
+}
 fn default_mobile_custom_keyboard_font_size() -> u16 {
     11
 }
@@ -349,6 +358,77 @@ fn default_mobile_custom_keyboard_padding() -> u16 {
 }
 fn default_mobile_custom_keyboard_row_gap() -> u16 {
     4
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentCommandPatternKind {
+    Literal,
+    Regex,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TerminalAgentKind {
+    Codex,
+    Claude,
+    Antigravity,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TerminalAgentNotificationPolicy {
+    #[default]
+    Always,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCommandPattern {
+    pub id: String,
+    pub label: String,
+    pub kind: AgentCommandPatternKind,
+    pub pattern: String,
+    pub agent: TerminalAgentKind,
+    pub enabled: bool,
+}
+
+fn default_terminal_agent_command_patterns() -> Vec<AgentCommandPattern> {
+    vec![
+        AgentCommandPattern {
+            id: "codex".to_string(),
+            label: "Codex".to_string(),
+            kind: AgentCommandPatternKind::Literal,
+            pattern: "codex".to_string(),
+            agent: TerminalAgentKind::Codex,
+            enabled: true,
+        },
+        AgentCommandPattern {
+            id: "claude".to_string(),
+            label: "Claude".to_string(),
+            kind: AgentCommandPatternKind::Literal,
+            pattern: "claude".to_string(),
+            agent: TerminalAgentKind::Claude,
+            enabled: true,
+        },
+        AgentCommandPattern {
+            id: "claude-code".to_string(),
+            label: "Claude Code".to_string(),
+            kind: AgentCommandPatternKind::Literal,
+            pattern: "claude-code".to_string(),
+            agent: TerminalAgentKind::Claude,
+            enabled: true,
+        },
+        AgentCommandPattern {
+            id: "antigravity".to_string(),
+            label: "Antigravity".to_string(),
+            kind: AgentCommandPatternKind::Literal,
+            pattern: "antigravity".to_string(),
+            agent: TerminalAgentKind::Antigravity,
+            enabled: true,
+        },
+    ]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -390,6 +470,42 @@ pub struct UiConfig {
     pub reveal_active_file_shortcut: String,
     #[serde(default = "default_true", alias = "terminal_suggestions_enabled")]
     pub terminal_suggestions_enabled: bool,
+    #[serde(
+        default = "default_terminal_agent_notifications_enabled",
+        alias = "terminal_agent_notifications_enabled",
+        alias = "terminalAgentNotificationsEnabled"
+    )]
+    pub terminal_agent_notifications_enabled: bool,
+    #[serde(
+        default = "default_terminal_agent_notification_policy",
+        alias = "terminal_agent_notification_policy",
+        alias = "terminalAgentNotificationPolicy"
+    )]
+    pub terminal_agent_notification_policy: TerminalAgentNotificationPolicy,
+    #[serde(
+        default = "default_true",
+        alias = "terminal_agent_signals_enabled",
+        alias = "terminalAgentSignalsEnabled"
+    )]
+    pub terminal_agent_signals_enabled: bool,
+    #[serde(
+        default = "default_true",
+        alias = "terminal_agent_quiet_tracking_enabled",
+        alias = "terminalAgentQuietTrackingEnabled"
+    )]
+    pub terminal_agent_quiet_tracking_enabled: bool,
+    #[serde(
+        default = "default_terminal_agent_quiet_timeout_ms",
+        alias = "terminal_agent_quiet_timeout_ms",
+        alias = "terminalAgentQuietTimeoutMs"
+    )]
+    pub terminal_agent_quiet_timeout_ms: u32,
+    #[serde(
+        default = "default_terminal_agent_command_patterns",
+        alias = "terminal_agent_command_patterns",
+        alias = "terminalAgentCommandPatterns"
+    )]
+    pub terminal_agent_command_patterns: Vec<AgentCommandPattern>,
     #[serde(default, alias = "explorer_show_hidden", alias = "explorerShowHidden")]
     pub explorer_show_hidden: bool,
     #[serde(
@@ -460,6 +576,12 @@ impl Default for UiConfig {
             terminal_file_panel_shortcut: default_terminal_file_panel_shortcut(),
             reveal_active_file_shortcut: default_reveal_active_file_shortcut(),
             terminal_suggestions_enabled: true,
+            terminal_agent_notifications_enabled: default_terminal_agent_notifications_enabled(),
+            terminal_agent_notification_policy: default_terminal_agent_notification_policy(),
+            terminal_agent_signals_enabled: true,
+            terminal_agent_quiet_tracking_enabled: true,
+            terminal_agent_quiet_timeout_ms: default_terminal_agent_quiet_timeout_ms(),
+            terminal_agent_command_patterns: default_terminal_agent_command_patterns(),
             explorer_show_hidden: false,
             mobile_custom_keyboard_enabled: true,
             mobile_custom_keyboard_font_size: default_mobile_custom_keyboard_font_size(),
@@ -487,6 +609,96 @@ impl UiConfig {
         Self::validate_mobile_keyboard_font_size(self.mobile_custom_keyboard_font_size)?;
         Self::validate_mobile_keyboard_padding(self.mobile_custom_keyboard_padding)?;
         Self::validate_mobile_keyboard_row_gap(self.mobile_custom_keyboard_row_gap)
+    }
+
+    pub fn validate_terminal_agent_notification_settings(&self) -> Result<(), String> {
+        if !(5_000..=600_000).contains(&self.terminal_agent_quiet_timeout_ms) {
+            return Err(format!(
+                "Terminal agent quiet timeout {} out of range [5000, 600000]",
+                self.terminal_agent_quiet_timeout_ms
+            ));
+        }
+
+        if self.terminal_agent_command_patterns.len() > 32 {
+            return Err(format!(
+                "Terminal agent command pattern count {} exceeds maximum 32",
+                self.terminal_agent_command_patterns.len()
+            ));
+        }
+
+        for pattern in &self.terminal_agent_command_patterns {
+            let pattern_id = pattern.id.trim();
+            if !(1..=64).contains(&pattern_id.len()) {
+                return Err(format!(
+                    "Terminal agent command pattern id length {} out of range [1, 64]",
+                    pattern_id.len()
+                ));
+            }
+
+            let label = pattern.label.trim();
+            if !(1..=64).contains(&label.len()) {
+                return Err(format!(
+                    "Terminal agent command pattern label length {} out of range [1, 64]",
+                    label.len()
+                ));
+            }
+
+            let raw_pattern = pattern.pattern.trim();
+            if !(1..=128).contains(&raw_pattern.len()) {
+                return Err(format!(
+                    "Terminal agent command pattern length {} out of range [1, 128]",
+                    raw_pattern.len()
+                ));
+            }
+
+            match pattern.kind {
+                AgentCommandPatternKind::Literal => {
+                    if raw_pattern.is_empty() {
+                        return Err("Terminal agent literal pattern must not be empty".to_string());
+                    }
+                }
+                AgentCommandPatternKind::Regex => {
+                    regex::Regex::new(raw_pattern).map_err(|err| {
+                        format!(
+                            "Invalid terminal agent regex pattern '{}': {err}",
+                            pattern.pattern
+                        )
+                    })?;
+                }
+            }
+        }
+
+        let mut ids = std::collections::HashSet::new();
+        for pattern in &self.terminal_agent_command_patterns {
+            let normalized_id = pattern.id.trim();
+            if !ids.insert(normalized_id) {
+                return Err(format!(
+                    "Duplicate terminal agent command pattern id '{}'",
+                    pattern.id
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_terminal_agent_notification_settings(&mut self) {
+        for pattern in &mut self.terminal_agent_command_patterns {
+            pattern.id = pattern.id.trim().to_string();
+            pattern.label = pattern.label.trim().to_string();
+            pattern.pattern = pattern.pattern.trim().to_string();
+        }
+    }
+
+    pub fn reset_terminal_agent_notification_settings_to_defaults(&mut self) {
+        let defaults = UiConfig::default();
+        self.terminal_agent_notifications_enabled = defaults.terminal_agent_notifications_enabled;
+        self.terminal_agent_notification_policy = defaults.terminal_agent_notification_policy;
+        self.terminal_agent_signals_enabled = defaults.terminal_agent_signals_enabled;
+        self.terminal_agent_quiet_tracking_enabled =
+            defaults.terminal_agent_quiet_tracking_enabled;
+        self.terminal_agent_quiet_timeout_ms = defaults.terminal_agent_quiet_timeout_ms;
+        self.terminal_agent_command_patterns = defaults.terminal_agent_command_patterns;
     }
 
     pub fn validate_font_size(size: u16) -> Result<(), String> {

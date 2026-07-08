@@ -1215,6 +1215,104 @@ fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> Ap
     .expect("make_state_with_project_env_file failed")
 }
 
+#[test]
+fn merge_global_ui_config_rejects_invalid_enum_values_as_invalid_input() {
+    let err = crate::api::config::merge_global_ui_config(
+        Some(crate::config::schema::UiConfig::default()),
+        &serde_json::json!({
+            "terminalAgentNotificationPolicy": "sometimes",
+        }),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+}
+
+#[test]
+fn merge_global_ui_config_rejects_invalid_regex_as_invalid_input() {
+    let err = crate::api::config::merge_global_ui_config(
+        Some(crate::config::schema::UiConfig::default()),
+        &serde_json::json!({
+            "terminalAgentCommandPatterns": [
+                {
+                    "id": "broken",
+                    "label": "Broken",
+                    "kind": "regex",
+                    "pattern": "(",
+                    "agent": "unknown",
+                    "enabled": true
+                }
+            ]
+        }),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+}
+
+#[test]
+fn merge_global_ui_config_rejects_non_object_payloads() {
+    let err = crate::api::config::merge_global_ui_config(
+        Some(crate::config::schema::UiConfig::default()),
+        &serde_json::json!(true),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+}
+
+#[test]
+fn merge_global_ui_config_trims_persisted_pattern_fields() {
+    let ui = crate::api::config::merge_global_ui_config(
+        Some(crate::config::schema::UiConfig::default()),
+        &serde_json::json!({
+            "terminalAgentCommandPatterns": [
+                {
+                    "id": " codex ",
+                    "label": " Codex ",
+                    "kind": "literal",
+                    "pattern": " codex ",
+                    "agent": "codex",
+                    "enabled": true
+                }
+            ]
+        }),
+    )
+    .unwrap();
+
+    let pattern = &ui.terminal_agent_command_patterns[0];
+    assert_eq!(pattern.id, "codex");
+    assert_eq!(pattern.label, "Codex");
+    assert_eq!(pattern.pattern, "codex");
+}
+
+#[tokio::test]
+async fn update_global_ui_at_path_persists_partial_merge_and_updates_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+
+    crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalAgentNotificationsEnabled": true,
+            "terminalAgentQuietTimeoutMs": 45000,
+        })),
+    )
+    .await
+    .unwrap();
+
+    let written = std::fs::read_to_string(&gc_path).unwrap();
+    assert!(written.contains("terminal_agent_notifications_enabled = true"));
+    assert!(written.contains("terminal_agent_quiet_timeout_ms = 45000"));
+
+    let ui = state.global_config.read().await.ui.clone().unwrap();
+    assert!(ui.terminal_agent_notifications_enabled);
+    assert_eq!(ui.terminal_agent_quiet_timeout_ms, 45_000);
+    assert!(ui.terminal_agent_signals_enabled);
+}
+
 fn test_project_config(workspace_dir: &std::path::Path) -> ProjectConfig {
     ProjectConfig {
         name: "test-project".into(),

@@ -14,6 +14,16 @@ import {
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
   DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
 } from "@/lib/shortcuts.js";
+import type {
+  AgentCommandPattern,
+  TerminalAgentNotificationPolicy,
+} from "@/api/client.js";
+import {
+  DEFAULT_TERMINAL_AGENT_NOTIFICATION_POLICY,
+  DEFAULT_TERMINAL_AGENT_QUIET_TIMEOUT_MS,
+  getDefaultTerminalAgentCommandPatterns,
+  normalizeAgentCommandPatterns,
+} from "@/lib/terminal-agent-notification-settings.js";
 
 const FONT_MIN = 10;
 const FONT_MAX = 32;
@@ -23,6 +33,8 @@ const KEYBOARD_PADDING_MIN = 2;
 const KEYBOARD_PADDING_MAX = 14;
 const KEYBOARD_ROW_GAP_MIN = 2;
 const KEYBOARD_ROW_GAP_MAX = 12;
+const QUIET_TIMEOUT_MIN = 5_000;
+const QUIET_TIMEOUT_MAX = 600_000;
 
 export function clampFont(size: number): number {
   return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(size)));
@@ -49,7 +61,14 @@ function clampKeyboardRowGap(size: number): number {
   );
 }
 
-interface SettingsState {
+function clampQuietTimeout(size: number): number {
+  return Math.min(
+    QUIET_TIMEOUT_MAX,
+    Math.max(QUIET_TIMEOUT_MIN, Math.round(size)),
+  );
+}
+
+interface PersistedSettingsState {
   systemFontSize: number;
   editorFontSize: number;
   editorZoomWheelEnabled: boolean;
@@ -59,6 +78,12 @@ interface SettingsState {
   terminalFilePanelShortcut: string;
   revealActiveFileShortcut: string;
   terminalSuggestionsEnabled: boolean;
+  terminalAgentNotificationsEnabled: boolean;
+  terminalAgentNotificationPolicy: TerminalAgentNotificationPolicy;
+  terminalAgentSignalsEnabled: boolean;
+  terminalAgentQuietTrackingEnabled: boolean;
+  terminalAgentQuietTimeoutMs: number;
+  terminalAgentCommandPatterns: AgentCommandPattern[];
   terminalScrollButtonsEnabled: boolean;
   terminalScrollStep: number;
   explorerShowHidden: boolean;
@@ -66,55 +91,14 @@ interface SettingsState {
   mobileCustomKeyboardFontSize: number;
   mobileCustomKeyboardPadding: number;
   mobileCustomKeyboardRowGap: number;
+}
+
+interface SettingsState extends PersistedSettingsState {
   hydrated: boolean;
 
   hydrate: () => Promise<void>;
-  set: (
-    partial: Partial<
-      Pick<
-        SettingsState,
-        | "systemFontSize"
-        | "editorFontSize"
-        | "editorZoomWheelEnabled"
-        | "searchTextShortcut"
-        | "searchFilenameShortcut"
-        | "terminalWorkspaceShortcut"
-        | "terminalFilePanelShortcut"
-        | "revealActiveFileShortcut"
-        | "terminalSuggestionsEnabled"
-        | "terminalScrollButtonsEnabled"
-        | "terminalScrollStep"
-        | "explorerShowHidden"
-        | "mobileCustomKeyboardEnabled"
-        | "mobileCustomKeyboardFontSize"
-        | "mobileCustomKeyboardPadding"
-        | "mobileCustomKeyboardRowGap"
-      >
-    >,
-  ) => void;
-  saveDebounced: (
-    partial: Partial<
-      Pick<
-        SettingsState,
-        | "systemFontSize"
-        | "editorFontSize"
-        | "editorZoomWheelEnabled"
-        | "searchTextShortcut"
-        | "searchFilenameShortcut"
-        | "terminalWorkspaceShortcut"
-        | "terminalFilePanelShortcut"
-        | "revealActiveFileShortcut"
-        | "terminalSuggestionsEnabled"
-        | "terminalScrollButtonsEnabled"
-        | "terminalScrollStep"
-        | "explorerShowHidden"
-        | "mobileCustomKeyboardEnabled"
-        | "mobileCustomKeyboardFontSize"
-        | "mobileCustomKeyboardPadding"
-        | "mobileCustomKeyboardRowGap"
-      >
-    >,
-  ) => void;
+  set: (partial: Partial<PersistedSettingsState>) => void;
+  saveDebounced: (partial: Partial<PersistedSettingsState>) => void;
 }
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -129,6 +113,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   terminalFilePanelShortcut: DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
   revealActiveFileShortcut: DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
   terminalSuggestionsEnabled: true,
+  terminalAgentNotificationsEnabled: false,
+  terminalAgentNotificationPolicy: DEFAULT_TERMINAL_AGENT_NOTIFICATION_POLICY,
+  terminalAgentSignalsEnabled: true,
+  terminalAgentQuietTrackingEnabled: true,
+  terminalAgentQuietTimeoutMs: DEFAULT_TERMINAL_AGENT_QUIET_TIMEOUT_MS,
+  terminalAgentCommandPatterns: getDefaultTerminalAgentCommandPatterns(),
   terminalScrollButtonsEnabled: false,
   terminalScrollStep: 3,
   explorerShowHidden: false,
@@ -152,6 +142,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         terminalFilePanelShortcut: ui.terminalFilePanelShortcut,
         revealActiveFileShortcut: ui.revealActiveFileShortcut,
         terminalSuggestionsEnabled: ui.terminalSuggestionsEnabled ?? true,
+        terminalAgentNotificationsEnabled:
+          ui.terminalAgentNotificationsEnabled ?? false,
+        terminalAgentNotificationPolicy:
+          ui.terminalAgentNotificationPolicy ?? "always",
+        terminalAgentSignalsEnabled: ui.terminalAgentSignalsEnabled ?? true,
+        terminalAgentQuietTrackingEnabled:
+          ui.terminalAgentQuietTrackingEnabled ?? true,
+        terminalAgentQuietTimeoutMs: ui.terminalAgentQuietTimeoutMs ?? 30_000,
+        terminalAgentCommandPatterns: ui.terminalAgentCommandPatterns,
         terminalScrollButtonsEnabled: ui.terminalScrollButtonsEnabled ?? false,
         terminalScrollStep: ui.terminalScrollStep ?? 3,
         explorerShowHidden: ui.explorerShowHidden ?? false,
@@ -187,6 +186,25 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.revealActiveFileShortcut = partial.revealActiveFileShortcut;
     if (partial.terminalSuggestionsEnabled !== undefined)
       clamped.terminalSuggestionsEnabled = partial.terminalSuggestionsEnabled;
+    if (partial.terminalAgentNotificationsEnabled !== undefined)
+      clamped.terminalAgentNotificationsEnabled =
+        partial.terminalAgentNotificationsEnabled;
+    if (partial.terminalAgentNotificationPolicy !== undefined)
+      clamped.terminalAgentNotificationPolicy =
+        partial.terminalAgentNotificationPolicy;
+    if (partial.terminalAgentSignalsEnabled !== undefined)
+      clamped.terminalAgentSignalsEnabled = partial.terminalAgentSignalsEnabled;
+    if (partial.terminalAgentQuietTrackingEnabled !== undefined)
+      clamped.terminalAgentQuietTrackingEnabled =
+        partial.terminalAgentQuietTrackingEnabled;
+    if (partial.terminalAgentQuietTimeoutMs !== undefined)
+      clamped.terminalAgentQuietTimeoutMs = clampQuietTimeout(
+        partial.terminalAgentQuietTimeoutMs,
+      );
+    if (partial.terminalAgentCommandPatterns !== undefined)
+      clamped.terminalAgentCommandPatterns = normalizeAgentCommandPatterns(
+        partial.terminalAgentCommandPatterns,
+      );
     if (partial.terminalScrollButtonsEnabled !== undefined)
       clamped.terminalScrollButtonsEnabled = partial.terminalScrollButtonsEnabled;
     if (partial.terminalScrollStep !== undefined)
@@ -226,6 +244,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         terminalFilePanelShortcut,
         revealActiveFileShortcut,
         terminalSuggestionsEnabled,
+        terminalAgentNotificationsEnabled,
+        terminalAgentNotificationPolicy,
+        terminalAgentSignalsEnabled,
+        terminalAgentQuietTrackingEnabled,
+        terminalAgentQuietTimeoutMs,
+        terminalAgentCommandPatterns,
         terminalScrollButtonsEnabled,
         terminalScrollStep,
         explorerShowHidden,
@@ -244,6 +268,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         terminalFilePanelShortcut,
         revealActiveFileShortcut,
         terminalSuggestionsEnabled,
+        terminalAgentNotificationsEnabled,
+        terminalAgentNotificationPolicy,
+        terminalAgentSignalsEnabled,
+        terminalAgentQuietTrackingEnabled,
+        terminalAgentQuietTimeoutMs,
+        terminalAgentCommandPatterns,
         terminalScrollButtonsEnabled,
         terminalScrollStep,
         explorerShowHidden,
