@@ -6,7 +6,7 @@ import { fixupPluginRules } from "@eslint/compat";
 /** @type {import("eslint").Linter.FlatConfig[]} */
 export default [
   {
-    ignores: ["**/dist/**", "**/node_modules/**"],
+    ignores: ["**/dist/**", "**/node_modules/**", "**/target/**"],
   },
   {
     files: ["**/*.ts", "**/*.tsx"],
