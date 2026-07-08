@@ -331,6 +331,20 @@ export function TerminalPanel({
         fromOffset,
       });
       clearAttachTimeout();
+
+      const attachSent = transport.terminalAttach
+        ? transport.terminalAttach(safeSessionId, fromOffset) !== false
+        : false;
+      if (!attachSent) {
+        recordClientDiagnostic(
+          "transport",
+          "terminal-panel",
+          "terminal.attach_deferred",
+          { sessionId: safeSessionId },
+        );
+        return;
+      }
+
       attachTimeout = setTimeout(() => {
         attachTimeout = null;
         if (hasBufferBeenWritten || attachStateRef.current === "attached") {
@@ -349,16 +363,58 @@ export function TerminalPanel({
           "terminal.attach_timeout",
           { sessionId: safeSessionId },
         );
-        void createSession();
+        void transport
+          .invoke<SessionInfo[]>("terminal:listDetailed")
+          .then((sessions) => {
+            const stillAlive = sessions.some(
+              (s) => s.id === safeSessionId && s.alive,
+            );
+            if (stillAlive) {
+              recordClientDiagnostic(
+                "transport",
+                "terminal-panel",
+                "terminal.attach_timeout_alive",
+                { sessionId: safeSessionId },
+              );
+              attachToSession(fromOffset);
+            } else {
+              void createSession();
+            }
+          })
+          .catch((err: unknown) => {
+            recordClientDiagnostic(
+              "transport",
+              "terminal-panel",
+              "terminal.attach_timeout_check_failed",
+              {
+                sessionId: safeSessionId,
+                error: err instanceof Error ? err.message : String(err),
+              },
+            );
+          });
       }, 3000);
-
-      if (transport.terminalAttach) {
-        transport.terminalAttach(safeSessionId, fromOffset);
-      }
     };
 
     if (transport.onStatusChange) {
       unsubStatus = transport.onStatusChange((status) => {
+        if (
+          status !== "connected" &&
+          !hasBufferBeenWritten &&
+          attachStateRef.current === "attaching"
+        ) {
+          clearAttachTimeout();
+          return;
+        }
+
+        if (
+          status === "connected" &&
+          !hasBufferBeenWritten &&
+          attachStateRef.current === "attaching"
+        ) {
+          attachToSession();
+          return;
+        }
+
         if (
           status === "connected" &&
           hasBufferBeenWritten &&

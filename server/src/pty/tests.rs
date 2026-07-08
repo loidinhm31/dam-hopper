@@ -225,11 +225,77 @@ mod pty_tests {
 
     #[test]
     fn recreating_existing_id_kills_old_session() {
-        let mgr = make_manager();
+        let sink = Arc::new(RecordingSink::default());
+        let events = Arc::clone(&sink.events);
+        let mgr = test_rt().block_on(async { PtySessionManager::new(sink) });
+
         mgr.create(opts("run:recreate", "cat")).unwrap();
         // Second create should not fail — old session gets killed first
         mgr.create(opts("run:recreate", "cat")).unwrap();
+
+        let replacement_alive = wait_for(Duration::from_secs(2), || mgr.is_alive("run:recreate"));
+        assert!(
+            replacement_alive,
+            "replacement session should remain live after old reader exits"
+        );
+
+        mgr.write("run:recreate", b"replacement-alive\n").unwrap();
+        let echoed = wait_for(Duration::from_secs(2), || {
+            mgr.get_buffer("run:recreate")
+                .map(|b| b.contains("replacement-alive"))
+                .unwrap_or(false)
+        });
+        assert!(echoed, "replacement session should still accept input");
+
+        let ev = events.lock().unwrap();
+        assert!(
+            !ev.iter()
+                .any(|event| event.starts_with("exit:run:recreate:")
+                    || event.starts_with("exit_enhanced:run:recreate:")),
+            "old killed session exit should not be emitted for replacement id: {ev:?}"
+        );
+        drop(ev);
+
         mgr.remove("run:recreate").unwrap();
+    }
+
+    #[test]
+    fn rapid_recreates_suppress_each_old_exit_event() {
+        let sink = Arc::new(RecordingSink::default());
+        let events = Arc::clone(&sink.events);
+        let mgr = test_rt().block_on(async { PtySessionManager::new(sink) });
+
+        mgr.create(opts("run:rapid-recreate", "cat")).unwrap();
+        mgr.create(opts("run:rapid-recreate", "cat")).unwrap();
+        mgr.create(opts("run:rapid-recreate", "cat")).unwrap();
+
+        let replacement_alive = wait_for(Duration::from_secs(2), || {
+            mgr.is_alive("run:rapid-recreate")
+        });
+        assert!(
+            replacement_alive,
+            "latest replacement session should remain live"
+        );
+
+        mgr.write("run:rapid-recreate", b"rapid-replacement-alive\n")
+            .unwrap();
+        let echoed = wait_for(Duration::from_secs(2), || {
+            mgr.get_buffer("run:rapid-recreate")
+                .map(|b| b.contains("rapid-replacement-alive"))
+                .unwrap_or(false)
+        });
+        assert!(echoed, "latest replacement session should accept input");
+
+        let ev = events.lock().unwrap();
+        assert!(
+            !ev.iter()
+                .any(|event| event.starts_with("exit:run:rapid-recreate:")
+                    || event.starts_with("exit_enhanced:run:rapid-recreate:")),
+            "old killed session exits should not be emitted for replacement id: {ev:?}"
+        );
+        drop(ev);
+
+        mgr.remove("run:rapid-recreate").unwrap();
     }
 
     // -----------------------------------------------------------------------

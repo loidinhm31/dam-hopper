@@ -146,6 +146,9 @@ struct Inner {
     /// Track session IDs that were explicitly killed by user (kill/remove API).
     /// Reader thread checks this to prevent auto-restart after manual termination.
     killed: HashSet<String>,
+    /// Count of replaced readers that must not emit exit events against reused
+    /// public ids. Multiple rapid recreates can have multiple old readers.
+    suppress_exit_counts: HashMap<String, usize>,
 }
 
 impl Inner {
@@ -154,6 +157,7 @@ impl Inner {
             live: HashMap::new(),
             dead: HashMap::new(),
             killed: HashSet::new(),
+            suppress_exit_counts: HashMap::new(),
         }
     }
 }
@@ -230,7 +234,7 @@ impl PtySessionManager {
         validate_session_id(&opts.id)?;
 
         // Kill any existing session with this ID before recreating.
-        self.kill_internal(&opts.id);
+        self.kill_internal_for_replace(&opts.id);
 
         // Release lock before slow I/O operations (openpty, spawn_command).
         // Reacquire after spawn to update state atomically.
@@ -709,16 +713,42 @@ impl PtySessionManager {
     // -----------------------------------------------------------------------
 
     fn kill_internal(&self, id: &str) {
+        self.kill_internal_impl(id, false);
+    }
+
+    fn kill_internal_for_replace(&self, id: &str) {
+        self.kill_internal_impl(id, true);
+    }
+
+    fn kill_internal_impl(&self, id: &str, suppress_exit: bool) {
         let mut inner = self.inner.lock().unwrap();
         // Mark as killed BEFORE removing from live — reader thread checks this.
         inner.killed.insert(id.to_string());
         if let Some(session) = inner.live.remove(id) {
+            if suppress_exit {
+                *inner
+                    .suppress_exit_counts
+                    .entry(id.to_string())
+                    .or_insert(0) += 1;
+            }
             session.terminate();
             inner
                 .dead
                 .insert(id.to_string(), DeadSession::killed(session.meta));
         }
     }
+}
+
+fn consume_suppressed_exit(inner: &mut Inner, session_id: &str) -> bool {
+    let Some(count) = inner.suppress_exit_counts.get_mut(session_id) else {
+        return false;
+    };
+
+    *count -= 1;
+    if *count == 0 {
+        inner.suppress_exit_counts.remove(session_id);
+    }
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -853,11 +883,21 @@ fn reader_thread(
         }
     }
 
-    let (respawn_opts, restart_count, _was_killed, should_restart, _delay_ms) = {
+    let (respawn_opts, restart_count, _was_killed, should_restart, _delay_ms, emit_exit) = {
         let mut inner_guard = inner.lock().unwrap();
         let was_killed = inner_guard.killed.contains(&session_id);
 
-        if let Some(session) = inner_guard.live.remove(&session_id) {
+        let owns_live_session = inner_guard
+            .live
+            .get(&session_id)
+            .map(|session| Arc::ptr_eq(&session.shutdown_ref(), &shutdown))
+            .unwrap_or(false);
+
+        if owns_live_session {
+            let session = inner_guard
+                .live
+                .remove(&session_id)
+                .expect("checked live session ownership before removal");
             let restart_count = session.meta.restart_count;
             let policy = session.respawn_opts.restart_policy;
             let max_retries = session.respawn_opts.restart_max_retries;
@@ -905,8 +945,40 @@ fn reader_thread(
                 was_killed,
                 restart_decision,
                 restart_in_ms.unwrap_or(0),
+                true,
+            )
+        } else if inner_guard.live.contains_key(&session_id) {
+            consume_suppressed_exit(&mut inner_guard, &session_id);
+            // A newer PTY with the same public session id was already created.
+            // This reader belongs to the old PTY; do not remove or emit exit for
+            // the newer session.
+            record_diag(
+                "terminal.exit_stale",
+                BTreeMap::from([
+                    ("exitCode".into(), exit_code.to_string()),
+                    ("note".into(), "newer live session owns id".into()),
+                ]),
+            );
+            (
+                RespawnOpts {
+                    id: session_id.clone(),
+                    command: String::new(),
+                    cwd: String::new(),
+                    env: HashMap::new(),
+                    cols: 80,
+                    rows: 24,
+                    project: None,
+                    restart_policy: RestartPolicy::Never,
+                    restart_max_retries: 0,
+                },
+                0,
+                true,
+                None,
+                0,
+                false,
             )
         } else {
+            let suppress_exit = consume_suppressed_exit(&mut inner_guard, &session_id);
             // Session already removed (concurrent kill) — no restart.
             // Still record the exit for diagnostics context.
             record_diag(
@@ -934,6 +1006,7 @@ fn reader_thread(
                 true,
                 None,
                 0,
+                !suppress_exit,
             )
         }
     };
@@ -958,8 +1031,10 @@ fn reader_thread(
         }
     }
 
-    sink.send_terminal_exit(&session_id, Some(exit_code));
-    sink.send_terminal_changed();
+    if emit_exit {
+        sink.send_terminal_exit(&session_id, Some(exit_code));
+        sink.send_terminal_changed();
+    }
 }
 
 // ---------------------------------------------------------------------------

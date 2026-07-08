@@ -25,7 +25,9 @@ export class IdleTransport implements Transport {
 
   terminalResize(): void {}
 
-  terminalAttach(): void {}
+  terminalAttach(): boolean {
+    return false;
+  }
 
   onTerminalBuffer(): () => void {
     return noopUnsubscribe();
