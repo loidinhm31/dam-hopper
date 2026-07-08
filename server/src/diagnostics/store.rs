@@ -373,8 +373,13 @@ mod tests {
         assert_eq!(events[0].source, "pty");
         assert_eq!(events[0].message, "terminal.create");
         // Sensitive field should be redacted.
-        assert_eq!(events[0].fields.get("token"), Some(&"[REDACTED]".to_string()));
-        assert_eq!(events[0].fields.get("sessionId"), Some(&"shell:test".to_string()));
+        assert_eq!(
+            events[0].fields.get("token"),
+            Some(&"[REDACTED]".to_string())
+        );
+        assert_eq!(
+            events[0].fields.get("sessionId"),
+            Some(&"shell:test".to_string())
+        );
     }
-
 }

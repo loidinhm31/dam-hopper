@@ -16,12 +16,12 @@ mod pty_tests {
     use std::sync::OnceLock;
 
     use crate::config::schema::{RestartPolicy, DEFAULT_RESTART_MAX_RETRIES};
+    use crate::diagnostics::DiagnosticStore;
     use crate::persistence::{PersistCmd, PersistWorker, SessionStore};
     use crate::pty::{
         event_sink::{EventSink, NoopEventSink},
         manager::{build_child_env_from_parent_snapshot, PtyCreateOpts, PtySessionManager},
     };
-    use crate::diagnostics::DiagnosticStore;
 
     // Shared multi-thread Tokio runtime for tests. PtySessionManager::new
     // calls tokio::spawn (supervisor loop) which requires an active runtime.
@@ -1021,9 +1021,7 @@ mod pty_tests {
     // -----------------------------------------------------------------------
 
     fn make_manager_with_diag(store: &DiagnosticStore) -> PtySessionManager {
-        let mgr = test_rt().block_on(async {
-            PtySessionManager::new(Arc::new(NoopEventSink))
-        });
+        let mgr = test_rt().block_on(async { PtySessionManager::new(Arc::new(NoopEventSink)) });
         mgr.set_diagnostics(store.clone());
         mgr
     }
@@ -1048,7 +1046,9 @@ mod pty_tests {
             .filter(|e| e.message == "terminal.create")
             .collect();
         assert!(
-            create_events.iter().any(|e| e.fields.get("sessionId")
+            create_events.iter().any(|e| e
+                .fields
+                .get("sessionId")
                 .is_some_and(|v| v == "shell:diag-create")),
             "terminal.create event should be recorded with sessionId"
         );
@@ -1069,7 +1069,9 @@ mod pty_tests {
         assert!(
             events.iter().any(|e| {
                 e.message == "terminal.kill"
-                    && e.fields.get("sessionId").is_some_and(|v| v == "shell:diag-kill")
+                    && e.fields
+                        .get("sessionId")
+                        .is_some_and(|v| v == "shell:diag-kill")
             }),
             "terminal.kill event should be recorded"
         );
@@ -1086,7 +1088,9 @@ mod pty_tests {
         mgr.create(opts("shell:diag-exit", "exit 1")).unwrap();
         // Wait for the process to exit.
         wait_for(Duration::from_secs(3), || {
-            mgr.list().iter().all(|s| s.id != "shell:diag-exit" || !s.alive)
+            mgr.list()
+                .iter()
+                .all(|s| s.id != "shell:diag-exit" || !s.alive)
         });
 
         let events = store.recent_events(60);
@@ -1096,7 +1100,9 @@ mod pty_tests {
             .collect();
         assert!(
             exit_events.iter().any(|e| {
-                e.fields.get("sessionId").is_some_and(|v| v == "shell:diag-exit")
+                e.fields
+                    .get("sessionId")
+                    .is_some_and(|v| v == "shell:diag-exit")
                     && e.fields.get("exitCode").is_some_and(|v| v == "1")
             }),
             "terminal.exit event should be recorded with exitCode=1, events: {:?}",
@@ -1111,7 +1117,8 @@ mod pty_tests {
         let mgr = make_manager_with_diag(&store);
 
         // Produce output containing a secret pattern that should be redacted.
-        mgr.create(opts("shell:diag-tail", "echo 'token=secret123'; sleep 5")).unwrap();
+        mgr.create(opts("shell:diag-tail", "echo 'token=secret123'; sleep 5"))
+            .unwrap();
         wait_for(Duration::from_secs(3), || {
             mgr.get_buffer("shell:diag-tail")
                 .map(|b| b.contains("secret123"))
@@ -1119,7 +1126,10 @@ mod pty_tests {
         });
 
         let tail = mgr.terminal_tail("shell:diag-tail", 1024);
-        assert!(tail.is_some(), "terminal_tail should return Some for live session");
+        assert!(
+            tail.is_some(),
+            "terminal_tail should return Some for live session"
+        );
         let tail = tail.unwrap();
         assert_eq!(tail.source, "live");
         assert_eq!(tail.session_id, "shell:diag-tail");
@@ -1172,7 +1182,10 @@ mod pty_tests {
         let mgr = make_manager_with_diag(&store);
 
         let tail = mgr.terminal_tail("nonexistent", 1024);
-        assert!(tail.is_none(), "terminal_tail should return None for unknown session");
+        assert!(
+            tail.is_none(),
+            "terminal_tail should return None for unknown session"
+        );
     }
 
     #[test]
@@ -1193,8 +1206,11 @@ mod pty_tests {
         });
         mgr.set_diagnostics(diag_store);
 
-        mgr.create(opts("shell:diag-persisted-tail", "printf 'token=secret123'"))
-            .unwrap();
+        mgr.create(opts(
+            "shell:diag-persisted-tail",
+            "printf 'token=secret123'",
+        ))
+        .unwrap();
         let exited = wait_for(Duration::from_secs(3), || {
             mgr.list()
                 .iter()
@@ -1295,14 +1311,10 @@ mod pty_tests {
             .iter()
             .find(|event| event.message == "terminal.respawn_failed")
             .expect("respawn failure event should exist");
-        assert_eq!(
-            failure.fields.get("restartCount"),
-            Some(&"1".to_string())
-        );
+        assert_eq!(failure.fields.get("restartCount"), Some(&"1".to_string()));
         assert_eq!(
             failure.fields.get("restartPolicy"),
             Some(&"Always".to_string())
         );
     }
-
 }

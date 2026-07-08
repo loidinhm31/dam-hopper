@@ -36,6 +36,7 @@ pub async fn update_config(
     let config_path = state.config.read().await.config_path.clone();
     let config_dir = config_path.parent().unwrap_or(StdPath::new("/"));
     relativize_project_paths(&mut body, config_dir);
+    normalize_config_json_for_toml(&mut body);
     write_json_as_toml(&config_path, &body)?;
     reload_config(&state).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -258,17 +259,100 @@ fn patch_project(doc: &mut toml::Value, name: &str, patch: &Value) -> Result<(),
 
     if let (toml::Value::Table(tbl), Value::Object(patch_map)) = (proj, patch) {
         for (k, v) in patch_map {
-            match json_to_toml(v) {
+            let toml_key = project_json_key_to_toml(k);
+            let normalized_value = normalize_project_field_value_for_toml(toml_key, v);
+            remove_project_key_aliases(tbl, toml_key);
+            match json_to_toml(&normalized_value) {
                 Some(tv) => {
-                    tbl.insert(k.clone(), tv);
+                    tbl.insert(toml_key.to_string(), tv);
                 }
                 None => {
-                    tbl.remove(k);
+                    tbl.remove(toml_key);
                 }
             }
         }
     }
     Ok(())
+}
+
+fn normalize_config_json_for_toml(value: &mut Value) {
+    if let Some(projects) = value.get_mut("projects").and_then(Value::as_array_mut) {
+        for project in projects {
+            normalize_project_json_for_toml(project);
+        }
+    }
+}
+
+fn normalize_project_json_for_toml(value: &mut Value) {
+    let Some(project) = value.as_object_mut() else {
+        return;
+    };
+
+    let entries = std::mem::take(project);
+    for (key, value) in entries {
+        let toml_key = project_json_key_to_toml(&key).to_string();
+        project.insert(
+            toml_key.clone(),
+            normalize_project_field_value_for_toml(&toml_key, &value),
+        );
+    }
+}
+
+fn project_json_key_to_toml(key: &str) -> &str {
+    match key {
+        "envFile" => "env_file",
+        "restartPolicy" => "restart",
+        "restartMaxRetries" => "restart_max_retries",
+        "healthCheckUrl" => "health_check_url",
+        other => other,
+    }
+}
+
+fn normalize_project_field_value_for_toml(key: &str, value: &Value) -> Value {
+    if key == "services" {
+        return normalize_services_for_toml(value);
+    }
+    value.clone()
+}
+
+fn normalize_services_for_toml(value: &Value) -> Value {
+    let Some(services) = value.as_array() else {
+        return value.clone();
+    };
+
+    Value::Array(
+        services
+            .iter()
+            .map(|service| {
+                let Some(service_obj) = service.as_object() else {
+                    return service.clone();
+                };
+                let mut normalized = serde_json::Map::new();
+                for (key, value) in service_obj {
+                    let toml_key = match key.as_str() {
+                        "buildCommand" => "build_command",
+                        "runCommand" => "run_command",
+                        other => other,
+                    };
+                    normalized.insert(toml_key.to_string(), value.clone());
+                }
+                Value::Object(normalized)
+            })
+            .collect(),
+    )
+}
+
+fn remove_project_key_aliases(tbl: &mut toml::map::Map<String, toml::Value>, toml_key: &str) {
+    let aliases: &[&str] = match toml_key {
+        "env_file" => &["envFile"],
+        "restart" => &["restartPolicy"],
+        "restart_max_retries" => &["restartMaxRetries"],
+        "health_check_url" => &["healthCheckUrl"],
+        _ => &[],
+    };
+    for alias in aliases {
+        tbl.remove(*alias);
+    }
 }
 
 fn json_to_toml(v: &Value) -> Option<toml::Value> {
