@@ -68,6 +68,7 @@ Dam Hopper uses an extensible IDE-style Tool Window system, inspired by IntelliJ
 - Header with tool title and action buttons
 - Automatic focus management
 - Close functionality
+- Optional maximize/restore toggle (`maximizable`, `isMaximized`, `onToggleMaximize` props) rendered left of the close button; swaps `Maximize2`/`Minimize2` icons with an accessible `aria-label` ("Maximize panel" / "Restore panel"). Only bottom tool panels opt in.
 
 ### Integration in IdeShell
 
@@ -82,6 +83,10 @@ The `IdeShell` orchestrates the system:
   <MainArea />
 </IdeShell>
 ```
+
+### Bottom Panel Maximize Toggle
+
+The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose an IntelliJ-style maximize/restore toggle. When maximized, the bottom panel expands to cover the entire top area (explorer, source-control, editor, and right-top panels are hidden via `display:none`), while the activity bars stay visible so tools remain switchable. The state is **session-only** (not persisted): closing the maximized bottom tool, or switching workspace mode, resets it. The maximize is implemented as sibling-only CSS class flips in `IdeShell` — the terminal keep-alive element stays in the same React tree position, so no PTY is remounted or duplicated on toggle. Layout decisions are centralized in the pure `resolveBottomPanelLayout` helper (`packages/ui/src/lib/ide-shell-layout.ts`) so the maximize/restore/reset-on-close contract is unit-testable under the SSR test harness.
 
 ### Workspace Mode Shell
 

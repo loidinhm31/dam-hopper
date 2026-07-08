@@ -9,6 +9,7 @@ import { ActivityBar } from "@/components/organisms/ActivityBar.js";
 import { SidebarTopGroup } from "@/components/organisms/SidebarTopGroup.js";
 import { SidebarBottomGroup } from "@/components/organisms/SidebarBottomGroup.js";
 import type { WorkspaceMode } from "@/lib/workspace-mode.js";
+import { resolveBottomPanelLayout } from "@/lib/ide-shell-layout.js";
 
 const TREE_WIDTH_KEY = "dam-hopper:ide-tree-width";
 const TERMINAL_TREE_WIDTH_KEY = "dam-hopper:ide-terminal-tree-width";
@@ -214,6 +215,11 @@ export function IdeShell({
 
   const isDragging = isLeftDragging || isRightDragging || isBottomDragging;
 
+  const bottomLayout = resolveBottomPanelLayout({
+    bottomMaximized,
+    bottomHeight,
+  });
+
   return (
     <div
       className={cn(
@@ -247,12 +253,7 @@ export function IdeShell({
 
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           {/* ── Top area: Sidebars + Editor ───────────────────────────── */}
-          <div
-            className={cn(
-              "flex-1 flex min-w-0 overflow-hidden",
-              bottomMaximized && "hidden",
-            )}
-          >
+          <div className={bottomLayout.topAreaClassName}>
             {activeLeftTopTool && (
               <>
                 <div
@@ -301,13 +302,8 @@ export function IdeShell({
 
           {/* ── Bottom Panel Area ────────────────────────────────────── */}
           {(activeLeftBottomTool || activeRightBottomTool) && (
-            <div
-              className={cn(
-                "flex flex-col bg-[var(--color-surface)]",
-                bottomMaximized ? "flex-1" : "shrink-0",
-              )}
-            >
-              {!bottomMaximized && (
+            <div className={bottomLayout.bottomOuterClassName}>
+              {bottomLayout.showResizeHandle && (
                 <div
                   {...bottomResizeProps}
                   className="h-1 shrink-0 cursor-row-resize group relative hover:bg-[var(--color-primary)]/20"
@@ -316,11 +312,8 @@ export function IdeShell({
                 </div>
               )}
               <div
-                style={bottomMaximized ? undefined : { height: bottomHeight }}
-                className={cn(
-                  "flex border-t border-[var(--color-border)] overflow-hidden",
-                  bottomMaximized && "flex-1",
-                )}
+                style={bottomLayout.innerStyle}
+                className={bottomLayout.innerClassName}
               >
                 {activeLeftBottomTool && (
                   <div className="flex-1 min-w-0 flex flex-col">
