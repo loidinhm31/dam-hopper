@@ -127,22 +127,41 @@ All features are enabled by default.
 
 ### UI Configuration
 
-The global UI config includes the terminal workspace shortcut used by `WorkspacePage` and terminal input guards.
+The global UI config includes terminal workspace shortcuts and agent notification settings.
 
-| Field                     | Type   | Default                    | Notes |
-| ------------------------- | ------ | -------------------------- | ----- |
-| terminalWorkspaceShortcut  | string | `Mod+Shift+Backquote`      | Global IDE/Terminal mode toggle shortcut |
-| terminalScrollButtonsEnabled | bool   | `false`                    | Show floating Page Up/Down buttons in terminal |
+| Field                               | Type     | Default                   | Notes |
+| ----------------------------------- | -------- | ------------------------- | ----- |
+| terminal_workspace_shortcut         | string   | `Mod+Shift+Backquote`     | Global IDE/terminal mode toggle shortcut |
+| terminal_scroll_buttons_enabled     | bool     | `false`                   | Show floating Page Up/Down buttons in terminal |
+| terminal_agent_notifications_enabled | bool     | `false`                   | Enable browser notifications for terminal agent activity |
+| terminal_agent_notification_policy  | string   | `"always"`                | Notification policy for agent activity |
+| terminal_agent_signals_enabled      | bool     | `true`                    | Show terminal agent signal events |
+| terminal_agent_quiet_tracking_enabled | bool   | `true`                    | Track quiet periods before notifications |
+| terminal_agent_quiet_timeout_ms     | u64      | `30000`                   | Quiet window in milliseconds |
+| terminal_agent_command_patterns     | array    | default literal pattern objects for `codex`, `claude`, `claude-code`, `antigravity` | Command patterns treated as terminal agents |
 
 Example:
 
 ```toml
 [ui]
-terminalWorkspaceShortcut = "Mod+Shift+Backquote"
-terminalScrollButtonsEnabled = false
+terminal_workspace_shortcut = "Mod+Shift+Backquote"
+terminal_scroll_buttons_enabled = false
+terminal_agent_notifications_enabled = false
+terminal_agent_notification_policy = "always"
+terminal_agent_signals_enabled = true
+terminal_agent_quiet_tracking_enabled = true
+terminal_agent_quiet_timeout_ms = 30000
+
+[[ui.terminal_agent_command_patterns]]
+id = "codex"
+label = "Codex"
+kind = "literal"
+pattern = "codex"
+agent = "codex"
+enabled = true
 ```
 
-The shortcut is normalized by the client config layer, and terminal panels treat it as a non-text global shortcut.
+The shortcut is normalized by the client config layer, and browser notification permission is not persisted.
 
 ### Server Configuration
 

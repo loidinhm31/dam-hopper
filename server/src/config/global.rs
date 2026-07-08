@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::AppError;
 use crate::utils::atomic_write;
+use serde_json::Value;
 
 use super::schema::{GlobalConfig, KnownWorkspace};
 
@@ -33,7 +34,20 @@ pub fn read_global_config_at(path: &Path) -> Result<Option<GlobalConfig>, AppErr
     };
 
     match toml::from_str::<GlobalConfig>(&content) {
-        Ok(cfg) => Ok(Some(cfg)),
+        Ok(mut cfg) => {
+            if let Some(ui) = cfg.ui.as_mut() {
+                ui.normalize_terminal_agent_notification_settings();
+                if let Err(error) = ui.validate_terminal_agent_notification_settings() {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %error,
+                        "Invalid terminal agent notification settings in global config — resetting to defaults"
+                    );
+                    ui.reset_terminal_agent_notification_settings_to_defaults();
+                }
+            }
+            Ok(Some(cfg))
+        }
         Err(e) => {
             // Matches Node.js behavior: corrupted global config is warned and ignored.
             tracing::warn!(path = %path.display(), error = %e, "Failed to parse global config — ignoring");
@@ -43,10 +57,117 @@ pub fn read_global_config_at(path: &Path) -> Result<Option<GlobalConfig>, AppErr
 }
 
 pub fn write_global_config_at(path: &Path, config: &GlobalConfig) -> Result<(), AppError> {
-    let content = toml::to_string_pretty(config)
+    let toml_value = serialize_global_config_for_toml(config)?;
+    let content = toml::to_string_pretty(&toml_value)
         .map_err(|e| AppError::Config(format!("Cannot serialize global config: {}", e)))?;
     // atomic_write uses 0o600 on Unix (protects workspace paths + future auth tokens)
     atomic_write(path, &content)
+}
+
+fn serialize_global_config_for_toml(config: &GlobalConfig) -> Result<toml::Value, AppError> {
+    let mut json = serde_json::to_value(config)
+        .map_err(|e| AppError::Config(format!("Cannot serialize global config: {}", e)))?;
+    normalize_global_config_json_for_toml(&mut json);
+    json_to_toml(&json)
+        .ok_or_else(|| AppError::Config("Cannot convert global config to TOML".to_string()))
+}
+
+fn normalize_global_config_json_for_toml(value: &mut Value) {
+    let Some(root) = value.as_object_mut() else {
+        return;
+    };
+
+    if let Some(ui) = root.get_mut("ui") {
+        normalize_ui_json_for_toml(ui);
+    }
+    if let Some(server) = root.get_mut("server") {
+        normalize_server_json_for_toml(server);
+    }
+}
+
+fn normalize_server_json_for_toml(value: &mut Value) {
+    let Some(server) = value.as_object_mut() else {
+        return;
+    };
+
+    let entries = std::mem::take(server);
+    for (key, value) in entries {
+        let toml_key = match key.as_str() {
+            "sessionDbPath" => "session_db_path",
+            "sessionBufferTtlHours" => "session_buffer_ttl_hours",
+            other => other,
+        };
+        server.insert(toml_key.to_string(), value);
+    }
+}
+
+fn normalize_ui_json_for_toml(value: &mut Value) {
+    let Some(ui) = value.as_object_mut() else {
+        return;
+    };
+
+    let entries = std::mem::take(ui);
+    for (key, value) in entries {
+        let toml_key = match key.as_str() {
+            "systemFontSize" => "system_font_size",
+            "editorFontSize" => "editor_font_size",
+            "editorZoomWheelEnabled" => "editor_zoom_wheel_enabled",
+            "searchTextShortcut" => "search_text_shortcut",
+            "searchFilenameShortcut" => "search_filename_shortcut",
+            "terminalWorkspaceShortcut" => "terminal_workspace_shortcut",
+            "terminalFilePanelShortcut" => "terminal_file_panel_shortcut",
+            "revealActiveFileShortcut" => "reveal_active_file_shortcut",
+            "terminalSuggestionsEnabled" => "terminal_suggestions_enabled",
+            "terminalAgentNotificationsEnabled" => "terminal_agent_notifications_enabled",
+            "terminalAgentNotificationPolicy" => "terminal_agent_notification_policy",
+            "terminalAgentSignalsEnabled" => "terminal_agent_signals_enabled",
+            "terminalAgentQuietTrackingEnabled" => "terminal_agent_quiet_tracking_enabled",
+            "terminalAgentQuietTimeoutMs" => "terminal_agent_quiet_timeout_ms",
+            "terminalAgentCommandPatterns" => "terminal_agent_command_patterns",
+            "explorerShowHidden" => "explorer_show_hidden",
+            "mobileCustomKeyboardEnabled" => "mobile_custom_keyboard_enabled",
+            "mobileCustomKeyboardFontSize" => "mobile_custom_keyboard_font_size",
+            "mobileCustomKeyboardPadding" => "mobile_custom_keyboard_padding",
+            "mobileCustomKeyboardRowGap" => "mobile_custom_keyboard_row_gap",
+            "terminalOrder" => "terminal_order",
+            "projectOrder" => "project_order",
+            "projectCommandOrder" => "project_command_order",
+            "runtimeGroupOrder" => "runtime_group_order",
+            "runtimeItemOrder" => "runtime_item_order",
+            "terminalScrollButtonsEnabled" => "terminal_scroll_buttons_enabled",
+            "terminalScrollStep" => "terminal_scroll_step",
+            other => other,
+        };
+        ui.insert(toml_key.to_string(), value);
+    }
+}
+
+fn json_to_toml(v: &Value) -> Option<toml::Value> {
+    match v {
+        Value::Null => None,
+        Value::Bool(b) => Some(toml::Value::Boolean(*b)),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(toml::Value::Integer(i))
+            } else {
+                n.as_f64().map(toml::Value::Float)
+            }
+        }
+        Value::String(s) => Some(toml::Value::String(s.clone())),
+        Value::Array(arr) => {
+            let items: Vec<_> = arr.iter().filter_map(json_to_toml).collect();
+            Some(toml::Value::Array(items))
+        }
+        Value::Object(map) => {
+            let mut tbl = toml::map::Map::new();
+            for (k, v) in map {
+                if let Some(tv) = json_to_toml(v) {
+                    tbl.insert(k.clone(), tv);
+                }
+            }
+            Some(toml::Value::Table(tbl))
+        }
+    }
 }
 
 // ──────────────────────────────────────────────

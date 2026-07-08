@@ -341,6 +341,23 @@ export interface DiscoverResponse {
   projects: DiscoveredProject[];
 }
 
+export type AgentCommandPatternKind = "literal" | "regex";
+export type TerminalAgentType =
+  | "codex"
+  | "claude"
+  | "antigravity"
+  | "unknown";
+export type TerminalAgentNotificationPolicy = "always";
+
+export interface AgentCommandPattern {
+  id: string;
+  label: string;
+  kind: AgentCommandPatternKind;
+  pattern: string;
+  agent: TerminalAgentType;
+  enabled: boolean;
+}
+
 export interface UiConfig {
   systemFontSize: number;
   editorFontSize: number;
@@ -351,6 +368,12 @@ export interface UiConfig {
   terminalFilePanelShortcut: string;
   revealActiveFileShortcut: string;
   terminalSuggestionsEnabled?: boolean;
+  terminalAgentNotificationsEnabled?: boolean;
+  terminalAgentNotificationPolicy?: TerminalAgentNotificationPolicy;
+  terminalAgentSignalsEnabled?: boolean;
+  terminalAgentQuietTrackingEnabled?: boolean;
+  terminalAgentQuietTimeoutMs?: number;
+  terminalAgentCommandPatterns?: AgentCommandPattern[];
   terminalScrollButtonsEnabled?: boolean;
   terminalScrollStep?: number;
   explorerShowHidden?: boolean;

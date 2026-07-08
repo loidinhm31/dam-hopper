@@ -4,7 +4,7 @@ use axum::{
     Json,
 };
 use serde_json::Value;
-use std::path::{Path as StdPath, PathBuf};
+use std::path::{Path as FsPath, Path as StdPath, PathBuf};
 
 use crate::config::schema::DamHopperConfig;
 use crate::config::{
@@ -96,7 +96,7 @@ pub async fn update_global_defaults(
 
     write_global_config_at(&gc_path, &gc).map_err(ApiError::from_app)?;
     *state.global_config.write().await = gc;
-    Ok(Json(serde_json::json!({ "ok": true })))
+    Ok(Json(serde_json::json!({ "updated": true })))
 }
 
 // ---------------------------------------------------------------------------
@@ -108,28 +108,50 @@ pub async fn update_global_ui(
     Json(body): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
     let gc_path = global_config_path();
-    let mut gc = read_global_config_at(&gc_path)
-        .map_err(ApiError::from_app)?
-        .unwrap_or_default();
+    update_global_ui_at_path(&state, &gc_path, body.get("ui"))
+        .await
+        .map_err(ApiError::from_app)?;
+    Ok(Json(serde_json::json!({ "updated": true })))
+}
 
-    if let Some(ui_val) = body.get("ui") {
-        let mut merged = serde_json::to_value(gc.ui.clone().unwrap_or_default())
-            .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
-        merge_json_objects(&mut merged, ui_val);
-        let new_ui: crate::config::schema::UiConfig = serde_json::from_value(merged)
-            .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
-        new_ui
-            .validate_font_sizes()
-            .map_err(|e| ApiError::from_app(AppError::InvalidInput(e)))?;
-        new_ui
-            .validate_mobile_keyboard_sizes()
-            .map_err(|e| ApiError::from_app(AppError::InvalidInput(e)))?;
-        gc.ui = Some(new_ui);
+pub(crate) fn merge_global_ui_config(
+    existing: Option<crate::config::schema::UiConfig>,
+    incoming: &Value,
+) -> Result<crate::config::schema::UiConfig, AppError> {
+    if !incoming.is_object() {
+        return Err(AppError::InvalidInput("ui must be an object".to_string()));
+    }
+    let mut merged = serde_json::to_value(existing.unwrap_or_default())
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    merge_json_objects(&mut merged, incoming);
+    let new_ui: crate::config::schema::UiConfig = serde_json::from_value(merged)
+        .map_err(|e| AppError::InvalidInput(format!("Invalid UI config: {e}")))?;
+    new_ui.validate_font_sizes().map_err(AppError::InvalidInput)?;
+    new_ui
+        .validate_mobile_keyboard_sizes()
+        .map_err(AppError::InvalidInput)?;
+    new_ui
+        .validate_terminal_agent_notification_settings()
+        .map_err(AppError::InvalidInput)?;
+    let mut new_ui = new_ui;
+    new_ui.normalize_terminal_agent_notification_settings();
+    Ok(new_ui)
+}
+
+pub(crate) async fn update_global_ui_at_path(
+    state: &AppState,
+    gc_path: &FsPath,
+    incoming_ui: Option<&Value>,
+) -> Result<(), AppError> {
+    let mut gc = read_global_config_at(gc_path)?.unwrap_or_default();
+
+    if let Some(ui_val) = incoming_ui {
+        gc.ui = Some(merge_global_ui_config(gc.ui.clone(), ui_val)?);
     }
 
-    write_global_config_at(&gc_path, &gc).map_err(ApiError::from_app)?;
+    write_global_config_at(gc_path, &gc)?;
     *state.global_config.write().await = gc;
-    Ok(Json(serde_json::json!({ "ok": true })))
+    Ok(())
 }
 
 fn merge_json_objects(base: &mut Value, incoming: &Value) {
