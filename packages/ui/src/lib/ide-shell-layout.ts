@@ -68,3 +68,63 @@ export function resolveBottomPanelLayout({
     innerClassName: INNER_BASE,
   };
 }
+
+// ── Maximize state transitions ─────────────────────────────────────────────
+// Pure decision helpers for the bottom panel maximize toggle and top-tool
+// activity bar clicks. Kept alongside the layout helper so the full maximize
+// contract (layout + state transitions) is unit-testable under the SSR harness.
+
+/**
+ * Decide the side effects of toggling the bottom panel maximize state.
+ *
+ * Entering maximize (false -> true) clears the active top tool IDs on both
+ * sides so the activity bar no longer highlights them while the bottom panel
+ * covers the top area. Leaving maximize (true -> false) leaves top tool
+ * selection untouched (the restore button only flips the layout).
+ */
+export interface MaximizeToggleInput {
+  bottomMaximized: boolean;
+}
+export interface MaximizeToggleOutcome {
+  nextBottomMaximized: boolean;
+  /** Whether the caller should clear the active left/right top tool IDs. */
+  clearTopActive: boolean;
+}
+export function resolveMaximizeToggle({
+  bottomMaximized,
+}: MaximizeToggleInput): MaximizeToggleOutcome {
+  const nextBottomMaximized = !bottomMaximized;
+  return {
+    nextBottomMaximized,
+    clearTopActive: nextBottomMaximized,
+  };
+}
+
+/**
+ * Decide the outcome of clicking a top tool in the activity bar.
+ *
+ * Activating a top tool (toggling it on) while the bottom panel is maximized
+ * restores the normal layout by reverting maximize. Toggling an already-active
+ * top tool off does not touch maximize.
+ */
+export interface TopToolToggleInput {
+  currentActiveId: string | null;
+  clickedId: string;
+  bottomMaximized: boolean;
+}
+export interface TopToolToggleOutcome {
+  nextActiveId: string | null;
+  /** Whether the caller should revert the bottom maximize state. */
+  revertMaximize: boolean;
+}
+export function resolveTopToolToggle({
+  currentActiveId,
+  clickedId,
+  bottomMaximized,
+}: TopToolToggleInput): TopToolToggleOutcome {
+  const willActivate = currentActiveId !== clickedId;
+  return {
+    nextActiveId: willActivate ? clickedId : null,
+    revertMaximize: willActivate && bottomMaximized,
+  };
+}

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveBottomPanelLayout } from "./ide-shell-layout.js";
+import {
+  resolveBottomPanelLayout,
+  resolveMaximizeToggle,
+  resolveTopToolToggle,
+} from "./ide-shell-layout.js";
 
 describe("resolveBottomPanelLayout", () => {
   describe("default (non-maximized)", () => {
@@ -117,5 +121,61 @@ describe("resolveBottomPanelLayout", () => {
       bottomHeight: 450,
     });
     expect(layout.innerStyle).toBeUndefined();
+  });
+});
+
+describe("resolveMaximizeToggle", () => {
+  it("clears top active tools when entering maximize", () => {
+    const outcome = resolveMaximizeToggle({ bottomMaximized: false });
+    expect(outcome.nextBottomMaximized).toBe(true);
+    expect(outcome.clearTopActive).toBe(true);
+  });
+
+  it("leaves top tool selection untouched when leaving maximize", () => {
+    const outcome = resolveMaximizeToggle({ bottomMaximized: true });
+    expect(outcome.nextBottomMaximized).toBe(false);
+    expect(outcome.clearTopActive).toBe(false);
+  });
+});
+
+describe("resolveTopToolToggle", () => {
+  it("activates an inactive top tool and reverts maximize when maximized", () => {
+    const outcome = resolveTopToolToggle({
+      currentActiveId: null,
+      clickedId: "explorer",
+      bottomMaximized: true,
+    });
+    expect(outcome.nextActiveId).toBe("explorer");
+    expect(outcome.revertMaximize).toBe(true);
+  });
+
+  it("activates an inactive top tool without reverting when not maximized", () => {
+    const outcome = resolveTopToolToggle({
+      currentActiveId: null,
+      clickedId: "explorer",
+      bottomMaximized: false,
+    });
+    expect(outcome.nextActiveId).toBe("explorer");
+    expect(outcome.revertMaximize).toBe(false);
+  });
+
+  it("deactivates an already-active top tool without touching maximize", () => {
+    const outcome = resolveTopToolToggle({
+      currentActiveId: "explorer",
+      clickedId: "explorer",
+      bottomMaximized: true,
+    });
+    expect(outcome.nextActiveId).toBeNull();
+    expect(outcome.revertMaximize).toBe(false);
+  });
+
+  it("switches to a different top tool and reverts maximize", () => {
+    const outcome = resolveTopToolToggle({
+      currentActiveId: "search",
+      clickedId: "explorer",
+      bottomMaximized: true,
+    });
+    expect(outcome.nextActiveId).toBe("explorer");
+    expect(outcome.revertMaximize).toBe(true);
   });
 });
