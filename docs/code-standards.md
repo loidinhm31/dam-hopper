@@ -655,6 +655,8 @@ Native startup must not depend on packaged webview same-origin fallback. Use the
 
 `packages/shared` owns dependency-free runtime utilities used across packages. Current rule: keep logger config, level resolution, and metadata redaction centralized in `src/logger.ts`, and prefer it over ad hoc `console` calls in transport, auth, terminal, dashboard, error boundary, and filesystem code.
 
+Frontend diagnostics that need feature-specific breadcrumbs should go through `recordClientDiagnostic()` from `packages/ui/src/lib/diagnostics-client.ts`. For terminal agent notifications, only record safe metadata such as `sessionId`, `source`, `permission`, `reason`, and `agent`; never attach raw terminal output, raw OSC payloads, or full command arguments.
+
 ### Client Types
 
 Types in `src/api/client.ts` **intentionally duplicate** Rust API shapes. This keeps the web package independent — no shared TypeScript lib.

@@ -6,6 +6,7 @@
  */
 import { create } from "zustand";
 import { api } from "@/api/client.js";
+import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 import { withUiConfigDefaults } from "@/lib/ui-config.js";
 import {
   DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
@@ -102,6 +103,40 @@ interface SettingsState extends PersistedSettingsState {
 }
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let lastSavedSettings: PersistedSettingsState | null = null;
+let latestLocalEditId = 0;
+let saveChain: Promise<void> = Promise.resolve();
+
+function pickPersistedSettings(
+  state: PersistedSettingsState | SettingsState,
+): PersistedSettingsState {
+  return {
+    systemFontSize: state.systemFontSize,
+    editorFontSize: state.editorFontSize,
+    editorZoomWheelEnabled: state.editorZoomWheelEnabled,
+    searchTextShortcut: state.searchTextShortcut,
+    searchFilenameShortcut: state.searchFilenameShortcut,
+    terminalWorkspaceShortcut: state.terminalWorkspaceShortcut,
+    terminalFilePanelShortcut: state.terminalFilePanelShortcut,
+    revealActiveFileShortcut: state.revealActiveFileShortcut,
+    terminalSuggestionsEnabled: state.terminalSuggestionsEnabled,
+    terminalAgentNotificationsEnabled: state.terminalAgentNotificationsEnabled,
+    terminalAgentNotificationPolicy: state.terminalAgentNotificationPolicy,
+    terminalAgentSignalsEnabled: state.terminalAgentSignalsEnabled,
+    terminalAgentQuietTrackingEnabled: state.terminalAgentQuietTrackingEnabled,
+    terminalAgentQuietTimeoutMs: state.terminalAgentQuietTimeoutMs,
+    terminalAgentCommandPatterns: normalizeAgentCommandPatterns(
+      state.terminalAgentCommandPatterns,
+    ),
+    terminalScrollButtonsEnabled: state.terminalScrollButtonsEnabled,
+    terminalScrollStep: state.terminalScrollStep,
+    explorerShowHidden: state.explorerShowHidden,
+    mobileCustomKeyboardEnabled: state.mobileCustomKeyboardEnabled,
+    mobileCustomKeyboardFontSize: state.mobileCustomKeyboardFontSize,
+    mobileCustomKeyboardPadding: state.mobileCustomKeyboardPadding,
+    mobileCustomKeyboardRowGap: state.mobileCustomKeyboardRowGap,
+  };
+}
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   systemFontSize: 14,
@@ -160,9 +195,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         mobileCustomKeyboardRowGap: ui.mobileCustomKeyboardRowGap ?? 4,
         hydrated: true,
       });
+      lastSavedSettings = pickPersistedSettings(get());
     } catch {
       // Keep defaults; mark hydrated so app doesn't wait forever
       set({ hydrated: true });
+      lastSavedSettings = pickPersistedSettings(get());
     }
   },
 
@@ -230,58 +267,45 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   saveDebounced: (partial) => {
+    const localEditId = ++latestLocalEditId;
     get().set(partial);
     if (debounceTimer !== null) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
-      const {
-        systemFontSize,
-        editorFontSize,
-        editorZoomWheelEnabled,
-        searchTextShortcut,
-        searchFilenameShortcut,
-        terminalWorkspaceShortcut,
-        terminalFilePanelShortcut,
-        revealActiveFileShortcut,
-        terminalSuggestionsEnabled,
-        terminalAgentNotificationsEnabled,
-        terminalAgentNotificationPolicy,
-        terminalAgentSignalsEnabled,
-        terminalAgentQuietTrackingEnabled,
-        terminalAgentQuietTimeoutMs,
-        terminalAgentCommandPatterns,
-        terminalScrollButtonsEnabled,
-        terminalScrollStep,
-        explorerShowHidden,
-        mobileCustomKeyboardEnabled,
-        mobileCustomKeyboardFontSize,
-        mobileCustomKeyboardPadding,
-        mobileCustomKeyboardRowGap,
-      } = get();
-      void api.globalConfig.updateUi({
-        systemFontSize,
-        editorFontSize,
-        editorZoomWheelEnabled,
-        searchTextShortcut,
-        searchFilenameShortcut,
-        terminalWorkspaceShortcut,
-        terminalFilePanelShortcut,
-        revealActiveFileShortcut,
-        terminalSuggestionsEnabled,
-        terminalAgentNotificationsEnabled,
-        terminalAgentNotificationPolicy,
-        terminalAgentSignalsEnabled,
-        terminalAgentQuietTrackingEnabled,
-        terminalAgentQuietTimeoutMs,
-        terminalAgentCommandPatterns,
-        terminalScrollButtonsEnabled,
-        terminalScrollStep,
-        explorerShowHidden,
-        mobileCustomKeyboardEnabled,
-        mobileCustomKeyboardFontSize,
-        mobileCustomKeyboardPadding,
-        mobileCustomKeyboardRowGap,
+      const payload = pickPersistedSettings(get());
+      saveChain = saveChain.catch(() => {}).then(async () => {
+        try {
+          await api.globalConfig.updateUi(payload);
+          lastSavedSettings = payload;
+          if (localEditId === latestLocalEditId) {
+            set(payload);
+          }
+        } catch (error) {
+          if (localEditId === latestLocalEditId && lastSavedSettings) {
+            set(lastSavedSettings);
+          }
+          recordClientDiagnostic(
+            "custom",
+            "settings-store",
+            "settings update rejected",
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+        }
       });
     }, 500);
   },
 }));
+
+lastSavedSettings = pickPersistedSettings(useSettingsStore.getState());
+
+export function __resetSettingsStoreTestState(): void {
+  if (debounceTimer !== null) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
+  latestLocalEditId = 0;
+  saveChain = Promise.resolve();
+  lastSavedSettings = pickPersistedSettings(useSettingsStore.getState());
+}

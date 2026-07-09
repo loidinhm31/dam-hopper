@@ -92,6 +92,53 @@ describe("BrowserNotificationService", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+  it("records structured diagnostics for skipped and failed delivery", () => {
+    const diagnostics = vi.fn();
+    const service = new BrowserNotificationService({
+      diagnostics,
+      getPermission: () => "default",
+      notificationFactory: () => {
+        throw new Error("boom");
+      },
+    });
+
+    expect(service.notifyTerminalAgent(event)).toEqual({
+      delivered: false,
+      reason: "permission-default",
+    });
+    expect(diagnostics).toHaveBeenCalledWith(
+      "terminal agent notification skipped",
+      expect.objectContaining({
+        agent: "codex",
+        permission: "default",
+        reason: "permission-default",
+        sessionId: "s1",
+        source: "quiet",
+      }),
+    );
+
+    diagnostics.mockClear();
+    const failingService = new BrowserNotificationService({
+      diagnostics,
+      getPermission: () => "granted",
+      notificationFactory: () => {
+        throw new Error("boom");
+      },
+    });
+    expect(failingService.notifyTerminalAgent(event)).toEqual({
+      delivered: false,
+      reason: "factory-error",
+    });
+    expect(diagnostics).toHaveBeenCalledWith(
+      "terminal agent notification delivery failed",
+      expect.objectContaining({
+        agent: "codex",
+        permission: "granted",
+        reason: "factory-error",
+      }),
+    );
+  });
+
   it("rate-limits through the exported helper for normal callers", () => {
     const originalNotification = globalThis.Notification;
     const created: Array<{ title: string; options: NotificationOptions }> = [];
