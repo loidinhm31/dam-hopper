@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  __resetDefaultBrowserNotificationServiceForTests,
   BrowserNotificationService,
+  getBrowserNotificationPermissionState,
   notifyTerminalAgent,
+  requestBrowserNotificationPermission,
 } from "./browser-notification-service.js";
 import type { TerminalAgentNotification } from "./terminal-notification-signal-parser.js";
 
@@ -15,6 +18,20 @@ const event: TerminalAgentNotification = {
   status: "needs-attention",
   receivedAt: 1,
 };
+
+function restoreNotificationGlobal(
+  originalNotification: typeof globalThis.Notification,
+): void {
+  if (originalNotification === undefined) {
+    Reflect.deleteProperty(globalThis, "Notification");
+    return;
+  }
+
+  Object.defineProperty(globalThis, "Notification", {
+    configurable: true,
+    value: originalNotification,
+  });
+}
 
 describe("BrowserNotificationService", () => {
   it("no-ops when notifications are disabled or permission is not granted", () => {
@@ -33,6 +50,29 @@ describe("BrowserNotificationService", () => {
       reason: "permission-denied",
     });
     expect(factory).not.toHaveBeenCalled();
+  });
+
+  it("no-ops when the Notification API is unsupported", () => {
+    const factory = vi.fn();
+    const diagnostics = vi.fn();
+    const service = new BrowserNotificationService({
+      notificationFactory: factory,
+      diagnostics,
+      getPermission: () => "unsupported",
+    });
+
+    expect(service.notifyTerminalAgent(event)).toEqual({
+      delivered: false,
+      reason: "unsupported",
+    });
+    expect(factory).not.toHaveBeenCalled();
+    expect(diagnostics).toHaveBeenCalledWith(
+      "terminal agent notification skipped",
+      expect.objectContaining({
+        permission: "unsupported",
+        reason: "unsupported",
+      }),
+    );
   });
 
   it("delivers sanitized browser notifications with stable tags", () => {
@@ -140,6 +180,7 @@ describe("BrowserNotificationService", () => {
   });
 
   it("rate-limits through the exported helper for normal callers", () => {
+    __resetDefaultBrowserNotificationServiceForTests();
     const originalNotification = globalThis.Notification;
     const created: Array<{ title: string; options: NotificationOptions }> = [];
     class FakeNotification {
@@ -166,10 +207,80 @@ describe("BrowserNotificationService", () => {
       });
       expect(created).toHaveLength(1);
     } finally {
-      Object.defineProperty(globalThis, "Notification", {
-        configurable: true,
-        value: originalNotification,
-      });
+      __resetDefaultBrowserNotificationServiceForTests();
+      restoreNotificationGlobal(originalNotification);
+    }
+  });
+});
+
+describe("browser notification permission helpers", () => {
+  it("reports unsupported when Notification is unavailable", () => {
+    const originalNotification = globalThis.Notification;
+    Reflect.deleteProperty(globalThis, "Notification");
+
+    try {
+      expect(getBrowserNotificationPermissionState()).toBe("unsupported");
+    } finally {
+      restoreNotificationGlobal(originalNotification);
+    }
+  });
+
+  it("returns unsupported when permission is requested without Notification support", async () => {
+    const originalNotification = globalThis.Notification;
+    Reflect.deleteProperty(globalThis, "Notification");
+
+    try {
+      await expect(requestBrowserNotificationPermission()).resolves.toBe(
+        "unsupported",
+      );
+    } finally {
+      restoreNotificationGlobal(originalNotification);
+    }
+  });
+
+  it("requests permission successfully when supported", async () => {
+    const originalNotification = globalThis.Notification;
+    const requestPermission = vi.fn(async () => "granted" as const);
+
+    class FakeNotification {
+      static permission: NotificationPermission = "default";
+      static requestPermission = requestPermission;
+    }
+
+    Object.defineProperty(globalThis, "Notification", {
+      configurable: true,
+      value: FakeNotification,
+    });
+
+    try {
+      await expect(requestBrowserNotificationPermission()).resolves.toBe(
+        "granted",
+      );
+      expect(requestPermission).toHaveBeenCalledTimes(1);
+    } finally {
+      restoreNotificationGlobal(originalNotification);
+    }
+  });
+
+  it("requests permission and falls back to current state on request errors", async () => {
+    const originalNotification = globalThis.Notification;
+
+    class FakeNotification {
+      static permission: NotificationPermission = "default";
+      static async requestPermission(): Promise<NotificationPermission> {
+        throw new Error("blocked");
+      }
+    }
+
+    Object.defineProperty(globalThis, "Notification", {
+      configurable: true,
+      value: FakeNotification,
+    });
+
+    try {
+      await expect(requestBrowserNotificationPermission()).resolves.toBe("default");
+    } finally {
+      restoreNotificationGlobal(originalNotification);
     }
   });
 });

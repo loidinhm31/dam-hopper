@@ -165,6 +165,10 @@ export function notifyTerminalAgent(
   return service.notifyTerminalAgent(event, options);
 }
 
+export function __resetDefaultBrowserNotificationServiceForTests(): void {
+  defaultBrowserNotificationService = null;
+}
+
 function createBrowserNotification(
   title: string,
   options: NotificationOptions,
