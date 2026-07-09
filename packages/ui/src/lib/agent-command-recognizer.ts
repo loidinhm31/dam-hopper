@@ -41,7 +41,11 @@ export function extractExecutableToken(commandLine: string): string | null {
   let index = 0;
   if (tokens[index] === "env") {
     index++;
-    index = skipEnvOptions(tokens, index);
+    const envOptions = skipEnvOptions(tokens, index);
+    if (envOptions.executable !== undefined) {
+      return envOptions.executable;
+    }
+    index = envOptions.index;
   }
 
   while (index < tokens.length && ASSIGNMENT_RE.test(tokens[index]!)) {
@@ -71,27 +75,42 @@ function matchesRegex(pattern: string, executable: string): boolean {
   }
 }
 
-function skipEnvOptions(tokens: string[], start: number): number {
+function skipEnvOptions(
+  tokens: string[],
+  start: number,
+): { index: number; executable?: string | null } {
   let index = start;
 
   while (index < tokens.length) {
     const token = tokens[index]!;
     if (!token.startsWith("-") || token === "-") break;
 
+    if (token.startsWith("--unset=") || token.startsWith("--chdir=")) {
+      index++;
+      continue;
+    }
+
     index++;
     if (
       token === "-u" ||
       token === "--unset" ||
       token === "-C" ||
-      token === "--chdir" ||
-      token === "-S" ||
-      token === "--split-string"
+      token === "--chdir"
     ) {
       index++;
+      continue;
+    }
+
+    if (token === "-S" || token === "--split-string") {
+      const splitString = tokens[index];
+      return {
+        index: tokens.length,
+        executable: splitString ? extractExecutableToken(splitString) : null,
+      };
     }
   }
 
-  return index;
+  return { index };
 }
 
 function tokenizeCommandLine(commandLine: string): string[] {
