@@ -2,11 +2,8 @@ import { useEffect, useState } from "react";
 import { BellRing } from "lucide-react";
 import { Badge } from "@/components/atoms/Badge.js";
 import { Button } from "@/components/atoms/Button.js";
-import { NumberStepper } from "@/components/atoms/NumberStepper.js";
 import { Switch } from "@/components/atoms/Switch.js";
-import { AgentCommandPatternEditor } from "@/components/molecules/AgentCommandPatternEditor.js";
 import { SettingRow } from "@/components/molecules/SettingRow.js";
-import type { AgentCommandPattern } from "@/api/client.js";
 import {
   getBrowserNotificationPermissionState,
   requestBrowserNotificationPermission,
@@ -15,19 +12,11 @@ import {
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 
 type TerminalAgentNotificationSettingsPatch = Partial<{
-  terminalAgentNotificationsEnabled: boolean;
-  terminalAgentSignalsEnabled: boolean;
-  terminalAgentQuietTrackingEnabled: boolean;
-  terminalAgentQuietTimeoutMs: number;
-  terminalAgentCommandPatterns: AgentCommandPattern[];
+  terminalCodexNotificationsEnabled: boolean;
 }>;
 
 interface TerminalAgentNotificationSettingsProps {
   enabled: boolean;
-  signalsEnabled: boolean;
-  quietTrackingEnabled: boolean;
-  quietTimeoutMs: number;
-  commandPatterns: AgentCommandPattern[];
   onSave: (partial: TerminalAgentNotificationSettingsPatch) => void;
 }
 
@@ -50,10 +39,6 @@ const PERMISSION_LABEL: Record<BrowserNotificationPermissionState, string> = {
 
 export function TerminalAgentNotificationSettings({
   enabled,
-  signalsEnabled,
-  quietTrackingEnabled,
-  quietTimeoutMs,
-  commandPatterns,
   onSave,
 }: TerminalAgentNotificationSettingsProps) {
   const [permission, setPermission] = useState<BrowserNotificationPermissionState>(() =>
@@ -89,22 +74,26 @@ export function TerminalAgentNotificationSettings({
         </div>
         <div className="min-w-0">
           <h4 className="text-sm font-medium text-[var(--color-text)]">
-            Terminal agent notifications
+            Codex terminal notifications
           </h4>
           <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
-            Browser notifications for DamHopper xterm sessions only. External
-            terminals stay out of scope.
+            Browser notifications for Codex running inside DamHopper terminals.
+            DamHopper syncs your home
+            {" "}
+            <code>~/.codex/config.toml</code>
+            {" "}
+            TUI notification block for you.
           </p>
         </div>
       </div>
       <SettingRow
-        title="Enable agent notifications"
-        description="Allow tracked terminal agents to raise browser notifications"
+        title="Enable Codex notifications"
+        description='Writes `tui.notifications`, `tui.notification_method = "osc9"`, and `tui.notification_condition = "always"` to `~/.codex/config.toml`'
       >
         <Switch
           checked={enabled}
           onCheckedChange={(checked) =>
-            onSave({ terminalAgentNotificationsEnabled: checked })
+            onSave({ terminalCodexNotificationsEnabled: checked })
           }
         />
       </SettingRow>
@@ -134,61 +123,6 @@ export function TerminalAgentNotificationSettings({
           notification setting in the browser, then request permission again.
         </p>
       ) : null}
-      <div className="border-t border-[var(--color-border)]" />
-      <SettingRow
-        title="Terminal notification signals"
-        description="Honor BEL and OSC 9/777/99 notifications emitted inside xterm"
-      >
-        <Switch
-          checked={signalsEnabled}
-          onCheckedChange={(checked) =>
-            onSave({ terminalAgentSignalsEnabled: checked })
-          }
-        />
-      </SettingRow>
-      <div className="border-t border-[var(--color-border)]" />
-      <SettingRow
-        title="Quiet tracking"
-        description="Notify when a tracked agent goes quiet and may need attention"
-      >
-        <Switch
-          checked={quietTrackingEnabled}
-          onCheckedChange={(checked) =>
-            onSave({ terminalAgentQuietTrackingEnabled: checked })
-          }
-        />
-      </SettingRow>
-      <div className="border-t border-[var(--color-border)]" />
-      <SettingRow
-        title="Quiet timeout"
-        description="Seconds of inactivity before a quiet notification fires (5–600)"
-      >
-        <NumberStepper
-          value={Math.round(quietTimeoutMs / 1000)}
-          min={5}
-          max={600}
-          onChange={(value) =>
-            onSave({ terminalAgentQuietTimeoutMs: value * 1000 })
-          }
-        />
-      </SettingRow>
-      <div className="border-t border-[var(--color-border)]" />
-      <div className="space-y-2">
-        <div>
-          <p className="text-sm font-medium text-[var(--color-text)]">
-            Command patterns
-          </p>
-          <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
-            Match agent launch commands by executable token.
-          </p>
-        </div>
-        <AgentCommandPatternEditor
-          patterns={commandPatterns}
-          onCommit={(patterns) =>
-            onSave({ terminalAgentCommandPatterns: patterns })
-          }
-        />
-      </div>
     </div>
   );
 }

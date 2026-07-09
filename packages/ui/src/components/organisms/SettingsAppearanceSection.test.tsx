@@ -14,20 +14,7 @@ const settingsStore = {
   editorFontSize: 14,
   editorZoomWheelEnabled: true,
   terminalSuggestionsEnabled: true,
-  terminalAgentNotificationsEnabled: true,
-  terminalAgentSignalsEnabled: true,
-  terminalAgentQuietTrackingEnabled: true,
-  terminalAgentQuietTimeoutMs: 30000,
-  terminalAgentCommandPatterns: [
-    {
-      id: "codex",
-      label: "Codex",
-      kind: "literal" as const,
-      pattern: "codex",
-      agent: "codex" as const,
-      enabled: true,
-    },
-  ],
+  terminalCodexNotificationsEnabled: true,
   terminalScrollButtonsEnabled: false,
   terminalScrollStep: 3,
   explorerShowHidden: false,
@@ -42,9 +29,10 @@ describe("SettingsAppearanceSection", () => {
   it("renders the terminal agent notification controls", () => {
     const markup = renderToStaticMarkup(<SettingsAppearanceSection />);
 
-    expect(markup).toContain("Terminal agent notifications");
+    expect(markup).toContain("Codex terminal notifications");
     expect(markup).toContain("Request permission");
-    expect(markup).toContain("Quiet tracking");
-    expect(markup).toContain("Command patterns");
+    expect(markup).toContain("Enable Codex notifications");
+    expect(markup).not.toContain("Quiet tracking");
+    expect(markup).not.toContain("Command patterns");
   });
 });

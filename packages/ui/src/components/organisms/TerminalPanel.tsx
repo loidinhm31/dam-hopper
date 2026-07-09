@@ -288,6 +288,10 @@ export function TerminalPanel({
       }
     });
 
+    const titleDisposable = term.onTitleChange((title) => {
+      agentNotifications?.onTitleChange(title);
+    });
+
     // 6. PTY resize: fired by fitAddon.fit()
     const resizeDisposable = term.onResize(({ cols: c, rows: r }) => {
       transport.terminalResize(safeSessionId, c, r);
@@ -463,6 +467,7 @@ export function TerminalPanel({
           dispose: () => {
             _inputDisposable?.dispose();
             resizeDisposable.dispose();
+            titleDisposable.dispose();
           },
         };
       })
@@ -479,6 +484,7 @@ export function TerminalPanel({
       unsubBuffer?.();
       unsubStatus?.();
       inputDisposable?.dispose();
+      titleDisposable.dispose();
       agentNotifications?.dispose();
       clearAttachTimeout();
       observer?.disconnect();

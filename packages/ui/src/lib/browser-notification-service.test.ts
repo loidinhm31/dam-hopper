@@ -96,6 +96,27 @@ describe("BrowserNotificationService", () => {
     });
   });
 
+  it("uses the notification source in the browser tag for TUI-ready events", () => {
+    const factory = vi.fn();
+    const service = new BrowserNotificationService({
+      notificationFactory: factory,
+      getPermission: () => "granted",
+      now: () => 1000,
+    });
+
+    expect(
+      service.notifyTerminalAgent({
+        ...event,
+        source: "tui-ready",
+        title: "Codex is ready",
+      }),
+    ).toEqual({ delivered: true });
+    expect(factory).toHaveBeenCalledWith("Codex is ready", {
+      body: "No terminal output for 30s in web.",
+      tag: "dam-hopper-agent-s1-tui-ready",
+    });
+  });
+
   it("rate-limits repeated notifications per session and source", () => {
     const factory = vi.fn();
     let now = 0;
@@ -116,6 +137,25 @@ describe("BrowserNotificationService", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+  it("allows callers to disable rate limiting explicitly", () => {
+    const factory = vi.fn();
+    let now = 0;
+    const service = new BrowserNotificationService({
+      notificationFactory: factory,
+      getPermission: () => "granted",
+      now: () => now,
+    });
+
+    expect(service.notifyTerminalAgent(event, { rateLimitMs: 0 })).toEqual({
+      delivered: true,
+    });
+    now = 10_000;
+    expect(service.notifyTerminalAgent(event, { rateLimitMs: 0 })).toEqual({
+      delivered: true,
+    });
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
   it("allows callers to reset rate limits when output resumes", () => {
     const factory = vi.fn();
     let now = 0;
@@ -130,6 +170,29 @@ describe("BrowserNotificationService", () => {
     service.resetTerminalAgentRateLimit("s1", "quiet");
     expect(service.notifyTerminalAgent(event)).toEqual({ delivered: true });
     expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reset other notification sources when quiet tracking resumes", () => {
+    const factory = vi.fn();
+    let now = 0;
+    const service = new BrowserNotificationService({
+      notificationFactory: factory,
+      getPermission: () => "granted",
+      now: () => now,
+    });
+
+    expect(
+      service.notifyTerminalAgent({ ...event, source: "osc9", sessionId: "s2" }),
+    ).toEqual({ delivered: true });
+    now = 5_000;
+    service.resetTerminalAgentRateLimit("s2", "quiet");
+    expect(
+      service.notifyTerminalAgent({ ...event, source: "osc9", sessionId: "s2" }),
+    ).toEqual({
+      delivered: false,
+      reason: "rate-limited",
+    });
+    expect(factory).toHaveBeenCalledTimes(1);
   });
 
   it("records structured diagnostics for skipped and failed delivery", () => {

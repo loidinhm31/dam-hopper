@@ -14,7 +14,7 @@ export class TerminalInputBuffer {
         continue;
       }
 
-      if (ch === "\x7f") {
+      if (ch === "\x7f" || ch === "\b") {
         // Backspace — remove last character
         if (this._buffer.length > 0) this._buffer = this._buffer.slice(0, -1);
         i++;

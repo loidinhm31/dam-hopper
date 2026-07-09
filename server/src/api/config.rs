@@ -130,11 +130,6 @@ pub(crate) fn merge_global_ui_config(
     new_ui
         .validate_mobile_keyboard_sizes()
         .map_err(AppError::InvalidInput)?;
-    new_ui
-        .validate_terminal_agent_notification_settings()
-        .map_err(AppError::InvalidInput)?;
-    let mut new_ui = new_ui;
-    new_ui.normalize_terminal_agent_notification_settings();
     Ok(new_ui)
 }
 
@@ -143,14 +138,107 @@ pub(crate) async fn update_global_ui_at_path(
     gc_path: &FsPath,
     incoming_ui: Option<&Value>,
 ) -> Result<(), AppError> {
+    update_global_ui_at_path_with_codex_home(state, gc_path, incoming_ui, None).await
+}
+
+pub(crate) async fn update_global_ui_at_path_with_codex_home(
+    state: &AppState,
+    gc_path: &FsPath,
+    incoming_ui: Option<&Value>,
+    codex_home_override: Option<&FsPath>,
+) -> Result<(), AppError> {
     let mut gc = read_global_config_at(gc_path)?.unwrap_or_default();
+    let should_sync_codex_tui = incoming_ui
+        .and_then(|ui| ui.get("terminalCodexNotificationsEnabled"))
+        .is_some();
+    let previous_codex_notifications_enabled = gc
+        .ui
+        .as_ref()
+        .map(|ui| ui.terminal_codex_notifications_enabled)
+        .unwrap_or(false);
 
     if let Some(ui_val) = incoming_ui {
         gc.ui = Some(merge_global_ui_config(gc.ui.clone(), ui_val)?);
     }
 
+    let next_codex_notifications_enabled = gc
+        .ui
+        .as_ref()
+        .map(|ui| ui.terminal_codex_notifications_enabled)
+        .unwrap_or(false);
+
+    if should_sync_codex_tui
+        || next_codex_notifications_enabled != previous_codex_notifications_enabled
+    {
+        sync_codex_tui_config(codex_home_override, next_codex_notifications_enabled)?;
+    }
+
     write_global_config_at(gc_path, &gc)?;
     *state.global_config.write().await = gc;
+    Ok(())
+}
+
+fn sync_codex_tui_config(
+    codex_home_override: Option<&FsPath>,
+    enabled: bool,
+) -> Result<(), AppError> {
+    let home_dir = codex_home_override
+        .map(FsPath::to_path_buf)
+        .or_else(dirs::home_dir)
+        .ok_or_else(|| AppError::Config("Unable to resolve home directory".to_string()))?;
+    let codex_dir = home_dir.join(".codex");
+    let config_path = codex_dir.join("config.toml");
+
+    if !enabled && !config_path.exists() {
+        return Ok(());
+    }
+
+    let mut doc = if config_path.exists() {
+        let raw = std::fs::read_to_string(&config_path)
+            .map_err(|e| AppError::Config(format!("Failed to read {}: {e}", config_path.display())))?;
+        if raw.trim().is_empty() {
+            toml::Value::Table(toml::map::Map::new())
+        } else {
+            toml::from_str::<toml::Value>(&raw).map_err(|e| {
+                AppError::InvalidInput(format!(
+                    "Invalid TOML in {}: {e}",
+                    config_path.display()
+                ))
+            })?
+        }
+    } else {
+        std::fs::create_dir_all(&codex_dir).map_err(|e| {
+            AppError::Config(format!("Failed to create {}: {e}", codex_dir.display()))
+        })?;
+        toml::Value::Table(toml::map::Map::new())
+    };
+
+    let root = doc
+        .as_table_mut()
+        .ok_or_else(|| AppError::InvalidInput(format!("{} root must be a TOML table", config_path.display())))?;
+    let tui_value = root
+        .entry("tui".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+    let tui = tui_value.as_table_mut().ok_or_else(|| {
+        AppError::InvalidInput(format!(
+            "{} [tui] section must be a TOML table",
+            config_path.display()
+        ))
+    })?;
+
+    tui.insert("notifications".to_string(), toml::Value::Boolean(enabled));
+    tui.insert(
+        "notification_method".to_string(),
+        toml::Value::String("osc9".to_string()),
+    );
+    tui.insert(
+        "notification_condition".to_string(),
+        toml::Value::String("always".to_string()),
+    );
+
+    let serialized =
+        toml::to_string_pretty(&doc).map_err(|e| AppError::Internal(e.to_string()))?;
+    atomic_write(&config_path, &serialized)?;
     Ok(())
 }
 

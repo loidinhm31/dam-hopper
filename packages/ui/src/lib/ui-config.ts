@@ -7,24 +7,13 @@ import {
   DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
   formatShortcut,
 } from "@/lib/shortcuts.js";
-import {
-  DEFAULT_TERMINAL_AGENT_NOTIFICATION_POLICY,
-  DEFAULT_TERMINAL_AGENT_QUIET_TIMEOUT_MS,
-  getDefaultTerminalAgentCommandPatterns,
-  normalizeAgentCommandPatterns,
-} from "@/lib/terminal-agent-notification-settings.js";
 
 export const DEFAULT_UI_CONFIG: UiConfig = {
   systemFontSize: 14,
   editorFontSize: 14,
   editorZoomWheelEnabled: true,
   terminalSuggestionsEnabled: true,
-  terminalAgentNotificationsEnabled: false,
-  terminalAgentNotificationPolicy: DEFAULT_TERMINAL_AGENT_NOTIFICATION_POLICY,
-  terminalAgentSignalsEnabled: true,
-  terminalAgentQuietTrackingEnabled: true,
-  terminalAgentQuietTimeoutMs: DEFAULT_TERMINAL_AGENT_QUIET_TIMEOUT_MS,
-  terminalAgentCommandPatterns: getDefaultTerminalAgentCommandPatterns(),
+  terminalCodexNotificationsEnabled: false,
   terminalScrollButtonsEnabled: false,
   terminalScrollStep: 3,
   explorerShowHidden: false,
@@ -45,6 +34,10 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
 };
 
 export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
+  const legacyTerminalAgentNotificationsEnabled = (
+    ui as { terminalAgentNotificationsEnabled?: boolean } | null | undefined
+  )?.terminalAgentNotificationsEnabled;
+
   return {
     ...DEFAULT_UI_CONFIG,
     ...ui,
@@ -69,24 +62,10 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
     mobileCustomKeyboardRowGap:
       ui?.mobileCustomKeyboardRowGap ??
       DEFAULT_UI_CONFIG.mobileCustomKeyboardRowGap,
-    terminalAgentNotificationsEnabled:
-      ui?.terminalAgentNotificationsEnabled ??
-      DEFAULT_UI_CONFIG.terminalAgentNotificationsEnabled,
-    terminalAgentNotificationPolicy:
-      ui?.terminalAgentNotificationPolicy ??
-      DEFAULT_UI_CONFIG.terminalAgentNotificationPolicy,
-    terminalAgentSignalsEnabled:
-      ui?.terminalAgentSignalsEnabled ??
-      DEFAULT_UI_CONFIG.terminalAgentSignalsEnabled,
-    terminalAgentQuietTrackingEnabled:
-      ui?.terminalAgentQuietTrackingEnabled ??
-      DEFAULT_UI_CONFIG.terminalAgentQuietTrackingEnabled,
-    terminalAgentQuietTimeoutMs:
-      ui?.terminalAgentQuietTimeoutMs ??
-      DEFAULT_UI_CONFIG.terminalAgentQuietTimeoutMs,
-    terminalAgentCommandPatterns: normalizeAgentCommandPatterns(
-      ui?.terminalAgentCommandPatterns,
-    ),
+    terminalCodexNotificationsEnabled:
+      ui?.terminalCodexNotificationsEnabled ??
+      legacyTerminalAgentNotificationsEnabled ??
+      DEFAULT_UI_CONFIG.terminalCodexNotificationsEnabled,
     searchTextShortcut: formatShortcut(
       ui?.searchTextShortcut ?? DEFAULT_UI_CONFIG.searchTextShortcut,
     ),

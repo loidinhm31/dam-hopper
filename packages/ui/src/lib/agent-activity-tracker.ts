@@ -3,6 +3,7 @@ import {
   recognizeAgentCommand,
   type RecognizedAgentCommand,
 } from "./agent-command-recognizer.js";
+import { detectTerminalAgentTitleActivity } from "./terminal-agent-title-activity.js";
 import {
   createTerminalAgentNotification,
   type TerminalAgentNotification,
@@ -11,7 +12,7 @@ import {
 export type AgentActivityTrackerState =
   | "idle"
   | "tracked_running"
-  | "quiet_notified"
+  | "attention_notified"
   | "finished";
 
 export interface AgentActivityTrackerSettings {
@@ -53,6 +54,8 @@ export class AgentActivityTracker {
   private timer: unknown = null;
   private tracked: RecognizedAgentCommand | null = null;
   private currentState: AgentActivityTrackerState = "idle";
+  private hasSeenWorkingTitle = false;
+  private expectedReadyTitle: string | null = null;
 
   constructor(
     session: AgentActivityTrackerSession,
@@ -78,6 +81,8 @@ export class AgentActivityTracker {
     }
 
     this.tracked = match;
+    this.hasSeenWorkingTitle = false;
+    this.expectedReadyTitle = null;
     this.currentState = "tracked_running";
     this.armQuietTimer();
   }
@@ -91,8 +96,51 @@ export class AgentActivityTracker {
   }
 
   onUserInput(): void {
-    if (this.currentState !== "quiet_notified") return;
-    this.reset();
+    if (this.currentState !== "attention_notified" || !this.tracked) return;
+    this.currentState = "tracked_running";
+    this.hasSeenWorkingTitle = false;
+    this.expectedReadyTitle = null;
+    this.armQuietTimer();
+  }
+
+  onTitleChange(title: string): void {
+    if (!this.tracked || this.currentState === "finished") return;
+
+    const activity = detectTerminalAgentTitleActivity(this.tracked.agent, title);
+    if (activity === null) return;
+    if (activity.kind === "working") {
+      this.hasSeenWorkingTitle = true;
+      this.expectedReadyTitle = activity.readyTitle;
+      this.currentState = "tracked_running";
+      this.clearQuietTimer();
+      return;
+    }
+    if (!this.hasSeenWorkingTitle || this.currentState === "attention_notified") {
+      return;
+    }
+    if (
+      !this.expectedReadyTitle ||
+      activity.readyTitle !== this.expectedReadyTitle
+    ) {
+      return;
+    }
+    if (this.settings.terminalAgentNotificationsEnabled === false) return;
+
+    const agentName = formatAgentName(this.tracked.agent, this.tracked.label);
+    this.currentState = "attention_notified";
+    this.hasSeenWorkingTitle = false;
+    this.expectedReadyTitle = null;
+    this.notify(
+      createTerminalAgentNotification("tui-ready", {
+        ...this.session,
+        agent: this.tracked.agent,
+        now: this.now,
+      }, {
+        title: `${agentName} is ready`,
+        body: `${agentName} is waiting in ${this.session.project ?? this.session.sessionId}.`,
+        status: "needs-attention",
+      }),
+    );
   }
 
   onTerminalExit({
@@ -135,6 +183,7 @@ export class AgentActivityTracker {
     this.clearQuietTimer();
     if (this.settings.terminalAgentNotificationsEnabled === false) return;
     if (this.settings.terminalAgentQuietTrackingEnabled === false) return;
+    if (this.tracked?.agent === "codex" && this.hasSeenWorkingTitle) return;
 
     const timeoutMs = this.settings.terminalAgentQuietTimeoutMs ?? 30_000;
     this.timer = this.timers.setTimeout(() => {
@@ -143,7 +192,7 @@ export class AgentActivityTracker {
       if (this.settings.terminalAgentNotificationsEnabled === false) return;
       if (this.settings.terminalAgentQuietTrackingEnabled === false) return;
 
-      this.currentState = "quiet_notified";
+      this.currentState = "attention_notified";
       const target = this.session.project ?? this.session.sessionId;
       this.notify(
         createTerminalAgentNotification("quiet", {
@@ -162,6 +211,8 @@ export class AgentActivityTracker {
   private reset(): void {
     this.clearQuietTimer();
     this.tracked = null;
+    this.hasSeenWorkingTitle = false;
+    this.expectedReadyTitle = null;
     this.currentState = "idle";
   }
 

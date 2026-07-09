@@ -6,6 +6,7 @@ export type TerminalAgentNotificationSource =
   | "osc777"
   | "osc99"
   | "quiet"
+  | "tui-ready"
   | "terminal-exit";
 
 export type TerminalAgentNotificationStatus =
