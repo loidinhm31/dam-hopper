@@ -42,45 +42,7 @@ function resetSettingsStore() {
     terminalFilePanelShortcut: "Mod+Shift+KeyE",
     revealActiveFileShortcut: "Alt+F1",
     terminalSuggestionsEnabled: true,
-    terminalAgentNotificationsEnabled: false,
-    terminalAgentNotificationPolicy: "always",
-    terminalAgentSignalsEnabled: true,
-    terminalAgentQuietTrackingEnabled: true,
-    terminalAgentQuietTimeoutMs: 30000,
-    terminalAgentCommandPatterns: [
-      {
-        id: "codex",
-        label: "Codex",
-        kind: "literal",
-        pattern: "codex",
-        agent: "codex",
-        enabled: true,
-      },
-      {
-        id: "claude",
-        label: "Claude",
-        kind: "literal",
-        pattern: "claude",
-        agent: "claude",
-        enabled: true,
-      },
-      {
-        id: "claude-code",
-        label: "Claude Code",
-        kind: "literal",
-        pattern: "claude-code",
-        agent: "claude",
-        enabled: true,
-      },
-      {
-        id: "antigravity",
-        label: "Antigravity",
-        kind: "literal",
-        pattern: "antigravity",
-        agent: "antigravity",
-        enabled: true,
-      },
-    ],
+    terminalCodexNotificationsEnabled: false,
     terminalScrollButtonsEnabled: false,
     terminalScrollStep: 3,
     explorerShowHidden: false,
@@ -118,48 +80,21 @@ describe("settings store terminal agent notification fields", () => {
     const state = useSettingsStore.getState();
     expect(state.hydrated).toBe(true);
     expect(state.systemFontSize).toBe(16);
-    expect(state.terminalAgentNotificationsEnabled).toBe(false);
-    expect(state.terminalAgentNotificationPolicy).toBe("always");
-    expect(state.terminalAgentQuietTimeoutMs).toBe(30000);
-    expect(state.terminalAgentCommandPatterns).toHaveLength(4);
+    expect(state.terminalCodexNotificationsEnabled).toBe(false);
   });
 
-  it("clamps quiet timeout and persists new notification fields", async () => {
+  it("persists codex notification changes", async () => {
     updateUi.mockResolvedValue({ updated: true });
 
     useSettingsStore.getState().saveDebounced({
-      terminalAgentNotificationsEnabled: true,
-      terminalAgentQuietTimeoutMs: 1,
-      terminalAgentCommandPatterns: [
-        {
-          id: "codexnsb",
-          label: "Codex NSB",
-          kind: "regex",
-          pattern: "^CODEXNSB$",
-          agent: "codex",
-          enabled: true,
-        },
-      ],
+      terminalCodexNotificationsEnabled: true,
     });
 
     await vi.advanceTimersByTimeAsync(500);
 
-    const state = useSettingsStore.getState();
-    expect(state.terminalAgentQuietTimeoutMs).toBe(5000);
     expect(updateUi).toHaveBeenCalledWith(
       expect.objectContaining({
-        terminalAgentNotificationsEnabled: true,
-        terminalAgentQuietTimeoutMs: 5000,
-        terminalAgentCommandPatterns: [
-          {
-            id: "codexnsb",
-            label: "Codex NSB",
-            kind: "regex",
-            pattern: "^CODEXNSB$",
-            agent: "codex",
-            enabled: true,
-          },
-        ],
+        terminalCodexNotificationsEnabled: true,
       }),
     );
   });
@@ -171,42 +106,39 @@ describe("settings store terminal agent notification fields", () => {
 
     const state = useSettingsStore.getState();
     expect(state.hydrated).toBe(true);
-    expect(state.terminalAgentNotificationsEnabled).toBe(false);
-    expect(state.terminalAgentQuietTimeoutMs).toBe(30000);
+    expect(state.terminalCodexNotificationsEnabled).toBe(false);
+  });
+
+  it("hydrates codex notifications from the legacy toggle when needed", async () => {
+    getGlobalConfig.mockResolvedValue({
+      ui: {
+        terminalAgentNotificationsEnabled: true,
+      },
+    });
+
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().terminalCodexNotificationsEnabled).toBe(
+      true,
+    );
   });
 
   it("rolls back optimistic settings when updateUi rejects", async () => {
     updateUi.mockRejectedValue(new Error("invalid regex"));
 
     useSettingsStore.getState().saveDebounced({
-      terminalAgentCommandPatterns: [
-        {
-          id: "codex",
-          label: "Codex",
-          kind: "regex",
-          pattern: "(?<bad>oops)",
-          agent: "codex",
-          enabled: true,
-        },
-      ],
+      terminalCodexNotificationsEnabled: true,
     });
 
-    expect(useSettingsStore.getState().terminalAgentCommandPatterns).toEqual([
-      {
-        id: "codex",
-        label: "Codex",
-        kind: "regex",
-        pattern: "(?<bad>oops)",
-        agent: "codex",
-        enabled: true,
-      },
-    ]);
+    expect(useSettingsStore.getState().terminalCodexNotificationsEnabled).toBe(
+      true,
+    );
 
     await vi.advanceTimersByTimeAsync(500);
     await flushMicrotasks();
 
-    expect(useSettingsStore.getState().terminalAgentCommandPatterns).toHaveLength(
-      4,
+    expect(useSettingsStore.getState().terminalCodexNotificationsEnabled).toBe(
+      false,
     );
     expect(recordClientDiagnostic).toHaveBeenCalledWith(
       "custom",
@@ -214,14 +146,6 @@ describe("settings store terminal agent notification fields", () => {
       "settings update rejected",
       expect.objectContaining({ error: "invalid regex" }),
     );
-    expect(useSettingsStore.getState().terminalAgentCommandPatterns[0]).toEqual({
-      id: "codex",
-      label: "Codex",
-      kind: "literal",
-      pattern: "codex",
-      agent: "codex",
-      enabled: true,
-    });
   });
 
   it("rolls back to the latest confirmed save when a later queued save rejects", async () => {

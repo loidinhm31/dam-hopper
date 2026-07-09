@@ -34,20 +34,7 @@ pub fn read_global_config_at(path: &Path) -> Result<Option<GlobalConfig>, AppErr
     };
 
     match toml::from_str::<GlobalConfig>(&content) {
-        Ok(mut cfg) => {
-            if let Some(ui) = cfg.ui.as_mut() {
-                ui.normalize_terminal_agent_notification_settings();
-                if let Err(error) = ui.validate_terminal_agent_notification_settings() {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = %error,
-                        "Invalid terminal agent notification settings in global config — resetting to defaults"
-                    );
-                    ui.reset_terminal_agent_notification_settings_to_defaults();
-                }
-            }
-            Ok(Some(cfg))
-        }
+        Ok(cfg) => Ok(Some(cfg)),
         Err(e) => {
             // Matches Node.js behavior: corrupted global config is warned and ignored.
             tracing::warn!(path = %path.display(), error = %e, "Failed to parse global config — ignoring");
@@ -118,12 +105,8 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
             "terminalFilePanelShortcut" => "terminal_file_panel_shortcut",
             "revealActiveFileShortcut" => "reveal_active_file_shortcut",
             "terminalSuggestionsEnabled" => "terminal_suggestions_enabled",
-            "terminalAgentNotificationsEnabled" => "terminal_agent_notifications_enabled",
-            "terminalAgentNotificationPolicy" => "terminal_agent_notification_policy",
-            "terminalAgentSignalsEnabled" => "terminal_agent_signals_enabled",
-            "terminalAgentQuietTrackingEnabled" => "terminal_agent_quiet_tracking_enabled",
-            "terminalAgentQuietTimeoutMs" => "terminal_agent_quiet_timeout_ms",
-            "terminalAgentCommandPatterns" => "terminal_agent_command_patterns",
+            "terminalCodexNotificationsEnabled" => "terminal_codex_notifications_enabled",
+            "terminalAgentNotificationsEnabled" => "terminal_codex_notifications_enabled",
             "explorerShowHidden" => "explorer_show_hidden",
             "mobileCustomKeyboardEnabled" => "mobile_custom_keyboard_enabled",
             "mobileCustomKeyboardFontSize" => "mobile_custom_keyboard_font_size",

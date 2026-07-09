@@ -353,6 +353,7 @@ export default function WorkspacePage() {
           "WorkspacePage",
           "TerminalPanel",
           "terminal-panel",
+          "terminal-agent-notifications",
           "workspace",
         ],
       }}

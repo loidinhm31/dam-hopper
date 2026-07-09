@@ -1216,41 +1216,6 @@ fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> Ap
 }
 
 #[test]
-fn merge_global_ui_config_rejects_invalid_enum_values_as_invalid_input() {
-    let err = crate::api::config::merge_global_ui_config(
-        Some(crate::config::schema::UiConfig::default()),
-        &serde_json::json!({
-            "terminalAgentNotificationPolicy": "sometimes",
-        }),
-    )
-    .unwrap_err();
-
-    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
-}
-
-#[test]
-fn merge_global_ui_config_rejects_invalid_regex_as_invalid_input() {
-    let err = crate::api::config::merge_global_ui_config(
-        Some(crate::config::schema::UiConfig::default()),
-        &serde_json::json!({
-            "terminalAgentCommandPatterns": [
-                {
-                    "id": "broken",
-                    "label": "Broken",
-                    "kind": "regex",
-                    "pattern": "(",
-                    "agent": "unknown",
-                    "enabled": true
-                }
-            ]
-        }),
-    )
-    .unwrap_err();
-
-    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
-}
-
-#[test]
 fn merge_global_ui_config_rejects_non_object_payloads() {
     let err = crate::api::config::merge_global_ui_config(
         Some(crate::config::schema::UiConfig::default()),
@@ -1261,56 +1226,119 @@ fn merge_global_ui_config_rejects_non_object_payloads() {
     assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
 }
 
-#[test]
-fn merge_global_ui_config_trims_persisted_pattern_fields() {
-    let ui = crate::api::config::merge_global_ui_config(
-        Some(crate::config::schema::UiConfig::default()),
-        &serde_json::json!({
-            "terminalAgentCommandPatterns": [
-                {
-                    "id": " codex ",
-                    "label": " Codex ",
-                    "kind": "literal",
-                    "pattern": " codex ",
-                    "agent": "codex",
-                    "enabled": true
-                }
-            ]
-        }),
-    )
-    .unwrap();
-
-    let pattern = &ui.terminal_agent_command_patterns[0];
-    assert_eq!(pattern.id, "codex");
-    assert_eq!(pattern.label, "Codex");
-    assert_eq!(pattern.pattern, "codex");
-}
-
 #[tokio::test]
 async fn update_global_ui_at_path_persists_partial_merge_and_updates_state() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
     let gc_path = tmp.path().join("dam-hopper").join("config.toml");
 
-    crate::api::config::update_global_ui_at_path(
+    crate::api::config::update_global_ui_at_path_with_codex_home(
         &state,
         &gc_path,
         Some(&serde_json::json!({
-            "terminalAgentNotificationsEnabled": true,
-            "terminalAgentQuietTimeoutMs": 45000,
+            "terminalCodexNotificationsEnabled": true,
         })),
+        Some(tmp.path()),
     )
     .await
     .unwrap();
 
     let written = std::fs::read_to_string(&gc_path).unwrap();
-    assert!(written.contains("terminal_agent_notifications_enabled = true"));
-    assert!(written.contains("terminal_agent_quiet_timeout_ms = 45000"));
+    assert!(written.contains("terminal_codex_notifications_enabled = true"));
+    assert!(!written.contains("terminal_agent_notifications_enabled"));
 
     let ui = state.global_config.read().await.ui.clone().unwrap();
-    assert!(ui.terminal_agent_notifications_enabled);
-    assert_eq!(ui.terminal_agent_quiet_timeout_ms, 45_000);
-    assert!(ui.terminal_agent_signals_enabled);
+    assert!(ui.terminal_codex_notifications_enabled);
+}
+
+#[tokio::test]
+async fn update_global_ui_at_path_creates_codex_tui_config_when_enabled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalCodexNotificationsEnabled": true,
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+
+    let written = std::fs::read_to_string(tmp.path().join(".codex").join("config.toml")).unwrap();
+    assert!(written.contains("[tui]"));
+    assert!(written.contains("notifications = true"));
+    assert!(written.contains("notification_method = \"osc9\""));
+    assert!(written.contains("notification_condition = \"always\""));
+
+    let ui = state.global_config.read().await.ui.clone().unwrap();
+    assert!(ui.terminal_codex_notifications_enabled);
+}
+
+#[tokio::test]
+async fn update_global_ui_at_path_merges_existing_codex_tui_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+    let codex_dir = tmp.path().join(".codex");
+    std::fs::create_dir_all(&codex_dir).unwrap();
+    std::fs::write(
+        codex_dir.join("config.toml"),
+        "[model]\nname = \"gpt-5\"\n\n[tui]\nnotifications = false\n",
+    )
+    .unwrap();
+
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalCodexNotificationsEnabled": true,
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+
+    let written = std::fs::read_to_string(codex_dir.join("config.toml")).unwrap();
+    assert!(written.contains("[model]"));
+    assert!(written.contains("name = \"gpt-5\""));
+    assert!(written.contains("[tui]"));
+    assert!(written.contains("notifications = true"));
+    assert!(written.contains("notification_method = \"osc9\""));
+    assert!(written.contains("notification_condition = \"always\""));
+}
+
+#[tokio::test]
+async fn update_global_ui_at_path_disables_existing_codex_tui_notifications() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+    let codex_dir = tmp.path().join(".codex");
+    std::fs::create_dir_all(&codex_dir).unwrap();
+    std::fs::write(
+        codex_dir.join("config.toml"),
+        "[tui]\nnotifications = true\nnotification_method = \"osc9\"\nnotification_condition = \"always\"\n",
+    )
+    .unwrap();
+
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalCodexNotificationsEnabled": false,
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+
+    let written = std::fs::read_to_string(codex_dir.join("config.toml")).unwrap();
+    assert!(written.contains("notifications = false"));
+    assert!(written.contains("notification_method = \"osc9\""));
+    assert!(written.contains("notification_condition = \"always\""));
 }
 
 fn test_project_config(workspace_dir: &std::path::Path) -> ProjectConfig {

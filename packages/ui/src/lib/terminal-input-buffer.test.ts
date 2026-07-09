@@ -22,6 +22,13 @@ describe("TerminalInputBuffer", () => {
     expect(buf.length).toBe(4);
   });
 
+  it("removes last character on backspace (0x08)", () => {
+    buf.append("hello");
+    buf.append("\b");
+    expect(buf.currentInput).toBe("hell");
+    expect(buf.length).toBe(4);
+  });
+
   it("backspace on empty buffer is a no-op", () => {
     buf.append("\x7f");
     expect(buf.currentInput).toBe("");

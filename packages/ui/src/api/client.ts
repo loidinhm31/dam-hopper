@@ -368,12 +368,7 @@ export interface UiConfig {
   terminalFilePanelShortcut: string;
   revealActiveFileShortcut: string;
   terminalSuggestionsEnabled?: boolean;
-  terminalAgentNotificationsEnabled?: boolean;
-  terminalAgentNotificationPolicy?: TerminalAgentNotificationPolicy;
-  terminalAgentSignalsEnabled?: boolean;
-  terminalAgentQuietTrackingEnabled?: boolean;
-  terminalAgentQuietTimeoutMs?: number;
-  terminalAgentCommandPatterns?: AgentCommandPattern[];
+  terminalCodexNotificationsEnabled?: boolean;
   terminalScrollButtonsEnabled?: boolean;
   terminalScrollStep?: number;
   explorerShowHidden?: boolean;

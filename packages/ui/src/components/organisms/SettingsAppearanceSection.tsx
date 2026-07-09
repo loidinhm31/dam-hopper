@@ -10,11 +10,7 @@ export function SettingsAppearanceSection() {
     editorFontSize,
     editorZoomWheelEnabled,
     terminalSuggestionsEnabled,
-    terminalAgentNotificationsEnabled,
-    terminalAgentSignalsEnabled,
-    terminalAgentQuietTrackingEnabled,
-    terminalAgentQuietTimeoutMs,
-    terminalAgentCommandPatterns,
+    terminalCodexNotificationsEnabled,
     terminalScrollButtonsEnabled,
     terminalScrollStep,
     explorerShowHidden,
@@ -92,11 +88,7 @@ export function SettingsAppearanceSection() {
       <div className="border-t border-[var(--color-border)]" />
 
       <TerminalAgentNotificationSettings
-        enabled={terminalAgentNotificationsEnabled}
-        signalsEnabled={terminalAgentSignalsEnabled}
-        quietTrackingEnabled={terminalAgentQuietTrackingEnabled}
-        quietTimeoutMs={terminalAgentQuietTimeoutMs}
-        commandPatterns={terminalAgentCommandPatterns}
+        enabled={terminalCodexNotificationsEnabled}
         onSave={saveDebounced}
       />
 
