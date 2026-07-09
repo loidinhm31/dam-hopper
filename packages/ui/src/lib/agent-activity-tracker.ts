@@ -95,7 +95,11 @@ export class AgentActivityTracker {
     this.reset();
   }
 
-  onTerminalExit({ willRestart = false }: { willRestart?: boolean } = {}): void {
+  onTerminalExit({
+    willRestart = false,
+  }: {
+    willRestart?: boolean;
+  } = {}): void {
     if (!this.tracked) {
       this.clearQuietTimer();
       return;
@@ -134,7 +138,10 @@ export class AgentActivityTracker {
 
     const timeoutMs = this.settings.terminalAgentQuietTimeoutMs ?? 30_000;
     this.timer = this.timers.setTimeout(() => {
+      this.timer = null;
       if (!this.tracked || this.currentState !== "tracked_running") return;
+      if (this.settings.terminalAgentNotificationsEnabled === false) return;
+      if (this.settings.terminalAgentQuietTrackingEnabled === false) return;
 
       this.currentState = "quiet_notified";
       const target = this.session.project ?? this.session.sessionId;

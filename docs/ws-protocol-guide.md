@@ -79,6 +79,13 @@ Request buffer replay from a session (for reconnection or delta sync):
 5. On buffer response → clear xterm only when `reset=true`; otherwise append the delta
 6. Timeout fallback (3s): if no buffer response, create new session via `terminal:spawn`
 
+**TerminalPanel xterm integration:**
+
+- xterm BEL and OSC 9/777/99 handlers stay frontend-only and feed `AgentActivityTracker`.
+- Tracker input includes submitted commands, output, user input, and enhanced exit state.
+- `willRestart` suppresses the finished notification so restart flows do not emit a false terminal-exit alert.
+- Cleanup removes signal handlers and timers on unmount, reconnect, or session swap.
+
 **UI States:**
 
 - `idle` — Ready for attach
