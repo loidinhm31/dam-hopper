@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getGlobalConfig, updateUi } = vi.hoisted(() => ({
+const { getGlobalConfig, updateUi, recordClientDiagnostic } = vi.hoisted(() => ({
   getGlobalConfig: vi.fn(),
   updateUi: vi.fn(),
+  recordClientDiagnostic: vi.fn(),
 }));
 
 vi.mock("@/api/client.js", () => ({
@@ -14,9 +15,23 @@ vi.mock("@/api/client.js", () => ({
   },
 }));
 
-import { useSettingsStore } from "./settings.js";
+vi.mock("@/lib/diagnostics-client.js", () => ({
+  recordClientDiagnostic,
+}));
+
+import {
+  __resetSettingsStoreTestState,
+  useSettingsStore,
+} from "./settings.js";
+
+async function flushMicrotasks() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 function resetSettingsStore() {
+  __resetSettingsStoreTestState();
   useSettingsStore.setState({
     systemFontSize: 14,
     editorFontSize: 14,
@@ -82,6 +97,7 @@ describe("settings store terminal agent notification fields", () => {
     vi.useFakeTimers();
     getGlobalConfig.mockReset();
     updateUi.mockReset();
+    recordClientDiagnostic.mockReset();
     resetSettingsStore();
   });
 
@@ -157,5 +173,127 @@ describe("settings store terminal agent notification fields", () => {
     expect(state.hydrated).toBe(true);
     expect(state.terminalAgentNotificationsEnabled).toBe(false);
     expect(state.terminalAgentQuietTimeoutMs).toBe(30000);
+  });
+
+  it("rolls back optimistic settings when updateUi rejects", async () => {
+    updateUi.mockRejectedValue(new Error("invalid regex"));
+
+    useSettingsStore.getState().saveDebounced({
+      terminalAgentCommandPatterns: [
+        {
+          id: "codex",
+          label: "Codex",
+          kind: "regex",
+          pattern: "(?<bad>oops)",
+          agent: "codex",
+          enabled: true,
+        },
+      ],
+    });
+
+    expect(useSettingsStore.getState().terminalAgentCommandPatterns).toEqual([
+      {
+        id: "codex",
+        label: "Codex",
+        kind: "regex",
+        pattern: "(?<bad>oops)",
+        agent: "codex",
+        enabled: true,
+      },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(500);
+    await flushMicrotasks();
+
+    expect(useSettingsStore.getState().terminalAgentCommandPatterns).toHaveLength(
+      4,
+    );
+    expect(recordClientDiagnostic).toHaveBeenCalledWith(
+      "custom",
+      "settings-store",
+      "settings update rejected",
+      expect.objectContaining({ error: "invalid regex" }),
+    );
+    expect(useSettingsStore.getState().terminalAgentCommandPatterns[0]).toEqual({
+      id: "codex",
+      label: "Codex",
+      kind: "literal",
+      pattern: "codex",
+      agent: "codex",
+      enabled: true,
+    });
+  });
+
+  it("rolls back to the latest confirmed save when a later queued save rejects", async () => {
+    let resolveFirst: ((value: unknown) => void) | undefined;
+    let rejectSecond: ((reason?: unknown) => void) | undefined;
+
+    updateUi
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectSecond = reject;
+          }),
+      );
+
+    useSettingsStore.getState().saveDebounced({ systemFontSize: 15 });
+    await vi.advanceTimersByTimeAsync(500);
+
+    useSettingsStore.getState().saveDebounced({ systemFontSize: 16 });
+    await vi.advanceTimersByTimeAsync(500);
+
+    resolveFirst?.({ updated: true });
+    await flushMicrotasks();
+
+    expect(rejectSecond).toBeTypeOf("function");
+    rejectSecond?.(new Error("second failed"));
+    await flushMicrotasks();
+
+    expect(useSettingsStore.getState().systemFontSize).toBe(15);
+    expect(recordClientDiagnostic).toHaveBeenCalledWith(
+      "custom",
+      "settings-store",
+      "settings update rejected",
+      expect.objectContaining({ error: "second failed" }),
+    );
+  });
+
+  it("keeps newer optimistic edits when an older in-flight save resolves first", async () => {
+    let resolveFirst: ((value: unknown) => void) | undefined;
+
+    updateUi
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({ updated: true });
+
+    useSettingsStore.getState().saveDebounced({ systemFontSize: 15 });
+    await vi.advanceTimersByTimeAsync(500);
+
+    useSettingsStore.getState().saveDebounced({ systemFontSize: 16 });
+    expect(useSettingsStore.getState().systemFontSize).toBe(16);
+
+    resolveFirst?.({ updated: true });
+    await flushMicrotasks();
+
+    expect(useSettingsStore.getState().systemFontSize).toBe(16);
+
+    await vi.advanceTimersByTimeAsync(500);
+    await flushMicrotasks();
+
+    expect(updateUi).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ systemFontSize: 16 }),
+    );
+    expect(useSettingsStore.getState().systemFontSize).toBe(16);
   });
 });

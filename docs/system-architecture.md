@@ -83,6 +83,15 @@ Pure frontend notification pipeline in `packages/ui/src/lib/`:
 
 This path is intentionally UI-only. It has no server/API dependency and is covered by unit tests around parsing, recognition, tracking, notification gating, restart suppression, and cleanup behavior.
 
+Phase 04 adds a settings surface in the shared UI package:
+
+- `TerminalAgentNotificationSettings` exposes enable/signal/quiet controls and the explicit browser-permission button
+- `AgentCommandPatternEditor` lets users add literal aliases such as `CODEXNSB` or custom regex matches without editing config files by hand
+- browser permission state is read from the runtime `Notification` API and is never persisted into server config
+- diagnostics for unsupported/default/denied/rate-limited/factory-error paths are emitted as frontend `custom` events under scope `terminal-agent-notifications`
+
+Notification scope remains xterm-only. DamHopper does not watch external terminals, OS process tables, or native notification daemons for this feature.
+
 ### frontend diagnostics (Phase 01)
 
 The browser host now initializes a diagnostics client before React render. This creates a local-only ring buffer for client-side troubleshooting and keeps the capture path active from app startup onward.

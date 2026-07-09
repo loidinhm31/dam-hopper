@@ -1,7 +1,8 @@
-import { useSettingsStore } from "@/stores/settings.js";
-import { Switch } from "@/components/atoms/Switch.js";
 import { NumberStepper } from "@/components/atoms/NumberStepper.js";
+import { Switch } from "@/components/atoms/Switch.js";
 import { SettingRow } from "@/components/molecules/SettingRow.js";
+import { TerminalAgentNotificationSettings } from "@/components/molecules/TerminalAgentNotificationSettings.js";
+import { useSettingsStore } from "@/stores/settings.js";
 
 export function SettingsAppearanceSection() {
   const {
@@ -9,6 +10,11 @@ export function SettingsAppearanceSection() {
     editorFontSize,
     editorZoomWheelEnabled,
     terminalSuggestionsEnabled,
+    terminalAgentNotificationsEnabled,
+    terminalAgentSignalsEnabled,
+    terminalAgentQuietTrackingEnabled,
+    terminalAgentQuietTimeoutMs,
+    terminalAgentCommandPatterns,
     terminalScrollButtonsEnabled,
     terminalScrollStep,
     explorerShowHidden,
@@ -82,6 +88,17 @@ export function SettingsAppearanceSection() {
           }
         />
       </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <TerminalAgentNotificationSettings
+        enabled={terminalAgentNotificationsEnabled}
+        signalsEnabled={terminalAgentSignalsEnabled}
+        quietTrackingEnabled={terminalAgentQuietTrackingEnabled}
+        quietTimeoutMs={terminalAgentQuietTimeoutMs}
+        commandPatterns={terminalAgentCommandPatterns}
+        onSave={saveDebounced}
+      />
 
       <div className="border-t border-[var(--color-border)]" />
 

@@ -67,16 +67,19 @@ export class BrowserNotificationService {
     if (options.enabled === false) return this.skip("disabled", event);
 
     const permission = this.getPermission();
-    if (permission === "unsupported") return this.skip("unsupported", event);
-    if (permission === "denied") return this.skip("permission-denied", event);
-    if (permission === "default") return this.skip("permission-default", event);
+    if (permission === "unsupported")
+      return this.skip("unsupported", event, permission);
+    if (permission === "denied")
+      return this.skip("permission-denied", event, permission);
+    if (permission === "default")
+      return this.skip("permission-default", event, permission);
 
     const key = `${event.sessionId}:${event.source}`;
     const currentTime = this.now();
     const lastTime = this.lastNotificationAt.get(key);
     const rateLimitMs = options.rateLimitMs ?? DEFAULT_RATE_LIMIT_MS;
     if (lastTime !== undefined && currentTime - lastTime < rateLimitMs) {
-      return this.skip("rate-limited", event);
+      return this.skip("rate-limited", event, permission);
     }
 
     try {
@@ -90,7 +93,7 @@ export class BrowserNotificationService {
       this.lastNotificationAt.set(key, currentTime);
       return { delivered: true };
     } catch {
-      return this.skip("factory-error", event);
+      return this.skip("factory-error", event, permission);
     }
   }
 
@@ -113,8 +116,15 @@ export class BrowserNotificationService {
   private skip(
     reason: NonNullable<BrowserNotificationResult["reason"]>,
     event: TerminalAgentNotification,
+    permission?: BrowserNotificationPermissionState,
   ): BrowserNotificationResult {
-    this.diagnostics?.("terminal agent notification skipped", {
+    const message =
+      reason === "factory-error"
+        ? "terminal agent notification delivery failed"
+        : "terminal agent notification skipped";
+    this.diagnostics?.(message, {
+      agent: event.agent,
+      permission: permission ?? this.getPermission(),
       reason,
       source: event.source,
       sessionId: event.sessionId,

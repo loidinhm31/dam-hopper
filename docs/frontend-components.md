@@ -65,6 +65,8 @@ Shared runtime libraries:
 - Quiet tracking is optional; when enabled it emits a "may need attention" notification after configurable inactivity.
 - Terminal exit notifications are suppressed when the session is expected to restart, so `willRestart` does not produce a finished notification.
 - Cleanup disposes xterm handlers, timers, and tracker state when the panel unmounts or the session is replaced.
+- Settings live under `SettingsAppearanceSection` via the extracted `TerminalAgentNotificationSettings` and `AgentCommandPatternEditor` UI. Permission is requested only from the explicit button click and the app surfaces `unsupported`, `not requested`, `granted`, and `denied` states without persisting that browser permission.
+- Client diagnostics for this feature are recorded under scope `terminal-agent-notifications` and must not include raw terminal output, OSC payloads, or command arguments beyond the executable token.
 
 ## IDE Tool Window System
 

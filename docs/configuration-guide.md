@@ -161,7 +161,15 @@ agent = "codex"
 enabled = true
 ```
 
-The shortcut is normalized by the client config layer, and browser notification permission is not persisted.
+The shortcut is normalized by the client config layer. Browser notification permission is not persisted; it is requested per browser from Settings > Appearance > Terminal agent notifications.
+
+Pattern rows are editable from the same Settings subsection:
+
+- `kind=literal` matches the executable token exactly and is the recommended choice for wrappers such as `CODEXNSB`
+- `kind=regex` is trimmed locally, but syntax compatibility is finalized by the server config layer on save
+- `agent` selects the notification persona shown in browser copy and diagnostics metadata
+
+Only DamHopper-managed xterm sessions participate in this feature. External terminals remain out of scope even if they launch the same agent commands.
 
 ### Server Configuration
 
