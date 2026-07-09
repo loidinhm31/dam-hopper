@@ -21,6 +21,10 @@ import {
   utf8ByteLength,
 } from "@/lib/terminal-buffer-replay.js";
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
+import {
+  attachTerminalAgentNotifications,
+  type TerminalAgentNotificationIntegration,
+} from "@/lib/terminal-agent-notification-integration.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalSuggestions } from "@/hooks/use-terminal-suggestions.js";
 import { TerminalSuggestionOverlay } from "@/components/atoms/TerminalSuggestionOverlay.js";
@@ -180,6 +184,7 @@ export function TerminalPanel({
     let unsubBuffer: (() => void) | null = null;
     let unsubStatus: (() => void) | null = null;
     let inputDisposable: { dispose: () => void } | null = null;
+    let agentNotifications: TerminalAgentNotificationIntegration | null = null;
     let observer: ResizeObserver | null = null;
     let attachTimeout: ReturnType<typeof setTimeout> | null = null;
     let releaseTouchScroll = () => {};
@@ -197,6 +202,11 @@ export function TerminalPanel({
 
     const transport = getTransport();
     transportRef.current = transport;
+    agentNotifications = attachTerminalAgentNotifications({
+      term,
+      sessionId: safeSessionId,
+      project,
+    });
 
     // ── Register all listeners immediately to avoid race conditions ──────────
     // 1. Stream PTY output → xterm + notify suggestion detector
@@ -206,6 +216,7 @@ export function TerminalPanel({
         term.write(data);
         lastServerOffset += utf8ByteLength(data);
         suggestionsRef.current.notifyOutput();
+        agentNotifications?.onOutput();
       } else if (!recordedSuppressedOutput) {
         recordedSuppressedOutput = true;
         recordClientDiagnostic(
@@ -251,6 +262,7 @@ export function TerminalPanel({
           ? `[Process exited (code ${exitCode ?? "?"}), restarting in ${Math.round((restartIn ?? 0) / 1000)}s…]`
           : `[Process exited with code ${exitCode ?? "?"}]`;
         term.write(`\r\n${color}${text}\x1b[0m\r\n`);
+        agentNotifications?.onTerminalExit({ willRestart });
         onExit?.(exitCode);
       }) ?? null;
 
@@ -263,6 +275,7 @@ export function TerminalPanel({
 
     // 5. Forward user input → PTY stdin, with suggestion interception
     inputDisposable = term.onData((data) => {
+      agentNotifications?.onUserInput();
       const result = suggestionsRef.current.handleInput(data);
       if (result.inject !== undefined) {
         transport.terminalWrite(safeSessionId, result.inject);
@@ -271,6 +284,7 @@ export function TerminalPanel({
       }
       if (result.record) {
         recordCommand(result.record, project);
+        agentNotifications?.onSubmittedCommand(result.record);
       }
     });
 
@@ -465,6 +479,7 @@ export function TerminalPanel({
       unsubBuffer?.();
       unsubStatus?.();
       inputDisposable?.dispose();
+      agentNotifications?.dispose();
       clearAttachTimeout();
       observer?.disconnect();
       releaseTouchScroll();

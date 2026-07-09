@@ -54,8 +54,8 @@ Shared runtime libraries:
 **Flow:**
 
 1. `recognizeAgentCommand()` extracts the executable token from a submitted terminal command and matches it against enabled literal or regex agent patterns.
-2. `AgentActivityTracker` watches submitted commands, output, user input, and terminal exit state to decide when to emit activity events.
-3. `terminal-notification-signal-parser.ts` normalizes BEL and OSC-based terminal signals into a shared `TerminalAgentNotification` shape.
+2. `AgentActivityTracker` watches submitted commands, output, user input, and enhanced terminal exit state to decide when to emit activity events.
+3. `terminal-notification-signal-parser.ts` normalizes BEL and OSC 9/777/99 terminal signals into a shared `TerminalAgentNotification` shape.
 4. `BrowserNotificationService` gates browser delivery by permission, rate limit, and support checks, then dispatches native `Notification` objects.
 
 **Behavior notes:**
@@ -63,7 +63,8 @@ Shared runtime libraries:
 - Parsing is defensive: control sequences are stripped, titles/bodies are capped, and invalid regex patterns fail closed.
 - Notifications are deduped per `sessionId` + `source` with a default 30s rate limit.
 - Quiet tracking is optional; when enabled it emits a "may need attention" notification after configurable inactivity.
-- Terminal exit notifications are separate from quiet notifications and use the same shared notification shape.
+- Terminal exit notifications are suppressed when the session is expected to restart, so `willRestart` does not produce a finished notification.
+- Cleanup disposes xterm handlers, timers, and tracker state when the panel unmounts or the session is replaced.
 
 ## IDE Tool Window System
 
@@ -182,9 +183,9 @@ The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose
 
 **Location:** `packages/ui/src/components/organisms/TerminalPanel.tsx`
 
-**Purpose:** Renders a single terminal session using xterm.js. Handles lifecycle events (output, exit, restart, reconnect) and session attachment.
+**Purpose:** Renders a single terminal session using xterm.js. Handles lifecycle events (output, exit, restart, reconnect), session attachment, and browser agent notification integration.
 
-**Behavior:** Filters out the terminal workspace shortcut so xterm input does not swallow the global mode toggle.
+**Behavior:** Filters out the terminal workspace shortcut so xterm input does not swallow the global mode toggle. Wires xterm BEL and OSC 9/777/99 handlers into the shared agent-activity path so submitted command, output, user input, and exit signals can drive browser notifications without any backend protocol change. The terminal session cleanup path disposes signal handlers and timers to avoid duplicate notifications after reconnect or unmount.
 
 **Props:**
 

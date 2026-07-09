@@ -77,11 +77,11 @@ Dependency-free runtime helpers shared by browser packages.
 Pure frontend notification pipeline in `packages/ui/src/lib/`:
 
 - `agent-command-recognizer.ts` identifies tracked agent commands from terminal input
-- `agent-activity-tracker.ts` turns command/output/exit events into activity state changes
-- `terminal-notification-signal-parser.ts` converts BEL and OSC terminal signals into normalized notification events
+- `agent-activity-tracker.ts` turns submitted command, output, user input, and enhanced exit events into activity state changes
+- `terminal-notification-signal-parser.ts` converts BEL and OSC 9/777/99 terminal signals into normalized notification events
 - `browser-notification-service.ts` applies permission, rate-limit, and delivery guards before creating browser `Notification` objects
 
-This path is intentionally UI-only. It has no server/API dependency and is covered by unit tests around parsing, recognition, tracking, and notification gating.
+This path is intentionally UI-only. It has no server/API dependency and is covered by unit tests around parsing, recognition, tracking, notification gating, restart suppression, and cleanup behavior.
 
 ### frontend diagnostics (Phase 01)
 

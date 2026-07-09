@@ -207,6 +207,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-07-09:** Completed Phase 03 TerminalPanel xterm integration for xterm agent notifications.
+  - ✅ Wired BEL, OSC, output, command, and exit events into the notification tracker
+  - ✅ Final review approved by user, score 9.3/10
+  - ✅ No critical issues or warnings
+
 - **2026-05-26:** Completed Tauri v2 Shared UI Native Phase 05: Verification And Documentation.
   - ✅ Fixed compact workspace hook/lint regressions in `WorkspacePage` without changing desktop shell behavior
   - ✅ Revalidated shared, UI, web, native, root build, and lint targets

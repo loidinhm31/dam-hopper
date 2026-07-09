@@ -130,4 +130,54 @@ describe("AgentActivityTracker", () => {
     expect(notify).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
+
+  it("skips already-armed quiet timer when notifications are disabled before expiry", () => {
+    vi.useFakeTimers();
+    const notify = vi.fn();
+    let notificationsEnabled = true;
+    const tracker = new AgentActivityTracker(
+      { sessionId: "s1", project: "web" },
+      {
+        get terminalAgentNotificationsEnabled() {
+          return notificationsEnabled;
+        },
+        terminalAgentQuietTrackingEnabled: true,
+        terminalAgentQuietTimeoutMs: 30_000,
+        terminalAgentCommandPatterns: patterns,
+      },
+      { notify },
+    );
+
+    tracker.onSubmittedCommand("codex");
+    notificationsEnabled = false;
+    vi.advanceTimersByTime(30_000);
+
+    expect(notify).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("skips already-armed quiet timer when quiet tracking is disabled before expiry", () => {
+    vi.useFakeTimers();
+    const notify = vi.fn();
+    let quietTrackingEnabled = true;
+    const tracker = new AgentActivityTracker(
+      { sessionId: "s1", project: "web" },
+      {
+        terminalAgentNotificationsEnabled: true,
+        get terminalAgentQuietTrackingEnabled() {
+          return quietTrackingEnabled;
+        },
+        terminalAgentQuietTimeoutMs: 30_000,
+        terminalAgentCommandPatterns: patterns,
+      },
+      { notify },
+    );
+
+    tracker.onSubmittedCommand("codex");
+    quietTrackingEnabled = false;
+    vi.advanceTimersByTime(30_000);
+
+    expect(notify).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
 });
