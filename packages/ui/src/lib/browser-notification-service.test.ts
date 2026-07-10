@@ -92,7 +92,9 @@ describe("BrowserNotificationService", () => {
     ).toEqual({ delivered: true });
     expect(factory).toHaveBeenCalledWith("Codex done", {
       body: "Needs attention",
+      renotify: true,
       tag: "dam-hopper-agent-s1-quiet",
+      timestamp: 1,
     });
   });
 
@@ -113,8 +115,56 @@ describe("BrowserNotificationService", () => {
     ).toEqual({ delivered: true });
     expect(factory).toHaveBeenCalledWith("Codex is ready", {
       body: "No terminal output for 30s in web.",
+      renotify: true,
       tag: "dam-hopper-agent-s1-tui-ready",
+      timestamp: 1,
     });
+  });
+
+  it("re-alerts repeated stable-tag notifications after the rate limit window", () => {
+    const factory = vi.fn();
+    let now = 0;
+    const service = new BrowserNotificationService({
+      notificationFactory: factory,
+      getPermission: () => "granted",
+      now: () => now,
+    });
+
+    expect(
+      service.notifyTerminalAgent({
+        ...event,
+        source: "osc9",
+        receivedAt: 100,
+      }),
+    ).toEqual({ delivered: true });
+    now = 31_000;
+    expect(
+      service.notifyTerminalAgent({
+        ...event,
+        source: "osc9",
+        receivedAt: 31_100,
+      }),
+    ).toEqual({ delivered: true });
+
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(factory).toHaveBeenNthCalledWith(
+      1,
+      "Codex may need attention",
+      expect.objectContaining({
+        renotify: true,
+        tag: "dam-hopper-agent-s1-osc9",
+        timestamp: 100,
+      }),
+    );
+    expect(factory).toHaveBeenNthCalledWith(
+      2,
+      "Codex may need attention",
+      expect.objectContaining({
+        renotify: true,
+        tag: "dam-hopper-agent-s1-osc9",
+        timestamp: 31_100,
+      }),
+    );
   });
 
   it("rate-limits repeated notifications per session and source", () => {
@@ -182,12 +232,20 @@ describe("BrowserNotificationService", () => {
     });
 
     expect(
-      service.notifyTerminalAgent({ ...event, source: "osc9", sessionId: "s2" }),
+      service.notifyTerminalAgent({
+        ...event,
+        source: "osc9",
+        sessionId: "s2",
+      }),
     ).toEqual({ delivered: true });
     now = 5_000;
     service.resetTerminalAgentRateLimit("s2", "quiet");
     expect(
-      service.notifyTerminalAgent({ ...event, source: "osc9", sessionId: "s2" }),
+      service.notifyTerminalAgent({
+        ...event,
+        source: "osc9",
+        sessionId: "s2",
+      }),
     ).toEqual({
       delivered: false,
       reason: "rate-limited",
@@ -261,13 +319,17 @@ describe("BrowserNotificationService", () => {
     });
 
     try {
-      expect(notifyTerminalAgent({ ...event, sessionId: "helper-s1" })).toEqual({
-        delivered: true,
-      });
-      expect(notifyTerminalAgent({ ...event, sessionId: "helper-s1" })).toEqual({
-        delivered: false,
-        reason: "rate-limited",
-      });
+      expect(notifyTerminalAgent({ ...event, sessionId: "helper-s1" })).toEqual(
+        {
+          delivered: true,
+        },
+      );
+      expect(notifyTerminalAgent({ ...event, sessionId: "helper-s1" })).toEqual(
+        {
+          delivered: false,
+          reason: "rate-limited",
+        },
+      );
       expect(created).toHaveLength(1);
     } finally {
       __resetDefaultBrowserNotificationServiceForTests();
@@ -341,7 +403,9 @@ describe("browser notification permission helpers", () => {
     });
 
     try {
-      await expect(requestBrowserNotificationPermission()).resolves.toBe("default");
+      await expect(requestBrowserNotificationPermission()).resolves.toBe(
+        "default",
+      );
     } finally {
       restoreNotificationGlobal(originalNotification);
     }

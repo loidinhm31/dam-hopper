@@ -33,6 +33,11 @@ export interface BrowserNotificationResult {
     | "factory-error";
 }
 
+type BrowserTerminalNotificationOptions = NotificationOptions & {
+  renotify?: boolean;
+  timestamp?: number;
+};
+
 const DEFAULT_RATE_LIMIT_MS = 30_000;
 const MAX_TITLE_LENGTH = 80;
 const MAX_BODY_LENGTH = 180;
@@ -83,12 +88,16 @@ export class BrowserNotificationService {
     }
 
     try {
+      const notificationOptions: BrowserTerminalNotificationOptions = {
+        body: sanitizeTerminalNotificationText(event.body, MAX_BODY_LENGTH),
+        renotify: true,
+        tag: `dam-hopper-agent-${event.sessionId}-${event.source}`,
+        timestamp: event.receivedAt,
+      };
+
       this.notificationFactory(
         sanitizeTerminalNotificationText(event.title, MAX_TITLE_LENGTH),
-        {
-          body: sanitizeTerminalNotificationText(event.body, MAX_BODY_LENGTH),
-          tag: `dam-hopper-agent-${event.sessionId}-${event.source}`,
-        },
+        notificationOptions,
       );
       this.lastNotificationAt.set(key, currentTime);
       return { delivered: true };
@@ -160,8 +169,7 @@ export function notifyTerminalAgent(
     options.diagnostics !== undefined;
   const service = hasCustomDependencies
     ? new BrowserNotificationService(options)
-    : (defaultBrowserNotificationService ??=
-        new BrowserNotificationService());
+    : (defaultBrowserNotificationService ??= new BrowserNotificationService());
   return service.notifyTerminalAgent(event, options);
 }
 

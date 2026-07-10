@@ -8,6 +8,7 @@ import {
 import { useSettingsStore } from "@/stores/settings.js";
 
 type Disposable = { dispose: () => void };
+const CODEX_OSC9_RATE_LIMIT_MS = 1_000;
 
 interface TerminalAgentNotificationIntegrationOptions {
   term: Terminal;
@@ -42,11 +43,15 @@ export function attachTerminalAgentNotifications({
   const notifyTerminalAgent = (event: TerminalAgentNotification) => {
     notificationService.notifyTerminalAgent(event, {
       enabled: useSettingsStore.getState().terminalCodexNotificationsEnabled,
-      rateLimitMs: 0,
+      rateLimitMs: CODEX_OSC9_RATE_LIMIT_MS,
     });
   };
 
-  const parseSignalContext = () => ({ sessionId, project, agent: "codex" as const });
+  const parseSignalContext = () => ({
+    sessionId,
+    project,
+    agent: "codex" as const,
+  });
   const handleTerminalSignal = (
     parse: () => TerminalAgentNotification | null,
   ): boolean => {
