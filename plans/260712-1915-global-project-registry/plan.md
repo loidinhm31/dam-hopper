@@ -1,7 +1,7 @@
 ---
 title: "Global Project Registry + Absolute Project Paths"
 description: "Move project registry to ~/.config/dam-hopper/dam-hopper.toml, allow absolute project paths, replace single-root sandbox with per-project-root validation"
-status: in-progress
+status: completed
 priority: P1
 effort: 18h
 branch: main
@@ -15,7 +15,7 @@ created: 2026-07-12
 
 Replace DamHopper's repo-local `dam-hopper.toml` discovery model with a global registry at `~/.config/dam-hopper/dam-hopper.toml`. Allow absolute project paths in TOML. Replace single-root `WorkspaceSandbox` with per-project-root validation so file APIs work for projects scattered across the filesystem — without opening arbitrary disk access.
 
-Plan progress: 5/6 phases complete (83%).
+Plan progress: 6/6 phases complete (100%).
 
 ## Current Choke Points
 
@@ -42,7 +42,7 @@ Plan progress: 5/6 phases complete (83%).
 | 3 | Per-Project-Root Sandbox | Completed (Approved: 9.5/10) | 4h | [phase-03](./phase-03-per-project-sandbox.md) |
 | 4 | API + State Adjustments | Completed (Approved: 9/10) | 4h | [phase-04](./phase-04-api-state-adjustments.md) |
 | 5 | Config Write Roundtrip | Completed (Approved: 9/10) | 2h | [phase-05](./phase-05-config-write-roundtrip.md) |
-| 6 | Integration Tests + Windows Paths + Docs | Pending | 3h | [phase-06](./phase-06-tests-windows-docs.md) |
+| 6 | Integration Tests + Windows Paths + Docs | Completed (Reviewed: 9/10) | 3h | [phase-06](./phase-06-tests-windows-docs.md) |
 
 ## Dependencies
 
@@ -85,13 +85,14 @@ Plan progress: 5/6 phases complete (83%).
 **Phase 03 Complete** - Score: 9.5/10 | Full backend gate passed
 **Phase 04 Complete** - Score: 9/10 | All API state adjustments integrated and tested
 **Phase 05 Complete** - Score: 9/10 | Config write roundtrip completed on 2026-07-13
+**Phase 06 Complete** - Score: 9/10 | All integration tests, Windows paths, and docs completed on 2026-07-13
 
 **Optional follow-ups for Phase 02:**
 1. Windows edge-case coverage: add drive-relative and UNC path tests on Windows CI
 2. Redundant `./` stripping: future refactor to normalize relative paths at parse time rather than resolution time
 
-**Review report:** [phase-01-review-260712-2200.md](./reports/phase-01-review-260712-2200.md)
+**Review reports:** [phase-01-review-260712-2200.md](./reports/phase-01-review-260712-2200.md), [phase-06-summary-20260713.md](./reports/phase-06-summary-20260713.md)
 
 **Next actions:**
-1. Create decision document for unresolved questions 2-6
-2. Proceed to Phase 05 (Config Write Roundtrip)
+1. Plan complete. All phases passed with integrated tests, Windows coverage, and documentation updates.
+2. Consider separate UX cleanup plan for renaming workspace concepts to registry/projects in frontend.

@@ -714,10 +714,10 @@ The `--no-auth` flag enables local development without MongoDB authentication:
 
 ```bash
 # Command-line flag
-cd server && cargo run -- --no-auth --workspace /path/to/workspace
+cd server && cargo run -- --no-auth --config /path/to/dam-hopper.toml
 
 # Environment variable
-DAM_HOPPER_NO_AUTH=1 cargo run -- --workspace /path/to/workspace
+DAM_HOPPER_NO_AUTH=1 cargo run -- --config /path/to/dam-hopper.toml
 ```
 
 **Implementation Pattern** (auth.rs):
@@ -755,7 +755,9 @@ See [Phase 01 documentation](./phase-01-server-auth-bypass/index.md) for complet
 - **Validation**: Constant-time comparison via `subtle` crate
 - **Expiry**: 30 days for production, 30 days for dev mode
 
-## Configuration (dam-hopper.toml)
+## Project Registry (dam-hopper.toml)
+
+The canonical registry file lives at `~/.config/dam-hopper/dam-hopper.toml`. Relative project paths resolve against the registry file directory, while `env_file` and terminal `cwd` stay project-relative.
 
 ```toml
 [workspace]

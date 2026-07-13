@@ -334,6 +334,7 @@ fn accept_windows_absolute_project_path() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("dam-hopper.toml");
     let project_path = std::env::temp_dir().join("dam-hopper-windows-project");
+    std::fs::create_dir_all(&project_path).unwrap();
     let project_path_raw = project_path.to_string_lossy().replace('\\', "/");
     std::fs::write(
         &config_path,
@@ -346,6 +347,41 @@ fn accept_windows_absolute_project_path() {
 
     let cfg = read_config(&config_path).unwrap();
     assert_eq!(cfg.projects[0].path, project_path.to_string_lossy());
+}
+
+#[cfg(windows)]
+#[test]
+fn accept_windows_absolute_project_path_with_mixed_separators() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let project_path = std::env::temp_dir()
+        .join("dam-hopper-windows-project")
+        .join("nested");
+    std::fs::create_dir_all(&project_path).unwrap();
+
+    let mut project_path_raw = project_path.to_string_lossy().replace('\\', "/");
+    if let Some((index, _)) = project_path_raw
+        .char_indices()
+        .skip(3)
+        .find(|(_, ch)| *ch == '/')
+    {
+        project_path_raw.replace_range(index..=index, "\\");
+    }
+
+    assert!(project_path_raw.contains('/'));
+    assert!(project_path_raw.contains('\\'));
+
+    std::fs::write(
+        &config_path,
+        format!(
+            "[workspace]\nname='w'\n\n[[projects]]\nname='p'\npath='{}'\ntype='cargo'",
+            project_path_raw
+        ),
+    )
+    .unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(std::path::PathBuf::from(&cfg.projects[0].path), project_path);
 }
 
 #[test]
@@ -502,6 +538,20 @@ fn write_config_escapes_native_windows_absolute_project_paths() {
 
     let reloaded = read_config(&config_path).unwrap();
     assert_eq!(reloaded.projects[0].path, project_path.to_string_lossy());
+}
+
+#[cfg(windows)]
+#[test]
+fn project_path_for_toml_preserves_verbatim_windows_absolute_paths() {
+    let registry = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let project_path = outside.path().join("windows-project");
+    let verbatim = std::path::PathBuf::from(format!(r"\\?\{}", project_path.display()));
+
+    let formatted = project_path_for_toml(&verbatim, registry.path());
+
+    assert_eq!(formatted, verbatim.to_string_lossy());
+    assert!(std::path::Path::new(&formatted).is_absolute());
 }
 
 // ──────────────────────────────────────────────

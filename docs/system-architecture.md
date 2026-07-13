@@ -50,12 +50,19 @@
 
 ### config/
 
-Handles TOML parsing, project discovery, feature flags.
+Handles registry loading, legacy discovery fallback, and feature flags.
 
 **Key types:**
 
-- `DamHopperConfig` — parsed workspace config
+- `DamHopperConfig` — parsed project registry
 - `ProjectConfig` — individual project settings
+
+**Registry and sandbox semantics:**
+
+- Canonical registry path is `~/.config/dam-hopper/dam-hopper.toml`, with `--config` and `DAM_HOPPER_CONFIG` as explicit overrides
+- Relative `projects[].path` values resolve against the loaded registry file directory; absolute paths are preserved
+- File API security is enforced by per-project roots in `ProjectSandbox`, not by `workspace_dir`
+- Example: with a registry at `~/.config/dam-hopper/dam-hopper.toml`, `path = "./apps/web"` resolves to `~/.config/dam-hopper/apps/web`, while `path = "D:\\repos\\api"` stays `D:\repos\api` on Windows
 
 **Path resolution priority:**
 
