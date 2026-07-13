@@ -1077,6 +1077,60 @@ async fn config_update_reinitializes_sandbox_from_new_project_roots() {
 }
 
 #[tokio::test]
+async fn config_update_formats_mixed_absolute_project_paths_for_toml() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let inside_dir = tmp.path().join("inside-project");
+    std::fs::create_dir_all(&inside_dir).unwrap();
+
+    let outside = tempfile::tempdir().unwrap();
+    let outside_dir = outside.path().join("outside-project");
+    std::fs::create_dir_all(&outside_dir).unwrap();
+
+    let resp = put_json(
+        state.clone(),
+        "/api/config",
+        serde_json::json!({
+            "workspace": { "name": "test-workspace", "root": "." },
+            "projects": [
+                {
+                    "name": "inside",
+                    "path": inside_dir.to_string_lossy().to_string(),
+                    "type": "cargo"
+                },
+                {
+                    "name": "outside",
+                    "path": outside_dir.to_string_lossy().to_string(),
+                    "type": "cargo"
+                }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let written = std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap();
+    let parsed: toml::Value = toml::from_str(&written).unwrap();
+    let projects = parsed["projects"].as_array().unwrap();
+    let inside_path = projects[0]["path"].as_str().unwrap();
+    let outside_path = projects[1]["path"].as_str().unwrap();
+
+    assert_eq!(inside_path, "inside-project");
+    assert!(!inside_path.contains('\\'));
+    assert_eq!(outside_path, outside_dir.to_string_lossy());
+    assert!(std::path::Path::new(outside_path).is_absolute());
+
+    let resp = get(state, "/api/config").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["projects"][0]["path"], inside_dir.to_string_lossy().to_string());
+    assert_eq!(json["projects"][1]["path"], outside_dir.to_string_lossy().to_string());
+}
+
+#[tokio::test]
 async fn config_patch_project_persists_camel_case_project_fields_as_toml_schema() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);

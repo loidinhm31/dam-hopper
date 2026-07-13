@@ -15,7 +15,7 @@ created: 2026-07-12
 
 Replace DamHopper's repo-local `dam-hopper.toml` discovery model with a global registry at `~/.config/dam-hopper/dam-hopper.toml`. Allow absolute project paths in TOML. Replace single-root `WorkspaceSandbox` with per-project-root validation so file APIs work for projects scattered across the filesystem — without opening arbitrary disk access.
 
-Plan progress: 4/6 phases complete (67%).
+Plan progress: 5/6 phases complete (83%).
 
 ## Current Choke Points
 
@@ -41,7 +41,7 @@ Plan progress: 4/6 phases complete (67%).
 | 2 | Parser: Absolute Project Paths | Completed (Approved: 8.5/10) | 2h | [phase-02](./phase-02-parser-absolute-paths.md) |
 | 3 | Per-Project-Root Sandbox | Completed (Approved: 9.5/10) | 4h | [phase-03](./phase-03-per-project-sandbox.md) |
 | 4 | API + State Adjustments | Completed (Approved: 9/10) | 4h | [phase-04](./phase-04-api-state-adjustments.md) |
-| 5 | Config Write Roundtrip | Pending | 2h | [phase-05](./phase-05-config-write-roundtrip.md) |
+| 5 | Config Write Roundtrip | Completed (Approved: 9/10) | 2h | [phase-05](./phase-05-config-write-roundtrip.md) |
 | 6 | Integration Tests + Windows Paths + Docs | Pending | 3h | [phase-06](./phase-06-tests-windows-docs.md) |
 
 ## Dependencies
@@ -84,6 +84,7 @@ Plan progress: 4/6 phases complete (67%).
 **Phase 02 Complete** - Score: 8.5/10 | All 55 tests passed
 **Phase 03 Complete** - Score: 9.5/10 | Full backend gate passed
 **Phase 04 Complete** - Score: 9/10 | All API state adjustments integrated and tested
+**Phase 05 Complete** - Score: 9/10 | Config write roundtrip completed on 2026-07-13
 
 **Optional follow-ups for Phase 02:**
 1. Windows edge-case coverage: add drive-relative and UNC path tests on Windows CI
