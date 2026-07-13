@@ -5,7 +5,7 @@ use super::{
         add_known_workspace_at, list_known_workspaces_at, read_global_config_at,
         remove_known_workspace_at, write_global_config_at,
     },
-    parser::{read_config, write_config},
+    parser::{project_path_for_toml, read_config, write_config},
     presets::{get_effective_command, get_preset},
     resolve::{resolve_startup_config, ConfigResolutionInput, ConfigSource},
     schema::{
@@ -377,6 +377,131 @@ env_file = ".env"
     assert_eq!(original.projects[0].name, reloaded.projects[0].name);
     assert_eq!(original.projects[0].env_file, reloaded.projects[0].env_file);
     assert_eq!(original.projects[0].tags, reloaded.projects[0].tags);
+}
+
+#[test]
+fn project_path_for_toml_returns_dot_for_config_dir_root() {
+    let dir = tempfile::tempdir().unwrap();
+
+    assert_eq!(project_path_for_toml(dir.path(), dir.path()), ".");
+}
+
+#[test]
+fn project_path_for_toml_uses_forward_slash_relative_path_inside_config_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let project_path = dir.path().join("nested").join("inside");
+
+    let formatted = project_path_for_toml(&project_path, dir.path());
+
+    assert_eq!(formatted, "nested/inside");
+    assert!(!formatted.contains('\\'));
+}
+
+#[test]
+fn project_path_for_toml_preserves_absolute_path_outside_config_dir() {
+    let registry = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let project_path = outside.path().join("outside-project");
+
+    let formatted = project_path_for_toml(&project_path, registry.path());
+
+    assert_eq!(formatted, project_path.to_string_lossy());
+    assert!(std::path::Path::new(&formatted).is_absolute());
+}
+
+#[test]
+fn config_roundtrip_preserves_mixed_relative_and_absolute_project_paths() {
+    let registry = tempfile::tempdir().unwrap();
+    let config_dir = registry.path().join("registry");
+    std::fs::create_dir_all(config_dir.join("nested/inside")).unwrap();
+
+    let outside = tempfile::tempdir().unwrap();
+    let outside_path = outside.path().join("project-root");
+    let outside_path_raw = outside_path.to_string_lossy().replace('\\', "/");
+    let config_path = config_dir.join("dam-hopper.toml");
+
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+[workspace]
+name = "rt-ws"
+
+[[projects]]
+name = "inside"
+path = "./nested/inside"
+type = "cargo"
+
+[[projects]]
+name = "outside"
+path = "{}"
+type = "cargo"
+"#,
+            outside_path_raw
+        ),
+    )
+    .unwrap();
+
+    let original = read_config(&config_path).unwrap();
+    write_config(&config_path, &original).unwrap();
+    let reloaded = read_config(&config_path).unwrap();
+    let written = std::fs::read_to_string(&config_path).unwrap();
+    let parsed: toml::Value = toml::from_str(&written).unwrap();
+    let projects = parsed["projects"].as_array().unwrap();
+    let inside_path = projects[0]["path"].as_str().unwrap();
+    let outside_path_written = projects[1]["path"].as_str().unwrap();
+
+    assert_eq!(inside_path, "nested/inside");
+    assert!(!inside_path.contains('\\'));
+    assert!(std::path::Path::new(outside_path_written).is_absolute());
+    assert_eq!(outside_path_written, original.projects[1].path);
+    assert_eq!(original.projects[0].path, reloaded.projects[0].path);
+    assert_eq!(original.projects[1].path, reloaded.projects[1].path);
+}
+
+#[cfg(windows)]
+#[test]
+fn write_config_escapes_native_windows_absolute_project_paths() {
+    use super::schema::{DamHopperConfig, FeaturesConfig, ProjectConfig, WorkspaceInfo};
+
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let outside = tempfile::tempdir().unwrap();
+    let project_path = outside.path().join("windows-project");
+
+    let config = DamHopperConfig {
+        workspace: WorkspaceInfo {
+            name: "windows-rt".to_string(),
+            root: ".".to_string(),
+        },
+        agent_store: None,
+        server: super::schema::ServerConfig::default(),
+        projects: vec![ProjectConfig {
+            name: "outside".to_string(),
+            path: project_path.to_string_lossy().to_string(),
+            project_type: ProjectType::Cargo,
+            services: None,
+            commands: None,
+            env_file: None,
+            tags: None,
+            terminals: vec![],
+            agents: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: super::schema::DEFAULT_RESTART_MAX_RETRIES,
+            health_check_url: None,
+        }],
+        features: FeaturesConfig::default(),
+        config_path: config_path.clone(),
+    };
+
+    write_config(&config_path, &config).unwrap();
+
+    let written = std::fs::read_to_string(&config_path).unwrap();
+    let escaped = project_path.to_string_lossy().replace('\\', "\\\\");
+    assert!(written.contains(&format!("path = \"{}\"", escaped)));
+
+    let reloaded = read_config(&config_path).unwrap();
+    assert_eq!(reloaded.projects[0].path, project_path.to_string_lossy());
 }
 
 // ──────────────────────────────────────────────

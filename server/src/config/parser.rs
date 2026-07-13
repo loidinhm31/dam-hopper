@@ -289,6 +289,23 @@ fn build_raw_toml(config: &DamHopperConfig, config_dir: &Path) -> toml::Value {
     Value::Table(map)
 }
 
+pub(crate) fn project_path_for_toml(abs: &Path, config_dir: &Path) -> String {
+    match pathdiff::diff_paths(abs, config_dir) {
+        Some(relative)
+            if !relative.is_absolute()
+                && !matches!(relative.components().next(), Some(Component::ParentDir)) =>
+        {
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            if relative.is_empty() {
+                ".".to_string()
+            } else {
+                relative
+            }
+        }
+        _ => abs.to_string_lossy().to_string(),
+    }
+}
+
 fn project_to_toml(p: &ProjectConfig, config_dir: &Path) -> toml::Value {
     use toml::Value;
 
@@ -296,12 +313,10 @@ fn project_to_toml(p: &ProjectConfig, config_dir: &Path) -> toml::Value {
     map.insert("name".to_string(), Value::String(p.name.clone()));
 
     let abs = PathBuf::from(&p.path);
-    let rel = pathdiff::diff_paths(&abs, config_dir)
-        .unwrap_or(abs)
-        .to_string_lossy()
-        .to_string();
-    let rel = if rel.is_empty() { ".".to_string() } else { rel };
-    map.insert("path".to_string(), Value::String(rel));
+    map.insert(
+        "path".to_string(),
+        Value::String(project_path_for_toml(&abs, config_dir)),
+    );
     map.insert(
         "type".to_string(),
         Value::String(p.project_type.to_string()),
@@ -354,6 +369,8 @@ fn project_to_toml(p: &ProjectConfig, config_dir: &Path) -> toml::Value {
                 tm.insert("name".to_string(), Value::String(t.name.clone()));
                 tm.insert("command".to_string(), Value::String(t.command.clone()));
                 let abs_cwd = PathBuf::from(&t.cwd);
+                // Terminal cwd stays project-relative even when the project path
+                // itself is written as an absolute registry path.
                 let rel_cwd = pathdiff::diff_paths(&abs_cwd, &project_path)
                     .unwrap_or(abs_cwd)
                     .to_string_lossy()

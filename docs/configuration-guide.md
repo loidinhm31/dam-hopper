@@ -17,6 +17,8 @@ name = "my-workspace"
 
 Define projects with type-specific defaults. Project paths can be absolute or relative; relative paths resolve against the config file directory. Other path fields like `env_file` and terminal profile `cwd` remain project-relative and reject absolute or traversal-containing values.
 
+**Path Serialization:** When DamHopper writes the registry TOML, absolute project paths are preserved when projects live outside the config file directory. Projects inside the config directory are written as relative paths for portability. Relative paths are normalized to forward slashes in TOML output regardless of platform.
+
 ```toml
 [[projects]]
 name = "api"

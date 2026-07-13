@@ -173,6 +173,19 @@ Infrastructure
 - **Tests**: 8 decision matrix rows + 5 integration tests (13/13 passing)
 - **Known Limitation**: Exit code inference (portable-pty API) — cannot distinguish exit 0 from exit 1
 
+### Phase 05: Config Write Roundtrip ✅ Complete
+
+- **Status**: Absolute and relative project paths preserved correctly in TOML output
+- **Features**:
+  - Projects outside config directory preserve absolute paths in TOML writes
+  - Projects inside config directory written as relative paths for portability
+  - Relative paths normalized to forward slashes in TOML output
+  - Config read → write → read cycle remains idempotent
+  - Roundtrip behavior applies to both parser serialization and API config updates
+- **Runtime Security**: Write behavior is serialization-only; runtime file access still limited by configured per-project roots
+- **Tests**: Parser roundtrip tests and API config update tests passing
+- **Related**: [Configuration Guide - Project Path Serialization](./configuration-guide.md#project-discovery)
+
 ### Phase 06: Startup Restore ✅ Complete
 
 - **Status**: Session restoration from SQLite on server startup

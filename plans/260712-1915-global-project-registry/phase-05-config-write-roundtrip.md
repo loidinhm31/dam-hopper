@@ -10,10 +10,11 @@
 ## Overview
 
 Date: 2026-07-12
+Completion date: 2026-07-13
 Description: Preserve clean absolute project paths when writing registry TOML.
 Priority: P1
-Implementation status: Pending
-Review status: Not reviewed
+Implementation status: Completed
+Review status: Approved: 9/10
 Effort: 2h
 
 ## Key Insights
@@ -64,11 +65,11 @@ Use the same rule in `project_to_toml()` and API JSON-to-TOML writing.
 
 ## Todo list
 
-- [ ] Add project path formatting helper.
-- [ ] Update config writer.
-- [ ] Update API config writer.
-- [ ] Add roundtrip tests.
-- [ ] Run focused config/API tests.
+- [x] Add project path formatting helper.
+- [x] Update config writer.
+- [x] Update API config writer.
+- [x] Add roundtrip tests.
+- [x] Run focused config/API tests.
 
 ## Success Criteria
 
@@ -90,4 +91,7 @@ Use the same rule in `project_to_toml()` and API JSON-to-TOML writing.
 
 ## Next steps
 
-- Phase 06 validates full read/write/restart behavior and updates docs.
+- **Phase 06 ready**: Proceed to Integration Tests + Windows Paths + Docs.
+- Unresolved questions from main plan should be addressed in Phase 06 final integration.
+- Complete platform-specific testing (Windows UNC paths, UNIX absolute paths).
+- Update project documentation with global registry model.
