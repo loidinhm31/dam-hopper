@@ -7,6 +7,7 @@ use super::{
     },
     parser::{read_config, write_config},
     presets::{get_effective_command, get_preset},
+    resolve::{resolve_startup_config, ConfigResolutionInput, ConfigSource},
     schema::{
         CommandKind, GlobalConfig, KnownWorkspace, ProjectType, RestartPolicy, UiConfig,
     },
@@ -450,6 +451,194 @@ fn no_op_add_same_workspace() {
     add_known_workspace_at(&cfg_path, "ws", "/tmp/ws").unwrap();
     add_known_workspace_at(&cfg_path, "ws", "/tmp/ws").unwrap(); // no-op
     assert_eq!(list_known_workspaces_at(&cfg_path).unwrap().len(), 1);
+}
+
+// ──────────────────────────────────────────────
+// Startup config resolver tests
+// ──────────────────────────────────────────────
+
+#[test]
+fn resolve_explicit_config_path_uses_exact_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = dir.path().join("custom-registry.toml");
+    write_workspace_config(&registry, "explicit");
+
+    let resolution = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: Some(registry.clone()),
+        workspace_dir: None,
+        global_default_workspace: None,
+        current_dir: dir.path().join("cwd"),
+        registry_path: dir.path().join("missing-registry.toml"),
+    })
+    .unwrap();
+
+    assert_eq!(resolution.source, ConfigSource::ExplicitConfig);
+    assert_eq!(resolution.config.workspace.name, "explicit");
+    assert_eq!(resolution.config.config_path, registry.canonicalize().unwrap());
+    assert_eq!(resolution.workspace_dir, registry.parent().unwrap());
+}
+
+#[test]
+fn resolve_explicit_config_invalid_toml_returns_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = dir.path().join("bad-registry.toml");
+    std::fs::write(&registry, "invalid [[[[ toml").unwrap();
+
+    let result = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: Some(registry),
+        workspace_dir: None,
+        global_default_workspace: None,
+        current_dir: dir.path().join("cwd"),
+        registry_path: dir.path().join("missing-registry.toml"),
+    });
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn resolve_workspace_uses_found_config_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    write_workspace_config(&config_path, "workspace");
+
+    let nested = dir.path().join("server").join("src");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    let resolution = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: None,
+        workspace_dir: Some(nested),
+        global_default_workspace: None,
+        current_dir: dir.path().join("cwd"),
+        registry_path: dir.path().join("missing-registry.toml"),
+    })
+    .unwrap();
+
+    assert_eq!(resolution.source, ConfigSource::Workspace);
+    assert_eq!(resolution.config.workspace.name, "workspace");
+    assert_eq!(resolution.workspace_dir, dir.path());
+}
+
+#[test]
+fn resolve_prefers_global_registry_over_legacy_discovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = dir.path().join("dam-hopper.toml");
+    write_workspace_config(&registry, "registry");
+
+    let default_workspace = dir.path().join("default-workspace");
+    std::fs::create_dir_all(&default_workspace).unwrap();
+    write_workspace_config(&default_workspace.join("dam-hopper.toml"), "default");
+
+    let cwd = dir.path().join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    write_workspace_config(&cwd.join("dam-hopper.toml"), "cwd");
+
+    let resolution = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: None,
+        workspace_dir: None,
+        global_default_workspace: Some(default_workspace),
+        current_dir: cwd,
+        registry_path: registry,
+    })
+    .unwrap();
+
+    assert_eq!(resolution.source, ConfigSource::GlobalRegistry);
+    assert_eq!(resolution.config.workspace.name, "registry");
+}
+
+#[test]
+fn resolve_uses_global_default_workspace_when_registry_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let default_workspace = dir.path().join("default-workspace");
+    std::fs::create_dir_all(&default_workspace).unwrap();
+    write_workspace_config(&default_workspace.join("dam-hopper.toml"), "default");
+
+    let resolution = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: None,
+        workspace_dir: None,
+        global_default_workspace: Some(default_workspace.clone()),
+        current_dir: dir.path().join("cwd"),
+        registry_path: dir.path().join("missing-registry.toml"),
+    })
+    .unwrap();
+
+    assert_eq!(resolution.source, ConfigSource::GlobalDefaultWorkspace);
+    assert_eq!(resolution.config.workspace.name, "default");
+    assert_eq!(resolution.workspace_dir, default_workspace);
+}
+
+#[test]
+fn resolve_uses_current_dir_when_higher_priority_sources_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    write_workspace_config(&cwd.join("dam-hopper.toml"), "cwd");
+
+    let resolution = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: None,
+        workspace_dir: None,
+        global_default_workspace: Some(dir.path().join("missing-default")),
+        current_dir: cwd.clone(),
+        registry_path: dir.path().join("missing-registry.toml"),
+    })
+    .unwrap();
+
+    assert_eq!(resolution.source, ConfigSource::CurrentDirectory);
+    assert_eq!(resolution.config.workspace.name, "cwd");
+    assert_eq!(resolution.workspace_dir, cwd);
+}
+
+#[test]
+fn resolve_explicit_workspace_missing_config_returns_empty_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("empty-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    let resolution = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: None,
+        workspace_dir: Some(workspace.clone()),
+        global_default_workspace: None,
+        current_dir: dir.path().join("cwd"),
+        registry_path: dir.path().join("missing-registry.toml"),
+    })
+    .unwrap();
+
+    assert_eq!(resolution.source, ConfigSource::EmptyFallback);
+    assert_eq!(resolution.workspace_dir, workspace);
+    assert_eq!(resolution.config.workspace.name, "unknown");
+    assert_eq!(resolution.config.projects.len(), 0);
+}
+
+#[test]
+fn resolve_missing_everything_returns_empty_current_dir_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let resolution = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: None,
+        workspace_dir: None,
+        global_default_workspace: Some(dir.path().join("missing-default")),
+        current_dir: cwd.clone(),
+        registry_path: dir.path().join("missing-registry.toml"),
+    })
+    .unwrap();
+
+    assert_eq!(resolution.source, ConfigSource::EmptyFallback);
+    assert_eq!(resolution.workspace_dir, cwd.clone());
+    assert_eq!(resolution.config.config_path, cwd.join("dam-hopper.toml"));
+}
+
+fn write_workspace_config(path: &std::path::Path, workspace_name: &str) {
+    std::fs::write(
+        path,
+        format!(
+            r#"
+[workspace]
+name = "{workspace_name}"
+"#
+        ),
+    )
+    .unwrap();
 }
 
 // ──────────────────────────────────────────────

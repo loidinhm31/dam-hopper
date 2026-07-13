@@ -2,7 +2,9 @@
 
 ## Workspace Configuration (dam-hopper.toml)
 
-Create `dam-hopper.toml` in your workspace root.
+DamHopper loads project registry data from `dam-hopper.toml`. You can point the server at a specific registry file with `--config <path>` or `DAM_HOPPER_CONFIG`, or let it use the canonical global registry at `~/.config/dam-hopper/dam-hopper.toml`.
+
+If you are using legacy workspace-root discovery, create `dam-hopper.toml` in your workspace root.
 
 ### Basic Setup
 
@@ -60,6 +62,19 @@ run_command = "bash scripts/run.sh"
 | run_command   | string |          | Overrides preset for type                         |
 | env_file      | string |          | Path to .env (relative to project)                |
 | tags          | array  |          | Arbitrary tags for filtering                      |
+
+## Startup Config Resolution
+
+Server startup resolves configuration in this order:
+
+1. `--config <path>` or `DAM_HOPPER_CONFIG`
+2. `--workspace <dir>` or `DAM_HOPPER_WORKSPACE`
+3. `~/.config/dam-hopper/dam-hopper.toml`
+4. `defaults.workspace` from `~/.config/dam-hopper/config.toml`
+5. Current working directory via legacy upward `dam-hopper.toml` discovery
+6. Empty config fallback
+
+Use `--config` when you want to load an exact registry file. Use `--workspace` when you want the legacy behavior of searching upward from a directory for `dam-hopper.toml`.
 
 ### Project Type Presets
 
@@ -221,7 +236,7 @@ The export API is local-only, uses camelCase on the wire, and accepts `frontend`
 
 ## Global Configuration (~/.config/dam-hopper/config.toml)
 
-Store global defaults:
+Store global defaults and known workspace metadata. This file is separate from the project registry.
 
 ```toml
 [defaults]
@@ -238,7 +253,7 @@ path = "/tmp/test-workspace"
 
 ### Fields
 
-**defaults.workspace** — Path to default workspace (fallback if no --workspace or DAM_HOPPER_WORKSPACE).
+**defaults.workspace** — Legacy fallback workspace directory, used only after explicit config, explicit workspace, and the global registry path are checked.
 
 **workspaces** — Known workspace shortcuts (referenced by server later, not currently used by CLI).
 
@@ -246,6 +261,7 @@ path = "/tmp/test-workspace"
 
 | Var                    | Type   | Purpose                                                             |
 | ---------------------- | ------ | ------------------------------------------------------------------- |
+| `DAM_HOPPER_CONFIG`    | path   | Load an exact `dam-hopper.toml` registry file                       |
 | `DAM_HOPPER_WORKSPACE` | path   | Override workspace path (takes priority over global config default) |
 | `RUST_LOG`             | string | Logging level (e.g., `dam_hopper=debug,axum=info`)                  |
 
