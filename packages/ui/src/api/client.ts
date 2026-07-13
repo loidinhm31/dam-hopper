@@ -309,6 +309,7 @@ export interface ProjectWithStatus extends ProjectConfig {
 export interface WorkspaceInfo {
   name: string;
   root: string;
+  configPath: string;
   projectCount: number;
 }
 
@@ -325,6 +326,7 @@ export interface KnownWorkspacesResponse {
 export interface WorkspaceStatus {
   ready: boolean;
   path?: string;
+  configPath?: string;
   name?: string;
   projectCount?: number;
 }

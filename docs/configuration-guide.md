@@ -65,24 +65,51 @@ run_command = "bash scripts/run.sh"
 
 ## File Access Boundaries
 
-Runtime file access via `/api/fs/*` and WebSocket file operations is **sandboxed per project root**. When a request targets a project, the server validates all file paths against that project's configured root directory. This prevents traversal attempts from escaping a project's directory tree and blocks access to other projects' files.
+Runtime file access via `/api/fs/*` and WebSocket file operations is **sandboxed per project root**. The server maintains a set of allowed roots derived from the currently loaded `projects[].path` entries. All file paths are validated against these configured roots. This prevents traversal attempts from escaping a project's directory tree and blocks access to other projects' files.
+
+**Phase 04 note:** `workspace_dir` is now a display/legacy field only; the security boundary is enforced by per-project roots derived from the config. This allows projects to be located anywhere on the filesystem while maintaining strict access control.
 
 - Symlink targets are canonicalized and re-validated against the project boundary
-- Tree subscriptions (watchers) are rooted at the project root
+- Tree subscriptions (watchers) are rooted at each project root
 - Relative path sequences containing `..` are rejected before filesystem access
+- After config reload or workspace switch, the sandbox roots are automatically reinitialized
 
 ## Startup Config Resolution
 
 Server startup resolves configuration in this order:
 
-1. `--config <path>` or `DAM_HOPPER_CONFIG`
-2. `--workspace <dir>` or `DAM_HOPPER_WORKSPACE`
-3. `~/.config/dam-hopper/dam-hopper.toml`
+1. `--config <path>` or `DAM_HOPPER_CONFIG` — load exact registry file
+2. `--workspace <dir>` or `DAM_HOPPER_WORKSPACE` — load from directory or search upward
+3. `~/.config/dam-hopper/dam-hopper.toml` — global registry
 4. `defaults.workspace` from `~/.config/dam-hopper/config.toml`
 5. Current working directory via legacy upward `dam-hopper.toml` discovery
 6. Empty config fallback
 
-Use `--config` when you want to load an exact registry file. Use `--workspace` when you want the legacy behavior of searching upward from a directory for `dam-hopper.toml`.
+**Phase 04 note:** Workspace APIs now report `configPath` (the authoritative registry file path) separately from `path`/`root` (legacy display fields).
+
+## Workspace Switching and Config Reload
+
+**POST /api/workspace/switch**
+
+The workspace switch endpoint accepts either a directory path or a direct path to a `dam-hopper.toml` file:
+
+```json
+{ "path": "/home/user/projects/my-workspace" }
+```
+
+or
+
+```json
+{ "path": "/home/user/.config/dam-hopper/dam-hopper.toml" }
+```
+
+When switching:
+- The server reloads configuration from the specified path (or discovers `dam-hopper.toml` in the directory)
+- File API sandbox is reinitialized from the newly loaded project roots
+- All PTY sessions are disposed
+- All connected clients receive a `workspace:changed` broadcast event
+
+**Config updates and settings changes** (`PUT /api/config`, `PATCH /api/config/projects/:name`, `POST /api/settings`) also trigger sandbox reinitialization after writing the new configuration. The reload always reads from the current `configPath` without re-discovery.
 
 ### Project Type Presets
 

@@ -861,6 +861,74 @@ async fn workspace_status_returns_loaded_true() {
     assert_eq!(json["ready"], true);
     assert_eq!(json["name"], "test-workspace");
     assert_eq!(json["projectCount"], 0);
+    assert_eq!(
+        json["configPath"],
+        tmp.path().join("dam-hopper.toml").to_string_lossy().to_string()
+    );
+}
+
+#[tokio::test]
+async fn workspace_get_includes_config_path_and_legacy_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let resp = get(state, "/api/workspace").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["name"], "test-workspace");
+    assert_eq!(json["root"], tmp.path().to_string_lossy().to_string());
+    assert_eq!(
+        json["configPath"],
+        tmp.path().join("dam-hopper.toml").to_string_lossy().to_string()
+    );
+}
+
+#[tokio::test]
+async fn workspace_switch_accepts_direct_config_file_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let switched = tempfile::tempdir().unwrap();
+    let switched_cfg = switched.path().join("dam-hopper.toml");
+    std::fs::write(
+        &switched_cfg,
+        r#"
+[workspace]
+name = "switched"
+root = "."
+"#,
+    )
+    .unwrap();
+
+    let resp = post_json(
+        state.clone(),
+        "/api/workspace/switch",
+        serde_json::json!({ "path": switched_cfg.to_string_lossy().to_string() }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = get(state.clone(), "/api/workspace/status").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["name"], "switched");
+    assert_eq!(
+        json["configPath"],
+        switched_cfg.canonicalize().unwrap().to_string_lossy().to_string()
+    );
+
+    let resp = get(state, "/api/workspace").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["root"], switched.path().to_string_lossy().to_string());
 }
 
 #[tokio::test]
@@ -943,6 +1011,59 @@ async fn config_update_persists_camel_case_project_fields_as_toml_schema() {
         json["projects"][0]["services"][0]["runCommand"],
         "cargo run"
     );
+}
+
+#[tokio::test]
+async fn config_update_reloads_from_current_config_path_not_workspace_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let unrelated = tempfile::tempdir().unwrap();
+    *state.workspace_dir.write().await = unrelated.path().to_path_buf();
+
+    let resp = put_json(
+        state.clone(),
+        "/api/config",
+        serde_json::json!({
+            "workspace": { "name": "updated-via-config-path", "root": "." },
+            "projects": []
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let cfg = state.config.read().await;
+    assert_eq!(cfg.workspace.name, "updated-via-config-path");
+}
+
+#[tokio::test]
+async fn config_update_reinitializes_sandbox_from_new_project_roots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let project_dir = tmp.path().join("alpha");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(project_dir.join("hello.txt"), "hello").unwrap();
+
+    let resp = put_json(
+        state.clone(),
+        "/api/config",
+        serde_json::json!({
+            "workspace": { "name": "test-workspace", "root": "." },
+            "projects": [{
+                "name": "alpha",
+                "path": "alpha",
+                "type": "custom"
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let read_resp = get(state, "/api/fs/read?project=alpha&path=hello.txt").await;
+    assert_eq!(read_resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(read_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&body[..], b"hello");
 }
 
 #[tokio::test]
