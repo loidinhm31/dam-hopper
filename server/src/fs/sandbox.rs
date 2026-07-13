@@ -21,11 +21,25 @@ pub struct ProjectSandbox {
 
 impl ProjectSandbox {
     /// Canonicalize project roots synchronously. Called at startup and workspace switch.
+    ///
+    /// Invalid roots are skipped so a stale or missing project path cannot disable
+    /// filesystem access for every other project in the workspace.
     pub fn new(projects: Vec<(String, PathBuf)>) -> Result<Self, FsError> {
         let mut roots = HashMap::with_capacity(projects.len());
         for (name, root) in projects {
-            let canonical = canonicalize_existing(root)?;
-            roots.insert(name, canonical);
+            match canonicalize_existing(root.clone()) {
+                Ok(canonical) => {
+                    roots.insert(name, canonical);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        project = %name,
+                        root = %root.display(),
+                        error = %error,
+                        "Skipping unavailable project root"
+                    );
+                }
+            }
         }
         Ok(Self { roots })
     }
@@ -193,6 +207,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn skips_missing_project_roots_without_disabling_valid_projects() {
+        let tmp = tempfile::tempdir().unwrap();
+        let valid = tmp.path().join("valid");
+        std::fs::create_dir_all(&valid).unwrap();
+        std::fs::write(valid.join("owned.txt"), "valid").unwrap();
+
+        let sandbox = ProjectSandbox::new(vec![
+            ("valid".into(), valid.clone()),
+            ("missing".into(), tmp.path().join("missing")),
+        ])
+        .unwrap();
+
+        assert!(sandbox.project_root("valid").is_some());
+        assert!(sandbox.project_root("missing").is_none());
+
+        let valid_file = sandbox
+            .validate("valid", valid.join("owned.txt"))
+            .await
+            .unwrap();
+        assert!(valid_file.ends_with("owned.txt"));
+
+        let missing_project = sandbox.validate("missing", valid.join("owned.txt")).await;
+        assert!(matches!(missing_project, Err(FsError::NotFound)));
+    }
+
+    #[tokio::test]
     async fn rejects_unknown_project_before_path_access() {
         let tmp = tempfile::tempdir().unwrap();
         let alpha = tmp.path().join("alpha");
@@ -249,7 +289,10 @@ mod tests {
             .validate_new_path("alpha", alpha.join("dir"), "new.txt")
             .await
             .unwrap();
-        assert_eq!(new_path, sandbox.project_root("alpha").unwrap().join("dir/new.txt"));
+        assert_eq!(
+            new_path,
+            sandbox.project_root("alpha").unwrap().join("dir/new.txt")
+        );
 
         let sibling_project = sandbox
             .validate_new_path("alpha", beta.clone(), "new.txt")

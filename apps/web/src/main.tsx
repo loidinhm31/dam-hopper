@@ -6,7 +6,10 @@ import "@dam-hopper/ui/styles";
 
 import { initTransport } from "@dam-hopper/ui/api/transport";
 import { WsTransport } from "@dam-hopper/ui/api/ws-transport";
-import { getServerUrl } from "@dam-hopper/ui/api/server-config";
+import {
+  getServerUrl,
+  migrateToProfiles,
+} from "@dam-hopper/ui/api/server-config";
 import {
   initializeClientDiagnostics,
   setClientTransportStatus,
@@ -22,6 +25,8 @@ configureLogger({
   ),
 });
 initializeClientDiagnostics();
+
+migrateToProfiles();
 
 const transport = new WsTransport(getServerUrl());
 setClientTransportStatus(transport.getStatus());

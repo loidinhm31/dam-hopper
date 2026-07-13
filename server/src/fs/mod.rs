@@ -268,6 +268,26 @@ mod tests {
         assert_eq!(fs.watcher_refcount(&alpha), 0);
         fs.unsubscribe_tree(sub_id);
     }
+
+    #[test]
+    fn missing_project_root_does_not_make_fs_unavailable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let alpha = tmp.path().join("alpha");
+        std::fs::create_dir_all(&alpha).unwrap();
+
+        let fs = FsSubsystem::new(vec![
+            ("alpha".into(), alpha.clone()),
+            ("missing".into(), tmp.path().join("missing")),
+        ]);
+
+        let (sub_id, _rx) = fs.subscribe_tree("alpha", alpha.clone()).unwrap();
+        assert_eq!(fs.watcher_refcount(&alpha), 1);
+
+        let missing = fs.subscribe_tree("missing", alpha.clone());
+        assert!(matches!(missing, Err(super::FsError::NotFound)));
+
+        fs.unsubscribe_tree(sub_id);
+    }
 }
 
 fn map_io_sync(e: std::io::Error) -> FsError {

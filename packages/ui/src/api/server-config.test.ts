@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getActiveProfile,
   getProfiles,
+  getServerUrl,
   migrateToProfiles,
   setServerUrl,
 } from "./server-config.js";
@@ -66,5 +67,13 @@ describe("server profile migration", () => {
 
     expect(getProfiles()).toHaveLength(1);
     expect(getActiveProfile()?.url).toBe("http://127.0.0.1:4800");
+  });
+
+  it("uses migrated active profile for server URL after migration", () => {
+    setServerUrl("http://localhost:4800/");
+
+    migrateToProfiles();
+
+    expect(getServerUrl()).toBe("http://localhost:4800");
   });
 });
