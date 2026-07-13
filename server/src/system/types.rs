@@ -10,6 +10,7 @@ pub struct HostMetrics {
     pub cpu: CpuMetrics,
     pub memory: MemoryMetrics,
     pub disk: DiskMetrics,
+    pub disks: Vec<DiskMetrics>,
     pub temperatures: Vec<TemperatureMetrics>,
 }
 
