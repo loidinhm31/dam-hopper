@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Activity, AlertTriangle, Loader2 } from "lucide-react";
 import { useHostMetrics } from "@/api/queries.js";
-import type { HostMetrics } from "@/api/client.js";
+import type { DiskMetrics, HostMetrics } from "@/api/client.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import {
-  formatBytes,
   formatCelsius,
   formatPercent,
   formatUsage,
@@ -62,7 +61,7 @@ export function HostResourcePopover() {
 
       {open && (
         <div
-          className="fixed left-1/2 top-0 z-[60] w-[min(20rem,calc(100vw-1rem))] -translate-x-1/2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 shadow-xl glass-card-blur sm:absolute sm:left-auto sm:right-0 sm:top-9 sm:w-80 sm:translate-x-0"
+          className="fixed left-1/2 top-0 z-[60] max-h-[calc(100vh-5rem)] w-[min(20rem,calc(100vw-1rem))] -translate-x-1/2 overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 shadow-xl glass-card-blur sm:absolute sm:left-auto sm:right-0 sm:top-9 sm:w-80 sm:translate-x-0"
           style={isCompactWorkspace ? { top: panelTop } : undefined}
         >
           {isLoading && (
@@ -88,6 +87,7 @@ export function HostResourcePopover() {
 
 function MetricsRows({ metrics }: { metrics: HostMetrics }) {
   const temperatures = metrics.temperatures ?? [];
+  const disks = getDiskRows(metrics);
   const hottestTemperature = temperatures.reduce<
     HostMetrics["temperatures"][number] | null
   >((hottest, reading) => {
@@ -124,11 +124,14 @@ function MetricsRows({ metrics }: { metrics: HostMetrics }) {
           metrics.memory.totalBytes,
         )}
       />
-      <MetricRow
-        label="Disk"
-        percent={metrics.disk.usagePercent}
-        detail={`${formatBytes(metrics.disk.usedBytes)} used on ${metrics.disk.mountPoint || "workspace disk"}`}
-      />
+      {disks.map((disk, index) => (
+        <MetricRow
+          key={`${disk.mountPoint || disk.name}-${index}`}
+          label={disks.length === 1 ? "Disk" : formatDiskLabel(disk, index)}
+          percent={disk.usagePercent}
+          detail={formatDiskDetail(disk, disks.length === 1)}
+        />
+      ))}
       {hottestTemperature && (
         <TemperatureRow
           value={formatCelsius(hottestTemperature.celsius)}
@@ -145,6 +148,24 @@ function MetricsRows({ metrics }: { metrics: HostMetrics }) {
       )}
     </div>
   );
+}
+
+function getDiskRows(metrics: HostMetrics): DiskMetrics[] {
+  return metrics.disks?.length ? metrics.disks : [metrics.disk];
+}
+
+function formatDiskLabel(disk: DiskMetrics, index: number): string {
+  if (disk.mountPoint === "/") return "Root disk";
+  return disk.mountPoint || disk.name || `Disk ${index + 1}`;
+}
+
+function formatDiskDetail(disk: DiskMetrics, includeMountPoint: boolean): string {
+  const mountPoint = disk.mountPoint || disk.name || "disk";
+  const name = disk.name && disk.name !== disk.mountPoint ? ` · ${disk.name}` : "";
+  if (includeMountPoint) {
+    return `${formatUsage(disk.usedBytes, disk.totalBytes)} on ${mountPoint}${name}`;
+  }
+  return `${formatUsage(disk.usedBytes, disk.totalBytes)}${name}`;
 }
 
 function TemperatureRow({ value, detail }: { value: string; detail: string }) {
@@ -177,7 +198,10 @@ function MetricRow({
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-text)]">
+        <span
+          className="min-w-0 flex-1 truncate text-[10px] font-bold uppercase tracking-widest text-[var(--color-text)]"
+          title={label}
+        >
           {label}
         </span>
         <span className="text-[11px] font-bold text-[var(--color-primary)]">
@@ -190,7 +214,7 @@ function MetricRow({
           style={{ width: formatPercent(percent) }}
         />
       </div>
-      <p className="truncate text-[10px] text-[var(--color-text-muted)]">
+      <p className="truncate text-[10px] text-[var(--color-text-muted)]" title={detail}>
         {detail}
       </p>
     </div>

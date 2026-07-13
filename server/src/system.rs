@@ -64,16 +64,19 @@ impl HostMetricsSampler {
         let available_memory = inner.system.available_memory();
         let used_memory = total_memory.saturating_sub(available_memory);
         let load = System::load_average();
-        let disk = select_workspace_disk(
-            workspace_root,
-            inner.disks.list().iter().map(|disk| DiskMountSnapshot {
+        let disk_snapshots =
+            sorted_disk_snapshots(inner.disks.list().iter().map(|disk| DiskMountSnapshot {
                 name: os_str_to_string(disk.name()),
                 mount_point: disk.mount_point().to_path_buf(),
                 total_bytes: disk.total_space(),
                 available_bytes: disk.available_space(),
-            }),
-        )
-        .unwrap_or_else(|| fallback_disk(workspace_root));
+            }));
+        let disk = select_workspace_disk(workspace_root, disk_snapshots.iter().cloned())
+            .unwrap_or_else(|| fallback_disk(workspace_root));
+        let disks = disk_snapshots
+            .into_iter()
+            .map(DiskMountSnapshot::into_metrics)
+            .collect();
 
         HostMetrics {
             sampled_at: sampled_at_ms(),
@@ -97,6 +100,7 @@ impl HostMetricsSampler {
                 usage_percent: usage_percent(used_memory, total_memory),
             },
             disk: disk.into_metrics(),
+            disks,
             temperatures: read_thermal_zones(Path::new(THERMAL_ZONE_ROOT)),
         }
     }
@@ -136,6 +140,19 @@ where
         .into_iter()
         .filter(|disk| workspace.starts_with(&disk.mount_point))
         .max_by_key(|disk| disk.mount_point.components().count())
+}
+
+pub fn sorted_disk_snapshots<I>(disks: I) -> Vec<DiskMountSnapshot>
+where
+    I: IntoIterator<Item = DiskMountSnapshot>,
+{
+    let mut disks = disks.into_iter().collect::<Vec<_>>();
+    disks.sort_by(|left, right| {
+        left.mount_point
+            .cmp(&right.mount_point)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    disks
 }
 
 fn fallback_disk(workspace_root: &Path) -> DiskMountSnapshot {

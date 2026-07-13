@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use super::{read_thermal_zones, select_workspace_disk, usage_percent, DiskMountSnapshot};
+use super::{
+    read_thermal_zones, select_workspace_disk, sorted_disk_snapshots, usage_percent,
+    DiskMountSnapshot,
+};
 
 #[test]
 fn usage_percent_handles_zero_totals() {
@@ -55,6 +58,54 @@ fn ignores_non_matching_mounts() {
     );
 
     assert!(selected.is_none());
+}
+
+#[test]
+fn unmatched_workspace_disk_falls_back_to_workspace_path() {
+    let fallback = super::fallback_disk(Path::new("/work/repos/demo"));
+
+    assert_eq!(fallback.name, "workspace");
+    assert_eq!(fallback.mount_point, PathBuf::from("/work/repos/demo"));
+    assert_eq!(fallback.total_bytes, 0);
+    assert_eq!(fallback.available_bytes, 0);
+}
+
+#[test]
+fn sorts_disk_snapshots_by_mount_point_then_name() {
+    let disks = sorted_disk_snapshots(vec![
+        DiskMountSnapshot {
+            name: "z-data".into(),
+            mount_point: PathBuf::from("/data"),
+            total_bytes: 100,
+            available_bytes: 50,
+        },
+        DiskMountSnapshot {
+            name: "root".into(),
+            mount_point: PathBuf::from("/"),
+            total_bytes: 100,
+            available_bytes: 50,
+        },
+        DiskMountSnapshot {
+            name: "a-data".into(),
+            mount_point: PathBuf::from("/data"),
+            total_bytes: 100,
+            available_bytes: 50,
+        },
+    ]);
+
+    let ordered = disks
+        .iter()
+        .map(|disk| (disk.mount_point.as_path(), disk.name.as_str()))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        ordered,
+        vec![
+            (Path::new("/"), "root"),
+            (Path::new("/data"), "a-data"),
+            (Path::new("/data"), "z-data"),
+        ]
+    );
 }
 
 #[test]
