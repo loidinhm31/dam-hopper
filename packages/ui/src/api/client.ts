@@ -127,19 +127,22 @@ export interface HostMetrics {
     availableBytes: number;
     usagePercent: number;
   };
-  disk: {
-    name: string;
-    mountPoint: string;
-    totalBytes: number;
-    availableBytes: number;
-    usedBytes: number;
-    usagePercent: number;
-  };
+  disk: DiskMetrics;
+  disks?: DiskMetrics[];
   temperatures: Array<{
     label: string;
     celsius: number;
     source: string;
   }>;
+}
+
+export interface DiskMetrics {
+  name: string;
+  mountPoint: string;
+  totalBytes: number;
+  availableBytes: number;
+  usedBytes: number;
+  usagePercent: number;
 }
 
 export interface DiagnosticExportRequest {

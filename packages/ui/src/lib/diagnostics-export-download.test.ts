@@ -101,6 +101,16 @@ describe("diagnostics-export download path", () => {
           usedBytes: 1,
           usagePercent: 100,
         },
+        disks: [
+          {
+            name: "/",
+            mountPoint: "/",
+            totalBytes: 1,
+            availableBytes: 0,
+            usedBytes: 1,
+            usagePercent: 100,
+          },
+        ],
         temperatures: [],
       },
     });

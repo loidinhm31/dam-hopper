@@ -333,6 +333,7 @@ async fn system_metrics_returns_sane_json() {
     assert!(json["memory"]["usagePercent"].as_f64().unwrap() >= 0.0);
     assert!(json["disk"]["mountPoint"].as_str().is_some());
     assert!(json["disk"]["usagePercent"].as_f64().unwrap() >= 0.0);
+    assert!(json["disks"].as_array().is_some());
     assert!(json["temperatures"].as_array().is_some());
 }
 
