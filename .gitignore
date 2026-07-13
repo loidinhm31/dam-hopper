@@ -10,3 +10,7 @@ repomix-output.xml
 output.log
 server/.fuse_hidden*
 *.jks
+.claude
+.agents
+.codex
+.gemini

@@ -863,7 +863,10 @@ async fn workspace_status_returns_loaded_true() {
     assert_eq!(json["projectCount"], 0);
     assert_eq!(
         json["configPath"],
-        tmp.path().join("dam-hopper.toml").to_string_lossy().to_string()
+        tmp.path()
+            .join("dam-hopper.toml")
+            .to_string_lossy()
+            .to_string()
     );
 }
 
@@ -881,7 +884,10 @@ async fn workspace_get_includes_config_path_and_legacy_root() {
     assert_eq!(json["root"], tmp.path().to_string_lossy().to_string());
     assert_eq!(
         json["configPath"],
-        tmp.path().join("dam-hopper.toml").to_string_lossy().to_string()
+        tmp.path()
+            .join("dam-hopper.toml")
+            .to_string_lossy()
+            .to_string()
     );
 }
 
@@ -919,7 +925,11 @@ root = "."
     assert_eq!(json["name"], "switched");
     assert_eq!(
         json["configPath"],
-        switched_cfg.canonicalize().unwrap().to_string_lossy().to_string()
+        switched_cfg
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string()
     );
 
     let resp = get(state, "/api/workspace").await;
@@ -1315,7 +1325,12 @@ fn make_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) -> Ap
         .collect();
     let sandbox_roots = projects
         .iter()
-        .map(|project| (project.name.clone(), std::path::PathBuf::from(&project.path)))
+        .map(|project| {
+            (
+                project.name.clone(),
+                std::path::PathBuf::from(&project.path),
+            )
+        })
         .collect();
 
     let config = DamHopperConfig {
@@ -1371,11 +1386,7 @@ async fn fs_rest_validates_against_selected_project_root() {
         vec![("alpha", alpha.as_path()), ("beta", beta.as_path())],
     );
 
-    let alpha_resp = get(
-        state.clone(),
-        "/api/fs/read?project=alpha&path=owned.txt",
-    )
-    .await;
+    let alpha_resp = get(state.clone(), "/api/fs/read?project=alpha&path=owned.txt").await;
     assert_eq!(alpha_resp.status(), StatusCode::OK);
     let alpha_body = axum::body::to_bytes(alpha_resp.into_body(), usize::MAX)
         .await
@@ -1686,6 +1697,48 @@ async fn terminal_create_loads_project_env_file_for_terminal_sessions() {
             .unwrap_or(false)
     });
     assert!(ok, "terminal should receive project env_file values");
+}
+
+#[tokio::test]
+async fn terminal_create_defaults_project_cwd_to_project_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state_with_project_env_file(&tmp, None);
+
+    let body = serde_json::json!({
+        "id": "project-default-cwd-session",
+        "command": "printf '%s' \"$PWD\"; cat",
+        "project": "test-project"
+    });
+    let resp = post_json(state.clone(), "/api/terminal", body).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let ok = wait_for(Duration::from_secs(2), || {
+        state
+            .pty_manager
+            .get_buffer("project-default-cwd-session")
+            .map(|buf| buf.contains(&tmp.path().to_string_lossy().to_string()))
+            .unwrap_or(false)
+    });
+    assert!(
+        ok,
+        "terminal should start in project root when cwd is omitted"
+    );
+}
+
+#[tokio::test]
+async fn terminal_create_rejects_project_cwd_escape() {
+    let tmp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let state = make_state_with_project_env_file(&tmp, None);
+
+    let body = serde_json::json!({
+        "id": "project-cwd-escape-session",
+        "command": "echo should-not-run",
+        "cwd": outside.path().to_str().unwrap(),
+        "project": "test-project"
+    });
+    let resp = post_json(state, "/api/terminal", body).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

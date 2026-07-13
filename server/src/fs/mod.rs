@@ -105,7 +105,14 @@ impl FsSubsystem {
         };
         let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         inner.sandbox = sandbox;
-        inner.subs.clear();
+        let watcher_roots: Vec<PathBuf> = inner
+            .subs
+            .drain()
+            .map(|(_, info)| info.watcher_root)
+            .collect();
+        for watcher_root in watcher_roots {
+            inner.watcher_mgr.release(&watcher_root);
+        }
     }
 
     /// Returns a cloned sandbox handle, or `Err(Unavailable)` if init failed.
@@ -238,6 +245,29 @@ pub fn tree_snapshot_sync(abs_path: &Path) -> Result<Vec<TreeNode>, FsError> {
     });
 
     Ok(nodes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FsSubsystem;
+
+    #[test]
+    fn reinit_sandbox_releases_active_watchers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let alpha = tmp.path().join("alpha");
+        let beta = tmp.path().join("beta");
+        std::fs::create_dir_all(&alpha).unwrap();
+        std::fs::create_dir_all(&beta).unwrap();
+
+        let fs = FsSubsystem::new(vec![("alpha".into(), alpha.clone())]);
+        let (sub_id, _rx) = fs.subscribe_tree("alpha", alpha.clone()).unwrap();
+        assert_eq!(fs.watcher_refcount(&alpha), 1);
+
+        fs.reinit_sandbox(vec![("beta".into(), beta)]);
+
+        assert_eq!(fs.watcher_refcount(&alpha), 0);
+        fs.unsubscribe_tree(sub_id);
+    }
 }
 
 fn map_io_sync(e: std::io::Error) -> FsError {
