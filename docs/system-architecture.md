@@ -59,9 +59,12 @@ Handles TOML parsing, project discovery, feature flags.
 
 **Path resolution priority:**
 
-1. `--workspace` CLI flag
-2. `DAM_HOPPER_WORKSPACE` env var
-3. `~/.config/dam-hopper/config.toml` default path
+1. `--config` CLI flag or `DAM_HOPPER_CONFIG` env var
+2. `--workspace` CLI flag or `DAM_HOPPER_WORKSPACE` env var
+3. `~/.config/dam-hopper/dam-hopper.toml` global registry path
+4. `~/.config/dam-hopper/config.toml` `defaults.workspace`
+5. Current working directory via legacy upward `dam-hopper.toml` discovery
+6. Empty config fallback
 
 ### shared/
 
