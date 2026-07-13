@@ -65,7 +65,7 @@ fn make_state(tmp: &TempDir) -> AppState {
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
-    let fs = FsSubsystem::new(workspace_dir.clone());
+    let fs = FsSubsystem::new(vec![]);
     let tunnel_manager = make_tunnel_manager(&event_sink);
 
     AppState::new(
@@ -861,6 +861,84 @@ async fn workspace_status_returns_loaded_true() {
     assert_eq!(json["ready"], true);
     assert_eq!(json["name"], "test-workspace");
     assert_eq!(json["projectCount"], 0);
+    assert_eq!(
+        json["configPath"],
+        tmp.path()
+            .join("dam-hopper.toml")
+            .to_string_lossy()
+            .to_string()
+    );
+}
+
+#[tokio::test]
+async fn workspace_get_includes_config_path_and_legacy_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let resp = get(state, "/api/workspace").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["name"], "test-workspace");
+    assert_eq!(json["root"], tmp.path().to_string_lossy().to_string());
+    assert_eq!(
+        json["configPath"],
+        tmp.path()
+            .join("dam-hopper.toml")
+            .to_string_lossy()
+            .to_string()
+    );
+}
+
+#[tokio::test]
+async fn workspace_switch_accepts_direct_config_file_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let switched = tempfile::tempdir().unwrap();
+    let switched_cfg = switched.path().join("dam-hopper.toml");
+    std::fs::write(
+        &switched_cfg,
+        r#"
+[workspace]
+name = "switched"
+root = "."
+"#,
+    )
+    .unwrap();
+
+    let resp = post_json(
+        state.clone(),
+        "/api/workspace/switch",
+        serde_json::json!({ "path": switched_cfg.to_string_lossy().to_string() }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = get(state.clone(), "/api/workspace/status").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["name"], "switched");
+    assert_eq!(
+        json["configPath"],
+        switched_cfg
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string()
+    );
+
+    let resp = get(state, "/api/workspace").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["root"], switched.path().to_string_lossy().to_string());
 }
 
 #[tokio::test]
@@ -943,6 +1021,113 @@ async fn config_update_persists_camel_case_project_fields_as_toml_schema() {
         json["projects"][0]["services"][0]["runCommand"],
         "cargo run"
     );
+}
+
+#[tokio::test]
+async fn config_update_reloads_from_current_config_path_not_workspace_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let unrelated = tempfile::tempdir().unwrap();
+    *state.workspace_dir.write().await = unrelated.path().to_path_buf();
+
+    let resp = put_json(
+        state.clone(),
+        "/api/config",
+        serde_json::json!({
+            "workspace": { "name": "updated-via-config-path", "root": "." },
+            "projects": []
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let cfg = state.config.read().await;
+    assert_eq!(cfg.workspace.name, "updated-via-config-path");
+}
+
+#[tokio::test]
+async fn config_update_reinitializes_sandbox_from_new_project_roots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let project_dir = tmp.path().join("alpha");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(project_dir.join("hello.txt"), "hello").unwrap();
+
+    let resp = put_json(
+        state.clone(),
+        "/api/config",
+        serde_json::json!({
+            "workspace": { "name": "test-workspace", "root": "." },
+            "projects": [{
+                "name": "alpha",
+                "path": "alpha",
+                "type": "custom"
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let read_resp = get(state, "/api/fs/read?project=alpha&path=hello.txt").await;
+    assert_eq!(read_resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(read_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&body[..], b"hello");
+}
+
+#[tokio::test]
+async fn config_update_formats_mixed_absolute_project_paths_for_toml() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let inside_dir = tmp.path().join("inside-project");
+    std::fs::create_dir_all(&inside_dir).unwrap();
+
+    let outside = tempfile::tempdir().unwrap();
+    let outside_dir = outside.path().join("outside-project");
+    std::fs::create_dir_all(&outside_dir).unwrap();
+
+    let resp = put_json(
+        state.clone(),
+        "/api/config",
+        serde_json::json!({
+            "workspace": { "name": "test-workspace", "root": "." },
+            "projects": [
+                {
+                    "name": "inside",
+                    "path": inside_dir.to_string_lossy().to_string(),
+                    "type": "cargo"
+                },
+                {
+                    "name": "outside",
+                    "path": outside_dir.to_string_lossy().to_string(),
+                    "type": "cargo"
+                }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let written = std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap();
+    let parsed: toml::Value = toml::from_str(&written).unwrap();
+    let projects = parsed["projects"].as_array().unwrap();
+    let inside_path = projects[0]["path"].as_str().unwrap();
+    let outside_path = projects[1]["path"].as_str().unwrap();
+
+    assert_eq!(inside_path, "inside-project");
+    assert!(!inside_path.contains('\\'));
+    assert_eq!(outside_path, outside_dir.to_string_lossy());
+    assert!(std::path::Path::new(outside_path).is_absolute());
+
+    let resp = get(state, "/api/config").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["projects"][0]["path"], inside_dir.to_string_lossy().to_string());
+    assert_eq!(json["projects"][1]["path"], outside_dir.to_string_lossy().to_string());
 }
 
 #[tokio::test]
@@ -1151,7 +1336,7 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
-    let fs = FsSubsystem::new(workspace_dir.clone());
+    let fs = FsSubsystem::new(vec![("test-project".into(), workspace_dir.clone())]);
     let tunnel_manager = make_tunnel_manager(&event_sink);
 
     AppState::new(
@@ -1171,6 +1356,113 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
     )
     .expect("make_state_with_project failed")
+}
+
+fn make_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) -> AppState {
+    let workspace_dir = tmp.path().to_path_buf();
+    let projects: Vec<ProjectConfig> = roots
+        .iter()
+        .map(|(name, path)| ProjectConfig {
+            name: (*name).into(),
+            path: path.to_string_lossy().into_owned(),
+            project_type: ProjectType::Custom,
+            services: None,
+            commands: None,
+            env_file: None,
+            tags: None,
+            terminals: vec![],
+            agents: None,
+            restart_policy: crate::config::RestartPolicy::Never,
+            restart_max_retries: crate::config::DEFAULT_RESTART_MAX_RETRIES,
+            health_check_url: None,
+        })
+        .collect();
+    let sandbox_roots = projects
+        .iter()
+        .map(|project| {
+            (
+                project.name.clone(),
+                std::path::PathBuf::from(&project.path),
+            )
+        })
+        .collect();
+
+    let config = DamHopperConfig {
+        workspace: WorkspaceInfo {
+            name: "test-workspace".into(),
+            root: ".".into(),
+        },
+        agent_store: None,
+        server: crate::config::ServerConfig::default(),
+        projects,
+        features: FeaturesConfig::default(),
+        config_path: workspace_dir.join("dam-hopper.toml"),
+    };
+
+    let (event_sink, _rx) = BroadcastEventSink::new(64);
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
+    let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
+    let fs = FsSubsystem::new(sandbox_roots);
+    let tunnel_manager = make_tunnel_manager(&event_sink);
+
+    AppState::new(
+        workspace_dir,
+        config,
+        GlobalConfig::default(),
+        pty_manager,
+        agent_store,
+        event_sink,
+        TEST_TOKEN.to_string(),
+        fs,
+        None,
+        false,
+        tunnel_manager,
+        None,
+        test_opaque_setup(),
+        DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
+    )
+    .expect("make_state_with_project_roots failed")
+}
+
+#[tokio::test]
+async fn fs_rest_validates_against_selected_project_root() {
+    let registry_tmp = tempfile::tempdir().unwrap();
+    let projects_tmp = tempfile::tempdir().unwrap();
+    let alpha = projects_tmp.path().join("alpha");
+    let beta = projects_tmp.path().join("beta");
+    std::fs::create_dir_all(&alpha).unwrap();
+    std::fs::create_dir_all(&beta).unwrap();
+    std::fs::write(alpha.join("owned.txt"), "alpha").unwrap();
+    std::fs::write(beta.join("owned.txt"), "beta").unwrap();
+
+    let state = make_state_with_project_roots(
+        &registry_tmp,
+        vec![("alpha", alpha.as_path()), ("beta", beta.as_path())],
+    );
+
+    let alpha_resp = get(state.clone(), "/api/fs/read?project=alpha&path=owned.txt").await;
+    assert_eq!(alpha_resp.status(), StatusCode::OK);
+    let alpha_body = axum::body::to_bytes(alpha_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&alpha_body[..], b"alpha");
+
+    let beta_resp = get(state.clone(), "/api/fs/read?project=beta&path=owned.txt").await;
+    assert_eq!(beta_resp.status(), StatusCode::OK);
+    let beta_body = axum::body::to_bytes(beta_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&beta_body[..], b"beta");
+
+    let escape_resp = get(
+        state.clone(),
+        "/api/fs/read?project=alpha&path=../beta/owned.txt",
+    )
+    .await;
+    assert_eq!(escape_resp.status(), StatusCode::FORBIDDEN);
+
+    let missing_resp = get(state, "/api/fs/read?project=missing&path=owned.txt").await;
+    assert_eq!(missing_resp.status(), StatusCode::NOT_FOUND);
 }
 
 fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> AppState {
@@ -1193,7 +1485,7 @@ fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> Ap
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
-    let fs = FsSubsystem::new(workspace_dir.clone());
+    let fs = FsSubsystem::new(vec![("test-project".into(), workspace_dir.clone())]);
     let tunnel_manager = make_tunnel_manager(&event_sink);
 
     AppState::new(
@@ -1459,6 +1751,48 @@ async fn terminal_create_loads_project_env_file_for_terminal_sessions() {
             .unwrap_or(false)
     });
     assert!(ok, "terminal should receive project env_file values");
+}
+
+#[tokio::test]
+async fn terminal_create_defaults_project_cwd_to_project_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state_with_project_env_file(&tmp, None);
+
+    let body = serde_json::json!({
+        "id": "project-default-cwd-session",
+        "command": "printf '%s' \"$PWD\"; cat",
+        "project": "test-project"
+    });
+    let resp = post_json(state.clone(), "/api/terminal", body).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let ok = wait_for(Duration::from_secs(2), || {
+        state
+            .pty_manager
+            .get_buffer("project-default-cwd-session")
+            .map(|buf| buf.contains(&tmp.path().to_string_lossy().to_string()))
+            .unwrap_or(false)
+    });
+    assert!(
+        ok,
+        "terminal should start in project root when cwd is omitted"
+    );
+}
+
+#[tokio::test]
+async fn terminal_create_rejects_project_cwd_escape() {
+    let tmp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let state = make_state_with_project_env_file(&tmp, None);
+
+    let body = serde_json::json!({
+        "id": "project-cwd-escape-session",
+        "command": "echo should-not-run",
+        "cwd": outside.path().to_str().unwrap(),
+        "project": "test-project"
+    });
+    let resp = post_json(state, "/api/terminal", body).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

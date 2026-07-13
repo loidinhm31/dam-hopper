@@ -173,6 +173,19 @@ Infrastructure
 - **Tests**: 8 decision matrix rows + 5 integration tests (13/13 passing)
 - **Known Limitation**: Exit code inference (portable-pty API) — cannot distinguish exit 0 from exit 1
 
+### Phase 05: Config Write Roundtrip ✅ Complete
+
+- **Status**: Absolute and relative project paths preserved correctly in TOML output
+- **Features**:
+  - Projects outside config directory preserve absolute paths in TOML writes
+  - Projects inside config directory written as relative paths for portability
+  - Relative paths normalized to forward slashes in TOML output
+  - Config read → write → read cycle remains idempotent
+  - Roundtrip behavior applies to both parser serialization and API config updates
+- **Runtime Security**: Write behavior is serialization-only; runtime file access still limited by configured per-project roots
+- **Tests**: Parser roundtrip tests and API config update tests passing
+- **Related**: [Configuration Guide - Project Path Serialization](./configuration-guide.md#project-discovery)
+
 ### Phase 06: Startup Restore ✅ Complete
 
 - **Status**: Session restoration from SQLite on server startup
@@ -229,7 +242,8 @@ Infrastructure
 ### Environment Variables
 
 ```bash
-DAM_HOPPER_WORKSPACE     # Workspace root directory
+DAM_HOPPER_CONFIG        # Explicit project registry file
+DAM_HOPPER_WORKSPACE     # Legacy workspace directory override / discovery root
 DAM_HOPPER_PORT          # Server port (default: 4800)
 DAM_HOPPER_HOST          # Bind address (default: 0.0.0.0)
 DAM_HOPPER_NO_AUTH       # Dev mode, bypasses auth
@@ -244,11 +258,12 @@ RUST_ENV                 # Runtime environment (blocks if "production")
 ```
 ~/.config/dam-hopper/
   ├── server-token         # JWT signing secret (hex UUID)
-  └── config.toml          # Global config (workspaces)
+  ├── config.toml          # Global defaults / known workspaces
+  └── dam-hopper.toml      # Canonical project registry
 
-workspace-root/
-  ├── dam-hopper.toml      # Workspace configuration
-  └── .dam-hopper/         # Internal directory
+registry-dir/
+  ├── dam-hopper.toml      # Loaded registry (default: ~/.config/dam-hopper/)
+  └── .dam-hopper/         # Internal directory next to the loaded registry
       ├── agent-store/     # Agent store repository
       └── cache/           # Cache directory
 ```
@@ -261,7 +276,7 @@ workspace-root/
 cd server
 
 # Dev mode with no authentication
-cargo run -- --no-auth --workspace /path/to/workspace
+cargo run -- --no-auth --config /path/to/dam-hopper.toml
 
 # Dev mode with watch
 cargo watch -x run
@@ -379,7 +394,7 @@ dam-hopper/
 
 ### File System
 
-- **Sandbox**: All paths validated relative to workspace root
+- **Sandbox**: All paths validated relative to the selected project's configured root
 - **Symlinks**: Allowed but cannot escape sandbox
 - **Permissions**: Preserved from filesystem
 

@@ -54,7 +54,7 @@ fn create_no_auth_state(workspace_root: PathBuf) -> AppState {
     let store_path = workspace_root.join(".dam-hopper/agent-store");
     let agent_store = AgentStoreService::new(store_path);
     let jwt_secret = "test-secret-key".to_string();
-    let fs = FsSubsystem::new(workspace_root.clone());
+    let fs = FsSubsystem::new(vec![]);
 
     // Acquire lock for env var access
     let _guard = ENV_LOCK.lock().unwrap();
@@ -117,7 +117,7 @@ fn create_normal_auth_state(workspace_root: PathBuf) -> AppState {
     let store_path = workspace_root.join(".dam-hopper/agent-store");
     let agent_store = AgentStoreService::new(store_path);
     let jwt_secret = "test-secret-key".to_string();
-    let fs = FsSubsystem::new(workspace_root.clone());
+    let fs = FsSubsystem::new(vec![]);
 
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
     let diagnostics = DiagnosticStore::new(workspace_root.join("diagnostics.jsonl"));
@@ -370,7 +370,7 @@ async fn test_no_auth_with_mongodb_fails() {
     let store_path = workspace_root.join(".dam-hopper/agent-store");
     let agent_store = AgentStoreService::new(store_path);
     let jwt_secret = "test-secret-key".to_string();
-    let fs = FsSubsystem::new(workspace_root.clone());
+    let fs = FsSubsystem::new(vec![]);
 
     // Create a mock MongoDB database (simulating MONGODB_URI being set)
     let mongodb_client = mongodb::Client::with_uri_str("mongodb://fake")
@@ -440,7 +440,7 @@ async fn test_no_auth_in_production_env_fails() {
     let store_path = workspace_root.join(".dam-hopper/agent-store");
     let agent_store = AgentStoreService::new(store_path);
     let jwt_secret = "test-secret-key".to_string();
-    let fs = FsSubsystem::new(workspace_root.clone());
+    let fs = FsSubsystem::new(vec![]);
 
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
     let diagnostics = DiagnosticStore::new(workspace_root.join("diagnostics.jsonl"));

@@ -1446,7 +1446,7 @@ async fn resolve_abs_path(
         path.trim_start_matches('/')
     };
     sandbox
-        .validate(project_abs.join(rel))
+        .validate(project, project_abs.join(rel))
         .await
         .map_err(|e| ("PATH_REJECTED".to_string(), e.to_string()))
 }
@@ -1592,6 +1592,7 @@ async fn do_fs_op(
         .map_err(|e| crate::fs::FsError::MutationRefused(e.to_string()))?;
 
     let sandbox = state.fs.sandbox()?;
+    let project_root = sandbox.project_root(project).ok_or(crate::fs::FsError::NotFound)?;
 
     match op {
         "create_file" | "create_dir" => {
@@ -1604,11 +1605,11 @@ async fn do_fs_op(
                 .unwrap_or(project_abs.clone());
             let name = proposed.file_name().and_then(|n| n.to_str()).unwrap_or("");
             // Validate parent exists and is within sandbox, then construct new abs path.
-            let new_abs = sandbox.validate_new_path(parent, name).await?;
+            let new_abs = sandbox.validate_new_path(project, parent, name).await?;
             if op == "create_file" {
-                mutate::create_file(&new_abs, &project_abs).await
+                mutate::create_file(&new_abs, &project_root).await
             } else {
-                mutate::create_dir(&new_abs, &project_abs).await
+                mutate::create_dir(&new_abs, &project_root).await
             }
         }
         "delete" => {
@@ -1618,13 +1619,13 @@ async fn do_fs_op(
             let abs = if rel == "." {
                 project_abs.clone()
             } else {
-                sandbox.validate(project_abs.join(rel)).await?
+                sandbox.validate(project, project_abs.join(rel)).await?
             };
-            mutate::delete(&abs, &project_abs, force_git).await
+            mutate::delete(&abs, &project_root, force_git).await
         }
         "rename" | "move" => {
             let rel = trim_leading_slash(path);
-            let abs = sandbox.validate(project_abs.join(rel)).await?;
+            let abs = sandbox.validate(project, project_abs.join(rel)).await?;
 
             let dst_rel = new_path.ok_or_else(|| {
                 crate::fs::FsError::MutationRefused("rename/move requires new_path".into())
@@ -1639,12 +1640,14 @@ async fn do_fs_op(
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("");
-            let dst_abs = sandbox.validate_new_path(dst_parent, dst_name).await?;
+            let dst_abs = sandbox
+                .validate_new_path(project, dst_parent, dst_name)
+                .await?;
 
             if op == "rename" {
-                mutate::rename(&abs, &dst_abs, &project_abs).await
+                mutate::rename(&abs, &dst_abs, &project_root).await
             } else {
-                mutate::move_path(&abs, &dst_abs, &project_abs).await
+                mutate::move_path(&abs, &dst_abs, &project_root).await
             }
         }
         _ => Err(crate::fs::FsError::MutationRefused(format!(
@@ -1687,10 +1690,12 @@ async fn do_upload_begin(
     let sandbox = state.fs.sandbox()?;
 
     let dir_rel = trim_leading_slash(dir);
-    let dir_abs = sandbox.validate(project_abs.join(dir_rel)).await?;
+    let dir_abs = sandbox.validate(project, project_abs.join(dir_rel)).await?;
 
     // validate_new_path checks filename for path separators / ".." / empty
-    let target_abs = sandbox.validate_new_path(dir_abs, filename).await?;
+    let target_abs = sandbox
+        .validate_new_path(project, dir_abs, filename)
+        .await?;
 
     let upload_state = UploadState::new(target_abs, len)?;
     uploads.insert(upload_id.to_string(), upload_state);
@@ -1967,17 +1972,15 @@ async fn do_enc_put_begin(
         ));
     }
 
-    let project_abs = state
-        .project_path(project)
-        .await
-        .map_err(|e| ("PROJECT_NOT_FOUND".into(), e.to_string()))?;
-
     let sandbox = state
         .fs
         .sandbox()
         .map_err(|e| ("FS_UNAVAILABLE".into(), e.to_string()))?;
+    let project_root = sandbox
+        .project_root(project)
+        .ok_or_else(|| ("PROJECT_NOT_FOUND".into(), format!("Project not found: {project}")))?;
 
-    let dir_abs = project_abs.join(dir.trim_start_matches('/'));
+    let dir_abs = project_root.join(dir.trim_start_matches('/'));
 
     // FIX-01: fast-path lexical traversal check before any filesystem I/O
     if dir_abs
@@ -1992,7 +1995,7 @@ async fn do_enc_put_begin(
     {
         let mut check = dir_abs.clone();
         loop {
-            match sandbox.validate(check.clone()).await {
+            match sandbox.validate(project, check.clone()).await {
                 Ok(_) => break, // found an existing ancestor within sandbox
                 Err(crate::fs::FsError::NotFound) => {
                     check = check.parent().map(|p| p.to_path_buf()).ok_or_else(|| {
@@ -2023,7 +2026,7 @@ async fn do_enc_put_begin(
     })?;
 
     // FIX-01: final canonicalize + sandbox check on now-existing dir
-    let dir_validated = sandbox.validate(dir_abs).await.map_err(|e| match e {
+    let dir_validated = sandbox.validate(project, dir_abs).await.map_err(|e| match e {
         crate::fs::FsError::PathEscape | crate::fs::FsError::PermissionDenied => {
             ("FORBIDDEN".into(), "dir resolves outside workspace".into())
         }
@@ -2031,7 +2034,7 @@ async fn do_enc_put_begin(
     })?;
 
     let target_abs = sandbox
-        .validate_new_path(dir_validated, filename)
+        .validate_new_path(project, dir_validated, filename)
         .await
         .map_err(|e| ("INVALID_PATH".into(), e.to_string()))?;
 
@@ -2091,14 +2094,20 @@ async fn do_fs_subscribe(
         path.trim_start_matches('/')
     };
     let abs_path = sandbox
-        .validate(project_abs.join(rel_path))
+        .validate(project, project_abs.join(rel_path))
         .await
         .map_err(|e| ("PATH_REJECTED".to_string(), e.to_string()))?;
 
     let (sub_id, fs_rx) = state
         .fs
-        .subscribe_tree(project_abs.clone(), abs_path.clone())
-        .map_err(|e| ("WATCHER_ERROR".to_string(), e.to_string()))?;
+        .subscribe_tree(project, abs_path.clone())
+        .map_err(|e| match e {
+            crate::fs::FsError::NotFound => {
+                ("PROJECT_NOT_FOUND".to_string(), format!("Project not found: {project}"))
+            }
+            crate::fs::FsError::PathEscape => ("PATH_REJECTED".to_string(), e.to_string()),
+            _ => ("WATCHER_ERROR".to_string(), e.to_string()),
+        })?;
 
     debug!(sub_id, project, path, "fs:subscribe_tree");
 

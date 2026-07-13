@@ -5,8 +5,9 @@ use super::{
         add_known_workspace_at, list_known_workspaces_at, read_global_config_at,
         remove_known_workspace_at, write_global_config_at,
     },
-    parser::{read_config, write_config},
+    parser::{project_path_for_toml, read_config, write_config},
     presets::{get_effective_command, get_preset},
+    resolve::{resolve_startup_config, ConfigResolutionInput, ConfigSource},
     schema::{
         CommandKind, GlobalConfig, KnownWorkspace, ProjectType, RestartPolicy, UiConfig,
     },
@@ -102,6 +103,37 @@ run_command = "java -jar auth/target/*.jar"
 }
 
 #[test]
+fn parse_config_with_terminal_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[workspace]
+name = "term-ws"
+
+[[projects]]
+name = "backend"
+path = "./backend"
+type = "cargo"
+
+[[projects.terminals]]
+name = "shell"
+command = "bash"
+cwd = "./ops"
+"#,
+    )
+    .unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(cfg.projects[0].terminals.len(), 1);
+    assert_eq!(
+        cfg.projects[0].terminals[0].cwd,
+        dir.path().join("backend/ops").to_string_lossy()
+    );
+}
+
+#[test]
 fn reject_duplicate_project_names() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("dam-hopper.toml");
@@ -128,14 +160,99 @@ type = "npm"
 }
 
 #[test]
-fn reject_absolute_project_path() {
+fn accept_absolute_project_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let project_path = dir.path().join("project-root");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"{}\"\ntype=\"cargo\"",
+            project_path.display()
+        ),
+    )
+    .unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(cfg.projects[0].path, project_path.to_string_lossy());
+}
+
+#[test]
+fn resolve_relative_project_path_against_config_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path().join("registry");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let config_path = config_dir.join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"./project-root\"\ntype=\"cargo\"",
+    )
+    .unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(
+        cfg.projects[0].path,
+        config_dir.join("project-root").to_string_lossy()
+    );
+}
+
+#[test]
+fn resolve_relative_project_path_removes_redundant_current_dir_components() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("dam-hopper.toml");
     std::fs::write(
         &config_path,
-        "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"/etc/passwd\"\ntype=\"cargo\"",
+        "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"././project-root\"\ntype=\"cargo\"",
     )
     .unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(
+        cfg.projects[0].path,
+        dir.path().join("project-root").to_string_lossy()
+    );
+}
+
+#[test]
+fn reject_path_traversal_in_project_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"../outside\"\ntype=\"cargo\"",
+    )
+    .unwrap();
+
+    assert!(read_config(&config_path).is_err());
+}
+
+#[test]
+fn reject_multiple_parent_dir_components_in_project_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"../../outside\"\ntype=\"cargo\"",
+    )
+    .unwrap();
+
+    assert!(read_config(&config_path).is_err());
+}
+
+#[test]
+fn reject_path_traversal_in_absolute_project_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let project_path = dir.path().join("..").join("outside");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"{}\"\ntype=\"cargo\"",
+            project_path.display()
+        ),
+    )
+    .unwrap();
+
     assert!(read_config(&config_path).is_err());
 }
 
@@ -149,6 +266,122 @@ fn reject_path_traversal_in_env_file() {
     )
     .unwrap();
     assert!(read_config(&config_path).is_err());
+}
+
+#[test]
+fn reject_absolute_env_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let env_file = dir.path().join(".env");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"\nenv_file=\"{}\"",
+            env_file.display()
+        ),
+    )
+    .unwrap();
+
+    assert!(read_config(&config_path).is_err());
+}
+
+#[test]
+fn reject_path_traversal_in_terminal_cwd() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[workspace]
+name = "w"
+
+[[projects]]
+name = "p"
+path = "."
+type = "cargo"
+
+[[projects.terminals]]
+name = "shell"
+command = "bash"
+cwd = "../../etc"
+"#,
+    )
+    .unwrap();
+
+    assert!(read_config(&config_path).is_err());
+}
+
+#[test]
+fn reject_absolute_terminal_cwd() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let cwd = dir.path().join("ops");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"\n\n[[projects.terminals]]\nname=\"shell\"\ncommand=\"bash\"\ncwd=\"{}\"",
+            cwd.display()
+        ),
+    )
+    .unwrap();
+
+    assert!(read_config(&config_path).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn accept_windows_absolute_project_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let project_path = std::env::temp_dir().join("dam-hopper-windows-project");
+    std::fs::create_dir_all(&project_path).unwrap();
+    let project_path_raw = project_path.to_string_lossy().replace('\\', "/");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"{}\"\ntype=\"cargo\"",
+            project_path_raw
+        ),
+    )
+    .unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(cfg.projects[0].path, project_path.to_string_lossy());
+}
+
+#[cfg(windows)]
+#[test]
+fn accept_windows_absolute_project_path_with_mixed_separators() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let project_path = std::env::temp_dir()
+        .join("dam-hopper-windows-project")
+        .join("nested");
+    std::fs::create_dir_all(&project_path).unwrap();
+
+    let mut project_path_raw = project_path.to_string_lossy().replace('\\', "/");
+    if let Some((index, _)) = project_path_raw
+        .char_indices()
+        .skip(3)
+        .find(|(_, ch)| *ch == '/')
+    {
+        project_path_raw.replace_range(index..=index, "\\");
+    }
+
+    assert!(project_path_raw.contains('/'));
+    assert!(project_path_raw.contains('\\'));
+
+    std::fs::write(
+        &config_path,
+        format!(
+            "[workspace]\nname='w'\n\n[[projects]]\nname='p'\npath='{}'\ntype='cargo'",
+            project_path_raw
+        ),
+    )
+    .unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(std::path::PathBuf::from(&cfg.projects[0].path), project_path);
 }
 
 #[test]
@@ -180,6 +413,145 @@ env_file = ".env"
     assert_eq!(original.projects[0].name, reloaded.projects[0].name);
     assert_eq!(original.projects[0].env_file, reloaded.projects[0].env_file);
     assert_eq!(original.projects[0].tags, reloaded.projects[0].tags);
+}
+
+#[test]
+fn project_path_for_toml_returns_dot_for_config_dir_root() {
+    let dir = tempfile::tempdir().unwrap();
+
+    assert_eq!(project_path_for_toml(dir.path(), dir.path()), ".");
+}
+
+#[test]
+fn project_path_for_toml_uses_forward_slash_relative_path_inside_config_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let project_path = dir.path().join("nested").join("inside");
+
+    let formatted = project_path_for_toml(&project_path, dir.path());
+
+    assert_eq!(formatted, "nested/inside");
+    assert!(!formatted.contains('\\'));
+}
+
+#[test]
+fn project_path_for_toml_preserves_absolute_path_outside_config_dir() {
+    let registry = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let project_path = outside.path().join("outside-project");
+
+    let formatted = project_path_for_toml(&project_path, registry.path());
+
+    assert_eq!(formatted, project_path.to_string_lossy());
+    assert!(std::path::Path::new(&formatted).is_absolute());
+}
+
+#[test]
+fn config_roundtrip_preserves_mixed_relative_and_absolute_project_paths() {
+    let registry = tempfile::tempdir().unwrap();
+    let config_dir = registry.path().join("registry");
+    std::fs::create_dir_all(config_dir.join("nested/inside")).unwrap();
+
+    let outside = tempfile::tempdir().unwrap();
+    let outside_path = outside.path().join("project-root");
+    let outside_path_raw = outside_path.to_string_lossy().replace('\\', "/");
+    let config_path = config_dir.join("dam-hopper.toml");
+
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+[workspace]
+name = "rt-ws"
+
+[[projects]]
+name = "inside"
+path = "./nested/inside"
+type = "cargo"
+
+[[projects]]
+name = "outside"
+path = "{}"
+type = "cargo"
+"#,
+            outside_path_raw
+        ),
+    )
+    .unwrap();
+
+    let original = read_config(&config_path).unwrap();
+    write_config(&config_path, &original).unwrap();
+    let reloaded = read_config(&config_path).unwrap();
+    let written = std::fs::read_to_string(&config_path).unwrap();
+    let parsed: toml::Value = toml::from_str(&written).unwrap();
+    let projects = parsed["projects"].as_array().unwrap();
+    let inside_path = projects[0]["path"].as_str().unwrap();
+    let outside_path_written = projects[1]["path"].as_str().unwrap();
+
+    assert_eq!(inside_path, "nested/inside");
+    assert!(!inside_path.contains('\\'));
+    assert!(std::path::Path::new(outside_path_written).is_absolute());
+    assert_eq!(outside_path_written, original.projects[1].path);
+    assert_eq!(original.projects[0].path, reloaded.projects[0].path);
+    assert_eq!(original.projects[1].path, reloaded.projects[1].path);
+}
+
+#[cfg(windows)]
+#[test]
+fn write_config_escapes_native_windows_absolute_project_paths() {
+    use super::schema::{DamHopperConfig, FeaturesConfig, ProjectConfig, WorkspaceInfo};
+
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let outside = tempfile::tempdir().unwrap();
+    let project_path = outside.path().join("windows-project");
+
+    let config = DamHopperConfig {
+        workspace: WorkspaceInfo {
+            name: "windows-rt".to_string(),
+            root: ".".to_string(),
+        },
+        agent_store: None,
+        server: super::schema::ServerConfig::default(),
+        projects: vec![ProjectConfig {
+            name: "outside".to_string(),
+            path: project_path.to_string_lossy().to_string(),
+            project_type: ProjectType::Cargo,
+            services: None,
+            commands: None,
+            env_file: None,
+            tags: None,
+            terminals: vec![],
+            agents: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: super::schema::DEFAULT_RESTART_MAX_RETRIES,
+            health_check_url: None,
+        }],
+        features: FeaturesConfig::default(),
+        config_path: config_path.clone(),
+    };
+
+    write_config(&config_path, &config).unwrap();
+
+    let written = std::fs::read_to_string(&config_path).unwrap();
+    let escaped = project_path.to_string_lossy().replace('\\', "\\\\");
+    assert!(written.contains(&format!("path = \"{}\"", escaped)));
+
+    let reloaded = read_config(&config_path).unwrap();
+    assert_eq!(reloaded.projects[0].path, project_path.to_string_lossy());
+}
+
+#[cfg(windows)]
+#[test]
+fn project_path_for_toml_preserves_verbatim_windows_absolute_paths() {
+    let registry = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let project_path = outside.path().join("windows-project");
+    let verbatim = std::path::PathBuf::from(format!(r"\\?\{}", project_path.display()));
+
+    let formatted = project_path_for_toml(&verbatim, registry.path());
+
+    assert_eq!(formatted, verbatim.to_string_lossy());
+    assert!(std::path::Path::new(&formatted).is_absolute());
 }
 
 // ──────────────────────────────────────────────
@@ -450,6 +822,194 @@ fn no_op_add_same_workspace() {
     add_known_workspace_at(&cfg_path, "ws", "/tmp/ws").unwrap();
     add_known_workspace_at(&cfg_path, "ws", "/tmp/ws").unwrap(); // no-op
     assert_eq!(list_known_workspaces_at(&cfg_path).unwrap().len(), 1);
+}
+
+// ──────────────────────────────────────────────
+// Startup config resolver tests
+// ──────────────────────────────────────────────
+
+#[test]
+fn resolve_explicit_config_path_uses_exact_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = dir.path().join("custom-registry.toml");
+    write_workspace_config(&registry, "explicit");
+
+    let resolution = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: Some(registry.clone()),
+        workspace_dir: None,
+        global_default_workspace: None,
+        current_dir: dir.path().join("cwd"),
+        registry_path: dir.path().join("missing-registry.toml"),
+    })
+    .unwrap();
+
+    assert_eq!(resolution.source, ConfigSource::ExplicitConfig);
+    assert_eq!(resolution.config.workspace.name, "explicit");
+    assert_eq!(resolution.config.config_path, registry.canonicalize().unwrap());
+    assert_eq!(resolution.workspace_dir, registry.parent().unwrap());
+}
+
+#[test]
+fn resolve_explicit_config_invalid_toml_returns_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = dir.path().join("bad-registry.toml");
+    std::fs::write(&registry, "invalid [[[[ toml").unwrap();
+
+    let result = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: Some(registry),
+        workspace_dir: None,
+        global_default_workspace: None,
+        current_dir: dir.path().join("cwd"),
+        registry_path: dir.path().join("missing-registry.toml"),
+    });
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn resolve_workspace_uses_found_config_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    write_workspace_config(&config_path, "workspace");
+
+    let nested = dir.path().join("server").join("src");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    let resolution = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: None,
+        workspace_dir: Some(nested),
+        global_default_workspace: None,
+        current_dir: dir.path().join("cwd"),
+        registry_path: dir.path().join("missing-registry.toml"),
+    })
+    .unwrap();
+
+    assert_eq!(resolution.source, ConfigSource::Workspace);
+    assert_eq!(resolution.config.workspace.name, "workspace");
+    assert_eq!(resolution.workspace_dir, dir.path());
+}
+
+#[test]
+fn resolve_prefers_global_registry_over_legacy_discovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = dir.path().join("dam-hopper.toml");
+    write_workspace_config(&registry, "registry");
+
+    let default_workspace = dir.path().join("default-workspace");
+    std::fs::create_dir_all(&default_workspace).unwrap();
+    write_workspace_config(&default_workspace.join("dam-hopper.toml"), "default");
+
+    let cwd = dir.path().join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    write_workspace_config(&cwd.join("dam-hopper.toml"), "cwd");
+
+    let resolution = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: None,
+        workspace_dir: None,
+        global_default_workspace: Some(default_workspace),
+        current_dir: cwd,
+        registry_path: registry,
+    })
+    .unwrap();
+
+    assert_eq!(resolution.source, ConfigSource::GlobalRegistry);
+    assert_eq!(resolution.config.workspace.name, "registry");
+}
+
+#[test]
+fn resolve_uses_global_default_workspace_when_registry_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let default_workspace = dir.path().join("default-workspace");
+    std::fs::create_dir_all(&default_workspace).unwrap();
+    write_workspace_config(&default_workspace.join("dam-hopper.toml"), "default");
+
+    let resolution = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: None,
+        workspace_dir: None,
+        global_default_workspace: Some(default_workspace.clone()),
+        current_dir: dir.path().join("cwd"),
+        registry_path: dir.path().join("missing-registry.toml"),
+    })
+    .unwrap();
+
+    assert_eq!(resolution.source, ConfigSource::GlobalDefaultWorkspace);
+    assert_eq!(resolution.config.workspace.name, "default");
+    assert_eq!(resolution.workspace_dir, default_workspace);
+}
+
+#[test]
+fn resolve_uses_current_dir_when_higher_priority_sources_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    write_workspace_config(&cwd.join("dam-hopper.toml"), "cwd");
+
+    let resolution = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: None,
+        workspace_dir: None,
+        global_default_workspace: Some(dir.path().join("missing-default")),
+        current_dir: cwd.clone(),
+        registry_path: dir.path().join("missing-registry.toml"),
+    })
+    .unwrap();
+
+    assert_eq!(resolution.source, ConfigSource::CurrentDirectory);
+    assert_eq!(resolution.config.workspace.name, "cwd");
+    assert_eq!(resolution.workspace_dir, cwd);
+}
+
+#[test]
+fn resolve_explicit_workspace_missing_config_returns_empty_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("empty-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    let resolution = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: None,
+        workspace_dir: Some(workspace.clone()),
+        global_default_workspace: None,
+        current_dir: dir.path().join("cwd"),
+        registry_path: dir.path().join("missing-registry.toml"),
+    })
+    .unwrap();
+
+    assert_eq!(resolution.source, ConfigSource::EmptyFallback);
+    assert_eq!(resolution.workspace_dir, workspace);
+    assert_eq!(resolution.config.workspace.name, "unknown");
+    assert_eq!(resolution.config.projects.len(), 0);
+}
+
+#[test]
+fn resolve_missing_everything_returns_empty_current_dir_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let resolution = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: None,
+        workspace_dir: None,
+        global_default_workspace: Some(dir.path().join("missing-default")),
+        current_dir: cwd.clone(),
+        registry_path: dir.path().join("missing-registry.toml"),
+    })
+    .unwrap();
+
+    assert_eq!(resolution.source, ConfigSource::EmptyFallback);
+    assert_eq!(resolution.workspace_dir, cwd.clone());
+    assert_eq!(resolution.config.config_path, cwd.join("dam-hopper.toml"));
+}
+
+fn write_workspace_config(path: &std::path::Path, workspace_name: &str) {
+    std::fs::write(
+        path,
+        format!(
+            r#"
+[workspace]
+name = "{workspace_name}"
+"#
+        ),
+    )
+    .unwrap();
 }
 
 // ──────────────────────────────────────────────

@@ -33,13 +33,13 @@
 │  │  ├─ /api/pty/* → PTY spawn/send/kill                   │
 │  │  ├─ /api/ports → Port detection list                   │
 │  │  ├─ /api/git/* → Clone/push/status/branch/root ops     │
-│  │  ├─ /api/fs/* → [conditional] List/read/stat           │
+│  │  ├─ /api/fs/* → [conditional] List/read/stat (per-proj)│
 │  │  ├─ /api/agent-store/* → Distribution/import           │
 │  │  ├─ /api/workspace/* → Config switching                │
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
 │     ├─ PtySessionManager (Arc<Mutex<Map<uuid, ...>>>)     │
-│     ├─ FsSubsystem (Arc<Mutex<WorkspaceSandbox>>)         │
+│     ├─ FsSubsystem (Arc<Mutex<ProjectSandbox>>)           │
 │     ├─ AgentStoreService (symlink distribution)           │
 │     ├─ CommandRegistry (BM25 search)                      │
 │     └─ Broadcast channels (PTY output, git progress)      │
@@ -50,18 +50,28 @@
 
 ### config/
 
-Handles TOML parsing, project discovery, feature flags.
+Handles registry loading, legacy discovery fallback, and feature flags.
 
 **Key types:**
 
-- `DamHopperConfig` — parsed workspace config
+- `DamHopperConfig` — parsed project registry
 - `ProjectConfig` — individual project settings
+
+**Registry and sandbox semantics:**
+
+- Canonical registry path is `~/.config/dam-hopper/dam-hopper.toml`, with `--config` and `DAM_HOPPER_CONFIG` as explicit overrides
+- Relative `projects[].path` values resolve against the loaded registry file directory; absolute paths are preserved
+- File API security is enforced by per-project roots in `ProjectSandbox`, not by `workspace_dir`
+- Example: with a registry at `~/.config/dam-hopper/dam-hopper.toml`, `path = "./apps/web"` resolves to `~/.config/dam-hopper/apps/web`, while `path = "D:\\repos\\api"` stays `D:\repos\api` on Windows
 
 **Path resolution priority:**
 
-1. `--workspace` CLI flag
-2. `DAM_HOPPER_WORKSPACE` env var
-3. `~/.config/dam-hopper/config.toml` default path
+1. `--config` CLI flag or `DAM_HOPPER_CONFIG` env var
+2. `--workspace` CLI flag or `DAM_HOPPER_WORKSPACE` env var
+3. `~/.config/dam-hopper/dam-hopper.toml` global registry path
+4. `~/.config/dam-hopper/config.toml` `defaults.workspace`
+5. Current working directory via legacy upward `dam-hopper.toml` discovery
+6. Empty config fallback
 
 ### shared/
 
@@ -320,9 +330,10 @@ pub struct PersistedSession {
 
 - `Conflict` variant (Phase 04): raised when write rejected due to mtime mismatch.
 
-**sandbox.rs** — `WorkspaceSandbox` validates paths stay within project bounds.
+**sandbox.rs** — `ProjectSandbox` validates paths against per-configured project roots.
 
-- Cheap clone (PathBuf)
+- HashMap<project_name, canonical_root> initialized at startup + workspace switch
+- Cheap clone; canonicalization done at init time
 - Never held across `.await`
 
 **ops.rs** — Filesystem operations:
@@ -336,7 +347,8 @@ pub struct PersistedSession {
 
 **mod.rs** — `FsSubsystem` (Arc<Mutex<Inner>>):
 
-- Lazy init: sandbox stored as Option (Unavailable if init failed)
+- Lazy init: ProjectSandbox stored as Option (Unavailable if init failed)
+- Seeded/reinitialized from config projects on startup and workspace switch
 - Cheap clone pattern
 
 ### git/
@@ -842,8 +854,8 @@ GET /api/fs/list?project=web&path=src
     → finds project in config
     → returns absolute path
          ↓
-    WorkspaceSandbox.validate()
-    → checks path stays in bounds
+    ProjectSandbox.validate("web", proposed_path)
+    → checks path stays within project root
     → returns canonical path
          ↓
     ops::list_dir()
@@ -860,7 +872,7 @@ GET /api/fs/search?project=web&q=pattern[&case=true&max=50]
          ↓
     search() handler (fs.rs)
          ↓
-    WorkspaceSandbox.validate(project root)
+    ProjectSandbox.validate(project, search_root)
          ↓
     spawn_blocking: walk_dir via ignore crate (respects .gitignore)
     → filter by path + file type
