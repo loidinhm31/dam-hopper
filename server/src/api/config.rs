@@ -8,10 +8,10 @@ use std::path::{Path as FsPath, Path as StdPath, PathBuf};
 
 use crate::config::schema::DamHopperConfig;
 use crate::config::{
-    global_config_path, load_workspace_config, read_global_config_at, write_global_config_at,
+    global_config_path, read_config, read_global_config_at, write_global_config_at,
 };
 use crate::error::AppError;
-use crate::state::AppState;
+use crate::state::{project_roots_from_config, AppState};
 use crate::utils::atomic_write;
 
 use super::error::ApiError;
@@ -494,9 +494,9 @@ fn json_to_toml(v: &Value) -> Option<toml::Value> {
 }
 
 async fn reload_config(state: &AppState) -> Result<(), ApiError> {
-    let workspace_dir = state.workspace_dir.read().await.clone();
-    let new_cfg: DamHopperConfig =
-        load_workspace_config(&workspace_dir).map_err(ApiError::from_app)?;
+    let config_path = state.config.read().await.config_path.clone();
+    let new_cfg: DamHopperConfig = read_config(&config_path).map_err(ApiError::from_app)?;
+    state.fs.reinit_sandbox(project_roots_from_config(&new_cfg));
     *state.config.write().await = new_cfg;
     Ok(())
 }
