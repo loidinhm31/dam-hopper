@@ -74,7 +74,7 @@ fn make_state(tmp: &TempDir) -> AppState {
     let (event_sink, _) = BroadcastEventSink::new(64);
     let pty = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
-    let fs = FsSubsystem::new(workspace_dir.clone());
+    let fs = FsSubsystem::new(vec![("proj".into(), workspace_dir.clone())]);
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
     let diagnostics = DiagnosticStore::new(workspace_dir.join("diagnostics.jsonl"));
     AppState::new(

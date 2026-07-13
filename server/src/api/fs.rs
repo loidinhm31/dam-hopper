@@ -90,7 +90,7 @@ async fn resolve(
     let project_abs = state.project_path(project).await?;
     let sandbox = state.fs.sandbox().map_err(AppError::Fs)?;
     let proposed = project_abs.join(rel_path);
-    sandbox.validate(proposed).await.map_err(AppError::Fs)
+    sandbox.validate(project, proposed).await.map_err(AppError::Fs)
 }
 
 // ---------------------------------------------------------------------------

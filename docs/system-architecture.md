@@ -33,13 +33,13 @@
 │  │  ├─ /api/pty/* → PTY spawn/send/kill                   │
 │  │  ├─ /api/ports → Port detection list                   │
 │  │  ├─ /api/git/* → Clone/push/status/branch/root ops     │
-│  │  ├─ /api/fs/* → [conditional] List/read/stat           │
+│  │  ├─ /api/fs/* → [conditional] List/read/stat (per-proj)│
 │  │  ├─ /api/agent-store/* → Distribution/import           │
 │  │  ├─ /api/workspace/* → Config switching                │
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
 │     ├─ PtySessionManager (Arc<Mutex<Map<uuid, ...>>>)     │
-│     ├─ FsSubsystem (Arc<Mutex<WorkspaceSandbox>>)         │
+│     ├─ FsSubsystem (Arc<Mutex<ProjectSandbox>>)           │
 │     ├─ AgentStoreService (symlink distribution)           │
 │     ├─ CommandRegistry (BM25 search)                      │
 │     └─ Broadcast channels (PTY output, git progress)      │
@@ -323,9 +323,10 @@ pub struct PersistedSession {
 
 - `Conflict` variant (Phase 04): raised when write rejected due to mtime mismatch.
 
-**sandbox.rs** — `WorkspaceSandbox` validates paths stay within project bounds.
+**sandbox.rs** — `ProjectSandbox` validates paths against per-configured project roots.
 
-- Cheap clone (PathBuf)
+- HashMap<project_name, canonical_root> initialized at startup + workspace switch
+- Cheap clone; canonicalization done at init time
 - Never held across `.await`
 
 **ops.rs** — Filesystem operations:
@@ -339,7 +340,8 @@ pub struct PersistedSession {
 
 **mod.rs** — `FsSubsystem` (Arc<Mutex<Inner>>):
 
-- Lazy init: sandbox stored as Option (Unavailable if init failed)
+- Lazy init: ProjectSandbox stored as Option (Unavailable if init failed)
+- Seeded/reinitialized from config projects on startup and workspace switch
 - Cheap clone pattern
 
 ### git/
@@ -845,8 +847,8 @@ GET /api/fs/list?project=web&path=src
     → finds project in config
     → returns absolute path
          ↓
-    WorkspaceSandbox.validate()
-    → checks path stays in bounds
+    ProjectSandbox.validate("web", proposed_path)
+    → checks path stays within project root
     → returns canonical path
          ↓
     ops::list_dir()
@@ -863,7 +865,7 @@ GET /api/fs/search?project=web&q=pattern[&case=true&max=50]
          ↓
     search() handler (fs.rs)
          ↓
-    WorkspaceSandbox.validate(project root)
+    ProjectSandbox.validate(project, search_root)
          ↓
     spawn_blocking: walk_dir via ignore crate (respects .gitignore)
     → filter by path + file type
