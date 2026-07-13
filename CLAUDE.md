@@ -17,7 +17,7 @@ pnpm dev
 # Rust server: dev mode
 pnpm dev:server
 # Or directly:
-cd server && cargo run -- --workspace /path/to/workspace --port 4800
+cd server && cargo run -- --config /path/to/dam-hopper.toml --port 4800
 
 # Rust server: watch mode (requires cargo-watch)
 pnpm dev:server:watch
@@ -30,13 +30,13 @@ pnpm build:server
 cd server && cargo build --release
 
 # Run release server
-cd server && ./target/release/dam-hopper-server --workspace /path/to/workspace
+cd server && ./target/release/dam-hopper-server --config /path/to/dam-hopper.toml
 
 # Get auth token after server started at least once:
 cat ~/.config/dam-hopper/server-token
 
 # Regenerate auth token:
-cd server && cargo run -- --new-token --workspace /path/to/workspace
+cd server && cargo run -- --new-token --config /path/to/dam-hopper.toml
 
 # Lint (packages/web only)
 pnpm lint
@@ -67,13 +67,13 @@ pnpm check
 
 ```bash
 # Via npm script (recommended for dev:server)
-npm run dev:server -- --no-auth --workspace /path/to/workspace
+npm run dev:server -- --no-auth --config /path/to/dam-hopper.toml
 
 # Or directly via cargo
-cd server && cargo run -- --no-auth --workspace /path/to/workspace
+cd server && cargo run -- --no-auth --config /path/to/dam-hopper.toml
 
 # Or via environment variable
-DAM_HOPPER_NO_AUTH=1 cargo run -- --workspace /path/to/workspace
+DAM_HOPPER_NO_AUTH=1 cargo run -- --config /path/to/dam-hopper.toml
 ```
 
 ### Behavior
@@ -143,9 +143,12 @@ Browser
 
 **Workspace resolution**: Priority order:
 
-1. `--workspace` CLI flag
-2. `DAM_HOPPER_WORKSPACE` env var
-3. Global config default path (`~/.config/dam-hopper/config.toml`)
+1. `--config` CLI flag or `DAM_HOPPER_CONFIG` env var
+2. `--workspace` CLI flag or `DAM_HOPPER_WORKSPACE` env var
+3. `~/.config/dam-hopper/dam-hopper.toml` global registry path
+4. Global config default workspace path (`~/.config/dam-hopper/config.toml` `defaults.workspace`)
+5. Current working directory via legacy upward `dam-hopper.toml` discovery
+6. Empty config fallback
 
 **Agent store**: Distributes `.claude/` items (skills, commands, hooks, MCP servers, subagents) across projects via symlinks. Store at `.dam-hopper/agent-store/`. `ship()` creates symlinks, `unship()` removes them, `absorb()` copies project file into store. Health check detects broken symlinks. Distribution matrix tracks which projects have which items.
 
@@ -170,7 +173,9 @@ Browser
 - Server: `api/ws.rs` handles `FsPutBegin/Chunk/Commit/Save` — decrypts on commit, store is always plaintext
 - `export_key` zeroed immediately after AES key import (client) / Zeroizing<Vec<u8>> (server)
 
-## Workspace Config (`dam-hopper.toml`)
+## Project Registry (`dam-hopper.toml`)
+
+Canonical location: `~/.config/dam-hopper/dam-hopper.toml`. Relative `projects[].path` values resolve against the registry file directory; absolute project paths are allowed.
 
 ```toml
 [workspace]

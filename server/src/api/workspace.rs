@@ -11,6 +11,7 @@ use crate::config::{
     discovery::{discover_projects, DiscoveredProject},
     global_config_path, list_known_workspaces_at, load_workspace_config,
     parser::write_config,
+    read_config,
     remove_known_workspace_at,
     schema::{
         DamHopperConfig, FeaturesConfig, ProjectConfig, WorkspaceInfo as WorkspaceInfoSchema,
@@ -18,7 +19,7 @@ use crate::config::{
     CONFIG_FILENAME,
 };
 use crate::pty::EventSink as _;
-use crate::state::AppState;
+use crate::state::{project_roots_from_config, AppState};
 
 use super::error::{ApiError, AppJson};
 
@@ -31,6 +32,7 @@ use super::error::{ApiError, AppJson};
 pub struct WorkspaceStatus {
     pub ready: bool,
     pub path: Option<String>,
+    pub config_path: Option<String>,
     pub name: Option<String>,
     pub project_count: usize,
 }
@@ -46,6 +48,7 @@ pub async fn get_status(State(state): State<AppState>) -> AppJson<WorkspaceStatu
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default(),
         ),
+        config_path: Some(cfg.config_path.to_string_lossy().into_owned()),
         name: Some(cfg.workspace.name.clone()),
         project_count: cfg.projects.len(),
     })
@@ -60,6 +63,7 @@ pub async fn get_status(State(state): State<AppState>) -> AppJson<WorkspaceStatu
 pub struct WorkspaceInfo {
     pub name: String,
     pub root: String,
+    pub config_path: String,
     pub project_count: usize,
 }
 
@@ -69,6 +73,7 @@ pub async fn get_workspace(State(state): State<AppState>) -> impl IntoResponse {
     Json(WorkspaceInfo {
         name: cfg.workspace.name.clone(),
         root: workspace_dir.to_string_lossy().into_owned(),
+        config_path: cfg.config_path.to_string_lossy().into_owned(),
         project_count: cfg.projects.len(),
     })
     .into_response()
@@ -158,13 +163,8 @@ pub async fn init_workspace(
         }
     };
 
-    let sandbox_root = cfg
-        .config_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| path.clone());
-    state.fs.reinit_sandbox(sandbox_root);
-    *state.workspace_dir.write().await = path;
+    state.fs.reinit_sandbox(project_roots_from_config(&cfg));
+    *state.workspace_dir.write().await = workspace_dir_from_config(&cfg);
     *state.config.write().await = cfg;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -178,18 +178,13 @@ pub async fn switch_workspace(
     Json(body): Json<PathBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = std::path::PathBuf::from(&body.path);
-    let cfg = load_workspace_config(&path).map_err(ApiError::from_app)?;
+    let cfg = load_config_from_workspace_or_file(&path).map_err(ApiError::from_app)?;
 
     state.pty_manager.dispose();
 
-    let sandbox_root = cfg
-        .config_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| path.clone());
-    state.fs.reinit_sandbox(sandbox_root);
+    state.fs.reinit_sandbox(project_roots_from_config(&cfg));
 
-    *state.workspace_dir.write().await = path.clone();
+    *state.workspace_dir.write().await = workspace_dir_from_config(&cfg);
     *state.config.write().await = cfg;
 
     state.event_sink.broadcast(
@@ -198,6 +193,20 @@ pub async fn switch_workspace(
     );
 
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+fn load_config_from_workspace_or_file(path: &std::path::Path) -> Result<DamHopperConfig, crate::error::AppError> {
+    if path.is_file() {
+        return read_config(path);
+    }
+    load_workspace_config(path)
+}
+
+fn workspace_dir_from_config(cfg: &DamHopperConfig) -> std::path::PathBuf {
+    cfg.config_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("/"))
 }
 
 // ---------------------------------------------------------------------------

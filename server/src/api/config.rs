@@ -8,10 +8,11 @@ use std::path::{Path as FsPath, Path as StdPath, PathBuf};
 
 use crate::config::schema::DamHopperConfig;
 use crate::config::{
-    global_config_path, load_workspace_config, read_global_config_at, write_global_config_at,
+    global_config_path, read_config, read_global_config_at, write_global_config_at,
 };
+use crate::config::parser::project_path_for_toml;
 use crate::error::AppError;
-use crate::state::AppState;
+use crate::state::{project_roots_from_config, AppState};
 use crate::utils::atomic_write;
 
 use super::error::ApiError;
@@ -308,8 +309,9 @@ pub async fn get_project_status(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Convert absolute project paths to relative (relative to config_dir) so the
-/// TOML validator doesn't reject them. Mirrors the logic in `project_to_toml`.
+/// Format project paths the same way as `project_to_toml`: keep them relative
+/// only when they stay inside `config_dir` without a `..` prefix; otherwise
+/// preserve the absolute path.
 fn relativize_project_paths(body: &mut Value, config_dir: &StdPath) {
     let Some(projects) = body.get_mut("projects").and_then(|p| p.as_array_mut()) else {
         return;
@@ -324,13 +326,11 @@ fn relativize_project_paths(body: &mut Value, config_dir: &StdPath) {
         };
         let p = StdPath::new(&path_str);
         if p.is_absolute() {
-            let rel = pathdiff::diff_paths(p, config_dir)
-                .unwrap_or_else(|| p.to_path_buf())
-                .to_string_lossy()
-                .to_string();
-            let rel = if rel.is_empty() { ".".to_string() } else { rel };
             if let Some(obj) = project.as_object_mut() {
-                obj.insert("path".to_string(), Value::String(rel));
+                obj.insert(
+                    "path".to_string(),
+                    Value::String(project_path_for_toml(p, config_dir)),
+                );
             }
         }
     }
@@ -494,9 +494,9 @@ fn json_to_toml(v: &Value) -> Option<toml::Value> {
 }
 
 async fn reload_config(state: &AppState) -> Result<(), ApiError> {
-    let workspace_dir = state.workspace_dir.read().await.clone();
-    let new_cfg: DamHopperConfig =
-        load_workspace_config(&workspace_dir).map_err(ApiError::from_app)?;
+    let config_path = state.config.read().await.config_path.clone();
+    let new_cfg: DamHopperConfig = read_config(&config_path).map_err(ApiError::from_app)?;
+    state.fs.reinit_sandbox(project_roots_from_config(&new_cfg));
     *state.config.write().await = new_cfg;
     Ok(())
 }

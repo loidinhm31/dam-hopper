@@ -178,6 +178,7 @@ Notes:
 - bundles are generated locally and downloaded by the browser; there is no server-side bundle archive
 - terminal tails can still contain sensitive local/dev output even after best-effort redaction; review before sharing the exported JSON
 - when `terminalIds` is provided, backend events with `sessionId` are scoped to those ids while global events remain included
+- **Phase 04:** `system` field contains host metrics sampled from the config directory (`~/.config/dam-hopper/` by default) for host-context only, not project sandboxes
 
 ## Session Persistence API (Phase 05)
 
@@ -1167,13 +1168,62 @@ Body: `{ items: string[], projects: string[] }`
 
 ### Workspace Management
 
+**GET /api/workspace/status**
+Current workspace status. Returns `configPath` (authoritative registry file location) and `path` (legacy config directory).
+
+Response:
+
+```json
+{
+  "ready": true,
+  "path": "/home/user/.config/dam-hopper",
+  "configPath": "/home/user/.config/dam-hopper/dam-hopper.toml",
+  "name": "my-workspace",
+  "projectCount": 5
+}
+```
+
+**GET /api/workspace**
+Detailed workspace info. Returns both `root` (legacy display field) and `configPath` (authoritative registry location).
+
+Response:
+
+```json
+{
+  "name": "my-workspace",
+  "root": "/home/user/.config/dam-hopper",
+  "configPath": "/home/user/.config/dam-hopper/dam-hopper.toml",
+  "projectCount": 5
+}
+```
+
 **POST /api/workspace/switch**
-Change active workspace.
+Change active workspace. Accepts either a directory path or a direct path to a `dam-hopper.toml` file.
 
-Body: `{ path: string }`
+Request body:
 
-**GET /api/workspace/config**
-Current workspace configuration.
+```json
+{ "path": "/path/to/workspace-dir-or-config.toml" }
+```
+
+On switch:
+- Configuration is reloaded from the specified path
+- File API sandbox is reinitialized from project roots in the new config
+- All PTY sessions are disposed
+- Event: `workspace:changed` is broadcast to all clients
+
+Response: `{ "ok": true }`
+
+**POST /api/workspace/init**
+Initialize a workspace in a directory. Discovers projects or creates an empty config.
+
+Request body:
+
+```json
+{ "path": "/path/to/new-workspace" }
+```
+
+Response: `{ "ok": true }`
 
 ### Settings & Health
 

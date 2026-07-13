@@ -6,7 +6,10 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 use dam_hopper_server::{
     agent_store::AgentStoreService,
     api::build_router,
-    config::{global_config_path, load_workspace_config, read_global_config_at},
+    config::{
+        global_config_path, global_registry_path, read_global_config_at, DamHopperConfig,
+        resolve_startup_config, ConfigResolutionInput, ConfigSource,
+    },
     crypto::load_or_create_server_setup,
     diagnostics::{DiagnosticStore, DiagnosticTracingLayer},
     fs::FsSubsystem,
@@ -20,6 +23,10 @@ use dam_hopper_server::{
 #[derive(Debug, Parser)]
 #[command(name = "dam-hopper-server", version, about = "DamHopper Rust server")]
 struct Cli {
+    /// Path to a specific dam-hopper.toml registry file
+    #[arg(long, env = "DAM_HOPPER_CONFIG")]
+    config: Option<PathBuf>,
+
     /// Path to workspace directory containing dam-hopper.toml
     #[arg(long, env = "DAM_HOPPER_WORKSPACE")]
     workspace: Option<PathBuf>,
@@ -82,41 +89,39 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Workspace ─────────────────────────────────────────────────────────────
 
-    let workspace_dir = cli
-        .workspace
-        .or_else(|| {
-            global_config
-                .defaults
-                .as_ref()
-                .and_then(|d| d.workspace.as_ref())
-                .map(PathBuf::from)
-        })
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let resolution = resolve_startup_config(ConfigResolutionInput {
+        explicit_config: cli.config.clone(),
+        workspace_dir: cli.workspace.clone(),
+        global_default_workspace: global_config
+            .defaults
+            .as_ref()
+            .and_then(|d| d.workspace.as_ref())
+            .map(PathBuf::from),
+        current_dir,
+        registry_path: global_registry_path(),
+    })?;
 
-    let config = match load_workspace_config(&workspace_dir) {
-        Ok(cfg) => {
-            tracing::info!(
-                workspace = cfg.workspace.name,
-                projects = cfg.projects.len(),
-                "Workspace loaded"
+    let workspace_dir = resolution.workspace_dir;
+    let config = resolution.config;
+
+    match resolution.source {
+        ConfigSource::EmptyFallback => {
+            tracing::warn!(
+                config_path = %config.config_path.display(),
+                "No workspace config loaded — server will start without workspace"
             );
-            cfg
         }
-        Err(e) => {
-            tracing::warn!(error = %e, workspace = %workspace_dir.display(), "Could not load workspace config — server will start without workspace");
-            dam_hopper_server::config::DamHopperConfig {
-                workspace: dam_hopper_server::config::WorkspaceInfo {
-                    name: "unknown".into(),
-                    root: ".".into(),
-                },
-                agent_store: None,
-                server: dam_hopper_server::config::ServerConfig::default(),
-                projects: vec![],
-                features: dam_hopper_server::config::FeaturesConfig::default(),
-                config_path: workspace_dir.join("dam-hopper.toml"),
-            }
+        source => {
+            tracing::info!(
+                source = source.as_str(),
+                config_path = %config.config_path.display(),
+                workspace = config.workspace.name,
+                projects = config.projects.len(),
+                "Workspace config loaded"
+            );
         }
-    };
+    }
 
     // ── Services ──────────────────────────────────────────────────────────────
 
@@ -233,17 +238,7 @@ async fn main() -> anyhow::Result<()> {
         .map(|s| s.split(',').map(|o| o.trim().to_string()).collect())
         .unwrap_or_default();
 
-    // Use the directory that actually contains dam-hopper.toml as the sandbox root.
-    // workspace_dir is the raw CLI arg / CWD, which may differ from the config
-    // location when the server is started from a subdirectory (e.g. server/).
-    // config.config_path is canonicalized by read_config(), so its parent is
-    // always the true workspace root that project paths are relative to.
-    let fs_root = config
-        .config_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| workspace_dir.clone());
-    let fs = FsSubsystem::new(fs_root);
+    let fs = FsSubsystem::new(project_roots(&config));
 
     let db = if let (Ok(uri), Ok(name)) = (
         std::env::var("MONGODB_URI"),
@@ -339,6 +334,19 @@ fn token_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("~/.config"))
         .join("dam-hopper")
         .join("server-token")
+}
+
+fn project_roots(config: &DamHopperConfig) -> Vec<(String, std::path::PathBuf)> {
+    config
+        .projects
+        .iter()
+        .map(|project| {
+            (
+                project.name.clone(),
+                std::path::PathBuf::from(&project.path),
+            )
+        })
+        .collect()
 }
 
 fn manage_token(regen: bool) -> anyhow::Result<String> {

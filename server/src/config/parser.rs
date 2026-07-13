@@ -29,12 +29,15 @@ pub fn read_config(file_path: &Path) -> Result<DamHopperConfig, AppError> {
     let canonical = file_path
         .canonicalize()
         .unwrap_or_else(|_| file_path.to_path_buf());
-    let config_dir = canonical.parent().unwrap_or(Path::new("/"));
+    let config_dir = canonical
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| fallback_config_dir().to_path_buf());
 
     let projects = raw
         .projects
         .into_iter()
-        .map(|p| resolve_project(p, config_dir))
+        .map(|p| resolve_project(p, &config_dir))
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(DamHopperConfig {
@@ -62,8 +65,8 @@ fn validate_config(raw: &DamHopperConfigRaw) -> Result<(), AppError> {
             ));
         }
 
-        // Reject absolute paths and path traversal in project.path
-        validate_relative_path(&project.path, &format!("projects.{}.path", project.name))?;
+        // Allow absolute project paths, but still reject traversal components.
+        validate_project_path(&project.path, &format!("projects.{}.path", project.name))?;
 
         // Reject absolute paths and path traversal in env_file
         if let Some(env_file) = &project.env_file {
@@ -92,6 +95,16 @@ fn validate_config(raw: &DamHopperConfigRaw) -> Result<(), AppError> {
                     project.name
                 )));
             }
+
+            for terminal in terminals {
+                validate_relative_path(
+                    &terminal.cwd,
+                    &format!(
+                        "projects.{}.terminals.{}.cwd",
+                        project.name, terminal.name
+                    ),
+                )?;
+            }
         }
 
         // health_check_url must be an http/https URL when present
@@ -107,8 +120,24 @@ fn validate_config(raw: &DamHopperConfigRaw) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Reject `..` components to prevent path traversal attacks while allowing
+/// absolute project roots in the registry.
+///
+/// `resolve_project_path()` relies on this guarantee to normalize relative
+/// paths lexically without touching the filesystem.
+fn validate_project_path(raw: &str, field: &str) -> Result<(), AppError> {
+    let p = Path::new(raw);
+    if p.components().any(|c| c == Component::ParentDir) {
+        return Err(AppError::Config(format!(
+            "Field '{}' must not contain '..' components: {}",
+            field, raw
+        )));
+    }
+    Ok(())
+}
+
 /// Reject absolute paths and `..` components to prevent path traversal attacks.
-/// Config paths should always be relative to the workspace root.
+/// Supporting paths like env files should stay project-relative.
 fn validate_relative_path(raw: &str, field: &str) -> Result<(), AppError> {
     let p = Path::new(raw);
     if p.is_absolute() {
@@ -127,7 +156,8 @@ fn validate_relative_path(raw: &str, field: &str) -> Result<(), AppError> {
 }
 
 fn resolve_project(raw: ProjectConfigRaw, config_dir: &Path) -> Result<ProjectConfig, AppError> {
-    let abs_project_path = config_dir.join(&raw.path);
+    let raw_project_path = Path::new(&raw.path);
+    let abs_project_path = resolve_project_path(config_dir, raw_project_path);
 
     let terminals = raw
         .terminals
@@ -158,11 +188,50 @@ fn resolve_project(raw: ProjectConfigRaw, config_dir: &Path) -> Result<ProjectCo
     })
 }
 
+fn resolve_project_path(config_dir: &Path, raw_project_path: &Path) -> PathBuf {
+    if raw_project_path.is_absolute() {
+        return raw_project_path.to_path_buf();
+    }
+
+    join_validated_relative_path(config_dir, raw_project_path)
+}
+
+fn join_validated_relative_path(base_dir: &Path, relative_path: &Path) -> PathBuf {
+    debug_assert!(
+        !relative_path.components().any(|component| component == Component::ParentDir),
+        "Relative path must be validated before joining"
+    );
+
+    let mut joined = base_dir.to_path_buf();
+
+    for component in relative_path.components() {
+        if let Component::Normal(part) = component {
+            joined.push(part);
+        }
+    }
+
+    joined
+}
+
+fn fallback_config_dir() -> &'static Path {
+    #[cfg(windows)]
+    {
+        Path::new("C:\\")
+    }
+
+    #[cfg(not(windows))]
+    {
+        Path::new("/")
+    }
+}
+
 fn resolve_terminal(raw: TerminalProfileRaw, project_path: &Path) -> TerminalProfile {
     TerminalProfile {
         name: raw.name,
         command: raw.command,
-        cwd: project_path.join(&raw.cwd).to_string_lossy().to_string(),
+        cwd: join_validated_relative_path(project_path, Path::new(&raw.cwd))
+            .to_string_lossy()
+            .to_string(),
     }
 }
 
@@ -174,9 +243,12 @@ pub fn write_config(file_path: &Path, config: &DamHopperConfig) -> Result<(), Ap
     let abs_path = file_path
         .canonicalize()
         .unwrap_or_else(|_| file_path.to_path_buf());
-    let config_dir = abs_path.parent().unwrap_or(Path::new("/"));
+    let config_dir = abs_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| fallback_config_dir().to_path_buf());
 
-    let raw = build_raw_toml(config, config_dir);
+    let raw = build_raw_toml(config, &config_dir);
     let toml_str = toml::to_string_pretty(&raw)
         .map_err(|e| AppError::Config(format!("Failed to serialize config: {}", e)))?;
 
@@ -217,6 +289,23 @@ fn build_raw_toml(config: &DamHopperConfig, config_dir: &Path) -> toml::Value {
     Value::Table(map)
 }
 
+pub(crate) fn project_path_for_toml(abs: &Path, config_dir: &Path) -> String {
+    match pathdiff::diff_paths(abs, config_dir) {
+        Some(relative)
+            if !relative.is_absolute()
+                && !matches!(relative.components().next(), Some(Component::ParentDir)) =>
+        {
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            if relative.is_empty() {
+                ".".to_string()
+            } else {
+                relative
+            }
+        }
+        _ => abs.to_string_lossy().to_string(),
+    }
+}
+
 fn project_to_toml(p: &ProjectConfig, config_dir: &Path) -> toml::Value {
     use toml::Value;
 
@@ -224,12 +313,10 @@ fn project_to_toml(p: &ProjectConfig, config_dir: &Path) -> toml::Value {
     map.insert("name".to_string(), Value::String(p.name.clone()));
 
     let abs = PathBuf::from(&p.path);
-    let rel = pathdiff::diff_paths(&abs, config_dir)
-        .unwrap_or(abs)
-        .to_string_lossy()
-        .to_string();
-    let rel = if rel.is_empty() { ".".to_string() } else { rel };
-    map.insert("path".to_string(), Value::String(rel));
+    map.insert(
+        "path".to_string(),
+        Value::String(project_path_for_toml(&abs, config_dir)),
+    );
     map.insert(
         "type".to_string(),
         Value::String(p.project_type.to_string()),
@@ -282,6 +369,8 @@ fn project_to_toml(p: &ProjectConfig, config_dir: &Path) -> toml::Value {
                 tm.insert("name".to_string(), Value::String(t.name.clone()));
                 tm.insert("command".to_string(), Value::String(t.command.clone()));
                 let abs_cwd = PathBuf::from(&t.cwd);
+                // Terminal cwd stays project-relative even when the project path
+                // itself is written as an absolute registry path.
                 let rel_cwd = pathdiff::diff_paths(&abs_cwd, &project_path)
                     .unwrap_or(abs_cwd)
                     .to_string_lossy()

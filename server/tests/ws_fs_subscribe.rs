@@ -5,6 +5,7 @@
 /// cycle, and verifies the refcount cleanup.
 use std::{
     net::SocketAddr,
+    path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -54,16 +55,16 @@ fn test_jwt() -> String {
 fn make_test_state(tmp: &TempDir) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
 
-    let config = DamHopperConfig {
-        workspace: WorkspaceInfo {
-            name: "ws-test".into(),
-            root: ".".into(),
-        },
-        agent_store: None,
-        server: dam_hopper_server::config::ServerConfig::default(),
-        projects: vec![ProjectConfig {
-            name: "test-project".into(),
-            path: workspace_dir.to_string_lossy().into_owned(),
+    make_test_state_with_project_roots(tmp, vec![("test-project", workspace_dir.as_path())])
+}
+
+fn make_test_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) -> AppState {
+    let workspace_dir = tmp.path().to_path_buf();
+    let projects: Vec<ProjectConfig> = roots
+        .iter()
+        .map(|(name, path)| ProjectConfig {
+            name: (*name).into(),
+            path: path.to_string_lossy().into_owned(),
             project_type: ProjectType::Custom,
             services: None,
             commands: None,
@@ -74,7 +75,21 @@ fn make_test_state(tmp: &TempDir) -> AppState {
             restart_policy: Default::default(),
             restart_max_retries: 5,
             health_check_url: None,
-        }],
+        })
+        .collect();
+    let sandbox_roots = projects
+        .iter()
+        .map(|project| (project.name.clone(), std::path::PathBuf::from(&project.path)))
+        .collect();
+
+    let config = DamHopperConfig {
+        workspace: WorkspaceInfo {
+            name: "ws-test".into(),
+            root: ".".into(),
+        },
+        agent_store: None,
+        server: dam_hopper_server::config::ServerConfig::default(),
+        projects,
         features: FeaturesConfig::default(),
         config_path: workspace_dir.join("dam-hopper.toml"),
     };
@@ -82,7 +97,7 @@ fn make_test_state(tmp: &TempDir) -> AppState {
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
-    let fs = FsSubsystem::new(workspace_dir.clone());
+    let fs = FsSubsystem::new(sandbox_roots);
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
     let diagnostics = DiagnosticStore::new(workspace_dir.join("diagnostics.jsonl"));
 
@@ -390,4 +405,79 @@ async fn watcher_shared_between_two_connections() {
 
     ws1.close(None).await.unwrap();
     ws2.close(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn watcher_events_are_isolated_between_project_roots() {
+    let registry_tmp = tempfile::tempdir().unwrap();
+    let projects_tmp = tempfile::tempdir().unwrap();
+    let alpha = projects_tmp.path().join("alpha");
+    let beta = projects_tmp.path().join("beta");
+    std::fs::create_dir_all(&alpha).unwrap();
+    std::fs::create_dir_all(&beta).unwrap();
+
+    let state = make_test_state_with_project_roots(
+        &registry_tmp,
+        vec![("alpha", alpha.as_path()), ("beta", beta.as_path())],
+    );
+    let addr = spawn_server(state).await;
+    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), test_jwt());
+    let (mut alpha_ws, _) = connect_async(&url).await.unwrap();
+    let (mut beta_ws, _) = connect_async(&url).await.unwrap();
+
+    alpha_ws
+        .send(Message::Text(
+            json!({ "kind": "fs:subscribe_tree", "req_id": 20, "project": "alpha", "path": "" })
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    beta_ws
+        .send(Message::Text(
+            json!({ "kind": "fs:subscribe_tree", "req_id": 21, "project": "beta", "path": "" })
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+
+    let _alpha_snap = next_json(&mut alpha_ws, Duration::from_secs(5))
+        .await
+        .expect("alpha snapshot");
+    let _beta_snap = next_json(&mut beta_ws, Duration::from_secs(5))
+        .await
+        .expect("beta snapshot");
+
+    std::fs::write(alpha.join("alpha-only.txt"), "alpha").unwrap();
+    let alpha_event = next_json(&mut alpha_ws, Duration::from_secs(3))
+        .await
+        .expect("alpha event");
+    assert_eq!(alpha_event["kind"], "fs:event");
+    assert!(alpha_event["event"]["path"]
+        .as_str()
+        .map(|path| path.contains("alpha-only.txt"))
+        .unwrap_or(false));
+    let beta_spurious = next_json(&mut beta_ws, Duration::from_millis(700)).await;
+    assert!(
+        beta_spurious.is_none()
+            || beta_spurious
+                .as_ref()
+                .map(|msg| msg["kind"] != "fs:event")
+                .unwrap_or(false),
+        "beta received alpha event: {beta_spurious:?}"
+    );
+
+    std::fs::write(beta.join("beta-only.txt"), "beta").unwrap();
+    let beta_event = next_json(&mut beta_ws, Duration::from_secs(3))
+        .await
+        .expect("beta event");
+    assert_eq!(beta_event["kind"], "fs:event");
+    assert!(beta_event["event"]["path"]
+        .as_str()
+        .map(|path| path.contains("beta-only.txt"))
+        .unwrap_or(false));
+
+    alpha_ws.close(None).await.unwrap();
+    beta_ws.close(None).await.unwrap();
 }

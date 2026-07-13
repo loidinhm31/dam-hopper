@@ -2,7 +2,7 @@
 
 ## Project Vision
 
-DamHopper is a **workspace-first IDE assistant** that manages multiple projects within a single workspace, providing integrated terminal management, file exploration, and AI-powered agent distribution.
+DamHopper is a **multi-project IDE assistant** that loads a project registry and manages projects across one or more filesystem roots, providing integrated terminal management, file exploration, and AI-powered agent distribution.
 
 Target users: Developers managing monorepos or multi-project workspaces who want a lightweight, AI-friendly interface for common development tasks.
 
@@ -12,22 +12,24 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 **Functional Requirements:**
 
-- Support TOML-based workspace configuration (dam-hopper.toml)
+- Support TOML-based project registry configuration (`dam-hopper.toml`)
+- Prefer the canonical global registry at `~/.config/dam-hopper/dam-hopper.toml`, with explicit override support
 - Auto-discover projects by type (Maven, Gradle, npm, pnpm, Cargo, custom)
-- Hot-reload workspace config without restart
+- Resolve relative project paths against the loaded registry file and allow absolute project paths
+- Hot-reload registry config without restart
 - Store global defaults at ~/.config/dam-hopper/config.toml
 
 **Acceptance Criteria:**
 
-- ✓ Load and parse dam-hopper.toml
-- ✓ Resolve relative project paths to absolute
-- ✓ Support workspace:switch via API
-- ✓ Fallback to global config defaults
+- ✓ Load and parse explicit or global `dam-hopper.toml` registry files
+- ✓ Resolve relative project paths against the registry file and preserve absolute project paths
+- ✓ Support `workspace:switch` via API for directory or direct registry-file targets
+- ✓ Fallback to global config defaults and legacy discovery when higher-priority sources are missing
 
 **Technical Constraints:**
 
 - Serde for TOML deserialization with snake_case field mapping
-- Workspace resolver priority: CLI flag > ENV var > global config
+- Startup resolution priority: `--config` / `DAM_HOPPER_CONFIG` > `--workspace` / `DAM_HOPPER_WORKSPACE` > global registry path > `defaults.workspace` > legacy current-directory discovery
 
 ### PR-002: Terminal Session Management
 
