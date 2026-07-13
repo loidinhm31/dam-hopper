@@ -15,7 +15,7 @@ created: 2026-07-12
 
 Replace DamHopper's repo-local `dam-hopper.toml` discovery model with a global registry at `~/.config/dam-hopper/dam-hopper.toml`. Allow absolute project paths in TOML. Replace single-root `WorkspaceSandbox` with per-project-root validation so file APIs work for projects scattered across the filesystem — without opening arbitrary disk access.
 
-Plan progress: 1/6 phases complete (17%).
+Plan progress: 2/6 phases complete (33%).
 
 ## Current Choke Points
 
@@ -38,7 +38,7 @@ Plan progress: 1/6 phases complete (17%).
 | # | Phase | Status | Effort | Link |
 | --- | --- | --- | --- | --- |
 | 1 | Global Registry Path + Config Loading Priority | Completed (Reviewed: 7.5/10) | 3h | [phase-01](./phase-01-global-registry-path.md) |
-| 2 | Parser: Absolute Project Paths | Blocked | 2h | [phase-02](./phase-02-parser-absolute-paths.md) |
+| 2 | Parser: Absolute Project Paths | Completed (Approved: 8.5/10) | 2h | [phase-02](./phase-02-parser-absolute-paths.md) |
 | 3 | Per-Project-Root Sandbox | Pending | 4h | [phase-03](./phase-03-per-project-sandbox.md) |
 | 4 | API + State Adjustments | Pending | 4h | [phase-04](./phase-04-api-state-adjustments.md) |
 | 5 | Config Write Roundtrip | Pending | 2h | [phase-05](./phase-05-config-write-roundtrip.md) |
@@ -81,15 +81,14 @@ Plan progress: 1/6 phases complete (17%).
 ## Current Status (2026-07-12)
 
 **Phase 01 Review Complete** - Score: 7.5/10
+**Phase 02 Complete** - Score: 8.5/10 | All 55 tests passed
 
-**Blockers for Phase 02:**
-1. **[P1]** Symlink validation for explicit config paths must be added to prevent security bypass when Phase 02 enables absolute project paths
-2. **[P1]** XDG_CONFIG_HOME validation needed to prevent malicious env injection
-3. **[P2]** Config parent resolution logic needs clarification
+**Optional follow-ups for Phase 02:**
+1. Windows edge-case coverage: add drive-relative and UNC path tests on Windows CI
+2. Redundant `./` stripping: future refactor to normalize relative paths at parse time rather than resolution time
 
 **Review report:** [phase-01-review-260712-2200.md](./reports/phase-01-review-260712-2200.md)
 
 **Next actions:**
-1. Fix High Priority Findings 1-2 from review (est. 2h)
-2. Create decision document for unresolved questions 2-6
-3. Proceed to Phase 02 implementation
+1. Create decision document for unresolved questions 2-6
+2. Proceed to Phase 03 (Per-Project-Root Sandbox)

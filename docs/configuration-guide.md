@@ -15,7 +15,7 @@ name = "my-workspace"
 
 ### Project Discovery
 
-Define projects with type-specific defaults:
+Define projects with type-specific defaults. Project paths can be absolute or relative; relative paths resolve against the config file directory. Other path fields like `env_file` and terminal profile `cwd` remain project-relative and reject absolute or traversal-containing values.
 
 ```toml
 [[projects]]
@@ -56,11 +56,11 @@ run_command = "bash scripts/run.sh"
 | Field         | Type   | Required | Notes                                             |
 | ------------- | ------ | -------- | ------------------------------------------------- |
 | name          | string | ✓        | Unique within workspace                           |
-| path          | string | ✓        | Relative to workspace root                        |
+| path          | string | ✓        | Absolute path or relative to config file dir      |
 | type          | enum   | ✓        | npm \| pnpm \| cargo \| maven \| gradle \| custom |
 | build_command | string |          | Overrides preset for type                         |
 | run_command   | string |          | Overrides preset for type                         |
-| env_file      | string |          | Path to .env (relative to project)                |
+| env_file      | string |          | Relative path to .env (project-local only)        |
 | tags          | array  |          | Arbitrary tags for filtering                      |
 
 ## Startup Config Resolution

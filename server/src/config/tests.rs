@@ -103,6 +103,37 @@ run_command = "java -jar auth/target/*.jar"
 }
 
 #[test]
+fn parse_config_with_terminal_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[workspace]
+name = "term-ws"
+
+[[projects]]
+name = "backend"
+path = "./backend"
+type = "cargo"
+
+[[projects.terminals]]
+name = "shell"
+command = "bash"
+cwd = "./ops"
+"#,
+    )
+    .unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(cfg.projects[0].terminals.len(), 1);
+    assert_eq!(
+        cfg.projects[0].terminals[0].cwd,
+        dir.path().join("backend/ops").to_string_lossy()
+    );
+}
+
+#[test]
 fn reject_duplicate_project_names() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("dam-hopper.toml");
@@ -129,14 +160,99 @@ type = "npm"
 }
 
 #[test]
-fn reject_absolute_project_path() {
+fn accept_absolute_project_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let project_path = dir.path().join("project-root");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"{}\"\ntype=\"cargo\"",
+            project_path.display()
+        ),
+    )
+    .unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(cfg.projects[0].path, project_path.to_string_lossy());
+}
+
+#[test]
+fn resolve_relative_project_path_against_config_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path().join("registry");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let config_path = config_dir.join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"./project-root\"\ntype=\"cargo\"",
+    )
+    .unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(
+        cfg.projects[0].path,
+        config_dir.join("project-root").to_string_lossy()
+    );
+}
+
+#[test]
+fn resolve_relative_project_path_removes_redundant_current_dir_components() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("dam-hopper.toml");
     std::fs::write(
         &config_path,
-        "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"/etc/passwd\"\ntype=\"cargo\"",
+        "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"././project-root\"\ntype=\"cargo\"",
     )
     .unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(
+        cfg.projects[0].path,
+        dir.path().join("project-root").to_string_lossy()
+    );
+}
+
+#[test]
+fn reject_path_traversal_in_project_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"../outside\"\ntype=\"cargo\"",
+    )
+    .unwrap();
+
+    assert!(read_config(&config_path).is_err());
+}
+
+#[test]
+fn reject_multiple_parent_dir_components_in_project_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"../../outside\"\ntype=\"cargo\"",
+    )
+    .unwrap();
+
+    assert!(read_config(&config_path).is_err());
+}
+
+#[test]
+fn reject_path_traversal_in_absolute_project_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let project_path = dir.path().join("..").join("outside");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"{}\"\ntype=\"cargo\"",
+            project_path.display()
+        ),
+    )
+    .unwrap();
+
     assert!(read_config(&config_path).is_err());
 }
 
@@ -150,6 +266,86 @@ fn reject_path_traversal_in_env_file() {
     )
     .unwrap();
     assert!(read_config(&config_path).is_err());
+}
+
+#[test]
+fn reject_absolute_env_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let env_file = dir.path().join(".env");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"\nenv_file=\"{}\"",
+            env_file.display()
+        ),
+    )
+    .unwrap();
+
+    assert!(read_config(&config_path).is_err());
+}
+
+#[test]
+fn reject_path_traversal_in_terminal_cwd() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[workspace]
+name = "w"
+
+[[projects]]
+name = "p"
+path = "."
+type = "cargo"
+
+[[projects.terminals]]
+name = "shell"
+command = "bash"
+cwd = "../../etc"
+"#,
+    )
+    .unwrap();
+
+    assert!(read_config(&config_path).is_err());
+}
+
+#[test]
+fn reject_absolute_terminal_cwd() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let cwd = dir.path().join("ops");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\".\"\ntype=\"cargo\"\n\n[[projects.terminals]]\nname=\"shell\"\ncommand=\"bash\"\ncwd=\"{}\"",
+            cwd.display()
+        ),
+    )
+    .unwrap();
+
+    assert!(read_config(&config_path).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn accept_windows_absolute_project_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let project_path = std::env::temp_dir().join("dam-hopper-windows-project");
+    let project_path_raw = project_path.to_string_lossy().replace('\\', "/");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[workspace]\nname=\"w\"\n\n[[projects]]\nname=\"p\"\npath=\"{}\"\ntype=\"cargo\"",
+            project_path_raw
+        ),
+    )
+    .unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(cfg.projects[0].path, project_path.to_string_lossy());
 }
 
 #[test]
