@@ -7,7 +7,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 **New to DamHopper?** Start here:
 
 1. **[Project Overview & PDR](./project-overview-pdr.md)** — Vision, requirements, architecture decisions
-2. **[Configuration Guide](./configuration-guide.md)** — Set up dam-hopper.toml and workspace
+2. **[Configuration Guide](./configuration-guide.md)** — Set up the global `dam-hopper.toml` project registry
 3. **[System Architecture](./system-architecture.md)** — How the system works
 
 ## Feature Guides
@@ -62,9 +62,9 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - Sandbox: Path validation prevents escape attempts
 - Frontend: shared file decoration registry powers icon, badge, display-language, and Monaco-language lookup
 
-**Workspace Management** — TOML-based config, project discovery, hot-reload.
+**Project Registry Management** — TOML-based registry, project discovery, hot-reload.
 
-- Config: dam-hopper.toml at workspace root
+- Config: `~/.config/dam-hopper/dam-hopper.toml` by default, or any file passed via `--config`
 - Support types: npm, pnpm, cargo, maven, gradle, custom
 - See: [Configuration Guide](./configuration-guide.md)
 
@@ -95,7 +95,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 
 ```bash
 cd server
-cargo run -- --workspace /path/to/workspace --port 4800
+cargo run -- --config /path/to/dam-hopper.toml --port 4800
 ```
 
 See token at `~/.config/dam-hopper/server-token`.
@@ -152,7 +152,7 @@ See [Frontend Components](./frontend-components.md#data-flow-terminal-lifecycle)
 
 ### Configure a Workspace
 
-1. Create `dam-hopper.toml` in workspace root:
+1. Create `~/.config/dam-hopper/dam-hopper.toml` (or another registry file you will pass with `--config`):
 
 ```toml
 [workspace]
@@ -164,7 +164,7 @@ path = "./api"
 type = "cargo"
 ```
 
-2. Start server with workspace path
+2. Start the server with `--config /path/to/dam-hopper.toml` or rely on the default global registry path
 3. Access at http://localhost:4800 (or 5173 for dev frontend)
 
 ### Use File Explorer API

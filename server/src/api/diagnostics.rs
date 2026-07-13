@@ -15,8 +15,8 @@ pub async fn export_diagnostics(
     request: Option<Json<DiagnosticExportRequest>>,
 ) -> Json<DiagnosticExportResponse> {
     let request = request.map(|Json(request)| request).unwrap_or_default();
-    let workspace_root = state.workspace_dir.read().await.clone();
-    let system = state.host_metrics.sample(&workspace_root);
+    let config_dir = state.config_dir().await;
+    let system = state.host_metrics.sample(&config_dir);
     let diagnostics = state.diagnostics.clone();
     let window_minutes = request.window_minutes;
     // Preserve the distinction between omitted terminalIds (default/all) and

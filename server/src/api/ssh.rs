@@ -105,11 +105,11 @@ async fn do_load_key(state: &AppState, body: LoadKeyBody) -> LoadKeyResult {
         Ok(path) => path,
         Err(error) => return load_failure(error),
     };
-    let workspace_dir = state.workspace_dir.read().await.clone();
+    let config_path = state.config.read().await.config_path.clone();
     let keyring = KeyringSshCredentialStore::new();
 
     match prepare_loaded_credential(
-        &workspace_dir,
+        &config_path,
         key_path,
         body.passphrase,
         body.save_for_later,
@@ -125,7 +125,7 @@ async fn do_load_key(state: &AppState, body: LoadKeyBody) -> LoadKeyResult {
 }
 
 fn prepare_loaded_credential<S, F>(
-    workspace_dir: &Path,
+    config_scope_path: &Path,
     key_path: PathBuf,
     passphrase: Option<String>,
     save_for_later: bool,
@@ -137,7 +137,7 @@ where
     F: Fn(&Path, &str) -> Result<(), String>,
 {
     let key_name = key_name(&key_path);
-    let saved_key = credential_key(workspace_dir, &key_path);
+    let saved_key = credential_key(config_scope_path, &key_path);
 
     let loaded_from_saved = passphrase.is_none();
     let passphrase = match passphrase {
@@ -249,8 +249,8 @@ async fn do_credential_status(state: &AppState, query: CredentialQuery) -> Crede
         }
     };
 
-    let workspace_dir = state.workspace_dir.read().await.clone();
-    let saved_key = credential_key(&workspace_dir, &key_path);
+    let config_path = state.config.read().await.config_path.clone();
+    let saved_key = credential_key(&config_path, &key_path);
     match KeyringSshCredentialStore::new().exists(&saved_key) {
         Ok(saved) => CredentialStatus {
             saved,
@@ -277,8 +277,8 @@ async fn do_forget_credential(state: &AppState, query: CredentialQuery) -> Forge
         }
     };
 
-    let workspace_dir = state.workspace_dir.read().await.clone();
-    let saved_key = credential_key(&workspace_dir, &key_path);
+    let config_path = state.config.read().await.config_path.clone();
+    let saved_key = credential_key(&config_path, &key_path);
     let deleted = match KeyringSshCredentialStore::new().delete(&saved_key) {
         Ok(deleted) => deleted,
         Err(error) => {

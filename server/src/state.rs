@@ -26,7 +26,11 @@ use crate::tunnel::TunnelSessionManager;
 /// store carry their own internal locking.
 #[derive(Clone)]
 pub struct AppState {
-    /// Current workspace directory (may change on workspace:switch).
+    /// Legacy workspace directory field used for compatibility and display.
+    ///
+    /// After global-registry refactors this is typically the current
+    /// `config_path` parent directory. It is not a filesystem security
+    /// boundary; sandbox enforcement comes from configured project roots.
     pub workspace_dir: Arc<RwLock<PathBuf>>,
     /// Parsed workspace config (reloaded on switch/update).
     pub config: Arc<RwLock<DamHopperConfig>>,
@@ -71,6 +75,15 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Return registry config parent directory used by legacy workspace-scoped features.
+    pub async fn config_dir(&self) -> StdPathBuf {
+        let cfg = self.config.read().await;
+        cfg.config_path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| StdPathBuf::from("/"))
+    }
+
     /// Resolve a project name to its absolute filesystem path.
     /// Returns `Err(NotFound)` if the project doesn't exist in the current config.
     pub async fn project_path(&self, name: &str) -> Result<StdPathBuf, AppError> {
@@ -159,4 +172,12 @@ impl AppState {
             diagnostics,
         })
     }
+}
+
+pub fn project_roots_from_config(config: &DamHopperConfig) -> Vec<(String, StdPathBuf)> {
+    config
+        .projects
+        .iter()
+        .map(|project| (project.name.clone(), StdPathBuf::from(&project.path)))
+        .collect()
 }

@@ -35,8 +35,10 @@ deploy/run-linux-nohup.sh restart --bin server/target/release/dam-hopper-server
 Edit `~/.config/dam-hopper/server.conf`:
 
 ```ini
-# Optional. Omit to use defaults.workspace from ~/.config/dam-hopper/config.toml.
-DAM_HOPPER_WORKSPACE="/path/to/workspace"
+# Optional. Omit to use ~/.config/dam-hopper/dam-hopper.toml.
+DAM_HOPPER_CONFIG="/home/user/.config/dam-hopper/dam-hopper.toml"
+# Legacy directory-discovery override:
+# DAM_HOPPER_WORKSPACE="/path/to/workspace"
 DAM_HOPPER_HOST="0.0.0.0"
 DAM_HOPPER_PORT="4800"
 RUST_LOG="info"
@@ -52,7 +54,7 @@ Restart after changes:
 pnpm server:restart
 ```
 
-Only bind to `0.0.0.0` when the host is protected by a trusted network, firewall, or Tailscale. DamHopper exposes terminal, file, git, and tunnel operations for the configured workspace.
+Only bind to `0.0.0.0` when the host is protected by a trusted network, firewall, or Tailscale. DamHopper exposes terminal, file, git, and tunnel operations for the configured registry projects.
 
 ## Operate
 

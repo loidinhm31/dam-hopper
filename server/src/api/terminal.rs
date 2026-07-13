@@ -45,9 +45,7 @@ pub async fn create_session(
     State(state): State<AppState>,
     Json(body): Json<CreateSessionBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let cwd = body
-        .cwd
-        .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
+    let cwd = resolve_terminal_cwd(&state, body.project.as_deref(), body.cwd).await?;
 
     let (restart_policy, restart_max_retries, env) =
         resolve_terminal_env(&state, body.project.as_deref(), body.env).await?;
@@ -67,6 +65,50 @@ pub async fn create_session(
         })
         .map_err(ApiError::from_app)?;
     Ok(Json(meta))
+}
+
+async fn resolve_terminal_cwd(
+    state: &AppState,
+    project_name: Option<&str>,
+    requested_cwd: Option<String>,
+) -> Result<String, ApiError> {
+    let Some(project_name) = project_name else {
+        return Ok(requested_cwd
+            .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())));
+    };
+
+    let sandbox = state
+        .fs
+        .sandbox()
+        .map_err(|err| ApiError::from_app(AppError::Fs(err)))?;
+    let project_root = sandbox.project_root(project_name).ok_or_else(|| {
+        ApiError::from_app(AppError::NotFound(format!(
+            "Project not found: {project_name}"
+        )))
+    })?;
+    let proposed = requested_cwd
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                project_root.join(path)
+            }
+        })
+        .unwrap_or_else(|| project_root.clone());
+    let cwd = sandbox
+        .validate(project_name, proposed)
+        .await
+        .map_err(|err| ApiError::from_app(AppError::Fs(err)))?;
+
+    if !cwd.is_dir() {
+        return Err(ApiError::from_app(AppError::InvalidInput(format!(
+            "Terminal cwd is not a directory: {}",
+            cwd.display()
+        ))));
+    }
+
+    Ok(cwd.to_string_lossy().into_owned())
 }
 
 // ---------------------------------------------------------------------------

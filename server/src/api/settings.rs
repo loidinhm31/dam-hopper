@@ -1,6 +1,8 @@
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::Deserialize;
 
+use crate::config::read_config;
+use crate::state::project_roots_from_config;
 use crate::state::AppState;
 
 use super::error::ApiError;
@@ -12,9 +14,10 @@ use super::error::ApiError;
 pub async fn cache_clear(State(state): State<AppState>) -> impl IntoResponse {
     // In the Rust server there's no in-process cache beyond RwLock fields.
     // Re-reading config is the closest equivalent.
-    let workspace_dir = state.workspace_dir.read().await.clone();
-    match crate::config::load_workspace_config(&workspace_dir) {
+    let config_path = state.config.read().await.config_path.clone();
+    match read_config(&config_path) {
         Ok(cfg) => {
+            state.fs.reinit_sandbox(project_roots_from_config(&cfg));
             *state.config.write().await = cfg;
             Json(serde_json::json!({ "ok": true })).into_response()
         }

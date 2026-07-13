@@ -18,7 +18,7 @@ pub use ops::{
     atomic_persist_with_check, atomic_write_with_check, DirEntry, FileStat, SearchMatch,
     MAX_READ_BYTES,
 };
-pub use sandbox::WorkspaceSandbox;
+pub use sandbox::{ProjectSandbox, WorkspaceSandbox};
 pub use upload::{UploadState, MAX_UPLOAD_BYTES};
 pub use watcher::FsWatcherManager;
 
@@ -51,7 +51,7 @@ struct SubInfo {
     filter_prefix: PathBuf,
 }
 
-/// Workspace-scoped filesystem subsystem.
+/// Project-scoped filesystem subsystem.
 ///
 /// Cheap to clone (Arc). Mirrors `PtySessionManager` lifecycle pattern.
 /// The inner Mutex is intentionally `std::sync::Mutex` — never held across
@@ -62,21 +62,21 @@ pub struct FsSubsystem {
 }
 
 struct Inner {
-    sandbox: Option<WorkspaceSandbox>,
+    sandbox: Option<ProjectSandbox>,
     watcher_mgr: FsWatcherManager,
     subs: HashMap<u64, SubInfo>,
     next_sub_id: u64,
 }
 
 impl FsSubsystem {
-    /// Construct synchronously. If workspace root cannot be canonicalized
+    /// Construct synchronously. If any project root cannot be canonicalized
     /// (e.g. path doesn't exist), the sandbox is stored as `None` and IDE
     /// FS operations will return `FsError::Unavailable` at request time.
-    pub fn new(ws_root: PathBuf) -> Self {
-        let sandbox = match WorkspaceSandbox::new(ws_root) {
+    pub fn new(projects: Vec<(String, PathBuf)>) -> Self {
+        let sandbox = match ProjectSandbox::new(projects) {
             Ok(s) => Some(s),
             Err(e) => {
-                tracing::warn!(error = %e, "WorkspaceSandbox init failed — IDE FS ops unavailable");
+                tracing::warn!(error = %e, "ProjectSandbox init failed — IDE FS ops unavailable");
                 None
             }
         };
@@ -90,29 +90,36 @@ impl FsSubsystem {
         }
     }
 
-    /// Reinitialize the sandbox root after a workspace switch.
+    /// Reinitialize sandbox roots after a workspace switch.
     ///
     /// Replaces the sandbox in-place so all existing `FsSubsystem` clones
     /// (including the one in `AppState`) see the new root immediately.
     /// Clears active subscriptions since they belong to the old workspace.
-    pub fn reinit_sandbox(&self, new_root: PathBuf) {
-        let sandbox = match WorkspaceSandbox::new(new_root) {
+    pub fn reinit_sandbox(&self, projects: Vec<(String, PathBuf)>) {
+        let sandbox = match ProjectSandbox::new(projects) {
             Ok(s) => Some(s),
             Err(e) => {
-                tracing::warn!(error = %e, "WorkspaceSandbox reinit failed — IDE FS ops unavailable");
+                tracing::warn!(error = %e, "ProjectSandbox reinit failed — IDE FS ops unavailable");
                 None
             }
         };
         let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         inner.sandbox = sandbox;
-        inner.subs.clear();
+        let watcher_roots: Vec<PathBuf> = inner
+            .subs
+            .drain()
+            .map(|(_, info)| info.watcher_root)
+            .collect();
+        for watcher_root in watcher_roots {
+            inner.watcher_mgr.release(&watcher_root);
+        }
     }
 
     /// Returns a cloned sandbox handle, or `Err(Unavailable)` if init failed.
     ///
     /// Clone is cheap (just a PathBuf clone). Call site must not hold the
     /// returned sandbox while awaiting — it owns no locks.
-    pub fn sandbox(&self) -> Result<WorkspaceSandbox, FsError> {
+    pub fn sandbox(&self) -> Result<ProjectSandbox, FsError> {
         self.inner
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -121,22 +128,29 @@ impl FsSubsystem {
             .ok_or(FsError::Unavailable)
     }
 
-    /// Subscribe to tree events for `filter_abs_path`.
+    /// Subscribe to tree events for `filter_abs_path` within `project`.
     ///
-    /// `watcher_root` is the workspace root to attach the watcher to (shared
-    /// across all subscriptions in the same workspace). `filter_abs_path` is
-    /// the path the client cares about — events outside it are dropped by the
-    /// pump task in ws.rs.
+    /// The watcher root is derived from the selected project's canonical root.
+    /// `filter_abs_path` is the path the client cares about — events outside it
+    /// are dropped by the pump task in ws.rs.
     ///
     /// Returns `(sub_id, broadcast::Receiver<FsEvent>)`. The caller is
     /// responsible for generating the initial snapshot via `tree_snapshot`.
     pub fn subscribe_tree(
         &self,
-        watcher_root: PathBuf,
+        project: &str,
         filter_abs_path: PathBuf,
-    ) -> Result<(u64, broadcast::Receiver<FsEvent>), notify::Error> {
+    ) -> Result<(u64, broadcast::Receiver<FsEvent>), FsError> {
         let mut inner = self.inner.lock().expect("FsSubsystem: Mutex poisoned");
-        let rx = inner.watcher_mgr.subscribe(&watcher_root)?;
+        let sandbox = inner.sandbox.as_ref().ok_or(FsError::Unavailable)?;
+        let watcher_root = sandbox.project_root(project).ok_or(FsError::NotFound)?;
+        if !filter_abs_path.starts_with(&watcher_root) {
+            return Err(FsError::PathEscape);
+        }
+        let rx = inner
+            .watcher_mgr
+            .subscribe(&watcher_root)
+            .map_err(|e| FsError::Io(std::io::Error::other(e)))?;
         let sub_id = inner.next_sub_id;
         inner.next_sub_id += 1;
         inner.subs.insert(
@@ -231,6 +245,29 @@ pub fn tree_snapshot_sync(abs_path: &Path) -> Result<Vec<TreeNode>, FsError> {
     });
 
     Ok(nodes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FsSubsystem;
+
+    #[test]
+    fn reinit_sandbox_releases_active_watchers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let alpha = tmp.path().join("alpha");
+        let beta = tmp.path().join("beta");
+        std::fs::create_dir_all(&alpha).unwrap();
+        std::fs::create_dir_all(&beta).unwrap();
+
+        let fs = FsSubsystem::new(vec![("alpha".into(), alpha.clone())]);
+        let (sub_id, _rx) = fs.subscribe_tree("alpha", alpha.clone()).unwrap();
+        assert_eq!(fs.watcher_refcount(&alpha), 1);
+
+        fs.reinit_sandbox(vec![("beta".into(), beta)]);
+
+        assert_eq!(fs.watcher_refcount(&alpha), 0);
+        fs.unsubscribe_tree(sub_id);
+    }
 }
 
 fn map_io_sync(e: std::io::Error) -> FsError {

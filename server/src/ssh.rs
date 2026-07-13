@@ -82,9 +82,9 @@ impl SshCredentialKey {
     }
 }
 
-/// Builds a stable saved-secret key scoped to this workspace and SSH key.
-pub fn credential_key(workspace_dir: &Path, key_path: &Path) -> SshCredentialKey {
-    let workspace = normalize_path_for_key(workspace_dir);
+/// Builds a stable saved-secret key scoped to a config/workspace identity path and SSH key.
+pub fn credential_key(config_scope_path: &Path, key_path: &Path) -> SshCredentialKey {
+    let workspace = normalize_path_for_key(config_scope_path);
     let key = normalize_path_for_key(key_path);
     let public_fingerprint = public_key_fingerprint(key_path);
     let material = match &public_fingerprint {

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { useState } from "react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import {
   useConfig,
@@ -11,24 +11,19 @@ import {
 import { SettingsAppearanceSection } from "@/components/organisms/SettingsAppearanceSection.js";
 import { SettingsKeyboardShortcutsSection } from "@/components/organisms/SettingsKeyboardShortcutsSection.js";
 import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
+import { SettingsSectionAccordion } from "@/components/pages/settings-page/SettingsSectionAccordion.js";
+import { SettingsMaintenancePanel } from "@/components/pages/settings-page/SettingsMaintenancePanel.js";
+import { SettingsImportExportPanel } from "@/components/pages/settings-page/SettingsImportExportPanel.js";
+import {
+  SettingsGlobalConfigPanel,
+  SettingsWorkspaceConfigPanel,
+} from "@/components/pages/settings-page/SettingsConfigPanels.js";
 
-const ConfigEditor = lazy(() =>
-  import("@/components/organisms/ConfigEditor.js").then((m) => ({
-    default: m.ConfigEditor,
-  })),
-);
-const GlobalConfigEditor = lazy(() =>
-  import("@/components/organisms/GlobalConfigEditor.js").then((m) => ({
-    default: m.GlobalConfigEditor,
-  })),
-);
-
-const SETTINGS_FALLBACK = (
-  <div className="flex min-h-24 items-center text-xs text-[var(--color-text-muted)]">
-    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
-    <span className="ml-2">Loading settings…</span>
-  </div>
-);
+const SETTINGS_DIAGNOSTICS_SCOPE = {
+  page: "settings",
+  route: "/settings",
+  frontendScopes: ["SettingsPage", "settings"],
+};
 
 export function SettingsPage() {
   const { data: config, isLoading, error } = useConfig();
@@ -104,11 +99,11 @@ export function SettingsPage() {
     setImportErr(null);
     try {
       const result = await importSettings.mutateAsync();
-      if (result.imported) {
-        setImportMsg("Settings imported and config reloaded.");
-      } else {
-        setImportMsg("Import cancelled.");
-      }
+      setImportMsg(
+        result.imported
+          ? "Settings imported and config reloaded."
+          : "Import cancelled.",
+      );
     } catch (err) {
       setImportErr(err instanceof Error ? err.message : String(err));
     }
@@ -125,231 +120,80 @@ export function SettingsPage() {
         <DiagnosticsExportButton
           compact
           terminalIds={[]}
-          scope={{
-            page: "settings",
-            route: "/settings",
-            frontendScopes: ["SettingsPage", "settings"],
-          }}
+          scope={SETTINGS_DIAGNOSTICS_SCOPE}
         />
       }
     >
-      <div className="max-w-3xl space-y-10">
-        <section>
-          <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">
-            Appearance
-          </h2>
+      <div className="max-w-4xl space-y-3">
+        <SettingsSectionAccordion
+          title="Appearance"
+          description="Theme, layout density, editor behavior, and notification preferences."
+          defaultOpen
+        >
           <SettingsAppearanceSection />
-        </section>
+        </SettingsSectionAccordion>
 
-        <section>
-          <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">
-            Keyboard Shortcuts
-          </h2>
+        <SettingsSectionAccordion
+          title="Keyboard Shortcuts"
+          description="Tune command keys used across workspace navigation and terminals."
+        >
           <SettingsKeyboardShortcutsSection />
-        </section>
+        </SettingsSectionAccordion>
 
-        <section>
-          <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">
-            Global Settings
-          </h2>
-          <Suspense fallback={SETTINGS_FALLBACK}>
-            <GlobalConfigEditor />
-          </Suspense>
-        </section>
+        <SettingsSectionAccordion
+          title="Global Settings"
+          description="Edit machine-level defaults that apply across DamHopper workspaces."
+          defaultOpen
+        >
+          <SettingsGlobalConfigPanel />
+        </SettingsSectionAccordion>
 
-        <section>
-          <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">
-            Workspace Config
-          </h2>
-          {isLoading && (
-            <p className="text-sm text-[var(--color-text-muted)]">
-              Loading config…
-            </p>
-          )}
-          {error && (
-            <p className="text-sm text-[var(--color-danger)]">
-              Failed to load config: {(error as Error).message}
-            </p>
-          )}
-          {config && (
-            <Suspense fallback={SETTINGS_FALLBACK}>
-              <ConfigEditor
-                config={config}
-                onSave={updateConfig}
-                isSaving={isPending}
-                saveError={
-                  saveError
-                    ? saveError instanceof Error
-                      ? saveError.message
-                      : String(saveError)
-                    : null
-                }
-              />
-            </Suspense>
-          )}
-        </section>
+        <SettingsSectionAccordion
+          title="Workspace Config"
+          description="Edit the active workspace TOML config and project definitions."
+          defaultOpen
+        >
+          <SettingsWorkspaceConfigPanel
+            config={config}
+            isLoading={isLoading}
+            error={error}
+            onSave={updateConfig}
+            isSaving={isPending}
+            saveError={saveError}
+          />
+        </SettingsSectionAccordion>
 
-        {/* ── Maintenance ─────────────────────────────────────────────── */}
-        <section>
-          <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">
-            Maintenance
-          </h2>
-          <div className="glass-card rounded-lg p-5 space-y-4">
-            {/* Revalidate */}
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-[var(--color-text)]">
-                  Revalidate Cache
-                </p>
-                <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                  Clear all cached query data so every panel refetches fresh
-                  data from disk. Useful after external changes.
-                </p>
-                {clearMsg && (
-                  <p className="text-xs text-[var(--color-success)] mt-1">
-                    ✓ {clearMsg}
-                  </p>
-                )}
-                {clearErr && (
-                  <p className="text-xs text-[var(--color-danger)] mt-1">
-                    ✗ {clearErr}
-                  </p>
-                )}
-              </div>
-              <button
-                className="btn-bracket shrink-0"
-                onClick={() => void handleClearCache()}
-                disabled={clearCache.isPending}
-              >
-                {clearCache.isPending ? "Clearing…" : "Revalidate"}
-              </button>
-            </div>
+        <SettingsSectionAccordion
+          title="Maintenance"
+          description="Refresh local data, export diagnostics, or reset workspace runtime state."
+        >
+          <SettingsMaintenancePanel
+            diagnosticsScope={SETTINGS_DIAGNOSTICS_SCOPE}
+            onClearCache={() => void handleClearCache()}
+            clearCachePending={clearCache.isPending}
+            clearMsg={clearMsg}
+            clearErr={clearErr}
+            onResetWorkspace={() => void handleNuclearReset()}
+            resetPending={resetWorkspace.isPending}
+            resetErr={resetErr}
+          />
+        </SettingsSectionAccordion>
 
-            <div className="border-t border-[var(--color-border)]" />
-
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-[var(--color-text)]">
-                  Export Diagnostics
-                </p>
-                <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                  Download a scoped local JSON bundle. Use the page header to
-                  choose a short window and keep noisy data down.
-                </p>
-              </div>
-              <DiagnosticsExportButton
-                className="shrink-0 justify-end"
-                terminalIds={[]}
-                scope={{
-                  page: "settings",
-                  route: "/settings",
-                  frontendScopes: ["SettingsPage", "settings"],
-                }}
-              />
-            </div>
-
-            <div className="border-t border-[var(--color-border)]" />
-
-            {/* Nuclear Reset */}
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-[var(--color-danger)]">
-                  Nuclear Reset
-                </p>
-                <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                  Kill all terminal sessions, clear cached state, and return to
-                  workspace selection. This cannot be undone.
-                </p>
-                {resetErr && (
-                  <p className="text-xs text-[var(--color-danger)] mt-1">
-                    ✗ {resetErr}
-                  </p>
-                )}
-              </div>
-              <button
-                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide rounded-sm border border-[var(--color-danger)] text-[var(--color-danger)] bg-transparent cursor-pointer transition-all duration-150 hover:bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] disabled:opacity-40 disabled:cursor-not-allowed"
-                onClick={() => void handleNuclearReset()}
-                disabled={resetWorkspace.isPending}
-              >
-                {resetWorkspace.isPending ? "Resetting…" : "⚠ Nuclear Reset"}
-              </button>
-            </div>
-          </div>
-        </section>
-
-        {/* ── Import / Export ───────────────────────────────────────────── */}
-        <section>
-          <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">
-            Import / Export Settings
-          </h2>
-          <div className="glass-card rounded-lg p-5 space-y-4">
-            {/* Export */}
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-[var(--color-text)]">
-                  Export Settings
-                </p>
-                <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                  Save a copy of the current{" "}
-                  <code className="text-[var(--color-primary)]">
-                    dam-hopper.toml
-                  </code>{" "}
-                  to a chosen location. Preserves all formatting and comments.
-                </p>
-                {exportMsg && (
-                  <p className="text-xs text-[var(--color-success)] mt-1">
-                    ✓ {exportMsg}
-                  </p>
-                )}
-                {exportErr && (
-                  <p className="text-xs text-[var(--color-danger)] mt-1">
-                    ✗ {exportErr}
-                  </p>
-                )}
-              </div>
-              <button
-                className="btn-bracket shrink-0"
-                onClick={() => void handleExport()}
-                disabled={exportSettings.isPending}
-              >
-                {exportSettings.isPending ? "Exporting…" : "Export"}
-              </button>
-            </div>
-
-            <div className="border-t border-[var(--color-border)]" />
-
-            {/* Import */}
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-[var(--color-text)]">
-                  Import Settings
-                </p>
-                <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                  Replace the current workspace config with a{" "}
-                  <code className="text-[var(--color-primary)]">.toml</code>{" "}
-                  file. The file is validated before being written.
-                </p>
-                {importMsg && (
-                  <p className="text-xs text-[var(--color-success)] mt-1">
-                    ✓ {importMsg}
-                  </p>
-                )}
-                {importErr && (
-                  <p className="text-xs text-[var(--color-danger)] mt-1">
-                    ✗ {importErr}
-                  </p>
-                )}
-              </div>
-              <button
-                className="btn-bracket shrink-0"
-                onClick={() => void handleImport()}
-                disabled={importSettings.isPending}
-              >
-                {importSettings.isPending ? "Importing…" : "Import"}
-              </button>
-            </div>
-          </div>
-        </section>
+        <SettingsSectionAccordion
+          title="Import / Export Settings"
+          description="Move workspace configuration between files without changing server contracts."
+        >
+          <SettingsImportExportPanel
+            onExport={() => void handleExport()}
+            exportPending={exportSettings.isPending}
+            exportMsg={exportMsg}
+            exportErr={exportErr}
+            onImport={() => void handleImport()}
+            importPending={importSettings.isPending}
+            importMsg={importMsg}
+            importErr={importErr}
+          />
+        </SettingsSectionAccordion>
       </div>
     </AppLayout>
   );
