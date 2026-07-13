@@ -12,8 +12,8 @@
 Date: 2026-07-12
 Description: Prove the new registry model with integration tests, Windows path coverage, manual smoke steps, and docs.
 Priority: P1
-Implementation status: Pending
-Review status: Not reviewed
+Implementation status: Completed
+Review status: Reviewed (9/10)
 Effort: 3h
 
 ## Key Insights
@@ -64,13 +64,13 @@ Testing layers:
 
 ## Todo list
 
-- [ ] Add config resolution tests.
-- [ ] Add parser/roundtrip tests.
-- [ ] Add sandbox and API integration tests.
-- [ ] Add Windows-specific tests where practical.
-- [ ] Update configuration and architecture docs.
-- [ ] Update CLAUDE and README command guidance.
-- [ ] Run final validation commands.
+- [x] Add config resolution tests.
+- [x] Add parser/roundtrip tests.
+- [x] Add sandbox and API integration tests.
+- [x] Add Windows-specific tests where practical.
+- [x] Update configuration and architecture docs.
+- [x] Update CLAUDE and README command guidance.
+- [x] Run final validation commands.
 
 ## Success Criteria
 

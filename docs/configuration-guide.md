@@ -1,12 +1,14 @@
 # Configuration Guide
 
-## Workspace Configuration (dam-hopper.toml)
+## Project Registry (dam-hopper.toml)
 
 DamHopper loads project registry data from `dam-hopper.toml`. You can point the server at a specific registry file with `--config <path>` or `DAM_HOPPER_CONFIG`, or let it use the canonical global registry at `~/.config/dam-hopper/dam-hopper.toml`.
 
-If you are using legacy workspace-root discovery, create `dam-hopper.toml` in your workspace root.
+Legacy workspace-root discovery still works when you pass `--workspace <dir>` or `DAM_HOPPER_WORKSPACE`, but it is no longer the primary model.
 
 ### Basic Setup
+
+For end-to-end validation steps after setup, jump to the [Manual Smoke Checklist](#manual-smoke-checklist).
 
 ```toml
 [workspace]
@@ -18,6 +20,8 @@ name = "my-workspace"
 Define projects with type-specific defaults. Project paths can be absolute or relative; relative paths resolve against the config file directory. Other path fields like `env_file` and terminal profile `cwd` remain project-relative and reject absolute or traversal-containing values.
 
 **Path Serialization:** When DamHopper writes the registry TOML, absolute project paths are preserved when projects live outside the config file directory. Projects inside the config directory are written as relative paths for portability. Relative paths are normalized to forward slashes in TOML output regardless of platform.
+
+**Windows paths:** Drive-letter absolute paths are supported. Mixed separators and `\\?\` verbatim prefixes are covered by automated tests. Verbatim paths preserve the exact Windows path string and are mainly useful when you need explicit device-style paths. UNC paths can be used only with manual validation in your target environment because they are not covered by automated CI in this repo.
 
 ```toml
 [[projects]]
@@ -57,7 +61,7 @@ run_command = "bash scripts/run.sh"
 
 | Field         | Type   | Required | Notes                                             |
 | ------------- | ------ | -------- | ------------------------------------------------- |
-| name          | string | ✓        | Unique within workspace                           |
+| name          | string | ✓        | Unique within registry                            |
 | path          | string | ✓        | Absolute path or relative to config file dir      |
 | type          | enum   | ✓        | npm \| pnpm \| cargo \| maven \| gradle \| custom |
 | build_command | string |          | Overrides preset for type                         |
@@ -171,7 +175,7 @@ Optional: configure where the agent store directory is located.
 path = ".dam-hopper/agent-store"
 ```
 
-If omitted, defaults to `.dam-hopper/agent-store/` in workspace root.
+If omitted, defaults to `.dam-hopper/agent-store/` relative to the loaded registry file directory.
 
 ### Feature Flags
 
@@ -313,7 +317,7 @@ path = "/tmp/test-workspace"
 ### Generate New Token
 
 ```bash
-cd server && cargo run -- --new-token --workspace /path/to/workspace
+cd server && cargo run -- --config /path/to/dam-hopper.toml --new-token
 ```
 
 Saves to `~/.config/dam-hopper/server-token`.
@@ -333,20 +337,21 @@ curl -H "Authorization: Bearer $(cat ~/.config/dam-hopper/server-token)" \
 
 ```bash
 cd server
-cargo run -- --workspace /path/to/workspace --port 4800
+cargo run -- --config /path/to/dam-hopper.toml --port 4800
+# Or omit --config to use ~/.config/dam-hopper/dam-hopper.toml
 ```
 
 ### With Logging
 
 ```bash
-RUST_LOG=dam_hopper=debug cargo run -- --workspace /path/to/workspace
+RUST_LOG=dam_hopper=debug cargo run -- --config /path/to/dam-hopper.toml
 ```
 
 ### Release Build
 
 ```bash
 cargo build --release
-./target/release/dam-hopper-server --workspace /path/to/workspace --port 4800
+./target/release/dam-hopper-server --config /path/to/dam-hopper.toml --port 4800
 ```
 
 ### Nohup Background Server
@@ -360,10 +365,11 @@ pnpm server:restart
 
 Edit `~/.config/dam-hopper/server.conf` to set:
 
-- `DAM_HOPPER_WORKSPACE`
+- `DAM_HOPPER_CONFIG`
 - `DAM_HOPPER_HOST`
 - `DAM_HOPPER_PORT`
 - `DAM_HOPPER_CORS_ORIGINS` (if needed)
+- `DAM_HOPPER_WORKSPACE` (legacy directory-discovery override, optional)
 
 Runtime files:
 
@@ -381,7 +387,7 @@ Override with `--cors-origins`:
 
 ```bash
 cargo run -- \
-  --workspace /path/to/workspace \
+  --config /path/to/dam-hopper.toml \
   --cors-origins "https://example.com" \
   --cors-origins "http://localhost:3000"
 ```
@@ -391,7 +397,7 @@ used by your target platform. Typical entries are:
 
 ```bash
 cargo run -- \
-  --workspace /path/to/workspace \
+  --config /path/to/dam-hopper.toml \
   --cors-origins "http://localhost:1420" \
   --cors-origins "tauri://localhost" \
   --cors-origins "http://tauri.localhost" \
@@ -415,17 +421,41 @@ curl -X POST \
 
 Keys are stored in-memory per session (not persisted to disk).
 
+## Manual Smoke Checklist
+
+1. Create `~/.config/dam-hopper/dam-hopper.toml` with at least two projects whose `projects[].path` values point at separate roots. On Windows, use different drives if available.
+Expected: `GET /api/workspace/status` reports the registry `configPath` and the expected `projectCount`.
+
+2. Start the server with `cargo run -- --config ~/.config/dam-hopper/dam-hopper.toml --port 4800`.
+Expected: startup succeeds without requiring a repo-local `dam-hopper.toml`.
+
+3. Browse and read files in each project, then create or edit a file inside each root.
+Expected: list/read/write operations work inside the selected project and do not bleed across roots.
+
+4. Create a terminal session for each project without passing `cwd`.
+Expected: each terminal starts in the selected project root.
+
+5. Attempt a traversal or sibling-project read such as `/api/fs/read?project=alpha&path=../beta/owned.txt`.
+Expected: the server returns `403 FORBIDDEN`. Also verify rejection for a raw absolute path outside the configured root and for any symlink that resolves outside the selected project.
+
+6. On Windows, change one project path to a mixed-separator absolute path and, if supported in your environment, a `\\?\` verbatim path.
+Expected: the registry still loads, the project remains accessible, and TOML writes preserve absolute paths instead of forcing them relative.
+
+7. On Windows or in any environment with a reachable network share, add a temporary UNC-style project entry such as `path = "\\\\server\\share\\project"`.
+Expected: the registry either works for that project in your environment or fails in a clear, local way that you can document before rollout. Do not assume UNC behavior from Linux CI alone.
+
 ## Troubleshooting Configuration
 
-### Workspace not found
+### Registry or project path not found
 
-Error: `Workspace directory does not exist`
+Error: `Workspace directory does not exist` or missing project path errors
 
 Check:
 
-1. Path in dam-hopper.toml exists: `ls /path/to/workspace`
-2. Path is absolute or relative to CWD
-3. User has read permissions
+1. Registry path exists: `ls ~/.config/dam-hopper/dam-hopper.toml`
+2. Each `projects[].path` exists
+3. Relative project paths are resolved from the registry file directory
+4. User has read permissions
 
 ### Project not discovered
 
@@ -434,11 +464,11 @@ Error: `Project not found: {name}`
 Verify in dam-hopper.toml:
 
 1. Project name is correct
-2. Project path exists relative to workspace root
+2. Project path exists relative to the registry file directory or is an absolute path
 3. Project type matches actual structure
 
 ```bash
-ls -la /path/to/workspace/path/to/project
+ls -la /configured/project/path
 ```
 
 ### Token issues
@@ -446,7 +476,7 @@ ls -la /path/to/workspace/path/to/project
 Regenerate token:
 
 ```bash
-cargo run -- --new-token --workspace /path/to/workspace
+cargo run -- --config /path/to/dam-hopper.toml --new-token
 cat ~/.config/dam-hopper/server-token
 ```
 
@@ -493,7 +523,7 @@ path = ".dam-hopper/agent-store"
 Start server:
 
 ```bash
-dam-hopper-server --workspace /path/to/web-app-monorepo --port 4800
+dam-hopper-server --config ~/.config/dam-hopper/dam-hopper.toml --port 4800
 ```
 
 All four projects now accessible via `/api/projects` and `/api/fs/list?project=frontend&path=src`, etc.

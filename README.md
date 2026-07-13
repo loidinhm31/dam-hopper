@@ -4,7 +4,7 @@ A web-based app for managing multi-project development environments. Manage git 
 
 ## Features
 
-- **Workspace config** — Define projects once in `dam-hopper.toml`, then operate on all of them
+- **Global project registry** — Define projects once in `~/.config/dam-hopper/dam-hopper.toml` or another registry file, then operate on all of them
 - **Bulk git operations** — Fetch, pull, push across all projects with concurrent progress
 - **Build management** — Build/run projects using per-type presets (Maven, Gradle, npm, pnpm, Cargo) or custom commands
 - **Interactive terminals** — Full PTY terminals (xterm.js + portable-pty) per command — color, interactivity, scrollback
@@ -34,7 +34,8 @@ cd server && cargo build --release
 cd .. && pnpm install && pnpm build
 
 # Run (web dist is served by the Rust server)
-DAM_HOPPER_WORKSPACE=/path/to/workspace ./server/target/release/dam-hopper-server
+./server/target/release/dam-hopper-server --config ~/.config/dam-hopper/dam-hopper.toml
+# Or omit --config to use the default global registry path
 # Open http://localhost:4800 — token printed to terminal on startup
 ```
 
@@ -63,7 +64,7 @@ See [Linux Nohup Setup](./docs/linux-nohup.md) for host/port, MongoDB, Tailscale
 
 ## Configuration
 
-Create a `dam-hopper.toml` in your workspace root:
+Create `~/.config/dam-hopper/dam-hopper.toml`:
 
 ```toml
 [workspace]
@@ -87,6 +88,10 @@ Supported project types: `maven`, `gradle`, `npm`, `pnpm`, `cargo`, `custom`.
 
 Each type has built-in default build/run commands. Override with `build_command` / `run_command`.
 
+Project paths may be absolute or relative. Relative paths resolve against the registry file directory, so repo-local registries still work when you pass `--config /path/to/repo/dam-hopper.toml`.
+
+For manual end-to-end validation of multi-root registries and escape rejection, see [docs/configuration-guide.md](docs/configuration-guide.md#manual-smoke-checklist).
+
 ## Development
 
 ```bash
@@ -109,7 +114,7 @@ pnpm android:dev
 pnpm android:build
 
 # Rust server (requires running Rust server separately)
-cd server && cargo run -- --workspace /path/to/workspace
+cd server && cargo run -- --config /path/to/dam-hopper.toml
 
 # Build everything
 pnpm build        # web app

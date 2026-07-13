@@ -242,7 +242,8 @@ Infrastructure
 ### Environment Variables
 
 ```bash
-DAM_HOPPER_WORKSPACE     # Workspace root directory
+DAM_HOPPER_CONFIG        # Explicit project registry file
+DAM_HOPPER_WORKSPACE     # Legacy workspace directory override / discovery root
 DAM_HOPPER_PORT          # Server port (default: 4800)
 DAM_HOPPER_HOST          # Bind address (default: 0.0.0.0)
 DAM_HOPPER_NO_AUTH       # Dev mode, bypasses auth
@@ -257,11 +258,12 @@ RUST_ENV                 # Runtime environment (blocks if "production")
 ```
 ~/.config/dam-hopper/
   ├── server-token         # JWT signing secret (hex UUID)
-  └── config.toml          # Global config (workspaces)
+  ├── config.toml          # Global defaults / known workspaces
+  └── dam-hopper.toml      # Canonical project registry
 
-workspace-root/
-  ├── dam-hopper.toml      # Workspace configuration
-  └── .dam-hopper/         # Internal directory
+registry-dir/
+  ├── dam-hopper.toml      # Loaded registry (default: ~/.config/dam-hopper/)
+  └── .dam-hopper/         # Internal directory next to the loaded registry
       ├── agent-store/     # Agent store repository
       └── cache/           # Cache directory
 ```
@@ -274,7 +276,7 @@ workspace-root/
 cd server
 
 # Dev mode with no authentication
-cargo run -- --no-auth --workspace /path/to/workspace
+cargo run -- --no-auth --config /path/to/dam-hopper.toml
 
 # Dev mode with watch
 cargo watch -x run
@@ -392,7 +394,7 @@ dam-hopper/
 
 ### File System
 
-- **Sandbox**: All paths validated relative to workspace root
+- **Sandbox**: All paths validated relative to the selected project's configured root
 - **Symlinks**: Allowed but cannot escape sandbox
 - **Permissions**: Preserved from filesystem
 
