@@ -65,7 +65,7 @@ fn make_state(tmp: &TempDir) -> AppState {
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
-    let fs = FsSubsystem::new(workspace_dir.clone());
+    let fs = FsSubsystem::new(vec![]);
     let tunnel_manager = make_tunnel_manager(&event_sink);
 
     AppState::new(
@@ -1151,7 +1151,7 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
-    let fs = FsSubsystem::new(workspace_dir.clone());
+    let fs = FsSubsystem::new(vec![("test-project".into(), workspace_dir.clone())]);
     let tunnel_manager = make_tunnel_manager(&event_sink);
 
     AppState::new(
@@ -1171,6 +1171,112 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
     )
     .expect("make_state_with_project failed")
+}
+
+fn make_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) -> AppState {
+    let workspace_dir = tmp.path().to_path_buf();
+    let projects: Vec<ProjectConfig> = roots
+        .iter()
+        .map(|(name, path)| ProjectConfig {
+            name: (*name).into(),
+            path: path.to_string_lossy().into_owned(),
+            project_type: ProjectType::Custom,
+            services: None,
+            commands: None,
+            env_file: None,
+            tags: None,
+            terminals: vec![],
+            agents: None,
+            restart_policy: crate::config::RestartPolicy::Never,
+            restart_max_retries: crate::config::DEFAULT_RESTART_MAX_RETRIES,
+            health_check_url: None,
+        })
+        .collect();
+    let sandbox_roots = projects
+        .iter()
+        .map(|project| (project.name.clone(), std::path::PathBuf::from(&project.path)))
+        .collect();
+
+    let config = DamHopperConfig {
+        workspace: WorkspaceInfo {
+            name: "test-workspace".into(),
+            root: ".".into(),
+        },
+        agent_store: None,
+        server: crate::config::ServerConfig::default(),
+        projects,
+        features: FeaturesConfig::default(),
+        config_path: workspace_dir.join("dam-hopper.toml"),
+    };
+
+    let (event_sink, _rx) = BroadcastEventSink::new(64);
+    let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
+    let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
+    let fs = FsSubsystem::new(sandbox_roots);
+    let tunnel_manager = make_tunnel_manager(&event_sink);
+
+    AppState::new(
+        workspace_dir,
+        config,
+        GlobalConfig::default(),
+        pty_manager,
+        agent_store,
+        event_sink,
+        TEST_TOKEN.to_string(),
+        fs,
+        None,
+        false,
+        tunnel_manager,
+        None,
+        test_opaque_setup(),
+        DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
+    )
+    .expect("make_state_with_project_roots failed")
+}
+
+#[tokio::test]
+async fn fs_rest_validates_against_selected_project_root() {
+    let registry_tmp = tempfile::tempdir().unwrap();
+    let projects_tmp = tempfile::tempdir().unwrap();
+    let alpha = projects_tmp.path().join("alpha");
+    let beta = projects_tmp.path().join("beta");
+    std::fs::create_dir_all(&alpha).unwrap();
+    std::fs::create_dir_all(&beta).unwrap();
+    std::fs::write(alpha.join("owned.txt"), "alpha").unwrap();
+    std::fs::write(beta.join("owned.txt"), "beta").unwrap();
+
+    let state = make_state_with_project_roots(
+        &registry_tmp,
+        vec![("alpha", alpha.as_path()), ("beta", beta.as_path())],
+    );
+
+    let alpha_resp = get(
+        state.clone(),
+        "/api/fs/read?project=alpha&path=owned.txt",
+    )
+    .await;
+    assert_eq!(alpha_resp.status(), StatusCode::OK);
+    let alpha_body = axum::body::to_bytes(alpha_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&alpha_body[..], b"alpha");
+
+    let beta_resp = get(state.clone(), "/api/fs/read?project=beta&path=owned.txt").await;
+    assert_eq!(beta_resp.status(), StatusCode::OK);
+    let beta_body = axum::body::to_bytes(beta_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&beta_body[..], b"beta");
+
+    let escape_resp = get(
+        state.clone(),
+        "/api/fs/read?project=alpha&path=../beta/owned.txt",
+    )
+    .await;
+    assert_eq!(escape_resp.status(), StatusCode::FORBIDDEN);
+
+    let missing_resp = get(state, "/api/fs/read?project=missing&path=owned.txt").await;
+    assert_eq!(missing_resp.status(), StatusCode::NOT_FOUND);
 }
 
 fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> AppState {
@@ -1193,7 +1299,7 @@ fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> Ap
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
-    let fs = FsSubsystem::new(workspace_dir.clone());
+    let fs = FsSubsystem::new(vec![("test-project".into(), workspace_dir.clone())]);
     let tunnel_manager = make_tunnel_manager(&event_sink);
 
     AppState::new(

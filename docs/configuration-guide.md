@@ -63,6 +63,14 @@ run_command = "bash scripts/run.sh"
 | env_file      | string |          | Relative path to .env (project-local only)        |
 | tags          | array  |          | Arbitrary tags for filtering                      |
 
+## File Access Boundaries
+
+Runtime file access via `/api/fs/*` and WebSocket file operations is **sandboxed per project root**. When a request targets a project, the server validates all file paths against that project's configured root directory. This prevents traversal attempts from escaping a project's directory tree and blocks access to other projects' files.
+
+- Symlink targets are canonicalized and re-validated against the project boundary
+- Tree subscriptions (watchers) are rooted at the project root
+- Relative path sequences containing `..` are rejected before filesystem access
+
 ## Startup Config Resolution
 
 Server startup resolves configuration in this order:

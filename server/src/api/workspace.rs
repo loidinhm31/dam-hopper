@@ -158,12 +158,7 @@ pub async fn init_workspace(
         }
     };
 
-    let sandbox_root = cfg
-        .config_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| path.clone());
-    state.fs.reinit_sandbox(sandbox_root);
+    state.fs.reinit_sandbox(project_roots(&cfg));
     *state.workspace_dir.write().await = path;
     *state.config.write().await = cfg;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -182,12 +177,7 @@ pub async fn switch_workspace(
 
     state.pty_manager.dispose();
 
-    let sandbox_root = cfg
-        .config_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| path.clone());
-    state.fs.reinit_sandbox(sandbox_root);
+    state.fs.reinit_sandbox(project_roots(&cfg));
 
     *state.workspace_dir.write().await = path.clone();
     *state.config.write().await = cfg;
@@ -198,6 +188,19 @@ pub async fn switch_workspace(
     );
 
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+fn project_roots(config: &DamHopperConfig) -> Vec<(String, std::path::PathBuf)> {
+    config
+        .projects
+        .iter()
+        .map(|project| {
+            (
+                project.name.clone(),
+                std::path::PathBuf::from(&project.path),
+            )
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
