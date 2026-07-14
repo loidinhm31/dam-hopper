@@ -207,6 +207,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-07-14:** Completed Explorer Copy Path context menu (Copy Absolute / Copy Relative Path on file-tree right-click; pure helpers + unit tests; native separators; 422 tests passing).
 - **2026-07-09:** Completed Phase 03 TerminalPanel xterm integration for xterm agent notifications.
   - ✅ Wired BEL, OSC, output, command, and exit events into the notification tracker
   - ✅ Final review approved by user, score 9.3/10

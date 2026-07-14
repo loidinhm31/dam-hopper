@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import {
+  ClipboardCopy,
+  Copy,
   FilePlus,
   FolderPlus,
   Pencil,
@@ -14,61 +16,54 @@ export interface ContextMenuAction {
   icon: React.ReactNode;
   onClick: () => void;
   danger?: boolean;
+  disabled?: boolean;
 }
 
-interface Props {
-  x: number;
-  y: number;
-  nodePath: string;
-  isDir: boolean;
+export interface TreeContextMenuHandlers {
+  onCopyAbsolutePath: () => void;
+  onCopyRelativePath: () => void;
   onNewFile: () => void;
   onNewFolder: () => void;
   onRename: () => void;
   onDelete: () => void;
   onDownload: () => void;
   onUpload: () => void;
-  onClose: () => void;
 }
 
-export function TreeContextMenu({
-  x,
-  y,
+interface BuildItemsArgs extends TreeContextMenuHandlers {
+  isDir: boolean;
+  /** When true (e.g. project root unknown), disable the absolute-path copy. */
+  absolutePathDisabled?: boolean;
+}
+
+/**
+ * Build the ordered list of context-menu actions. Extracted as a pure helper
+ * so it can be unit-tested without rendering (mirrors `getEditorTabContextMenuItems`).
+ */
+export function getTreeContextMenuItems({
   isDir,
+  absolutePathDisabled = false,
+  onCopyAbsolutePath,
+  onCopyRelativePath,
   onNewFile,
   onNewFolder,
   onRename,
   onDelete,
   onDownload,
   onUpload,
-  onClose,
-}: Props) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  // Close on outside click or Escape
-  useEffect(() => {
-    function handleDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    }
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("mousedown", handleDown);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handleDown);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [onClose]);
-
-  // Clamp to viewport
-  const style: React.CSSProperties = {
-    position: "fixed",
-    zIndex: 60,
-    top: Math.min(y, window.innerHeight - 200),
-    left: Math.min(x, window.innerWidth - 180),
-  };
-
-  const items: ContextMenuAction[] = [
+}: BuildItemsArgs): ContextMenuAction[] {
+  return [
+    {
+      label: "Copy Absolute Path",
+      icon: <ClipboardCopy className="h-3.5 w-3.5" />,
+      onClick: onCopyAbsolutePath,
+      disabled: absolutePathDisabled,
+    },
+    {
+      label: "Copy Relative Path",
+      icon: <Copy className="h-3.5 w-3.5" />,
+      onClick: onCopyRelativePath,
+    },
     ...(isDir
       ? [
           {
@@ -109,6 +104,43 @@ export function TreeContextMenu({
       danger: true,
     },
   ];
+}
+
+interface Props extends BuildItemsArgs {
+  x: number;
+  y: number;
+  onClose: () => void;
+}
+
+export function TreeContextMenu(props: Props) {
+  const { x, y, onClose } = props;
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close on outside click or Escape
+  useEffect(() => {
+    function handleDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("mousedown", handleDown);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleDown);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [onClose]);
+
+  // Clamp to viewport
+  const style: React.CSSProperties = {
+    position: "fixed",
+    zIndex: 60,
+    top: Math.min(y, window.innerHeight - 200),
+    left: Math.min(x, window.innerWidth - 180),
+  };
+
+  const items = getTreeContextMenuItems(props);
 
   return (
     <div
@@ -119,12 +151,14 @@ export function TreeContextMenu({
       {items.map((item) => (
         <button
           key={item.label}
+          disabled={item.disabled}
           onClick={() => {
+            if (item.disabled) return;
             item.onClick();
             onClose();
           }}
           className={cn(
-            "w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors",
+            "w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors disabled:cursor-not-allowed disabled:opacity-40",
             item.danger
               ? "text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
               : "text-[var(--color-text)] hover:bg-[var(--color-surface-2)]",
