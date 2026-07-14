@@ -25,7 +25,7 @@ import { EncryptedUploadDialog } from "@/components/organisms/EncryptedUploadDia
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useEditorStore } from "@/stores/editor.js";
-import { useGitDiff } from "@/api/queries.js";
+import { useGitDiff, useProject } from "@/api/queries.js";
 import {
   buildGitFileStateIndex,
   gitStateTitle,
@@ -37,6 +37,8 @@ import {
   revealFileTreePath,
   type FileTreeRevealRequest,
 } from "@/lib/file-tree-reveal.js";
+import { useCopyToClipboard } from "@/hooks/use-clipboard.js";
+import { buildTreeCopyPaths } from "@/lib/tree-copy-paths.js";
 
 const LOADING_SENTINEL_PREFIX = "__loading__:" as const;
 
@@ -264,6 +266,9 @@ export function FileTree({
   const ops = useFsOps(project, path);
   const { progress, upload, clearProgress } = useFsUpload(project, path);
   const { isEncryptEnabled } = useEncryptMode();
+  const { data: projectData } = useProject(project);
+  const projectRoot = projectData?.path ?? "";
+  const { copied, copy } = useCopyToClipboard();
 
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [newItemDialog, setNewItemDialog] = useState<{
@@ -353,6 +358,26 @@ export function FileTree({
   function handleContextMenu(e: React.MouseEvent, node: NodeApi<FsArborNode>) {
     e.preventDefault();
     setMenu({ x: e.clientX, y: e.clientY, node: node.data });
+  }
+
+  function handleCopyAbsolutePath() {
+    if (!menu) return;
+    const { absolutePath } = buildTreeCopyPaths({
+      projectRoot,
+      subPath: path,
+      nodeId: menu.node.id,
+    });
+    void copy(absolutePath);
+  }
+
+  function handleCopyRelativePath() {
+    if (!menu) return;
+    const { relativePath } = buildTreeCopyPaths({
+      projectRoot,
+      subPath: path,
+      nodeId: menu.node.id,
+    });
+    void copy(relativePath);
   }
 
   // ── Context menu actions ────────────────────────────────────────────────
@@ -664,6 +689,12 @@ export function FileTree({
           </div>
         )}
 
+        {copied && (
+          <div className="absolute bottom-2 left-2 right-2 z-10 rounded px-2 py-1.5 text-[10px] text-[var(--color-success)] bg-[var(--color-success)]/10 border border-[var(--color-success)]/20">
+            Copied to clipboard
+          </div>
+        )}
+
         {/* Hidden file input for upload */}
         <input
           ref={fileInputRef}
@@ -678,8 +709,10 @@ export function FileTree({
           <TreeContextMenu
             x={menu.x}
             y={menu.y}
-            nodePath={menu.node.id}
             isDir={menu.node.kind === "dir"}
+            onCopyAbsolutePath={handleCopyAbsolutePath}
+            onCopyRelativePath={handleCopyRelativePath}
+            absolutePathDisabled={!projectRoot}
             onNewFile={handleNewFile}
             onNewFolder={handleNewFolder}
             onRename={handleRenameStart}
