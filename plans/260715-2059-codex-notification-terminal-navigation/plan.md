@@ -24,6 +24,9 @@ notification reveal, select, and focus the originating xterm.
 Use a typed window-event bridge keyed by stable `sessionId`. Pass current open-tab
 order to mounted terminal panels for display only. `WorkspacePage` owns reveal and
 focus because it already owns workspace/surface and terminal-manager state.
+Notification metadata has its own budget so the original body retains its full
+180-character allowance. A session may use the mounted-and-registered fallback
+only when `alive` is undefined; an explicit `alive: false` is always rejected.
 
 Rejected: broad callback prop plumbing; shared navigation store for one event.
 
@@ -35,8 +38,9 @@ Rejected: broad callback prop plumbing; shared navigation store for one event.
 
 - Codex notifications include sanitized `Project · Bash #N` context while preserving the original title/body.
 - Popup selection reveals the originating live session and focuses its xterm; stale sessions remain a no-op.
-- Chromium coverage verifies desktop exact-session focus and compact/coarse-pointer navigation without forcing the native keyboard.
-- Focused tests, the full UI unit suite, UI typecheck, production web build, and feature-scoped lint passed. Repository-wide lint still reports unrelated pre-existing errors outside this feature.
+- Chromium coverage verifies the actual OSC9-to-Notification-to-click-to-`WorkspacePage`-to-xterm path, including compact/coarse-pointer behavior without forcing the native keyboard.
+- Focused tests, Chromium tests, UI typecheck, production web build, feature-scoped lint, and `git diff --check` passed. Repository-wide lint still reports unrelated pre-existing errors outside this feature.
+- Final review scored 9.5/10 with no critical findings or warnings; user approved on 2026-07-15.
 
 ## Side-Effect Review
 

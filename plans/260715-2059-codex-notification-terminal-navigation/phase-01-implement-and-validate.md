@@ -19,14 +19,17 @@
 - Notification events already carry stable `sessionId`; no backend contract needed.
 - Open-tab order is mutable display metadata, never navigation identity.
 - `WorkspacePage` owns all state required to reveal and focus a terminal.
+- Notification metadata must not consume the original body's 180-character allowance.
+- Mounted-and-registered fallback is valid only when `alive` is undefined; explicit-dead sessions remain stale.
 - Concurrent diagnostics changes in shared files must remain intact.
 
 ## Requirements
 
 - Render `Project · Bash #N` without losing the Codex-provided title/body.
+- Preserve the full 180-character allowance for the original body after adding metadata.
 - Native notification selection focuses the app and originating xterm.
 - Desktop IDE mode, Terminal mode, and compact Terminal surface are handled.
-- Missing or closed sessions do not change navigation state or throw.
+- Missing or explicitly dead sessions do not change navigation state or throw.
 
 ## Architecture
 
@@ -79,15 +82,17 @@
 
 ## Validation
 
-- Focused notification/navigation tests: 37 passed.
-- Full UI unit suite: 456 passed.
-- Chromium browser suite: 2 passed, covering desktop xterm focus and compact keyboard suppression.
+- Focused notification/navigation tests: 40/40 passed.
+- Chromium browser suite: 3/3 passed, including the actual OSC9-to-Notification-to-click-to-`WorkspacePage`-to-xterm path.
+- Added explicit-dead stale-registry and activation-timeout unsubscribe coverage.
+- Full UI unit suite: 459/459 passed after the final test additions.
 - UI TypeScript build and production web build passed.
 - Feature-scoped ESLint and `git diff --check` passed.
 - Repository-wide ESLint remains blocked by unrelated existing errors in `EditorTabs.tsx` and `use-coarse-pointer.ts`.
 
 ## Outcome
 
-Implementation, review, browser coverage, and user approval are complete.
+Implementation and browser coverage are complete. Final review scored 9.5/10
+with no critical findings or warnings; user approved on 2026-07-15.
 
 Unresolved questions: none.

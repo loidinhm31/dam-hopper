@@ -36,14 +36,19 @@ export function isTerminalNotificationTargetAvailable(
   sessionId: string,
   mountedSessionIds: readonly string[],
   alive: boolean | undefined,
+  registered = false,
 ): boolean {
-  return alive === true && mountedSessionIds.includes(sessionId);
+  return (
+    mountedSessionIds.includes(sessionId) &&
+    (alive === true || (alive === undefined && registered))
+  );
 }
 
 export interface NavigateToTerminalNotificationOptions {
   sessionId: string;
   mountedSessionIds: readonly string[];
   alive: boolean | undefined;
+  registered?: boolean;
   focusWindow: () => void;
   revealTerminal: () => void;
   selectSession: (sessionId: string) => void;
@@ -54,13 +59,19 @@ export function navigateToTerminalNotification({
   sessionId,
   mountedSessionIds,
   alive,
+  registered,
   focusWindow,
   revealTerminal,
   selectSession,
   focusTerminal,
 }: NavigateToTerminalNotificationOptions): boolean {
   if (
-    !isTerminalNotificationTargetAvailable(sessionId, mountedSessionIds, alive)
+    !isTerminalNotificationTargetAvailable(
+      sessionId,
+      mountedSessionIds,
+      alive,
+      registered,
+    )
   ) {
     return false;
   }
