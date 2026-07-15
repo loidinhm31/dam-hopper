@@ -894,6 +894,7 @@ Frontend now uses a split host/package layout: `apps/web` is the thin Vite brows
 
 - Renders single terminal session using xterm.js
 - Subscribes to Transport events: `onTerminalExit`, `onProcessRestarted`, `onTransportStatus`
+- Phase 1 provides a session-local xterm search controller plus the official search addon for client-only terminal find; TerminalPanel ownership is wired in Phase 2
 - Writes ANSI banners for lifecycle events:
   - Exit: Green (code=0), Red (code≠0, no restart), Yellow (willRestart)
   - Restart: Yellow `[Process restarted (#N)]`
