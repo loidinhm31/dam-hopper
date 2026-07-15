@@ -4,6 +4,9 @@ import { SettingRow } from "@/components/molecules/SettingRow.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import {
   DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
+  DEFAULT_FLEET_TERMINAL_SHORTCUT,
+  DEFAULT_GIT_PANEL_SHORTCUT,
+  DEFAULT_PORTS_PANEL_SHORTCUT,
   DEFAULT_SEARCH_FILENAME_SHORTCUT,
   DEFAULT_SEARCH_TEXT_SHORTCUT,
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
@@ -104,6 +107,9 @@ export function SettingsKeyboardShortcutsSection() {
     terminalWorkspaceShortcut,
     terminalFilePanelShortcut,
     revealActiveFileShortcut,
+    gitPanelShortcut,
+    portsPanelShortcut,
+    fleetTerminalShortcut,
     saveDebounced,
   } = useSettingsStore();
 
@@ -176,6 +182,46 @@ export function SettingsKeyboardShortcutsSection() {
           defaultValue={DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT}
           onChange={(shortcut) =>
             saveDebounced({ revealActiveFileShortcut: shortcut })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow title="Git panel" description="Open or close the Git panel">
+        <ShortcutCapture
+          value={gitPanelShortcut}
+          defaultValue={DEFAULT_GIT_PANEL_SHORTCUT}
+          onChange={(shortcut) => saveDebounced({ gitPanelShortcut: shortcut })}
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Ports panel"
+        description="Open or close the Ports panel"
+      >
+        <ShortcutCapture
+          value={portsPanelShortcut}
+          defaultValue={DEFAULT_PORTS_PANEL_SHORTCUT}
+          onChange={(shortcut) =>
+            saveDebounced({ portsPanelShortcut: shortcut })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Fleet Terminal"
+        description="Open or close the Fleet Terminal panel"
+      >
+        <ShortcutCapture
+          value={fleetTerminalShortcut}
+          defaultValue={DEFAULT_FLEET_TERMINAL_SHORTCUT}
+          onChange={(shortcut) =>
+            saveDebounced({ fleetTerminalShortcut: shortcut })
           }
         />
       </SettingRow>

@@ -1,3 +1,10 @@
+## 2026-07-16
+
+- **Configurable terminal panel shortcuts.** Added settings-backed shortcuts for
+  Git (`Ctrl+Shift+G`), Ports (`Ctrl+Shift+P`), and Fleet Terminal
+  (`Ctrl+Shift+M`). Each shortcut toggles its target and closes the other two;
+  xterm input suppresses the bindings so they never reach the PTY. [See plan](../plans/260716-0025-terminal-panel-shortcuts/plan.md).
+
 ## 2026-07-14
 
 - **Explorer: Copy Path context menu.** Complete ✓ 2026-07-14. Added "Copy Absolute Path" and "Copy Relative Path" items to the Explorer (file-tree) right-click menu for both files and folders. Absolute path joins the server-resolved absolute project root (`useProject(name).data.path`) with the node's project-relative path using the native separator (backslash on Windows, forward slash elsewhere); relative path is always forward-slash POSIX. Path computation and the menu item list are extracted into pure `buildTreeCopyPaths` / `getTreeContextMenuItems` helpers for SSR unit testing, mirroring the `getEditorTabContextMenuItems` pattern. The absolute item disables when the project root is unknown; a transient "Copied to clipboard" toast reuses the existing `useCopyToClipboard` hook. Frontend-only; no backend/API changes. Validation: `pnpm --filter @dam-hopper/ui build`, `pnpm --filter @dam-hopper/ui test` (422 passing), changed files lint-clean. [See plan](../plans/260714-1430-explorer-copy-path/plan.md).

@@ -185,6 +185,11 @@ export const PaneContainer = memo(function PaneContainer({
         workspaceShortcut: useSettingsStore.getState().terminalWorkspaceShortcut,
         revealActiveFileShortcut:
           useSettingsStore.getState().revealActiveFileShortcut,
+        panelShortcuts: [
+          useSettingsStore.getState().gitPanelShortcut,
+          useSettingsStore.getState().portsPanelShortcut,
+          useSettingsStore.getState().fleetTerminalShortcut,
+        ],
         onCopySelection: () => {
           const selection = terminal.getSelection();
           if (selection) void navigator.clipboard.writeText(selection);

@@ -9,6 +9,9 @@ describe("withUiConfigDefaults", () => {
     expect(ui.terminalWorkspaceShortcut).toBe("Mod+Shift+Backquote");
     expect(ui.terminalFilePanelShortcut).toBe("Mod+Shift+KeyE");
     expect(ui.revealActiveFileShortcut).toBe("Alt+F1");
+    expect(ui.gitPanelShortcut).toBe("Mod+Shift+KeyG");
+    expect(ui.portsPanelShortcut).toBe("Mod+Shift+KeyP");
+    expect(ui.fleetTerminalShortcut).toBe("Mod+Shift+KeyM");
     expect(ui.terminalCodexNotificationsEnabled).toBe(false);
     expect(ui.mobileCustomKeyboardEnabled).toBe(true);
     expect(ui.mobileCustomKeyboardFontSize).toBe(11);
@@ -30,6 +33,9 @@ describe("withUiConfigDefaults", () => {
       terminalWorkspaceShortcut: "ctrl+shift+backquote",
       terminalFilePanelShortcut: "ctrl+shift+e",
       revealActiveFileShortcut: "alt+f1",
+      gitPanelShortcut: "ctrl+shift+g",
+      portsPanelShortcut: "ctrl+shift+p",
+      fleetTerminalShortcut: "ctrl+shift+m",
       terminalCodexNotificationsEnabled: true,
       mobileCustomKeyboardEnabled: false,
       mobileCustomKeyboardFontSize: 14,
@@ -46,6 +52,9 @@ describe("withUiConfigDefaults", () => {
     expect(ui.terminalWorkspaceShortcut).toBe("Ctrl+Shift+Backquote");
     expect(ui.terminalFilePanelShortcut).toBe("Ctrl+Shift+KeyE");
     expect(ui.revealActiveFileShortcut).toBe("Alt+F1");
+    expect(ui.gitPanelShortcut).toBe("Ctrl+Shift+KeyG");
+    expect(ui.portsPanelShortcut).toBe("Ctrl+Shift+KeyP");
+    expect(ui.fleetTerminalShortcut).toBe("Ctrl+Shift+KeyM");
     expect(ui.terminalCodexNotificationsEnabled).toBe(true);
     expect(ui.mobileCustomKeyboardEnabled).toBe(false);
     expect(ui.mobileCustomKeyboardFontSize).toBe(14);

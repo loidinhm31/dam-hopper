@@ -341,6 +341,11 @@ export function TerminalPanel({
           useSettingsStore.getState().terminalWorkspaceShortcut,
         revealActiveFileShortcut:
           useSettingsStore.getState().revealActiveFileShortcut,
+        panelShortcuts: [
+          useSettingsStore.getState().gitPanelShortcut,
+          useSettingsStore.getState().portsPanelShortcut,
+          useSettingsStore.getState().fleetTerminalShortcut,
+        ],
         onCopySelection: () => {
           const selection = term.getSelection();
           if (selection) void navigator.clipboard.writeText(selection);

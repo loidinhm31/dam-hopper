@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveBottomPanelLayout,
   resolveMaximizeToggle,
+  resolveTerminalPanelShortcut,
   resolveTopToolToggle,
 } from "./ide-shell-layout.js";
 
@@ -177,5 +178,48 @@ describe("resolveTopToolToggle", () => {
     });
     expect(outcome.nextActiveId).toBe("explorer");
     expect(outcome.revertMaximize).toBe(true);
+  });
+});
+
+describe("resolveTerminalPanelShortcut", () => {
+  it("switches between Git and Ports in the shared bottom slot", () => {
+    expect(
+      resolveTerminalPanelShortcut({
+        targetId: "ports",
+        activeLeftBottomId: "git",
+        activeRightTopId: "project-info",
+        bottomMaximized: false,
+      }),
+    ).toEqual({
+      nextActiveLeftBottomId: "ports",
+      nextActiveRightTopId: "project-info",
+      nextBottomMaximized: false,
+    });
+  });
+
+  it("closes Fleet Terminal when Git is opened", () => {
+    expect(
+      resolveTerminalPanelShortcut({
+        targetId: "git",
+        activeLeftBottomId: null,
+        activeRightTopId: "terminals",
+        bottomMaximized: false,
+      }).nextActiveRightTopId,
+    ).toBeNull();
+  });
+
+  it("toggles the active target off", () => {
+    expect(
+      resolveTerminalPanelShortcut({
+        targetId: "terminals",
+        activeLeftBottomId: "ports",
+        activeRightTopId: "terminals",
+        bottomMaximized: true,
+      }),
+    ).toEqual({
+      nextActiveLeftBottomId: "ports",
+      nextActiveRightTopId: null,
+      nextBottomMaximized: false,
+    });
   });
 });

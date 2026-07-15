@@ -347,11 +347,7 @@ export interface DiscoverResponse {
 }
 
 export type AgentCommandPatternKind = "literal" | "regex";
-export type TerminalAgentType =
-  | "codex"
-  | "claude"
-  | "antigravity"
-  | "unknown";
+export type TerminalAgentType = "codex" | "claude" | "antigravity" | "unknown";
 export type TerminalAgentNotificationPolicy = "always";
 
 export interface AgentCommandPattern {
@@ -372,6 +368,9 @@ export interface UiConfig {
   terminalWorkspaceShortcut: string;
   terminalFilePanelShortcut: string;
   revealActiveFileShortcut: string;
+  gitPanelShortcut: string;
+  portsPanelShortcut: string;
+  fleetTerminalShortcut: string;
   terminalSuggestionsEnabled?: boolean;
   terminalCodexNotificationsEnabled?: boolean;
   terminalScrollButtonsEnabled?: boolean;
