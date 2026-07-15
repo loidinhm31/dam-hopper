@@ -4,10 +4,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Status Overview
 
-- **Current Phase:** Codex Terminal Notification Center (completed)
-- **Last Milestone:** Added session-only Codex terminal notification center with unread bell/feed and top-right toasts
-- **Total Phases Completed:** 18 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 5/5, terminal notification center 1/1 complete)
-- **Next Milestone:** Phase 06: Startup Restore — Load persisted sessions on server restart
+- **Current Phase:** Safe Inline Terminal Suggestions Phase 01 (completed)
+- **Last Milestone:** Contained unsafe terminal suggestions and added local-history privacy controls
+- **Total Phases Completed:** 19 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 5/5, terminal notification center 1/1, inline terminal suggestions 1/5 complete)
+- **Next Milestone:** Inline Terminal Suggestions Phase 02: verified shell lifecycle integration
 
 ## Roadmap Phases
 
@@ -206,6 +206,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [ ] Multi-workspace management UI
 
 ## Recent Milestones
+
+- **2026-07-16:** Completed Safe Inline Terminal Suggestions Phase 01: Security containment and history privacy.
+  - ✅ Removed PTY-silence authorization, automatic overlay rendering, input interception, and automatic command recording
+  - ✅ Kept all native terminal input byte-for-byte passive while automatic suggestions are unavailable
+  - ✅ Added browser-local history clear/disable controls and preserved exact commands for direct API writes
+  - ✅ Retained legacy browser history unchanged with no automatic purge; users may clear it explicitly in Settings
+  - ✅ Validation passed: focused containment, capability, command-history, prompt-detector, and settings tests
 
 - **2026-07-16:** Completed Codex Terminal Notification Center.
   - ✅ Added bounded session-only notification history with unread badge, item read, mark-all-read, and clear actions

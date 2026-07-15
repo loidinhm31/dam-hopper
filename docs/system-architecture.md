@@ -109,12 +109,17 @@ Notification scope remains xterm-only. DamHopper does not watch external termina
 
 ### inline terminal suggestions (planned)
 
-Inline suggestions use verified shell lifecycle, not PTY output silence. A supported
-shell integration emits bounded OSC 633-compatible markers with a per-PTY-incarnation
-nonce. Unsupported shells, replay attaches, respawns, invalid marker order, alternate
-buffers, SSH/subshell transitions, and measurement failures fail closed: automatic
-suggestions and history capture stay off, while an explicitly opened history workflow
-may remain available.
+Phase 01 removes unsafe automatic activation and recording. Until a supported shell
+integration supplies a verified lifecycle, automatic suggestions and history capture
+fail closed. Terminal and outgoing PTY bytes remain passive: containment does not
+intercept, rewrite, or infer command boundaries from Enter, output silence, replayed
+scrollback, or arbitrary input. Command history is stored only in browser local storage;
+users can clear it or disable future persistence from Settings.
+
+Future lifecycle integration uses bounded OSC 633-compatible markers with a per-PTY-
+incarnation nonce. Unsupported shells, replay attaches, respawns, invalid marker order,
+alternate buffers, SSH/subshell transitions, and measurement failures must continue to
+fail closed, while an explicitly opened history workflow may remain available.
 
 ```mermaid
 stateDiagram-v2
@@ -131,7 +136,7 @@ stateDiagram-v2
   Opaque --> Unverified : invalid transition
 ```
 
-Security boundary: only `Editing` may query or show a passive suggestion. `E` supplies
+Future security boundary: only `Editing` may query or show a passive suggestion. `E` supplies
 the exact submitted command; `C` closes editing before command output or password/REPL/
 TUI input. History commits only from a validated `E -> C` transition. Outgoing PTY bytes,
 Enter, terminal silence, and replayed scrollback never establish a history boundary.
