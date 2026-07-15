@@ -9,7 +9,22 @@ interface SharedTerminalKeyOptions {
   workspaceShortcut: string;
   revealActiveFileShortcut: string;
   onCopySelection: () => void;
+  onFind?: () => void;
   onNewTerminal?: () => void;
+}
+
+function matchesTerminalFindShortcut(event: ShortcutKeyEvent): boolean {
+  const isFindKey =
+    event.code === "KeyF" || event.key === "f" || event.key === "F";
+  const hasExactlyOneFindModifier = event.ctrlKey !== event.metaKey;
+
+  return (
+    event.type === "keydown" &&
+    !event.altKey &&
+    !event.shiftKey &&
+    hasExactlyOneFindModifier &&
+    isFindKey
+  );
 }
 
 export function handleSharedTerminalKeyEvent(
@@ -18,9 +33,15 @@ export function handleSharedTerminalKeyEvent(
     workspaceShortcut,
     revealActiveFileShortcut,
     onCopySelection,
+    onFind,
     onNewTerminal,
   }: SharedTerminalKeyOptions,
 ) {
+  if (matchesTerminalFindShortcut(event)) {
+    event.preventDefault?.();
+    if (!event.repeat && !event.isComposing) onFind?.();
+    return false;
+  }
   if (matchesTerminalCopyShortcut(event) && event.type === "keydown") {
     onCopySelection();
     return false;

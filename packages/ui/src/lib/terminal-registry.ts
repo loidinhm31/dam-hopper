@@ -11,6 +11,7 @@ export interface TerminalEntry {
   terminal: Terminal;
   fitAddon: FitAddon;
   findController: TerminalFindController;
+  baseKeyEventHandler?: (event: KeyboardEvent) => boolean;
 }
 
 export const terminalRegistry = new Map<string, TerminalEntry>();

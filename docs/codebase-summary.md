@@ -21,7 +21,7 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 - **Compatibility Layer**: `packages/ui/src/lib/mime-to-language.ts` keeps MIME-only callers working while routing to the shared registry.
 - **Rendering Wrapper**: `packages/ui/src/lib/file-decoration-icon.tsx` is a thin icon component over the registry.
 - **Shared Surfaces**: explorer tree, editor tabs, search headers, and path labels all read from the same lookup so file identity stays aligned across the UI.
-- **Terminal Find**: `packages/ui/src/lib/terminal-find-controller.ts` provides session-local xterm search state backed by the official search addon; `TerminalPanel` lifecycle wiring is the next phase, keeping Ctrl/Cmd+F client-only without server transport state.
+- **Terminal Find**: `TerminalPanel` and `PaneContainer` route Ctrl/Cmd+F only to the active pane's session-local xterm find controller, suppress the browser default, and keep the key out of PTY input. `PaneContainer` restores the TerminalPanel base key handler after temporary pane routing; inactive, detached, and reparented terminals close find state so queries and decorations do not leak across hosts.
 - **Workspace Terminal Layout**: `WorkspacePage` switches between IDE and terminal modes, `TerminalWorkspaceShell` renders the full-height terminal workspace with a persisted Fleet Terminal rail, and `MultiTerminalDisplay` reuses the existing terminal manager state across layout changes.
 - **Git VCS Roots**: `WorkspaceGitPanel` now loads server-reported VCS roots, scopes branch/history queries by selected root, groups local changes by `rootId`, and blocks mixed-root commits in the UI.
 
@@ -38,7 +38,7 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 ### Frontend (React + Vite)
 
 - **IDE Interface**: File tree, editor tabs, code highlighting (Monaco)
-- **Terminal Emulator**: Multi-session terminal management with color support
+- **Terminal Emulator**: Multi-session xterm terminal management with color support and active-pane client-side find
 - **Workspace Navigation**: Multi-workspace switching, project discovery
 - **Real-time Sync**: TanStack Query for efficient data synchronization
 - **Git Integration**: Diff viewer, commit history, merge conflict handling

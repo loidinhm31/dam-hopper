@@ -36,6 +36,11 @@ export function attachTerminalsToHost({
     if (!entry || !element) continue;
 
     const isActive = sessionId === activeSessionId;
+    const isMovingToHost = element.parentElement !== host;
+    if (!isActive || isMovingToHost) {
+      entry.findController.close();
+    }
+
     applyHostGeometry(element);
     if (isActive) element.style.visibility = "hidden";
     if (element.parentElement !== host) host.appendChild(element);
