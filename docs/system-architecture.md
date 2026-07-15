@@ -90,6 +90,7 @@ Pure frontend notification pipeline in `packages/ui/src/lib/`:
 - `agent-activity-tracker.ts` turns submitted command, output, user input, and enhanced exit events into activity state changes
 - `terminal-notification-signal-parser.ts` converts BEL and OSC 9/777/99 terminal signals into normalized notification events
 - `terminal-notifications.ts` keeps a bounded, memory-only notification history and transient toast IDs in Zustand
+- `terminal-notification-sound.ts` attempts a short, low-volume in-app Web Audio chime through a reused context; unavailable or blocked audio is a silent no-op
 - `browser-notification-service.ts` applies permission, rate-limit, and delivery guards before creating browser `Notification` objects
 - `TerminalNotificationCenter` and `TerminalNotificationToastViewport` render the shared in-app bell/feed and top-right live alerts
 
@@ -101,7 +102,7 @@ Phase 04 adds a settings surface in the shared UI package:
 - `AgentCommandPatternEditor` lets users add literal aliases such as `CODEXNSB` or custom regex matches without editing config files by hand
 - browser permission state is read from the runtime `Notification` API and is never persisted into server config
 - diagnostics for unsupported/default/denied/rate-limited/factory-error paths are emitted as frontend `custom` events under scope `terminal-agent-notifications`
-- the Codex notification setting gates event capture; native browser permission gates only native popup delivery, so the in-app bell/feed remains available when browser permission is denied or unsupported
+- the Codex notification setting gates event capture; native browser permission gates only native popup delivery, so the in-app bell/feed and best-effort chime remain available when browser permission is denied or unsupported
 - in-app history is session-memory only, capped at 50 records; at most three toast alerts are shown and each expires after six seconds
 
 Notification scope remains xterm-only. DamHopper does not watch external terminals, OS process tables, or native notification daemons for this feature.

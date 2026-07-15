@@ -46,6 +46,7 @@ Shared runtime libraries:
 
 - `packages/ui/src/lib/agent-command-recognizer.ts`
 - `packages/ui/src/lib/terminal-notification-signal-parser.ts`
+- `packages/ui/src/lib/terminal-notification-sound.ts`
 - `packages/ui/src/lib/browser-notification-service.ts`
 - `packages/ui/src/lib/agent-activity-tracker.ts`
 - `packages/ui/src/lib/terminal-notification-navigation.ts`
@@ -61,7 +62,7 @@ Shared runtime libraries:
 1. `recognizeAgentCommand()` extracts the executable token from a submitted terminal command and matches it against enabled literal or regex agent patterns.
 2. `AgentActivityTracker` watches submitted commands, output, user input, and enhanced terminal exit state to decide when to emit activity events.
 3. `terminal-notification-signal-parser.ts` normalizes BEL and OSC 9/777/99 terminal signals into a shared `TerminalAgentNotification` shape.
-4. `terminal-agent-notification-integration.ts` stores each accepted event in the bounded in-memory Zustand notification store and forwards the same event to `BrowserNotificationService`.
+4. `terminal-agent-notification-integration.ts` stores each accepted event in the bounded in-memory Zustand notification store, attempts the short in-app chime, and forwards the same event to `BrowserNotificationService`.
 5. `TerminalNotificationCenter` renders the TopNav bell, unread count, bounded history, mark-read/all, and clear actions. Selecting an item dispatches a typed event keyed by stable `sessionId`.
 6. `TerminalNotificationToastViewport` renders up to three live top-right alerts with a six-second timeout. Toast and feed selection both route through the existing `WorkspacePage` terminal navigation path.
 7. `BrowserNotificationService` independently gates native delivery by permission, rate limit, and support checks, then dispatches native `Notification` objects whose body starts with `Project · Bash #N`; the original sanitized body retains its independent payload allowance below that context line.
@@ -74,6 +75,7 @@ Shared runtime libraries:
 - Terminal exit notifications are suppressed when the session is expected to restart, so `willRestart` does not produce a finished notification.
 - Cleanup disposes xterm handlers, timers, and tracker state when the panel unmounts or the session is replaced.
 - In-app history is memory-only and capped at 50 records; toast IDs are capped at three. Enabling the Codex notification setting is required, but browser `Notification` permission does not affect the in-app bell or toast path.
+- `terminal-notification-sound.ts` uses a reused Web Audio context to attempt a short, low-volume chime for enabled valid Codex OSC 9 events. Unsupported, SSR, autoplay-blocked, and audio-failure paths are silent no-ops; no browser permission or sound setting is added.
 - Terminal ordinals are the current 1-based open-list position and are display context only. Navigation never relies on a project name or ordinal. A target must be mounted and either explicitly alive or, only while liveness is unknown, already registered with xterm; explicitly dead, unmounted, and stale targets are safe no-ops.
 - In compact coarse-pointer layouts with the mobile custom keyboard enabled, selection still reveals and refits the exact terminal but deliberately avoids forcing native xterm focus so the browser keyboard is not opened unexpectedly.
 - Settings live under `SettingsAppearanceSection` via the extracted `TerminalAgentNotificationSettings` and `AgentCommandPatternEditor` UI. Permission is requested only from the explicit button click and the app surfaces `unsupported`, `not requested`, `granted`, and `denied` states without persisting that browser permission.
