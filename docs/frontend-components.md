@@ -58,7 +58,7 @@ Shared runtime libraries:
 2. `AgentActivityTracker` watches submitted commands, output, user input, and enhanced terminal exit state to decide when to emit activity events.
 3. `terminal-notification-signal-parser.ts` normalizes BEL and OSC 9/777/99 terminal signals into a shared `TerminalAgentNotification` shape.
 4. `BrowserNotificationService` gates browser delivery by permission, rate limit, and support checks, then dispatches native `Notification` objects whose body starts with `Project · Bash #N`; the original sanitized body retains its independent payload allowance below that context line.
-5. Notification clicks dispatch a typed selection event keyed by stable `sessionId`; `WorkspacePage` reveals the terminal surface, selects the exact session, and activates its registered xterm instance.
+5. Notification clicks dispatch a typed selection event keyed by stable `sessionId`; `WorkspacePage` preserves the current IDE/Terminal mode, reveals the existing IDE Terminal tool or compact Terminal surface, selects the exact session, and activates its registered xterm instance.
 
 **Behavior notes:**
 
@@ -195,8 +195,9 @@ The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose
 
 Codex OSC 9 notifications include `Project · Bash #N`, where `N` is the
 terminal's current 1-based position in the open list. Selecting the native
-notification focuses Dam Hopper, reveals Terminal mode, selects the originating
-live session by stable session ID, and focuses its xterm. Notifications for
+notification focuses Dam Hopper, preserves the current IDE/Terminal mode,
+reveals the IDE Terminal tool or compact Terminal surface when needed, selects
+the originating live session by stable session ID, and focuses its xterm. Notifications for
 sessions closed before selection are ignored safely. On compact coarse-pointer
 devices with the mobile custom keyboard enabled, selection reveals and refits
 the xterm without forcing focus or opening the native keyboard.

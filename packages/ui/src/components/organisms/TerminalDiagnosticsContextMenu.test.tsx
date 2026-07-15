@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clampTerminalDiagnosticsContextMenuPosition,
+  openTerminalDiagnosticsContextMenu,
   TerminalDiagnosticsContextMenu,
 } from "./TerminalDiagnosticsContextMenu.js";
 
@@ -15,6 +16,22 @@ describe("TerminalDiagnosticsContextMenu", () => {
     expect(
       clampTerminalDiagnosticsContextMenuPosition(1250, 940, 1280, 960),
     ).toEqual({ x: 1080, y: 856 });
+  });
+
+  it("opens the exact session menu target and suppresses the browser menu", () => {
+    const preventDefault = vi.fn();
+    const stopPropagation = vi.fn();
+    const onOpenDiagnosticsMenu = vi.fn();
+
+    openTerminalDiagnosticsContextMenu(
+      { clientX: 120, clientY: 80, preventDefault, stopPropagation },
+      "session-bash-2",
+      onOpenDiagnosticsMenu,
+    );
+
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(stopPropagation).toHaveBeenCalledOnce();
+    expect(onOpenDiagnosticsMenu).toHaveBeenCalledWith("session-bash-2", 120, 80);
   });
 
   it("renders pending and error feedback without exposing another action", () => {

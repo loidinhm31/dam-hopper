@@ -10,6 +10,7 @@ import { useTerminalLayout } from "@/hooks/use-terminal-layout.js";
 import { fitAllTerminals } from "@/lib/terminal-fit-scheduler.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 
 export interface MountedSession {
   sessionId: string;
@@ -26,6 +27,7 @@ interface Props {
   onNewTerminal?: () => void;
   onSelectTab?: (sessionId: string) => void;
   onCloseTab?: (sessionId: string) => void;
+  onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   layoutRevision?: number;
   renderTerminals?: boolean;
 }
@@ -38,6 +40,7 @@ export function MultiTerminalDisplay({
   onNewTerminal,
   onSelectTab,
   onCloseTab,
+  onOpenDiagnosticsMenu,
   layoutRevision = 0,
   renderTerminals = true,
 }: Props) {
@@ -132,6 +135,7 @@ export function MultiTerminalDisplay({
           onSessionExit={onSessionExit ?? (() => {})}
           onSelectTab={onSelectTab ?? (() => {})}
           onCloseTab={onCloseTab ?? (() => {})}
+          onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           suppressTerminalFocus={suppressTerminalFocus}
         />
       </div>

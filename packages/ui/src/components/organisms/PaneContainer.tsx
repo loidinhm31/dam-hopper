@@ -16,6 +16,7 @@ import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import { TabBar } from "@/components/organisms/TabBar.js";
 import { TerminalDockPreview } from "@/components/organisms/TerminalDockPreview.js";
+import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 
 interface PaneContainerProps {
   node: PaneNode;
@@ -26,6 +27,7 @@ interface PaneContainerProps {
   onSessionExit: (sessionId: string) => void;
   onSelectTab: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
+  onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   suppressTerminalFocus?: boolean;
 }
 
@@ -36,6 +38,7 @@ export const PaneContainer = memo(function PaneContainer({
   onNewTerminal,
   onSelectTab,
   onCloseTab,
+  onOpenDiagnosticsMenu,
   suppressTerminalFocus = false,
 }: PaneContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -259,6 +262,7 @@ export const PaneContainer = memo(function PaneContainer({
           onSelectTab(sessionId);
         }}
         onCloseTab={onCloseTab}
+        onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
         onNewTerminal={onNewTerminal}
         onSplitPaneHorizontal={() => layout.splitPane(node.id, "horizontal")}
         onSplitPaneVertical={() => layout.splitPane(node.id, "vertical")}

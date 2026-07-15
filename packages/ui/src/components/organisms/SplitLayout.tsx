@@ -19,6 +19,7 @@ import { fitAllTerminals } from "@/lib/terminal-fit-scheduler.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
+import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 
 interface LayoutTreeProps {
   node: LayoutNode;
@@ -29,6 +30,7 @@ interface LayoutTreeProps {
   onSessionExit: (sessionId: string) => void;
   onSelectTab: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
+  onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   suppressTerminalFocus?: boolean;
 }
 
@@ -41,6 +43,7 @@ function LayoutTree({
   onSessionExit,
   onSelectTab,
   onCloseTab,
+  onOpenDiagnosticsMenu,
   suppressTerminalFocus = false,
 }: LayoutTreeProps) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -80,6 +83,7 @@ function LayoutTree({
         onSessionExit={onSessionExit}
         onSelectTab={onSelectTab}
         onCloseTab={onCloseTab}
+        onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
         suppressTerminalFocus={suppressTerminalFocus}
       />
     );
@@ -101,6 +105,7 @@ function LayoutTree({
           onSessionExit={onSessionExit}
           onSelectTab={onSelectTab}
           onCloseTab={onCloseTab}
+          onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           suppressTerminalFocus={suppressTerminalFocus}
         />
       </Panel>
@@ -115,6 +120,7 @@ function LayoutTree({
           onSessionExit={onSessionExit}
           onSelectTab={onSelectTab}
           onCloseTab={onCloseTab}
+          onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           suppressTerminalFocus={suppressTerminalFocus}
         />
       </Panel>
@@ -131,6 +137,7 @@ export interface SplitLayoutProps {
   onSessionExit: (sessionId: string) => void;
   onSelectTab: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
+  onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   suppressTerminalFocus?: boolean;
 }
 
@@ -168,6 +175,7 @@ export function SplitLayout({
   onSessionExit,
   onSelectTab,
   onCloseTab,
+  onOpenDiagnosticsMenu,
   suppressTerminalFocus = false,
 }: SplitLayoutProps) {
   // ── dnd-kit drag sensors (8px activation so clicks still work) ──────────
@@ -240,6 +248,7 @@ export function SplitLayout({
           onSessionExit={onSessionExit}
           onSelectTab={onSelectTab}
           onCloseTab={onCloseTab}
+          onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           suppressTerminalFocus={suppressTerminalFocus}
         />
       </div>

@@ -9,6 +9,10 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
+import {
+  openTerminalDiagnosticsContextMenu,
+  type TerminalDiagnosticsMenuHandler,
+} from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import { TerminalTabInsertionZone } from "@/components/organisms/TerminalTabInsertionZone.js";
 
 export function splitActionToPaneDirection(action: "right" | "down") {
@@ -31,14 +35,16 @@ interface DraggableTabProps {
   isActive: boolean;
   onSelect: (sessionId: string) => void;
   onClose: (sessionId: string) => void;
+  onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
 }
 
-function DraggableTab({
+export function DraggableTab({
   paneId,
   tab,
   isActive,
   onSelect,
   onClose,
+  onOpenDiagnosticsMenu,
 }: DraggableTabProps) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `tab:${paneId}:${tab.sessionId}`,
@@ -74,6 +80,13 @@ function DraggableTab({
         type="button"
         className="px-1.5 py-1.5 text-xs whitespace-nowrap"
         onClick={() => onSelect(tab.sessionId)}
+        onContextMenu={(event) =>
+          openTerminalDiagnosticsContextMenu(
+            event,
+            tab.sessionId,
+            onOpenDiagnosticsMenu,
+          )
+        }
       >
         <span className="max-w-32 truncate block font-mono">{tab.label}</span>
       </button>
@@ -111,6 +124,7 @@ export interface TabBarProps {
   hasSplit: boolean;
   onSelectTab: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
+  onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   onNewTerminal: () => void;
   onSplitPaneHorizontal: () => void;
   onSplitPaneVertical: () => void;
@@ -124,6 +138,7 @@ export function TabBar({
   hasSplit,
   onSelectTab,
   onCloseTab,
+  onOpenDiagnosticsMenu,
   onNewTerminal,
   onSplitPaneHorizontal,
   onSplitPaneVertical,
@@ -172,6 +187,7 @@ export function TabBar({
                   isActive={tab.sessionId === activeSessionId}
                   onSelect={onSelectTab}
                   onClose={onCloseTab}
+                  onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
                 />
                 <TerminalTabInsertionZone
                   paneId={paneId}

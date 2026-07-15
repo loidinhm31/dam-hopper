@@ -3,6 +3,7 @@ import { Plus, Terminal as TerminalIcon } from "lucide-react";
 import { TerminalRuntimeNavigatorGroup } from "@/components/organisms/TerminalRuntimeNavigatorGroup.js";
 import type { RuntimeTreeGroup } from "@/lib/terminal-runtime-tree.js";
 import { cn } from "@/lib/utils.js";
+import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 
 interface Props {
   activeSessionId: string | null;
@@ -13,6 +14,7 @@ interface Props {
   touchOptimized?: boolean;
   onSelectSession?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
+  onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   onNewProjectTerminal?: (projectName: string) => void;
   onNewFreeTerminal?: () => void;
   onMoveGroup: (draggedId: string, targetId: string) => void;
@@ -30,6 +32,7 @@ export function TerminalRuntimeNavigator({
   touchOptimized = false,
   onSelectSession,
   onCloseSession,
+  onOpenDiagnosticsMenu,
   onNewProjectTerminal,
   onNewFreeTerminal,
   onMoveGroup,
@@ -72,6 +75,7 @@ export function TerminalRuntimeNavigator({
               dragState={dragState}
               group={group}
               onCloseSession={onCloseSession}
+              onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
               onMoveGroup={onMoveGroup}
               onMoveItem={onMoveItem}
               onNewProjectTerminal={onNewProjectTerminal}

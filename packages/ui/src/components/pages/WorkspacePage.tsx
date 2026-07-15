@@ -162,6 +162,7 @@ const IDE_COMPACT_SURFACE_IDS = [
   "explorer",
   "search",
   "editor",
+  "terminal",
   "git",
   "project",
 ] as const;
@@ -254,10 +255,13 @@ export default function WorkspacePage() {
     useState<FileTreeRevealRequest | null>(null);
   const [ideLeftTopToolRequest, setIdeLeftTopToolRequest] =
     useState<ActivateToolRequest | null>(null);
+  const [ideBottomToolRequest, setIdeBottomToolRequest] =
+    useState<ActivateToolRequest | null>(null);
   const [terminalFilePanelEditorFocusSignal, setTerminalFilePanelEditorFocusSignal] =
     useState(0);
   const [terminalLayoutRevision, setTerminalLayoutRevision] = useState(0);
   const revealRequestNonceRef = useRef(0);
+  const terminalNotificationRevealNonceRef = useRef(0);
   const terminalNotificationActivationRef = useRef<() => void>(() => {});
   const isCompactWorkspace = useCompactWorkspace();
   const isCoarsePointer = useCoarsePointer();
@@ -358,6 +362,28 @@ export default function WorkspacePage() {
     setTerminalDiagnosticsMenuTarget(null);
     setTerminalDiagnosticsError(null);
   }, []);
+
+  useEffect(() => {
+    const target = terminalDiagnosticsMenuTarget;
+    if (!target) return;
+    const isSessionAvailable =
+      sessionMap.has(target.sessionId) ||
+      mountedSessions.some((session) => session.sessionId === target.sessionId);
+    if (!isSessionAvailable) closeTerminalDiagnosticsMenu();
+  }, [
+    closeTerminalDiagnosticsMenu,
+    mountedSessions,
+    sessionMap,
+    terminalDiagnosticsMenuTarget,
+  ]);
+
+  const openTerminalDiagnosticsMenu = useCallback(
+    (sessionId: string, x: number, y: number) => {
+      setTerminalDiagnosticsError(null);
+      setTerminalDiagnosticsMenuTarget({ sessionId, x, y });
+    },
+    [],
+  );
 
   const handleExportTerminalDiagnostics = useCallback(async () => {
     const target = terminalDiagnosticsMenuTarget;
@@ -610,8 +636,18 @@ export default function WorkspacePage() {
           registered: terminalRegistry.has(sessionId),
           focusWindow: () => window.focus(),
           revealTerminal: () => {
-            setWorkspaceMode("terminal");
-            setRequestedCompactSurface("terminal");
+            if (isCompactWorkspace) {
+              setRequestedCompactSurface("terminal");
+              return;
+            }
+
+            if (workspaceMode === "ide") {
+              terminalNotificationRevealNonceRef.current += 1;
+              setIdeBottomToolRequest({
+                nonce: terminalNotificationRevealNonceRef.current,
+                toolId: "terminal",
+              });
+            }
           },
           selectSession: handleSelectTab,
           focusTerminal: (selectedSessionId) => {
@@ -643,7 +679,7 @@ export default function WorkspacePage() {
       mountedSessions,
       sessionMap,
       setRequestedCompactSurface,
-      setWorkspaceMode,
+      workspaceMode,
     ],
   );
 
@@ -869,6 +905,7 @@ export default function WorkspacePage() {
                 onNewProjectTerminal={handleLaunchShell}
                 onNewFreeTerminal={handleAddFreeTerminal}
                 onSelectTab={handleSelectTab}
+                onOpenDiagnosticsMenu={openTerminalDiagnosticsMenu}
               />
             </Suspense>
           ) : mountedSessions.length > 0 ? (
@@ -883,6 +920,7 @@ export default function WorkspacePage() {
                 onNewTerminal={handleOpenCurrentTerminal}
                 onSelectTab={handleSelectTab}
                 onCloseTab={handleCloseTab}
+                onOpenDiagnosticsMenu={openTerminalDiagnosticsMenu}
               />
             </Suspense>
           ) : projects.length === 0 ? (
@@ -967,6 +1005,7 @@ export default function WorkspacePage() {
       toggleTerminalFilePanel,
       workspaceMode,
       diagnosticsWindowMinutes,
+      openTerminalDiagnosticsMenu,
     ],
   );
 
@@ -1278,6 +1317,12 @@ export default function WorkspacePage() {
           </Suspense>
         ),
       },
+      {
+        id: "terminal",
+        label: "Terminal",
+        icon: TerminalIcon,
+        content: terminalContent,
+      },
       compactGitSurface,
       compactProjectSurface,
     ],
@@ -1289,6 +1334,7 @@ export default function WorkspacePage() {
       handleSearchResultOpen,
       fileTreeRevealRequest,
       projectName,
+      terminalContent,
     ],
   );
 
@@ -1415,6 +1461,7 @@ export default function WorkspacePage() {
           onWorkspaceModeChange={setWorkspaceMode}
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}
           activateLeftTopToolRequest={ideLeftTopToolRequest}
+          activateBottomToolRequest={ideBottomToolRequest}
           editor={
             <Suspense fallback={<PanelFallback label="Loading editor…" />}>
               <EditorTabs project={projectName} />
