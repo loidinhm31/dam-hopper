@@ -48,6 +48,7 @@ Shared runtime libraries:
 - `packages/ui/src/lib/terminal-notification-signal-parser.ts`
 - `packages/ui/src/lib/browser-notification-service.ts`
 - `packages/ui/src/lib/agent-activity-tracker.ts`
+- `packages/ui/src/lib/terminal-notification-navigation.ts`
 
 **Purpose:** Pure frontend pipeline for xterm-driven agent notifications. It stays UI-side, has no server dependency, and is unit-test friendly.
 
@@ -56,7 +57,8 @@ Shared runtime libraries:
 1. `recognizeAgentCommand()` extracts the executable token from a submitted terminal command and matches it against enabled literal or regex agent patterns.
 2. `AgentActivityTracker` watches submitted commands, output, user input, and enhanced terminal exit state to decide when to emit activity events.
 3. `terminal-notification-signal-parser.ts` normalizes BEL and OSC 9/777/99 terminal signals into a shared `TerminalAgentNotification` shape.
-4. `BrowserNotificationService` gates browser delivery by permission, rate limit, and support checks, then dispatches native `Notification` objects.
+4. `BrowserNotificationService` gates browser delivery by permission, rate limit, and support checks, then dispatches native `Notification` objects whose body identifies the source as `Project · Bash #N`.
+5. Notification clicks dispatch a typed selection event keyed by stable `sessionId`; `WorkspacePage` reveals the terminal surface, selects the matching live session, and activates its registered xterm instance.
 
 **Behavior notes:**
 
@@ -65,6 +67,8 @@ Shared runtime libraries:
 - Quiet tracking is optional; when enabled it emits a "may need attention" notification after configurable inactivity.
 - Terminal exit notifications are suppressed when the session is expected to restart, so `willRestart` does not produce a finished notification.
 - Cleanup disposes xterm handlers, timers, and tracker state when the panel unmounts or the session is replaced.
+- Terminal ordinals are the current 1-based open-list position and are display context only. Navigation never relies on a project name or ordinal, and a click for a session that is no longer live is a safe no-op.
+- In compact coarse-pointer layouts with the mobile custom keyboard enabled, selection still reveals and refits the exact terminal but deliberately avoids forcing native xterm focus so the browser keyboard is not opened unexpectedly.
 - Settings live under `SettingsAppearanceSection` via the extracted `TerminalAgentNotificationSettings` and `AgentCommandPatternEditor` UI. Permission is requested only from the explicit button click and the app surfaces `unsupported`, `not requested`, `granted`, and `denied` states without persisting that browser permission.
 - Client diagnostics for this feature are recorded under scope `terminal-agent-notifications` and must not include raw terminal output, OSC payloads, or command arguments beyond the executable token.
 
@@ -188,6 +192,14 @@ The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose
 **Purpose:** Renders a single terminal session using xterm.js. Handles lifecycle events (output, exit, restart, reconnect), session attachment, and browser agent notification integration. Phase 1 adds the session-local find controller; TerminalPanel lifecycle wiring follows in Phase 2.
 
 **Behavior:** Filters out the terminal workspace shortcut so xterm input does not swallow the global mode toggle. Wires xterm BEL and OSC 9/777/99 handlers into the shared agent-activity path so submitted command, output, user input, and exit signals can drive browser notifications without any backend protocol change. The terminal session cleanup path disposes signal handlers and timers; search controller cleanup is added with the Phase 2 lifecycle wiring.
+
+Codex OSC 9 notifications include `Project · Bash #N`, where `N` is the
+terminal's current 1-based position in the open list. Selecting the native
+notification focuses Dam Hopper, reveals Terminal mode, selects the originating
+live session by stable session ID, and focuses its xterm. Notifications for
+sessions closed before selection are ignored safely. On compact coarse-pointer
+devices with the mobile custom keyboard enabled, selection reveals and refits
+the xterm without forcing focus or opening the native keyboard.
 
 **Props:**
 

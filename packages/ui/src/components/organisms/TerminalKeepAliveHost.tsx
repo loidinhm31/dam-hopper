@@ -1,8 +1,10 @@
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
+import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 
 interface TerminalKeepAliveHostProps {
   mountedSessions: MountedSession[];
+  openTabs?: TabEntry[];
   onSessionExit?: (sessionId: string) => void;
   onNewTerminal?: () => void;
   onTerminalReady?: (sessionId: string) => void;
@@ -12,6 +14,7 @@ interface TerminalKeepAliveHostProps {
 
 export function TerminalKeepAliveHost({
   mountedSessions,
+  openTabs,
   onSessionExit,
   onNewTerminal,
   onTerminalReady,
@@ -32,20 +35,32 @@ export function TerminalKeepAliveHost({
         left: -10000,
       }}
     >
-      {mountedSessions.map((session) => (
-        <TerminalPanel
-          key={session.sessionId}
-          sessionId={session.sessionId}
-          project={session.project}
-          command={session.command}
-          cwd={session.cwd}
-          onExit={() => onSessionExit?.(session.sessionId)}
-          onNewTerminal={onNewTerminal}
-          onTerminalReady={onTerminalReady}
-          suppressAutoFocus={suppressAutoFocus}
-          suppressNativeKeyboard={suppressNativeKeyboard}
-        />
-      ))}
+      {mountedSessions.map((session, mountedIndex) => {
+        const tabIndex = openTabs?.findIndex(
+          (tab) => tab.sessionId === session.sessionId,
+        );
+        const terminalOrder = openTabs
+          ? tabIndex !== undefined && tabIndex >= 0
+            ? tabIndex + 1
+            : undefined
+          : mountedIndex + 1;
+
+        return (
+          <TerminalPanel
+            key={session.sessionId}
+            sessionId={session.sessionId}
+            project={session.project}
+            command={session.command}
+            cwd={session.cwd}
+            onExit={() => onSessionExit?.(session.sessionId)}
+            onNewTerminal={onNewTerminal}
+            onTerminalReady={onTerminalReady}
+            suppressAutoFocus={suppressAutoFocus}
+            suppressNativeKeyboard={suppressNativeKeyboard}
+            terminalOrder={terminalOrder}
+          />
+        );
+      })}
     </div>
   );
 }

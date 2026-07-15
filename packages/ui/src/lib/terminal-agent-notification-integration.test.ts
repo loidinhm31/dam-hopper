@@ -142,4 +142,27 @@ describe("attachTerminalAgentNotifications", () => {
     expect(handler?.("notify;Codex done;Review the answer")).toBe(true);
     expect(created).toHaveLength(0);
   });
+
+  it("adds the current project and open-terminal order to the body", () => {
+    const created = installFakeNotification();
+    const { term, getHandler } = createTerminal();
+    let terminalOrder = 2;
+
+    attachTerminalAgentNotifications({
+      term,
+      sessionId: "term-3",
+      project: "api",
+      getTerminalOrder: () => terminalOrder,
+    });
+
+    expect(getHandler()?.("notify;Codex done;Review the answer")).toBe(true);
+    expect(created[0]?.options.body).toBe(
+      "api · Bash #2\nReview the answer",
+    );
+
+    vi.advanceTimersByTime(1_001);
+    terminalOrder = 4;
+    expect(getHandler()?.("notify;Codex done;Review again")).toBe(true);
+    expect(created[1]?.options.body).toBe("api · Bash #4\nReview again");
+  });
 });

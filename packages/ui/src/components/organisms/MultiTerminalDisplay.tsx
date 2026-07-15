@@ -113,6 +113,7 @@ export function MultiTerminalDisplay({
       {renderTerminals && (
         <TerminalKeepAliveHost
           mountedSessions={mountedSessions}
+          openTabs={openTabs}
           onSessionExit={onSessionExit}
           onNewTerminal={onNewTerminal}
           onTerminalReady={handleTerminalReady}

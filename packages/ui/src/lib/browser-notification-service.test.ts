@@ -98,6 +98,41 @@ describe("BrowserNotificationService", () => {
     });
   });
 
+  it("shows terminal context and navigates when the notification is selected", () => {
+    let clickListener: (() => void) | undefined;
+    const close = vi.fn();
+    const factory = vi.fn(() => ({
+      addEventListener: vi.fn(
+        (type: string, listener: () => void, options?: AddEventListenerOptions) => {
+          expect(type).toBe("click");
+          expect(options).toEqual({ once: true });
+          clickListener = listener;
+        },
+      ),
+      close,
+    }));
+    const onSelect = vi.fn();
+    const service = new BrowserNotificationService({
+      notificationFactory: factory,
+      getPermission: () => "granted",
+      now: () => 1000,
+    });
+
+    expect(
+      service.notifyTerminalAgent(event, { terminalOrder: 3, onSelect }),
+    ).toEqual({ delivered: true });
+    expect(factory).toHaveBeenCalledWith("Codex may need attention", {
+      body: "web · Bash #3\nNo terminal output for 30s in web.",
+      renotify: true,
+      tag: "dam-hopper-agent-s1-quiet",
+      timestamp: 1,
+    });
+
+    clickListener?.();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(event);
+  });
+
   it("uses the notification source in the browser tag for TUI-ready events", () => {
     const factory = vi.fn();
     const service = new BrowserNotificationService({

@@ -11,6 +11,9 @@ import { downloadJson } from "./download-json.js";
 
 export const DIAGNOSTICS_WINDOW_OPTIONS = [2, 5, 10, 30, 60] as const;
 
+export type DiagnosticsTimeWindowMinutes =
+  (typeof DIAGNOSTICS_WINDOW_OPTIONS)[number];
+
 export const DEFAULT_DIAGNOSTICS_EXPORT_REQUEST: Required<
   Pick<
     DiagnosticExportRequest,

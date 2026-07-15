@@ -245,6 +245,9 @@ describe("WorkspacePage", () => {
 
     expect(markup).toContain('data-shell="terminal-shell"');
     expect(lastTerminalWorkspaceShellProps?.terminalOverlayContent).toBeTruthy();
+    expect(lastTerminalWorkspaceShellProps?.toolbarActions).toBeUndefined();
+    expect(terminalMarkup).toContain('aria-label="Diagnostics time window"');
+    expect(terminalMarkup).toContain('value="10" selected=""');
     expect(terminalMarkup).toContain("Show files panel");
   });
 

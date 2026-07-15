@@ -102,6 +102,18 @@ Phase 04 adds a settings surface in the shared UI package:
 
 Notification scope remains xterm-only. DamHopper does not watch external terminals, OS process tables, or native notification daemons for this feature.
 
+Notification selection also stays frontend-only. Native notification clicks
+publish a typed browser event keyed by the stable PTY `sessionId`;
+`WorkspacePage` consumes it because that page owns workspace mode, compact
+surface selection, terminal selection, and xterm focus orchestration. Displayed
+notification context uses `Project · Bash #N`, with the ordinal read from the
+current 1-based open-terminal order. Project names and terminal ordinals are
+display only and are never used as navigation identity. Stale session clicks
+no-op without changing server state, the WebSocket protocol, or persisted
+terminal layout. Compact coarse-pointer layouts with the mobile custom keyboard
+enabled still reveal and refit the exact session but suppress forced native
+xterm focus so selection does not unexpectedly open the browser keyboard.
+
 ### frontend diagnostics (Phase 01)
 
 The browser host now initializes a diagnostics client before React render. This creates a local-only ring buffer for client-side troubleshooting and keeps the capture path active from app startup onward.
