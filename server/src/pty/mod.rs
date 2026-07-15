@@ -2,6 +2,8 @@ pub mod buffer;
 pub mod event_sink;
 pub mod manager;
 pub mod session;
+pub mod shell_integration;
+pub mod shell_lifecycle;
 
 #[cfg(test)]
 mod tests;
