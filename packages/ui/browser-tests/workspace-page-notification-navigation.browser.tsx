@@ -1,11 +1,11 @@
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import type { Terminal } from "@xterm/xterm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WorkspacePage from "@/components/pages/WorkspacePage.js";
-import { BrowserNotificationService } from "@/lib/browser-notification-service.js";
+import { attachTerminalAgentNotifications } from "@/lib/terminal-agent-notification-integration.js";
 import { dispatchTerminalNotificationSelection } from "@/lib/terminal-notification-navigation.js";
 import { registerTerminal, terminalRegistry } from "@/lib/terminal-registry.js";
-import type { TerminalAgentNotification } from "@/lib/terminal-notification-signal-parser.js";
 
 const mocks = vi.hoisted(() => {
   const sessionId = "terminal:web:_:1";
@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => {
   };
   const settingsStore = {
     mobileCustomKeyboardEnabled: false,
+    terminalCodexNotificationsEnabled: true,
     searchTextShortcut: "mod+shift+f",
     searchFilenameShortcut: "mod+p",
     terminalWorkspaceShortcut: "mod+`",
@@ -35,6 +36,7 @@ const mocks = vi.hoisted(() => {
     focusCompetingTerminal: vi.fn(),
     compactWorkspace: false,
     coarsePointer: false,
+    sessionAlive: true,
     terminalActions: {
       handleSelectProject: vi.fn(),
       handleSelectTerminal: vi.fn(),
@@ -180,7 +182,11 @@ vi.mock("@/hooks/use-terminal-manager.js", () => ({
       sessionMap: new Map([
         [
           mocks.sessionId,
-          { session_id: mocks.sessionId, project: "web", alive: true },
+          {
+            session_id: mocks.sessionId,
+            project: "web",
+            alive: mocks.sessionAlive,
+          },
         ],
       ]),
     },
@@ -223,19 +229,19 @@ vi.mock("@/lib/workspace-mode.js", () => ({
 }));
 
 class FakeNotification extends EventTarget {
-  readonly close = vi.fn();
-}
+  static permission: NotificationPermission = "granted";
+  static latest: FakeNotification | null = null;
 
-const notificationEvent: TerminalAgentNotification = {
-  source: "osc9",
-  sessionId: SESSION_ID,
-  project: "web",
-  agent: "codex",
-  title: "Codex is ready",
-  body: "Review the completed task.",
-  status: "finished",
-  receivedAt: 1,
-};
+  readonly close = vi.fn();
+
+  constructor(
+    readonly title: string,
+    readonly options: NotificationOptions,
+  ) {
+    super();
+    FakeNotification.latest = this;
+  }
+}
 
 describe("WorkspacePage notification navigation in Chromium", () => {
   let container: HTMLDivElement;
@@ -261,6 +267,10 @@ describe("WorkspacePage notification navigation in Chromium", () => {
     mocks.compactWorkspace = false;
     mocks.coarsePointer = false;
     mocks.settingsStore.mobileCustomKeyboardEnabled = false;
+    mocks.settingsStore.terminalCodexNotificationsEnabled = true;
+    mocks.sessionAlive = true;
+    FakeNotification.latest = null;
+    vi.stubGlobal("Notification", FakeNotification);
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -277,38 +287,45 @@ describe("WorkspacePage notification navigation in Chromium", () => {
     terminalRegistry.clear();
     container.remove();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it("selects the popup's live bash and focuses its xterm", async () => {
+  it("handles Codex OSC9 through popup selection and focuses its xterm", async () => {
     await renderWorkspace();
     const windowFocus = vi.spyOn(window, "focus").mockImplementation(() => {});
-    const nativeNotification = new FakeNotification();
-    let notificationOptions: NotificationOptions | undefined;
-    const service = new BrowserNotificationService({
-      getPermission: () => "granted",
-      notificationFactory: (_title, options) => {
-        notificationOptions = options;
-        return nativeNotification;
-      },
+    let oscHandler: ((payload: string) => boolean) | undefined;
+    const integration = attachTerminalAgentNotifications({
+      term: {
+        parser: {
+          registerOscHandler: vi.fn(
+            (_code: number, handler: (payload: string) => boolean) => {
+              oscHandler = handler;
+              return { dispose: vi.fn() };
+            },
+          ),
+        },
+      } as unknown as Terminal,
+      sessionId: SESSION_ID,
+      project: "web",
+      getTerminalOrder: () => 1,
     });
 
     expect(container.querySelector('[data-shell="ide"]')).not.toBeNull();
-    expect(
-      service.notifyTerminalAgent(notificationEvent, {
-        terminalOrder: 1,
-        onSelect: ({ sessionId }) =>
-          dispatchTerminalNotificationSelection(sessionId),
-      }),
-    ).toEqual({ delivered: true });
-    expect(notificationOptions?.body).toBe(
+    expect(oscHandler?.("notify;Codex is ready;Review the completed task.")).toBe(
+      true,
+    );
+    const nativeNotification = FakeNotification.latest;
+    expect(nativeNotification?.title).toBe("Codex is ready");
+    expect(nativeNotification?.options.body).toBe(
       "web · Bash #1\nReview the completed task.",
     );
 
     await act(async () => {
-      nativeNotification.dispatchEvent(new Event("click"));
+      nativeNotification?.dispatchEvent(new Event("click"));
     });
+    integration.dispose();
 
-    expect(nativeNotification.close).toHaveBeenCalledOnce();
+    expect(nativeNotification?.close).toHaveBeenCalledOnce();
     expect(windowFocus).toHaveBeenCalledOnce();
     expect(mocks.saveWorkspaceMode).toHaveBeenCalledWith("terminal");
     expect(mocks.selectSession).toHaveBeenCalledWith(SESSION_ID);
@@ -321,6 +338,24 @@ describe("WorkspacePage notification navigation in Chromium", () => {
       expect(mocks.focusTerminal).toHaveBeenCalled();
     });
     expect(mocks.fitCompetingTerminal).not.toHaveBeenCalled();
+  });
+
+  it("ignores a stale popup selection even when xterm is registered", async () => {
+    mocks.sessionAlive = false;
+    registerNotifiedTerminal();
+    await renderWorkspace();
+    const windowFocus = vi.spyOn(window, "focus").mockImplementation(() => {});
+
+    await act(async () => {
+      dispatchTerminalNotificationSelection(SESSION_ID);
+    });
+
+    expect(windowFocus).not.toHaveBeenCalled();
+    expect(mocks.saveWorkspaceMode).not.toHaveBeenCalled();
+    expect(mocks.selectSession).not.toHaveBeenCalled();
+    expect(mocks.fitTerminal).not.toHaveBeenCalled();
+    expect(mocks.focusTerminal).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-shell="ide"]')).not.toBeNull();
   });
 
   it("reveals the compact terminal without forcing the native keyboard", async () => {

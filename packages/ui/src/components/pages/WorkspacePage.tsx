@@ -607,6 +607,7 @@ export default function WorkspacePage() {
             (session) => session.sessionId,
           ),
           alive: sessionMap.get(sessionId)?.alive,
+          registered: terminalRegistry.has(sessionId),
           focusWindow: () => window.focus(),
           revealTerminal: () => {
             setWorkspaceMode("terminal");

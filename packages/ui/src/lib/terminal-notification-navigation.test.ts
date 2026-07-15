@@ -24,7 +24,7 @@ describe("terminal notification navigation", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
-  it("accepts only mounted terminals confirmed to be live", () => {
+  it("accepts mounted terminals that are live or registered while status loads", () => {
     const mounted = ["live", "pending"];
 
     expect(isTerminalNotificationTargetAvailable("live", mounted, true)).toBe(
@@ -33,9 +33,20 @@ describe("terminal notification navigation", () => {
     expect(
       isTerminalNotificationTargetAvailable("pending", mounted, undefined),
     ).toBe(false);
+    expect(
+      isTerminalNotificationTargetAvailable(
+        "pending",
+        mounted,
+        undefined,
+        true,
+      ),
+    ).toBe(true);
     expect(isTerminalNotificationTargetAvailable("live", mounted, false)).toBe(
       false,
     );
+    expect(
+      isTerminalNotificationTargetAvailable("live", mounted, false, true),
+    ).toBe(false);
     expect(isTerminalNotificationTargetAvailable("closed", mounted, true)).toBe(
       false,
     );
@@ -73,6 +84,24 @@ describe("terminal notification navigation", () => {
       }),
     ).toBe(false);
     expect(action).not.toHaveBeenCalled();
+  });
+
+  it("navigates to a registered terminal while live status is loading", () => {
+    const action = vi.fn();
+
+    expect(
+      navigateToTerminalNotification({
+        sessionId: "pending",
+        mountedSessionIds: ["pending"],
+        alive: undefined,
+        registered: true,
+        focusWindow: action,
+        revealTerminal: action,
+        selectSession: action,
+        focusTerminal: action,
+      }),
+    ).toBe(true);
+    expect(action).toHaveBeenCalledTimes(4);
   });
 
   it("waits for a replacement terminal registry entry after navigation", () => {
@@ -132,6 +161,45 @@ describe("terminal notification navigation", () => {
     frame?.();
     expect(cancelFrame).toHaveBeenCalledWith(7);
     expect(subscribeToTerminal).not.toHaveBeenCalled();
+    expect(activateTerminal).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting when replacement registration exceeds the timeout", () => {
+    let frame: (() => void) | undefined;
+    let timeout: (() => void) | undefined;
+    let registryListener: ((sessionId: string) => void) | undefined;
+    let registered = false;
+    const activateTerminal = vi.fn();
+    const unsubscribe = vi.fn(() => {
+      registryListener = undefined;
+    });
+
+    activateTerminalAfterNavigation({
+      sessionId: "slow",
+      hasTerminal: () => registered,
+      activateTerminal,
+      subscribeToTerminal: (listener) => {
+        registryListener = listener;
+        return unsubscribe;
+      },
+      requestFrame: (callback) => {
+        frame = callback;
+        return 3;
+      },
+      setTimer: (callback, delayMs) => {
+        expect(delayMs).toBe(2_000);
+        timeout = callback;
+        return 9;
+      },
+      clearTimer: vi.fn(),
+    });
+
+    frame?.();
+    timeout?.();
+    registered = true;
+    registryListener?.("slow");
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(activateTerminal).not.toHaveBeenCalled();
   });
 });
