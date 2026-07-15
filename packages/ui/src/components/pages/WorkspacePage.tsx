@@ -24,7 +24,8 @@ import { IdeShell } from "@/components/templates/IdeShell.js";
 import { MobileWorkspaceShell } from "@/components/templates/MobileWorkspaceShell.js";
 import { TerminalWorkspaceShell } from "@/components/templates/TerminalWorkspaceShell.js";
 import { TerminalFloatingFilePanel } from "@/components/organisms/TerminalFloatingFilePanel.js";
-import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
+import { DiagnosticsTimeWindowSelect } from "@/components/molecules/DiagnosticsTimeWindowSelect.js";
+import { TerminalDiagnosticsContextMenu } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
@@ -40,7 +41,9 @@ import { useSearchUiStore } from "@/stores/search-ui.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalManager } from "@/hooks/use-terminal-manager.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
+import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
+import { useExportDiagnostics } from "@/api/queries.js";
 import {
   addKeyboardShortcutListener,
   useDocumentKeyboardShortcut,
@@ -72,6 +75,20 @@ import type { MobileWorkspaceSurface } from "@/components/templates/MobileWorksp
 import type { ActivateToolRequest } from "@/lib/reveal-active-file.js";
 import type { FileTreeRevealRequest } from "@/lib/file-tree-reveal.js";
 import { resolveRevealActiveFileOutcome } from "@/lib/reveal-active-file.js";
+import { scheduleTerminalFit } from "@/lib/terminal-fit-scheduler.js";
+import {
+  subscribeToRegistry,
+  terminalRegistry,
+} from "@/lib/terminal-registry.js";
+import {
+  activateTerminalAfterNavigation,
+  navigateToTerminalNotification,
+  subscribeToTerminalNotificationSelection,
+} from "@/lib/terminal-notification-navigation.js";
+import {
+  exportDiagnosticsBundle,
+  type DiagnosticsTimeWindowMinutes,
+} from "@/lib/diagnostics-export.js";
 export { resolveRevealActiveFileOutcome };
 
 const FileTree = lazy(() =>
@@ -157,6 +174,19 @@ const TERMINAL_COMPACT_SURFACE_IDS = [
 ] as const;
 const TERMINAL_LAYOUT_SENSITIVE_COMPACT_SURFACES = new Set(["terminal"]);
 const TERMINAL_USAGE_OPTIONS: TerminalUsageMode[] = ["traditional", "runtime"];
+const WORKSPACE_DIAGNOSTICS_FRONTEND_SCOPES = [
+  "WorkspacePage",
+  "TerminalPanel",
+  "terminal-panel",
+  "terminal-agent-notifications",
+  "workspace",
+];
+
+interface TerminalDiagnosticsMenuTarget {
+  sessionId: string;
+  x: number;
+  y: number;
+}
 
 function renderCompactPlaceholder(message: string) {
   return (
@@ -209,6 +239,14 @@ export default function WorkspacePage() {
     useState<WorkspaceMode>(loadWorkspaceMode);
   const [terminalUsageMode, setTerminalUsageModeState] =
     useState<TerminalUsageMode>(loadTerminalUsageMode);
+  const [diagnosticsWindowMinutes, setDiagnosticsWindowMinutes] =
+    useState<DiagnosticsTimeWindowMinutes>(10);
+  const [terminalDiagnosticsMenuTarget, setTerminalDiagnosticsMenuTarget] =
+    useState<TerminalDiagnosticsMenuTarget | null>(null);
+  const [terminalDiagnosticsError, setTerminalDiagnosticsError] = useState<
+    string | null
+  >(null);
+  const exportDiagnostics = useExportDiagnostics();
   const [terminalFilePanelOpen, setTerminalFilePanelOpenState] = useState(
     loadTerminalFilePanelOpen,
   );
@@ -220,7 +258,12 @@ export default function WorkspacePage() {
     useState(0);
   const [terminalLayoutRevision, setTerminalLayoutRevision] = useState(0);
   const revealRequestNonceRef = useRef(0);
+  const terminalNotificationActivationRef = useRef<() => void>(() => {});
   const isCompactWorkspace = useCompactWorkspace();
+  const isCoarsePointer = useCoarsePointer();
+  const mobileCustomKeyboardEnabled = useSettingsStore(
+    (state) => state.mobileCustomKeyboardEnabled,
+  );
   const defaultCompactSurfaceId = getDefaultCompactSurfaceId(workspaceMode);
   const availableCompactSurfaceIds = getCompactSurfaceIds(workspaceMode);
   const [requestedCompactSurface, setRequestedCompactSurface] = useState(
@@ -310,55 +353,54 @@ export default function WorkspacePage() {
 
   const projectName =
     activeProject ?? (projects.length > 0 ? projects[0].name : null);
-  const workspaceTerminalIds = useMemo(() => {
-    if (!projectName) return [];
-    const activeSession = activeTab ? sessionMap.get(activeTab) : null;
-    if (activeTab && activeSession?.project === projectName) {
-      return [activeTab];
-    }
 
-    const ids = mountedSessions
-      .filter((session) => session.project === projectName)
-      .map((session) => session.sessionId);
-    return [...new Set(ids)];
-  }, [activeTab, mountedSessions, projectName, sessionMap]);
-  const workspaceTerminalOptions = useMemo(() => {
-    if (!projectName) return [];
-    return Array.from(sessionMap.values())
-      .filter((session) => session.project === projectName)
-      .map((session) => ({
-        id: session.id,
-        label: `${session.command}${session.alive ? "" : " (exited)"}`,
-      }));
-  }, [projectName, sessionMap]);
-  const defaultWorkspaceTerminalLabel =
-    workspaceTerminalIds.length === 1
-      ? "Current terminal"
-      : workspaceTerminalIds.length > 1
-        ? "Open project terminals"
-        : "No terminals";
-  const workspaceDiagnosticsAction = (
-    <DiagnosticsExportButton
-      compact
-      terminalIds={workspaceTerminalIds}
-      terminalOptions={workspaceTerminalOptions}
-      defaultTerminalLabel={defaultWorkspaceTerminalLabel}
-      showTerminalSelector
-      scope={{
-        page: "workspace",
-        route: "/workspace",
-        project: projectName,
-        terminalIds: workspaceTerminalIds,
-        frontendScopes: [
-          "WorkspacePage",
-          "TerminalPanel",
-          "terminal-panel",
-          "terminal-agent-notifications",
-          "workspace",
-        ],
-      }}
-    />
-  );
+  const closeTerminalDiagnosticsMenu = useCallback(() => {
+    setTerminalDiagnosticsMenuTarget(null);
+    setTerminalDiagnosticsError(null);
+  }, []);
+
+  const handleExportTerminalDiagnostics = useCallback(async () => {
+    const target = terminalDiagnosticsMenuTarget;
+    if (!target || exportDiagnostics.isPending) return;
+
+    setTerminalDiagnosticsError(null);
+    const terminalIds = [target.sessionId];
+    const sessionProject =
+      sessionMap.get(target.sessionId)?.project ??
+      mountedSessions.find((session) => session.sessionId === target.sessionId)
+        ?.project ??
+      null;
+
+    try {
+      await exportDiagnosticsBundle(
+        (request) => exportDiagnostics.mutateAsync(request),
+        {
+          windowMinutes: diagnosticsWindowMinutes,
+          includeTerminalOutput: true,
+          terminalTailBytes: 65_536,
+          terminalIds,
+          scope: {
+            page: "workspace",
+            route: "/workspace",
+            project: sessionProject,
+            terminalIds,
+            frontendScopes: WORKSPACE_DIAGNOSTICS_FRONTEND_SCOPES,
+          },
+        },
+      );
+      setTerminalDiagnosticsMenuTarget(null);
+    } catch (error) {
+      setTerminalDiagnosticsError(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }, [
+    diagnosticsWindowMinutes,
+    exportDiagnostics,
+    mountedSessions,
+    sessionMap,
+    terminalDiagnosticsMenuTarget,
+  ]);
 
   const {
     open: searchOpen,
@@ -556,6 +598,59 @@ export default function WorkspacePage() {
     }
   }, [handleAddFreeTerminal, handleLaunchShell, projectName]);
 
+  useEffect(
+    () =>
+      subscribeToTerminalNotificationSelection((sessionId) => {
+        navigateToTerminalNotification({
+          sessionId,
+          mountedSessionIds: mountedSessions.map(
+            (session) => session.sessionId,
+          ),
+          alive: sessionMap.get(sessionId)?.alive,
+          focusWindow: () => window.focus(),
+          revealTerminal: () => {
+            setWorkspaceMode("terminal");
+            setRequestedCompactSurface("terminal");
+          },
+          selectSession: handleSelectTab,
+          focusTerminal: (selectedSessionId) => {
+            const suppressNativeFocus =
+              isCompactWorkspace &&
+              isCoarsePointer &&
+              mobileCustomKeyboardEnabled;
+            terminalNotificationActivationRef.current();
+            terminalNotificationActivationRef.current =
+              activateTerminalAfterNavigation({
+                sessionId: selectedSessionId,
+                hasTerminal: (candidateSessionId) =>
+                  terminalRegistry.has(candidateSessionId),
+                activateTerminal: (candidateSessionId) =>
+                  scheduleTerminalFit(
+                    terminalRegistry.get(candidateSessionId),
+                    { focus: !suppressNativeFocus },
+                  ),
+                subscribeToTerminal: subscribeToRegistry,
+              });
+          },
+        });
+      }),
+    [
+      handleSelectTab,
+      isCoarsePointer,
+      isCompactWorkspace,
+      mobileCustomKeyboardEnabled,
+      mountedSessions,
+      sessionMap,
+      setRequestedCompactSurface,
+      setWorkspaceMode,
+    ],
+  );
+
+  useEffect(
+    () => () => terminalNotificationActivationRef.current(),
+    [],
+  );
+
   const terminalContent = useMemo(
     () => (
       <div className="flex flex-col h-full">
@@ -567,6 +662,10 @@ export default function WorkspacePage() {
             </span>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            <DiagnosticsTimeWindowSelect
+              value={diagnosticsWindowMinutes}
+              onChange={setDiagnosticsWindowMinutes}
+            />
             <div className="flex rounded-sm border border-[var(--color-border)] bg-[var(--color-background)] p-0.5">
               {TERMINAL_USAGE_OPTIONS.map((mode) => (
                 <button
@@ -746,6 +845,7 @@ export default function WorkspacePage() {
             <Suspense fallback={null}>
               <TerminalKeepAliveHost
                 mountedSessions={mountedSessions}
+                openTabs={tabsWithLiveSession}
                 onSessionExit={handleSessionExit}
                 onNewTerminal={handleOpenCurrentTerminal}
                 suppressAutoFocus
@@ -865,6 +965,7 @@ export default function WorkspacePage() {
       terminalFilePanelOpen,
       toggleTerminalFilePanel,
       workspaceMode,
+      diagnosticsWindowMinutes,
     ],
   );
 
@@ -1293,7 +1394,6 @@ export default function WorkspacePage() {
           workspaceMode={workspaceMode}
           onWorkspaceModeChange={setWorkspaceMode}
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}
-          toolbarActions={workspaceDiagnosticsAction}
         />
       ) : workspaceMode === "terminal" ? (
         <TerminalWorkspaceShell
@@ -1305,7 +1405,6 @@ export default function WorkspacePage() {
           onWorkspaceModeChange={setWorkspaceMode}
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}
           onFleetLayoutChange={handleTerminalWorkspaceFleetLayoutChange}
-          toolbarActions={workspaceDiagnosticsAction}
         />
       ) : (
         <IdeShell
@@ -1315,12 +1414,22 @@ export default function WorkspacePage() {
           onWorkspaceModeChange={setWorkspaceMode}
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}
           activateLeftTopToolRequest={ideLeftTopToolRequest}
-          toolbarActions={workspaceDiagnosticsAction}
           editor={
             <Suspense fallback={<PanelFallback label="Loading editor…" />}>
               <EditorTabs project={projectName} />
             </Suspense>
           }
+        />
+      )}
+
+      {terminalDiagnosticsMenuTarget && (
+        <TerminalDiagnosticsContextMenu
+          x={terminalDiagnosticsMenuTarget.x}
+          y={terminalDiagnosticsMenuTarget.y}
+          isPending={exportDiagnostics.isPending}
+          error={terminalDiagnosticsError}
+          onExport={() => void handleExportTerminalDiagnostics()}
+          onClose={closeTerminalDiagnosticsMenu}
         />
       )}
 

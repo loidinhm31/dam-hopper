@@ -20,6 +20,8 @@ export interface BrowserNotificationServiceDependencies {
 export interface NotifyTerminalAgentOptions {
   enabled?: boolean;
   rateLimitMs?: number;
+  terminalOrder?: number;
+  onSelect?: (event: TerminalAgentNotification) => void;
 }
 
 export interface BrowserNotificationResult {
@@ -89,16 +91,17 @@ export class BrowserNotificationService {
 
     try {
       const notificationOptions: BrowserTerminalNotificationOptions = {
-        body: sanitizeTerminalNotificationText(event.body, MAX_BODY_LENGTH),
+        body: buildNotificationBody(event, options.terminalOrder),
         renotify: true,
         tag: `dam-hopper-agent-${event.sessionId}-${event.source}`,
         timestamp: event.receivedAt,
       };
 
-      this.notificationFactory(
+      const notification = this.notificationFactory(
         sanitizeTerminalNotificationText(event.title, MAX_TITLE_LENGTH),
         notificationOptions,
       );
+      bindNotificationSelection(notification, event, options.onSelect);
       this.lastNotificationAt.set(key, currentTime);
       return { delivered: true };
     } catch {
@@ -182,4 +185,49 @@ function createBrowserNotification(
   options: NotificationOptions,
 ): Notification {
   return new globalThis.Notification(title, options);
+}
+
+function buildNotificationBody(
+  event: TerminalAgentNotification,
+  terminalOrder: number | undefined,
+): string {
+  if (!Number.isInteger(terminalOrder) || terminalOrder! < 1) {
+    return sanitizeTerminalNotificationText(event.body, MAX_BODY_LENGTH);
+  }
+
+  const project = sanitizeTerminalNotificationText(event.project, 60);
+  const context = `${project || "Unknown project"} · Bash #${terminalOrder}`;
+  const remainingLength = Math.max(
+    0,
+    MAX_BODY_LENGTH - Array.from(context).length - 1,
+  );
+  const body = sanitizeTerminalNotificationText(event.body, remainingLength);
+  return body ? `${context}\n${body}` : context;
+}
+
+function bindNotificationSelection(
+  notification: unknown,
+  event: TerminalAgentNotification,
+  onSelect: NotifyTerminalAgentOptions["onSelect"],
+): void {
+  if (!onSelect || !notification || typeof notification !== "object") return;
+
+  const target = notification as {
+    addEventListener?: (
+      type: string,
+      listener: () => void,
+      options?: AddEventListenerOptions,
+    ) => void;
+    close?: () => void;
+  };
+  if (typeof target.addEventListener !== "function") return;
+
+  target.addEventListener(
+    "click",
+    () => {
+      target.close?.();
+      onSelect(event);
+    },
+    { once: true },
+  );
 }
