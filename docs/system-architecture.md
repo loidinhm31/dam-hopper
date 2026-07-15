@@ -894,7 +894,10 @@ Frontend now uses a split host/package layout: `apps/web` is the thin Vite brows
 
 - Renders single terminal session using xterm.js
 - Subscribes to Transport events: `onTerminalExit`, `onProcessRestarted`, `onTransportStatus`
-- Phase 1 provides a session-local xterm search controller plus the official search addon for client-only terminal find; TerminalPanel ownership is wired in Phase 2
+- Owns a session-local xterm search controller backed by the official search addon
+- Routes Ctrl/Cmd+F from the active pane to that controller; the browser default is suppressed and the keystroke stays client-only, so it never enters PTY input. Ctrl/Cmd+Shift+F remains the file-search shortcut.
+- Stores the base xterm key handler so temporary `PaneContainer` routing can be removed without disabling terminal shortcuts, including split-to-runtime transitions
+- Closes find state for inactive, detached, or reparented terminals so stale queries and decorations do not survive host changes
 - Writes ANSI banners for lifecycle events:
   - Exit: Green (code=0), Red (code≠0, no restart), Yellow (willRestart)
   - Restart: Yellow `[Process restarted (#N)]`

@@ -329,7 +329,7 @@ export function TerminalPanel({
     });
 
     // 7. Custom keyboard shortcuts
-    term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+    const baseKeyEventHandler = (e: KeyboardEvent) => {
       return handleSharedTerminalKeyEvent(e, {
         workspaceShortcut:
           useSettingsStore.getState().terminalWorkspaceShortcut,
@@ -339,9 +339,12 @@ export function TerminalPanel({
           const selection = term.getSelection();
           if (selection) void navigator.clipboard.writeText(selection);
         },
+        onFind: () => findController.open(),
         onNewTerminal,
       });
-    });
+    };
+    terminalEntry.baseKeyEventHandler = baseKeyEventHandler;
+    term.attachCustomKeyEventHandler(baseKeyEventHandler);
 
     // Initial fit — container may be hidden (display:none); FitAddon safely no-ops if dims=0
     // Now safe because resize listener is already registered above.

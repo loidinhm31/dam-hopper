@@ -31,6 +31,7 @@ function elementFixture(events: string[]) {
 function entryFixture(events: string[], element: HTMLElement): TerminalEntry {
   return {
     fitAddon: { fit: () => events.push("fit") },
+    findController: { close: () => events.push("close-find") },
     terminal: {
       element,
       focus: () => events.push("focus"),
@@ -63,6 +64,7 @@ describe("attachTerminalsToHost", () => {
     });
 
     expect(events).toEqual([
+      "close-find",
       "visibility:hidden",
       "append",
       "display:block",
@@ -92,6 +94,38 @@ describe("attachTerminalsToHost", () => {
       resolveTerminal: () => entry,
     });
 
-    expect(events).toEqual(["append", "display:none", "visibility:"]);
+    expect(events).toEqual([
+      "close-find",
+      "append",
+      "display:none",
+      "visibility:",
+    ]);
+  });
+
+  it("closes search before moving an active terminal to another host", () => {
+    animationFrameFixture();
+    const events: string[] = [];
+    const element = elementFixture(events);
+    const oldHost = {} as HTMLElement;
+    Object.defineProperty(element, "parentElement", { value: oldHost });
+    const entry = entryFixture(events, element);
+    const controller = entry.findController;
+    const newHost = {
+      appendChild: (child: HTMLElement) => {
+        events.push("append");
+        Object.defineProperty(child, "parentElement", { value: newHost });
+      },
+    } as unknown as HTMLElement;
+
+    attachTerminalsToHost({
+      host: newHost,
+      sessionIds: ["active"],
+      activeSessionId: "active",
+      resolveTerminal: () => entry,
+    });
+
+    expect(events[0]).toBe("close-find");
+    expect(entry.terminal.element).toBe(element);
+    expect(entry.findController).toBe(controller);
   });
 });
