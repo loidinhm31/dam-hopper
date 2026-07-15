@@ -21,6 +21,7 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 - **Compatibility Layer**: `packages/ui/src/lib/mime-to-language.ts` keeps MIME-only callers working while routing to the shared registry.
 - **Rendering Wrapper**: `packages/ui/src/lib/file-decoration-icon.tsx` is a thin icon component over the registry.
 - **Shared Surfaces**: explorer tree, editor tabs, search headers, and path labels all read from the same lookup so file identity stays aligned across the UI.
+- **Terminal Find**: `packages/ui/src/lib/terminal-find-controller.ts` provides session-local xterm search state backed by the official search addon; `TerminalPanel` lifecycle wiring is the next phase, keeping Ctrl/Cmd+F client-only without server transport state.
 - **Workspace Terminal Layout**: `WorkspacePage` switches between IDE and terminal modes, `TerminalWorkspaceShell` renders the full-height terminal workspace with a persisted Fleet Terminal rail, and `MultiTerminalDisplay` reuses the existing terminal manager state across layout changes.
 - **Git VCS Roots**: `WorkspaceGitPanel` now loads server-reported VCS roots, scopes branch/history queries by selected root, groups local changes by `rootId`, and blocks mixed-root commits in the UI.
 
