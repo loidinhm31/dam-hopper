@@ -6,6 +6,7 @@ import {
   type TerminalAgentNotification,
 } from "@/lib/terminal-notification-signal-parser.js";
 import { dispatchTerminalNotificationSelection } from "@/lib/terminal-notification-navigation.js";
+import { playTerminalNotificationSound } from "@/lib/terminal-notification-sound.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalNotificationsStore } from "@/stores/terminal-notifications.js";
 
@@ -46,6 +47,7 @@ export function attachTerminalAgentNotifications({
   });
   const notifyTerminalAgent = (event: TerminalAgentNotification) => {
     useTerminalNotificationsStore.getState().addNotification(event);
+    playTerminalNotificationSound();
     notificationService.notifyTerminalAgent(event, {
       enabled: useSettingsStore.getState().terminalCodexNotificationsEnabled,
       rateLimitMs: CODEX_OSC9_RATE_LIMIT_MS,

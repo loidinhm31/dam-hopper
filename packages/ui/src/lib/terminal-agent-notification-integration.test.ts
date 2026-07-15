@@ -1,12 +1,17 @@
 import type { Terminal } from "@xterm/xterm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { recordClientDiagnostic } = vi.hoisted(() => ({
+const { playTerminalNotificationSound, recordClientDiagnostic } = vi.hoisted(() => ({
+  playTerminalNotificationSound: vi.fn(),
   recordClientDiagnostic: vi.fn(),
 }));
 
 vi.mock("@/lib/diagnostics-client.js", () => ({
   recordClientDiagnostic,
+}));
+
+vi.mock("@/lib/terminal-notification-sound.js", () => ({
+  playTerminalNotificationSound,
 }));
 
 import { attachTerminalAgentNotifications } from "./terminal-agent-notification-integration.js";
@@ -73,6 +78,7 @@ describe("attachTerminalAgentNotifications", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     recordClientDiagnostic.mockReset();
+    playTerminalNotificationSound.mockReset();
     useSettingsStore.setState({ terminalCodexNotificationsEnabled: true });
     useTerminalNotificationsStore.setState({ notifications: [], toasts: [] });
   });
@@ -109,6 +115,7 @@ describe("attachTerminalAgentNotifications", () => {
     expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(
       2,
     );
+    expect(playTerminalNotificationSound).toHaveBeenCalledTimes(2);
     expect(created[0]).toEqual({
       title: "Codex done",
       options: {
@@ -150,6 +157,7 @@ describe("attachTerminalAgentNotifications", () => {
     expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(
       0,
     );
+    expect(playTerminalNotificationSound).not.toHaveBeenCalled();
   });
 
   it("delivers in-app when native browser notifications are denied", () => {
@@ -175,6 +183,7 @@ describe("attachTerminalAgentNotifications", () => {
       body: "Review the answer",
     });
     expect(state.toasts).toEqual([state.notifications[0]?.id]);
+    expect(playTerminalNotificationSound).toHaveBeenCalledTimes(1);
   });
 
   it("adds the current project and open-terminal order to the body", () => {
