@@ -834,7 +834,7 @@ Types: feat, fix, refactor, test, docs, perf, ci, chore.
 
 - Core: react, vite, tailwind, typescript
 - API: TanStack Query (data fetching)
-- Terminal: xterm.js for PTY rendering
+- Terminal: xterm.js for PTY rendering; `@xterm/addon-search` for client-only terminal find
 
 No additional heavy dependencies without discussion.
 
