@@ -1,6 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PromptDetector } from "./prompt-detector.js";
-import type { PromptState } from "./prompt-detector.js";
 
 describe("PromptDetector", () => {
   beforeEach(() => {
@@ -12,138 +11,36 @@ describe("PromptDetector", () => {
   });
 
   it("starts in RUNNING state", () => {
-    const d = new PromptDetector();
-    expect(d.state).toBe("RUNNING");
-    d.dispose();
+    const detector = new PromptDetector();
+    expect(detector.state).toBe("RUNNING");
+    detector.dispose();
   });
 
-  it("transitions RUNNING → PROMPT_READY after idle threshold", () => {
-    const d = new PromptDetector({ idleThresholdMs: 100 });
-    const states: PromptState[] = [];
-    d.onStateChange = (s) => states.push(s);
+  it("never authorizes a prompt from PTY silence", () => {
+    const detector = new PromptDetector({ idleThresholdMs: 100 });
+    detector.notifyOutput();
 
-    d.notifyOutput(); // start idle timer
-    expect(d.state).toBe("RUNNING");
-
-    vi.advanceTimersByTime(100);
-    expect(d.state).toBe("PROMPT_READY");
-    expect(states).toContain("PROMPT_READY");
-
-    d.dispose();
+    vi.advanceTimersByTime(10_000);
+    expect(detector.state).toBe("RUNNING");
+    detector.dispose();
   });
 
-  it("transitions PROMPT_READY → INPUT_ACTIVE on first input", () => {
-    const d = new PromptDetector({ idleThresholdMs: 100 });
-    const states: PromptState[] = [];
-    d.onStateChange = (s) => states.push(s);
+  it("treats password, REPL, and TUI input as opaque", () => {
+    const detector = new PromptDetector({ idleThresholdMs: 100 });
+    detector.notifyOutput();
+    vi.advanceTimersByTime(10_000);
+    detector.notifyInput("super-secret\r");
 
-    d.notifyOutput();
-    vi.advanceTimersByTime(100);
-    expect(d.state).toBe("PROMPT_READY");
-
-    d.notifyInput("l");
-    expect(d.state).toBe("INPUT_ACTIVE");
-    expect(states).toContain("INPUT_ACTIVE");
-
-    d.dispose();
+    expect(detector.state).toBe("RUNNING");
+    detector.dispose();
   });
 
-  it("stays INPUT_ACTIVE while user keeps typing", () => {
-    const d = new PromptDetector({ idleThresholdMs: 100 });
-    d.notifyOutput();
-    vi.advanceTimersByTime(100);
-    d.notifyInput("l");
-    d.notifyInput("s");
-    d.notifyInput(" ");
-    expect(d.state).toBe("INPUT_ACTIVE");
-    d.dispose();
-  });
+  it("dispose leaves no pending timer that can authorize input", () => {
+    const detector = new PromptDetector({ idleThresholdMs: 100 });
+    detector.notifyOutput();
+    detector.dispose();
 
-  it("INPUT_ACTIVE → RUNNING on Enter, then → PROMPT_READY after idle", () => {
-    const d = new PromptDetector({ idleThresholdMs: 100 });
-    d.notifyOutput();
-    vi.advanceTimersByTime(100);
-    d.notifyInput("l");
-    expect(d.state).toBe("INPUT_ACTIVE");
-
-    d.notifyInput("\r"); // Enter
-    expect(d.state).toBe("RUNNING");
-
-    vi.advanceTimersByTime(100);
-    expect(d.state).toBe("PROMPT_READY");
-
-    d.dispose();
-  });
-
-  it("notifyOutput is ignored while INPUT_ACTIVE (echo does not reset state)", () => {
-    const d = new PromptDetector({ idleThresholdMs: 100 });
-    d.notifyOutput();
-    vi.advanceTimersByTime(100);
-    d.notifyInput("l");
-    expect(d.state).toBe("INPUT_ACTIVE");
-
-    // PTY echoes the character — must not reset state
-    d.notifyOutput();
-    expect(d.state).toBe("INPUT_ACTIVE");
-
-    d.dispose();
-  });
-
-  it("PTY output resets to RUNNING after Enter transitions out of INPUT_ACTIVE", () => {
-    const d = new PromptDetector({ idleThresholdMs: 100 });
-    d.notifyOutput();
-    vi.advanceTimersByTime(100);
-    d.notifyInput("l");
-    expect(d.state).toBe("INPUT_ACTIVE");
-
-    d.notifyInput("\r"); // Enter — user submitted command
-    expect(d.state).toBe("RUNNING");
-
-    // Command output arrives
-    d.notifyOutput();
-    expect(d.state).toBe("RUNNING");
-
-    // After idle, back to PROMPT_READY
-    vi.advanceTimersByTime(100);
-    expect(d.state).toBe("PROMPT_READY");
-
-    d.dispose();
-  });
-
-  it("multiple notifyOutput calls reset idle timer (debounce behaviour)", () => {
-    const d = new PromptDetector({ idleThresholdMs: 100 });
-    d.notifyOutput();
-    vi.advanceTimersByTime(80);
-    d.notifyOutput(); // reset timer
-    vi.advanceTimersByTime(80); // total 160ms but only 80ms since last output
-    expect(d.state).toBe("RUNNING"); // not yet PROMPT_READY
-
-    vi.advanceTimersByTime(20); // now 100ms since last output
-    expect(d.state).toBe("PROMPT_READY");
-
-    d.dispose();
-  });
-
-  it("Ctrl+C from INPUT_ACTIVE transitions to RUNNING", () => {
-    const d = new PromptDetector({ idleThresholdMs: 100 });
-    d.notifyOutput();
-    vi.advanceTimersByTime(100);
-    d.notifyInput("x");
-    expect(d.state).toBe("INPUT_ACTIVE");
-
-    d.notifyInput("\x03"); // Ctrl+C
-    expect(d.state).toBe("RUNNING");
-
-    d.dispose();
-  });
-
-  it("dispose clears pending timers without errors", () => {
-    const d = new PromptDetector({ idleThresholdMs: 100 });
-    d.notifyOutput(); // starts timer
-    d.dispose(); // should cancel timer
-
-    vi.advanceTimersByTime(200);
-    // State should remain RUNNING (timer was cancelled)
-    expect(d.state).toBe("RUNNING");
+    vi.advanceTimersByTime(10_000);
+    expect(detector.state).toBe("RUNNING");
   });
 });

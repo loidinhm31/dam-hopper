@@ -18,7 +18,6 @@ import {
   scheduleTerminalFit,
 } from "@/lib/terminal-fit-scheduler.js";
 import { activateTerminalWebglRenderer } from "@/lib/terminal-renderer.js";
-import { recordCommand } from "@/lib/command-history.js";
 import { handleSharedTerminalKeyEvent } from "@/lib/terminal-keyboard-shortcuts.js";
 import { bindTerminalTouchScroll } from "@/lib/terminal-touch-scroll.js";
 import {
@@ -32,7 +31,6 @@ import {
 } from "@/lib/terminal-agent-notification-integration.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalSuggestions } from "@/hooks/use-terminal-suggestions.js";
-import { TerminalSuggestionOverlay } from "@/components/atoms/TerminalSuggestionOverlay.js";
 import { TerminalFindBar } from "@/components/atoms/TerminalFindBar.js";
 
 interface TerminalPanelProps {
@@ -149,9 +147,6 @@ export function TerminalPanel({
   const findUnsubscribeRef = useRef<(() => void) | null>(null);
   const [findSnapshot, setFindSnapshot] =
     useState<TerminalFindSnapshot>(EMPTY_FIND_SNAPSHOT);
-  // Transport ref — needed by JSX-level onAccept without a closure over useEffect locals
-  const transportRef = useRef<ReturnType<typeof getTransport> | null>(null);
-
   const suggestions = useTerminalSuggestions(termRef, safeSessionId, project);
   // Keep a stable ref so closures inside the main useEffect always access the latest methods
   const suggestionsRef = useRef(suggestions);
@@ -237,7 +232,6 @@ export function TerminalPanel({
     releaseTouchScroll = bindTerminalTouchScroll(term.element ?? null);
 
     const transport = getTransport();
-    transportRef.current = transport;
     agentNotifications = attachTerminalAgentNotifications({
       term,
       sessionId: safeSessionId,
@@ -314,14 +308,8 @@ export function TerminalPanel({
     inputDisposable = term.onData((data) => {
       agentNotifications?.onUserInput();
       const result = suggestionsRef.current.handleInput(data);
-      if (result.inject !== undefined) {
-        transport.terminalWrite(safeSessionId, result.inject);
-      } else if (result.forward) {
-        transport.terminalWrite(safeSessionId, data);
-      }
-      if (result.record) {
-        recordCommand(result.record, project);
-        agentNotifications?.onSubmittedCommand(result.record);
+      if (result.forward) {
+        transport.terminalWrite(safeSessionId, result.data);
       }
     });
 
@@ -571,8 +559,6 @@ export function TerminalPanel({
     syncNativeKeyboardSuppression(termRef.current, suppressNativeKeyboard);
   }, [suppressNativeKeyboard, termElement]);
 
-  const { state: suggestionsState, acceptSuggestion } = suggestions;
-
   return (
     <div className={cn("relative w-full h-full min-h-48", className)}>
       <div
@@ -623,22 +609,6 @@ export function TerminalPanel({
               if (!suppressNativeKeyboard) termRef.current?.focus();
             }}
             autoFocusInput={!suppressNativeKeyboard}
-          />,
-          termElement,
-        )}
-      {termElement &&
-        suggestionsState.isVisible &&
-        suggestionsState.suggestions.length > 0 &&
-        createPortal(
-          <TerminalSuggestionOverlay
-            suggestions={suggestionsState.suggestions}
-            selectedIndex={suggestionsState.selectedIndex}
-            position={suggestionsState.position}
-            onAccept={(cmd) => {
-              const inject = acceptSuggestion(cmd);
-              transportRef.current?.terminalWrite(safeSessionId, inject);
-            }}
-            onDismiss={() => suggestionsRef.current.notifyOutput()}
           />,
           termElement,
         )}

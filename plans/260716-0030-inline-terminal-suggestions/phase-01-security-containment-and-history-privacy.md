@@ -12,8 +12,8 @@
 - Date: 2026-07-16
 - Description: remove unsafe automatic activation/recording before replacement work
 - Priority: P1
-- Implementation status: pending
-- Review status: pending
+- Implementation status: completed 2026-07-16
+- Review status: approved 2026-07-16
 - Effort: 8h
 
 ## Key Insights
@@ -28,7 +28,8 @@
 - Automatic UI and recording stay off until verified lifecycle capability exists.
 - Close/toggle/session-dispose synchronously cancel timers and visible state.
 - Add clear-history and history-enabled controls with explicit local-storage copy.
-- Decide legacy-history disposition before mutation; recommended default is purge with notice.
+- Retain legacy local history unchanged; do not automatically purge or migrate it.
+- Make the existing history clear action the explicit user-controlled removal path.
 - Preserve native PTY bytes; containment must not add key interception.
 
 ## Architecture
@@ -57,18 +58,19 @@ explicit history data API independent so clearing and later migration can ship s
 3. Replace `PromptDetector` authorization with an unavailable lifecycle capability stub.
 4. Remove outgoing-Enter recording and ensure pending search cannot render after disable.
 5. Add settings actions for clear/disable; make storage failure degrade to empty history.
-6. Implement the validated legacy-history policy without attempting to reconstruct lost whitespace.
+6. Retain legacy history without automatic mutation; preserve newly recorded commands
+   exactly without attempting to reconstruct previously lost whitespace.
 7. Confirm ordinary terminal input remains byte-for-byte unchanged.
 
 ## Todo list
 
-- [ ] Free disk space and reconcile dirty overlaps
-- [ ] Lock legacy-history policy
-- [ ] Add containment regression tests
-- [ ] Disable silence-based activation/recording
-- [ ] Fix synchronous dismiss/toggle/dispose cleanup
-- [ ] Add clear/disable controls and documentation copy
-- [ ] Review privacy and backward compatibility
+- [x] Free disk space and reconcile dirty overlaps
+- [x] Lock legacy-history policy: retain unchanged, no automatic purge
+- [x] Add containment regression tests
+- [x] Disable silence-based activation/recording
+- [x] Remove automatic UI state so close, toggle, session hide, and dispose have no pending timer or overlay to clean up
+- [x] Add clear/disable controls and documentation copy
+- [x] Review privacy and backward compatibility
 
 ## Success Criteria
 
@@ -82,7 +84,7 @@ explicit history data API independent so clearing and later migration can ship s
 
 - Temporary feature loss: communicate automatic suggestions are unavailable pending verified integration.
 - Dirty-file conflict: integrate surgically; never reset user changes.
-- Legacy purge surprises users: one-time notice and validation decision required.
+- Legacy history remains potentially sensitive until the user explicitly clears it.
 
 ## Security Considerations
 
@@ -93,7 +95,15 @@ or migration contents. Clearing must remove the actual localStorage key, not onl
 
 Proceed to Phase 02 only after containment tests prove automatic recording is impossible.
 
+## Completion Notes
+
+- The containment hook always forwards native input byte-for-byte and never renders,
+  intercepts, searches, or records automatic suggestions.
+- The unavailable capability gate is the only automatic-suggestion activation point;
+  Phase 02 must provide verified lifecycle evidence before changing it.
+- Local history remains browser-local. Existing stored entries are intentionally left
+  unchanged, while new direct history API writes preserve whitespace exactly.
+
 ## Unresolved questions
 
-- Automatic purge or explicit one-time confirmation for legacy history?
-- Keep history-enabled server-backed or browser-local only?
+- Keep history-enabled browser-local only, or mirror it through server-backed settings in a later phase?

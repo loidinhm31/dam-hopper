@@ -30,6 +30,9 @@ describe("SettingsAppearanceSection", () => {
     const markup = renderToStaticMarkup(<SettingsAppearanceSection />);
 
     expect(markup).toContain("Codex terminal notifications");
+    expect(markup).toContain("Local command history");
+    expect(markup).toContain("Clear local command history");
+    expect(markup).toContain("Stored only in this browser");
     expect(markup).toContain("Request permission");
     expect(markup).toContain("Enable Codex notifications");
     expect(markup).not.toContain("Quiet tracking");
