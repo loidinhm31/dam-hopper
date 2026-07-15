@@ -158,11 +158,10 @@ The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose
 
 **Behavior:**
 
-- Renders the selected Git, Ports, or Fleet Terminal panel in a persisted right rail in terminal mode.
-- Terminal panel shortcuts are mutually exclusive: opening one panel replaces the other two, and repeating the same shortcut collapses the rail.
-- Persists rail width and collapse state with `dam-hopper:terminal-workspace-fleet-width` and `dam-hopper:terminal-workspace-fleet-collapsed`.
+- Renders the selected Git, Ports, or Fleet Terminal panel as a floating overlay in terminal mode.
+- The floating panel matches the Explorer interaction model: it can be dragged or resized within the terminal workspace.
+- Terminal panel shortcuts and visible terminal-header controls are mutually exclusive: opening one panel replaces the other two, and repeating the active control closes the overlay.
 - Keeps the main terminal area full-height below the top nav.
-- Triggers terminal refit on rail resize and collapse changes.
 
 ### Multi Terminal Display
 
@@ -235,7 +234,7 @@ interface TerminalPanelProps {
 
 **Data flow:** `usePorts()` preserves `sessionId` on detected rows and exposes `killPortSession(sessionId)` so the panel can terminate the owning terminal session without direct process handling.
 
-**Terminal workspace:** The same `PortsPanel` is available in the Terminal workspace right rail through its configurable shortcut, so detected ports and tunnel actions remain available without switching back to IDE mode.
+**Terminal workspace:** The same `PortsPanel` is available in a floating Terminal workspace overlay through its configurable shortcut, so detected ports and tunnel actions remain available without switching back to IDE mode.
 
 ### PaneContainer
 
