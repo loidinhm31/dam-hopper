@@ -13,6 +13,7 @@ export interface HistorySearchResult {
 const K1 = 1.2;
 const B = 0.75;
 const STORAGE_KEY = "dam-hopper:command-history";
+const HISTORY_ENABLED_STORAGE_KEY = "dam-hopper:command-history-enabled";
 const MAX_ENTRIES = 1000;
 // 0.01 chosen empirically: compositeScore = bm25 * recency * freq; with 30-day decay
 // a command used once 31+ days ago scores ~bm25 * 1.05 * 1 ≈ 0.02–0.1 for a weak match.
@@ -122,12 +123,28 @@ function saveEntries(entries: CommandHistoryEntry[]): void {
   }
 }
 
+/** Returns false when storage is unavailable so command capture fails closed. */
+export function isHistoryEnabled(): boolean {
+  try {
+    return localStorage.getItem(HISTORY_ENABLED_STORAGE_KEY) !== "false";
+  } catch {
+    return false;
+  }
+}
+
+export function setHistoryEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(HISTORY_ENABLED_STORAGE_KEY, String(enabled));
+  } catch {
+    // Storage errors are handled by isHistoryEnabled(), which fails closed.
+  }
+}
+
 export function recordCommand(command: string, project?: string): void {
-  const normalized = command.trim().replace(/\s+/g, " ");
-  if (!normalized) return;
+  if (!isHistoryEnabled() || !command.trim()) return;
 
   const entries = loadEntries();
-  const existing = entries.find((e) => e.command === normalized);
+  const existing = entries.find((e) => e.command === command);
 
   if (existing) {
     existing.lastUsedAt = Date.now();
@@ -135,7 +152,7 @@ export function recordCommand(command: string, project?: string): void {
     if (project) existing.project = project;
   } else {
     entries.push({
-      command: normalized,
+      command,
       lastUsedAt: Date.now(),
       useCount: 1,
       project,

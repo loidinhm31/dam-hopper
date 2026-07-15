@@ -8,7 +8,6 @@ import {
 import { useTerminalSessions, useProjects } from "@/api/queries.js";
 import { api } from "@/api/client.js";
 import { generateUUID, sanitizeSessionSegment } from "@/lib/utils.js";
-import { recordCommand } from "@/lib/command-history.js";
 import { getTerminalLaunchContext } from "@/lib/terminal-launch-context.js";
 import {
   deriveTerminalAutoAttachState,
@@ -694,7 +693,6 @@ export function useTerminalManager(
 
   function handleLaunchFreeWithCommand(command: string, projectName?: string) {
     const launchContext = getTerminalLaunchContext(projects, projectName);
-    if (command.trim()) recordCommand(command, launchContext.projectName);
     const sessionId = `${FREE_TERMINAL_PREFIX}${generateUUID()}`;
     api.terminal
       .create({
@@ -729,7 +727,6 @@ export function useTerminalManager(
   }
 
   function handleLaunchSuggestedCommand(projectName: string, command: string) {
-    if (command.trim()) recordCommand(command, projectName);
     const sessionId = `terminal:${projectName}:_:${Date.now()}`;
     const projectPath = projects.find((p) => p.name === projectName)?.path;
     api.terminal

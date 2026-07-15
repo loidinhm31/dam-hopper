@@ -1,10 +1,17 @@
+import { useState } from "react";
 import { NumberStepper } from "@/components/atoms/NumberStepper.js";
 import { Switch } from "@/components/atoms/Switch.js";
 import { SettingRow } from "@/components/molecules/SettingRow.js";
 import { TerminalAgentNotificationSettings } from "@/components/molecules/TerminalAgentNotificationSettings.js";
 import { useSettingsStore } from "@/stores/settings.js";
+import {
+  clearHistory,
+  isHistoryEnabled,
+  setHistoryEnabled,
+} from "@/lib/command-history.js";
 
 export function SettingsAppearanceSection() {
+  const [historyEnabled, setHistoryEnabledState] = useState(isHistoryEnabled);
   const {
     systemFontSize,
     editorFontSize,
@@ -75,7 +82,7 @@ export function SettingsAppearanceSection() {
 
       <SettingRow
         title="Inline Terminal Suggestions"
-        description="Show command suggestions based on history while typing in terminal"
+        description="Saved preference; automatic suggestions stay unavailable until verified shell lifecycle support is ready"
       >
         <Switch
           checked={terminalSuggestionsEnabled}
@@ -83,6 +90,36 @@ export function SettingsAppearanceSection() {
             saveDebounced({ terminalSuggestionsEnabled: checked })
           }
         />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Local command history"
+        description="Stored only in this browser. Disabling stops future command saving."
+      >
+        <Switch
+          checked={historyEnabled}
+          onCheckedChange={(enabled) => {
+            setHistoryEnabled(enabled);
+            setHistoryEnabledState(isHistoryEnabled());
+          }}
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Clear local command history"
+        description="Remove commands previously stored in this browser"
+      >
+        <button
+          type="button"
+          onClick={clearHistory}
+          className="rounded border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-2)]"
+        >
+          Clear history
+        </button>
       </SettingRow>
 
       <div className="border-t border-[var(--color-border)]" />
