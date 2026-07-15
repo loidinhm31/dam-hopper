@@ -33,6 +33,14 @@ export interface TerminalFloatingFilePanelLayout {
   left: number | null;
 }
 
+export interface TerminalFloatingPanelConstraints {
+  minWidth: number;
+  maxWidth: number;
+  minHeight: number;
+  maxHeight: number;
+  margin?: number;
+}
+
 function loadStoredNumber(key: string, fallback: number) {
   try {
     const stored = localStorage.getItem(key);
@@ -58,41 +66,48 @@ export function saveTerminalFilePanelOpen(open: boolean) {
   } catch {}
 }
 
-export function clampTerminalFloatingFilePanelLayout(
+export function clampTerminalFloatingPanelLayout(
   layout: TerminalFloatingFilePanelLayout,
   bounds: {
     width: number;
     height: number;
   },
+  {
+    minWidth,
+    maxWidth,
+    minHeight,
+    maxHeight,
+    margin = TERMINAL_FILE_PANEL_MARGIN,
+  }: TerminalFloatingPanelConstraints,
 ) {
   const widthLimit = Math.max(
-    TERMINAL_FILE_PANEL_MIN_WIDTH,
-    bounds.width - TERMINAL_FILE_PANEL_MARGIN * 2,
+    minWidth,
+    bounds.width - margin * 2,
   );
   const heightLimit = Math.max(
-    TERMINAL_FILE_PANEL_MIN_HEIGHT,
-    bounds.height - TERMINAL_FILE_PANEL_MARGIN * 2,
+    minHeight,
+    bounds.height - margin * 2,
   );
   const width = Math.min(
-    Math.max(layout.width, TERMINAL_FILE_PANEL_MIN_WIDTH),
-    Math.min(TERMINAL_FILE_PANEL_MAX_WIDTH, widthLimit),
+    Math.max(layout.width, minWidth),
+    Math.min(maxWidth, widthLimit),
   );
   const height = Math.min(
-    Math.max(layout.height, TERMINAL_FILE_PANEL_MIN_HEIGHT),
-    Math.min(TERMINAL_FILE_PANEL_MAX_HEIGHT, heightLimit),
+    Math.max(layout.height, minHeight),
+    Math.min(maxHeight, heightLimit),
   );
   const top = Math.min(
-    Math.max(layout.top, TERMINAL_FILE_PANEL_MARGIN),
-    Math.max(TERMINAL_FILE_PANEL_MARGIN, bounds.height - height - TERMINAL_FILE_PANEL_MARGIN),
+    Math.max(layout.top, margin),
+    Math.max(margin, bounds.height - height - margin),
   );
   const left =
     layout.left === null
       ? null
       : Math.min(
-          Math.max(layout.left, TERMINAL_FILE_PANEL_MARGIN),
+          Math.max(layout.left, margin),
           Math.max(
-            TERMINAL_FILE_PANEL_MARGIN,
-            bounds.width - width - TERMINAL_FILE_PANEL_MARGIN,
+            margin,
+            bounds.width - width - margin,
           ),
         );
 
@@ -102,6 +117,21 @@ export function clampTerminalFloatingFilePanelLayout(
     top,
     left,
   };
+}
+
+export function clampTerminalFloatingFilePanelLayout(
+  layout: TerminalFloatingFilePanelLayout,
+  bounds: {
+    width: number;
+    height: number;
+  },
+) {
+  return clampTerminalFloatingPanelLayout(layout, bounds, {
+    minWidth: TERMINAL_FILE_PANEL_MIN_WIDTH,
+    maxWidth: TERMINAL_FILE_PANEL_MAX_WIDTH,
+    minHeight: TERMINAL_FILE_PANEL_MIN_HEIGHT,
+    maxHeight: TERMINAL_FILE_PANEL_MAX_HEIGHT,
+  });
 }
 
 export function loadTerminalFloatingFilePanelLayout() {
