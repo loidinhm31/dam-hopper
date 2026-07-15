@@ -1,6 +1,9 @@
 import type { UiConfig } from "@/api/client.js";
 import {
   DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
+  DEFAULT_FLEET_TERMINAL_SHORTCUT,
+  DEFAULT_GIT_PANEL_SHORTCUT,
+  DEFAULT_PORTS_PANEL_SHORTCUT,
   DEFAULT_SEARCH_FILENAME_SHORTCUT,
   DEFAULT_SEARCH_TEXT_SHORTCUT,
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
@@ -31,6 +34,9 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   terminalWorkspaceShortcut: DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
   terminalFilePanelShortcut: DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
   revealActiveFileShortcut: DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
+  gitPanelShortcut: DEFAULT_GIT_PANEL_SHORTCUT,
+  portsPanelShortcut: DEFAULT_PORTS_PANEL_SHORTCUT,
+  fleetTerminalShortcut: DEFAULT_FLEET_TERMINAL_SHORTCUT,
 };
 
 export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
@@ -83,6 +89,15 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
     revealActiveFileShortcut: formatShortcut(
       ui?.revealActiveFileShortcut ??
         DEFAULT_UI_CONFIG.revealActiveFileShortcut,
+    ),
+    gitPanelShortcut: formatShortcut(
+      ui?.gitPanelShortcut ?? DEFAULT_UI_CONFIG.gitPanelShortcut,
+    ),
+    portsPanelShortcut: formatShortcut(
+      ui?.portsPanelShortcut ?? DEFAULT_UI_CONFIG.portsPanelShortcut,
+    ),
+    fleetTerminalShortcut: formatShortcut(
+      ui?.fleetTerminalShortcut ?? DEFAULT_UI_CONFIG.fleetTerminalShortcut,
     ),
   };
 }

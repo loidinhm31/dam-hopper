@@ -1,4 +1,4 @@
-import { useState, type ReactNode, useMemo, useEffect } from "react";
+import { useState, type ReactNode, useMemo, useEffect, useRef } from "react";
 import { TopNav } from "@/components/organisms/TopNav.js";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
@@ -12,8 +12,10 @@ import type { WorkspaceMode } from "@/lib/workspace-mode.js";
 import {
   resolveBottomPanelLayout,
   resolveMaximizeToggle,
+  resolveTerminalPanelShortcut,
   resolveTopToolToggle,
 } from "@/lib/ide-shell-layout.js";
+import type { TerminalPanelToolId } from "@/lib/ide-shell-layout.js";
 
 const TREE_WIDTH_KEY = "dam-hopper:ide-tree-width";
 const TERMINAL_TREE_WIDTH_KEY = "dam-hopper:ide-terminal-tree-width";
@@ -33,6 +35,7 @@ export function IdeShell({
   workspaceModeShortcutLabel,
   activateLeftTopToolRequest,
   activateBottomToolRequest,
+  activateRightTopToolRequest,
   toolbarActions,
 }: {
   leftTools: ToolWindowDef[];
@@ -41,8 +44,21 @@ export function IdeShell({
   workspaceMode?: WorkspaceMode;
   onWorkspaceModeChange?: (mode: WorkspaceMode) => void;
   workspaceModeShortcutLabel?: string;
-  activateLeftTopToolRequest?: { nonce: number; toolId: string } | null;
-  activateBottomToolRequest?: { nonce: number; toolId: string } | null;
+  activateLeftTopToolRequest?: {
+    nonce: number;
+    toolId: string;
+    exclusiveTarget?: TerminalPanelToolId;
+  } | null;
+  activateBottomToolRequest?: {
+    nonce: number;
+    toolId: string;
+    exclusiveTarget?: TerminalPanelToolId;
+  } | null;
+  activateRightTopToolRequest?: {
+    nonce: number;
+    toolId: string;
+    exclusiveTarget?: TerminalPanelToolId;
+  } | null;
   toolbarActions?: ReactNode;
 }) {
   const { collapsed, toggle } = useSidebarCollapse();
@@ -183,6 +199,7 @@ export function IdeShell({
   }, [activeRightBottomId]);
   // Session-only maximize state for the bottom tool panel (not persisted).
   const [bottomMaximized, setBottomMaximized] = useState(false);
+  const processedPanelShortcutNonceRef = useRef<number | null>(null);
   const closeLeftBottom = () => {
     setActiveLeftBottomId(null);
     setBottomMaximized(false);
@@ -232,6 +249,78 @@ export function IdeShell({
     }
     setBottomMaximized((v) => (v ? false : v));
   }, [activateBottomToolRequest, leftTools, rightTools]);
+
+  useEffect(() => {
+    if (!activateRightTopToolRequest) return;
+    const requestedTool = rightTools.find(
+      (entry) => entry.id === activateRightTopToolRequest.toolId,
+    );
+    if (!requestedTool || requestedTool.position === "bottom") return;
+
+    if (activateRightTopToolRequest.exclusiveTarget) {
+      if (
+        processedPanelShortcutNonceRef.current ===
+        activateRightTopToolRequest.nonce
+      ) {
+        return;
+      }
+      processedPanelShortcutNonceRef.current =
+        activateRightTopToolRequest.nonce;
+      const outcome = resolveTerminalPanelShortcut({
+        targetId: activateRightTopToolRequest.exclusiveTarget,
+        activeLeftBottomId,
+        activeRightTopId,
+        bottomMaximized,
+      });
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setActiveLeftBottomId(outcome.nextActiveLeftBottomId);
+      setActiveRightTopId(outcome.nextActiveRightTopId);
+      setBottomMaximized(outcome.nextBottomMaximized);
+      return;
+    }
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setActiveRightTopId(activateRightTopToolRequest.toolId);
+    setBottomMaximized((v) => (v ? false : v));
+  }, [
+    activateRightTopToolRequest,
+    activeLeftBottomId,
+    activeRightTopId,
+    bottomMaximized,
+    rightTools,
+  ]);
+
+  useEffect(() => {
+    if (!activateBottomToolRequest?.exclusiveTarget) return;
+    const requestedTool = leftTools.find(
+      (entry) => entry.id === activateBottomToolRequest.toolId,
+    );
+    if (!requestedTool || requestedTool.position !== "bottom") return;
+
+    if (
+      processedPanelShortcutNonceRef.current === activateBottomToolRequest.nonce
+    ) {
+      return;
+    }
+    processedPanelShortcutNonceRef.current = activateBottomToolRequest.nonce;
+
+    const outcome = resolveTerminalPanelShortcut({
+      targetId: activateBottomToolRequest.exclusiveTarget,
+      activeLeftBottomId,
+      activeRightTopId,
+      bottomMaximized,
+    });
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setActiveLeftBottomId(outcome.nextActiveLeftBottomId);
+    setActiveRightTopId(outcome.nextActiveRightTopId);
+    setBottomMaximized(outcome.nextBottomMaximized);
+  }, [
+    activateBottomToolRequest,
+    activeLeftBottomId,
+    activeRightTopId,
+    bottomMaximized,
+    leftTools,
+  ]);
 
   function handleToggleLeft(id: string) {
     const tool = leftTools.find((t) => t.id === id);

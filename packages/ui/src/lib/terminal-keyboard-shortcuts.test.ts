@@ -33,11 +33,12 @@ describe("handleSharedTerminalKeyEvent", () => {
     expect(onCopySelection).toHaveBeenCalledOnce();
   });
 
-  it("suppresses workspace and new-terminal shortcuts from xterm input", () => {
+  it("suppresses workspace and panel shortcuts from xterm input", () => {
     expect(
       handleSharedTerminalKeyEvent(key({ code: "Backquote", ctrlKey: true }), {
         workspaceShortcut: "Mod+Shift+Backquote",
         revealActiveFileShortcut: "Alt+F1",
+        panelShortcuts: ["Mod+Shift+KeyG", "Mod+Shift+KeyP", "Mod+Shift+KeyM"],
         onCopySelection: vi.fn(),
       }),
     ).toBe(false);
@@ -47,6 +48,11 @@ describe("handleSharedTerminalKeyEvent", () => {
         {
           workspaceShortcut: "Ctrl+Shift+Backquote",
           revealActiveFileShortcut: "Alt+F1",
+          panelShortcuts: [
+            "Ctrl+Shift+KeyG",
+            "Ctrl+Shift+KeyP",
+            "Ctrl+Shift+KeyM",
+          ],
           onCopySelection: vi.fn(),
         },
       ),
@@ -57,6 +63,26 @@ describe("handleSharedTerminalKeyEvent", () => {
         {
           workspaceShortcut: "Ctrl+Shift+Backquote",
           revealActiveFileShortcut: "Alt+F1",
+          panelShortcuts: [
+            "Ctrl+Shift+KeyG",
+            "Ctrl+Shift+KeyP",
+            "Ctrl+Shift+KeyM",
+          ],
+          onCopySelection: vi.fn(),
+        },
+      ),
+    ).toBe(false);
+    expect(
+      handleSharedTerminalKeyEvent(
+        key({ code: "KeyP", ctrlKey: true, shiftKey: true }),
+        {
+          workspaceShortcut: "Mod+Shift+Backquote",
+          revealActiveFileShortcut: "Alt+F1",
+          panelShortcuts: [
+            "Mod+Shift+KeyG",
+            "Mod+Shift+KeyP",
+            "Mod+Shift+KeyM",
+          ],
           onCopySelection: vi.fn(),
         },
       ),
