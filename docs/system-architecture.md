@@ -107,9 +107,12 @@ publish a typed browser event keyed by the stable PTY `sessionId`;
 `WorkspacePage` consumes it because that page owns workspace mode, compact
 surface selection, terminal selection, and xterm focus orchestration. Displayed
 notification context uses `Project · Bash #N`, with the ordinal read from the
-current 1-based open-terminal order. Project names and terminal ordinals are
-display only and are never used as navigation identity. Stale session clicks
-no-op without changing server state, the WebSocket protocol, or persisted
+current 1-based open-terminal order; the original sanitized body keeps its own
+payload allowance below that context line. Project names and terminal ordinals
+are display only and are never used as navigation identity. Navigation requires
+a mounted target that is explicitly alive, or a mounted and registered xterm
+only when liveness is unknown. Explicitly dead, unmounted, and stale session
+clicks no-op without changing server state, the WebSocket protocol, or persisted
 terminal layout. Compact coarse-pointer layouts with the mobile custom keyboard
 enabled still reveal and refit the exact session but suppress forced native
 xterm focus so selection does not unexpectedly open the browser keyboard.

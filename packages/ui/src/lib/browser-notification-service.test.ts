@@ -133,6 +133,24 @@ describe("BrowserNotificationService", () => {
     expect(onSelect).toHaveBeenCalledWith(event);
   });
 
+  it("preserves the existing Codex body allowance when adding terminal context", () => {
+    const factory = vi.fn();
+    const service = new BrowserNotificationService({
+      notificationFactory: factory,
+      getPermission: () => "granted",
+    });
+    const body = "x".repeat(240);
+
+    service.notifyTerminalAgent({ ...event, body }, { terminalOrder: 2 });
+
+    expect(factory).toHaveBeenCalledWith(
+      event.title,
+      expect.objectContaining({
+        body: `web · Bash #2\n${"x".repeat(180)}`,
+      }),
+    );
+  });
+
   it("uses the notification source in the browser tag for TUI-ready events", () => {
     const factory = vi.fn();
     const service = new BrowserNotificationService({

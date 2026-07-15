@@ -197,11 +197,7 @@ function buildNotificationBody(
 
   const project = sanitizeTerminalNotificationText(event.project, 60);
   const context = `${project || "Unknown project"} · Bash #${terminalOrder}`;
-  const remainingLength = Math.max(
-    0,
-    MAX_BODY_LENGTH - Array.from(context).length - 1,
-  );
-  const body = sanitizeTerminalNotificationText(event.body, remainingLength);
+  const body = sanitizeTerminalNotificationText(event.body, MAX_BODY_LENGTH);
   return body ? `${context}\n${body}` : context;
 }
 
