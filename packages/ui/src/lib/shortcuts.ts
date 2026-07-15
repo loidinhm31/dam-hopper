@@ -31,6 +31,7 @@ export interface ShortcutKeyEvent {
   metaKey: boolean;
   altKey: boolean;
   shiftKey: boolean;
+  preventDefault?: () => void;
   repeat?: boolean;
   isComposing?: boolean;
 }

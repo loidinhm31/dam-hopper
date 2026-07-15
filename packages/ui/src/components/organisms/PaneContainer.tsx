@@ -186,6 +186,7 @@ export const PaneContainer = memo(function PaneContainer({
           const selection = terminal.getSelection();
           if (selection) void navigator.clipboard.writeText(selection);
         },
+        onFind: () => entry.findController.open(),
         onNewTerminal,
       });
     });
@@ -195,11 +196,13 @@ export const PaneContainer = memo(function PaneContainer({
       terminal.focus();
     }
 
-    // Cleanup: restore no-op handler when effect re-runs or cleanup
+    // Cleanup: restore the base handler when this pane releases the terminal.
     return () => {
-      // Restore a minimal handler so it doesn't crash if terminal is gone
+      // Restore the TerminalPanel handler when this pane stops owning the terminal.
       try {
-        terminal.attachCustomKeyEventHandler(() => true);
+        terminal.attachCustomKeyEventHandler(
+          entry.baseKeyEventHandler ?? (() => true),
+        );
       } catch {
         // terminal may be disposed
       }
