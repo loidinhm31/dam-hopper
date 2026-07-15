@@ -4,11 +4,13 @@
 
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
+import type { TerminalFindController } from "@/lib/terminal-find-controller.js";
 import { cancelScheduledTerminalFit } from "@/lib/terminal-fit-scheduler.js";
 
 export interface TerminalEntry {
   terminal: Terminal;
   fitAddon: FitAddon;
+  findController: TerminalFindController;
 }
 
 export const terminalRegistry = new Map<string, TerminalEntry>();
@@ -20,8 +22,9 @@ export function registerTerminal(
   id: string,
   terminal: Terminal,
   fitAddon: FitAddon,
+  findController: TerminalFindController,
 ): TerminalEntry {
-  const entry = { terminal, fitAddon };
+  const entry = { terminal, fitAddon, findController };
   terminalRegistry.set(id, entry);
   // Notify subscribers that a new terminal is ready
   subscribers.forEach((cb) => cb(id));

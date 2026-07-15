@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
+import { SearchAddon } from "@xterm/addon-search";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { logger } from "@dam-hopper/shared/logger";
@@ -8,6 +9,10 @@ import { cn } from "@/lib/utils.js";
 import { getTransport } from "@/api/transport.js";
 import { api, type SessionInfo } from "@/api/client.js";
 import { registerTerminal, removeTerminal } from "@/lib/terminal-registry.js";
+import {
+  TerminalFindController,
+  type TerminalFindSnapshot,
+} from "@/lib/terminal-find-controller.js";
 import {
   cancelScheduledTerminalFit,
   scheduleTerminalFit,
@@ -28,6 +33,7 @@ import {
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalSuggestions } from "@/hooks/use-terminal-suggestions.js";
 import { TerminalSuggestionOverlay } from "@/components/atoms/TerminalSuggestionOverlay.js";
+import { TerminalFindBar } from "@/components/atoms/TerminalFindBar.js";
 
 interface TerminalPanelProps {
   /** Unique session ID (e.g. "build:api-server", "run:api-server") */
@@ -72,6 +78,14 @@ const DARK_THEME = {
   brightMagenta: "#c084fc",
   brightCyan: "#22d3ee",
   brightWhite: "#ffffff",
+};
+
+const EMPTY_FIND_SNAPSHOT: TerminalFindSnapshot = {
+  isOpen: false,
+  query: "",
+  resultIndex: 0,
+  resultCount: 0,
+  status: "empty",
 };
 
 function syncNativeKeyboardSuppression(
@@ -126,6 +140,10 @@ export function TerminalPanel({
   const termRef = useRef<Terminal | null>(null);
   // Term element state — triggers re-render to mount portal after open()
   const [termElement, setTermElement] = useState<HTMLElement | null>(null);
+  const findControllerRef = useRef<TerminalFindController | null>(null);
+  const findUnsubscribeRef = useRef<(() => void) | null>(null);
+  const [findSnapshot, setFindSnapshot] =
+    useState<TerminalFindSnapshot>(EMPTY_FIND_SNAPSHOT);
   // Transport ref — needed by JSX-level onAccept without a closure over useEffect locals
   const transportRef = useRef<ReturnType<typeof getTransport> | null>(null);
 
@@ -155,6 +173,14 @@ export function TerminalPanel({
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(container);
+
+    // Search state belongs to this terminal's lifecycle and never enters PTY
+    // transport or React state as an xterm object.
+    const searchAddon = new SearchAddon();
+    term.loadAddon(searchAddon);
+    const findController = new TerminalFindController(searchAddon);
+    findControllerRef.current = findController;
+    setFindSnapshot(findController.getSnapshot());
 
     // Align xterm.js Unicode width tables with backend CLI tools (e.g. agy).
     // Without this, ⚡ (U+26A1, East Asian Width = Ambiguous) is rendered as 2 cells
@@ -196,7 +222,12 @@ export function TerminalPanel({
     };
 
     // Register in global registry so PaneContainer can reparent the terminal element
-    const terminalEntry = registerTerminal(safeSessionId, term, fitAddon);
+    const terminalEntry = registerTerminal(
+      safeSessionId,
+      term,
+      fitAddon,
+      findController,
+    );
     onTerminalReady?.(safeSessionId);
     releaseTouchScroll = bindTerminalTouchScroll(term.element ?? null);
 
@@ -490,6 +521,10 @@ export function TerminalPanel({
       observer?.disconnect();
       releaseTouchScroll();
       cancelScheduledTerminalFit(terminalEntry);
+      findUnsubscribeRef.current?.();
+      findUnsubscribeRef.current = null;
+      findController.dispose();
+      findControllerRef.current = null;
       removeTerminal(safeSessionId);
       termRef.current = null;
       openedRef.current = false;
@@ -498,6 +533,25 @@ export function TerminalPanel({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intentionally run once per mount — use key prop to force remount
+
+  useEffect(() => {
+    const controller = findControllerRef.current;
+    if (!controller || !termElement) return;
+
+    findUnsubscribeRef.current?.();
+    setFindSnapshot(controller.getSnapshot());
+    const unsubscribe = controller.subscribe(() => {
+      setFindSnapshot(controller.getSnapshot());
+    });
+    findUnsubscribeRef.current = unsubscribe;
+
+    return () => {
+      unsubscribe();
+      if (findUnsubscribeRef.current === unsubscribe) {
+        findUnsubscribeRef.current = null;
+      }
+    };
+  }, [termElement]);
 
   useEffect(() => {
     syncNativeKeyboardSuppression(termRef.current, suppressNativeKeyboard);
@@ -539,6 +593,25 @@ export function TerminalPanel({
           </div>
         </div>
       )}
+      {termElement &&
+        findControllerRef.current &&
+        findSnapshot.isOpen &&
+        createPortal(
+          <TerminalFindBar
+            snapshot={findSnapshot}
+            onQueryChange={(query) =>
+              findControllerRef.current?.setQuery(query)
+            }
+            onNext={() => findControllerRef.current?.findNext()}
+            onPrevious={() => findControllerRef.current?.findPrevious()}
+            onClose={() => {
+              findControllerRef.current?.close();
+              if (!suppressNativeKeyboard) termRef.current?.focus();
+            }}
+            autoFocusInput={!suppressNativeKeyboard}
+          />,
+          termElement,
+        )}
       {termElement &&
         suggestionsState.isVisible &&
         suggestionsState.suggestions.length > 0 &&
