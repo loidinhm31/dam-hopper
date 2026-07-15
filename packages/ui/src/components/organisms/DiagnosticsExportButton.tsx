@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
 import { Download } from "lucide-react";
 import { Button } from "@/components/atoms/Button.js";
+import { DiagnosticsTimeWindowSelect } from "@/components/molecules/DiagnosticsTimeWindowSelect.js";
 import { useExportDiagnostics } from "@/api/queries.js";
 import {
-  DIAGNOSTICS_WINDOW_OPTIONS,
   exportDiagnosticsBundle,
   type DiagnosticsExportScopeContext,
+  type DiagnosticsTimeWindowMinutes,
 } from "@/lib/diagnostics-export.js";
 import { cn } from "@/lib/utils.js";
 
@@ -38,7 +39,7 @@ export function DiagnosticsExportButton({
 }: DiagnosticsExportButtonProps) {
   const exportDiagnostics = useExportDiagnostics();
   const [windowMinutes, setWindowMinutes] =
-    useState<(typeof DIAGNOSTICS_WINDOW_OPTIONS)[number]>(10);
+    useState<DiagnosticsTimeWindowMinutes>(10);
   const [terminalSelection, setTerminalSelection] = useState("default");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -106,22 +107,10 @@ export function DiagnosticsExportButton({
         className,
       )}
     >
-      <select
-        aria-label="Diagnostics time window"
+      <DiagnosticsTimeWindowSelect
         value={windowMinutes}
-        onChange={(event) =>
-          setWindowMinutes(
-            Number(event.target.value) as typeof windowMinutes,
-          )
-        }
-        className="h-7 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-xs text-[var(--color-text)] outline-none"
-      >
-        {DIAGNOSTICS_WINDOW_OPTIONS.map((minutes) => (
-          <option key={minutes} value={minutes}>
-            Last {minutes}m
-          </option>
-        ))}
-      </select>
+        onChange={setWindowMinutes}
+      />
       {shouldShowTerminalSelector && (
         <select
           aria-label="Diagnostics terminal scope"
@@ -152,7 +141,9 @@ export function DiagnosticsExportButton({
         {exportDiagnostics.isPending ? "Exporting" : "Export Diagnostics"}
       </Button>
       {message && !compact && (
-        <span className="text-[var(--color-success)]">Downloaded {message}</span>
+        <span className="text-[var(--color-success)]">
+          Downloaded {message}
+        </span>
       )}
       {error && !compact && (
         <span className="text-[var(--color-danger)]">{error}</span>

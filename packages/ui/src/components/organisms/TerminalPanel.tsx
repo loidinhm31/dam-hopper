@@ -54,6 +54,8 @@ interface TerminalPanelProps {
   suppressAutoFocus?: boolean;
   /** Disables xterm text input for mobile custom-keyboard mode */
   suppressNativeKeyboard?: boolean;
+  /** Current 1-based position in the open terminal list. */
+  terminalOrder?: number;
   className?: string;
 }
 
@@ -120,6 +122,7 @@ export function TerminalPanel({
   onTerminalReady,
   suppressAutoFocus = false,
   suppressNativeKeyboard = suppressAutoFocus,
+  terminalOrder,
   className,
 }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -127,6 +130,8 @@ export function TerminalPanel({
   const safeSessionId = sessionId.replace(/[^a-zA-Z0-9:._-]/g, "-");
   const sessionIdRef = useRef(safeSessionId);
   const openedRef = useRef(false);
+  const terminalOrderRef = useRef(terminalOrder);
+  terminalOrderRef.current = terminalOrder;
   const [attachState, setAttachState] = useState<
     "idle" | "attaching" | "attached" | "creating"
   >("idle");
@@ -237,6 +242,7 @@ export function TerminalPanel({
       term,
       sessionId: safeSessionId,
       project,
+      getTerminalOrder: () => terminalOrderRef.current,
     });
 
     // ── Register all listeners immediately to avoid race conditions ──────────

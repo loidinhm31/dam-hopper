@@ -5,6 +5,7 @@ import {
   parseOsc9Notification,
   type TerminalAgentNotification,
 } from "@/lib/terminal-notification-signal-parser.js";
+import { dispatchTerminalNotificationSelection } from "@/lib/terminal-notification-navigation.js";
 import { useSettingsStore } from "@/stores/settings.js";
 
 type Disposable = { dispose: () => void };
@@ -14,6 +15,7 @@ interface TerminalAgentNotificationIntegrationOptions {
   term: Terminal;
   sessionId: string;
   project: string;
+  getTerminalOrder?: () => number | undefined;
 }
 
 export interface TerminalAgentNotificationIntegration {
@@ -29,6 +31,7 @@ export function attachTerminalAgentNotifications({
   term,
   sessionId,
   project,
+  getTerminalOrder,
 }: TerminalAgentNotificationIntegrationOptions): TerminalAgentNotificationIntegration {
   const notificationService = new BrowserNotificationService({
     diagnostics: (message, fields) => {
@@ -44,6 +47,9 @@ export function attachTerminalAgentNotifications({
     notificationService.notifyTerminalAgent(event, {
       enabled: useSettingsStore.getState().terminalCodexNotificationsEnabled,
       rateLimitMs: CODEX_OSC9_RATE_LIMIT_MS,
+      terminalOrder: getTerminalOrder?.(),
+      onSelect: ({ sessionId: selectedSessionId }) =>
+        dispatchTerminalNotificationSelection(selectedSessionId),
     });
   };
 
