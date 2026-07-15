@@ -4,9 +4,9 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Status Overview
 
-- **Current Phase:** Phase 07: Compact Top Navigation (UI/UX Redesign)
-- **Last Milestone:** Tauri v2 Shared UI Native Phase 05 verification and documentation completed with split-host docs refresh, compact workspace lint fix, and blocked-manual-check notes recorded
-- **Total Phases Completed:** 17 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 5/5 complete)
+- **Current Phase:** Codex Terminal Notification Center (completed)
+- **Last Milestone:** Added session-only Codex terminal notification center with unread bell/feed and top-right toasts
+- **Total Phases Completed:** 18 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 5/5, terminal notification center 1/1 complete)
 - **Next Milestone:** Phase 06: Startup Restore — Load persisted sessions on server restart
 
 ## Roadmap Phases
@@ -206,6 +206,14 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [ ] Multi-workspace management UI
 
 ## Recent Milestones
+
+- **2026-07-16:** Completed Codex Terminal Notification Center.
+  - ✅ Added bounded session-only notification history with unread badge, item read, mark-all-read, and clear actions
+  - ✅ Added responsive top-right bell/feed and a maximum-three toast viewport with automatic and manual dismissal
+  - ✅ Preserved native browser notifications while ensuring denied native permission cannot suppress in-app delivery
+  - ✅ Reused terminal selection navigation and kept the existing Codex notification setting as the master gate
+  - ✅ Validation passed: UI TypeScript compile, 93 files / 482 UI tests, 2 files / 10 browser tests, changed-file ESLint, and feature diff/whitespace checks
+  - ⚠️ Root lint remains blocked by three unrelated pre-existing errors in `EditorTabs.tsx` and `use-coarse-pointer.ts`
 
 - **2026-07-14:** Completed Explorer Copy Path context menu (Copy Absolute / Copy Relative Path on file-tree right-click; pure helpers + unit tests; native separators; 422 tests passing).
 - **2026-07-09:** Completed Phase 03 TerminalPanel xterm integration for xterm agent notifications.

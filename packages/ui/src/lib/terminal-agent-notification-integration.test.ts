@@ -11,6 +11,7 @@ vi.mock("@/lib/diagnostics-client.js", () => ({
 
 import { attachTerminalAgentNotifications } from "./terminal-agent-notification-integration.js";
 import { useSettingsStore } from "@/stores/settings.js";
+import { useTerminalNotificationsStore } from "@/stores/terminal-notifications.js";
 
 type OscHandler = (payload: string) => boolean;
 
@@ -73,10 +74,12 @@ describe("attachTerminalAgentNotifications", () => {
     vi.setSystemTime(1_000);
     recordClientDiagnostic.mockReset();
     useSettingsStore.setState({ terminalCodexNotificationsEnabled: true });
+    useTerminalNotificationsStore.setState({ notifications: [], toasts: [] });
   });
 
   afterEach(() => {
     useSettingsStore.setState({ terminalCodexNotificationsEnabled: false });
+    useTerminalNotificationsStore.setState({ notifications: [], toasts: [] });
     restoreNotificationGlobal();
     vi.useRealTimers();
   });
@@ -103,6 +106,9 @@ describe("attachTerminalAgentNotifications", () => {
     expect(handler?.("notify;Codex done;Review the answer again")).toBe(true);
 
     expect(created).toHaveLength(2);
+    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(
+      2,
+    );
     expect(created[0]).toEqual({
       title: "Codex done",
       options: {
@@ -141,6 +147,34 @@ describe("attachTerminalAgentNotifications", () => {
     expect(handler).toBeTypeOf("function");
     expect(handler?.("notify;Codex done;Review the answer")).toBe(true);
     expect(created).toHaveLength(0);
+    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(
+      0,
+    );
+  });
+
+  it("delivers in-app when native browser notifications are denied", () => {
+    installFakeNotification();
+    Object.defineProperty(globalThis.Notification, "permission", {
+      configurable: true,
+      value: "denied",
+    });
+    const { term, getHandler } = createTerminal();
+
+    attachTerminalAgentNotifications({
+      term,
+      sessionId: "term-denied",
+      project: "web",
+    });
+
+    expect(getHandler()?.("notify;Codex done;Review the answer")).toBe(true);
+    const state = useTerminalNotificationsStore.getState();
+    expect(state.notifications).toHaveLength(1);
+    expect(state.notifications[0]?.event).toMatchObject({
+      sessionId: "term-denied",
+      title: "Codex done",
+      body: "Review the answer",
+    });
+    expect(state.toasts).toEqual([state.notifications[0]?.id]);
   });
 
   it("adds the current project and open-terminal order to the body", () => {
