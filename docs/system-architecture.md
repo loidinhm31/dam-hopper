@@ -102,6 +102,56 @@ Phase 04 adds a settings surface in the shared UI package:
 
 Notification scope remains xterm-only. DamHopper does not watch external terminals, OS process tables, or native notification daemons for this feature.
 
+### inline terminal suggestions (planned)
+
+Inline suggestions use verified shell lifecycle, not PTY output silence. A supported
+shell integration emits bounded OSC 633-compatible markers with a per-PTY-incarnation
+nonce. Unsupported shells, replay attaches, respawns, invalid marker order, alternate
+buffers, SSH/subshell transitions, and measurement failures fail closed: automatic
+suggestions and history capture stay off, while an explicitly opened history workflow
+may remain available.
+
+```mermaid
+stateDiagram-v2
+  [*] --> Unverified
+  Unverified --> PromptStart : valid A and handshake
+  PromptStart --> Editing : valid B
+  Editing --> Submitted : valid E with nonce and exact command
+  Submitted --> Opaque : valid C
+  Opaque --> Finished : valid D
+  Finished --> PromptStart : next valid A
+  PromptStart --> Unverified : invalid or stale marker
+  Editing --> Unverified : disconnect, replay, respawn, or alternate buffer
+  Submitted --> Unverified : invalid transition
+  Opaque --> Unverified : invalid transition
+```
+
+Security boundary: only `Editing` may query or show a passive suggestion. `E` supplies
+the exact submitted command; `C` closes editing before command output or password/REPL/
+TUI input. History commits only from a validated `E -> C` transition. Outgoing PTY bytes,
+Enter, terminal silence, and replayed scrollback never establish a history boundary.
+Nonce validation limits accidental or child-process marker spoofing; it is not isolation
+against malicious same-user code, so invalid sequences always reset to `Unverified`.
+
+The per-session suggestion controller owns a monotonic prompt epoch and input revision.
+Every input/lifecycle change synchronously hides prior results. A result may render or be
+accepted only if session, epoch, revision, exact raw input, verified lifecycle, normal
+buffer, clean end-of-line state, and true-prefix relation still match. Passive mode never
+owns Tab, Enter, Escape, Ctrl+R, paste, or TUI keys. Acceptance sends only the remaining
+suffix through the normal PTY input path and never sends Ctrl+U, the existing prefix, or
+Enter. Fuzzy/non-prefix results belong to an explicitly focused accessible list.
+
+Cursor placement is isolated behind one fail-closed geometry adapter. It measures the
+xterm screen/cursor relative to the current terminal host, recomputes on cursor/output/
+resize/scroll/host-reparent events, clamps explicit lists to terminal bounds, and hides
+the ghost when validation fails. Proposed xterm decoration APIs are not a default
+dependency; adopting them requires a renderer/reflow spike and pinned compatibility.
+
+History stores exact raw commands separately from normalized search fields, remains
+local-only, and provides clear/disable controls. Desktop is the first support boundary;
+mobile direct-write paths remain explicitly unsupported until all input routes share the
+same controller.
+
 Notification selection also stays frontend-only. Native notification clicks
 publish a typed browser event keyed by the stable PTY `sessionId`;
 `WorkspacePage` consumes it because that page owns workspace mode, compact
