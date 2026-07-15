@@ -4,7 +4,10 @@ use std::{
     collections::HashMap,
     fs,
     io::Write,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -13,6 +16,8 @@ use rand::{rngs::OsRng, RngCore};
 use tempfile::{NamedTempFile, TempDir, TempPath};
 
 use super::shell_lifecycle::ShellLifecycle;
+
+static NEXT_LIFECYCLE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy)]
 enum Shell {
@@ -63,15 +68,13 @@ impl ShellIntegration {
         };
         let mut bytes = [0_u8; 24];
         OsRng.fill_bytes(&mut bytes);
-        let mut generation = [0_u8; 8];
-        OsRng.fill_bytes(&mut generation);
         Some(Self {
             init_file,
             init_dir,
             shell,
             lifecycle: Arc::new(Mutex::new(ShellLifecycle::new(
                 URL_SAFE_NO_PAD.encode(bytes),
-                u64::from_le_bytes(generation),
+                NEXT_LIFECYCLE_GENERATION.fetch_add(1, Ordering::Relaxed),
             ))),
         })
     }
@@ -95,5 +98,29 @@ impl ShellIntegration {
 
     pub fn lifecycle(&self) -> Arc<Mutex<ShellLifecycle>> {
         Arc::clone(&self.lifecycle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_generations_are_monotonic() {
+        let env = HashMap::from([("SHELL".into(), "/bin/zsh".into())]);
+        let first = ShellIntegration::prepare("", &env)
+            .unwrap()
+            .lifecycle()
+            .lock()
+            .unwrap()
+            .generation();
+        let second = ShellIntegration::prepare("", &env)
+            .unwrap()
+            .lifecycle()
+            .lock()
+            .unwrap()
+            .generation();
+
+        assert!(second > first);
     }
 }

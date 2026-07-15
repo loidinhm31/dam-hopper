@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import type { CombinedSearchResult } from "@/api/client.js";
 import { api } from "@/api/client.js";
 import { useCommandHistory } from "@/hooks/use-command-history.js";
+import { getProjectUsage } from "@/lib/command-history.js";
 
 const PROJECT_BOOST = 1.5;
 
@@ -30,7 +31,7 @@ export function useCommandSearch(projectType?: string, projectName?: string) {
         tags: [],
       },
       score:
-        projectName && r.entry.project === projectName
+        projectName && getProjectUsage(r.entry, projectName)
           ? r.score * PROJECT_BOOST
           : r.score,
       historyEntry: r.entry,
