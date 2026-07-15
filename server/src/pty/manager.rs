@@ -18,6 +18,8 @@ use crate::{
     pty::{
         event_sink::EventSink,
         session::{DeadSession, LiveSession, RespawnOpts, SessionMeta, SessionType},
+        shell_integration::ShellIntegration,
+        shell_lifecycle::{LifecycleEvent, LifecycleState, ShellLifecycle},
     },
 };
 
@@ -251,8 +253,12 @@ impl PtySessionManager {
             })
             .map_err(|e| AppError::PtyError(e.to_string()))?;
 
+        let integration = ShellIntegration::prepare(&opts.command, &opts.env);
         let mut cmd = build_command(&opts);
         apply_child_env(&mut cmd, &opts.env);
+        if let Some(integration) = &integration {
+            integration.apply(&mut cmd);
+        }
         // Log env keys only — values may contain secrets (API keys, tokens).
         debug!(id = %opts.id, env_keys = ?opts.env.keys().collect::<Vec<_>>(), "Spawning PTY");
         let session_id_for_diag = opts.id.clone();
@@ -293,15 +299,19 @@ impl PtySessionManager {
             opts.restart_policy,
         );
 
+        let lifecycle = integration.as_ref().map(ShellIntegration::lifecycle);
         let session = LiveSession::new(
             meta.clone(),
             pair.master,
             writer,
             child_killer,
             respawn_opts,
+            lifecycle,
+            integration,
         );
         let buffer = session.buffer_ref();
         let shutdown = session.shutdown_ref();
+        let lifecycle = session.lifecycle.clone();
 
         {
             let mut inner = self.inner.lock().unwrap();
@@ -386,6 +396,7 @@ impl PtySessionManager {
                     project_name,
                     rt_handle,
                     diag_store,
+                    lifecycle,
                 );
             })
             .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
@@ -405,6 +416,31 @@ impl PtySessionManager {
         session
             .write(data)
             .map_err(|e| AppError::PtyError(e.to_string()))
+    }
+
+    /// A replay or reattach has no trustworthy editing boundary. Require a new
+    /// marker handshake before clients may use automatic suggestions again.
+    pub fn reset_lifecycle(&self, id: &str) -> Result<(), AppError> {
+        let lifecycle = self
+            .inner
+            .lock()
+            .unwrap()
+            .live
+            .get(id)
+            .and_then(|session| session.lifecycle.clone())
+            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
+        let event = lifecycle.lock().unwrap().reset();
+        self.send_lifecycle_event(id, lifecycle.lock().unwrap().generation(), event);
+        Ok(())
+    }
+
+    fn send_lifecycle_event(&self, id: &str, generation: u64, event: LifecycleEvent) {
+        self.sink.send_terminal_lifecycle(
+            id,
+            lifecycle_name(event.state),
+            generation,
+            event.command.as_deref(),
+        );
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), AppError> {
@@ -769,6 +805,7 @@ fn reader_thread(
     project: Option<String>,
     rt_handle: Option<tokio::runtime::Handle>,
     diag_store: Option<DiagnosticStore>,
+    lifecycle: Option<Arc<Mutex<ShellLifecycle>>>,
 ) {
     // Local helper to record a terminal lifecycle event from the reader thread.
     let record_diag = |message: &str, mut fields: BTreeMap<String, String>| {
@@ -803,10 +840,34 @@ fn reader_thread(
             }
             Ok(n) => {
                 let data = &chunk[..n];
+                let visible_data = if let Some(lifecycle) = &lifecycle {
+                    let mut lifecycle = lifecycle.lock().unwrap();
+                    let generation = lifecycle.generation();
+                    if let Some(event) = lifecycle.observe_alternate_buffer(data) {
+                        sink.send_terminal_lifecycle(
+                            &session_id,
+                            lifecycle_name(event.state),
+                            generation,
+                            None,
+                        );
+                    }
+                    let (visible_data, events) = lifecycle.feed_visible(data);
+                    for event in events {
+                        sink.send_terminal_lifecycle(
+                            &session_id,
+                            lifecycle_name(event.state),
+                            generation,
+                            event.command.as_deref(),
+                        );
+                    }
+                    visible_data
+                } else {
+                    data.to_vec()
+                };
                 {
                     let mut buf = buffer.lock().unwrap();
-                    buf.push(data);
-                    bytes_since_snapshot += n;
+                    buf.push(&visible_data);
+                    bytes_since_snapshot += visible_data.len();
 
                     // Send buffer update to persist worker (if enabled)
                     // Throttle: only snapshot every 16KB to reduce memory churn from 1MB copies
@@ -827,11 +888,11 @@ fn reader_thread(
                         }
                     }
                 }
-                let data_str = String::from_utf8_lossy(data).into_owned();
+                let data_str = String::from_utf8_lossy(&visible_data).into_owned();
                 // Port forward: scan chunk for service startup messages (sync, ~µs).
                 if let (Some(pfm), Some(handle)) = (&port_forward_manager, &rt_handle) {
                     crate::port_forward::scan_chunk(
-                        data,
+                        &visible_data,
                         &session_id,
                         project.as_deref(),
                         pfm,
@@ -1138,6 +1199,7 @@ async fn respawn_internal(
         })
         .map_err(|e| AppError::PtyError(e.to_string()))?;
 
+    let integration = ShellIntegration::prepare(&opts.command, &opts.env);
     let mut build_cmd = if cfg!(target_os = "windows") {
         CommandBuilder::new("cmd.exe")
     } else if opts.command.is_empty() {
@@ -1157,6 +1219,9 @@ async fn respawn_internal(
 
     build_cmd.cwd(&opts.cwd);
     apply_child_env(&mut build_cmd, &opts.env);
+    if let Some(integration) = &integration {
+        integration.apply(&mut build_cmd);
+    }
 
     let child = pair
         .slave
@@ -1185,15 +1250,19 @@ async fn respawn_internal(
     meta.last_exit_at = Some(crate::pty::session::now_ms());
 
     let child_killer = child.clone_killer();
+    let lifecycle = integration.as_ref().map(ShellIntegration::lifecycle);
     let session = LiveSession::new(
         meta.clone(),
         pair.master,
         writer,
         child_killer,
         opts.clone(),
+        lifecycle,
+        integration,
     );
     let buffer = session.buffer_ref();
     let shutdown = session.shutdown_ref();
+    let lifecycle = session.lifecycle.clone();
 
     // Insert into live map — if session ID already exists (user called create
     // concurrently), this will replace it (same behavior as create()).
@@ -1249,6 +1318,7 @@ async fn respawn_internal(
                 project_name,
                 rt_handle,
                 diag_store,
+                lifecycle,
             );
         })
         .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
@@ -1263,6 +1333,17 @@ fn is_eof_error(e: &std::io::Error) -> bool {
             | std::io::ErrorKind::ConnectionReset
             | std::io::ErrorKind::UnexpectedEof
     )
+}
+
+fn lifecycle_name(state: LifecycleState) -> &'static str {
+    match state {
+        LifecycleState::Editing => "editing",
+        LifecycleState::Submitted => "submitted",
+        LifecycleState::Opaque => "opaque",
+        LifecycleState::Unverified | LifecycleState::Prompt | LifecycleState::Finished => {
+            "unverified"
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

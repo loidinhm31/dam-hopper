@@ -93,6 +93,44 @@ describe("WsTransport terminalAttach", () => {
   });
 });
 
+describe("WsTransport terminal lifecycle", () => {
+  it("delivers validated snapshots only to the matching session", () => {
+    installMockWebSocket();
+    const transport = new WsTransport("http://localhost:4800");
+    const received: unknown[] = [];
+    transport.onTerminalLifecycle("session-1", (event) => received.push(event));
+
+    sockets[0].onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:lifecycle",
+        id: "session-1",
+        lifecycle: "submitted",
+        generation: 3,
+        command: "git status",
+      }),
+    });
+    sockets[0].onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:lifecycle",
+        id: "session-1",
+        lifecycle: "editing",
+        generation: 3,
+        command: "must not be exposed",
+      }),
+    });
+
+    expect(received).toEqual([
+      {
+        id: "session-1",
+        lifecycle: "submitted",
+        generation: 3,
+        command: "git status",
+      },
+    ]);
+    transport.destroy();
+  });
+});
+
 describe("WsTransport commit message endpoints", () => {
   it("loads and edits the full commit message with root scope", async () => {
     installMockWebSocket();

@@ -235,6 +235,16 @@ pub enum ServerMsg {
         truncated: bool,
     },
 
+    /// Verified shell lifecycle only. The nonce is never serialized.
+    #[serde(rename = "terminal:lifecycle")]
+    TerminalLifecycle {
+        id: String,
+        lifecycle: String,
+        generation: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
+    },
+
     // Terminal exit — enhanced with restart metadata
     #[serde(rename = "terminal:exit")]
     TermExit {
@@ -499,6 +509,21 @@ mod tests {
         // Optional fields should not be present
         assert!(json_min.get("restartIn").is_none());
         assert!(json_min.get("restartCount").is_none());
+    }
+
+    #[test]
+    fn test_terminal_lifecycle_never_serializes_a_nonce() {
+        let msg = ServerMsg::TerminalLifecycle {
+            id: "session-1".into(),
+            lifecycle: "submitted".into(),
+            generation: 12,
+            command: Some("git status".into()),
+        };
+        let json = serde_json::to_value(msg).unwrap();
+        assert_eq!(json["kind"], "terminal:lifecycle");
+        assert_eq!(json["lifecycle"], "submitted");
+        assert_eq!(json["generation"], 12);
+        assert!(json.get("nonce").is_none());
     }
 
     #[test]

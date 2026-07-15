@@ -34,7 +34,7 @@ explicit history workflow.
 | # | Phase | Status | Progress | Effort | Link |
 |---|---|---|---:|---:|---|
 | 1 | Security containment + history privacy | Completed 2026-07-16 | 100% | 8h | [Phase 01](./phase-01-security-containment-and-history-privacy.md) |
-| 2 | Verified shell lifecycle integration | Pending | 0% | 16h | [Phase 02](./phase-02-shell-lifecycle-integration.md) |
+| 2 | Verified shell lifecycle integration | Completed 2026-07-16 | 100% | 16h | [Phase 02](./phase-02-shell-lifecycle-integration.md) |
 | 3 | Suggestion controller + history/search separation | Pending | 0% | 12h | [Phase 03](./phase-03-suggestion-controller-and-history-search.md) |
 | 4 | Ghost geometry + explicit history list | Pending | 0% | 14h | [Phase 04](./phase-04-ghost-geometry-and-explicit-history-list.md) |
 | 5 | Release validation, docs, rollout | Pending | 0% | 14h | [Phase 05](./phase-05-release-validation-documentation-and-rollout.md) |
@@ -91,3 +91,17 @@ must not merge automatic UI before lifecycle and controller gates pass.
 - Added local command-history clear/disable controls and exact-command storage.
 - Retained existing local history unchanged. No automatic purge or migration runs;
   users may clear it manually from Settings.
+
+### Phase 02 Completion
+
+**Completed:** 2026-07-16
+
+- Added per-incarnation, non-persisted lifecycle nonces and validated zsh/fish shell
+  adapters; unsupported shells, including bash, remain fail-closed.
+- Added a bounded OSC 633 parser that validates legal marker order, nonce, payload
+  size, and termination while preserving malformed marker bytes in terminal output.
+- Added typed lifecycle events that expose only lifecycle state, generation, and a
+  validated submitted command—never the nonce.
+- Reset lifecycle trust for replay/attach, respawn, malformed or oversized markers,
+  and alternate-buffer entry.
+- Validated focused lifecycle parser tests (7/7) and lifecycle protocol coverage.

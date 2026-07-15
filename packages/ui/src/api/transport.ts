@@ -5,6 +5,8 @@
  * All other modules use getTransport() to get the singleton.
  */
 
+import type { TerminalLifecycleEvent } from "./client.js";
+
 export interface Transport {
   /** Request/response — maps to fetch (REST) */
   invoke<T>(channel: string, data?: unknown): Promise<T>;
@@ -24,6 +26,12 @@ export interface Transport {
       restartIn?: number;
       restartCount?: number;
     }) => void,
+  ): () => void;
+
+  /** Verified shell lifecycle subscription (optional for non-WS transports). */
+  onTerminalLifecycle?(
+    id: string,
+    cb: (event: TerminalLifecycleEvent) => void,
   ): () => void;
 
   /** Process restart subscription (optional, not all transports support). */

@@ -19,6 +19,8 @@ use tracing::warn;
 
 use crate::config::schema::RestartPolicy;
 use crate::pty::buffer::ScrollbackBuffer;
+use crate::pty::shell_integration::ShellIntegration;
+use crate::pty::shell_lifecycle::ShellLifecycle;
 
 pub const SCROLLBACK_CAPACITY: usize = 1024 * 1024;
 
@@ -154,6 +156,10 @@ pub struct LiveSession {
 
     /// Snapshot of creation opts used to re-launch this session on restart (Phase 4).
     pub respawn_opts: RespawnOpts,
+    /// Ephemeral and intentionally excluded from serializable session metadata.
+    pub lifecycle: Option<Arc<Mutex<ShellLifecycle>>>,
+    /// Keeps the temporary adapter files alive for the child process lifetime.
+    pub shell_integration: Option<ShellIntegration>,
 }
 
 impl LiveSession {
@@ -163,6 +169,8 @@ impl LiveSession {
         writer: Box<dyn std::io::Write + Send>,
         child_killer: Box<dyn ChildKiller + Send + Sync>,
         respawn_opts: RespawnOpts,
+        lifecycle: Option<Arc<Mutex<ShellLifecycle>>>,
+        shell_integration: Option<ShellIntegration>,
     ) -> Self {
         Self {
             buffer: Arc::new(Mutex::new(ScrollbackBuffer::new(SCROLLBACK_CAPACITY))),
@@ -172,6 +180,8 @@ impl LiveSession {
             shutdown: Arc::new(AtomicBool::new(false)),
             meta,
             respawn_opts,
+            lifecycle,
+            shell_integration,
         }
     }
 
