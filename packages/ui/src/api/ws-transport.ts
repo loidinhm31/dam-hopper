@@ -12,6 +12,10 @@
  */
 
 import type { Transport } from "./transport.js";
+import type {
+  TerminalLifecycle,
+  TerminalLifecycleEvent,
+} from "./client.js";
 import { logger } from "@dam-hopper/shared/logger";
 import {
   buildAuthHeaders,
@@ -27,6 +31,59 @@ import type {
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 
 type Callback = (...args: unknown[]) => void;
+
+function parseTerminalLifecycleEvent(message: {
+  id?: unknown;
+  lifecycle?: unknown;
+  generation?: unknown;
+  command?: unknown;
+}): TerminalLifecycleEvent | null {
+  if (
+    typeof message.id !== "string" ||
+    !isTerminalLifecycle(message.lifecycle) ||
+    typeof message.generation !== "number" ||
+    !Number.isInteger(message.generation) ||
+    message.generation < 0
+  ) {
+    return null;
+  }
+
+  if (message.lifecycle === "submitted") {
+    if (message.command !== undefined && typeof message.command !== "string") {
+      return null;
+    }
+    return message.command === undefined
+      ? {
+          id: message.id,
+          lifecycle: message.lifecycle,
+          generation: message.generation,
+        }
+      : {
+          id: message.id,
+          lifecycle: message.lifecycle,
+          generation: message.generation,
+          command: message.command,
+        };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(message, "command")) {
+    return null;
+  }
+  return {
+    id: message.id,
+    lifecycle: message.lifecycle,
+    generation: message.generation,
+  };
+}
+
+function isTerminalLifecycle(value: unknown): value is TerminalLifecycle {
+  return (
+    value === "unverified" ||
+    value === "editing" ||
+    value === "submitted" ||
+    value === "opaque"
+  );
+}
 
 export type WsStatus = "connecting" | "connected" | "disconnected" | "error";
 
@@ -842,6 +899,11 @@ export class WsTransport implements Transport {
       }) => void
     >
   >();
+  /** sessionId → server-validated shell lifecycle callbacks */
+  private lifecycleListeners = new Map<
+    string,
+    Set<(event: TerminalLifecycleEvent) => void>
+  >();
   /** sub_id → overflow callbacks */
   private fsOverflowListeners = new Map<
     number,
@@ -1123,6 +1185,7 @@ export class WsTransport implements Transport {
     this.exitListeners.clear();
     this.exitEnhancedListeners.clear();
     this.restartListeners.clear();
+    this.lifecycleListeners.clear();
     this.fsOverflowListeners.clear();
     this.fsEventListeners.clear();
     this.failAllPending("transport destroyed");
@@ -1171,6 +1234,9 @@ export class WsTransport implements Transport {
         restartIn?: number;
         restartCount?: number;
         previousExitCode?: number | null;
+        lifecycle?: unknown;
+        generation?: unknown;
+        command?: unknown;
         payload?: unknown;
         req_id?: number;
         sub_id?: number;
@@ -1226,6 +1292,16 @@ export class WsTransport implements Transport {
               );
             }
             break;
+
+          case "terminal:lifecycle": {
+            const lifecycleEvent = parseTerminalLifecycleEvent(msg);
+            if (lifecycleEvent) {
+              this.lifecycleListeners
+                .get(lifecycleEvent.id)
+                ?.forEach((cb) => cb(lifecycleEvent));
+            }
+            break;
+          }
 
           case "terminal:exit":
             if (msg.id) {
@@ -1764,6 +1840,16 @@ export class WsTransport implements Transport {
     if (!this.bufferListeners.has(id)) this.bufferListeners.set(id, new Set());
     this.bufferListeners.get(id)!.add(cb);
     return () => this.bufferListeners.get(id)?.delete(cb);
+  }
+
+  onTerminalLifecycle(
+    id: string,
+    cb: (event: TerminalLifecycleEvent) => void,
+  ): () => void {
+    if (!this.lifecycleListeners.has(id))
+      this.lifecycleListeners.set(id, new Set());
+    this.lifecycleListeners.get(id)!.add(cb);
+    return () => this.lifecycleListeners.get(id)?.delete(cb);
   }
 
   // ── FS subscription methods ───────────────────────────────────────────────

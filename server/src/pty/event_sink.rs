@@ -6,6 +6,16 @@ pub trait EventSink: Send + Sync + 'static {
     fn send_terminal_data(&self, session_id: &str, data: &str);
     fn send_terminal_exit(&self, session_id: &str, exit_code: Option<i32>);
     fn send_terminal_changed(&self);
+    /// Lifecycle events deliberately omit the per-session nonce.
+    fn send_terminal_lifecycle(
+        &self,
+        session_id: &str,
+        state: &str,
+        generation: u64,
+        command: Option<&str>,
+    ) {
+        let _ = (session_id, state, generation, command);
+    }
     fn broadcast(&self, event_type: &str, payload: serde_json::Value);
 
     /// Enhanced terminal exit with restart metadata.
@@ -102,6 +112,25 @@ impl EventSink for BroadcastEventSink {
 
     fn send_terminal_changed(&self) {
         self.send_json(json!({ "kind": "terminal:changed", "payload": {} }));
+    }
+
+    fn send_terminal_lifecycle(
+        &self,
+        session_id: &str,
+        state: &str,
+        generation: u64,
+        command: Option<&str>,
+    ) {
+        let mut event = json!({
+            "kind": "terminal:lifecycle",
+            "id": session_id,
+            "lifecycle": state,
+            "generation": generation,
+        });
+        if let Some(command) = command {
+            event["command"] = json!(command);
+        }
+        self.send_json(event);
     }
 
     fn broadcast(&self, event_type: &str, payload: serde_json::Value) {

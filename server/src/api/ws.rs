@@ -303,6 +303,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         ),
                     ]),
                 );
+                // Scrollback is not a live shell boundary. Reset before replay so
+                // a newly attached browser cannot act on stale editing state.
+                let _ = state.pty_manager.reset_lifecycle(&id);
                 match state.pty_manager.get_buffer_with_offset(&id, from_offset) {
                     Ok(replay) => {
                         let msg = ServerMsg::TermBuffer {

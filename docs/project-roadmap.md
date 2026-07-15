@@ -4,10 +4,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Status Overview
 
-- **Current Phase:** Safe Inline Terminal Suggestions Phase 01 (completed)
-- **Last Milestone:** Contained unsafe terminal suggestions and added local-history privacy controls
-- **Total Phases Completed:** 19 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 5/5, terminal notification center 1/1, inline terminal suggestions 1/5 complete)
-- **Next Milestone:** Inline Terminal Suggestions Phase 02: verified shell lifecycle integration
+- **Current Phase:** Safe Inline Terminal Suggestions Phase 02 (completed)
+- **Last Milestone:** Added verified shell lifecycle integration with fail-closed adapters
+- **Total Phases Completed:** 20 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 5/5, terminal notification center 1/1, inline terminal suggestions 2/5 complete)
+- **Next Milestone:** Inline Terminal Suggestions Phase 03: suggestion controller and history/search separation
 
 ## Roadmap Phases
 
@@ -206,6 +206,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [ ] Multi-workspace management UI
 
 ## Recent Milestones
+
+- **2026-07-16:** Completed Safe Inline Terminal Suggestions Phase 02: Verified Shell Lifecycle Integration.
+  - ✅ Added per-PTY-incarnation nonce-backed lifecycle validation and zsh/fish launch adapters
+  - ✅ Added bounded OSC 633 parsing with legal transition checks, exact validated command capture, and malformed-byte preservation
+  - ✅ Broadcast lifecycle state/generation without serializing the nonce; reset trust on reattach, respawn, invalid markers, and TUI alternate buffers
+  - ✅ Kept bash and unsupported shells fail-closed pending a lossless exact-command adapter
+  - ✅ Validation passed: focused shell lifecycle parser tests (7/7) and lifecycle protocol coverage
 
 - **2026-07-16:** Completed Safe Inline Terminal Suggestions Phase 01: Security containment and history privacy.
   - ✅ Removed PTY-silence authorization, automatic overlay rendering, input interception, and automatic command recording
