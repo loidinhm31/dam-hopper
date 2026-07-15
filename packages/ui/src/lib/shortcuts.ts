@@ -4,6 +4,9 @@ export const DEFAULT_SEARCH_FILENAME_SHORTCUT = DOUBLE_SHIFT_SHORTCUT;
 export const DEFAULT_TERMINAL_WORKSPACE_SHORTCUT = "Mod+Shift+Backquote";
 export const DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT = "Mod+Shift+KeyE";
 export const DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT = "Alt+F1";
+export const DEFAULT_GIT_PANEL_SHORTCUT = "Mod+Shift+KeyG";
+export const DEFAULT_PORTS_PANEL_SHORTCUT = "Mod+Shift+KeyP";
+export const DEFAULT_FLEET_TERMINAL_SHORTCUT = "Mod+Shift+KeyM";
 export const EDITOR_ZOOM_WHEEL_SHORTCUT = "Mod+Wheel";
 
 const DOUBLE_SHIFT_MS = 450;

@@ -128,3 +128,50 @@ export function resolveTopToolToggle({
     revertMaximize: willActivate && bottomMaximized,
   };
 }
+
+export type TerminalPanelToolId = "git" | "ports" | "terminals";
+
+export interface TerminalPanelShortcutInput {
+  targetId: TerminalPanelToolId;
+  activeLeftBottomId: string | null;
+  activeRightTopId: string | null;
+  bottomMaximized: boolean;
+}
+
+export interface TerminalPanelShortcutOutcome {
+  nextActiveLeftBottomId: string | null;
+  nextActiveRightTopId: string | null;
+  nextBottomMaximized: boolean;
+}
+
+/**
+ * Toggle one of the keyboard-accessible terminal panels. Git and Ports share
+ * the left bottom slot; Fleet Terminal owns the right top slot. Only those
+ * three target IDs are made mutually exclusive—other tools remain intact.
+ */
+export function resolveTerminalPanelShortcut({
+  targetId,
+  activeLeftBottomId,
+  activeRightTopId,
+  bottomMaximized,
+}: TerminalPanelShortcutInput): TerminalPanelShortcutOutcome {
+  if (targetId === "terminals") {
+    const isActive = activeRightTopId === targetId;
+    return {
+      nextActiveLeftBottomId:
+        isActive || !["git", "ports"].includes(activeLeftBottomId ?? "")
+          ? activeLeftBottomId
+          : null,
+      nextActiveRightTopId: isActive ? null : targetId,
+      nextBottomMaximized: isActive ? false : bottomMaximized,
+    };
+  }
+
+  const isActive = activeLeftBottomId === targetId;
+  return {
+    nextActiveLeftBottomId: isActive ? null : targetId,
+    nextActiveRightTopId:
+      !isActive && activeRightTopId === "terminals" ? null : activeRightTopId,
+    nextBottomMaximized: isActive ? false : bottomMaximized,
+  };
+}

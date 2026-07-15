@@ -183,11 +183,14 @@ All features are enabled by default.
 
 ### UI Configuration
 
-The global UI config includes terminal workspace shortcuts and agent notification settings.
+The global UI config includes terminal workspace/panel shortcuts and agent notification settings.
 
 | Field                               | Type     | Default                   | Notes |
 | ----------------------------------- | -------- | ------------------------- | ----- |
 | terminal_workspace_shortcut         | string   | `Mod+Shift+Backquote`     | Global IDE/terminal mode toggle shortcut |
+| git_panel_shortcut                  | string   | `Mod+Shift+KeyG`          | Toggle the IDE Git panel |
+| ports_panel_shortcut                | string   | `Mod+Shift+KeyP`          | Toggle the IDE Ports panel |
+| fleet_terminal_shortcut             | string   | `Mod+Shift+KeyM`          | Toggle the IDE Fleet Terminal panel |
 | terminal_scroll_buttons_enabled     | bool     | `false`                   | Show floating Page Up/Down buttons in terminal |
 | terminal_agent_notifications_enabled | bool     | `false`                   | Enable browser notifications for terminal agent activity |
 | terminal_agent_notification_policy  | string   | `"always"`                | Notification policy for agent activity |
@@ -201,6 +204,9 @@ Example:
 ```toml
 [ui]
 terminal_workspace_shortcut = "Mod+Shift+Backquote"
+git_panel_shortcut = "Mod+Shift+KeyG"
+ports_panel_shortcut = "Mod+Shift+KeyP"
+fleet_terminal_shortcut = "Mod+Shift+KeyM"
 terminal_scroll_buttons_enabled = false
 terminal_agent_notifications_enabled = false
 terminal_agent_notification_policy = "always"
@@ -217,7 +223,7 @@ agent = "codex"
 enabled = true
 ```
 
-The shortcut is normalized by the client config layer. Browser notification permission is not persisted; it is requested per browser from Settings > Appearance > Terminal agent notifications.
+Shortcuts are normalized by the client config layer and can be captured/reset from Settings > Appearance > Keyboard Shortcuts. Git, Ports, and Fleet Terminal shortcuts toggle their target; opening one closes the other two target panels. Browser notification permission is not persisted; it is requested per browser from Settings > Appearance > Terminal agent notifications.
 
 Pattern rows are editable from the same Settings subsection:
 

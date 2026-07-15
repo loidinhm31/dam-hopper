@@ -73,6 +73,7 @@ import type { FsArborNode, PathSearchMatch, SearchMatch } from "@/api/fs-types.j
 import type { ToolWindowDef } from "@/types/ide.js";
 import type { MobileWorkspaceSurface } from "@/components/templates/MobileWorkspaceShell.js";
 import type { ActivateToolRequest } from "@/lib/reveal-active-file.js";
+import type { TerminalPanelToolId } from "@/lib/ide-shell-layout.js";
 import type { FileTreeRevealRequest } from "@/lib/file-tree-reveal.js";
 import { resolveRevealActiveFileOutcome } from "@/lib/reveal-active-file.js";
 import { scheduleTerminalFit } from "@/lib/terminal-fit-scheduler.js";
@@ -257,10 +258,13 @@ export default function WorkspacePage() {
     useState<ActivateToolRequest | null>(null);
   const [ideBottomToolRequest, setIdeBottomToolRequest] =
     useState<ActivateToolRequest | null>(null);
+  const [ideRightTopToolRequest, setIdeRightTopToolRequest] =
+    useState<ActivateToolRequest | null>(null);
   const [terminalFilePanelEditorFocusSignal, setTerminalFilePanelEditorFocusSignal] =
     useState(0);
   const [terminalLayoutRevision, setTerminalLayoutRevision] = useState(0);
   const revealRequestNonceRef = useRef(0);
+  const panelShortcutNonceRef = useRef(0);
   const terminalNotificationRevealNonceRef = useRef(0);
   const terminalNotificationActivationRef = useRef<() => void>(() => {});
   const isCompactWorkspace = useCompactWorkspace();
@@ -441,6 +445,11 @@ export default function WorkspacePage() {
   const terminalFilePanelShortcut = useSettingsStore(
     (s) => s.terminalFilePanelShortcut,
   );
+  const gitPanelShortcut = useSettingsStore((s) => s.gitPanelShortcut);
+  const portsPanelShortcut = useSettingsStore((s) => s.portsPanelShortcut);
+  const fleetTerminalShortcut = useSettingsStore(
+    (s) => s.fleetTerminalShortcut,
+  );
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const setTerminalFilePanelOpen = useCallback((open: boolean) => {
@@ -456,6 +465,23 @@ export default function WorkspacePage() {
     });
   }, []);
 
+  const activateTerminalPanelShortcut = useCallback(
+    (targetId: TerminalPanelToolId) => {
+      if (workspaceMode !== "ide" || isCompactWorkspace) return;
+      const request: ActivateToolRequest = {
+        nonce: ++panelShortcutNonceRef.current,
+        toolId: targetId === "terminals" ? "terminals" : targetId,
+        exclusiveTarget: targetId,
+      };
+      if (targetId === "terminals") {
+        setIdeRightTopToolRequest(request);
+      } else {
+        setIdeBottomToolRequest(request);
+      }
+    },
+    [isCompactWorkspace, workspaceMode],
+  );
+
   useDocumentKeyboardShortcut(searchTextShortcut, () => openSearch("content"));
   useDocumentKeyboardShortcut(searchFilenameShortcut, () =>
     openSearch("filename"),
@@ -464,6 +490,33 @@ export default function WorkspacePage() {
     if (workspaceMode !== "terminal" || isCompactWorkspace) return;
     toggleTerminalFilePanel();
   });
+  useEffect(
+    () =>
+      addKeyboardShortcutListener(
+        window,
+        () => gitPanelShortcut,
+        () => activateTerminalPanelShortcut("git"),
+      ),
+    [activateTerminalPanelShortcut, gitPanelShortcut],
+  );
+  useEffect(
+    () =>
+      addKeyboardShortcutListener(
+        window,
+        () => portsPanelShortcut,
+        () => activateTerminalPanelShortcut("ports"),
+      ),
+    [activateTerminalPanelShortcut, portsPanelShortcut],
+  );
+  useEffect(
+    () =>
+      addKeyboardShortcutListener(
+        window,
+        () => fleetTerminalShortcut,
+        () => activateTerminalPanelShortcut("terminals"),
+      ),
+    [activateTerminalPanelShortcut, fleetTerminalShortcut],
+  );
 
   const handleRevealActiveFile = useCallback(() => {
     const activePath =
@@ -502,6 +555,9 @@ export default function WorkspacePage() {
   const setWorkspaceMode = useCallback(
     (mode: WorkspaceMode) => {
       setWorkspaceModeState(mode);
+      setIdeLeftTopToolRequest(null);
+      setIdeBottomToolRequest(null);
+      setIdeRightTopToolRequest(null);
       setRequestedCompactSurface((current) =>
         resolveActiveCompactSurfaceId(
           current,
@@ -518,6 +574,9 @@ export default function WorkspacePage() {
   const toggleWorkspaceMode = useCallback(() => {
     setWorkspaceModeState((current) => {
       const next = current === "ide" ? "terminal" : "ide";
+      setIdeLeftTopToolRequest(null);
+      setIdeBottomToolRequest(null);
+      setIdeRightTopToolRequest(null);
       setRequestedCompactSurface((activeSurface) =>
         resolveActiveCompactSurfaceId(
           activeSurface,
@@ -1460,6 +1519,7 @@ export default function WorkspacePage() {
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}
           activateLeftTopToolRequest={ideLeftTopToolRequest}
           activateBottomToolRequest={ideBottomToolRequest}
+          activateRightTopToolRequest={ideRightTopToolRequest}
           editor={
             <Suspense fallback={<PanelFallback label="Loading editor…" />}>
               <EditorTabs project={projectName} />

@@ -341,6 +341,15 @@ fn default_terminal_file_panel_shortcut() -> String {
 fn default_reveal_active_file_shortcut() -> String {
     "Alt+F1".to_string()
 }
+fn default_git_panel_shortcut() -> String {
+    "Mod+Shift+KeyG".to_string()
+}
+fn default_ports_panel_shortcut() -> String {
+    "Mod+Shift+KeyP".to_string()
+}
+fn default_fleet_terminal_shortcut() -> String {
+    "Mod+Shift+KeyM".to_string()
+}
 fn default_mobile_custom_keyboard_font_size() -> u16 {
     11
 }
@@ -388,6 +397,15 @@ pub struct UiConfig {
         alias = "reveal_active_file_shortcut"
     )]
     pub reveal_active_file_shortcut: String,
+    #[serde(default = "default_git_panel_shortcut", alias = "git_panel_shortcut")]
+    pub git_panel_shortcut: String,
+    #[serde(default = "default_ports_panel_shortcut", alias = "ports_panel_shortcut")]
+    pub ports_panel_shortcut: String,
+    #[serde(
+        default = "default_fleet_terminal_shortcut",
+        alias = "fleet_terminal_shortcut"
+    )]
+    pub fleet_terminal_shortcut: String,
     #[serde(default = "default_true", alias = "terminal_suggestions_enabled")]
     pub terminal_suggestions_enabled: bool,
     #[serde(
@@ -467,6 +485,9 @@ impl Default for UiConfig {
             terminal_workspace_shortcut: default_terminal_workspace_shortcut(),
             terminal_file_panel_shortcut: default_terminal_file_panel_shortcut(),
             reveal_active_file_shortcut: default_reveal_active_file_shortcut(),
+            git_panel_shortcut: default_git_panel_shortcut(),
+            ports_panel_shortcut: default_ports_panel_shortcut(),
+            fleet_terminal_shortcut: default_fleet_terminal_shortcut(),
             terminal_suggestions_enabled: true,
             terminal_codex_notifications_enabled: false,
             explorer_show_hidden: false,

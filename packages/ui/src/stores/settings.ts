@@ -10,6 +10,9 @@ import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 import { withUiConfigDefaults } from "@/lib/ui-config.js";
 import {
   DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
+  DEFAULT_FLEET_TERMINAL_SHORTCUT,
+  DEFAULT_GIT_PANEL_SHORTCUT,
+  DEFAULT_PORTS_PANEL_SHORTCUT,
   DEFAULT_SEARCH_FILENAME_SHORTCUT,
   DEFAULT_SEARCH_TEXT_SHORTCUT,
   DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
@@ -59,6 +62,9 @@ interface PersistedSettingsState {
   terminalWorkspaceShortcut: string;
   terminalFilePanelShortcut: string;
   revealActiveFileShortcut: string;
+  gitPanelShortcut: string;
+  portsPanelShortcut: string;
+  fleetTerminalShortcut: string;
   terminalSuggestionsEnabled: boolean;
   terminalCodexNotificationsEnabled: boolean;
   terminalScrollButtonsEnabled: boolean;
@@ -95,6 +101,9 @@ function pickPersistedSettings(
     terminalWorkspaceShortcut: state.terminalWorkspaceShortcut,
     terminalFilePanelShortcut: state.terminalFilePanelShortcut,
     revealActiveFileShortcut: state.revealActiveFileShortcut,
+    gitPanelShortcut: state.gitPanelShortcut,
+    portsPanelShortcut: state.portsPanelShortcut,
+    fleetTerminalShortcut: state.fleetTerminalShortcut,
     terminalSuggestionsEnabled: state.terminalSuggestionsEnabled,
     terminalCodexNotificationsEnabled: state.terminalCodexNotificationsEnabled,
     terminalScrollButtonsEnabled: state.terminalScrollButtonsEnabled,
@@ -116,6 +125,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   terminalWorkspaceShortcut: DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
   terminalFilePanelShortcut: DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
   revealActiveFileShortcut: DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
+  gitPanelShortcut: DEFAULT_GIT_PANEL_SHORTCUT,
+  portsPanelShortcut: DEFAULT_PORTS_PANEL_SHORTCUT,
+  fleetTerminalShortcut: DEFAULT_FLEET_TERMINAL_SHORTCUT,
   terminalSuggestionsEnabled: true,
   terminalCodexNotificationsEnabled: false,
   terminalScrollButtonsEnabled: false,
@@ -140,6 +152,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         terminalWorkspaceShortcut: ui.terminalWorkspaceShortcut,
         terminalFilePanelShortcut: ui.terminalFilePanelShortcut,
         revealActiveFileShortcut: ui.revealActiveFileShortcut,
+        gitPanelShortcut: ui.gitPanelShortcut,
+        portsPanelShortcut: ui.portsPanelShortcut,
+        fleetTerminalShortcut: ui.fleetTerminalShortcut,
         terminalSuggestionsEnabled: ui.terminalSuggestionsEnabled ?? true,
         terminalCodexNotificationsEnabled:
           ui.terminalCodexNotificationsEnabled ??
@@ -182,6 +197,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.terminalFilePanelShortcut = partial.terminalFilePanelShortcut;
     if (partial.revealActiveFileShortcut !== undefined)
       clamped.revealActiveFileShortcut = partial.revealActiveFileShortcut;
+    if (partial.gitPanelShortcut !== undefined)
+      clamped.gitPanelShortcut = partial.gitPanelShortcut;
+    if (partial.portsPanelShortcut !== undefined)
+      clamped.portsPanelShortcut = partial.portsPanelShortcut;
+    if (partial.fleetTerminalShortcut !== undefined)
+      clamped.fleetTerminalShortcut = partial.fleetTerminalShortcut;
     if (partial.terminalSuggestionsEnabled !== undefined)
       clamped.terminalSuggestionsEnabled = partial.terminalSuggestionsEnabled;
     if (partial.terminalCodexNotificationsEnabled !== undefined)

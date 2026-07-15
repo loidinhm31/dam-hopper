@@ -8,6 +8,7 @@ import { matchesTerminalCopyShortcut } from "@/lib/browser-shortcut-guard.js";
 interface SharedTerminalKeyOptions {
   workspaceShortcut: string;
   revealActiveFileShortcut: string;
+  panelShortcuts?: string[];
   onCopySelection: () => void;
   onFind?: () => void;
   onNewTerminal?: () => void;
@@ -32,6 +33,7 @@ export function handleSharedTerminalKeyEvent(
   {
     workspaceShortcut,
     revealActiveFileShortcut,
+    panelShortcuts = [],
     onCopySelection,
     onFind,
     onNewTerminal,
@@ -49,7 +51,10 @@ export function handleSharedTerminalKeyEvent(
   if (
     event.type === "keydown" &&
     (matchesKeyboardShortcut(workspaceShortcut, event) ||
-      matchesKeyboardShortcut(revealActiveFileShortcut, event))
+      matchesKeyboardShortcut(revealActiveFileShortcut, event) ||
+      panelShortcuts.some((shortcut) =>
+        matchesKeyboardShortcut(shortcut, event),
+      ))
   ) {
     return false;
   }
