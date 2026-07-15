@@ -108,4 +108,54 @@ describe("TerminalRuntimeNavigatorItem", () => {
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(stopPropagation).toHaveBeenCalledOnce();
   });
+
+  it("routes a grouped runtime session title to its own session", () => {
+    const onOpenDiagnosticsMenu = vi.fn();
+    const tree = TerminalRuntimeNavigatorItem({
+      activeSessionId: "web",
+      dragState: null,
+      item: {
+        kind: "service-group",
+        id: "service:web",
+        groupId: "web",
+        label: "web",
+        sessions: [
+          {
+            kind: "session",
+            id: "session:worker",
+            groupId: "web",
+            sessionId: "worker",
+            label: "web:worker",
+            project: "web",
+            command: "worker",
+            startedAt: 1,
+            ports: [],
+          },
+        ],
+      },
+      onOpenDiagnosticsMenu,
+      onMoveItem: () => {},
+      onSetDragState: () => {},
+      onStartTunnel: async () => {},
+      onStopTunnel: async () => {},
+    });
+    const labelProps = findElementByClass(
+      tree,
+      "flex min-w-0 flex-1 items-center gap-2 text-left",
+    );
+
+    (labelProps?.onContextMenu as (event: {
+      clientX: number;
+      clientY: number;
+      preventDefault: () => void;
+      stopPropagation: () => void;
+    }) => void)({
+      clientX: 33,
+      clientY: 44,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    });
+
+    expect(onOpenDiagnosticsMenu).toHaveBeenCalledWith("worker", 33, 44);
+  });
 });
