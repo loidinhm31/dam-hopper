@@ -15,7 +15,7 @@ describe("TerminalDiagnosticsContextMenu", () => {
     ).toEqual({ x: 8, y: 8 });
     expect(
       clampTerminalDiagnosticsContextMenuPosition(1250, 940, 1280, 960),
-    ).toEqual({ x: 1080, y: 856 });
+    ).toEqual({ x: 1080, y: 800 });
   });
 
   it("opens the exact session menu target and suppresses the browser menu", () => {

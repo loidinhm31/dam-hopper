@@ -363,19 +363,17 @@ export default function WorkspacePage() {
     setTerminalDiagnosticsError(null);
   }, []);
 
-  useEffect(() => {
-    const target = terminalDiagnosticsMenuTarget;
-    if (!target) return;
-    const isSessionAvailable =
-      sessionMap.has(target.sessionId) ||
-      mountedSessions.some((session) => session.sessionId === target.sessionId);
-    if (!isSessionAvailable) closeTerminalDiagnosticsMenu();
-  }, [
-    closeTerminalDiagnosticsMenu,
-    mountedSessions,
-    sessionMap,
-    terminalDiagnosticsMenuTarget,
-  ]);
+  const terminalDiagnosticsTargetSession = terminalDiagnosticsMenuTarget
+    ? sessionMap.get(terminalDiagnosticsMenuTarget.sessionId)
+    : undefined;
+  const isTerminalDiagnosticsMenuTargetAvailable =
+    terminalDiagnosticsMenuTarget !== null &&
+    (terminalDiagnosticsTargetSession
+      ? terminalDiagnosticsTargetSession.alive
+      : mountedSessions.some(
+          (session) =>
+            session.sessionId === terminalDiagnosticsMenuTarget.sessionId,
+        ));
 
   const openTerminalDiagnosticsMenu = useCallback(
     (sessionId: string, x: number, y: number) => {
@@ -1470,7 +1468,7 @@ export default function WorkspacePage() {
         />
       )}
 
-      {terminalDiagnosticsMenuTarget && (
+      {terminalDiagnosticsMenuTarget && isTerminalDiagnosticsMenuTargetAvailable && (
         <TerminalDiagnosticsContextMenu
           x={terminalDiagnosticsMenuTarget.x}
           y={terminalDiagnosticsMenuTarget.y}
