@@ -35,7 +35,7 @@ explicit history workflow.
 |---|---|---|---:|---:|---|
 | 1 | Security containment + history privacy | Completed 2026-07-16 | 100% | 8h | [Phase 01](./phase-01-security-containment-and-history-privacy.md) |
 | 2 | Verified shell lifecycle integration | Completed 2026-07-16 | 100% | 16h | [Phase 02](./phase-02-shell-lifecycle-integration.md) |
-| 3 | Suggestion controller + history/search separation | Pending | 0% | 12h | [Phase 03](./phase-03-suggestion-controller-and-history-search.md) |
+| 3 | Suggestion controller + history/search separation | Completed 2026-07-16 05:07 +07 (review approved) | 100% | 12h | [Phase 03](./phase-03-suggestion-controller-and-history-search.md) |
 | 4 | Ghost geometry + explicit history list | Pending | 0% | 14h | [Phase 04](./phase-04-ghost-geometry-and-explicit-history-list.md) |
 | 5 | Release validation, docs, rollout | Pending | 0% | 14h | [Phase 05](./phase-05-release-validation-documentation-and-rollout.md) |
 
@@ -105,3 +105,8 @@ must not merge automatic UI before lifecycle and controller gates pass.
 - Reset lifecycle trust for replay/attach, respawn, malformed or oversized markers,
   and alternate-buffer entry.
 - Validated focused lifecycle parser tests (7/7) and lifecycle protocol coverage.
+
+### Phase 03 Completion
+
+**Completed:** 2026-07-16 05:07 +07
+**Review:** Approved

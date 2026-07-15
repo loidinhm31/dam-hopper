@@ -825,6 +825,9 @@ fn reader_thread(
     // only server restart loses buffer for short sessions like quick commands or failed builds).
     let mut bytes_since_snapshot = 0usize;
     const SNAPSHOT_THRESHOLD: usize = 16 * 1024; // 16KB
+                                                 // Marker-only chunks must not announce editing before prompt bytes exist.
+    let mut pending_lifecycle_events: Vec<(u64, LifecycleEvent)> = Vec::new();
+    let mut visible_output_since_boundary = false;
 
     loop {
         if shutdown.load(Ordering::Relaxed) {
@@ -844,22 +847,11 @@ fn reader_thread(
                     let mut lifecycle = lifecycle.lock().unwrap();
                     let generation = lifecycle.generation();
                     if let Some(event) = lifecycle.observe_alternate_buffer(data) {
-                        sink.send_terminal_lifecycle(
-                            &session_id,
-                            lifecycle_name(event.state),
-                            generation,
-                            None,
-                        );
+                        pending_lifecycle_events.push((generation, event));
                     }
                     let (visible_data, events) = lifecycle.feed_visible(data);
-                    for event in events {
-                        sink.send_terminal_lifecycle(
-                            &session_id,
-                            lifecycle_name(event.state),
-                            generation,
-                            event.command.as_deref(),
-                        );
-                    }
+                    pending_lifecycle_events
+                        .extend(events.into_iter().map(|event| (generation, event)));
                     visible_data
                 } else {
                     data.to_vec()
@@ -899,7 +891,13 @@ fn reader_thread(
                         handle,
                     );
                 }
-                sink.send_terminal_data(&session_id, &data_str);
+                send_visible_output_then_lifecycle(
+                    sink.as_ref(),
+                    &session_id,
+                    &data_str,
+                    &mut pending_lifecycle_events,
+                    &mut visible_output_since_boundary,
+                );
             }
             Err(e) if is_eof_error(&e) => {
                 debug!(id = %session_id, "PTY reader: connection closed");
@@ -1095,6 +1093,40 @@ fn reader_thread(
     if emit_exit {
         sink.send_terminal_exit(&session_id, Some(exit_code));
         sink.send_terminal_changed();
+    }
+}
+
+/// Delivers prompt/output bytes before their validated lifecycle snapshots.
+/// Empty output is never sent and cannot flush a pending editing boundary.
+pub(crate) fn send_visible_output_then_lifecycle(
+    sink: &dyn EventSink,
+    session_id: &str,
+    visible_data: &str,
+    pending_events: &mut Vec<(u64, LifecycleEvent)>,
+    visible_output_since_boundary: &mut bool,
+) {
+    if !visible_data.is_empty() {
+        sink.send_terminal_data(session_id, visible_data);
+        *visible_output_since_boundary = true;
+    }
+    let ready_count = pending_events
+        .iter()
+        .position(|(_, event)| match event.state {
+            LifecycleState::Unverified => {
+                *visible_output_since_boundary = false;
+                false
+            }
+            LifecycleState::Editing => visible_data.is_empty() && !*visible_output_since_boundary,
+            _ => false,
+        })
+        .unwrap_or(pending_events.len());
+    for (generation, event) in pending_events.drain(..ready_count) {
+        sink.send_terminal_lifecycle(
+            session_id,
+            lifecycle_name(event.state),
+            generation,
+            event.command.as_deref(),
+        );
     }
 }
 

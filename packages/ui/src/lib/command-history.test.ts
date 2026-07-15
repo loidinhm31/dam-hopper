@@ -4,6 +4,7 @@ import {
   getHistory,
   isHistoryEnabled,
   recordCommand,
+  searchHistory,
   setHistoryEnabled,
 } from "./command-history.js";
 
@@ -43,6 +44,7 @@ describe("command history privacy", () => {
       expect.objectContaining({
         command: "  git   commit -m 'keep spacing'  ",
         project: "web",
+        searchText: "  git   commit -m 'keep spacing'  ",
       }),
     ]);
   });
@@ -75,4 +77,52 @@ describe("command history privacy", () => {
     expect(getHistory()).toEqual([]);
   });
 
+  it("retains legacy records in memory until a verified command writes v2", () => {
+    const legacy = [
+      { command: "git status", lastUsedAt: 1, useCount: 1, project: "web" },
+    ];
+    localStorage.setItem(entriesKey, JSON.stringify(legacy));
+
+    expect(getHistory()[0]).toMatchObject({
+      command: "git status",
+      id: expect.stringMatching(/^v2-/),
+      projectUsage: { web: { lastUsedAt: 1, useCount: 1 } },
+    });
+    expect(localStorage.getItem(entriesKey)).toBe(JSON.stringify(legacy));
+
+    recordCommand("git status", "api");
+    expect(JSON.parse(localStorage.getItem(entriesKey) ?? "{}")).toMatchObject({
+      version: 2,
+      entries: [
+        expect.objectContaining({
+          projectUsage: expect.objectContaining({ api: expect.any(Object) }),
+        }),
+      ],
+    });
+  });
+
+  it("ranks exact raw prefixes ahead of normalized token matches", () => {
+    recordCommand("git status", "web");
+    recordCommand("status --short", "web");
+    recordCommand("git café", "web");
+
+    expect(searchHistory("git s")[0]?.entry.command).toBe("git status");
+    expect(searchHistory("CAFÉ")[0]?.entry.command).toBe("git café");
+  });
+
+  it("keeps usage for each project without changing exact command identity", () => {
+    recordCommand("pnpm test", "web");
+    recordCommand("pnpm test", "server");
+
+    expect(getHistory()).toEqual([
+      expect.objectContaining({
+        command: "pnpm test",
+        useCount: 2,
+        projectUsage: expect.objectContaining({
+          web: expect.any(Object),
+          server: expect.any(Object),
+        }),
+      }),
+    ]);
+  });
 });

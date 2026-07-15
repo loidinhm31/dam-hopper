@@ -1,8 +1,18 @@
+export interface ProjectUsage {
+  lastUsedAt: number;
+  useCount: number;
+}
+
 export interface CommandHistoryEntry {
+  id: string;
+  /** Exact command as emitted by a verified shell lifecycle marker. */
   command: string;
+  /** Derived only for search; never used to reconstruct or transmit a command. */
+  searchText: string;
   lastUsedAt: number;
   useCount: number;
   project?: string;
+  projectUsage: Record<string, ProjectUsage>;
 }
 
 export interface HistorySearchResult {
@@ -10,92 +20,75 @@ export interface HistorySearchResult {
   score: number;
 }
 
-const K1 = 1.2;
-const B = 0.75;
+type StoredHistory = { version: 2; entries: unknown[] };
+type LegacyEntry = Partial<CommandHistoryEntry> & {
+  command?: unknown;
+  lastUsedAt?: unknown;
+  useCount?: unknown;
+  project?: unknown;
+};
+
 const STORAGE_KEY = "dam-hopper:command-history";
 const HISTORY_ENABLED_STORAGE_KEY = "dam-hopper:command-history-enabled";
 const MAX_ENTRIES = 1000;
-// 0.01 chosen empirically: compositeScore = bm25 * recency * freq; with 30-day decay
-// a command used once 31+ days ago scores ~bm25 * 1.05 * 1 ≈ 0.02–0.1 for a weak match.
-// Below 0.01 the BM25 token overlap is so partial the result would be noise.
-const MIN_SCORE_THRESHOLD = 0.01;
 const DECAY_DAYS = 30;
 
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((t) => t.length >= 2);
-}
-
-function computeDocFrequency(
-  queryTokens: string[],
-  allTokenized: string[][],
-): Map<string, number> {
-  const df = new Map<string, number>();
-  for (const docTokens of allTokenized) {
-    const counted = new Set<string>();
-    for (const t of docTokens) {
-      for (const qt of queryTokens) {
-        // Count exact matches and prefix matches (e.g. "hel" matches "hello")
-        if ((t === qt || t.startsWith(qt)) && !counted.has(qt)) {
-          df.set(qt, (df.get(qt) ?? 0) + 1);
-          counted.add(qt);
-        }
-      }
-    }
+function stableId(command: string): string {
+  let value = 2166136261;
+  for (const char of command) {
+    value ^= char.codePointAt(0) ?? 0;
+    value = Math.imul(value, 16777619);
   }
-  return df;
+  return `v2-${(value >>> 0).toString(36)}`;
 }
 
-function bm25Score(
-  queryTokens: string[],
-  docTokens: string[],
-  avgDocLen: number,
-  df: Map<string, number>,
-  N: number,
-): number {
-  const tf = new Map<string, number>();
-  for (const t of docTokens) tf.set(t, (tf.get(t) ?? 0) + 1);
-
-  let score = 0;
-  for (const qt of queryTokens) {
-    let freq = tf.get(qt) ?? 0;
-    let prefixOnly = false;
-    if (freq === 0) {
-      // Prefix match: "hel" matches doc tokens like "hello", "help"
-      for (const [token, count] of tf) {
-        if (token.startsWith(qt)) freq += count;
-      }
-      if (freq > 0) prefixOnly = true;
-    }
-    if (freq === 0) continue;
-    const n = df.get(qt) ?? 0;
-    const idf = Math.log((N - n + 0.5) / (n + 0.5) + 1);
-    const num = freq * (K1 + 1);
-    const denom = freq + K1 * (1 - B + B * (docTokens.length / avgDocLen));
-    // Prefix matches score at 70% of an exact match
-    score += idf * (num / denom) * (prefixOnly ? 0.7 : 1.0);
-  }
-  return score;
+function toSearchText(command: string): string {
+  return command.normalize("NFKC").toLocaleLowerCase();
 }
 
-function recencyBoost(lastUsedAt: number): number {
-  const ageDays = (Date.now() - lastUsedAt) / (1000 * 60 * 60 * 24);
-  return Math.exp(-ageDays / DECAY_DAYS);
+function tokens(text: string): string[] {
+  return toSearchText(text).match(/[\p{L}\p{N}]+/gu) ?? [];
 }
 
-function freqBoost(useCount: number): number {
-  return Math.log2(useCount + 1);
-}
-
-function compositeScore(
-  bm25: number,
-  entry: CommandHistoryEntry,
-  applyRecency = true,
-): number {
-  const recency = applyRecency ? 1 + recencyBoost(entry.lastUsedAt) : 1;
-  return bm25 * recency * (1 + freqBoost(entry.useCount));
+function toEntry(value: LegacyEntry): CommandHistoryEntry | null {
+  if (
+    typeof value.command !== "string" ||
+    typeof value.lastUsedAt !== "number" ||
+    typeof value.useCount !== "number"
+  )
+    return null;
+  const project = typeof value.project === "string" ? value.project : undefined;
+  const projectUsage =
+    value.projectUsage && typeof value.projectUsage === "object"
+      ? (Object.fromEntries(
+          Object.entries(value.projectUsage).filter(
+            ([, usage]) =>
+              typeof usage === "object" &&
+              usage !== null &&
+              typeof (usage as ProjectUsage).lastUsedAt === "number" &&
+              typeof (usage as ProjectUsage).useCount === "number",
+          ),
+        ) as Record<string, ProjectUsage>)
+      : project
+        ? {
+            [project]: {
+              lastUsedAt: value.lastUsedAt,
+              useCount: value.useCount,
+            },
+          }
+        : {};
+  return {
+    id: typeof value.id === "string" ? value.id : stableId(value.command),
+    command: value.command,
+    searchText:
+      typeof value.searchText === "string"
+        ? value.searchText
+        : toSearchText(value.command),
+    lastUsedAt: value.lastUsedAt,
+    useCount: value.useCount,
+    project,
+    projectUsage,
+  };
 }
 
 function loadEntries(): CommandHistoryEntry[] {
@@ -103,13 +96,15 @@ function loadEntries(): CommandHistoryEntry[] {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (e): e is CommandHistoryEntry =>
-        typeof (e as CommandHistoryEntry)?.command === "string" &&
-        typeof (e as CommandHistoryEntry)?.useCount === "number" &&
-        typeof (e as CommandHistoryEntry)?.lastUsedAt === "number",
-    );
+    const values = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray((parsed as StoredHistory)?.entries)
+        ? (parsed as StoredHistory).entries
+        : [];
+    return values.flatMap((value) => {
+      const entry = toEntry(value as LegacyEntry);
+      return entry ? [entry] : [];
+    });
   } catch {
     return [];
   }
@@ -117,13 +112,12 @@ function loadEntries(): CommandHistoryEntry[] {
 
 function saveEntries(entries: CommandHistoryEntry[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, entries }));
   } catch {
-    // QuotaExceededError or SecurityError in private browsing — silent degrade
+    // Quota or privacy failures intentionally leave command persistence disabled.
   }
 }
 
-/** Returns false when storage is unavailable so command capture fails closed. */
 export function isHistoryEnabled(): boolean {
   try {
     return localStorage.getItem(HISTORY_ENABLED_STORAGE_KEY) !== "false";
@@ -141,87 +135,85 @@ export function setHistoryEnabled(enabled: boolean): void {
 }
 
 export function recordCommand(command: string, project?: string): void {
-  if (!isHistoryEnabled() || !command.trim()) return;
-
+  if (!isHistoryEnabled() || !command) return;
+  const now = Date.now();
   const entries = loadEntries();
-  const existing = entries.find((e) => e.command === command);
-
-  if (existing) {
-    existing.lastUsedAt = Date.now();
-    existing.useCount += 1;
-    if (project) existing.project = project;
+  const entry = entries.find((candidate) => candidate.command === command);
+  if (entry) {
+    entry.lastUsedAt = now;
+    entry.useCount += 1;
+    if (project) {
+      entry.project = project;
+      const usage = entry.projectUsage[project] ?? {
+        lastUsedAt: now,
+        useCount: 0,
+      };
+      entry.projectUsage[project] = {
+        lastUsedAt: now,
+        useCount: usage.useCount + 1,
+      };
+    }
   } else {
     entries.push({
+      id: stableId(command),
       command,
-      lastUsedAt: Date.now(),
+      searchText: toSearchText(command),
+      lastUsedAt: now,
       useCount: 1,
       project,
+      projectUsage: project
+        ? { [project]: { lastUsedAt: now, useCount: 1 } }
+        : {},
     });
   }
-
-  if (entries.length > MAX_ENTRIES) {
-    entries.sort((a, b) => b.lastUsedAt - a.lastUsedAt);
-    entries.splice(MAX_ENTRIES);
-  }
-
-  saveEntries(entries);
+  entries.sort((left, right) => right.lastUsedAt - left.lastUsedAt);
+  saveEntries(entries.slice(0, MAX_ENTRIES));
 }
 
+function score(entry: CommandHistoryEntry, queryTokens: string[]): number {
+  const entryTokens = tokens(entry.searchText);
+  const matches = queryTokens.reduce(
+    (count, query) =>
+      count + Number(entryTokens.some((token) => token.startsWith(query))),
+    0,
+  );
+  if (!matches) return 0;
+  const ageDays = (Date.now() - entry.lastUsedAt) / 86_400_000;
+  return (
+    (matches / queryTokens.length) *
+    (1 + Math.exp(-ageDays / DECAY_DAYS)) *
+    (1 + Math.log2(entry.useCount + 1))
+  );
+}
+
+/** Shared ranking: exact raw prefixes win; normalized Unicode tokens rank the rest. */
 export function searchHistory(query: string, limit = 5): HistorySearchResult[] {
-  const q = query.trim();
-  if (!q) return [];
+  if (!query) return [];
+  const queryTokens = tokens(query);
+  const results = loadEntries().flatMap((entry) => {
+    const prefix = entry.command.startsWith(query);
+    const rank = prefix
+      ? 10_000 + score(entry, queryTokens)
+      : score(entry, queryTokens);
+    return rank > 0 ? [{ entry, score: rank }] : [];
+  });
+  return results
+    .sort((left, right) => right.score - left.score)
+    .slice(0, limit);
+}
 
-  const entries = loadEntries();
-  if (entries.length === 0) return [];
-
-  const queryTokens = tokenize(q);
-  if (queryTokens.length === 0) return [];
-
-  const allTokenized = entries.map((e) => tokenize(e.command));
-  const totalLen = allTokenized.reduce((sum, t) => sum + t.length, 0);
-  const avgDocLen = totalLen / entries.length;
-  const df = computeDocFrequency(queryTokens, allTokenized);
-  const N = entries.length;
-
-  // First pass: score with recency decay, retain raw bm25 for potential fallback reuse
-  type RawScored = { entry: CommandHistoryEntry; bm25: number; score: number };
-  const rawScored: RawScored[] = [];
-  for (let i = 0; i < entries.length; i++) {
-    const docTokens = allTokenized[i]!;
-    const bm25 = bm25Score(queryTokens, docTokens, avgDocLen, df, N);
-    if (bm25 === 0) continue;
-    rawScored.push({
-      entry: entries[i]!,
-      bm25,
-      score: compositeScore(bm25, entries[i]!),
-    });
-  }
-
-  rawScored.sort((a, b) => b.score - a.score);
-  const topResults = rawScored.slice(0, limit);
-
-  // Fallback: if all results are below threshold (matches are very old), re-score without
-  // recency decay so old-but-relevant commands still surface. Reuses first-pass bm25.
-  if (
-    topResults.length === 0 ||
-    topResults.every((r) => r.score < MIN_SCORE_THRESHOLD)
-  ) {
-    const fallback: HistorySearchResult[] = rawScored.map((r) => ({
-      entry: r.entry,
-      score: compositeScore(r.bm25, r.entry, false),
-    }));
-    fallback.sort((a, b) => b.score - a.score);
-    return fallback.slice(0, limit);
-  }
-
-  return topResults.map(({ entry, score }) => ({ entry, score }));
+export function getProjectUsage(
+  entry: CommandHistoryEntry,
+  project: string,
+): ProjectUsage | undefined {
+  return entry.projectUsage[project];
 }
 
 export function clearHistory(): void {
   try {
     localStorage.removeItem(STORAGE_KEY);
   } catch {
-    // ignore
+    /* intentionally ignored */
   }
 }
 

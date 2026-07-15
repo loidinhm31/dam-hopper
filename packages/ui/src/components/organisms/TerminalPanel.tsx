@@ -208,8 +208,10 @@ export function TerminalPanel({
     let unsubExit: (() => void) | null = null;
     let unsubRestart: (() => void) | null = null;
     let unsubBuffer: (() => void) | null = null;
+    let unsubLifecycle: (() => void) | null = null;
     let unsubStatus: (() => void) | null = null;
     let inputDisposable: { dispose: () => void } | null = null;
+    let releaseCompositionGuards = () => {};
     let agentNotifications: TerminalAgentNotificationIntegration | null = null;
     let observer: ResizeObserver | null = null;
     let attachTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -240,13 +242,14 @@ export function TerminalPanel({
     });
 
     // ── Register all listeners immediately to avoid race conditions ──────────
-    // 1. Stream PTY output → xterm + notify suggestion detector
+    // 1. Stream PTY output → xterm + invalidate the suggestion controller.
+    // Output alone never establishes a shell prompt or command boundary.
     unsubData = transport.onTerminalData(safeSessionId, (data) => {
       // Only write stream data if we've already handled the initial buffer
       if (hasBufferBeenWritten) {
         term.write(data);
         lastServerOffset += utf8ByteLength(data);
-        suggestionsRef.current.notifyOutput();
+        suggestionsRef.current.handleOutput();
         agentNotifications?.onOutput();
       } else if (!recordedSuppressedOutput) {
         recordedSuppressedOutput = true;
@@ -263,9 +266,17 @@ export function TerminalPanel({
       }
     });
 
+    // 1a. Only the server's nonce-validated lifecycle may establish an
+    // editable command boundary. PTY output and outgoing input stay passive.
+    unsubLifecycle =
+      transport.onTerminalLifecycle?.(safeSessionId, (event) => {
+        suggestionsRef.current.handleLifecycle(event);
+      }) ?? null;
+
     // 2. Handle PTY buffer (response to terminal:attach)
     if (transport.onTerminalBuffer) {
       unsubBuffer = transport.onTerminalBuffer(safeSessionId, (replay) => {
+        suggestionsRef.current.handleReplay();
         lastServerOffset = applyTerminalBufferReplay(term, replay);
         recordClientDiagnostic("transport", "terminal-panel", "buffer_replay", {
           sessionId: safeSessionId,
@@ -300,6 +311,7 @@ export function TerminalPanel({
     // 4. Handle process restart event
     unsubRestart =
       transport.onProcessRestarted?.(safeSessionId, (restartEvent) => {
+        suggestionsRef.current.handleReplay();
         const { restartCount } = restartEvent;
         term.write(`\x1b[33m[Process restarted (#${restartCount})]\x1b[0m\r\n`);
       }) ?? null;
@@ -312,6 +324,15 @@ export function TerminalPanel({
         transport.terminalWrite(safeSessionId, result.data);
       }
     });
+    const textarea = term.textarea;
+    const suppressComposition = () =>
+      suggestionsRef.current.handleComposition();
+    textarea?.addEventListener("compositionstart", suppressComposition);
+    textarea?.addEventListener("paste", suppressComposition);
+    releaseCompositionGuards = () => {
+      textarea?.removeEventListener("compositionstart", suppressComposition);
+      textarea?.removeEventListener("paste", suppressComposition);
+    };
 
     const titleDisposable = term.onTitleChange((title) => {
       agentNotifications?.onTitleChange(title);
@@ -376,6 +397,7 @@ export function TerminalPanel({
 
     // Helper: Attach to existing session
     const attachToSession = (fromOffset?: number) => {
+      suggestionsRef.current.handleReplay();
       setAttachState("attaching");
       recordClientDiagnostic("transport", "terminal-panel", "terminal.attach", {
         sessionId: safeSessionId,
@@ -515,8 +537,10 @@ export function TerminalPanel({
       unsubExit?.();
       unsubRestart?.();
       unsubBuffer?.();
+      unsubLifecycle?.();
       unsubStatus?.();
       inputDisposable?.dispose();
+      releaseCompositionGuards();
       titleDisposable.dispose();
       agentNotifications?.dispose();
       clearAttachTimeout();
