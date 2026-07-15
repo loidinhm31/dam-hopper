@@ -7,6 +7,7 @@ import {
 } from "@/lib/terminal-notification-signal-parser.js";
 import { dispatchTerminalNotificationSelection } from "@/lib/terminal-notification-navigation.js";
 import { useSettingsStore } from "@/stores/settings.js";
+import { useTerminalNotificationsStore } from "@/stores/terminal-notifications.js";
 
 type Disposable = { dispose: () => void };
 const CODEX_OSC9_RATE_LIMIT_MS = 1_000;
@@ -44,6 +45,7 @@ export function attachTerminalAgentNotifications({
     },
   });
   const notifyTerminalAgent = (event: TerminalAgentNotification) => {
+    useTerminalNotificationsStore.getState().addNotification(event);
     notificationService.notifyTerminalAgent(event, {
       enabled: useSettingsStore.getState().terminalCodexNotificationsEnabled,
       rateLimitMs: CODEX_OSC9_RATE_LIMIT_MS,

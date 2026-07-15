@@ -1,189 +1,115 @@
-# Shell lifecycle and marker security research
+# Shell Lifecycle and Marker Security Research
 
 Date: 2026-07-16  
 Scope: desktop Inline Terminal Suggestions; lifecycle integration only
 
 ## Recommendation
 
-Adopt shell injection for bash, zsh, fish, and PowerShell, emitting OSC 633-compatible
-lifecycle markers plus a Dam Hopper per-session nonce extension. Suggestions are enabled
-only in a verified `Editing` state. Anything unsupported, ambiguous, nested, remote, or
-out of sequence fails closed to an explicitly opened history picker.
+Adopt supported-shell injection that emits OSC 633-compatible lifecycle markers plus a
+Dam Hopper per-PTY-incarnation nonce. Suggestions are enabled only in verified `Editing`.
+Unsupported, ambiguous, nested, remote, replayed, or invalid sessions fail closed to an
+explicitly opened history picker.
 
-Do not treat bare OSC 133/633 as a security boundary. Any foreground process can write
-terminal escape sequences. The protocol is semantic metadata; nonce validation limits
-accidental/child spoofing, while a same-user malicious process remains outside the
-defended boundary.
+Bare OSC markers are not a security boundary: any foreground process can emit terminal
+sequences. Nonce validation limits accidental/child spoofing; malicious same-user code is
+outside this portable design's defended boundary.
 
-## Protocol semantics
+## Protocol Contract
 
-Official sequence meanings are consistent across FinalTerm-style OSC 133 and VS Code's
-extended OSC 633:
-
-| Sequence | Meaning | Suggestion state |
+| Sequence | Meaning | State effect |
 |---|---|---|
-| `A` | prompt starts | preparing; still hidden |
-| `B` | prompt ends / command-line editing starts | `Editing`, if verified |
-| `E;<commandline>;<nonce>` | exact command interpreted by shell | verify/capture candidate history |
-| `C` | pre-execution / output starts | immediately `Executing`; suppress input capture |
-| `D;<exitcode>` | execution finished | not editable until next verified `A` then `B` |
+| `A` | prompt starts | preparing; hidden |
+| `B` | prompt ends/editing starts | `Editing` after verification |
+| `E;<command>;<nonce>` | shell accepted exact command | validate/capture candidate |
+| `C` | execution/output starts | immediately `Opaque` |
+| `D;<exit>` | execution finished | wait for fresh `A -> B` |
 
-OSC 633 `E` is materially better than reconstructing input: it carries the exact shell
-command and supports an optional nonce specifically intended to prevent command spoofing.
-VS Code calls the ideal order `A, B, E, C, D`; OSC 133 lacks `E` and nonce, so it should
-be accepted only as reduced-quality metadata, never for automatic history capture.
+Ideal order is `A, B, E, C, D`. OSC 633 `E` is preferable to reconstructed input because
+it carries the exact command and optional nonce. OSC 133 lacks `E`/nonce and must not
+authorize automatic history capture.
 
-Sources:
+Primary sources:
 
 - [VS Code Terminal Shell Integration](https://code.visualstudio.com/docs/terminal/shell-integration)
-- [Windows Terminal shell integration / OSC 133](https://learn.microsoft.com/en-us/windows/terminal/tutorials/shell-integration)
+- [Windows Terminal OSC 133 integration](https://learn.microsoft.com/en-us/windows/terminal/tutorials/shell-integration)
 
-## Password and opaque-input boundary
+## Password and Opaque-Input Boundary
 
-The safety boundary is `C`, not output silence. Once the shell accepts a command, emit
-nonce-validated `E`, then `C` before it executes. From `C` until a valid completion/prompt
-transition, every keystroke is opaque and must bypass suggestions/history.
+`C`, not output silence, closes editing. From `C` until the next verified prompt, every
+keystroke is opaque and bypasses suggestions/history.
 
-Consequences:
+- sudo/SSH/credential prompts, REPL input, and TUIs occur after `C`; never record them.
+- a quiet running command remains opaque; no timeout can reopen suggestions.
+- alternate buffer, shell change, parse error, disconnect, replay, or impossible transition
+  resets to unverified.
+- ordinary remote SSH prompts do not become editable without a future explicit protocol.
+- commit history only from validated `E`, never outgoing PTY bytes or Enter.
 
-- `sudo`, `ssh`, credential prompts, REPL input, and interactive programs occur after
-  `C`; their typed input is never recorded.
-- A quiet long-running command remains `Executing`; no timeout may reopen suggestions.
-- Alternate-screen entry, shell change, marker parse error, disconnect, replay attach,
-  or impossible transition forces `Unknown/Disabled`.
-- A remote prompt over ordinary `ssh` does not become editable merely because it looks
-  like a prompt. Remote integration needs an explicit future protocol; Phase 1 stays off.
-- History is committed only from a validated `E`, never from outgoing PTY bytes or `Enter`.
+## Shell Feasibility
 
-## Shell feasibility
+| Shell | Integration | Main risk | Source |
+|---|---|---|---|
+| bash | `PROMPT_COMMAND`, prompt, guarded `DEBUG`/readline strategy | trap recursion/framework composition | [Bash variables](https://www.gnu.org/software/bash/manual/html_node/Bash-Variables.html), [trap](https://www.gnu.org/software/bash/manual/html_node/Bourne-Shell-Builtins.html#index-trap) |
+| zsh | `add-zsh-hook` `precmd`/`preexec`, prompt expansion | plugins reset/reorder hooks | [zsh hooks](https://zsh.sourceforge.io/Doc/Release/User-Contributions.html#Hook-Functions) |
+| fish | `fish_prompt`, `fish_preexec`, `fish_postexec` | empty/error commands need prompt reset | [fish events](https://fishshell.com/docs/current/language.html#event-handlers) |
+| PowerShell | prompt wrapper + proven PSReadLine strategy | singleton handlers/execution policy/version | [prompts](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_prompts?view=powershell-7.6), [PSReadLine](https://learn.microsoft.com/en-us/powershell/module/psreadline/set-psreadlineoption?view=powershell-7.6) |
 
-### bash — feasible, highest compatibility risk
+Spike all four; ship only adapters that compose safely with user config and prompt frameworks.
 
-Use `PROMPT_COMMAND` to publish completion/prompt-start and a carefully chained `DEBUG`
-trap or readline-aware wrapper for pre-execution. `B` can be embedded at the end of PS1.
-Bash documents `PROMPT_COMMAND` as executed before each primary prompt and `DEBUG` as
-running before simple/compound commands; the latter means recursion/internal-command
-guards are mandatory. Preserve array/string `PROMPT_COMMAND`, existing traps, `set -T`,
-and prompt framework behavior. Prefer adapting a proven integration script over a new
-hook design.
+## Parser and Spoofing Controls
 
-- [GNU Bash variables (`PROMPT_COMMAND`)](https://www.gnu.org/software/bash/manual/html_node/Bash-Variables.html)
-- [GNU Bash `trap` semantics](https://www.gnu.org/software/bash/manual/html_node/Bourne-Shell-Builtins.html#index-trap)
+State machine: `Unverified -> Prompt(A) -> Editing(B) -> Submitted(E+nonce) -> Opaque(C)
+-> Finished(D) -> Prompt(A)`.
 
-### zsh — feasible, strong hooks
+1. Mint cryptographically random nonce per PTY incarnation; remove it from child-visible
+   exported environment after integration initialization.
+2. Require nonce/generation on state-changing data; accept only legal transitions.
+3. Bound payloads; parse across chunks with strict BEL/ST termination and escaping.
+4. Malformed, duplicate, skipped, replayed, oversized, or wrong-nonce markers reset trust.
+5. Respawn/restore mint new nonce; scrollback replay never restores live trust.
+6. Never persist/log marker payloads, command content, or nonce.
 
-Register via `add-zsh-hook`: `precmd` for completion/prompt lifecycle and `preexec` for
-exact submitted command/pre-execution. Emit `B` through prompt expansion. Hooks compose
-better than overwriting user functions, but prompt/plugin reset and nested shells need
-tests.
+Prefer server-side validation for shared authoritative session lifecycle. Preserve raw PTY
+output and broadcast only typed capability/state events. A browser-only parser is simpler
+but gives multiple attached clients independent trust state.
 
-- [zsh hook functions](https://zsh.sourceforge.io/Doc/Release/User-Contributions.html#Hook-Functions)
+## Unsupported-Shell Fallback
 
-### fish — feasible, cleanest lifecycle
+- No silence heuristic, passive ghost, or automatic recording.
+- Explicit history opens only by deliberate UI action; copy/use never executes.
+- Expose quiet status: `rich`, `basic/no-capture`, `unsupported`, or `lost`.
+- Lost integration requires a new handshake, never elapsed time.
 
-Fish exposes `fish_prompt`, `fish_preexec`, and `fish_postexec`; `fish_preexec` receives
-the command line and fires immediately before an interactive command, while `postexec`
-fires afterward. Syntax errors have `fish_posterror`; empty commands do not trigger
-pre/postexec, so prompt events must reset the state without inventing a submission.
+## Likely Rust Touchpoints
 
-- [fish event handlers](https://fishshell.com/docs/current/language.html#event-handlers)
+- `server/src/pty/manager.rs`: command construction, child env, output parser feed, respawn.
+- `server/src/pty/session.rs`: ephemeral capability/generation, never serializable nonce.
+- `server/src/api/terminal.rs`: server-selected shell/capability.
+- `server/src/persistence/restore.rs`: new generation and unverified restore.
+- `server/src/api/ws.rs` / protocol: typed lifecycle events for attached clients.
 
-### PowerShell — feasible, execution-policy/handler risk
+`portable_pty::CommandBuilder` supports args/environment; inject beside existing command
+construction, not terminal input handling: [CommandBuilder](https://docs.rs/portable-pty/latest/portable_pty/struct.CommandBuilder.html).
 
-Wrap the user `prompt` function without replacing its visible result; it reliably marks
-readiness. Use the same PSReadLine integration strategy proven by VS Code for accepted
-command/pre-execution rather than inferring from Enter. PSReadLine exposes command
-validation and history callbacks, but replacing a user's singleton handler may conflict;
-exact composition/version support needs a spike. Script injection can also be blocked by
-PowerShell execution policy.
+## Phase Dependencies
 
-- [PowerShell prompt function](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_prompts?view=powershell-7.6)
-- [PSReadLine options and handlers](https://learn.microsoft.com/en-us/powershell/module/psreadline/set-psreadlineoption?view=powershell-7.6)
+1. Security containment and protocol/state contract.
+2. Shell adapter spike with pristine and framework-heavy profiles.
+3. Launch injection, parser, typed lifecycle/capability event.
+4. Suggestion/history controller consumes only `Editing` and validated `E`.
+5. UX/geometry after safety gates pass.
 
-## Marker parser and spoofing controls
+## Principal Risks
 
-Use a tiny explicit state machine, not regex over retained output:
+- Prompt frameworks overwrite hooks or reorder markers.
+- Bash DEBUG traps recurse; PowerShell handlers/policy reduce coverage.
+- Same-user hostile code can imitate PTY output; nonce is defense-in-depth only.
+- Replay/respawn/reparent may retain stale trust unless generation resets centrally.
+- Multiline command encoding can corrupt boundaries without byte-exact escaping tests.
 
-`Unverified -> Prompt(A) -> Editing(B) -> Submitted(E+nonce) -> Executing(C) -> Finished(D) -> Prompt(A)`
+## Unresolved Questions
 
-Required controls:
-
-1. Generate a cryptographically random nonce per PTY incarnation; inject it once, copy
-   into shell-local state, then unset/export-remove it before user commands run.
-2. Require nonce on `E` and preferably a Dam Hopper extension on every state-changing
-   marker. Unknown OSC properties remain ignorable by other terminals.
-3. Accept only bounded payloads and legal transitions; duplicate, skipped, oversized,
-   malformed, replayed, or wrong-nonce markers force `Unverified` until a fresh handshake.
-4. Invalidate nonce on respawn/recreate/restore. Never trust scrollback replay as live
-   lifecycle: attach starts unverified and waits for a fresh marker handshake.
-5. Parse OSC incrementally across PTY chunks with strict BEL/ST termination and length
-   caps. Do not persist marker payloads or log command/nonce values.
-6. Treat alternate-buffer activation as immediate suppression even with valid lifecycle.
-7. Do not strip arbitrary OSC in the browser. Register a narrow xterm OSC 633 handler;
-   keep lifecycle state outside history/search code and expose only typed events.
-
-Nonce is defense-in-depth, not isolation: a hostile same-user process may inspect parent
-state or deliberately imitate terminal output. Stronger assurance requires an out-of-band
-shell-to-server channel, which is substantially less portable and YAGNI for this local
-desktop feature. Document the trust model.
-
-## Unsupported-shell fallback
-
-- No silence heuristic and no automatic recording.
-- Passive ghost hidden.
-- Explicit history mode remains available only through deliberate UI invocation; it may
-  copy or insert text but cannot execute.
-- Surface integration status (`rich`, `basic/no-capture`, `unsupported`, `lost`) in terminal
-  details, not as recurring toast noise.
-- Shell/subshell/SSH transitions that lose markers downgrade immediately; recovery needs a
-  new valid handshake, not elapsed time.
-
-## Likely Rust PTY launch touchpoints
-
-- `server/src/pty/manager.rs`: `PtySessionManager::create`, `build_command`,
-  `apply_child_env`; select/inject the supported-shell script and nonce before spawn.
-- `server/src/pty/manager.rs` supervisor respawn path: mint a new nonce and rebuild
-  integration; never reuse creation-time trust state.
-- `server/src/pty/session.rs`: `PtyCreateOpts`/`RespawnOpts` and session metadata may carry
-  integration capability, but never expose nonce through serializable `SessionMeta`.
-- `server/src/api/terminal.rs`: creation request boundary; server decides actual shell and
-  capability rather than trusting a client claim.
-- `server/src/persistence/restore.rs`: restored shell sessions start unverified and receive
-  a new integration generation.
-- `server/src/api/ws.rs` and PTY event sink: only needed if lifecycle is server-parsed and
-  broadcast as typed events. Prefer browser xterm parsing for Phase 1 unless multiple
-  clients must share authoritative lifecycle; it avoids modifying the raw PTY pipeline.
-
-`portable_pty::CommandBuilder` already supports command arguments/environment, so launch
-injection belongs beside existing command construction, not in terminal input handling:
-[portable-pty CommandBuilder](https://docs.rs/portable-pty/latest/portable_pty/struct.CommandBuilder.html).
-
-## Phase dependencies
-
-1. **Security foundation:** protocol/state model, nonce lifecycle, trust statement, parser
-   fuzz/unit tests, replay/respawn/alternate-buffer invalidation.
-2. **Shell spike:** bash/zsh/fish/pwsh scripts against pristine and framework-heavy rc
-   files; prove exact command and ordering before UI work.
-3. **Integration:** launch detection/injection, typed lifecycle adapter, capability status.
-4. **Suggestion/history:** only consume `Editing` and validated `E`; unsupported fallback.
-5. **UX/geometry:** cursor ghost and explicit picker after safety gates pass.
-
-## Principal risks
-
-- Existing prompt frameworks overwrite hooks or reorder markers.
-- Bash DEBUG traps can fire for integration internals and compound commands.
-- PowerShell handler composition/version/execution policy reduces coverage.
-- Marker spoofing is not preventable against malicious same-user code over one PTY.
-- Replay, process respawn, or terminal reparent can accidentally retain stale trust.
-- Exact multiline command encoding/decoding can corrupt boundaries if OSC 633 escaping is
-  not implemented byte-for-byte.
-
-## Unresolved questions
-
-1. Is threat scope accidental leakage only, or hostile local commands too? The latter
-   requires evaluating an out-of-band authenticated channel.
-2. Must multiple attached browsers share one authoritative lifecycle state? If yes, parse
-   on the Rust side; otherwise xterm-side parsing is simpler.
-3. Which minimum shell versions and Windows PowerShell vs PowerShell 7 are supported?
-4. May launch injection add shell arguments/environment, or must user profiles opt in?
-5. Should OSC 133 ever enable passive ghost in `basic` mode, or remain decorations-only?
+1. Accidental leakage only, or hostile local commands too?
+2. Which shell/minimum-version matrix is required for v1?
+3. May launch injection add args/environment by default, or require opt-in?
+4. Should OSC 133 ever enable passive ghost, or remain decorations-only?

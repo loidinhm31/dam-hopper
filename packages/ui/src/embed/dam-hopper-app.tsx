@@ -24,6 +24,7 @@ import {
 } from "@/api/server-config.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 import { WorkspaceSetupWizard } from "@/components/organisms/WorkspaceSetupWizard.js";
+import { TerminalNotificationToastViewport } from "@/components/organisms/TerminalNotificationToastViewport.js";
 import { EncryptProvider } from "@/contexts/EncryptContext.js";
 import { PassphrasePrompt } from "@/components/molecules/PassphrasePrompt.js";
 import { useBrowserShortcutGuard } from "@/hooks/use-browser-shortcut-guard.js";
@@ -294,6 +295,7 @@ export function DamHopperApp() {
     <EncryptProvider>
       <BrowserRouter basename={routerBasename}>
         <GlobalShortcuts />
+        <TerminalNotificationToastViewport />
         <RouteDiagnostics />
         <PassphrasePrompt />
         <ServerProfileGuard>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils.js";
 import { useIpc } from "@/hooks/use-sse.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
@@ -9,6 +9,7 @@ import { TopNavMenuButton } from "@/components/atoms/TopNavMenuButton.js";
 import { TopNavRouteMenu } from "@/components/organisms/TopNavRouteMenu.js";
 import { TopNavUtilityStrip } from "@/components/organisms/TopNavUtilityStrip.js";
 import { TopNavProjectToolbar } from "@/components/organisms/TopNavProjectToolbar.js";
+import { TerminalNotificationCenter } from "@/components/organisms/TerminalNotificationCenter.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client.js";
@@ -35,6 +36,7 @@ export function TopNav({
   onWorkspaceModeChange,
   workspaceModeShortcutLabel,
 }: TopNavProps) {
+  const headerRef = useRef<HTMLElement>(null);
   const { status } = useIpc();
   const { activeProject } = useWorkspaceStore();
   const isCompactWorkspace = useCompactWorkspace();
@@ -88,8 +90,32 @@ export function TopNav({
     };
   }, [status]);
 
+  useEffect(() => {
+    const updateHeight = () => {
+      const height = headerRef.current?.getBoundingClientRect().height;
+      if (height) {
+        document.documentElement.style.setProperty(
+          "--top-nav-height",
+          `${height}px`,
+        );
+      }
+    };
+
+    updateHeight();
+    const observer = new ResizeObserver(updateHeight);
+    if (headerRef.current) observer.observe(headerRef.current);
+    window.addEventListener("resize", updateHeight);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateHeight);
+      document.documentElement.style.removeProperty("--top-nav-height");
+    };
+  }, [compactMobileMenuOpen, isCompactWorkspace]);
+
   return (
     <header
+      ref={headerRef}
       className={cn(
         "safe-area-inline safe-area-top shrink-0 glass-card z-50 overflow-visible border-b border-[var(--color-border)]",
         isCompactWorkspace
@@ -120,7 +146,14 @@ export function TopNav({
             )}
           >
             <TopNavBrand />
-            <TopNavMenuButton collapsed={collapsed} onToggle={onToggle} />
+            <div className="flex shrink-0 items-center gap-1">
+              <TopNavMenuButton collapsed={collapsed} onToggle={onToggle} />
+              {isCompactWorkspace && (
+                <div data-testid="top-nav-compact-notifications">
+                  <TerminalNotificationCenter />
+                </div>
+              )}
+            </div>
           </div>
 
           <TopNavRouteMenu

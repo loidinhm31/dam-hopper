@@ -85,6 +85,12 @@ vi.mock("@/components/organisms/HostResourcePopover.js", () => ({
   HostResourcePopover: () => <button>resources</button>,
 }));
 
+vi.mock("@/components/organisms/TerminalNotificationCenter.js", () => ({
+  TerminalNotificationCenter: () => (
+    <span data-testid="terminal-notification-center">notifications</span>
+  ),
+}));
+
 import { TopNav } from "./TopNav.js";
 
 describe("TopNav", () => {
@@ -100,6 +106,11 @@ describe("TopNav", () => {
     expect(markup).toContain('data-show-feedback="false"');
     expect(markup).toContain("safe-area-top");
     expect(markup).toContain("min-h-12");
+    expect(markup).toContain('data-testid="top-nav-desktop-notifications"');
+    expect(markup).not.toContain('data-testid="top-nav-compact-notifications"');
+    expect(
+      markup.match(/data-testid="terminal-notification-center"/g),
+    ).toHaveLength(1);
   });
 
   it("renders the project and branch toolbar in compact workspace mode", () => {
@@ -142,5 +153,10 @@ describe("TopNav", () => {
     expect(markup).toContain('data-mobile-menu-open="false"');
     expect(markup).toContain("hidden sm:flex");
     expect(markup).toContain('data-mobile-visible="false"');
+    expect(markup).toContain('data-testid="top-nav-compact-notifications"');
+    expect(markup).not.toContain('data-testid="top-nav-desktop-notifications"');
+    expect(
+      markup.match(/data-testid="terminal-notification-center"/g),
+    ).toHaveLength(1);
   });
 });

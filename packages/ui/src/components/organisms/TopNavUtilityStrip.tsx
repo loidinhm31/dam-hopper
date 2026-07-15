@@ -1,5 +1,6 @@
 import { ServerCog } from "lucide-react";
 import { HostResourcePopover } from "@/components/organisms/HostResourcePopover.js";
+import { TerminalNotificationCenter } from "@/components/organisms/TerminalNotificationCenter.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 import { ProjectSwitcher } from "@/components/organisms/ProjectSwitcher.js";
 import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
@@ -105,6 +106,12 @@ export function TopNavUtilityStrip({
           isCompactWorkspace ? "gap-1" : "gap-2",
         )}
       >
+        {!isCompactWorkspace && (
+          <div data-testid="top-nav-desktop-notifications">
+            <TerminalNotificationCenter />
+          </div>
+        )}
+
         <div
           data-testid="top-nav-resource-control"
           data-mobile-visible={compactMobileMenuOpen}
