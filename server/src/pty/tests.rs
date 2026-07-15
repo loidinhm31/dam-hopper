@@ -20,7 +20,11 @@ mod pty_tests {
     use crate::persistence::{PersistCmd, PersistWorker, SessionStore};
     use crate::pty::{
         event_sink::{EventSink, NoopEventSink},
-        manager::{build_child_env_from_parent_snapshot, PtyCreateOpts, PtySessionManager},
+        manager::{
+            build_child_env_from_parent_snapshot, send_visible_output_then_lifecycle,
+            PtyCreateOpts, PtySessionManager,
+        },
+        shell_lifecycle::{LifecycleEvent, LifecycleState},
     };
 
     // Shared multi-thread Tokio runtime for tests. PtySessionManager::new
@@ -471,6 +475,18 @@ mod pty_tests {
         fn send_terminal_changed(&self) {
             self.events.lock().unwrap().push("changed".to_string());
         }
+        fn send_terminal_lifecycle(
+            &self,
+            id: &str,
+            state: &str,
+            generation: u64,
+            _command: Option<&str>,
+        ) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("lifecycle:{id}:{state}:{generation}"));
+        }
         fn broadcast(&self, event_type: &str, _payload: serde_json::Value) {
             self.events
                 .lock()
@@ -508,6 +524,128 @@ mod pty_tests {
         assert!(ev.contains(&"changed".to_string()), "events: {ev:?}");
         drop(ev);
         mgr.remove("build:sink-test").unwrap();
+    }
+
+    #[test]
+    fn prompt_output_precedes_pending_editing_lifecycle() {
+        let sink = RecordingSink::default();
+        let mut visible_output_since_boundary = false;
+        let mut pending = vec![(
+            7,
+            LifecycleEvent {
+                state: LifecycleState::Editing,
+                command: None,
+            },
+        )];
+
+        send_visible_output_then_lifecycle(
+            &sink,
+            "shell:prompt",
+            "prompt> ",
+            &mut pending,
+            &mut visible_output_since_boundary,
+        );
+
+        assert_eq!(
+            *sink.events.lock().unwrap(),
+            [
+                "data:shell:prompt:prompt> ",
+                "lifecycle:shell:prompt:editing:7"
+            ]
+        );
+        assert!(pending.is_empty());
+        assert!(visible_output_since_boundary);
+    }
+
+    #[test]
+    fn marker_only_chunk_cannot_flush_editing_lifecycle() {
+        let sink = RecordingSink::default();
+        let mut visible_output_since_boundary = false;
+        let mut pending = vec![(
+            7,
+            LifecycleEvent {
+                state: LifecycleState::Editing,
+                command: None,
+            },
+        )];
+
+        send_visible_output_then_lifecycle(
+            &sink,
+            "shell:prompt",
+            "",
+            &mut pending,
+            &mut visible_output_since_boundary,
+        );
+
+        assert!(sink.events.lock().unwrap().is_empty());
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn marker_only_editing_after_prompt_output_flushes_safely() {
+        let sink = RecordingSink::default();
+        let mut visible_output_since_boundary = true;
+        let mut pending = vec![(
+            7,
+            LifecycleEvent {
+                state: LifecycleState::Editing,
+                command: None,
+            },
+        )];
+
+        send_visible_output_then_lifecycle(
+            &sink,
+            "shell:prompt",
+            "",
+            &mut pending,
+            &mut visible_output_since_boundary,
+        );
+
+        assert_eq!(
+            *sink.events.lock().unwrap(),
+            ["lifecycle:shell:prompt:editing:7"]
+        );
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn prompt_chunk_with_reset_and_editing_finishes_in_editing_order() {
+        let sink = RecordingSink::default();
+        let mut visible_output_since_boundary = true;
+        let mut pending = vec![
+            (
+                7,
+                LifecycleEvent {
+                    state: LifecycleState::Unverified,
+                    command: None,
+                },
+            ),
+            (
+                7,
+                LifecycleEvent {
+                    state: LifecycleState::Editing,
+                    command: None,
+                },
+            ),
+        ];
+
+        send_visible_output_then_lifecycle(
+            &sink,
+            "shell:prompt",
+            "prompt> ",
+            &mut pending,
+            &mut visible_output_since_boundary,
+        );
+
+        assert_eq!(
+            *sink.events.lock().unwrap(),
+            [
+                "data:shell:prompt:prompt> ",
+                "lifecycle:shell:prompt:unverified:7",
+                "lifecycle:shell:prompt:editing:7"
+            ]
+        );
+        assert!(pending.is_empty());
     }
 
     #[test]

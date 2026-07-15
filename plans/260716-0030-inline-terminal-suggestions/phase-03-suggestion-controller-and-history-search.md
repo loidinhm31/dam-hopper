@@ -12,8 +12,8 @@
 - Date: 2026-07-16
 - Description: deterministic session controller, stale-result gates, exact history model
 - Priority: P1
-- Implementation status: pending
-- Review status: pending
+- Implementation status: completed 2026-07-16 05:07 +07
+- Review status: approved
 - Effort: 12h
 
 ## Key Insights
@@ -66,14 +66,14 @@ on result and atomically on accept.
 
 ## Todo list
 
-- [ ] Lock controller state/event contract
-- [ ] Add transition, race, paste, IME, Unicode, grapheme tests
-- [ ] Implement append-only fail-closed tracker
-- [ ] Add query revision and atomic accept gates
-- [ ] Implement exact history v2 and migration
-- [ ] Make ranking prefix-first and Unicode-aware
-- [ ] Integrate lifecycle/transport and shared search
-- [ ] Remove obsolete authority only after coverage
+- [x] Lock controller state/event contract
+- [x] Add transition, race, paste, IME, Unicode, grapheme tests
+- [x] Implement append-only fail-closed tracker
+- [x] Add query revision and atomic accept gates
+- [x] Implement exact history v2 and migration
+- [x] Make ranking prefix-first and Unicode-aware
+- [x] Integrate lifecycle/transport and shared search
+- [x] Remove obsolete authority only after coverage
 
 ## Success Criteria
 
@@ -103,4 +103,3 @@ Phase 04 consumes only immutable `ghost` and `explicit-list` snapshots plus cont
 - Exact token boundary for partial acceptance?
 - Per-project usage map shape and retention cap?
 - Legacy history purge vs one-time confirmation outcome from Phase 01?
-
