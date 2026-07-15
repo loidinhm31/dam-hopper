@@ -5,6 +5,11 @@ import { useResizeHandle } from "@/hooks/use-resize-handle.js";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse.js";
 import { cn } from "@/lib/utils.js";
 import type { WorkspaceMode } from "@/lib/workspace-mode.js";
+import {
+  resolveTerminalWorkspacePanelActivation,
+  type TerminalWorkspacePanelId,
+  type TerminalWorkspacePanelRequest,
+} from "@/lib/terminal-workspace-panel.js";
 
 const FLEET_WIDTH_KEY = "dam-hopper:terminal-workspace-fleet-width";
 const FLEET_COLLAPSED_KEY = "dam-hopper:terminal-workspace-fleet-collapsed";
@@ -27,7 +32,9 @@ export function TerminalWorkspaceShell({
   terminalContent,
   terminalOverlayContent,
   fleetContent,
+  gitContent,
   portsContent,
+  activatePanelRequest,
   workspaceMode,
   onWorkspaceModeChange,
   workspaceModeShortcutLabel,
@@ -37,7 +44,9 @@ export function TerminalWorkspaceShell({
   terminalContent: ReactNode;
   terminalOverlayContent?: ReactNode;
   fleetContent: ReactNode;
+  gitContent: ReactNode;
   portsContent?: ReactNode;
+  activatePanelRequest?: TerminalWorkspacePanelRequest | null;
   workspaceMode: WorkspaceMode;
   onWorkspaceModeChange: (mode: WorkspaceMode) => void;
   workspaceModeShortcutLabel?: string;
@@ -45,7 +54,10 @@ export function TerminalWorkspaceShell({
   toolbarActions?: ReactNode;
 }) {
   const { collapsed, toggle } = useSidebarCollapse();
-  const [fleetCollapsed, setFleetCollapsed] = useState(loadFleetCollapsed);
+  const [activePanelId, setActivePanelId] =
+    useState<TerminalWorkspacePanelId | null>(() =>
+      loadFleetCollapsed() ? null : "terminals",
+    );
 
   const {
     width: fleetWidth,
@@ -60,17 +72,38 @@ export function TerminalWorkspaceShell({
     onResizeEnd: onFleetLayoutChange,
   });
 
-  const toggleFleet = useCallback(() => {
-    setFleetCollapsed((current) => {
-      const next = !current;
-      saveFleetCollapsed(next);
-      return next;
+  const closeSidePanel = useCallback(() => {
+    setActivePanelId((current) => {
+      if (current === null) return current;
+      saveFleetCollapsed(true);
+      return null;
     });
   }, []);
 
   useEffect(() => {
     onFleetLayoutChange?.();
-  }, [fleetCollapsed, onFleetLayoutChange]);
+  }, [activePanelId, onFleetLayoutChange]);
+
+  useEffect(() => {
+    if (!activatePanelRequest) return;
+    // This request prop is an intentional imperative bridge from WorkspacePage.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setActivePanelId((current) => {
+      const next = resolveTerminalWorkspacePanelActivation({
+        activePanelId: current,
+        targetId: activatePanelRequest.targetId,
+      });
+      saveFleetCollapsed(next === null);
+      return next;
+    });
+  }, [activatePanelRequest]);
+
+  const activePanel =
+    activePanelId === "git"
+      ? { label: "Git", content: gitContent }
+      : activePanelId === "ports"
+        ? { label: "Ports", content: portsContent }
+        : { label: "Fleet Terminal", content: fleetContent };
 
   return (
     <div
@@ -98,7 +131,7 @@ export function TerminalWorkspaceShell({
           {terminalOverlayContent}
         </main>
 
-        {!fleetCollapsed && (
+        {activePanelId !== null && (
           <>
             <div
               {...handleProps}
@@ -110,48 +143,38 @@ export function TerminalWorkspaceShell({
               style={{ width: fleetWidth }}
               className="flex min-h-0 shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)]"
             >
-              <section className="flex min-h-0 flex-[3] flex-col border-b border-[var(--color-border)]">
+              <section className="flex min-h-0 flex-1 flex-col">
                 <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-3">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-                    Fleet Terminal
+                    {activePanel.label}
                   </span>
                   <button
                     type="button"
-                    onClick={toggleFleet}
+                    onClick={closeSidePanel}
                     className="rounded-sm p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-                    title="Collapse Fleet Terminal"
+                    title={`Collapse ${activePanel.label}`}
                   >
                     <PanelRightClose className="h-4 w-4" />
                   </button>
                 </div>
                 <div className="min-h-0 flex-1 overflow-hidden">
-                  {fleetContent}
+                  {activePanel.content}
                 </div>
               </section>
-
-              {portsContent && (
-                <section className="flex min-h-48 flex-[2] flex-col">
-                  <div className="flex h-9 shrink-0 items-center border-b border-[var(--color-border)] px-3">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-                      Ports
-                    </span>
-                  </div>
-                  <div className="min-h-0 flex-1 overflow-hidden">
-                    {portsContent}
-                  </div>
-                </section>
-              )}
             </aside>
           </>
         )}
 
-        {fleetCollapsed && (
+        {activePanelId === null && (
           <div className="flex w-10 shrink-0 flex-col items-center border-l border-[var(--color-border)] bg-[var(--color-surface)] py-2">
             <button
               type="button"
-              onClick={toggleFleet}
+              onClick={() => {
+                saveFleetCollapsed(false);
+                setActivePanelId("terminals");
+              }}
               className="rounded-sm p-1.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-              title="Expand Fleet Terminal"
+              title="Open Fleet Terminal"
             >
               <PanelRightOpen className="h-4 w-4" />
             </button>
