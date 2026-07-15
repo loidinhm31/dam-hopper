@@ -4,6 +4,7 @@ import {
   UNASSIGNED_RUNTIME_GROUP_ID,
   type RuntimeTreeGroup,
 } from "@/lib/terminal-runtime-tree.js";
+import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 
 interface Props {
   activeSessionId: string | null;
@@ -15,6 +16,7 @@ interface Props {
   group: RuntimeTreeGroup;
   onSelectSession?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
+  onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   onNewProjectTerminal?: (projectName: string) => void;
   onMoveGroup: (draggedId: string, targetId: string) => void;
   onMoveItem: (groupId: string, draggedId: string, targetId: string) => void;
@@ -36,6 +38,7 @@ export function TerminalRuntimeNavigatorGroup({
   group,
   onSelectSession,
   onCloseSession,
+  onOpenDiagnosticsMenu,
   onNewProjectTerminal,
   onMoveGroup,
   onMoveItem,
@@ -95,6 +98,7 @@ export function TerminalRuntimeNavigatorGroup({
             dragState={dragState}
             item={item}
             onCloseSession={onCloseSession}
+            onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
             onMoveItem={onMoveItem}
             onSelectSession={onSelectSession}
             onSetDragState={onSetDragState}

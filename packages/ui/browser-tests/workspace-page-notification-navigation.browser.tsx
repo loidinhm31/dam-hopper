@@ -81,7 +81,16 @@ vi.mock("@/api/queries.js", () => ({
 }));
 
 vi.mock("@/components/templates/IdeShell.js", () => ({
-  IdeShell: () => <div data-shell="ide" />,
+  IdeShell: ({
+    activateBottomToolRequest,
+  }: {
+    activateBottomToolRequest?: { toolId: string } | null;
+  }) => (
+    <div
+      data-shell="ide"
+      data-bottom-tool={activateBottomToolRequest?.toolId ?? ""}
+    />
+  ),
 }));
 
 vi.mock("@/components/templates/TerminalWorkspaceShell.js", () => ({
@@ -327,9 +336,11 @@ describe("WorkspacePage notification navigation in Chromium", () => {
 
     expect(nativeNotification?.close).toHaveBeenCalledOnce();
     expect(windowFocus).toHaveBeenCalledOnce();
-    expect(mocks.saveWorkspaceMode).toHaveBeenCalledWith("terminal");
+    expect(mocks.saveWorkspaceMode).not.toHaveBeenCalled();
     expect(mocks.selectSession).toHaveBeenCalledWith(SESSION_ID);
-    expect(container.querySelector('[data-shell="terminal"]')).not.toBeNull();
+    expect(
+      container.querySelector('[data-shell="ide"]')?.getAttribute("data-bottom-tool"),
+    ).toBe("terminal");
     expect(mocks.focusCompetingTerminal).not.toHaveBeenCalled();
 
     await act(async () => registerNotifiedTerminal());
@@ -358,7 +369,7 @@ describe("WorkspacePage notification navigation in Chromium", () => {
     expect(container.querySelector('[data-shell="ide"]')).not.toBeNull();
   });
 
-  it("reveals the compact terminal without forcing the native keyboard", async () => {
+  it("keeps compact IDE mode while revealing the notifying terminal", async () => {
     mocks.compactWorkspace = true;
     mocks.coarsePointer = true;
     mocks.settingsStore.mobileCustomKeyboardEnabled = true;
@@ -377,7 +388,7 @@ describe("WorkspacePage notification navigation in Chromium", () => {
     });
 
     const shell = container.querySelector('[data-shell="mobile"]');
-    expect(shell?.getAttribute("data-workspace-mode")).toBe("terminal");
+    expect(shell?.getAttribute("data-workspace-mode")).toBe("ide");
     expect(shell?.getAttribute("data-surface")).toBe("terminal");
     expect(mocks.selectSession).toHaveBeenCalledWith(SESSION_ID);
     await vi.waitFor(() => expect(mocks.fitTerminal).toHaveBeenCalled());

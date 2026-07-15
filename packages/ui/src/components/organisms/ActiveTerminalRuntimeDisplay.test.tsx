@@ -1,6 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { ActiveTerminalRuntimeDisplay } from "./ActiveTerminalRuntimeDisplay.js";
+import {
+  ActiveTerminalRuntimeDisplay,
+  RuntimeActiveSessionTitle,
+} from "./ActiveTerminalRuntimeDisplay.js";
 import type { MountedSession } from "./MultiTerminalDisplay.js";
 import type { TabEntry } from "./TerminalTabBar.js";
 
@@ -90,5 +93,27 @@ describe("ActiveTerminalRuntimeDisplay", () => {
 
     expect(markup).toContain("cursor-col-resize");
     expect(markup).not.toContain("Full-width terminal");
+  });
+
+  it("opens diagnostics for the compact runtime title session", () => {
+    const onOpenDiagnosticsMenu = vi.fn();
+    const title = RuntimeActiveSessionTitle({
+      activeSessionId: "session-1",
+      activeSessionLabel: "demo: bash",
+      onOpenDiagnosticsMenu,
+    });
+    const preventDefault = vi.fn();
+    const stopPropagation = vi.fn();
+
+    (title.props.onContextMenu as (event: {
+      clientX: number;
+      clientY: number;
+      preventDefault: () => void;
+      stopPropagation: () => void;
+    }) => void)({ clientX: 10, clientY: 20, preventDefault, stopPropagation });
+
+    expect(onOpenDiagnosticsMenu).toHaveBeenCalledWith("session-1", 10, 20);
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(stopPropagation).toHaveBeenCalledOnce();
   });
 });

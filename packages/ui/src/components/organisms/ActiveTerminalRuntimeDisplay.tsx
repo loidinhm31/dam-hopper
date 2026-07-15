@@ -4,6 +4,10 @@ import { useGlobalConfig } from "@/api/queries.js";
 import { TerminalRuntimeNavigator } from "@/components/organisms/TerminalRuntimeNavigator.js";
 import { TerminalRuntimeOutput } from "@/components/organisms/TerminalRuntimeOutput.js";
 import {
+  openTerminalDiagnosticsContextMenu,
+  type TerminalDiagnosticsMenuHandler,
+} from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -34,6 +38,38 @@ interface ActiveTerminalRuntimeDisplayProps {
   onNewFreeTerminal?: () => void;
   onSelectTab?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
+  onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+}
+
+export function RuntimeActiveSessionTitle({
+  activeSessionId,
+  activeSessionLabel,
+  onOpenDiagnosticsMenu,
+}: {
+  activeSessionId: string | null;
+  activeSessionLabel: string;
+  onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+}) {
+  return (
+    <div
+      className="min-w-0 flex-1"
+      onContextMenu={(event) => {
+        if (!activeSessionId) return;
+        openTerminalDiagnosticsContextMenu(
+          event,
+          activeSessionId,
+          onOpenDiagnosticsMenu,
+        );
+      }}
+    >
+      <p className="truncate text-xs font-semibold text-[var(--color-text)]">
+        {activeSessionLabel}
+      </p>
+      <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+        Full-width terminal
+      </p>
+    </div>
+  );
 }
 
 export function ActiveTerminalRuntimeDisplay({
@@ -48,6 +84,7 @@ export function ActiveTerminalRuntimeDisplay({
   onNewFreeTerminal,
   onSelectTab,
   onCloseSession,
+  onOpenDiagnosticsMenu,
 }: ActiveTerminalRuntimeDisplayProps) {
   const { data: globalConfig } = useGlobalConfig();
   const { ports, createTunnel, stopTunnel } = usePorts();
@@ -115,14 +152,11 @@ export function ActiveTerminalRuntimeDisplay({
             <ListTree className="h-4 w-4 shrink-0" />
             <span>Runtime</span>
           </button>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-semibold text-[var(--color-text)]">
-              {activeSessionLabel}
-            </p>
-            <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-              Full-width terminal
-            </p>
-          </div>
+          <RuntimeActiveSessionTitle
+            activeSessionId={activeSessionId}
+            activeSessionLabel={activeSessionLabel}
+            onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
+          />
           <button
             type="button"
             onClick={handleNewTerminal}
@@ -159,6 +193,7 @@ export function ActiveTerminalRuntimeDisplay({
               disableReorder
               groups={groups}
               onCloseSession={onCloseSession}
+              onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
               onMoveGroup={ordering.moveGroup}
               onMoveItem={ordering.moveItem}
               onNewFreeTerminal={handleMobileNewTerminal}
@@ -186,6 +221,7 @@ export function ActiveTerminalRuntimeDisplay({
         groups={groups}
         width={navigatorWidth}
         onCloseSession={onCloseSession}
+        onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
         onMoveGroup={ordering.moveGroup}
         onMoveItem={ordering.moveItem}
         onNewFreeTerminal={handleNewTerminal}
