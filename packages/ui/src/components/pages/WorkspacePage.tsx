@@ -74,6 +74,7 @@ import type { ToolWindowDef } from "@/types/ide.js";
 import type { MobileWorkspaceSurface } from "@/components/templates/MobileWorkspaceShell.js";
 import type { ActivateToolRequest } from "@/lib/reveal-active-file.js";
 import type { TerminalPanelToolId } from "@/lib/ide-shell-layout.js";
+import type { TerminalWorkspacePanelRequest } from "@/lib/terminal-workspace-panel.js";
 import type { FileTreeRevealRequest } from "@/lib/file-tree-reveal.js";
 import { resolveRevealActiveFileOutcome } from "@/lib/reveal-active-file.js";
 import { scheduleTerminalFit } from "@/lib/terminal-fit-scheduler.js";
@@ -260,6 +261,8 @@ export default function WorkspacePage() {
     useState<ActivateToolRequest | null>(null);
   const [ideRightTopToolRequest, setIdeRightTopToolRequest] =
     useState<ActivateToolRequest | null>(null);
+  const [terminalWorkspacePanelRequest, setTerminalWorkspacePanelRequest] =
+    useState<TerminalWorkspacePanelRequest | null>(null);
   const [terminalFilePanelEditorFocusSignal, setTerminalFilePanelEditorFocusSignal] =
     useState(0);
   const [terminalLayoutRevision, setTerminalLayoutRevision] = useState(0);
@@ -467,9 +470,14 @@ export default function WorkspacePage() {
 
   const activateTerminalPanelShortcut = useCallback(
     (targetId: TerminalPanelToolId) => {
-      if (workspaceMode !== "ide" || isCompactWorkspace) return;
+      if (isCompactWorkspace) return;
+      const nonce = ++panelShortcutNonceRef.current;
+      if (workspaceMode === "terminal") {
+        setTerminalWorkspacePanelRequest({ nonce, targetId });
+        return;
+      }
       const request: ActivateToolRequest = {
-        nonce: ++panelShortcutNonceRef.current,
+        nonce,
         toolId: targetId === "terminals" ? "terminals" : targetId,
         exclusiveTarget: targetId,
       };
@@ -558,6 +566,7 @@ export default function WorkspacePage() {
       setIdeLeftTopToolRequest(null);
       setIdeBottomToolRequest(null);
       setIdeRightTopToolRequest(null);
+      setTerminalWorkspacePanelRequest(null);
       setRequestedCompactSurface((current) =>
         resolveActiveCompactSurfaceId(
           current,
@@ -577,6 +586,7 @@ export default function WorkspacePage() {
       setIdeLeftTopToolRequest(null);
       setIdeBottomToolRequest(null);
       setIdeRightTopToolRequest(null);
+      setTerminalWorkspacePanelRequest(null);
       setRequestedCompactSurface((activeSurface) =>
         resolveActiveCompactSurfaceId(
           activeSurface,
@@ -1130,6 +1140,20 @@ export default function WorkspacePage() {
     [],
   );
 
+  const terminalGitContent = useMemo(
+    () =>
+      projectName ? (
+        <Suspense fallback={<PanelFallback label="Loading Git…" />}>
+          <WorkspaceGitPanel key={projectName} project={projectName} />
+        </Suspense>
+      ) : (
+        <div className="p-4 text-xs text-[var(--color-text-muted)] italic text-center">
+          Select a project to see Git status
+        </div>
+      ),
+    [projectName],
+  );
+
   const leftTools = useMemo<ToolWindowDef[]>(
     () => [
       {
@@ -1504,7 +1528,9 @@ export default function WorkspacePage() {
           terminalContent={terminalContent}
           terminalOverlayContent={terminalFilePanelContent}
           fleetContent={fleetContent}
+          gitContent={terminalGitContent}
           portsContent={portsContent}
+          activatePanelRequest={terminalWorkspacePanelRequest}
           workspaceMode={workspaceMode}
           onWorkspaceModeChange={setWorkspaceMode}
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}

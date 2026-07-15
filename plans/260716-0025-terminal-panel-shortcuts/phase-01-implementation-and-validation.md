@@ -39,8 +39,9 @@ activation in the desktop IDE shell.
    settings at event time so changes apply without remounting listeners.
 4. In desktop IDE mode, target shortcuts toggle the target panel and clear the
    other two targets. Preserve PTY DOM nodes and unrelated tool selections.
-5. In compact/Terminal mode, route only to surfaces/layouts that already expose
-   the target; do not invent a second terminal manager or remount xterm sessions.
+5. In desktop Terminal mode, route the shortcuts to the existing right-rail
+   Git, Ports, and Fleet content without inventing a second terminal manager or
+   remounting xterm sessions. Keep compact-mode behavior unchanged.
 6. Suppress the bindings in `TerminalPanel` and `PaneContainer` before PTY input.
 7. Add focused unit/SSR coverage for constants/config defaults, xterm suppression,
    settings markup, and target activation/exclusivity state transitions.
