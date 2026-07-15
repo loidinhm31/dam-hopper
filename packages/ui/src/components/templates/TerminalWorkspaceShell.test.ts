@@ -18,12 +18,15 @@ describe("resolveTerminalWorkspacePanelActivation", () => {
     },
   );
 
-  it("closes the rail when its active panel is selected again", () => {
-    expect(
-      resolveTerminalWorkspacePanelActivation({
-        activePanelId: "git",
-        targetId: "git",
-      }),
-    ).toBeNull();
-  });
+  it.each(["git", "ports", "terminals"] as const)(
+    "closes %s when its active target is selected again",
+    (targetId) => {
+      expect(
+        resolveTerminalWorkspacePanelActivation({
+          activePanelId: targetId,
+          targetId,
+        }),
+      ).toBeNull();
+    },
+  );
 });

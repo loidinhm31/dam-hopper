@@ -249,6 +249,9 @@ describe("WorkspacePage", () => {
     expect(terminalMarkup).toContain('aria-label="Diagnostics time window"');
     expect(terminalMarkup).toContain('value="10" selected=""');
     expect(terminalMarkup).toContain("Show files panel");
+    expect(terminalMarkup).toContain("Git");
+    expect(terminalMarkup).toContain("Ports");
+    expect(terminalMarkup).toContain("Fleet");
   });
 
   it("restores the floating file panel state in desktop terminal mode", () => {

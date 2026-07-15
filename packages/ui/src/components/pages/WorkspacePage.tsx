@@ -805,6 +805,26 @@ export default function WorkspacePage() {
             >
               <Files className="h-4 w-4" />
             </button>
+            {workspaceMode === "terminal" && !isCompactWorkspace && (
+              <div className="flex rounded-sm border border-[var(--color-border)] bg-[var(--color-background)] p-0.5">
+                {[
+                  { id: "git", label: "Git" },
+                  { id: "ports", label: "Ports" },
+                  { id: "terminals", label: "Fleet" },
+                ].map(({ id, label }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() =>
+                      activateTerminalPanelShortcut(id as TerminalPanelToolId)
+                    }
+                    className="rounded-[3px] px-2 py-1 text-[11px] font-medium text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
             <button
               type="button"
               onClick={handleOpenCurrentTerminal}
@@ -1069,8 +1089,10 @@ export default function WorkspacePage() {
       projectName,
       handleLaunchShell,
       terminalFilePanelOpen,
-      toggleTerminalFilePanel,
       workspaceMode,
+      isCompactWorkspace,
+      activateTerminalPanelShortcut,
+      toggleTerminalFilePanel,
       diagnosticsWindowMinutes,
       openTerminalDiagnosticsMenu,
     ],
@@ -1303,10 +1325,6 @@ export default function WorkspacePage() {
     [fleetContent, handleLaunchTerminal, projectName],
   );
 
-  const handleTerminalWorkspaceFleetLayoutChange = useCallback(() => {
-    setTerminalLayoutRevision((current) => current + 1);
-  }, []);
-
   const compactGitSurface = useMemo<MobileWorkspaceSurface>(
     () => ({
       id: "git",
@@ -1534,7 +1552,6 @@ export default function WorkspacePage() {
           workspaceMode={workspaceMode}
           onWorkspaceModeChange={setWorkspaceMode}
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}
-          onFleetLayoutChange={handleTerminalWorkspaceFleetLayoutChange}
         />
       ) : (
         <IdeShell
