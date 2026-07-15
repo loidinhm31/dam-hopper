@@ -7,6 +7,10 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
+import {
+  openTerminalDiagnosticsContextMenu,
+  type TerminalDiagnosticsMenuHandler,
+} from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import type {
   RuntimePort,
   RuntimeSessionItem,
@@ -23,6 +27,7 @@ interface Props {
   item: RuntimeTreeItem;
   onSelectSession?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
+  onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   onMoveItem: (groupId: string, draggedId: string, targetId: string) => void;
   onSetDragState: (
     state:
@@ -92,6 +97,7 @@ function RuntimeSessionLeaf({
   session,
   onSelectSession,
   onCloseSession,
+  onOpenDiagnosticsMenu,
   onStartTunnel,
   onStopTunnel,
   touchOptimized = false,
@@ -100,6 +106,7 @@ function RuntimeSessionLeaf({
   session: RuntimeSessionItem;
   onSelectSession?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
+  onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   onStartTunnel: (port: number, label: string) => Promise<void>;
   onStopTunnel: (id: string) => Promise<void>;
   touchOptimized?: boolean;
@@ -132,7 +139,16 @@ function RuntimeSessionLeaf({
               : "bg-[var(--color-success)]",
           )}
         />
-        <div className="flex min-w-0 flex-1 items-center gap-2 text-left">
+        <div
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          onContextMenu={(event) =>
+            openTerminalDiagnosticsContextMenu(
+              event,
+              session.sessionId,
+              onOpenDiagnosticsMenu,
+            )
+          }
+        >
           <TerminalIcon className="h-3.5 w-3.5 shrink-0" />
           <span className="min-w-0 truncate font-mono">{session.label}</span>
         </div>
@@ -171,6 +187,7 @@ export function TerminalRuntimeNavigatorItem({
   item,
   onSelectSession,
   onCloseSession,
+  onOpenDiagnosticsMenu,
   onMoveItem,
   onSetDragState,
   onStartTunnel,
@@ -234,6 +251,7 @@ export function TerminalRuntimeNavigatorItem({
           session={item}
           onSelectSession={onSelectSession}
           onCloseSession={onCloseSession}
+          onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           onStartTunnel={onStartTunnel}
           onStopTunnel={onStopTunnel}
           touchOptimized={touchOptimized}
@@ -257,6 +275,7 @@ export function TerminalRuntimeNavigatorItem({
                 session={session}
                 onSelectSession={onSelectSession}
                 onCloseSession={onCloseSession}
+                onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
                 onStartTunnel={onStartTunnel}
                 onStopTunnel={onStopTunnel}
                 touchOptimized={touchOptimized}

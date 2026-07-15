@@ -32,6 +32,7 @@ export function IdeShell({
   onWorkspaceModeChange,
   workspaceModeShortcutLabel,
   activateLeftTopToolRequest,
+  activateBottomToolRequest,
   toolbarActions,
 }: {
   leftTools: ToolWindowDef[];
@@ -41,6 +42,7 @@ export function IdeShell({
   onWorkspaceModeChange?: (mode: WorkspaceMode) => void;
   workspaceModeShortcutLabel?: string;
   activateLeftTopToolRequest?: { nonce: number; toolId: string } | null;
+  activateBottomToolRequest?: { nonce: number; toolId: string } | null;
   toolbarActions?: ReactNode;
 }) {
   const { collapsed, toggle } = useSidebarCollapse();
@@ -214,6 +216,22 @@ export function IdeShell({
     // if active. Uses a functional update so the effect deps stay stable.
     setBottomMaximized((v) => (v ? false : v));
   }, [activateLeftTopToolRequest, leftTools]);
+
+  useEffect(() => {
+    if (!activateBottomToolRequest) return;
+    const requestedTool = [...leftTools, ...rightTools].find(
+      (entry) => entry.id === activateBottomToolRequest.toolId,
+    );
+    if (!requestedTool || requestedTool.position !== "bottom") return;
+    if (leftTools.includes(requestedTool)) {
+      // This request prop is an intentional imperative bridge from WorkspacePage.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setActiveLeftBottomId(requestedTool.id);
+    } else {
+      setActiveRightBottomId(requestedTool.id);
+    }
+    setBottomMaximized((v) => (v ? false : v));
+  }, [activateBottomToolRequest, leftTools, rightTools]);
 
   function handleToggleLeft(id: string) {
     const tool = leftTools.find((t) => t.id === id);

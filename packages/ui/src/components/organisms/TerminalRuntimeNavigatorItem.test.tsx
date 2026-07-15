@@ -17,6 +17,21 @@ function findElementByTitle(node: unknown, title: string): Record<string, unknow
   return null;
 }
 
+function findElementByClass(node: unknown, className: string): Record<string, unknown> | null {
+  if (!isValidElement(node)) return null;
+  if (typeof node.type === "function") {
+    return findElementByClass(node.type(node.props), className);
+  }
+  if ((node.props as { className?: string }).className === className) {
+    return node.props as Record<string, unknown>;
+  }
+  for (const child of Children.toArray((node.props as { children?: unknown }).children)) {
+    const match = findElementByClass(child, className);
+    if (match) return match;
+  }
+  return null;
+}
+
 describe("TerminalRuntimeNavigatorItem", () => {
   it("routes the close button to the existing close flow", () => {
     const onCloseSession = vi.fn();
@@ -51,5 +66,46 @@ describe("TerminalRuntimeNavigatorItem", () => {
     });
 
     expect(onCloseSession).toHaveBeenCalledWith("web");
+  });
+
+  it("routes a session title context menu to that session", () => {
+    const onOpenDiagnosticsMenu = vi.fn();
+    const tree = TerminalRuntimeNavigatorItem({
+      activeSessionId: "web",
+      dragState: null,
+      item: {
+        kind: "session",
+        id: "session:web",
+        groupId: "web",
+        sessionId: "web",
+        label: "web:bash",
+        project: "web",
+        command: "bash",
+        startedAt: 1,
+        ports: [],
+      },
+      onOpenDiagnosticsMenu,
+      onMoveItem: () => {},
+      onSetDragState: () => {},
+      onStartTunnel: async () => {},
+      onStopTunnel: async () => {},
+    });
+    const labelProps = findElementByClass(
+      tree,
+      "flex min-w-0 flex-1 items-center gap-2 text-left",
+    );
+    const preventDefault = vi.fn();
+    const stopPropagation = vi.fn();
+
+    (labelProps?.onContextMenu as (event: {
+      clientX: number;
+      clientY: number;
+      preventDefault: () => void;
+      stopPropagation: () => void;
+    }) => void)?.({ clientX: 11, clientY: 22, preventDefault, stopPropagation });
+
+    expect(onOpenDiagnosticsMenu).toHaveBeenCalledWith("web", 11, 22);
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(stopPropagation).toHaveBeenCalledOnce();
   });
 });

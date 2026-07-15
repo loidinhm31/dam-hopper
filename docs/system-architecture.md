@@ -105,7 +105,10 @@ Notification scope remains xterm-only. DamHopper does not watch external termina
 Notification selection also stays frontend-only. Native notification clicks
 publish a typed browser event keyed by the stable PTY `sessionId`;
 `WorkspacePage` consumes it because that page owns workspace mode, compact
-surface selection, terminal selection, and xterm focus orchestration. Displayed
+surface selection, terminal selection, and xterm focus orchestration. A click
+preserves the current IDE/Terminal mode: desktop IDE mode opens its Terminal
+bottom tool, while compact mode reveals the Terminal surface without toggling
+the mode. Displayed
 notification context uses `Project · Bash #N`, with the ordinal read from the
 current 1-based open-terminal order; the original sanitized body keeps its own
 payload allowance below that context line. Project names and terminal ordinals
@@ -169,7 +172,8 @@ The server now keeps a local-only diagnostics store for backend events and expos
 
 - `POST /api/diagnostics/export`
 - protected by auth like other backend routes
-- invoked by Settings > Maintenance > Export Diagnostics in the UI
+- invoked by Settings > Maintenance > Export Diagnostics and terminal-title context menus in the UI
+- workspace terminal exports use the shared terminal-panel time window and pass only the right-clicked session ID as `terminalIds`
 - request accepts `frontend` and also the legacy `frontendSnapshot` alias
 - response schema version is `1`
 - top-level export sections:

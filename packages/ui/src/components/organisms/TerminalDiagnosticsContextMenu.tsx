@@ -2,8 +2,30 @@ import { useEffect, useMemo, useRef } from "react";
 import { Download } from "lucide-react";
 
 const MENU_WIDTH = 192;
-const MENU_HEIGHT = 96;
+const MENU_HEIGHT = 152;
 const VIEWPORT_MARGIN = 8;
+
+export type TerminalDiagnosticsMenuHandler = (
+  sessionId: string,
+  x: number,
+  y: number,
+) => void;
+
+export function openTerminalDiagnosticsContextMenu(
+  event: {
+    clientX: number;
+    clientY: number;
+    preventDefault: () => void;
+    stopPropagation: () => void;
+  },
+  sessionId: string,
+  onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler,
+) {
+  if (!onOpenDiagnosticsMenu) return;
+  event.preventDefault();
+  event.stopPropagation();
+  onOpenDiagnosticsMenu(sessionId, event.clientX, event.clientY);
+}
 
 interface TerminalDiagnosticsContextMenuProps {
   x: number;
@@ -87,6 +109,7 @@ export function TerminalDiagnosticsContextMenu({
       <button
         type="button"
         role="menuitem"
+        autoFocus
         disabled={isPending}
         onClick={onExport}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-2)] focus-visible:bg-[var(--color-surface-2)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
@@ -97,7 +120,7 @@ export function TerminalDiagnosticsContextMenu({
       {error && (
         <p
           role="alert"
-          className="border-t border-[var(--color-border)] px-3 pt-1.5 text-[10px] leading-snug text-[var(--color-danger)]"
+          className="max-h-24 overflow-auto border-t border-[var(--color-border)] px-3 pt-1.5 text-[10px] leading-snug text-[var(--color-danger)]"
         >
           {error}
         </p>
