@@ -11,8 +11,8 @@
 - Date: 2026-07-16
 - Description: prove replay is silent and later identical live OSC 9 remains visible.
 - Priority: P2
-- Implementation status: pending
-- Review status: pending
+- Implementation status: completed 2026-07-16 13:38 +07
+- Review status: completed 2026-07-16 13:38 +07
 
 ## Key insights
 
@@ -45,10 +45,10 @@ Use deterministic fake xterm/parser/write callbacks. The test explicitly complet
 
 ## Todo list
 
-- [ ] Cover replay-silent OSC 9.
-- [ ] Cover identical post-replay live OSC 9.
-- [ ] Cover deferred xterm completion and concurrent live data.
-- [ ] Run focused and package-level verification.
+- [x] Cover replay-silent OSC 9.
+- [x] Cover identical post-replay live OSC 9.
+- [x] Cover deferred xterm completion and concurrent live data.
+- [x] Run focused and package-level verification.
 
 ## Success criteria
 
@@ -67,7 +67,7 @@ Use deterministic fake xterm/parser/write callbacks. The test explicitly complet
 
 ## Next steps
 
-After implementation, inspect the code diff against Phase 01 and update architecture documentation only if the final lifecycle differs from this bug-fix design.
+Phase 02 completed. The final lifecycle remains aligned with the Phase 01 replay-gate design; architecture documentation now records the callback-gated replay and ordered live-output coverage.
 
 ## Unresolved questions
 

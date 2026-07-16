@@ -1,7 +1,7 @@
 ---
 title: "Prevent replayed Codex terminal notifications"
 description: "Suppress OSC 9 delivery during retained xterm-buffer replay while preserving later live notifications."
-status: in_progress
+status: completed
 priority: P2
 effort: 3h
 branch: main
@@ -21,10 +21,10 @@ Use a per-`TerminalPanel` replay gate. It starts before xterm receives `terminal
 
 ## Phases
 
-| # | Phase | Status | Effort | Plan |
-|---|---|---|---:|---|
-| 1 | Replay-safe delivery lifecycle | completed 2026-07-16 13:14 +07 | 2h | [phase-01](./phase-01-replay-safe-notification-lifecycle.md) |
-| 2 | Regression coverage and validation | pending | 1h | [phase-02](./phase-02-replay-notification-regression-coverage.md) |
+| #   | Phase                              | Status                         | Effort | Plan                                                              |
+| --- | ---------------------------------- | ------------------------------ | -----: | ----------------------------------------------------------------- |
+| 1   | Replay-safe delivery lifecycle     | completed 2026-07-16 13:14 +07 |     2h | [phase-01](./phase-01-replay-safe-notification-lifecycle.md)      |
+| 2   | Regression coverage and validation | completed 2026-07-16 13:38 +07 |     1h | [phase-02](./phase-02-replay-notification-regression-coverage.md) |
 
 ## Dependencies
 
