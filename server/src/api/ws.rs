@@ -85,9 +85,7 @@ pub async fn ws_handler(
         .cloned()
         .or_else(|| jar.get(AUTH_COOKIE).map(|c| c.value().to_string()));
 
-    let auth_ok = token
-        .map(|t| crate::api::auth::validate_jwt(&t, &state.jwt_secret))
-        .unwrap_or(false);
+    let auth_ok = websocket_auth_ok(state.no_auth, token, &state.jwt_secret);
 
     if !auth_ok {
         return axum::response::IntoResponse::into_response((
@@ -97,6 +95,13 @@ pub async fn ws_handler(
     }
 
     upgrade.on_upgrade(move |socket| handle_socket(socket, state))
+}
+
+fn websocket_auth_ok(no_auth: bool, token: Option<String>, jwt_secret: &str) -> bool {
+    no_auth
+        || token
+            .map(|value| crate::api::auth::validate_jwt(&value, jwt_secret))
+            .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -2205,5 +2210,20 @@ async fn pump_fs_events(
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::websocket_auth_ok;
+
+    #[test]
+    fn no_auth_mode_allows_websocket_without_a_token() {
+        assert!(websocket_auth_ok(true, None, "test-secret"));
+    }
+
+    #[test]
+    fn authenticated_mode_still_requires_a_valid_token() {
+        assert!(!websocket_auth_ok(false, None, "test-secret"));
     }
 }

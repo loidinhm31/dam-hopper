@@ -46,12 +46,15 @@ const EMPTY = (sessionId: string): TerminalSuggestionSnapshot => ({
   rawInput: "",
 });
 
+const MAX_PENDING_ECHO_LENGTH = 4096;
+
 /** Purely client-side, fail-closed suggestion controller. It never writes PTY bytes. */
 export class TerminalSuggestionController {
   private listeners = new Set<Listener>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private token = 0;
   private generation: number | undefined;
+  private pendingEcho = "";
   private enabled: boolean;
   private current: TerminalSuggestionSnapshot;
 
@@ -120,13 +123,28 @@ export class TerminalSuggestionController {
       revision: this.current.revision + 1,
       suggestion: undefined,
     };
+    this.pendingEcho += input.text;
+    if (this.pendingEcho.length > MAX_PENDING_ECHO_LENGTH) {
+      this.reset("opaque");
+      return;
+    }
     this.invalidate(false);
     this.query();
   }
 
-  /** Any output is ambiguous without a bounded echo verifier, so fail closed. */
-  handleOutput(): void {
-    if (this.current.state !== "disabled") this.reset("opaque");
+  /** Ignore only the exact bounded echo of printable input sent by this client. */
+  handleOutput(data: string): void {
+    if (this.current.state === "disabled") return;
+    if (
+      !this.pendingEcho ||
+      !data ||
+      data.length > this.pendingEcho.length ||
+      !this.pendingEcho.startsWith(data)
+    ) {
+      this.reset("opaque");
+      return;
+    }
+    this.pendingEcho = this.pendingEcho.slice(data.length);
   }
 
   /** Reconnect and replay invalidate shell-line ownership before bytes arrive. */
@@ -219,6 +237,7 @@ export class TerminalSuggestionController {
   }
 
   private reset(state: TerminalSuggestionState): void {
+    this.pendingEcho = "";
     this.current = {
       ...EMPTY(this.options.sessionId),
       state,
