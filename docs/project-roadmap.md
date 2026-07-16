@@ -4,10 +4,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Status Overview
 
-- **Current Phase:** Safe Inline Terminal Suggestions Phase 03 (completed 2026-07-16 05:07 +07; review approved)
-- **Last Milestone:** Added fail-closed suggestion controller and exact history/search separation
-- **Total Phases Completed:** 21 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 5/5, terminal notification center 1/1, inline terminal suggestions 3/5 complete)
-- **Next Milestone:** Inline Terminal Suggestions Phase 04: ghost geometry and explicit history list
+- **Current Phase:** Safe Inline Terminal Suggestions Phase 05 (completed 2026-07-16 +07; review approved)
+- **Last Milestone:** Completed automated release validation, documentation, and fail-closed rollout preparation
+- **Total Phases Completed:** 23 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 5/5, terminal notification center 1/1, inline terminal suggestions 5/5 complete)
+- **Next Milestone:** Complete external release checks: real zsh/fish PTY, IME, screen-reader, and WebGL/renderer validation
 
 ## Roadmap Phases
 
@@ -208,6 +208,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 ## Recent Milestones
 
 - **2026-07-16:** Completed Safe Inline Terminal Suggestions Phase 03: Suggestion Controller and History/Search Separation (review approved 05:07 +07).
+
+- **2026-07-16:** Completed Safe Inline Terminal Suggestions Phase 05: Release Validation, Documentation, and Rollout (review approved).
+  - ✅ Automated validation passed for the shipped inline-suggestion behavior and documentation/rollout work
+  - ✅ Automatic suggestions remain fail-closed and retain the immediate kill switch and unsupported-session fallback
+  - ⚠️ External release gates remain: manual real-PTY zsh/fish, IME, screen-reader, and WebGL/renderer checks; none are claimed completed
 
 - **2026-07-16:** Completed Safe Inline Terminal Suggestions Phase 02: Verified Shell Lifecycle Integration.
   - ✅ Added per-PTY-incarnation nonce-backed lifecycle validation and zsh/fish launch adapters

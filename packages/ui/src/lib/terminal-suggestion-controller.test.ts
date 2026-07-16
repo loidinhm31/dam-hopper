@@ -1,6 +1,20 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { HistorySearchResult } from "./command-history.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getHistory, setHistoryEnabled, type HistorySearchResult } from "./command-history.js";
 import { createTerminalSuggestionController } from "./terminal-suggestion-controller.js";
+
+function createStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => values.set(key, value),
+  };
+}
 
 const result = (command: string): HistorySearchResult => ({
   entry: {
@@ -25,7 +39,15 @@ function editing(
 }
 
 describe("TerminalSuggestionController", () => {
-  afterEach(() => vi.useRealTimers());
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorage());
+    setHistoryEnabled(true);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it("only surfaces an exact raw prefix after debounce", async () => {
     vi.useFakeTimers();
@@ -115,6 +137,7 @@ describe("TerminalSuggestionController", () => {
       command: "should not record",
     });
     expect(controller.snapshot.state).toBe("ready-clean");
+    expect(getHistory()).toEqual([]);
     controller.handleLifecycle({
       id: "one",
       lifecycle: "submitted",
@@ -122,6 +145,28 @@ describe("TerminalSuggestionController", () => {
       command: "git status",
     });
     expect(controller.snapshot.state).toBe("unverified");
+    expect(getHistory()).toEqual([
+      expect.objectContaining({ command: "git status" }),
+    ]);
+  });
+
+  it("stops history persistence immediately when the suggestion kill switch turns off", () => {
+    const controller = createTerminalSuggestionController({
+      sessionId: "one",
+      project: "web",
+      search: () => [],
+    });
+    editing(controller);
+    controller.setEnabled(false);
+    controller.handleLifecycle({
+      id: "one",
+      lifecycle: "submitted",
+      generation: 1,
+      command: "sudo secret-command",
+    });
+
+    expect(controller.snapshot.state).toBe("disabled");
+    expect(getHistory()).toEqual([]);
   });
 
   it("consumes a suffix once before a caller can write it to the PTY", async () => {
