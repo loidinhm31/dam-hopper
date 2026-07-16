@@ -236,9 +236,11 @@ already retained in the browser. Use **Clear local command history** in Settings
 remove those commands, or disable **Local command history** to stop future browser-local
 writes independently.
 
-Automatic suggestions are supported only for a launch-only local interactive `zsh` or
-`fish` shell whose lifecycle markers validate for the current PTY incarnation. Bash,
-PowerShell, SSH/subshell sessions, replayed or respawned terminals, alternate buffers,
+Automatic suggestions are supported only for a launch-only local interactive `zsh`,
+`fish`, or Bash shell whose lifecycle markers validate for the current PTY incarnation.
+Bash preserves scalar and array `PROMPT_COMMAND` hooks, but fails closed when an existing
+`DEBUG` trap or ambiguous command syntax prevents lossless capture. PowerShell,
+SSH/subshell sessions, replayed or respawned terminals, alternate buffers,
 and mobile/coarse-pointer input remain fail closed. In those cases no ghost is shown;
 the explicit desktop history dialog remains the deliberate reuse path when enabled.
 

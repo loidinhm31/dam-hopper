@@ -115,9 +115,9 @@ Notification scope remains xterm-only. DamHopper does not watch external termina
 ### inline terminal suggestions
 
 Automatic suggestions and history capture remain fail-closed until the server verifies
-a shell lifecycle for the current PTY incarnation. The server currently supports only
-launch-only local interactive zsh and fish adapters; Bash and every other command or
-shell remain unsupported. Terminal and outgoing PTY bytes are passive: the feature
+a shell lifecycle for the current PTY incarnation. The server supports launch-only local
+interactive zsh, fish, and Bash adapters; every other command or shell remains unsupported.
+Terminal and outgoing PTY bytes are passive: the feature
 never infers command boundaries from Enter, output silence, replayed scrollback, or
 arbitrary input. Command history is browser-local and users can clear it or disable
 future persistence from Settings.
@@ -156,7 +156,10 @@ the exact submitted command; `C` closes editing before command output or passwor
 TUI input. Browser-local history commits only from a current-generation, server-validated
 `submitted` lifecycle event carrying that exact `E` command. Outgoing PTY bytes, Enter,
 terminal silence, and replayed scrollback never establish a history boundary.
-Nonce validation limits accidental or child-process marker spoofing; it is not isolation
+The Bash adapter preserves scalar and array `PROMPT_COMMAND` hooks and disables itself when
+an existing `DEBUG` trap would make command capture ambiguous. Bash commands containing
+compound, multiline, substitution, or redirection syntax also fail closed rather than
+submitting an approximation. Nonce validation limits accidental or child-process marker spoofing; it is not isolation
 against malicious same-user code, so invalid sequences always reset to `Unverified`.
 
 Phase 03 implements a per-session, client-only suggestion controller with immutable
