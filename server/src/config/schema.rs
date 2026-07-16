@@ -359,6 +359,9 @@ fn default_mobile_custom_keyboard_padding() -> u16 {
 fn default_mobile_custom_keyboard_row_gap() -> u16 {
     4
 }
+fn default_terminal_codex_notification_sound_volume() -> u8 {
+    100
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -416,6 +419,18 @@ pub struct UiConfig {
         alias = "terminalAgentNotificationsEnabled"
     )]
     pub terminal_codex_notifications_enabled: bool,
+    #[serde(
+        default = "default_true",
+        alias = "terminal_codex_notification_sound_enabled",
+        alias = "terminalCodexNotificationSoundEnabled"
+    )]
+    pub terminal_codex_notification_sound_enabled: bool,
+    #[serde(
+        default = "default_terminal_codex_notification_sound_volume",
+        alias = "terminal_codex_notification_sound_volume",
+        alias = "terminalCodexNotificationSoundVolume"
+    )]
+    pub terminal_codex_notification_sound_volume: u8,
     #[serde(default, alias = "explorer_show_hidden", alias = "explorerShowHidden")]
     pub explorer_show_hidden: bool,
     #[serde(
@@ -490,6 +505,9 @@ impl Default for UiConfig {
             fleet_terminal_shortcut: default_fleet_terminal_shortcut(),
             terminal_suggestions_enabled: true,
             terminal_codex_notifications_enabled: false,
+            terminal_codex_notification_sound_enabled: true,
+            terminal_codex_notification_sound_volume:
+                default_terminal_codex_notification_sound_volume(),
             explorer_show_hidden: false,
             mobile_custom_keyboard_enabled: true,
             mobile_custom_keyboard_font_size: default_mobile_custom_keyboard_font_size(),
@@ -517,6 +535,14 @@ impl UiConfig {
         Self::validate_mobile_keyboard_font_size(self.mobile_custom_keyboard_font_size)?;
         Self::validate_mobile_keyboard_padding(self.mobile_custom_keyboard_padding)?;
         Self::validate_mobile_keyboard_row_gap(self.mobile_custom_keyboard_row_gap)
+    }
+
+    pub fn validate_terminal_notification_sound_volume(&self) -> Result<(), String> {
+        if self.terminal_codex_notification_sound_volume <= 100 {
+            Ok(())
+        } else {
+            Err("Terminal notification sound volume must be between 0 and 100".to_string())
+        }
     }
 
     pub fn validate_font_size(size: u16) -> Result<(), String> {

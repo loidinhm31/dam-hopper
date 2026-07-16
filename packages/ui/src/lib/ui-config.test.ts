@@ -13,6 +13,8 @@ describe("withUiConfigDefaults", () => {
     expect(ui.portsPanelShortcut).toBe("Mod+Shift+KeyP");
     expect(ui.fleetTerminalShortcut).toBe("Mod+Shift+KeyM");
     expect(ui.terminalCodexNotificationsEnabled).toBe(false);
+    expect(ui.terminalCodexNotificationSoundEnabled).toBe(true);
+    expect(ui.terminalCodexNotificationSoundVolume).toBe(100);
     expect(ui.mobileCustomKeyboardEnabled).toBe(true);
     expect(ui.mobileCustomKeyboardFontSize).toBe(11);
     expect(ui.mobileCustomKeyboardPadding).toBe(6);
@@ -37,6 +39,8 @@ describe("withUiConfigDefaults", () => {
       portsPanelShortcut: "ctrl+shift+p",
       fleetTerminalShortcut: "ctrl+shift+m",
       terminalCodexNotificationsEnabled: true,
+      terminalCodexNotificationSoundEnabled: false,
+      terminalCodexNotificationSoundVolume: 45,
       mobileCustomKeyboardEnabled: false,
       mobileCustomKeyboardFontSize: 14,
       mobileCustomKeyboardPadding: 9,
@@ -56,6 +60,8 @@ describe("withUiConfigDefaults", () => {
     expect(ui.portsPanelShortcut).toBe("Ctrl+Shift+KeyP");
     expect(ui.fleetTerminalShortcut).toBe("Ctrl+Shift+KeyM");
     expect(ui.terminalCodexNotificationsEnabled).toBe(true);
+    expect(ui.terminalCodexNotificationSoundEnabled).toBe(false);
+    expect(ui.terminalCodexNotificationSoundVolume).toBe(45);
     expect(ui.mobileCustomKeyboardEnabled).toBe(false);
     expect(ui.mobileCustomKeyboardFontSize).toBe(14);
     expect(ui.mobileCustomKeyboardPadding).toBe(9);

@@ -27,6 +27,8 @@ const KEYBOARD_PADDING_MIN = 2;
 const KEYBOARD_PADDING_MAX = 14;
 const KEYBOARD_ROW_GAP_MIN = 2;
 const KEYBOARD_ROW_GAP_MAX = 12;
+const TERMINAL_NOTIFICATION_SOUND_VOLUME_MIN = 0;
+const TERMINAL_NOTIFICATION_SOUND_VOLUME_MAX = 100;
 
 export function clampFont(size: number): number {
   return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(size)));
@@ -53,6 +55,13 @@ function clampKeyboardRowGap(size: number): number {
   );
 }
 
+export function clampTerminalNotificationSoundVolume(volume: number): number {
+  return Math.min(
+    TERMINAL_NOTIFICATION_SOUND_VOLUME_MAX,
+    Math.max(TERMINAL_NOTIFICATION_SOUND_VOLUME_MIN, Math.round(volume)),
+  );
+}
+
 interface PersistedSettingsState {
   systemFontSize: number;
   editorFontSize: number;
@@ -67,6 +76,8 @@ interface PersistedSettingsState {
   fleetTerminalShortcut: string;
   terminalSuggestionsEnabled: boolean;
   terminalCodexNotificationsEnabled: boolean;
+  terminalCodexNotificationSoundEnabled: boolean;
+  terminalCodexNotificationSoundVolume: number;
   terminalScrollButtonsEnabled: boolean;
   terminalScrollStep: number;
   explorerShowHidden: boolean;
@@ -106,6 +117,10 @@ function pickPersistedSettings(
     fleetTerminalShortcut: state.fleetTerminalShortcut,
     terminalSuggestionsEnabled: state.terminalSuggestionsEnabled,
     terminalCodexNotificationsEnabled: state.terminalCodexNotificationsEnabled,
+    terminalCodexNotificationSoundEnabled:
+      state.terminalCodexNotificationSoundEnabled,
+    terminalCodexNotificationSoundVolume:
+      state.terminalCodexNotificationSoundVolume,
     terminalScrollButtonsEnabled: state.terminalScrollButtonsEnabled,
     terminalScrollStep: state.terminalScrollStep,
     explorerShowHidden: state.explorerShowHidden,
@@ -130,6 +145,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   fleetTerminalShortcut: DEFAULT_FLEET_TERMINAL_SHORTCUT,
   terminalSuggestionsEnabled: true,
   terminalCodexNotificationsEnabled: false,
+  terminalCodexNotificationSoundEnabled: true,
+  terminalCodexNotificationSoundVolume: 100,
   terminalScrollButtonsEnabled: false,
   terminalScrollStep: 3,
   explorerShowHidden: false,
@@ -162,6 +179,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
             ui as { terminalAgentNotificationsEnabled?: boolean } | undefined
           )?.terminalAgentNotificationsEnabled ??
           false,
+        terminalCodexNotificationSoundEnabled:
+          ui.terminalCodexNotificationSoundEnabled ?? true,
+        terminalCodexNotificationSoundVolume:
+          clampTerminalNotificationSoundVolume(
+            ui.terminalCodexNotificationSoundVolume ?? 100,
+          ),
         terminalScrollButtonsEnabled: ui.terminalScrollButtonsEnabled ?? false,
         terminalScrollStep: ui.terminalScrollStep ?? 3,
         explorerShowHidden: ui.explorerShowHidden ?? false,
@@ -208,6 +231,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (partial.terminalCodexNotificationsEnabled !== undefined)
       clamped.terminalCodexNotificationsEnabled =
         partial.terminalCodexNotificationsEnabled;
+    if (partial.terminalCodexNotificationSoundEnabled !== undefined)
+      clamped.terminalCodexNotificationSoundEnabled =
+        partial.terminalCodexNotificationSoundEnabled;
+    if (partial.terminalCodexNotificationSoundVolume !== undefined)
+      clamped.terminalCodexNotificationSoundVolume =
+        clampTerminalNotificationSoundVolume(
+          partial.terminalCodexNotificationSoundVolume,
+        );
     if (partial.terminalScrollButtonsEnabled !== undefined)
       clamped.terminalScrollButtonsEnabled = partial.terminalScrollButtonsEnabled;
     if (partial.terminalScrollStep !== undefined)

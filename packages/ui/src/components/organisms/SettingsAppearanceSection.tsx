@@ -18,6 +18,8 @@ export function SettingsAppearanceSection() {
     editorZoomWheelEnabled,
     terminalSuggestionsEnabled,
     terminalCodexNotificationsEnabled,
+    terminalCodexNotificationSoundEnabled,
+    terminalCodexNotificationSoundVolume,
     terminalScrollButtonsEnabled,
     terminalScrollStep,
     explorerShowHidden,
@@ -58,6 +60,7 @@ export function SettingsAppearanceSection() {
       >
         <Switch
           checked={editorZoomWheelEnabled}
+          ariaLabel="Enable Ctrl+Wheel zoom"
           onCheckedChange={(checked) =>
             saveDebounced({ editorZoomWheelEnabled: checked })
           }
@@ -72,6 +75,7 @@ export function SettingsAppearanceSection() {
       >
         <Switch
           checked={explorerShowHidden}
+          ariaLabel="Show hidden files"
           onCheckedChange={(checked) =>
             saveDebounced({ explorerShowHidden: checked })
           }
@@ -86,6 +90,7 @@ export function SettingsAppearanceSection() {
       >
         <Switch
           checked={terminalSuggestionsEnabled}
+          ariaLabel="Enable inline terminal suggestions"
           onCheckedChange={(checked) =>
             saveDebounced({ terminalSuggestionsEnabled: checked })
           }
@@ -100,6 +105,7 @@ export function SettingsAppearanceSection() {
       >
         <Switch
           checked={historyEnabled}
+          ariaLabel="Enable local command history"
           onCheckedChange={(enabled) => {
             setHistoryEnabled(enabled);
             setHistoryEnabledState(isHistoryEnabled());
@@ -126,6 +132,8 @@ export function SettingsAppearanceSection() {
 
       <TerminalAgentNotificationSettings
         enabled={terminalCodexNotificationsEnabled}
+        soundEnabled={terminalCodexNotificationSoundEnabled}
+        soundVolume={terminalCodexNotificationSoundVolume}
         onSave={saveDebounced}
       />
 
@@ -137,6 +145,7 @@ export function SettingsAppearanceSection() {
       >
         <Switch
           checked={terminalScrollButtonsEnabled}
+          ariaLabel="Show terminal scroll buttons"
           onCheckedChange={(checked) =>
             saveDebounced({ terminalScrollButtonsEnabled: checked })
           }
@@ -165,6 +174,7 @@ export function SettingsAppearanceSection() {
       >
         <Switch
           checked={mobileCustomKeyboardEnabled}
+          ariaLabel="Enable custom mobile terminal keyboard"
           onCheckedChange={(checked) =>
             saveDebounced({ mobileCustomKeyboardEnabled: checked })
           }

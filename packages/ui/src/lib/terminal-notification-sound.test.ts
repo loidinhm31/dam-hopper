@@ -33,24 +33,24 @@ function createAudioContext(state: AudioContextState = "running") {
 }
 
 describe("TerminalNotificationSound", () => {
-  it("schedules a short low-volume chime and reuses its context", () => {
+  it("schedules a pronounced chime and reuses its context", () => {
     const { context, gain, oscillator } = createAudioContext();
     const contextFactory = vi.fn(() => context);
     const sound = new TerminalNotificationSound({
       createAudioContext: contextFactory,
     });
 
-    sound.play();
-    sound.play();
+    sound.play(50);
+    sound.play(50);
 
     expect(contextFactory).toHaveBeenCalledTimes(1);
     expect(oscillator.frequency.setValueAtTime).toHaveBeenCalledWith(880, 2);
     expect(gain.gain.exponentialRampToValueAtTime).toHaveBeenCalledWith(
-      0.06,
+      0.12,
       2.01,
     );
     expect(oscillator.start).toHaveBeenCalledWith(2);
-    expect(oscillator.stop).toHaveBeenCalledWith(2.16);
+    expect(oscillator.stop).toHaveBeenCalledWith(2.32);
     expect(oscillator.connect).toHaveBeenCalledWith(gain);
   });
 
@@ -68,6 +68,22 @@ describe("TerminalNotificationSound", () => {
 
     expect(context.resume).toHaveBeenCalledTimes(1);
     expect(oscillator.start).toHaveBeenCalledWith(2);
+  });
+
+  it("resumes a suspended context at zero volume without scheduling a chime", async () => {
+    const { context, oscillator, rawContext } = createAudioContext("suspended");
+    context.resume = vi.fn(async () => {
+      rawContext.state = "running";
+    });
+    const sound = new TerminalNotificationSound({
+      createAudioContext: () => context,
+    });
+
+    sound.play(0);
+    await Promise.resolve();
+
+    expect(context.resume).toHaveBeenCalledTimes(1);
+    expect(oscillator.start).not.toHaveBeenCalled();
   });
 
   it("silently ignores unavailable and failing audio APIs", async () => {

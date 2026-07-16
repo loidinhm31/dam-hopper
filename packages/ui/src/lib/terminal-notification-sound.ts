@@ -1,6 +1,7 @@
-const CHIME_DURATION_SECONDS = 0.16;
+const CHIME_DURATION_SECONDS = 0.32;
 const CHIME_FREQUENCY_HERTZ = 880;
-const CHIME_VOLUME = 0.06;
+const CHIME_VOLUME = 0.24;
+const DEFAULT_VOLUME_PERCENT = 100;
 
 export interface TerminalNotificationSoundDependencies {
   createAudioContext?: () => AudioContext | null;
@@ -15,18 +16,18 @@ export class TerminalNotificationSound {
       dependencies.createAudioContext ?? createBrowserAudioContext;
   }
 
-  play(): void {
+  play(volumePercent = DEFAULT_VOLUME_PERCENT): void {
     const context = this.getAudioContext();
     if (!context) return;
+    const volume = CHIME_VOLUME * normalizeVolumePercent(volumePercent);
 
     try {
       if (context.state === "running") {
-        this.scheduleChime(context);
+        if (volume > 0) this.scheduleChime(context, volume);
       } else if (context.state === "suspended") {
-        void context.resume().then(
-          () => this.scheduleChime(context),
-          () => {},
-        );
+        void context.resume().then(() => {
+          if (volume > 0) this.scheduleChime(context, volume);
+        }, () => {});
       }
     } catch {
       // Audio is optional; unsupported and blocked playback must not affect delivery.
@@ -44,7 +45,7 @@ export class TerminalNotificationSound {
     return this.audioContext;
   }
 
-  private scheduleChime(context: AudioContext): void {
+  private scheduleChime(context: AudioContext, volume: number): void {
     if (context.state !== "running") return;
 
     let oscillator: OscillatorNode | undefined;
@@ -56,7 +57,7 @@ export class TerminalNotificationSound {
       oscillator.type = "sine";
       oscillator.frequency.setValueAtTime(CHIME_FREQUENCY_HERTZ, now);
       gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(CHIME_VOLUME, now + 0.01);
+      gain.gain.exponentialRampToValueAtTime(volume, now + 0.01);
       gain.gain.exponentialRampToValueAtTime(
         0.0001,
         now + CHIME_DURATION_SECONDS,
@@ -78,8 +79,10 @@ export class TerminalNotificationSound {
 
 let defaultTerminalNotificationSound: TerminalNotificationSound | null = null;
 
-export function playTerminalNotificationSound(): void {
-  (defaultTerminalNotificationSound ??= new TerminalNotificationSound()).play();
+export function playTerminalNotificationSound(volumePercent?: number): void {
+  (defaultTerminalNotificationSound ??= new TerminalNotificationSound()).play(
+    volumePercent,
+  );
 }
 
 export function __resetTerminalNotificationSoundForTests(): void {
@@ -93,4 +96,9 @@ function createBrowserAudioContext(): AudioContext | null {
   const AudioContextConstructor =
     browserGlobal.AudioContext ?? browserGlobal.webkitAudioContext;
   return AudioContextConstructor ? new AudioContextConstructor() : null;
+}
+
+function normalizeVolumePercent(volumePercent: number): number {
+  if (!Number.isFinite(volumePercent)) return 1;
+  return Math.min(100, Math.max(0, volumePercent)) / 100;
 }

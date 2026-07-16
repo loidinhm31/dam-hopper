@@ -17,6 +17,8 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   editorZoomWheelEnabled: true,
   terminalSuggestionsEnabled: true,
   terminalCodexNotificationsEnabled: false,
+  terminalCodexNotificationSoundEnabled: true,
+  terminalCodexNotificationSoundVolume: 100,
   terminalScrollButtonsEnabled: false,
   terminalScrollStep: 3,
   explorerShowHidden: false,
@@ -72,6 +74,12 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
       ui?.terminalCodexNotificationsEnabled ??
       legacyTerminalAgentNotificationsEnabled ??
       DEFAULT_UI_CONFIG.terminalCodexNotificationsEnabled,
+    terminalCodexNotificationSoundEnabled:
+      ui?.terminalCodexNotificationSoundEnabled ??
+      DEFAULT_UI_CONFIG.terminalCodexNotificationSoundEnabled,
+    terminalCodexNotificationSoundVolume:
+      ui?.terminalCodexNotificationSoundVolume ??
+      DEFAULT_UI_CONFIG.terminalCodexNotificationSoundVolume,
     searchTextShortcut: formatShortcut(
       ui?.searchTextShortcut ?? DEFAULT_UI_CONFIG.searchTextShortcut,
     ),

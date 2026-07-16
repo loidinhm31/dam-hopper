@@ -75,7 +75,7 @@ Shared runtime libraries:
 - Terminal exit notifications are suppressed when the session is expected to restart, so `willRestart` does not produce a finished notification.
 - Cleanup disposes xterm handlers, timers, and tracker state when the panel unmounts or the session is replaced.
 - In-app history is memory-only and capped at 50 records; toast IDs are capped at three. Enabling the Codex notification setting is required, but browser `Notification` permission does not affect the in-app bell or toast path.
-- `terminal-notification-sound.ts` uses a reused Web Audio context to attempt a short, low-volume chime for enabled valid Codex OSC 9 events. Unsupported, SSR, autoplay-blocked, and audio-failure paths are silent no-ops; no browser permission or sound setting is added.
+- `terminal-notification-sound.ts` uses a reused Web Audio context to attempt a short chime for enabled valid Codex OSC 9 events. Unsupported, SSR, autoplay-blocked, and audio-failure paths are silent no-ops; the persisted Sound switch and Volume slider control only this in-app channel, while the Settings page's **Play sound** button activates audio from an explicit click and does not request a browser permission.
 - Terminal ordinals are the current 1-based open-list position and are display context only. Navigation never relies on a project name or ordinal. A target must be mounted and either explicitly alive or, only while liveness is unknown, already registered with xterm; explicitly dead, unmounted, and stale targets are safe no-ops.
 - In compact coarse-pointer layouts with the mobile custom keyboard enabled, selection still reveals and refits the exact terminal but deliberately avoids forcing native xterm focus so the browser keyboard is not opened unexpectedly.
 - Settings live under `SettingsAppearanceSection` via the extracted `TerminalAgentNotificationSettings` and `AgentCommandPatternEditor` UI. Permission is requested only from the explicit button click and the app surfaces `unsupported`, `not requested`, `granted`, and `denied` states without persisting that browser permission.
@@ -206,6 +206,45 @@ The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose
 **Purpose:** Renders a single terminal session using xterm.js. Handles lifecycle events (output, exit, restart, reconnect), session attachment, and in-app/native agent notification integration. Phase 1 adds the session-local find controller; TerminalPanel lifecycle wiring follows in Phase 2.
 
 **Behavior:** Filters out the terminal workspace shortcut so xterm input does not swallow the global mode toggle. Wires xterm BEL and OSC 9/777/99 handlers into the shared agent-activity path so submitted command, output, user input, and exit signals can drive in-app and native browser notifications without any backend protocol change. The terminal session cleanup path disposes signal handlers and timers; search controller cleanup is added with the Phase 2 lifecycle wiring.
+
+#### Inline terminal suggestions (Phase 04)
+
+`useTerminalSuggestions` owns one `TerminalSuggestionController` per mounted terminal and
+exposes its immutable snapshot to React. The controller observes only typed,
+server-validated `terminal:lifecycle` events; a `submitted` event with an exact command is the
+only automatic local-history write path. `TerminalPanel` notifies the controller for each
+streamed output write, on attach/replay and process restart, and on composition/paste, so all
+of those boundaries invalidate an in-flight search before it can surface a stale result.
+
+The input adapter remains deliberately passive: it returns original input through the regular
+`terminalWrite` path without replacement bytes. In desktop layouts, `TerminalPanel` renders only
+the remaining suffix from a current verified `ghost` snapshot. `TerminalSuggestionGhost` is
+unfocusable, `aria-hidden`, pointer-inert, single-line, and clipped/faded at narrow widths, so it
+cannot cover or replace the typed prefix.
+
+The composed xterm key handler owns exactly three desktop actions. `Alt+Right` accepts the full
+verified suffix and `Alt+Shift+Right` accepts its next token; each action atomically consumes the
+snapshot before sending that suffix once through the ordinary PTY write path. It never sends the
+typed prefix, `Ctrl+U`, or Enter. `Ctrl+Alt+H` opens the history dialog only when suggestions are
+enabled. Every other key, including Tab, Enter, Escape, Ctrl+R, arrows, paste, IME composition,
+and TUI input, continues to xterm unchanged. Coarse-pointer and native-keyboard-suppressed
+surfaces disable automatic ghosts and the history shortcut rather than risking stale UI.
+
+`TerminalCursorGeometryAdapter` is the sole cursor anchor implementation. It validates public
+textarea measurements relative to the current terminal host and has one validated screen-grid
+fallback; unknown, detached, scrolled-back, alternate-buffer, or out-of-bounds geometry hides
+the ghost. Cursor/write/resize/scroll/zoom/font changes are coalesced to one animation frame,
+and terminal host attachment explicitly invalidates geometry after reparenting.
+
+`TerminalHistoryList` is a deliberate, keyboard-focused dialog rather than a passive menu. It
+shows full command text with accessible names, search, Copy, and Use actions. Use inserts the
+chosen one-line command without executing it; multi-line commands remain visible and copy-only.
+
+`command-history.ts` stores local v2 entries with exact command text kept apart from normalized
+Unicode search text. Ranking is shared by terminal and command-search consumers: exact raw
+prefixes outrank Unicode token-prefix matches, with recency and use count breaking the latter.
+Entries retain total and per-project usage without creating project-specific copies of the raw
+command. Browser storage errors and the local-history disabled preference prevent persistence.
 
 Codex OSC 9 notifications include `Project · Bash #N`, where `N` is the
 terminal's current 1-based position in the open list. Selecting the native

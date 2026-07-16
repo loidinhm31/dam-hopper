@@ -79,12 +79,20 @@ describe("attachTerminalAgentNotifications", () => {
     vi.setSystemTime(1_000);
     recordClientDiagnostic.mockReset();
     playTerminalNotificationSound.mockReset();
-    useSettingsStore.setState({ terminalCodexNotificationsEnabled: true });
+    useSettingsStore.setState({
+      terminalCodexNotificationsEnabled: true,
+      terminalCodexNotificationSoundEnabled: true,
+      terminalCodexNotificationSoundVolume: 100,
+    });
     useTerminalNotificationsStore.setState({ notifications: [], toasts: [] });
   });
 
   afterEach(() => {
-    useSettingsStore.setState({ terminalCodexNotificationsEnabled: false });
+    useSettingsStore.setState({
+      terminalCodexNotificationsEnabled: false,
+      terminalCodexNotificationSoundEnabled: true,
+      terminalCodexNotificationSoundVolume: 100,
+    });
     useTerminalNotificationsStore.setState({ notifications: [], toasts: [] });
     restoreNotificationGlobal();
     vi.useRealTimers();
@@ -162,6 +170,7 @@ describe("attachTerminalAgentNotifications", () => {
 
   it("delivers in-app when native browser notifications are denied", () => {
     installFakeNotification();
+    useSettingsStore.setState({ terminalCodexNotificationSoundVolume: 45 });
     Object.defineProperty(globalThis.Notification, "permission", {
       configurable: true,
       value: "denied",
@@ -183,7 +192,26 @@ describe("attachTerminalAgentNotifications", () => {
       body: "Review the answer",
     });
     expect(state.toasts).toEqual([state.notifications[0]?.id]);
-    expect(playTerminalNotificationSound).toHaveBeenCalledTimes(1);
+    expect(playTerminalNotificationSound).toHaveBeenCalledExactlyOnceWith(45);
+  });
+
+  it("delivers notifications without sound when the sound setting is disabled", () => {
+    const created = installFakeNotification();
+    useSettingsStore.setState({ terminalCodexNotificationSoundEnabled: false });
+    const { term, getHandler } = createTerminal();
+
+    attachTerminalAgentNotifications({
+      term,
+      sessionId: "term-muted",
+      project: "web",
+    });
+
+    expect(getHandler()?.("notify;Codex done;Review the answer")).toBe(true);
+    expect(created).toHaveLength(1);
+    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(
+      1,
+    );
+    expect(playTerminalNotificationSound).not.toHaveBeenCalled();
   });
 
   it("adds the current project and open-terminal order to the body", () => {
