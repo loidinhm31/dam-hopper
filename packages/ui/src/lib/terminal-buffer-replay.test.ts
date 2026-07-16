@@ -33,6 +33,31 @@ describe("applyTerminalBufferReplay", () => {
     expect(term.clear).not.toHaveBeenCalled();
     expect(term.write).toHaveBeenCalledWith("delta");
   });
+
+  it("preserves replay bytes and waits for xterm write completion", () => {
+    let complete: (() => void) | undefined;
+    const onComplete = vi.fn();
+    const term = {
+      clear: vi.fn(),
+      write: vi.fn((_data: string, callback?: () => void) => {
+        complete = callback;
+      }),
+    };
+    const replay = {
+      data: "\u001b]10;rgb:aa/bb/cc\u0007\u001b]9;notify;Old;History\u0007",
+      offset: 42,
+      reset: true,
+      truncated: false,
+    };
+
+    expect(applyTerminalBufferReplay(term, replay, onComplete)).toBe(42);
+    expect(term.clear).toHaveBeenCalledOnce();
+    expect(term.write).toHaveBeenCalledWith(replay.data, expect.any(Function));
+    expect(onComplete).not.toHaveBeenCalled();
+
+    complete?.();
+    expect(onComplete).toHaveBeenCalledOnce();
+  });
 });
 
 describe("utf8ByteLength", () => {
