@@ -12,8 +12,8 @@
 - Date: 2026-07-16
 - Description: passive cursor suffix plus deliberate accessible fuzzy-history workflow
 - Priority: P1
-- Implementation status: pending
-- Review status: pending
+- Implementation status: completed 2026-07-16 09:34 +07
+- Review status: approved 2026-07-16 09:34 +07
 - Effort: 14h
 
 ## Key Insights
@@ -69,14 +69,14 @@ without Enter, “Copy” never mutates PTY.
 
 ## Todo list
 
-- [ ] Choose acceptance and explicit-list shortcuts
-- [ ] Add key pass-through/acceptance tests
-- [ ] Complete geometry spike and decision record
-- [ ] Implement adapter and lifecycle cleanup
-- [ ] Build passive ghost
-- [ ] Build accessible explicit list
-- [ ] Verify PaneContainer/find/reparent composition
-- [ ] Verify mobile stays cleanly unsupported
+- [x] Choose acceptance and explicit-list shortcuts
+- [x] Add key pass-through/acceptance tests
+- [x] Complete geometry spike and decision record
+- [x] Implement adapter and lifecycle cleanup
+- [x] Build passive ghost
+- [x] Build accessible explicit list
+- [x] Verify PaneContainer/find/reparent composition
+- [x] Verify mobile stays cleanly unsupported
 
 ## Success Criteria
 
@@ -98,14 +98,43 @@ without Enter, “Copy” never mutates PTY.
 UI must consume only Phase 03 gated snapshots. Click/use repeats atomic revision and prefix
 checks. Full history text must not appear in diagnostics, telemetry, titles, or error logs.
 
+## Completion
+
+**Completed:** 2026-07-16 09:34 +07
+**Review:** Approved
+
+- The geometry adapter now measures the public xterm textarea before using a single
+  validated screen-grid fallback. It coalesces cursor, parsed-write, resize, scroll,
+  viewport, and font invalidations; buffer uncertainty, detach, and disposal hide it.
+- The passive ghost is host-relative, aria-hidden, non-interactive, one line only,
+  and clips/fades instead of wrapping. It renders only when a validated anchor and
+  suffix are both present.
+- `Alt+Right` inserts the full safe suffix; `Alt+Shift+Right` inserts its next token;
+  `Ctrl+Alt+H` deliberately opens the history dialog. Acceptance clears the ghost
+  atomically before the suffix is written, and no action sends Enter.
+- Existing find/shared shortcuts and pane routing remain composed after suggestion
+  handling. Geometry invalidates on terminal host reattachment.
+- The dialog has focus, name, description, full command text, filtering, Copy, and
+  Use controls. Use inserts only single-line commands; multiline commands are copy-only.
+- Coarse-pointer and native-keyboard-suppressed sessions fail closed for automatic
+  suggestions and do not retain desktop ghost geometry.
+
+## Decision record
+
+- Use measured textarea geometry with an isolated `.xterm-screen` grid fallback;
+  do not enable the proposed xterm decoration API.
+- Reserve `Alt+Right` and `Alt+Shift+Right` only while the controller can atomically
+  accept the current ghost; otherwise native pane/terminal routing receives them.
+- Use `Ctrl+Alt+H` for explicit history because it is deliberate and does not alter
+  native Tab, Enter, Escape, Ctrl+R, paste, or TUI input.
+- Automatic UI must remain disabled on coarse-pointer/mobile surfaces pending unified
+  input routing; the explicit desktop dialog is separate from passive suggestion state.
+
 ## Next steps
 
 Run Phase 05 browser and real-PTY release matrix; do not default-enable before it passes.
 
 ## Unresolved questions
 
-- Accept key policy?
-- Allow proposed decoration API if measurement fails?
-- Require WebGL parity or permit automatic DOM-renderer fallback?
-- Explicit history shortcut that does not collide with terminal apps?
-
+None for Phase 04. Phase 05 must validate the selected measurement strategy across
+the release browser/renderer matrix before any default enablement.

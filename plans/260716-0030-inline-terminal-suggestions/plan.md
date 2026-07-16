@@ -36,7 +36,7 @@ explicit history workflow.
 | 1 | Security containment + history privacy | Completed 2026-07-16 | 100% | 8h | [Phase 01](./phase-01-security-containment-and-history-privacy.md) |
 | 2 | Verified shell lifecycle integration | Completed 2026-07-16 | 100% | 16h | [Phase 02](./phase-02-shell-lifecycle-integration.md) |
 | 3 | Suggestion controller + history/search separation | Completed 2026-07-16 05:07 +07 (review approved) | 100% | 12h | [Phase 03](./phase-03-suggestion-controller-and-history-search.md) |
-| 4 | Ghost geometry + explicit history list | Pending | 0% | 14h | [Phase 04](./phase-04-ghost-geometry-and-explicit-history-list.md) |
+| 4 | Ghost geometry + explicit history list | Completed 2026-07-16 09:34 +07 (review approved) | 100% | 14h | [Phase 04](./phase-04-ghost-geometry-and-explicit-history-list.md) |
 | 5 | Release validation, docs, rollout | Pending | 0% | 14h | [Phase 05](./phase-05-release-validation-documentation-and-rollout.md) |
 
 ## Dependencies
@@ -110,3 +110,20 @@ must not merge automatic UI before lifecycle and controller gates pass.
 
 **Completed:** 2026-07-16 05:07 +07
 **Review:** Approved
+
+### Phase 04 Completion
+
+**Completed:** 2026-07-16 09:34 +07
+**Review:** Approved
+
+- Added a validated, rAF-coalesced cursor-geometry adapter with textarea-first
+  measurement, screen-grid fallback, lifecycle cleanup, and safe hide behavior.
+- Rendered an unfocusable, aria-hidden, one-line suffix ghost only from the
+  controller's immutable and atomically accepted snapshot.
+- Composed explicit desktop actions with existing terminal and pane routing:
+  `Alt+Right` accepts the suffix, `Alt+Shift+Right` accepts its next token, and
+  `Ctrl+Alt+H` opens the history workflow; all other input passes through.
+- Added an accessible, deliberate history dialog with filtering, full command text,
+  copy, and non-executing use actions; multiline commands remain copy-only.
+- Invalidated geometry during host reparenting and disabled automatic ghost/list UI
+  for coarse-pointer and native-keyboard-suppressed sessions.

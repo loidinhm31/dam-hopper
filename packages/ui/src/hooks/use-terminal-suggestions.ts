@@ -2,12 +2,12 @@ import type { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { RefObject } from "react";
 import type { TerminalLifecycleEvent } from "@/api/client.js";
-import type { OverlayPosition } from "@/components/atoms/TerminalSuggestionOverlay.js";
 import {
   createTerminalSuggestionController,
   type TerminalSuggestionController,
   type TerminalSuggestionSnapshot,
 } from "@/lib/terminal-suggestion-controller.js";
+import type { TerminalSuggestionAcceptKind } from "@/lib/terminal-suggestion-acceptance.js";
 import {
   searchHistory,
   type HistorySearchResult,
@@ -20,16 +20,7 @@ export interface HandleInputResult {
   data: string;
 }
 
-export interface TerminalSuggestionsState {
-  /** Phase 04 owns automatic ghost rendering; Phase 03 is controller-only. */
-  isVisible: boolean;
-  suggestions: HistorySearchResult[];
-  selectedIndex: number;
-  position: OverlayPosition;
-}
-
 export interface UseTerminalSuggestionsResult {
-  state: TerminalSuggestionsState;
   /** Immutable controller state for the Phase 04 presentation adapter. */
   snapshot: TerminalSuggestionSnapshot;
   handleInput: (data: string) => HandleInputResult;
@@ -37,14 +28,10 @@ export interface UseTerminalSuggestionsResult {
   handleOutput: () => void;
   handleReplay: () => void;
   handleComposition: () => void;
+  accept: (kind: TerminalSuggestionAcceptKind) => string | null;
+  openExplicitList: () => boolean;
+  closeExplicitList: () => void;
 }
-
-const PASSIVE_STATE: TerminalSuggestionsState = {
-  isVisible: false,
-  suggestions: [],
-  selectedIndex: 0,
-  position: { x: 0, y: 0, flipAbove: false },
-};
 
 /**
  * Preserves the browser/xterm byte sequence. Controller observation is kept
@@ -61,15 +48,15 @@ function searchSuggestionHistory(query: string): HistorySearchResult[] {
 /**
  * Session-local React adapter for the non-React suggestion controller.
  *
- * It deliberately never renders or accepts a ghost: until Phase 04 has a
- * validated geometry adapter, all keyboard bytes continue through xterm to
- * the PTY unchanged. The controller still receives server-validated lifecycle
- * events so it can safely maintain exact local command history.
+ * It keeps native terminal input passive while exposing controller actions for
+ * the Phase 04 presentation adapter. Only TerminalPanel may consume a
+ * configured accept key after the controller atomically yields a safe suffix.
  */
 export function useTerminalSuggestions(
   _termRef: RefObject<Terminal | null>,
   sessionId: string,
   project: string,
+  automaticEnabled = true,
 ): UseTerminalSuggestionsResult {
   void _termRef;
   const terminalSuggestionsEnabled = useSettingsStore(
@@ -92,8 +79,8 @@ export function useTerminalSuggestions(
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
   useEffect(() => {
-    controller.setEnabled(terminalSuggestionsEnabled);
-  }, [controller, terminalSuggestionsEnabled]);
+    controller.setEnabled(terminalSuggestionsEnabled && automaticEnabled);
+  }, [automaticEnabled, controller, terminalSuggestionsEnabled]);
 
   useEffect(
     () => () => {
@@ -125,14 +112,28 @@ export function useTerminalSuggestions(
     (): void => controller.handleComposition(),
     [controller],
   );
+  const accept = useCallback(
+    (kind: TerminalSuggestionAcceptKind): string | null => controller.accept(kind),
+    [controller],
+  );
+  const openExplicitList = useCallback(
+    (): boolean => controller.openExplicitList(),
+    [controller],
+  );
+  const closeExplicitList = useCallback(
+    (): void => controller.closeExplicitList(),
+    [controller],
+  );
 
   return {
-    state: PASSIVE_STATE,
     snapshot,
     handleInput,
     handleLifecycle,
     handleOutput,
     handleReplay,
     handleComposition,
+    accept,
+    openExplicitList,
+    closeExplicitList,
   };
 }

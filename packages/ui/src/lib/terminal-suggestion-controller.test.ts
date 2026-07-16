@@ -123,4 +123,22 @@ describe("TerminalSuggestionController", () => {
     });
     expect(controller.snapshot.state).toBe("unverified");
   });
+
+  it("consumes a suffix once before a caller can write it to the PTY", async () => {
+    vi.useFakeTimers();
+    const controller = createTerminalSuggestionController({
+      sessionId: "one",
+      project: "web",
+      search: () => [result("git status")],
+      debounceMs: 1,
+    });
+    editing(controller);
+    controller.handleInput("g");
+    controller.handleInput("i");
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(controller.accept("full")).toBe("t status");
+    expect(controller.snapshot.state).toBe("opaque");
+    expect(controller.accept("full")).toBeNull();
+  });
 });
