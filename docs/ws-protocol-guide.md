@@ -227,6 +227,29 @@ Response to `terminal:attach` request. Contains accumulated buffer content for r
 
 ### Terminal Events
 
+#### Shell Lifecycle Event
+
+```json
+{
+  "kind": "terminal:lifecycle",
+  "id": "uuid",
+  "lifecycle": "submitted",
+  "generation": 12,
+  "command": "git status"
+}
+```
+
+This server-to-client event is emitted only for supported local interactive `zsh` and
+`fish` sessions after bounded OSC 633-compatible marker validation. `lifecycle` is one
+of `editing`, `submitted`, `opaque`, or `unverified`; `command` is present only for a
+validated `submitted` event. `generation` is an opaque per-PTY-incarnation ordering
+value. The secret marker nonce is never sent, persisted, or logged.
+
+Visible terminal output is delivered before a pending `editing` event. Attach/replay,
+respawn, malformed or out-of-order markers, and alternate-buffer entry reset lifecycle
+trust to `unverified`. Clients must treat every unsupported or reset state as unavailable
+for automatic suggestions; terminal input remains normal `terminal:write` data.
+
 #### Basic Exit Event (Legacy)
 
 ```json

@@ -62,4 +62,23 @@ describe("terminal suggestion key handler", () => {
     ).toBe(false);
     expect(openHistory).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    { isComposing: true },
+    { keyCode: 229 },
+    { repeat: true },
+    { type: "keyup" },
+  ])("passes IME and non-initial keyboard events through: %o", (overrides) => {
+    const accept = vi.fn(() => " suffix");
+    const openHistory = vi.fn(() => true);
+
+    expect(
+      handleTerminalSuggestionKeyEvent(key({ altKey: true, ...overrides }), {
+        accept,
+        openHistory,
+      }),
+    ).toBe(true);
+    expect(accept).not.toHaveBeenCalled();
+    expect(openHistory).not.toHaveBeenCalled();
+  });
 });
