@@ -15,7 +15,14 @@ export function handleTerminalSuggestionKeyEvent(
   event: KeyboardEvent,
   { accept, openHistory }: TerminalSuggestionKeyHandlerOptions,
 ): boolean {
-  if (event.type !== "keydown" || event.repeat || event.isComposing) return true;
+  if (
+    event.type !== "keydown" ||
+    event.repeat ||
+    event.isComposing ||
+    event.keyCode === 229
+  ) {
+    return true;
+  }
   if (
     event.ctrlKey &&
     event.altKey &&

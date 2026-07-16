@@ -183,7 +183,7 @@ All features are enabled by default.
 
 ### UI Configuration
 
-The global UI config includes terminal workspace/panel shortcuts and agent notification settings.
+The global UI config includes terminal workspace/panel shortcuts, inline terminal suggestions, and agent notification settings.
 
 | Field                               | Type     | Default                   | Notes |
 | ----------------------------------- | -------- | ------------------------- | ----- |
@@ -191,6 +191,7 @@ The global UI config includes terminal workspace/panel shortcuts and agent notif
 | git_panel_shortcut                  | string   | `Mod+Shift+KeyG`          | Toggle the Git panel in IDE or Terminal mode |
 | ports_panel_shortcut                | string   | `Mod+Shift+KeyP`          | Toggle the Ports panel in IDE or Terminal mode |
 | fleet_terminal_shortcut             | string   | `Mod+Shift+KeyM`          | Toggle the Fleet Terminal panel in IDE or Terminal mode |
+| terminal_suggestions_enabled         | bool     | `true`                    | Kill switch for automatic suggestions and lifecycle-driven history writes |
 | terminal_scroll_buttons_enabled     | bool     | `false`                   | Show floating Page Up/Down buttons in terminal |
 | terminal_agent_notifications_enabled | bool     | `false`                   | Enable browser notifications for terminal agent activity |
 | terminal_agent_notification_policy  | string   | `"always"`                | Notification policy for agent activity |
@@ -207,6 +208,7 @@ terminal_workspace_shortcut = "Mod+Shift+Backquote"
 git_panel_shortcut = "Mod+Shift+KeyG"
 ports_panel_shortcut = "Mod+Shift+KeyP"
 fleet_terminal_shortcut = "Mod+Shift+KeyM"
+terminal_suggestions_enabled = true
 terminal_scroll_buttons_enabled = false
 terminal_agent_notifications_enabled = false
 terminal_agent_notification_policy = "always"
@@ -224,6 +226,26 @@ enabled = true
 ```
 
 Shortcuts are normalized by the client config layer and can be captured/reset from Settings > Appearance > Keyboard Shortcuts. Git, Ports, and Fleet Terminal shortcuts toggle their target in both IDE and Terminal modes; opening one closes the other two target panels. Browser notification permission is not persisted; it is requested per browser from Settings > Appearance > Terminal agent notifications.
+
+#### Inline terminal suggestions
+
+The **Inline Terminal Suggestions** switch is an immediate fail-closed kill switch:
+turning it off hides automatic ghosts, stops controller searches, and prevents future
+lifecycle-driven writes to browser-local command history. It does not delete commands
+already retained in the browser. Use **Clear local command history** in Settings to
+remove those commands, or disable **Local command history** to stop future browser-local
+writes independently.
+
+Automatic suggestions are supported only for a launch-only local interactive `zsh` or
+`fish` shell whose lifecycle markers validate for the current PTY incarnation. Bash,
+PowerShell, SSH/subshell sessions, replayed or respawned terminals, alternate buffers,
+and mobile/coarse-pointer input remain fail closed. In those cases no ghost is shown;
+the explicit desktop history dialog remains the deliberate reuse path when enabled.
+
+The desktop shortcuts are `Alt+Right` for the full suffix, `Alt+Shift+Right` for the
+next token, and `Ctrl+Alt+H` for command history. Acceptance writes only the verified
+suffix and never executes the command. All other terminal keys and paste data pass to
+the PTY unchanged.
 
 Pattern rows are editable from the same Settings subsection:
 

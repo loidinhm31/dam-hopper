@@ -207,5 +207,9 @@ Web unit tests (vitest): run with `pnpm --filter @dam-hopper/web test`. Covered 
 - `src/lib/terminal-input-buffer.ts` — 14 tests
 - `src/lib/prompt-detector.ts` — 9 tests
 - `src/lib/crypto.ts` — unit tests in `src/lib/crypto.test.ts`
+- `src/lib/terminal-suggestion-controller.ts`, command-history, key routing, and cursor geometry — fail-closed lifecycle, exact-history, and suffix-only acceptance coverage
 
-Manual verification against a running Rust server is still required for integration behaviour.
+Run the browser suite with `pnpm --filter @dam-hopper/ui test:browser`. It does not
+exercise a real PTY: inline terminal suggestions still require a manual desktop check
+against a local zsh or fish PTY, while IME and screen-reader smoke tests remain
+platform-specific release checks.

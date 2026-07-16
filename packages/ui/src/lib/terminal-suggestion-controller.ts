@@ -83,10 +83,10 @@ export class TerminalSuggestionController {
     if (this.generation !== undefined && event.generation < this.generation)
       return;
     this.generation = event.generation;
+    if (!this.enabled) return;
     if (event.lifecycle === "submitted" && event.command !== undefined) {
       recordCommand(event.command, this.options.project);
     }
-    if (!this.enabled) return;
     if (event.lifecycle === "editing") {
       this.current = {
         ...EMPTY(this.options.sessionId),
