@@ -125,8 +125,9 @@ future persistence from Settings.
 Supported adapters emit OSC 633-compatible `A`/`B`/`E`/`C`/`D` markers carrying a
 fresh, per-incarnation nonce. `ShellLifecycle` is a bounded (8 KiB) streaming parser:
 it accepts BEL or ST terminators and validates marker order, nonce, and the base64url
-exact command in `E`. The nonce exists only in the child environment and lifecycle
-observer; it is never persisted or sent to clients. Valid private markers are stripped
+command payload in `E`. Bash uses normalized `BASH_COMMAND` text for simple commands
+and emits no submission marker for ambiguous syntax. The nonce exists only in the child
+environment and lifecycle observer; it is never persisted or sent to clients. Valid private markers are stripped
 from live output and scrollback, while malformed, invalid, or oversized markers remain
 visible verbatim and reset trust.
 

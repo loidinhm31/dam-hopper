@@ -296,7 +296,7 @@ export function TerminalPanel({
     const writeLiveData = (data: string) => {
       term.write(data);
       lastServerOffset += utf8ByteLength(data);
-      suggestionsRef.current.handleOutput();
+      suggestionsRef.current.handleOutput(data);
       agentNotifications?.onOutput();
     };
 

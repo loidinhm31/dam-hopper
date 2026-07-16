@@ -94,7 +94,7 @@ describe("TerminalSuggestionController", () => {
     expect(controller.snapshot.suggestion).toBeUndefined();
   });
 
-  it("fails closed for output, replay, paste, and cursor movement", async () => {
+  it("ignores exact terminal echo but fails closed for unrelated output", async () => {
     vi.useFakeTimers();
     const controller = createTerminalSuggestionController({
       sessionId: "one",
@@ -104,8 +104,30 @@ describe("TerminalSuggestionController", () => {
     });
     editing(controller);
     controller.handleInput("g");
+    controller.handleOutput("g");
     await vi.advanceTimersByTimeAsync(1);
-    controller.handleOutput();
+    expect(controller.snapshot.state).toBe("ghost");
+
+    editing(controller);
+    controller.handleInput("g");
+    controller.handleOutput("x");
+    expect(controller.snapshot.state).toBe("opaque");
+    expect(controller.snapshot.suggestion).toBeUndefined();
+  });
+
+  it("fails closed for replay, paste, and cursor movement", async () => {
+    vi.useFakeTimers();
+    const controller = createTerminalSuggestionController({
+      sessionId: "one",
+      project: "web",
+      search: () => [result("git status")],
+      debounceMs: 1,
+    });
+    editing(controller);
+    controller.handleInput("g");
+    controller.handleOutput("g");
+    await vi.advanceTimersByTimeAsync(1);
+    controller.handleOutput("unexpected output");
     expect(controller.snapshot.state).toBe("opaque");
     expect(controller.snapshot.suggestion).toBeUndefined();
 
