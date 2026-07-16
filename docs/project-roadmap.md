@@ -4,10 +4,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Status Overview
 
-- **Current Phase:** Safe Inline Terminal Suggestions Phase 05 (completed 2026-07-16 +07; review approved)
+- **Current Phase:** Safe Inline Terminal Suggestions Phase 05: Release Validation, Documentation, and Rollout (completed 2026-07-16 +07; review approved)
 - **Last Milestone:** Completed automated release validation, documentation, and fail-closed rollout preparation
 - **Total Phases Completed:** 23 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 5/5, terminal notification center 1/1, inline terminal suggestions 5/5 complete)
-- **Next Milestone:** Complete external release checks: real zsh/fish PTY, IME, screen-reader, and WebGL/renderer validation
+- **Next Milestone:** Complete external release checks: real zsh/fish/Bash PTY, IME, screen-reader, and WebGL/renderer validation
 
 ## Roadmap Phases
 
@@ -216,13 +216,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **2026-07-16:** Completed Safe Inline Terminal Suggestions Phase 05: Release Validation, Documentation, and Rollout (review approved).
   - ✅ Automated validation passed for the shipped inline-suggestion behavior and documentation/rollout work
   - ✅ Automatic suggestions remain fail-closed and retain the immediate kill switch and unsupported-session fallback
-  - ⚠️ External release gates remain: manual real-PTY zsh/fish, IME, screen-reader, and WebGL/renderer checks; none are claimed completed
+  - ⚠️ External release gates remain: manual real-PTY zsh/fish/Bash, IME, screen-reader, and WebGL/renderer checks; none are claimed completed
 
 - **2026-07-16:** Completed Safe Inline Terminal Suggestions Phase 02: Verified Shell Lifecycle Integration.
   - ✅ Added per-PTY-incarnation nonce-backed lifecycle validation and zsh/fish launch adapters
   - ✅ Added bounded OSC 633 parsing with legal transition checks, exact validated command capture, and malformed-byte preservation
   - ✅ Broadcast lifecycle state/generation without serializing the nonce; reset trust on reattach, respawn, invalid markers, and TUI alternate buffers
-  - ✅ Kept bash and unsupported shells fail-closed pending a lossless exact-command adapter
+  - ✅ Kept unsupported shells fail-closed; Bash support uses guarded exact-command capture
   - ✅ Validation passed: focused shell lifecycle parser tests (7/7) and lifecycle protocol coverage
 
 - **2026-07-16:** Completed Safe Inline Terminal Suggestions Phase 01: Security containment and history privacy.
