@@ -9,11 +9,17 @@ describe("classifyTerminalSuggestionInput", () => {
     });
   });
 
-  it.each(["git", "\r", "\x1b[D", "\x7f"])(
+  it.each(["git", "\r", "\x1b[D"])(
     "fails closed for ambiguous terminal input %j",
     (input) =>
       expect(classifyTerminalSuggestionInput(input)).toEqual({
         kind: "ambiguous",
       }),
   );
+
+  it.each(["\x7f", "\b"])("classifies %j as Backspace", (input) => {
+    expect(classifyTerminalSuggestionInput(input)).toEqual({
+      kind: "backspace",
+    });
+  });
 });
