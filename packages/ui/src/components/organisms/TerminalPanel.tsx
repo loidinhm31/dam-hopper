@@ -30,6 +30,10 @@ import {
   applyTerminalBufferReplay,
   utf8ByteLength,
 } from "@/lib/terminal-buffer-replay.js";
+import {
+  createTerminalStreamReplayGate,
+  resetTerminalStreamReplayGateForAttach,
+} from "@/lib/terminal-stream-replay-gate.js";
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 import {
   attachTerminalAgentNotifications,
@@ -157,7 +161,8 @@ export function TerminalPanel({
   const isCoarsePointer = useCoarsePointer();
   // Mobile/touch routing is not unified yet, so every coarse-pointer surface
   // fails closed rather than relying on a compact-width heuristic.
-  const automaticSuggestionsAllowed = !suppressNativeKeyboard && !isCoarsePointer;
+  const automaticSuggestionsAllowed =
+    !suppressNativeKeyboard && !isCoarsePointer;
   const findUnsubscribeRef = useRef<(() => void) | null>(null);
   const [findSnapshot, setFindSnapshot] =
     useState<TerminalFindSnapshot>(EMPTY_FIND_SNAPSHOT);
@@ -179,7 +184,9 @@ export function TerminalPanel({
   suggestionsRef.current = suggestions;
   const historyResults = historyQuery
     ? searchHistory(historyQuery, 50)
-    : getHistory().slice(0, 50).map((entry) => ({ entry, score: 0 }));
+    : getHistory()
+        .slice(0, 50)
+        .map((entry) => ({ entry, score: 0 }));
   const ghostSuffix = getTerminalSuggestionSuffix(suggestions.snapshot, "full");
 
   const useHistoryCommand = useCallback(
@@ -242,12 +249,8 @@ export function TerminalPanel({
     // Separate receipt from xterm's asynchronous replay completion. Live output
     // remains fail-closed before a buffer arrives, then queues until replay parsing
     // is complete so historical OSC 9 events cannot be delivered as live alerts.
-    let hasAttachBufferBeenReceived = false;
-    let isReplayWriting = false;
-    let isLiveStreamReady = false;
-    let replayGeneration = 0;
+    const streamReplayGate = createTerminalStreamReplayGate();
     let disposed = false;
-    const queuedLiveData: string[] = [];
     let recordedSuppressedOutput = false;
     let lastServerOffset = 0;
 
@@ -279,9 +282,13 @@ export function TerminalPanel({
       fitAddon,
       findController,
     );
-    geometryAdapter = new TerminalCursorGeometryAdapter(term, setCursorGeometry);
+    geometryAdapter = new TerminalCursorGeometryAdapter(
+      term,
+      setCursorGeometry,
+    );
     cursorGeometryAdapterRef.current = geometryAdapter;
-    terminalEntry.invalidateSuggestionGeometry = () => geometryAdapter?.invalidate();
+    terminalEntry.invalidateSuggestionGeometry = () =>
+      geometryAdapter?.invalidate();
     onTerminalReady?.(safeSessionId);
     releaseTouchScroll = bindTerminalTouchScroll(term.element ?? null);
 
@@ -306,10 +313,16 @@ export function TerminalPanel({
     unsubData = transport.onTerminalData(safeSessionId, (data) => {
       // Output before the first attach buffer is not safely orderable. Output that
       // arrives while xterm parses a received replay is held until its completion.
-      if (hasAttachBufferBeenReceived && isLiveStreamReady) {
+      if (
+        streamReplayGate.hasAttachBufferBeenReceived &&
+        streamReplayGate.isLiveStreamReady
+      ) {
         writeLiveData(data);
-      } else if (hasAttachBufferBeenReceived && isReplayWriting) {
-        queuedLiveData.push(data);
+      } else if (
+        streamReplayGate.hasAttachBufferBeenReceived &&
+        streamReplayGate.isReplayWriting
+      ) {
+        streamReplayGate.queuedLiveData.push(data);
       } else if (!recordedSuppressedOutput) {
         recordedSuppressedOutput = true;
         recordClientDiagnostic(
@@ -336,18 +349,23 @@ export function TerminalPanel({
     if (transport.onTerminalBuffer) {
       unsubBuffer = transport.onTerminalBuffer(safeSessionId, (replay) => {
         suggestionsRef.current.handleReplay();
-        hasAttachBufferBeenReceived = true;
-        isReplayWriting = true;
-        isLiveStreamReady = false;
-        const currentReplayGeneration = ++replayGeneration;
+        streamReplayGate.hasAttachBufferBeenReceived = true;
+        streamReplayGate.isReplayWriting = true;
+        streamReplayGate.isLiveStreamReady = false;
+        const currentReplayGeneration = ++streamReplayGate.replayGeneration;
         agentNotifications?.setReplayActive(true);
         lastServerOffset = applyTerminalBufferReplay(term, replay, () => {
-          if (disposed || currentReplayGeneration !== replayGeneration) return;
+          if (
+            disposed ||
+            currentReplayGeneration !== streamReplayGate.replayGeneration
+          )
+            return;
 
-          isReplayWriting = false;
-          isLiveStreamReady = true;
+          streamReplayGate.isReplayWriting = false;
+          streamReplayGate.isLiveStreamReady = true;
           agentNotifications?.setReplayActive(false);
-          const queuedLiveDataSnapshot = queuedLiveData.splice(0);
+          const queuedLiveDataSnapshot =
+            streamReplayGate.queuedLiveData.splice(0);
           for (const data of queuedLiveDataSnapshot) {
             writeLiveData(data);
           }
@@ -429,6 +447,16 @@ export function TerminalPanel({
     // controller invalidates its current ghost and yields a suffix.
     const baseKeyEventHandler = (e: KeyboardEvent) => {
       if (
+        e.type === "keydown" &&
+        e.key === "Backspace" &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.metaKey &&
+        !e.isComposing
+      ) {
+        suggestionsRef.current.prepareBackspace();
+      }
+      if (
         !handleTerminalSuggestionKeyEvent(e, {
           accept: (kind) => {
             const suffix = suggestionsRef.current.accept(kind);
@@ -486,13 +514,19 @@ export function TerminalPanel({
           rows: finalRows,
         })
         .then(() => {
-          setAttachState("attached");
+          // Creation only starts the PTY. Attach immediately so replay owns the
+          // initial output ordering and the buffer callback alone marks it ready.
+          attachToSession();
         });
     };
 
     // Helper: Attach to existing session
     const attachToSession = (fromOffset?: number) => {
       suggestionsRef.current.handleReplay();
+      // Every attach starts a new replay ownership window. In particular, a
+      // reconnect must close the prior live-ready gate before sending attach so
+      // old-stream output cannot render ahead of the replacement replay.
+      resetTerminalStreamReplayGateForAttach(streamReplayGate);
       setAttachState("attaching");
       recordClientDiagnostic("transport", "terminal-panel", "terminal.attach", {
         sessionId: safeSessionId,
@@ -515,7 +549,10 @@ export function TerminalPanel({
 
       attachTimeout = setTimeout(() => {
         attachTimeout = null;
-        if (hasAttachBufferBeenReceived || attachStateRef.current === "attached") {
+        if (
+          streamReplayGate.hasAttachBufferBeenReceived ||
+          attachStateRef.current === "attached"
+        ) {
           return;
         }
         logger.warn(
@@ -567,7 +604,7 @@ export function TerminalPanel({
       unsubStatus = transport.onStatusChange((status) => {
         if (
           status !== "connected" &&
-          !hasAttachBufferBeenReceived &&
+          !streamReplayGate.hasAttachBufferBeenReceived &&
           attachStateRef.current === "attaching"
         ) {
           clearAttachTimeout();
@@ -576,7 +613,7 @@ export function TerminalPanel({
 
         if (
           status === "connected" &&
-          !hasAttachBufferBeenReceived &&
+          !streamReplayGate.hasAttachBufferBeenReceived &&
           attachStateRef.current === "attaching"
         ) {
           attachToSession();
@@ -585,7 +622,7 @@ export function TerminalPanel({
 
         if (
           status === "connected" &&
-          hasAttachBufferBeenReceived &&
+          streamReplayGate.hasAttachBufferBeenReceived &&
           attachStateRef.current === "attached"
         ) {
           attachToSession(lastServerOffset);
@@ -629,8 +666,8 @@ export function TerminalPanel({
 
     return () => {
       disposed = true;
-      replayGeneration += 1;
-      queuedLiveData.length = 0;
+      streamReplayGate.replayGeneration += 1;
+      streamReplayGate.queuedLiveData.length = 0;
       unsubData?.();
       unsubExit?.();
       unsubRestart?.();
@@ -753,9 +790,14 @@ export function TerminalPanel({
           />,
           termElement,
         )}
-      {termElement && ghostSuffix && cursorGeometry &&
+      {termElement &&
+        ghostSuffix &&
+        cursorGeometry &&
         createPortal(
-          <TerminalSuggestionGhost suffix={ghostSuffix} position={cursorGeometry} />,
+          <TerminalSuggestionGhost
+            suffix={ghostSuffix}
+            position={cursorGeometry}
+          />,
           termElement,
         )}
       <TerminalHistoryList

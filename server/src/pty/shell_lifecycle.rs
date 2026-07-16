@@ -45,6 +45,10 @@ impl ShellLifecycle {
     pub fn generation(&self) -> u64 {
         self.generation
     }
+
+    pub fn is_editing(&self) -> bool {
+        self.state == LifecycleState::Editing
+    }
     pub fn nonce(&self) -> &str {
         &self.nonce
     }

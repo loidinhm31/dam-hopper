@@ -699,6 +699,11 @@ mod pty_tests {
             "initial lifecycle events: {:?}",
             events.lock().unwrap()
         );
+        let snapshot = mgr
+            .get_attach_snapshot("terminal:explicit-bash", None)
+            .unwrap();
+        assert!(snapshot.editing_generation.is_some());
+        assert!(snapshot.replay.offset > 0);
 
         mgr.write("terminal:explicit-bash", b"echo explicit-bash\n")
             .unwrap();
