@@ -18,7 +18,7 @@ use crate::{
     pty::{
         event_sink::EventSink,
         session::{DeadSession, LiveSession, RespawnOpts, SessionMeta, SessionType},
-        shell_integration::ShellIntegration,
+        shell_integration::{interactive_shell_executable, ShellIntegration},
         shell_lifecycle::{LifecycleEvent, LifecycleState, ShellLifecycle},
     },
 };
@@ -1234,6 +1234,11 @@ async fn respawn_internal(
     let integration = ShellIntegration::prepare(&opts.command, &opts.env);
     let mut build_cmd = if cfg!(target_os = "windows") {
         CommandBuilder::new("cmd.exe")
+    } else if opts.command == "bash" {
+        CommandBuilder::new(
+            interactive_shell_executable(&opts.command, &opts.env)
+                .expect("explicit bash must resolve to an executable"),
+        )
     } else if opts.command.is_empty() {
         let shell = opts
             .env
@@ -1404,6 +1409,12 @@ fn build_command(opts: &PtyCreateOpts) -> CommandBuilder {
 
     let (exe, args) = if cfg!(target_os = "windows") {
         ("cmd.exe".to_string(), vec![])
+    } else if opts.command == "bash" {
+        (
+            interactive_shell_executable(&opts.command, &opts.env)
+                .expect("explicit bash must resolve to an executable"),
+            vec![],
+        )
     } else if is_interactive {
         let shell = opts
             .env

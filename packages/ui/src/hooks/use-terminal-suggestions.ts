@@ -25,7 +25,7 @@ export interface UseTerminalSuggestionsResult {
   snapshot: TerminalSuggestionSnapshot;
   handleInput: (data: string) => HandleInputResult;
   handleLifecycle: (event: TerminalLifecycleEvent) => void;
-  handleOutput: () => void;
+  handleOutput: (data: string) => void;
   handleReplay: () => void;
   handleComposition: () => void;
   accept: (kind: TerminalSuggestionAcceptKind) => string | null;
@@ -101,7 +101,7 @@ export function useTerminalSuggestions(
     [controller],
   );
   const handleOutput = useCallback(
-    (): void => controller.handleOutput(),
+    (data: string): void => controller.handleOutput(data),
     [controller],
   );
   const handleReplay = useCallback(

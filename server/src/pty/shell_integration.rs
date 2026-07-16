@@ -26,6 +26,32 @@ enum Shell {
     Fish,
 }
 
+pub(super) fn interactive_shell_executable(
+    command: &str,
+    env: &HashMap<String, String>,
+) -> Option<String> {
+    let configured_shell = env
+        .get("SHELL")
+        .filter(|shell| shell.starts_with('/'))
+        .cloned()
+        .unwrap_or_else(|| "/bin/bash".to_string());
+
+    if command.is_empty() {
+        return Some(configured_shell);
+    }
+    if command == "bash" {
+        return Some(
+            configured_shell
+                .rsplit('/')
+                .next()
+                .is_some_and(|name| name == "bash")
+                .then_some(configured_shell)
+                .unwrap_or_else(|| "/bin/bash".to_string()),
+        );
+    }
+    None
+}
+
 pub struct ShellIntegration {
     init_file: TempPath,
     init_dir: Option<TempDir>,
@@ -35,16 +61,8 @@ pub struct ShellIntegration {
 
 impl ShellIntegration {
     pub fn prepare(command: &str, env: &HashMap<String, String>) -> Option<Self> {
-        if !command.is_empty() {
-            return None;
-        }
-        let shell = match env
-            .get("SHELL")
-            .map(String::as_str)
-            .unwrap_or("/bin/bash")
-            .rsplit('/')
-            .next()?
-        {
+        let executable = interactive_shell_executable(command, env)?;
+        let shell = match executable.as_str().rsplit('/').next()? {
             "zsh" => Shell::Zsh,
             "fish" => Shell::Fish,
             "bash" => Shell::Bash,
@@ -100,9 +118,9 @@ impl ShellIntegration {
         );
         match self.shell {
             Shell::Bash => {
-                command.arg("-i");
                 command.arg("--rcfile");
                 command.arg(&self.init_file);
+                command.arg("-i");
             }
             Shell::Zsh => {
                 command.arg("-i");
@@ -230,6 +248,67 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn bash_ignores_ps0_helpers_before_capturing_the_user_command() {
+        let env = HashMap::from([("SHELL".into(), "/bin/bash".into())]);
+        let integration = ShellIntegration::prepare("", &env).expect("bash adapter");
+        let home = tempfile::tempdir().expect("temporary home");
+        fs::write(
+            home.path().join(".bashrc"),
+            "__test_ps0_helper() { :; }\nPS0='$(__test_ps0_helper)'\n",
+        )
+        .expect("write bashrc");
+
+        let output = run_bash(
+            &integration,
+            home.path(),
+            b"echo command-after-ps0-helper\nexit\n",
+        );
+        let events = lifecycle_events(&integration, &output);
+
+        assert!(
+            events.iter().any(|event| {
+                event.state == super::super::shell_lifecycle::LifecycleState::Submitted
+                    && event.command.as_deref() == Some("echo command-after-ps0-helper")
+            }),
+            "stdout: {:?}\nstderr: {:?}\nevents: {events:?}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bash_emits_simple_command_with_a_full_stifled_history_list() {
+        let env = HashMap::from([("SHELL".into(), "/bin/bash".into())]);
+        let integration = ShellIntegration::prepare("", &env).expect("bash adapter");
+        let home = tempfile::tempdir().expect("temporary home");
+        fs::write(home.path().join(".bashrc"), "HISTSIZE=2\n").expect("write bashrc");
+        fs::write(
+            home.path().join(".bash_history"),
+            "first-preloaded-command\nsecond-preloaded-command\nthird-preloaded-command\n",
+        )
+        .expect("write bash history");
+
+        let output = run_bash(
+            &integration,
+            home.path(),
+            b"echo command-after-full-history\nexit\n",
+        );
+        let events = lifecycle_events(&integration, &output);
+
+        assert!(
+            events.iter().any(|event| {
+                event.state == super::super::shell_lifecycle::LifecycleState::Submitted
+                    && event.command.as_deref() == Some("echo command-after-full-history")
+            }),
+            "stdout: {:?}\nstderr: {:?}\nevents: {events:?}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn bash_abandons_ambiguous_command_without_marker_leakage() {
         let env = HashMap::from([("SHELL".into(), "/bin/bash".into())]);
         let integration = ShellIntegration::prepare("", &env).expect("bash adapter");
@@ -248,17 +327,14 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn bash_fails_closed_when_leading_whitespace_is_not_lossless() {
+    fn bash_normalizes_leading_whitespace_in_simple_command() {
         let env = HashMap::from([("SHELL".into(), "/bin/bash".into())]);
         let integration = ShellIntegration::prepare("", &env).expect("bash adapter");
         let home = tempfile::tempdir().expect("temporary home");
         let output = run_bash(&integration, home.path(), b"  echo leading-space\nexit\n");
-        let mut combined = output.stdout.clone();
-        combined.extend_from_slice(&output.stderr);
         let events = lifecycle_events(&integration, &output);
 
-        assert!(!combined.windows(5).any(|window| window == b"633;"));
-        assert!(!events.iter().any(|event| {
+        assert!(events.iter().any(|event| {
             event.state == super::super::shell_lifecycle::LifecycleState::Submitted
                 && event.command.as_deref() == Some("echo leading-space")
         }));
@@ -284,10 +360,17 @@ mod tests {
     }
 
     #[test]
-    fn selects_bash_only_for_empty_interactive_sessions() {
+    fn selects_bash_for_default_and_explicit_interactive_sessions() {
         let env = HashMap::from([("SHELL".into(), "/bin/bash".into())]);
         assert!(ShellIntegration::prepare("", &env).is_some());
+        assert!(ShellIntegration::prepare("bash", &env).is_some());
         assert!(ShellIntegration::prepare("echo hi", &env).is_none());
+
+        let alternate = HashMap::from([("SHELL".into(), "/usr/bin/bash".into())]);
+        assert_eq!(
+            interactive_shell_executable("bash", &alternate).as_deref(),
+            Some("/usr/bin/bash")
+        );
     }
 
     #[test]

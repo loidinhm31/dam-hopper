@@ -17,6 +17,7 @@ Token stored at `~/.config/dam-hopper/server-token`.
 The server supports a `--no-auth` authentication bypass mode for local development (Phase 01). When enabled:
 
 - All protected routes bypass authentication checks
+- The `/ws` terminal/event stream accepts connections without a token
 - Login endpoint returns dev tokens without credential verification
 - Status endpoint returns `dev_mode: true`
 - See [Phase 01: Server-Side Auth Bypass](../phase-01-server-auth-bypass/) for details

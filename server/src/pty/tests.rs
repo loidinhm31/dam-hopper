@@ -480,12 +480,15 @@ mod pty_tests {
             id: &str,
             state: &str,
             generation: u64,
-            _command: Option<&str>,
+            command: Option<&str>,
         ) {
+            let suffix = command
+                .map(|command| format!(":{command}"))
+                .unwrap_or_default();
             self.events
                 .lock()
                 .unwrap()
-                .push(format!("lifecycle:{id}:{state}:{generation}"));
+                .push(format!("lifecycle:{id}:{state}:{generation}{suffix}"));
         }
         fn broadcast(&self, event_type: &str, _payload: serde_json::Value) {
             self.events
@@ -668,6 +671,110 @@ mod pty_tests {
             events.lock().unwrap()
         );
         mgr.remove("shell:sink-data").unwrap();
+    }
+
+    #[test]
+    fn explicit_bash_session_emits_validated_lifecycle() {
+        let sink = Arc::new(RecordingSink::default());
+        let events = Arc::clone(&sink.events);
+        let mgr = test_rt().block_on(async { PtySessionManager::new(sink) });
+        let home = tempfile::tempdir().unwrap();
+        let options = PtyCreateOpts {
+            env: HashMap::from([
+                ("TERM".into(), "xterm-256color".into()),
+                ("HOME".into(), home.path().to_string_lossy().into_owned()),
+            ]),
+            ..opts("terminal:explicit-bash", "bash")
+        };
+
+        mgr.create(options).unwrap();
+        assert!(
+            wait_for(Duration::from_secs(2), || events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(
+                    |event| event.starts_with("lifecycle:terminal:explicit-bash:editing:")
+                )),
+            "initial lifecycle events: {:?}",
+            events.lock().unwrap()
+        );
+
+        mgr.write("terminal:explicit-bash", b"echo explicit-bash\n")
+            .unwrap();
+        assert!(
+            wait_for(Duration::from_secs(2), || events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| {
+                    event.contains(":submitted:") && event.ends_with(":echo explicit-bash")
+                })),
+            "submitted lifecycle events: {:?}",
+            events.lock().unwrap()
+        );
+        mgr.remove("terminal:explicit-bash").unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn explicit_bash_respawn_emits_validated_lifecycle() {
+        let sink = Arc::new(RecordingSink::default());
+        let events = Arc::clone(&sink.events);
+        let mgr = PtySessionManager::new(sink);
+        let home = tempfile::tempdir().unwrap();
+        let mut options = PtyCreateOpts {
+            env: HashMap::from([
+                ("TERM".into(), "xterm-256color".into()),
+                ("HOME".into(), home.path().to_string_lossy().into_owned()),
+            ]),
+            ..opts("terminal:respawn-bash", "bash")
+        };
+        options.restart_policy = RestartPolicy::Always;
+        options.restart_max_retries = 1;
+
+        mgr.create(options).unwrap();
+        assert!(
+            tokio_wait_for(Duration::from_secs(2), || events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| {
+                    event.starts_with("lifecycle:terminal:respawn-bash:editing:")
+                }))
+            .await,
+            "initial lifecycle events: {:?}",
+            events.lock().unwrap()
+        );
+
+        mgr.write("terminal:respawn-bash", b"exit\n").unwrap();
+        assert!(
+            tokio_wait_for(Duration::from_secs(3), || events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| event.starts_with("lifecycle:terminal:respawn-bash:editing:"))
+                .count()
+                >= 2)
+            .await,
+            "respawn lifecycle events: {:?}",
+            events.lock().unwrap()
+        );
+
+        mgr.write("terminal:respawn-bash", b"echo respawn-bash\n")
+            .unwrap();
+        assert!(
+            tokio_wait_for(Duration::from_secs(2), || events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| {
+                    event.contains(":submitted:") && event.ends_with(":echo respawn-bash")
+                }))
+            .await,
+            "submitted lifecycle events: {:?}",
+            events.lock().unwrap()
+        );
+        mgr.remove("terminal:respawn-bash").unwrap();
     }
 
     #[test]
