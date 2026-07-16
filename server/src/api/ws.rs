@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::Write;
+use std::sync::Arc;
 
 use axum::{
     extract::{
@@ -144,9 +145,10 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     });
 
     // PTY broadcast pump (uses pty_tx with .await for proper backpressure)
+    let pty_order = Arc::new(tokio::sync::Mutex::new(()));
     let pty_rx_broadcast = state.event_sink.subscribe();
     let pty_out = pty_tx.clone();
-    let pty_pump = tokio::spawn(pump_pty(pty_rx_broadcast, pty_out));
+    let pty_pump = tokio::spawn(pump_pty(pty_rx_broadcast, pty_out, Arc::clone(&pty_order)));
 
     // Per-conn fs subscription pumps: sub_id → JoinHandle
     let mut fs_pumps: HashMap<u64, tokio::task::JoinHandle<()>> = HashMap::new();
@@ -308,11 +310,15 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         ),
                     ]),
                 );
-                // Scrollback is not a live shell boundary. Reset before replay so
-                // a newly attached browser cannot act on stale editing state.
-                let _ = state.pty_manager.reset_lifecycle(&id);
-                match state.pty_manager.get_buffer_with_offset(&id, from_offset) {
-                    Ok(replay) => {
+                // Replay is sent only to this connection. Preserve the PTY's
+                // current editing state for this client without broadcasting a
+                // lifecycle reset to other viewers of the same session.
+                // Serialize the snapshot and its response frames against this
+                // connection's live PTY pump so output cannot overtake replay.
+                let _attach_order = pty_order.lock().await;
+                match state.pty_manager.get_attach_snapshot(&id, from_offset) {
+                    Ok(snapshot) => {
+                        let replay = snapshot.replay;
                         let msg = ServerMsg::TermBuffer {
                             id: id.clone(),
                             data: replay.data,
@@ -323,6 +329,19 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         if let Ok(json) = serde_json::to_string(&msg) {
                             if let Err(e) = pty_tx.send(WireMsg::Text(json)).await {
                                 warn!(id = %id, error = %e, "Failed to send terminal:buffer");
+                            }
+                        }
+                        if let Some(generation) = snapshot.editing_generation {
+                            let msg = ServerMsg::TerminalLifecycle {
+                                id: id.clone(),
+                                lifecycle: "editing".into(),
+                                generation,
+                                command: None,
+                            };
+                            if let Ok(json) = serde_json::to_string(&msg) {
+                                if let Err(e) = pty_tx.send(WireMsg::Text(json)).await {
+                                    warn!(id = %id, error = %e, "Failed to send terminal lifecycle snapshot");
+                                }
                             }
                         }
                     }
@@ -2057,10 +2076,15 @@ async fn do_enc_put_begin(
 // PTY broadcast pump
 // ---------------------------------------------------------------------------
 
-async fn pump_pty(mut rx: tokio::sync::broadcast::Receiver<String>, pty_tx: mpsc::Sender<WireMsg>) {
+async fn pump_pty(
+    mut rx: tokio::sync::broadcast::Receiver<String>,
+    pty_tx: mpsc::Sender<WireMsg>,
+    order: Arc<tokio::sync::Mutex<()>>,
+) {
     loop {
         match rx.recv().await {
             Ok(msg) => {
+                let _order = order.lock().await;
                 if pty_tx.send(WireMsg::Text(msg)).await.is_err() {
                     break;
                 }
@@ -2215,7 +2239,12 @@ async fn pump_fs_events(
 
 #[cfg(test)]
 mod tests {
-    use super::websocket_auth_ok;
+    use std::sync::Arc;
+
+    use tokio::sync::{broadcast, mpsc};
+
+    use super::{pump_pty, websocket_auth_ok};
+    use crate::api::ws_protocol::WireMsg;
 
     #[test]
     fn no_auth_mode_allows_websocket_without_a_token() {
@@ -2225,5 +2254,26 @@ mod tests {
     #[test]
     fn authenticated_mode_still_requires_a_valid_token() {
         assert!(!websocket_auth_ok(false, None, "test-secret"));
+    }
+
+    #[tokio::test]
+    async fn pty_pump_waits_behind_attach_order_barrier() {
+        let (broadcast_tx, broadcast_rx) = broadcast::channel(4);
+        let (out_tx, mut out_rx) = mpsc::channel(4);
+        let order = Arc::new(tokio::sync::Mutex::new(()));
+        let guard = order.lock().await;
+        let pump = tokio::spawn(pump_pty(broadcast_rx, out_tx, Arc::clone(&order)));
+
+        broadcast_tx.send("live-output".into()).unwrap();
+        tokio::task::yield_now().await;
+        assert!(out_rx.try_recv().is_err());
+
+        drop(guard);
+        let message = tokio::time::timeout(std::time::Duration::from_secs(1), out_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(message, WireMsg::Text(value) if value == "live-output"));
+        pump.abort();
     }
 }

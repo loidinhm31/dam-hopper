@@ -3,7 +3,10 @@ import {
   recordCommand,
   type HistorySearchResult,
 } from "@/lib/command-history.js";
-import { classifyTerminalSuggestionInput } from "./terminal-suggestion-input.js";
+import {
+  classifyTerminalSuggestionInput,
+  removeLastGrapheme,
+} from "./terminal-suggestion-input.js";
 import {
   getTerminalSuggestionSuffix,
   type TerminalSuggestionAcceptKind,
@@ -47,6 +50,8 @@ const EMPTY = (sessionId: string): TerminalSuggestionSnapshot => ({
 });
 
 const MAX_PENDING_ECHO_LENGTH = 4096;
+const MAX_PROMPT_PAINT_BYTES = 4096;
+const BASH_BACKSPACE_ECHO = "\b\u001b[K";
 
 /** Purely client-side, fail-closed suggestion controller. It never writes PTY bytes. */
 export class TerminalSuggestionController {
@@ -55,6 +60,12 @@ export class TerminalSuggestionController {
   private token = 0;
   private generation: number | undefined;
   private pendingEcho = "";
+  private promptPaintBytesRemaining = 0;
+  private promptPaintSgrOpen = false;
+  private promptPaintText = "";
+  private promptPaintComplete = false;
+  private pendingNativeBackspace = false;
+  private deferredLifecycle: TerminalLifecycleEvent | undefined;
   private enabled: boolean;
   private current: TerminalSuggestionSnapshot;
 
@@ -79,6 +90,11 @@ export class TerminalSuggestionController {
     if (this.enabled === enabled) return;
     this.enabled = enabled;
     this.reset(enabled ? "unverified" : "disabled");
+    if (enabled && this.deferredLifecycle) {
+      const lifecycle = this.deferredLifecycle;
+      this.deferredLifecycle = undefined;
+      this.handleLifecycle(lifecycle);
+    }
   }
 
   handleLifecycle(event: TerminalLifecycleEvent): void {
@@ -86,11 +102,20 @@ export class TerminalSuggestionController {
     if (this.generation !== undefined && event.generation < this.generation)
       return;
     this.generation = event.generation;
-    if (!this.enabled) return;
+    if (!this.enabled) {
+      this.deferredLifecycle =
+        event.lifecycle === "editing" ? event : undefined;
+      return;
+    }
+    this.deferredLifecycle = undefined;
     if (event.lifecycle === "submitted" && event.command !== undefined) {
       recordCommand(event.command, this.options.project);
     }
     if (event.lifecycle === "editing") {
+      this.promptPaintBytesRemaining = MAX_PROMPT_PAINT_BYTES;
+      this.promptPaintSgrOpen = false;
+      this.promptPaintText = "";
+      this.promptPaintComplete = false;
       this.current = {
         ...EMPTY(this.options.sessionId),
         state: "ready-clean",
@@ -111,9 +136,19 @@ export class TerminalSuggestionController {
       this.current.state !== "ghost"
     )
       return;
+    if (data === "" && this.pendingNativeBackspace) {
+      this.pendingNativeBackspace = false;
+      this.handleBackspace();
+      return;
+    }
+    this.pendingNativeBackspace = false;
     const input = classifyTerminalSuggestionInput(data);
     if (input.kind === "ambiguous") {
       this.reset("opaque");
+      return;
+    }
+    if (input.kind === "backspace") {
+      this.handleBackspace();
       return;
     }
     this.current = {
@@ -132,9 +167,30 @@ export class TerminalSuggestionController {
     this.query();
   }
 
-  /** Ignore only the exact bounded echo of printable input sent by this client. */
+  /** Arm the native-key path used by xterm when Backspace produces no data. */
+  prepareBackspace(): void {
+    this.pendingNativeBackspace =
+      this.current.state === "ready-clean" ||
+      this.current.state === "querying" ||
+      this.current.state === "ghost";
+  }
+
+  /**
+   * Accept bounded prompt paint before input; after input, accept only the
+   * exact bounded echo of printable input sent by this client.
+   */
   handleOutput(data: string): void {
     if (this.current.state === "disabled") return;
+    if (
+      this.current.state === "ready-clean" &&
+      !this.current.rawInput &&
+      this.promptPaintBytesRemaining > 0 &&
+      this.isPromptPaint(data) &&
+      data.length <= this.promptPaintBytesRemaining
+    ) {
+      this.promptPaintBytesRemaining -= data.length;
+      return;
+    }
     if (
       !this.pendingEcho ||
       !data ||
@@ -149,6 +205,7 @@ export class TerminalSuggestionController {
 
   /** Reconnect and replay invalidate shell-line ownership before bytes arrive. */
   handleReplay(): void {
+    this.deferredLifecycle = undefined;
     if (this.current.state !== "disabled") this.reset("unverified");
   }
 
@@ -238,6 +295,11 @@ export class TerminalSuggestionController {
 
   private reset(state: TerminalSuggestionState): void {
     this.pendingEcho = "";
+    this.promptPaintBytesRemaining = 0;
+    this.promptPaintSgrOpen = false;
+    this.promptPaintText = "";
+    this.promptPaintComplete = false;
+    this.pendingNativeBackspace = false;
     this.current = {
       ...EMPTY(this.options.sessionId),
       state,
@@ -245,6 +307,86 @@ export class TerminalSuggestionController {
       revision: this.current.revision + 1,
     };
     this.invalidate(true);
+  }
+
+  private handleBackspace(): void {
+    const previousInput = this.current.rawInput;
+    const rawInput = removeLastGrapheme(this.current.rawInput);
+    this.current = {
+      ...this.current,
+      state: "ready-clean",
+      rawInput,
+      revision: this.current.revision + 1,
+      suggestion: undefined,
+    };
+    if (rawInput !== previousInput) {
+      this.pendingEcho += BASH_BACKSPACE_ECHO;
+    }
+    if (this.pendingEcho.length > MAX_PENDING_ECHO_LENGTH) {
+      this.reset("opaque");
+      return;
+    }
+    this.invalidate(false);
+    if (rawInput) this.query();
+    else this.publish(this.current);
+  }
+
+  private isPromptPaint(data: string): boolean {
+    if (!data || data.includes("\n")) return false;
+    const redrawPrefix = "\r\u001b[K\r";
+    if (this.promptPaintComplete) {
+      return (
+        data.startsWith(redrawPrefix) &&
+        data.slice(redrawPrefix.length) === this.promptPaintText
+      );
+    }
+    const startedInSgr = this.promptPaintSgrOpen;
+    let hasRecognizedControl = false;
+    let hasPromptText = false;
+    let hasSgrControl = false;
+    let sgrOpen = this.promptPaintSgrOpen;
+    let index = 0;
+    while (index < data.length) {
+      if (data[index] !== "\u001b") {
+        const codePoint = data.charCodeAt(index);
+        if (codePoint < 0x20) return false;
+        hasPromptText = true;
+        index += 1;
+        continue;
+      }
+      if (data[index + 1] === "[") {
+        let end = index + 2;
+        while (end < data.length && !/[\u0040-\u007e]/.test(data[end]!)) {
+          end += 1;
+        }
+        if (end >= data.length) return false;
+        if (data[end] === "m") {
+          const params = data.slice(index + 2, end);
+          sgrOpen = params !== "" && params !== "0";
+          hasSgrControl = true;
+        }
+        hasRecognizedControl = true;
+        index = end + 1;
+        continue;
+      }
+      if (data[index + 1] === "]") {
+        const bell = data.indexOf("\u0007", index + 2);
+        const st = data.indexOf("\u001b\\", index + 2);
+        const end = bell >= 0 && (st < 0 || bell < st) ? bell + 1 : st + 2;
+        if (end < 2) return false;
+        hasRecognizedControl = true;
+        index = end;
+        continue;
+      }
+      return false;
+    }
+    this.promptPaintSgrOpen = sgrOpen;
+    const accepted = hasRecognizedControl || startedInSgr;
+    if (accepted && (hasPromptText || hasSgrControl || startedInSgr)) {
+      this.promptPaintText += data;
+      this.promptPaintComplete = hasPromptText && !sgrOpen;
+    }
+    return accepted;
   }
 
   private invalidate(publish: boolean): void {

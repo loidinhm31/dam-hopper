@@ -158,6 +158,8 @@ pub struct LiveSession {
     pub respawn_opts: RespawnOpts,
     /// Ephemeral and intentionally excluded from serializable session metadata.
     pub lifecycle: Option<Arc<Mutex<ShellLifecycle>>>,
+    /// True only after the reader publishes Editing behind visible prompt bytes.
+    pub published_editing: Arc<AtomicBool>,
     /// Keeps the temporary adapter files alive for the child process lifetime.
     pub shell_integration: Option<ShellIntegration>,
 }
@@ -181,6 +183,7 @@ impl LiveSession {
             meta,
             respawn_opts,
             lifecycle,
+            published_editing: Arc::new(AtomicBool::new(false)),
             shell_integration,
         }
     }
@@ -248,6 +251,10 @@ impl LiveSession {
     /// Shutdown flag reference — reader thread polls this.
     pub fn shutdown_ref(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.shutdown)
+    }
+
+    pub fn published_editing_ref(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.published_editing)
     }
 }
 

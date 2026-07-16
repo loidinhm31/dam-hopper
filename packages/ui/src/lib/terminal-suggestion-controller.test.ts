@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getHistory, setHistoryEnabled, type HistorySearchResult } from "./command-history.js";
+import {
+  getHistory,
+  setHistoryEnabled,
+  type HistorySearchResult,
+} from "./command-history.js";
 import { createTerminalSuggestionController } from "./terminal-suggestion-controller.js";
 
 function createStorage(): Storage {
@@ -115,6 +119,116 @@ describe("TerminalSuggestionController", () => {
     expect(controller.snapshot.suggestion).toBeUndefined();
   });
 
+  it("keeps a verified prompt through bounded split prompt paint", async () => {
+    vi.useFakeTimers();
+    const controller = createTerminalSuggestionController({
+      sessionId: "one",
+      project: "web",
+      search: () => [result("echo live")],
+      debounceMs: 1,
+    });
+    editing(controller);
+    controller.handleOutput("\u001b]0;terminal\u0007");
+    controller.handleOutput("\u001b]3008;start=prompt\u0007");
+    controller.handleOutput("\u001b[?2004h");
+    controller.handleOutput("\u001b[32muser$ \u001b[0m");
+    controller.handleInput("e");
+    controller.handleOutput("e");
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(controller.snapshot).toMatchObject({
+      state: "ghost",
+      rawInput: "e",
+      suggestion: { entry: { command: "echo live" } },
+    });
+  });
+
+  it("keeps the exact mixed-style Bash prompt and readline repaint verified", async () => {
+    vi.useFakeTimers();
+    const controller = createTerminalSuggestionController({
+      sessionId: "one",
+      project: "web",
+      search: () => [result("echo live")],
+      debounceMs: 1,
+    });
+    const prompt =
+      "\u001b[0m\u001b[32mloidinh@localhost\u001b[0m:" +
+      "\u001b[32m/mnt/data/ws/sharing/clickstream\u001b[0m$ ";
+
+    editing(controller);
+    controller.handleOutput(
+      "\u001b]0;loidinh@localhost:/mnt/data/ws/sharing/clickstream\u0007",
+    );
+    controller.handleOutput(
+      "\u001b]3008;start=prompt;type=shell;cwd=/mnt/data/ws/sharing/clickstream\u001b\\",
+    );
+    controller.handleOutput("\u001b[?2004h");
+    controller.handleOutput(prompt);
+    controller.handleOutput(`\r\u001b[K\r${prompt}`);
+    controller.handleInput("e");
+    controller.handleOutput("e");
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(controller.snapshot).toMatchObject({
+      state: "ghost",
+      rawInput: "e",
+      suggestion: { entry: { command: "echo live" } },
+    });
+  });
+
+  it("rejects newline output even when it contains prompt control sequences", () => {
+    const controller = createTerminalSuggestionController({
+      sessionId: "one",
+      project: "web",
+      search: () => [result("echo live")],
+    });
+    editing(controller);
+
+    controller.handleOutput("background output\r\n\u001b[32muser$ \u001b[0m");
+
+    expect(controller.snapshot.state).toBe("opaque");
+  });
+
+  it("fails closed for colored background output after prompt paint", () => {
+    const controller = createTerminalSuggestionController({
+      sessionId: "one",
+      project: "web",
+      search: () => [result("echo live")],
+    });
+    editing(controller);
+    controller.handleOutput("\u001b[32muser$ \u001b[0m");
+
+    controller.handleOutput("\u001b[33mbackground job output\u001b[0m");
+
+    expect(controller.snapshot.state).toBe("opaque");
+  });
+
+  it("fails closed for unrelated output before input", () => {
+    const controller = createTerminalSuggestionController({
+      sessionId: "one",
+      project: "web",
+      search: () => [result("echo live")],
+    });
+    editing(controller);
+
+    controller.handleOutput("background job output\n");
+
+    expect(controller.snapshot.state).toBe("opaque");
+  });
+
+  it("fails closed for a single-line background message during prompt paint", () => {
+    const controller = createTerminalSuggestionController({
+      sessionId: "one",
+      project: "web",
+      search: () => [result("echo live")],
+    });
+    editing(controller);
+
+    controller.handleOutput("background job output");
+
+    expect(controller.snapshot.state).toBe("opaque");
+  });
+
   it("fails closed for replay, paste, and cursor movement", async () => {
     vi.useFakeTimers();
     const controller = createTerminalSuggestionController({
@@ -143,6 +257,63 @@ describe("TerminalSuggestionController", () => {
     editing(controller);
     controller.handleComposition();
     expect(controller.snapshot.state).toBe("opaque");
+  });
+
+  it("re-queries after Bash Backspace and its exact terminal echo", async () => {
+    vi.useFakeTimers();
+    const controller = createTerminalSuggestionController({
+      sessionId: "one",
+      project: "web",
+      search: (query) =>
+        query === "cho" ? [result("chown")] : [result("chmod")],
+      debounceMs: 1,
+    });
+    editing(controller);
+    controller.handleInput("c");
+    controller.handleOutput("c");
+    controller.handleInput("h");
+    controller.handleOutput("h");
+    controller.handleInput("o");
+    controller.handleOutput("o");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(controller.snapshot.suggestion?.entry.command).toBe("chown");
+
+    controller.handleInput("");
+    expect(controller.snapshot.state).toBe("opaque");
+
+    editing(controller);
+    controller.handleInput("c");
+    controller.handleOutput("c");
+    controller.handleInput("h");
+    controller.handleOutput("h");
+    controller.handleInput("o");
+    controller.handleOutput("o");
+    await vi.advanceTimersByTimeAsync(1);
+    controller.prepareBackspace();
+    controller.handleInput("");
+    controller.handleOutput("\b\u001b[K");
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(controller.snapshot).toMatchObject({
+      state: "ghost",
+      rawInput: "ch",
+      suggestion: { entry: { command: "chmod" } },
+    });
+  });
+
+  it("restores a lifecycle received while suggestions are temporarily disabled", () => {
+    const controller = createTerminalSuggestionController({
+      sessionId: "one",
+      project: "web",
+      search: () => [],
+      enabled: false,
+    });
+    editing(controller);
+    expect(controller.snapshot.state).toBe("disabled");
+
+    controller.setEnabled(true);
+
+    expect(controller.snapshot.state).toBe("ready-clean");
   });
 
   it("rejects stale lifecycle generations and records only verified submission", () => {
@@ -188,6 +359,24 @@ describe("TerminalSuggestionController", () => {
     });
 
     expect(controller.snapshot.state).toBe("disabled");
+    expect(getHistory()).toEqual([]);
+  });
+
+  it("does not retroactively persist a submission after re-enabling suggestions", () => {
+    const controller = createTerminalSuggestionController({
+      sessionId: "one",
+      project: "web",
+      search: () => [],
+    });
+    controller.setEnabled(false);
+    controller.handleLifecycle({
+      id: "one",
+      lifecycle: "submitted",
+      generation: 1,
+      command: "sudo secret-command",
+    });
+    controller.setEnabled(true);
+
     expect(getHistory()).toEqual([]);
   });
 

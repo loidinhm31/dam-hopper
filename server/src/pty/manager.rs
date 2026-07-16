@@ -57,6 +57,12 @@ pub struct TerminalBufferReplay {
     pub truncated: bool,
 }
 
+#[derive(Debug)]
+pub struct TerminalAttachSnapshot {
+    pub replay: TerminalBufferReplay,
+    pub editing_generation: Option<u64>,
+}
+
 // ---------------------------------------------------------------------------
 // Restart engine types
 // ---------------------------------------------------------------------------
@@ -312,6 +318,7 @@ impl PtySessionManager {
         let buffer = session.buffer_ref();
         let shutdown = session.shutdown_ref();
         let lifecycle = session.lifecycle.clone();
+        let published_editing = session.published_editing_ref();
 
         {
             let mut inner = self.inner.lock().unwrap();
@@ -397,6 +404,7 @@ impl PtySessionManager {
                     rt_handle,
                     diag_store,
                     lifecycle,
+                    published_editing,
                 );
             })
             .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
@@ -418,29 +426,45 @@ impl PtySessionManager {
             .map_err(|e| AppError::PtyError(e.to_string()))
     }
 
-    /// A replay or reattach has no trustworthy editing boundary. Require a new
-    /// marker handshake before clients may use automatic suggestions again.
-    pub fn reset_lifecycle(&self, id: &str) -> Result<(), AppError> {
-        let lifecycle = self
-            .inner
-            .lock()
-            .unwrap()
-            .live
-            .get(id)
-            .and_then(|session| session.lifecycle.clone())
-            .ok_or_else(|| AppError::SessionNotFound(id.to_string()))?;
-        let event = lifecycle.lock().unwrap().reset();
-        self.send_lifecycle_event(id, lifecycle.lock().unwrap().generation(), event);
-        Ok(())
-    }
+    /// Capture replay bytes and lifecycle state at one PTY boundary.
+    ///
+    /// Attach responses are per connection. Returning both values together
+    /// prevents a client from combining an older replay with a newer editing
+    /// state while the PTY reader advances between separate manager calls.
+    pub fn get_attach_snapshot(
+        &self,
+        id: &str,
+        from_offset: Option<u64>,
+    ) -> Result<TerminalAttachSnapshot, AppError> {
+        let inner = self.inner.lock().unwrap();
+        if let Some(session) = inner.live.get(id) {
+            let lifecycle = session
+                .lifecycle
+                .as_ref()
+                .map(|lifecycle| lifecycle.lock().unwrap());
+            let buffer = session.buffer.lock().unwrap();
+            let replay = buffer.read_replay(from_offset);
+            return Ok(TerminalAttachSnapshot {
+                replay: TerminalBufferReplay {
+                    data: String::from_utf8_lossy(replay.data).into_owned(),
+                    offset: replay.offset,
+                    reset: replay.reset,
+                    truncated: replay.truncated,
+                },
+                editing_generation: lifecycle.as_ref().and_then(|lifecycle| {
+                    attach_editing_generation(
+                        lifecycle,
+                        session.published_editing.load(Ordering::Acquire),
+                    )
+                }),
+            });
+        }
+        drop(inner);
 
-    fn send_lifecycle_event(&self, id: &str, generation: u64, event: LifecycleEvent) {
-        self.sink.send_terminal_lifecycle(
-            id,
-            lifecycle_name(event.state),
-            generation,
-            event.command.as_deref(),
-        );
+        Ok(TerminalAttachSnapshot {
+            replay: self.get_buffer_with_offset(id, from_offset)?,
+            editing_generation: None,
+        })
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), AppError> {
@@ -775,6 +799,10 @@ impl PtySessionManager {
     }
 }
 
+fn attach_editing_generation(lifecycle: &ShellLifecycle, published: bool) -> Option<u64> {
+    (published && lifecycle.is_editing()).then_some(lifecycle.generation())
+}
+
 fn consume_suppressed_exit(inner: &mut Inner, session_id: &str) -> bool {
     let Some(count) = inner.suppress_exit_counts.get_mut(session_id) else {
         return false;
@@ -806,6 +834,7 @@ fn reader_thread(
     rt_handle: Option<tokio::runtime::Handle>,
     diag_store: Option<DiagnosticStore>,
     lifecycle: Option<Arc<Mutex<ShellLifecycle>>>,
+    published_editing: Arc<std::sync::atomic::AtomicBool>,
 ) {
     // Local helper to record a terminal lifecycle event from the reader thread.
     let record_diag = |message: &str, mut fields: BTreeMap<String, String>| {
@@ -850,6 +879,12 @@ fn reader_thread(
                         pending_lifecycle_events.push((generation, event));
                     }
                     let (visible_data, events) = lifecycle.feed_visible(data);
+                    if events
+                        .iter()
+                        .any(|event| event.state != LifecycleState::Editing)
+                    {
+                        published_editing.store(false, Ordering::Release);
+                    }
                     pending_lifecycle_events
                         .extend(events.into_iter().map(|event| (generation, event)));
                     visible_data
@@ -891,13 +926,15 @@ fn reader_thread(
                         handle,
                     );
                 }
-                send_visible_output_then_lifecycle(
+                if send_visible_output_then_lifecycle(
                     sink.as_ref(),
                     &session_id,
                     &data_str,
                     &mut pending_lifecycle_events,
                     &mut visible_output_since_boundary,
-                );
+                ) {
+                    published_editing.store(true, Ordering::Release);
+                }
             }
             Err(e) if is_eof_error(&e) => {
                 debug!(id = %session_id, "PTY reader: connection closed");
@@ -1104,7 +1141,7 @@ pub(crate) fn send_visible_output_then_lifecycle(
     visible_data: &str,
     pending_events: &mut Vec<(u64, LifecycleEvent)>,
     visible_output_since_boundary: &mut bool,
-) {
+) -> bool {
     if !visible_data.is_empty() {
         sink.send_terminal_data(session_id, visible_data);
         *visible_output_since_boundary = true;
@@ -1120,7 +1157,9 @@ pub(crate) fn send_visible_output_then_lifecycle(
             _ => false,
         })
         .unwrap_or(pending_events.len());
+    let mut published_editing = false;
     for (generation, event) in pending_events.drain(..ready_count) {
+        published_editing |= event.state == LifecycleState::Editing;
         sink.send_terminal_lifecycle(
             session_id,
             lifecycle_name(event.state),
@@ -1128,6 +1167,7 @@ pub(crate) fn send_visible_output_then_lifecycle(
             event.command.as_deref(),
         );
     }
+    published_editing
 }
 
 // ---------------------------------------------------------------------------
@@ -1300,6 +1340,7 @@ async fn respawn_internal(
     let buffer = session.buffer_ref();
     let shutdown = session.shutdown_ref();
     let lifecycle = session.lifecycle.clone();
+    let published_editing = session.published_editing_ref();
 
     // Insert into live map — if session ID already exists (user called create
     // concurrently), this will replace it (same behavior as create()).
@@ -1356,6 +1397,7 @@ async fn respawn_internal(
                 rt_handle,
                 diag_store,
                 lifecycle,
+                published_editing,
             );
         })
         .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
@@ -1650,6 +1692,21 @@ mod strip_unc_prefix_tests {
     #[test]
     fn leaves_unix_path_unchanged() {
         assert_eq!(strip_unc_prefix("/home/user/path"), "/home/user/path");
+    }
+}
+
+#[cfg(test)]
+mod attach_snapshot_tests {
+    use super::{attach_editing_generation, ShellLifecycle};
+
+    #[test]
+    fn parsed_editing_is_not_attachable_until_prompt_boundary_is_published() {
+        let mut lifecycle = ShellLifecycle::new("nonce".into(), 7);
+        lifecycle.feed(b"\x1b]633;A;nonce\x07\x1b]633;B;nonce\x07");
+
+        assert!(lifecycle.is_editing());
+        assert_eq!(attach_editing_generation(&lifecycle, false), None);
+        assert_eq!(attach_editing_generation(&lifecycle, true), Some(7));
     }
 }
 

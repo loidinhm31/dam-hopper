@@ -24,6 +24,7 @@ export interface UseTerminalSuggestionsResult {
   /** Immutable controller state for the Phase 04 presentation adapter. */
   snapshot: TerminalSuggestionSnapshot;
   handleInput: (data: string) => HandleInputResult;
+  prepareBackspace: () => void;
   handleLifecycle: (event: TerminalLifecycleEvent) => void;
   handleOutput: (data: string) => void;
   handleReplay: () => void;
@@ -96,6 +97,10 @@ export function useTerminalSuggestions(
     },
     [controller],
   );
+  const prepareBackspace = useCallback(
+    (): void => controller.prepareBackspace(),
+    [controller],
+  );
   const handleLifecycle = useCallback(
     (event: TerminalLifecycleEvent): void => controller.handleLifecycle(event),
     [controller],
@@ -128,6 +133,7 @@ export function useTerminalSuggestions(
   return {
     snapshot,
     handleInput,
+    prepareBackspace,
     handleLifecycle,
     handleOutput,
     handleReplay,
