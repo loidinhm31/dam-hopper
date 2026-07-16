@@ -21,6 +21,7 @@ static NEXT_LIFECYCLE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy)]
 enum Shell {
+    Bash,
     Zsh,
     Fish,
 }
@@ -46,25 +47,38 @@ impl ShellIntegration {
         {
             "zsh" => Shell::Zsh,
             "fish" => Shell::Fish,
+            "bash" => Shell::Bash,
             _ => return None,
         };
         let asset = match shell {
+            Shell::Bash => include_str!("../../assets/shell-integration/bash.sh"),
             Shell::Zsh => include_str!("../../assets/shell-integration/zsh.zsh"),
             Shell::Fish => include_str!("../../assets/shell-integration/fish.fish"),
         };
-        let mut file = NamedTempFile::new().ok()?;
-        file.write_all(asset.as_bytes()).ok()?;
-        let init_file = file.into_temp_path();
+        let mut asset_file = NamedTempFile::new().ok()?;
+        asset_file.write_all(asset.as_bytes()).ok()?;
+        let asset_path = asset_file.into_temp_path();
         let init_dir = if matches!(shell, Shell::Zsh) {
             let dir = TempDir::new().ok()?;
             let rc = format!(
-                "[[ -f $HOME/.zshrc ]] && source $HOME/.zshrc\nsource '{}'\n",
-                init_file.display()
+                "[[ -f \"$HOME/.zshrc\" ]] && source \"$HOME/.zshrc\"\nsource '{}'\n",
+                asset_path.display()
             );
             fs::write(dir.path().join(".zshrc"), rc).ok()?;
             Some(dir)
         } else {
             None
+        };
+        let init_file = if matches!(shell, Shell::Bash) {
+            let mut wrapper = NamedTempFile::new().ok()?;
+            let rc = format!(
+                "[[ -f \"$HOME/.bashrc\" ]] && source \"$HOME/.bashrc\"\n{}\n",
+                asset
+            );
+            wrapper.write_all(rc.as_bytes()).ok()?;
+            wrapper.into_temp_path()
+        } else {
+            asset_path
         };
         let mut bytes = [0_u8; 24];
         OsRng.fill_bytes(&mut bytes);
@@ -85,6 +99,11 @@ impl ShellIntegration {
             self.lifecycle.lock().unwrap().nonce(),
         );
         match self.shell {
+            Shell::Bash => {
+                command.arg("-i");
+                command.arg("--rcfile");
+                command.arg(&self.init_file);
+            }
             Shell::Zsh => {
                 command.arg("-i");
                 command.env("ZDOTDIR", self.init_dir.as_ref().unwrap().path());
@@ -104,6 +123,146 @@ impl ShellIntegration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+
+    #[cfg(unix)]
+    fn run_bash(integration: &ShellIntegration, home: &Path, input: &[u8]) -> std::process::Output {
+        let nonce = integration.lifecycle.lock().unwrap().nonce().to_owned();
+        let mut child = Command::new("/bin/bash")
+            .args(["--noprofile", "--rcfile"])
+            .arg(&integration.init_file)
+            .arg("-i")
+            .env_clear()
+            .env("DAM_HOPPER_SHELL_NONCE", nonce)
+            .env("HOME", home)
+            .env("PATH", "/usr/bin:/bin")
+            .env("SHELL", "/bin/bash")
+            .env("TERM", "dumb")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn bash");
+
+        child
+            .stdin
+            .take()
+            .expect("bash stdin")
+            .write_all(input)
+            .expect("write bash commands");
+        child.wait_with_output().expect("wait for bash")
+    }
+
+    #[cfg(unix)]
+    fn lifecycle_events(
+        integration: &ShellIntegration,
+        output: &std::process::Output,
+    ) -> Vec<super::super::shell_lifecycle::LifecycleEvent> {
+        let mut bytes = output.stdout.clone();
+        bytes.extend_from_slice(&output.stderr);
+        integration.lifecycle.lock().unwrap().feed(&bytes)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bash_emits_validated_lifecycle_for_simple_command() {
+        let env = HashMap::from([("SHELL".into(), "/bin/bash".into())]);
+        let integration = ShellIntegration::prepare("", &env).expect("bash adapter");
+        let home = tempfile::tempdir().expect("temporary home");
+        let output = run_bash(&integration, home.path(), b"echo bash-inline-test\nexit\n");
+        let events = lifecycle_events(&integration, &output);
+
+        assert!(
+            events.iter().any(|event| {
+                event.state == super::super::shell_lifecycle::LifecycleState::Submitted
+                    && event.command.as_deref() == Some("echo bash-inline-test")
+            }),
+            "stdout: {:?}\nstderr: {:?}\nevents: {events:?}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(!output.stdout.windows(5).any(|window| window == b"633;"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bash_disables_adapter_without_replacing_existing_debug_trap() {
+        let env = HashMap::from([("SHELL".into(), "/bin/bash".into())]);
+        let integration = ShellIntegration::prepare("", &env).expect("bash adapter");
+        let home = tempfile::tempdir().expect("temporary home");
+        fs::write(
+            home.path().join(".bashrc"),
+            "trap 'printf user-debug\\n' DEBUG\n",
+        )
+        .expect("write bashrc");
+
+        let output = run_bash(&integration, home.path(), b"echo retained-trap\nexit\n");
+        let mut combined = output.stdout.clone();
+        combined.extend_from_slice(&output.stderr);
+        assert!(String::from_utf8_lossy(&combined).contains("user-debug"));
+        assert!(!combined.windows(5).any(|window| window == b"633;"));
+        assert!(lifecycle_events(&integration, &output).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bash_preserves_scalar_and_array_prompt_hooks() {
+        let env = HashMap::from([("SHELL".into(), "/bin/bash".into())]);
+        for (hook, output_text) in [
+            ("PROMPT_COMMAND='printf scalar-hook\\n'\n", "scalar-hook"),
+            ("PROMPT_COMMAND=('printf array-hook\\n')\n", "array-hook"),
+        ] {
+            let integration = ShellIntegration::prepare("", &env).expect("bash adapter");
+            let home = tempfile::tempdir().expect("temporary home");
+            fs::write(home.path().join(".bashrc"), hook).expect("write bashrc");
+            let output = run_bash(&integration, home.path(), b"echo hook-test\nexit\n");
+            let mut combined = output.stdout.clone();
+            combined.extend_from_slice(&output.stderr);
+            assert!(String::from_utf8_lossy(&combined).contains(output_text));
+            assert!(lifecycle_events(&integration, &output).iter().any(|event| {
+                event.state == super::super::shell_lifecycle::LifecycleState::Submitted
+                    && event.command.as_deref() == Some("echo hook-test")
+            }));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bash_abandons_ambiguous_command_without_marker_leakage() {
+        let env = HashMap::from([("SHELL".into(), "/bin/bash".into())]);
+        let integration = ShellIntegration::prepare("", &env).expect("bash adapter");
+        let home = tempfile::tempdir().expect("temporary home");
+        let output = run_bash(&integration, home.path(), b"echo one; echo two\nexit\n");
+        let mut combined = output.stdout.clone();
+        combined.extend_from_slice(&output.stderr);
+        let events = lifecycle_events(&integration, &output);
+
+        assert!(!combined.windows(5).any(|window| window == b"633;"));
+        assert!(!events.iter().any(|event| {
+            event.state == super::super::shell_lifecycle::LifecycleState::Submitted
+                && event.command.as_deref() == Some("echo one; echo two")
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bash_fails_closed_when_leading_whitespace_is_not_lossless() {
+        let env = HashMap::from([("SHELL".into(), "/bin/bash".into())]);
+        let integration = ShellIntegration::prepare("", &env).expect("bash adapter");
+        let home = tempfile::tempdir().expect("temporary home");
+        let output = run_bash(&integration, home.path(), b"  echo leading-space\nexit\n");
+        let mut combined = output.stdout.clone();
+        combined.extend_from_slice(&output.stderr);
+        let events = lifecycle_events(&integration, &output);
+
+        assert!(!combined.windows(5).any(|window| window == b"633;"));
+        assert!(!events.iter().any(|event| {
+            event.state == super::super::shell_lifecycle::LifecycleState::Submitted
+                && event.command.as_deref() == Some("echo leading-space")
+        }));
+    }
 
     #[test]
     fn lifecycle_generations_are_monotonic() {
@@ -122,5 +281,20 @@ mod tests {
             .generation();
 
         assert!(second > first);
+    }
+
+    #[test]
+    fn selects_bash_only_for_empty_interactive_sessions() {
+        let env = HashMap::from([("SHELL".into(), "/bin/bash".into())]);
+        assert!(ShellIntegration::prepare("", &env).is_some());
+        assert!(ShellIntegration::prepare("echo hi", &env).is_none());
+    }
+
+    #[test]
+    fn preserves_existing_shell_adapters() {
+        for shell in ["zsh", "fish"] {
+            let env = HashMap::from([("SHELL".into(), format!("/bin/{shell}"))]);
+            assert!(ShellIntegration::prepare("", &env).is_some(), "{shell}");
+        }
     }
 }

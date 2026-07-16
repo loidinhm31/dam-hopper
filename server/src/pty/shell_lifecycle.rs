@@ -184,6 +184,19 @@ impl ShellLifecycle {
                     command: None,
                 })
             }
+            // A shell may abandon an edit before it can emit an exact E/C pair
+            // (for example Bash compound syntax, Ctrl-C, or an empty submit).
+            // Treat the next trusted prompt boundary as a private reset so the
+            // marker is not replayed into visible terminal output.
+            "D" if self.valid(parts.next())
+                && parts.next().is_none()
+                && matches!(
+                    self.state,
+                    LifecycleState::Prompt | LifecycleState::Editing | LifecycleState::Submitted
+                ) =>
+            {
+                Some(self.reset())
+            }
             "D" if self.valid(parts.next())
                 && parts.next().is_none()
                 && self.state == LifecycleState::Opaque =>
@@ -300,5 +313,18 @@ mod tests {
                 .state,
             LifecycleState::Unverified
         );
+    }
+
+    #[test]
+    fn abandoned_prompt_boundary_resets_without_marker_leak() {
+        let mut lifecycle = ShellLifecycle::new("nonce".into(), 7);
+        lifecycle.feed(&marker("A;nonce"));
+        lifecycle.feed(&marker("B;nonce"));
+
+        let (visible, events) = lifecycle.feed_visible(&marker("D;nonce"));
+
+        assert!(visible.is_empty());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].state, LifecycleState::Unverified);
     }
 }
