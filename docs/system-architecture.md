@@ -94,7 +94,12 @@ Pure frontend notification pipeline in `packages/ui/src/lib/`:
 - `browser-notification-service.ts` applies permission, rate-limit, and delivery guards before creating browser `Notification` objects
 - `TerminalNotificationCenter` and `TerminalNotificationToastViewport` render the shared in-app bell/feed and top-right live alerts
 
-Runtime delivery is intentionally UI-only; the Sound switch and Volume slider use the existing global UI-config persistence path. It is covered by unit tests around parsing, recognition, tracking, notification gating, restart suppression, and cleanup behavior.
+On terminal attach or reconnect, notification delivery is marked replay-active before
+the retained buffer is written and remains suppressed until xterm invokes that write's
+completion callback. Live chunks queue during that interval, so historical OSC 9
+signals cannot alert while an identical signal received after replay completion can.
+
+Runtime delivery is intentionally UI-only; the Sound switch and Volume slider use the existing global UI-config persistence path. It is covered by unit tests around parsing, recognition, tracking, notification gating, callback-gated replay suppression, restart suppression, and cleanup behavior, plus a Chromium regression test that verifies queued live chunks resume only after retained replay completes.
 
 Phase 04 adds a settings surface in the shared UI package:
 

@@ -1,10 +1,12 @@
 import type { Terminal } from "@xterm/xterm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { playTerminalNotificationSound, recordClientDiagnostic } = vi.hoisted(() => ({
-  playTerminalNotificationSound: vi.fn(),
-  recordClientDiagnostic: vi.fn(),
-}));
+const { playTerminalNotificationSound, recordClientDiagnostic } = vi.hoisted(
+  () => ({
+    playTerminalNotificationSound: vi.fn(),
+    recordClientDiagnostic: vi.fn(),
+  }),
+);
 
 vi.mock("@/lib/diagnostics-client.js", () => ({
   recordClientDiagnostic,
@@ -15,6 +17,7 @@ vi.mock("@/lib/terminal-notification-sound.js", () => ({
 }));
 
 import { attachTerminalAgentNotifications } from "./terminal-agent-notification-integration.js";
+import { applyTerminalBufferReplay } from "./terminal-buffer-replay.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalNotificationsStore } from "@/stores/terminal-notifications.js";
 
@@ -56,8 +59,15 @@ function installFakeNotification() {
 
 function createTerminal() {
   let handler: OscHandler | null = null;
+  let writeComplete: (() => void) | undefined;
   const dispose = vi.fn();
   const term = {
+    clear: vi.fn(),
+    write: vi.fn((data: string, callback?: () => void) => {
+      const osc9Signals = data.matchAll(/\u001b]9;([^\u0007]*)\u0007/g);
+      for (const signal of osc9Signals) handler?.(signal[1] ?? "");
+      writeComplete = callback;
+    }),
     parser: {
       registerOscHandler: vi.fn((code: number, next: OscHandler) => {
         handler = next;
@@ -68,6 +78,7 @@ function createTerminal() {
 
   return {
     dispose,
+    completeWrite: () => writeComplete?.(),
     getHandler: () => handler,
     term,
   };
@@ -150,7 +161,7 @@ describe("attachTerminalAgentNotifications", () => {
   it("does not deliver OSC 9 notifications when the Codex setting is disabled", () => {
     const created = installFakeNotification();
     useSettingsStore.setState({ terminalCodexNotificationsEnabled: false });
-    const { term, getHandler } = createTerminal();
+    const { getHandler, term } = createTerminal();
 
     attachTerminalAgentNotifications({
       term,
@@ -165,7 +176,52 @@ describe("attachTerminalAgentNotifications", () => {
     expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(
       0,
     );
+    expect(useTerminalNotificationsStore.getState().toasts).toEqual([]);
     expect(playTerminalNotificationSound).not.toHaveBeenCalled();
+  });
+
+  it("keeps replayed OSC 9 silent, then delivers an identical live signal", () => {
+    const created = installFakeNotification();
+    const { completeWrite, getHandler, term } = createTerminal();
+    const integration = attachTerminalAgentNotifications({
+      term,
+      sessionId: "term-replay",
+      project: "web",
+    });
+    const handler = getHandler();
+    const payload = "notify;Codex done;Review the answer";
+
+    integration.setReplayActive(true);
+    applyTerminalBufferReplay(
+      term,
+      {
+        data: `\u001b]10;rgb:aa/bb/cc\u0007\u001b]9;${payload}\u0007`,
+        offset: 42,
+        reset: true,
+        truncated: false,
+      },
+      () => integration.setReplayActive(false),
+    );
+    expect(term.parser.registerOscHandler).toHaveBeenCalledTimes(1);
+    expect(term.parser.registerOscHandler).toHaveBeenCalledWith(
+      9,
+      expect.any(Function),
+    );
+    expect(created).toHaveLength(0);
+    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(
+      0,
+    );
+    expect(useTerminalNotificationsStore.getState().toasts).toEqual([]);
+    expect(playTerminalNotificationSound).not.toHaveBeenCalled();
+
+    completeWrite();
+    expect(handler?.(payload)).toBe(true);
+    expect(created).toHaveLength(1);
+    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(
+      1,
+    );
+    expect(useTerminalNotificationsStore.getState().toasts).toHaveLength(1);
+    expect(playTerminalNotificationSound).toHaveBeenCalledOnce();
   });
 
   it("delivers in-app when native browser notifications are denied", () => {
@@ -227,9 +283,7 @@ describe("attachTerminalAgentNotifications", () => {
     });
 
     expect(getHandler()?.("notify;Codex done;Review the answer")).toBe(true);
-    expect(created[0]?.options.body).toBe(
-      "api · Bash #2\nReview the answer",
-    );
+    expect(created[0]?.options.body).toBe("api · Bash #2\nReview the answer");
 
     vi.advanceTimersByTime(1_001);
     terminalOrder = 4;
