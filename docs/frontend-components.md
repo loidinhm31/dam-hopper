@@ -73,13 +73,14 @@ Shared runtime libraries:
 - Notifications are deduped per `sessionId` + `source` with a default 30s rate limit.
 - Quiet tracking is optional; when enabled it emits a "may need attention" notification after configurable inactivity.
 - Terminal exit notifications are suppressed when the session is expected to restart, so `willRestart` does not produce a finished notification.
+- Retained `terminal:buffer` replay is rendered unchanged but never delivers OSC 9 alerts: a session-local gate opens before xterm writes replay data and closes only from that write's completion callback. Live PTY chunks received while xterm is parsing replay queue in arrival order and flush after the gate closes; data received before any attach buffer keeps the existing fail-closed path.
 - Cleanup disposes xterm handlers, timers, and tracker state when the panel unmounts or the session is replaced.
 - In-app history is memory-only and capped at 50 records; toast IDs are capped at three. Enabling the Codex notification setting is required, but browser `Notification` permission does not affect the in-app bell or toast path.
 - `terminal-notification-sound.ts` uses a reused Web Audio context to attempt a short chime for enabled valid Codex OSC 9 events. Unsupported, SSR, autoplay-blocked, and audio-failure paths are silent no-ops; the persisted Sound switch and Volume slider control only this in-app channel, while the Settings page's **Play sound** button activates audio from an explicit click and does not request a browser permission.
 - Terminal ordinals are the current 1-based open-list position and are display context only. Navigation never relies on a project name or ordinal. A target must be mounted and either explicitly alive or, only while liveness is unknown, already registered with xterm; explicitly dead, unmounted, and stale targets are safe no-ops.
 - In compact coarse-pointer layouts with the mobile custom keyboard enabled, selection still reveals and refits the exact terminal but deliberately avoids forcing native xterm focus so the browser keyboard is not opened unexpectedly.
 - Settings live under `SettingsAppearanceSection` via the extracted `TerminalAgentNotificationSettings` and `AgentCommandPatternEditor` UI. Permission is requested only from the explicit button click and the app surfaces `unsupported`, `not requested`, `granted`, and `denied` states without persisting that browser permission.
-- Client diagnostics for this feature are recorded under scope `terminal-agent-notifications` and must not include raw terminal output, OSC payloads, or command arguments beyond the executable token.
+- Client diagnostics for this feature are recorded under scope `terminal-agent-notifications` and must not include raw terminal output, replay data, OSC payloads, or command arguments beyond the executable token; replay state may use metadata-only counts.
 
 ## IDE Tool Window System
 
@@ -205,7 +206,7 @@ The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose
 
 **Purpose:** Renders a single terminal session using xterm.js. Handles lifecycle events (output, exit, restart, reconnect), session attachment, and in-app/native agent notification integration. Phase 1 adds the session-local find controller; TerminalPanel lifecycle wiring follows in Phase 2.
 
-**Behavior:** Filters out the terminal workspace shortcut so xterm input does not swallow the global mode toggle. Wires xterm BEL and OSC 9/777/99 handlers into the shared agent-activity path so submitted command, output, user input, and exit signals can drive in-app and native browser notifications without any backend protocol change. The terminal session cleanup path disposes signal handlers and timers; search controller cleanup is added with the Phase 2 lifecycle wiring.
+**Behavior:** Filters out the terminal workspace shortcut so xterm input does not swallow the global mode toggle. Wires xterm BEL and OSC 9/777/99 handlers into the shared agent-activity path so submitted command, output, user input, and exit signals can drive in-app and native browser notifications without any backend protocol change. During retained buffer replay, it keeps the OSC 9 delivery gate active through xterm's asynchronous write callback, then FIFO-flushes queued live data so historical alerts stay silent and subsequent live alerts are preserved. The terminal session cleanup path disposes signal handlers and timers; search controller cleanup is added with the Phase 2 lifecycle wiring.
 
 #### Inline terminal suggestions (Phase 04)
 
