@@ -207,6 +207,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-07-16:** Completed Codex terminal notification replay Phase 01: Replay-safe delivery lifecycle (review approved 13:14 +07).
+  - ✅ Replayed OSC 9 is suppressed until xterm reports buffer-write completion; concurrent live chunks flush in order afterward.
+  - ✅ Focused lifecycle and affected UI validation passed; Phase 02 regression coverage remains pending.
+
 - **2026-07-16:** Completed Safe Inline Terminal Suggestions Phase 03: Suggestion Controller and History/Search Separation (review approved 05:07 +07).
 
 - **2026-07-16:** Completed Safe Inline Terminal Suggestions Phase 05: Release Validation, Documentation, and Rollout (review approved).
