@@ -15,6 +15,8 @@ const settingsStore = {
   editorZoomWheelEnabled: true,
   terminalSuggestionsEnabled: true,
   terminalCodexNotificationsEnabled: true,
+  terminalCodexNotificationSoundEnabled: true,
+  terminalCodexNotificationSoundVolume: 100,
   terminalScrollButtonsEnabled: false,
   terminalScrollStep: 3,
   explorerShowHidden: false,
@@ -35,6 +37,10 @@ describe("SettingsAppearanceSection", () => {
     expect(markup).toContain("Stored only in this browser");
     expect(markup).toContain("Request permission");
     expect(markup).toContain("Enable Codex notifications");
+    expect(markup).toContain("Notification sound");
+    expect(markup).toContain("Notification sound volume");
+    expect(markup).toContain("Test notification sound");
+    expect(markup).toContain("Play sound");
     expect(markup).not.toContain("Quiet tracking");
     expect(markup).not.toContain("Command patterns");
   });

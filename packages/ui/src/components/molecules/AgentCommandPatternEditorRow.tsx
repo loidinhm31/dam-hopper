@@ -42,6 +42,7 @@ export function AgentCommandPatternEditorRow({
         <div className="flex items-center gap-2">
           <Switch
             checked={pattern.enabled}
+            ariaLabel={`Enable ${pattern.label || "command pattern"}`}
             onCheckedChange={(enabled) => onChange({ enabled })}
           />
           <span className="text-xs text-[var(--color-text-muted)]">

@@ -90,72 +90,118 @@ Pure frontend notification pipeline in `packages/ui/src/lib/`:
 - `agent-activity-tracker.ts` turns submitted command, output, user input, and enhanced exit events into activity state changes
 - `terminal-notification-signal-parser.ts` converts BEL and OSC 9/777/99 terminal signals into normalized notification events
 - `terminal-notifications.ts` keeps a bounded, memory-only notification history and transient toast IDs in Zustand
-- `terminal-notification-sound.ts` attempts a short, low-volume in-app Web Audio chime through a reused context; unavailable or blocked audio is a silent no-op
+- `terminal-notification-sound.ts` attempts a short in-app Web Audio chime through a reused context at the persisted sound volume; unavailable or blocked audio is a silent no-op
 - `browser-notification-service.ts` applies permission, rate-limit, and delivery guards before creating browser `Notification` objects
 - `TerminalNotificationCenter` and `TerminalNotificationToastViewport` render the shared in-app bell/feed and top-right live alerts
 
-This path is intentionally UI-only. It has no server/API dependency and is covered by unit tests around parsing, recognition, tracking, notification gating, restart suppression, and cleanup behavior.
+Runtime delivery is intentionally UI-only; the Sound switch and Volume slider use the existing global UI-config persistence path. It is covered by unit tests around parsing, recognition, tracking, notification gating, restart suppression, and cleanup behavior.
 
 Phase 04 adds a settings surface in the shared UI package:
 
-- `TerminalAgentNotificationSettings` exposes enable/signal/quiet controls and the explicit browser-permission button
+- `TerminalAgentNotificationSettings` exposes the master notification switch, Sound switch, Volume slider, user-activated **Play sound** button, and explicit browser-permission button
 - `AgentCommandPatternEditor` lets users add literal aliases such as `CODEXNSB` or custom regex matches without editing config files by hand
 - browser permission state is read from the runtime `Notification` API and is never persisted into server config
 - diagnostics for unsupported/default/denied/rate-limited/factory-error paths are emitted as frontend `custom` events under scope `terminal-agent-notifications`
-- the Codex notification setting gates event capture; native browser permission gates only native popup delivery, so the in-app bell/feed and best-effort chime remain available when browser permission is denied or unsupported
+- the Codex notification setting gates event capture; the Sound switch and Volume slider gate only the best-effort chime; native browser permission gates only native popup delivery, so the in-app bell/feed remains available when browser permission is denied or unsupported
 - in-app history is session-memory only, capped at 50 records; at most three toast alerts are shown and each expires after six seconds
 
 Notification scope remains xterm-only. DamHopper does not watch external terminals, OS process tables, or native notification daemons for this feature.
 
-### inline terminal suggestions (planned)
+### inline terminal suggestions
 
-Phase 01 removes unsafe automatic activation and recording. Until a supported shell
-integration supplies a verified lifecycle, automatic suggestions and history capture
-fail closed. Terminal and outgoing PTY bytes remain passive: containment does not
-intercept, rewrite, or infer command boundaries from Enter, output silence, replayed
-scrollback, or arbitrary input. Command history is stored only in browser local storage;
-users can clear it or disable future persistence from Settings.
+Automatic suggestions and history capture remain fail-closed until the server verifies
+a shell lifecycle for the current PTY incarnation. The server currently supports only
+launch-only local interactive zsh and fish adapters; Bash and every other command or
+shell remain unsupported. Terminal and outgoing PTY bytes are passive: the feature
+never infers command boundaries from Enter, output silence, replayed scrollback, or
+arbitrary input. Command history is browser-local and users can clear it or disable
+future persistence from Settings.
 
-Future lifecycle integration uses bounded OSC 633-compatible markers with a per-PTY-
-incarnation nonce. Unsupported shells, replay attaches, respawns, invalid marker order,
-alternate buffers, SSH/subshell transitions, and measurement failures must continue to
-fail closed, while an explicitly opened history workflow may remain available.
+Supported adapters emit OSC 633-compatible `A`/`B`/`E`/`C`/`D` markers carrying a
+fresh, per-incarnation nonce. `ShellLifecycle` is a bounded (8 KiB) streaming parser:
+it accepts BEL or ST terminators and validates marker order, nonce, and the base64url
+exact command in `E`. The nonce exists only in the child environment and lifecycle
+observer; it is never persisted or sent to clients. Valid private markers are stripped
+from live output and scrollback, while malformed, invalid, or oversized markers remain
+visible verbatim and reset trust.
+
+The server broadcasts only typed `terminal:lifecycle` events (`editing`, `submitted`
+with the exact command, `opaque`, or `unverified`) and an opaque generation number.
+It resets lifecycle trust on a terminal attach/replay, invalid marker or transition,
+alternate-buffer entry, and a new PTY incarnation. No lifecycle event establishes
+trust for unsupported shells.
 
 ```mermaid
 stateDiagram-v2
   [*] --> Unverified
-  Unverified --> PromptStart : valid A and handshake
+  Unverified --> PromptStart : valid A and nonce
   PromptStart --> Editing : valid B
   Editing --> Submitted : valid E with nonce and exact command
   Submitted --> Opaque : valid C
   Opaque --> Finished : valid D
   Finished --> PromptStart : next valid A
   PromptStart --> Unverified : invalid or stale marker
-  Editing --> Unverified : disconnect, replay, respawn, or alternate buffer
+  Editing --> Unverified : attach/replay, respawn, or alternate buffer
   Submitted --> Unverified : invalid transition
   Opaque --> Unverified : invalid transition
 ```
 
-Future security boundary: only `Editing` may query or show a passive suggestion. `E` supplies
+The security boundary is that only `Editing` may query or show a passive suggestion. `E` supplies
 the exact submitted command; `C` closes editing before command output or password/REPL/
-TUI input. History commits only from a validated `E -> C` transition. Outgoing PTY bytes,
-Enter, terminal silence, and replayed scrollback never establish a history boundary.
+TUI input. Browser-local history commits only from a current-generation, server-validated
+`submitted` lifecycle event carrying that exact `E` command. Outgoing PTY bytes, Enter,
+terminal silence, and replayed scrollback never establish a history boundary.
 Nonce validation limits accidental or child-process marker spoofing; it is not isolation
 against malicious same-user code, so invalid sequences always reset to `Unverified`.
 
-The per-session suggestion controller owns a monotonic prompt epoch and input revision.
-Every input/lifecycle change synchronously hides prior results. A result may render or be
-accepted only if session, epoch, revision, exact raw input, verified lifecycle, normal
-buffer, clean end-of-line state, and true-prefix relation still match. Passive mode never
-owns Tab, Enter, Escape, Ctrl+R, paste, or TUI keys. Acceptance sends only the remaining
-suffix through the normal PTY input path and never sends Ctrl+U, the existing prefix, or
-Enter. Fuzzy/non-prefix results belong to an explicitly focused accessible list.
+Phase 03 implements a per-session, client-only suggestion controller with immutable
+snapshots and monotonic prompt epochs and input revisions. Each lifecycle, input, output,
+replay, or composition transition synchronously invalidates outstanding searches. A result
+can enter a `ghost` snapshot only when its session, epoch, revision, exact raw input, verified
+editing lifecycle, and byte-exact true-prefix relation still match. Phase 04 renders only the
+remaining suffix of that snapshot; it never redraws or replaces the typed prefix.
+
+The controller accepts only one printable grapheme as an append while a verified prompt is
+clean. Control sequences, Enter, cursor edits, completion, multi-grapheme/paste input, IME
+composition, terminal output, reconnect/replay, and buffer ambiguity fail closed to `opaque`
+or `unverified`. The terminal adapter remains passive except for three explicit desktop
+shortcuts: `Alt+Right` accepts the full remaining verified suffix, `Alt+Shift+Right` accepts
+its next token, and `Ctrl+Alt+H` opens the explicit history workflow when enabled. Acceptance
+atomically clears the ghost before writing the suffix once through the normal PTY path; it never
+sends Ctrl+U, the existing prefix, or Enter. Every other xterm key and input byte—including Tab,
+Enter, Escape, Ctrl+R, paste, and TUI input—continues unchanged. Coarse-pointer and
+native-keyboard-suppressed surfaces disable automatic ghost and history-shortcut behavior.
+Fuzzy/non-prefix results remain for an explicitly focused accessible list rather than passive
+completion.
+
+History v2 is browser-local under `dam-hopper:command-history` as `{ version: 2, entries }`.
+Each entry retains an exact raw command, a stable v2 id, last-used timestamp, total use count,
+current project, and a per-project usage map. Its NFKC-lowercased `searchText` and Unicode
+word tokens are derived search fields only; they never reconstruct or alter the raw command.
+The shared ranking puts byte-exact raw prefixes ahead of normalized token-prefix matches, then
+uses recency and usage as tie-breaking signals. Legacy records are normalized in memory and
+are not rewritten until a later verified command write. Disabled or inaccessible local storage
+fails closed, and the Settings controls can stop future writes or clear stored history.
+
+The server preserves ordering at the prompt boundary: visible PTY output is emitted before its
+pending `editing` lifecycle snapshot. A marker-only chunk cannot flush `editing`; it waits for
+visible prompt output (or a previously established visible boundary). This prevents the client
+from treating an unseen prompt marker as a usable editing surface.
 
 Cursor placement is isolated behind one fail-closed geometry adapter. It measures the
-xterm screen/cursor relative to the current terminal host, recomputes on cursor/output/
-resize/scroll/host-reparent events, clamps explicit lists to terminal bounds, and hides
-the ghost when validation fails. Proposed xterm decoration APIs are not a default
-dependency; adopting them requires a renderer/reflow spike and pinned compatibility.
+xterm textarea relative to the current terminal host and has one validated screen-grid fallback.
+It recomputes once per animation frame on cursor/output/resize/scroll/zoom/font changes; the
+terminal host attachment invalidates it after reparenting. Detached hosts, alternate buffers,
+scrollback, invalid rectangles, and out-of-bounds measurements hide the ghost rather than guess.
+The visual suffix is `aria-hidden`, unfocusable, pointer-inert, single-line, and clipped/faded at
+the available terminal width. Proposed xterm decoration APIs are not a default dependency;
+adopting them requires a renderer/reflow spike and pinned compatibility.
+
+The explicit history path is a focus-managed dialog, never a passive preselected menu. It searches
+browser-local entries and exposes full command text with Copy and Use actions. Use writes only a
+single-line command to the current PTY without Enter; a multi-line entry stays visible but is
+copy-only. The dialog and ghost consume only immutable controller snapshots and do not record
+history, alter lifecycle trust, or add terminal protocol messages.
 
 History stores exact raw commands separately from normalized search fields, remains
 local-only, and provides clear/disable controls. Desktop is the first support boundary;

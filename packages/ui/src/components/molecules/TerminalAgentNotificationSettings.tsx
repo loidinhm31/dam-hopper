@@ -10,13 +10,18 @@ import {
   type BrowserNotificationPermissionState,
 } from "@/lib/browser-notification-service.js";
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
+import { playTerminalNotificationSound } from "@/lib/terminal-notification-sound.js";
 
 type TerminalAgentNotificationSettingsPatch = Partial<{
   terminalCodexNotificationsEnabled: boolean;
+  terminalCodexNotificationSoundEnabled: boolean;
+  terminalCodexNotificationSoundVolume: number;
 }>;
 
 interface TerminalAgentNotificationSettingsProps {
   enabled: boolean;
+  soundEnabled: boolean;
+  soundVolume: number;
   onSave: (partial: TerminalAgentNotificationSettingsPatch) => void;
 }
 
@@ -39,6 +44,8 @@ const PERMISSION_LABEL: Record<BrowserNotificationPermissionState, string> = {
 
 export function TerminalAgentNotificationSettings({
   enabled,
+  soundEnabled,
+  soundVolume,
   onSave,
 }: TerminalAgentNotificationSettingsProps) {
   const [permission, setPermission] = useState<BrowserNotificationPermissionState>(() =>
@@ -92,10 +99,63 @@ export function TerminalAgentNotificationSettings({
       >
         <Switch
           checked={enabled}
+          ariaLabel="Enable Codex notifications"
           onCheckedChange={(checked) =>
             onSave({ terminalCodexNotificationsEnabled: checked })
           }
         />
+      </SettingRow>
+      <div className="border-t border-[var(--color-border)]" />
+      <SettingRow
+        title="Notification sound"
+        description="Play an in-app chime when Codex needs attention"
+      >
+        <Switch
+          checked={soundEnabled}
+          ariaLabel="Enable notification sound"
+          disabled={!enabled}
+          onCheckedChange={(checked) =>
+            onSave({ terminalCodexNotificationSoundEnabled: checked })
+          }
+        />
+      </SettingRow>
+      <div className="border-t border-[var(--color-border)]" />
+      <SettingRow
+        title="Notification sound volume"
+        description={`${soundVolume}% of the notification chime level`}
+      >
+        <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
+          <input
+            aria-label="Notification sound volume"
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={soundVolume}
+            disabled={!enabled || !soundEnabled}
+            onChange={(event) =>
+              onSave({
+                terminalCodexNotificationSoundVolume: Number(event.target.value),
+              })
+            }
+            className="w-28 accent-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+          />
+          <span className="w-9 text-right">{soundVolume}%</span>
+        </label>
+      </SettingRow>
+      <div className="border-t border-[var(--color-border)]" />
+      <SettingRow
+        title="Test notification sound"
+        description="Plays the selected volume and enables audio for future notification chimes"
+      >
+        <Button
+          type="button"
+          size="sm"
+          disabled={!enabled || !soundEnabled}
+          onClick={() => playTerminalNotificationSound(soundVolume)}
+        >
+          Play sound
+        </Button>
       </SettingRow>
       <div className="border-t border-[var(--color-border)]" />
       <SettingRow

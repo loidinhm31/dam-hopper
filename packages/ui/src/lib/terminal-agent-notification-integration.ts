@@ -46,10 +46,13 @@ export function attachTerminalAgentNotifications({
     },
   });
   const notifyTerminalAgent = (event: TerminalAgentNotification) => {
+    const settings = useSettingsStore.getState();
     useTerminalNotificationsStore.getState().addNotification(event);
-    playTerminalNotificationSound();
+    if (settings.terminalCodexNotificationSoundEnabled) {
+      playTerminalNotificationSound(settings.terminalCodexNotificationSoundVolume);
+    }
     notificationService.notifyTerminalAgent(event, {
-      enabled: useSettingsStore.getState().terminalCodexNotificationsEnabled,
+      enabled: settings.terminalCodexNotificationsEnabled,
       rateLimitMs: CODEX_OSC9_RATE_LIMIT_MS,
       terminalOrder: getTerminalOrder?.(),
       onSelect: ({ sessionId: selectedSessionId }) =>
