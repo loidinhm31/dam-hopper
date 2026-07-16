@@ -21,6 +21,7 @@ interface TerminalAgentNotificationIntegrationOptions {
 }
 
 export interface TerminalAgentNotificationIntegration {
+  setReplayActive: (active: boolean) => void;
   onOutput: () => void;
   onUserInput: () => void;
   onSubmittedCommand: (commandLine: string) => void;
@@ -35,6 +36,8 @@ export function attachTerminalAgentNotifications({
   project,
   getTerminalOrder,
 }: TerminalAgentNotificationIntegrationOptions): TerminalAgentNotificationIntegration {
+  let replayActive = false;
+  let disposed = false;
   const notificationService = new BrowserNotificationService({
     diagnostics: (message, fields) => {
       recordClientDiagnostic(
@@ -72,7 +75,7 @@ export function attachTerminalAgentNotifications({
     if (!settings.terminalCodexNotificationsEnabled) return true;
 
     const event = parse();
-    if (event) notifyTerminalAgent(event);
+    if (event && !replayActive) notifyTerminalAgent(event);
     return true;
   };
 
@@ -83,9 +86,11 @@ export function attachTerminalAgentNotifications({
       ),
     ),
   ];
-  let disposed = false;
-
   return {
+    setReplayActive: (active) => {
+      if (disposed) return;
+      replayActive = active;
+    },
     onOutput: () => {},
     onUserInput: () => {},
     onSubmittedCommand: () => {},

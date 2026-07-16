@@ -239,8 +239,15 @@ export function TerminalPanel({
     syncNativeKeyboardSuppression(term, suppressNativeKeyboard);
     setTermElement(term.element ?? null);
 
-    // Flag to prevent double-output during initialization
-    let hasBufferBeenWritten = false;
+    // Separate receipt from xterm's asynchronous replay completion. Live output
+    // remains fail-closed before a buffer arrives, then queues until replay parsing
+    // is complete so historical OSC 9 events cannot be delivered as live alerts.
+    let hasAttachBufferBeenReceived = false;
+    let isReplayWriting = false;
+    let isLiveStreamReady = false;
+    let replayGeneration = 0;
+    let disposed = false;
+    const queuedLiveData: string[] = [];
     let recordedSuppressedOutput = false;
     let lastServerOffset = 0;
 
@@ -286,16 +293,23 @@ export function TerminalPanel({
       getTerminalOrder: () => terminalOrderRef.current,
     });
 
+    const writeLiveData = (data: string) => {
+      term.write(data);
+      lastServerOffset += utf8ByteLength(data);
+      suggestionsRef.current.handleOutput();
+      agentNotifications?.onOutput();
+    };
+
     // ── Register all listeners immediately to avoid race conditions ──────────
     // 1. Stream PTY output → xterm + invalidate the suggestion controller.
     // Output alone never establishes a shell prompt or command boundary.
     unsubData = transport.onTerminalData(safeSessionId, (data) => {
-      // Only write stream data if we've already handled the initial buffer
-      if (hasBufferBeenWritten) {
-        term.write(data);
-        lastServerOffset += utf8ByteLength(data);
-        suggestionsRef.current.handleOutput();
-        agentNotifications?.onOutput();
+      // Output before the first attach buffer is not safely orderable. Output that
+      // arrives while xterm parses a received replay is held until its completion.
+      if (hasAttachBufferBeenReceived && isLiveStreamReady) {
+        writeLiveData(data);
+      } else if (hasAttachBufferBeenReceived && isReplayWriting) {
+        queuedLiveData.push(data);
       } else if (!recordedSuppressedOutput) {
         recordedSuppressedOutput = true;
         recordClientDiagnostic(
@@ -322,7 +336,31 @@ export function TerminalPanel({
     if (transport.onTerminalBuffer) {
       unsubBuffer = transport.onTerminalBuffer(safeSessionId, (replay) => {
         suggestionsRef.current.handleReplay();
-        lastServerOffset = applyTerminalBufferReplay(term, replay);
+        hasAttachBufferBeenReceived = true;
+        isReplayWriting = true;
+        isLiveStreamReady = false;
+        const currentReplayGeneration = ++replayGeneration;
+        agentNotifications?.setReplayActive(true);
+        lastServerOffset = applyTerminalBufferReplay(term, replay, () => {
+          if (disposed || currentReplayGeneration !== replayGeneration) return;
+
+          isReplayWriting = false;
+          isLiveStreamReady = true;
+          agentNotifications?.setReplayActive(false);
+          const queuedLiveDataSnapshot = queuedLiveData.splice(0);
+          for (const data of queuedLiveDataSnapshot) {
+            writeLiveData(data);
+          }
+          recordClientDiagnostic(
+            "transport",
+            "terminal-panel",
+            "buffer_replay_complete",
+            {
+              sessionId: safeSessionId,
+              queuedChunkCount: queuedLiveDataSnapshot.length,
+            },
+          );
+        });
         recordClientDiagnostic("transport", "terminal-panel", "buffer_replay", {
           sessionId: safeSessionId,
           offset: replay.offset,
@@ -330,7 +368,6 @@ export function TerminalPanel({
           truncated: replay.truncated,
           hadSuppressedOutput: recordedSuppressedOutput,
         });
-        hasBufferBeenWritten = true;
         setAttachState("attached");
         clearAttachTimeout();
       });
@@ -478,7 +515,7 @@ export function TerminalPanel({
 
       attachTimeout = setTimeout(() => {
         attachTimeout = null;
-        if (hasBufferBeenWritten || attachStateRef.current === "attached") {
+        if (hasAttachBufferBeenReceived || attachStateRef.current === "attached") {
           return;
         }
         logger.warn(
@@ -530,7 +567,7 @@ export function TerminalPanel({
       unsubStatus = transport.onStatusChange((status) => {
         if (
           status !== "connected" &&
-          !hasBufferBeenWritten &&
+          !hasAttachBufferBeenReceived &&
           attachStateRef.current === "attaching"
         ) {
           clearAttachTimeout();
@@ -539,7 +576,7 @@ export function TerminalPanel({
 
         if (
           status === "connected" &&
-          !hasBufferBeenWritten &&
+          !hasAttachBufferBeenReceived &&
           attachStateRef.current === "attaching"
         ) {
           attachToSession();
@@ -548,7 +585,7 @@ export function TerminalPanel({
 
         if (
           status === "connected" &&
-          hasBufferBeenWritten &&
+          hasAttachBufferBeenReceived &&
           attachStateRef.current === "attached"
         ) {
           attachToSession(lastServerOffset);
@@ -591,6 +628,9 @@ export function TerminalPanel({
       });
 
     return () => {
+      disposed = true;
+      replayGeneration += 1;
+      queuedLiveData.length = 0;
       unsubData?.();
       unsubExit?.();
       unsubRestart?.();
