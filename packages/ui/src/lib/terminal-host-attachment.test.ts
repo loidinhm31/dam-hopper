@@ -36,6 +36,7 @@ function entryFixture(events: string[], element: HTMLElement): TerminalEntry {
       element,
       focus: () => events.push("focus"),
     },
+    invalidateSuggestionGeometry: () => events.push("invalidate-geometry"),
   } as unknown as TerminalEntry;
 }
 
@@ -67,6 +68,7 @@ describe("attachTerminalsToHost", () => {
       "close-find",
       "visibility:hidden",
       "append",
+      "invalidate-geometry",
       "display:block",
       "fit",
       "visibility:",
@@ -97,6 +99,7 @@ describe("attachTerminalsToHost", () => {
     expect(events).toEqual([
       "close-find",
       "append",
+      "invalidate-geometry",
       "display:none",
       "visibility:",
     ]);
@@ -125,6 +128,7 @@ describe("attachTerminalsToHost", () => {
     });
 
     expect(events[0]).toBe("close-find");
+    expect(events).toContain("invalidate-geometry");
     expect(entry.terminal.element).toBe(element);
     expect(entry.findController).toBe(controller);
   });

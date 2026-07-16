@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { SearchAddon } from "@xterm/addon-search";
@@ -19,6 +19,12 @@ import {
 } from "@/lib/terminal-fit-scheduler.js";
 import { activateTerminalWebglRenderer } from "@/lib/terminal-renderer.js";
 import { handleSharedTerminalKeyEvent } from "@/lib/terminal-keyboard-shortcuts.js";
+import { handleTerminalSuggestionKeyEvent } from "@/lib/terminal-suggestion-key-handler.js";
+import { getTerminalSuggestionSuffix } from "@/lib/terminal-suggestion-acceptance.js";
+import {
+  TerminalCursorGeometryAdapter,
+  type CursorGeometry,
+} from "@/lib/terminal-cursor-geometry-adapter.js";
 import { bindTerminalTouchScroll } from "@/lib/terminal-touch-scroll.js";
 import {
   applyTerminalBufferReplay,
@@ -30,8 +36,12 @@ import {
   type TerminalAgentNotificationIntegration,
 } from "@/lib/terminal-agent-notification-integration.js";
 import { useSettingsStore } from "@/stores/settings.js";
+import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useTerminalSuggestions } from "@/hooks/use-terminal-suggestions.js";
 import { TerminalFindBar } from "@/components/atoms/TerminalFindBar.js";
+import { TerminalSuggestionGhost } from "@/components/atoms/TerminalSuggestionGhost.js";
+import { TerminalHistoryList } from "@/components/organisms/TerminalHistoryList.js";
+import { getHistory, searchHistory } from "@/lib/command-history.js";
 
 interface TerminalPanelProps {
   /** Unique session ID (e.g. "build:api-server", "run:api-server") */
@@ -144,13 +154,44 @@ export function TerminalPanel({
   // Term element state — triggers re-render to mount portal after open()
   const [termElement, setTermElement] = useState<HTMLElement | null>(null);
   const findControllerRef = useRef<TerminalFindController | null>(null);
+  const isCoarsePointer = useCoarsePointer();
+  // Mobile/touch routing is not unified yet, so every coarse-pointer surface
+  // fails closed rather than relying on a compact-width heuristic.
+  const automaticSuggestionsAllowed = !suppressNativeKeyboard && !isCoarsePointer;
   const findUnsubscribeRef = useRef<(() => void) | null>(null);
   const [findSnapshot, setFindSnapshot] =
     useState<TerminalFindSnapshot>(EMPTY_FIND_SNAPSHOT);
-  const suggestions = useTerminalSuggestions(termRef, safeSessionId, project);
+  const [cursorGeometry, setCursorGeometry] = useState<CursorGeometry | null>(
+    null,
+  );
+  const [historyQuery, setHistoryQuery] = useState("");
+  const cursorGeometryAdapterRef = useRef<TerminalCursorGeometryAdapter | null>(
+    null,
+  );
+  const suggestions = useTerminalSuggestions(
+    termRef,
+    safeSessionId,
+    project,
+    automaticSuggestionsAllowed,
+  );
   // Keep a stable ref so closures inside the main useEffect always access the latest methods
   const suggestionsRef = useRef(suggestions);
   suggestionsRef.current = suggestions;
+  const historyResults = historyQuery
+    ? searchHistory(historyQuery, 50)
+    : getHistory().slice(0, 50).map((entry) => ({ entry, score: 0 }));
+  const ghostSuffix = getTerminalSuggestionSuffix(suggestions.snapshot, "full");
+
+  const useHistoryCommand = useCallback(
+    (historyCommand: string) => {
+      // A newline is an execution boundary in a PTY; the dialog keeps it copy-only.
+      if (/\r|\n/.test(historyCommand)) return;
+      suggestionsRef.current.closeExplicitList();
+      getTransport().terminalWrite(safeSessionId, historyCommand);
+      if (!suppressNativeKeyboard) termRef.current?.focus();
+    },
+    [safeSessionId, suppressNativeKeyboard],
+  );
 
   useEffect(() => {
     const container = containerRef.current;
@@ -216,6 +257,7 @@ export function TerminalPanel({
     let observer: ResizeObserver | null = null;
     let attachTimeout: ReturnType<typeof setTimeout> | null = null;
     let releaseTouchScroll = () => {};
+    let geometryAdapter: TerminalCursorGeometryAdapter | null = null;
 
     const clearAttachTimeout = () => {
       if (!attachTimeout) return;
@@ -230,6 +272,9 @@ export function TerminalPanel({
       fitAddon,
       findController,
     );
+    geometryAdapter = new TerminalCursorGeometryAdapter(term, setCursorGeometry);
+    cursorGeometryAdapterRef.current = geometryAdapter;
+    terminalEntry.invalidateSuggestionGeometry = () => geometryAdapter?.invalidate();
     onTerminalReady?.(safeSessionId);
     releaseTouchScroll = bindTerminalTouchScroll(term.element ?? null);
 
@@ -343,8 +388,21 @@ export function TerminalPanel({
       transport.terminalResize(safeSessionId, c, r);
     });
 
-    // 7. Custom keyboard shortcuts
+    // 7. One composed keyboard handler: an acceptance only wins after the
+    // controller invalidates its current ghost and yields a suffix.
     const baseKeyEventHandler = (e: KeyboardEvent) => {
+      if (
+        !handleTerminalSuggestionKeyEvent(e, {
+          accept: (kind) => {
+            const suffix = suggestionsRef.current.accept(kind);
+            if (suffix) transport.terminalWrite(safeSessionId, suffix);
+            return suffix;
+          },
+          openHistory: () => suggestionsRef.current.openExplicitList(),
+        })
+      ) {
+        return false;
+      }
       return handleSharedTerminalKeyEvent(e, {
         workspaceShortcut:
           useSettingsStore.getState().terminalWorkspaceShortcut,
@@ -546,6 +604,10 @@ export function TerminalPanel({
       clearAttachTimeout();
       observer?.disconnect();
       releaseTouchScroll();
+      geometryAdapter?.dispose();
+      if (cursorGeometryAdapterRef.current === geometryAdapter) {
+        cursorGeometryAdapterRef.current = null;
+      }
       cancelScheduledTerminalFit(terminalEntry);
       findUnsubscribeRef.current?.();
       findUnsubscribeRef.current = null;
@@ -582,6 +644,21 @@ export function TerminalPanel({
   useEffect(() => {
     syncNativeKeyboardSuppression(termRef.current, suppressNativeKeyboard);
   }, [suppressNativeKeyboard, termElement]);
+
+  useEffect(() => {
+    if (suggestions.snapshot.state === "ghost") {
+      cursorGeometryAdapterRef.current?.invalidate();
+      return;
+    }
+    setCursorGeometry(null);
+    cursorGeometryAdapterRef.current?.hide();
+  }, [suggestions.snapshot.state]);
+
+  useEffect(() => {
+    if (suggestions.snapshot.state === "explicit-list") {
+      setHistoryQuery(suggestions.snapshot.rawInput);
+    }
+  }, [suggestions.snapshot.rawInput, suggestions.snapshot.state]);
 
   return (
     <div className={cn("relative w-full h-full min-h-48", className)}>
@@ -636,6 +713,21 @@ export function TerminalPanel({
           />,
           termElement,
         )}
+      {termElement && ghostSuffix && cursorGeometry &&
+        createPortal(
+          <TerminalSuggestionGhost suffix={ghostSuffix} position={cursorGeometry} />,
+          termElement,
+        )}
+      <TerminalHistoryList
+        open={suggestions.snapshot.state === "explicit-list"}
+        query={historyQuery}
+        results={historyResults}
+        onQueryChange={setHistoryQuery}
+        onOpenChange={(open) => {
+          if (!open) suggestions.closeExplicitList();
+        }}
+        onUse={useHistoryCommand}
+      />
     </div>
   );
 }
