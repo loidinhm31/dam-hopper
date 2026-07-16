@@ -2,10 +2,8 @@ import { memo, useState, useEffect, useRef } from "react";
 import { useDndMonitor } from "@dnd-kit/core";
 import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils.js";
-import { handleSharedTerminalKeyEvent } from "@/lib/terminal-keyboard-shortcuts.js";
 import { attachTerminalsToHost } from "@/lib/terminal-host-attachment.js";
 import { scheduleTerminalFit } from "@/lib/terminal-fit-scheduler.js";
-import { useSettingsStore } from "@/stores/settings.js";
 import {
   terminalRegistry,
   subscribeToRegistry,
@@ -90,6 +88,9 @@ export const PaneContainer = memo(function PaneContainer({
     const paneId = node.id;
 
     terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+      // Keep one composition chain: terminal-global handling (including a
+      // currently safe ghost acceptance) gets first refusal before pane keys.
+      if (!entry.baseKeyEventHandler?.(e)) return false;
       // Ctrl+Shift+5 → split pane vertically
       if (
         e.ctrlKey &&
@@ -181,22 +182,7 @@ export const PaneContainer = memo(function PaneContainer({
         return false;
       }
 
-      return handleSharedTerminalKeyEvent(e, {
-        workspaceShortcut: useSettingsStore.getState().terminalWorkspaceShortcut,
-        revealActiveFileShortcut:
-          useSettingsStore.getState().revealActiveFileShortcut,
-        panelShortcuts: [
-          useSettingsStore.getState().gitPanelShortcut,
-          useSettingsStore.getState().portsPanelShortcut,
-          useSettingsStore.getState().fleetTerminalShortcut,
-        ],
-        onCopySelection: () => {
-          const selection = terminal.getSelection();
-          if (selection) void navigator.clipboard.writeText(selection);
-        },
-        onFind: () => entry.findController.open(),
-        onNewTerminal,
-      });
+      return true;
     });
 
     // Focus terminal when pane receives focus

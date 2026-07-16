@@ -4,6 +4,10 @@ import {
   type HistorySearchResult,
 } from "@/lib/command-history.js";
 import { classifyTerminalSuggestionInput } from "./terminal-suggestion-input.js";
+import {
+  getTerminalSuggestionSuffix,
+  type TerminalSuggestionAcceptKind,
+} from "./terminal-suggestion-acceptance.js";
 
 export type TerminalSuggestionState =
   | "disabled"
@@ -134,17 +138,29 @@ export class TerminalSuggestionController {
     if (this.current.state !== "disabled") this.reset("opaque");
   }
 
-  openExplicitList(): void {
-    if (this.enabled)
-      this.publish({
-        ...this.current,
-        state: "explicit-list",
-        suggestion: undefined,
-      });
+  openExplicitList(): boolean {
+    if (!this.enabled) return false;
+    this.publish({
+      ...this.current,
+      state: "explicit-list",
+      suggestion: undefined,
+    });
+    return true;
   }
 
   closeExplicitList(): void {
     if (this.current.state === "explicit-list") this.reset("unverified");
+  }
+
+  /**
+   * Atomically consumes the current ghost before the caller writes its suffix.
+   * This prevents key-repeat or a later event from accepting it twice.
+   */
+  accept(kind: TerminalSuggestionAcceptKind): string | null {
+    const suffix = getTerminalSuggestionSuffix(this.current, kind);
+    if (!suffix) return null;
+    this.reset("opaque");
+    return suffix;
   }
 
   dispose(): void {

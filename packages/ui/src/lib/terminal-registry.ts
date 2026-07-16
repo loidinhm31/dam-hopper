@@ -12,6 +12,7 @@ export interface TerminalEntry {
   fitAddon: FitAddon;
   findController: TerminalFindController;
   baseKeyEventHandler?: (event: KeyboardEvent) => boolean;
+  invalidateSuggestionGeometry?: () => void;
 }
 
 export const terminalRegistry = new Map<string, TerminalEntry>();

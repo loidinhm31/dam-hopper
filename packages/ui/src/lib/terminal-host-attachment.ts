@@ -44,6 +44,7 @@ export function attachTerminalsToHost({
     applyHostGeometry(element);
     if (isActive) element.style.visibility = "hidden";
     if (element.parentElement !== host) host.appendChild(element);
+    entry.invalidateSuggestionGeometry?.();
 
     if (!isActive) {
       cancelScheduledTerminalFit(entry);
