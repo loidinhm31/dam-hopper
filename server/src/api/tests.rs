@@ -1545,6 +1545,33 @@ async fn update_global_ui_at_path_persists_partial_merge_and_updates_state() {
 }
 
 #[tokio::test]
+async fn update_global_ui_at_path_persists_terminal_notification_sound_settings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalCodexNotificationSoundEnabled": false,
+            "terminalCodexNotificationSoundVolume": 45,
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+
+    let written = std::fs::read_to_string(&gc_path).unwrap();
+    assert!(written.contains("terminal_codex_notification_sound_enabled = false"));
+    assert!(written.contains("terminal_codex_notification_sound_volume = 45"));
+
+    let ui = state.global_config.read().await.ui.clone().unwrap();
+    assert!(!ui.terminal_codex_notification_sound_enabled);
+    assert_eq!(ui.terminal_codex_notification_sound_volume, 45);
+}
+
+#[tokio::test]
 async fn update_global_ui_at_path_creates_codex_tui_config_when_enabled() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);

@@ -118,6 +118,8 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
             "terminalSuggestionsEnabled" => "terminal_suggestions_enabled",
             "terminalCodexNotificationsEnabled" => "terminal_codex_notifications_enabled",
             "terminalAgentNotificationsEnabled" => "terminal_codex_notifications_enabled",
+            "terminalCodexNotificationSoundEnabled" => "terminal_codex_notification_sound_enabled",
+            "terminalCodexNotificationSoundVolume" => "terminal_codex_notification_sound_volume",
             "explorerShowHidden" => "explorer_show_hidden",
             "mobileCustomKeyboardEnabled" => "mobile_custom_keyboard_enabled",
             "mobileCustomKeyboardFontSize" => "mobile_custom_keyboard_font_size",

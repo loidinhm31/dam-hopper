@@ -1134,6 +1134,8 @@ fn ui_config_defaults() {
     assert_eq!(ui.ports_panel_shortcut, "Mod+Shift+KeyP");
     assert_eq!(ui.fleet_terminal_shortcut, "Mod+Shift+KeyM");
     assert!(!ui.terminal_codex_notifications_enabled);
+    assert!(ui.terminal_codex_notification_sound_enabled);
+    assert_eq!(ui.terminal_codex_notification_sound_volume, 100);
     assert!(ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 11);
     assert_eq!(ui.mobile_custom_keyboard_padding, 6);
@@ -1162,6 +1164,8 @@ fn ui_config_serde_roundtrip() {
             fleet_terminal_shortcut: "Ctrl+Shift+KeyM".to_string(),
             terminal_suggestions_enabled: true,
             terminal_codex_notifications_enabled: true,
+            terminal_codex_notification_sound_enabled: false,
+            terminal_codex_notification_sound_volume: 45,
             explorer_show_hidden: false,
             mobile_custom_keyboard_enabled: false,
             mobile_custom_keyboard_font_size: 13,
@@ -1201,6 +1205,8 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(ui.ports_panel_shortcut, "Ctrl+Shift+KeyP");
     assert_eq!(ui.fleet_terminal_shortcut, "Ctrl+Shift+KeyM");
     assert!(ui.terminal_codex_notifications_enabled);
+    assert!(!ui.terminal_codex_notification_sound_enabled);
+    assert_eq!(ui.terminal_codex_notification_sound_volume, 45);
     assert!(!ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 13);
     assert_eq!(ui.mobile_custom_keyboard_padding, 8);
@@ -1378,4 +1384,17 @@ fn validate_mobile_keyboard_sizes_checks_font_and_padding() {
         ..UiConfig::default()
     };
     assert!(bad_row_gap.validate_mobile_keyboard_sizes().is_err());
+}
+
+#[test]
+fn validate_terminal_notification_sound_volume_checks_bounds() {
+    assert!(UiConfig::default()
+        .validate_terminal_notification_sound_volume()
+        .is_ok());
+
+    let invalid = UiConfig {
+        terminal_codex_notification_sound_volume: 101,
+        ..UiConfig::default()
+    };
+    assert!(invalid.validate_terminal_notification_sound_volume().is_err());
 }

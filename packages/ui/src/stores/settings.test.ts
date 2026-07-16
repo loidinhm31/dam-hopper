@@ -46,6 +46,8 @@ function resetSettingsStore() {
     fleetTerminalShortcut: "Mod+Shift+KeyM",
     terminalSuggestionsEnabled: true,
     terminalCodexNotificationsEnabled: false,
+    terminalCodexNotificationSoundEnabled: true,
+    terminalCodexNotificationSoundVolume: 100,
     terminalScrollButtonsEnabled: false,
     terminalScrollStep: 3,
     explorerShowHidden: false,
@@ -84,6 +86,8 @@ describe("settings store terminal agent notification fields", () => {
     expect(state.hydrated).toBe(true);
     expect(state.systemFontSize).toBe(16);
     expect(state.terminalCodexNotificationsEnabled).toBe(false);
+    expect(state.terminalCodexNotificationSoundEnabled).toBe(true);
+    expect(state.terminalCodexNotificationSoundVolume).toBe(100);
   });
 
   it("persists codex notification changes", async () => {
@@ -98,6 +102,24 @@ describe("settings store terminal agent notification fields", () => {
     expect(updateUi).toHaveBeenCalledWith(
       expect.objectContaining({
         terminalCodexNotificationsEnabled: true,
+      }),
+    );
+  });
+
+  it("clamps and persists notification sound settings", async () => {
+    updateUi.mockResolvedValue({ updated: true });
+
+    useSettingsStore.getState().saveDebounced({
+      terminalCodexNotificationSoundEnabled: false,
+      terminalCodexNotificationSoundVolume: 140,
+    });
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(updateUi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalCodexNotificationSoundEnabled: false,
+        terminalCodexNotificationSoundVolume: 100,
       }),
     );
   });

@@ -21,6 +21,28 @@ export interface SessionInfo {
   restartInMs?: number;
 }
 
+export type TerminalLifecycle =
+  | "unverified"
+  | "editing"
+  | "submitted"
+  | "opaque";
+
+/** Server-validated shell lifecycle snapshot for one terminal incarnation. */
+export type TerminalLifecycleEvent =
+  | {
+      id: string;
+      lifecycle: "submitted";
+      generation: number;
+      /** Exact command emitted by the verified shell marker, when available. */
+      command?: string;
+    }
+  | {
+      id: string;
+      lifecycle: Exclude<TerminalLifecycle, "submitted">;
+      generation: number;
+      command?: never;
+    };
+
 // ── Agent Store Types ─────────────────────────────────────────────────────────
 
 export type AgentType = "claude" | "gemini";
@@ -373,6 +395,8 @@ export interface UiConfig {
   fleetTerminalShortcut: string;
   terminalSuggestionsEnabled?: boolean;
   terminalCodexNotificationsEnabled?: boolean;
+  terminalCodexNotificationSoundEnabled?: boolean;
+  terminalCodexNotificationSoundVolume?: number;
   terminalScrollButtonsEnabled?: boolean;
   terminalScrollStep?: number;
   explorerShowHidden?: boolean;
@@ -1064,25 +1088,3 @@ export const api = {
     stop: (id: string) => getTransport().invoke<void>("tunnel:stop", { id }),
   },
 };
-export type TerminalLifecycle =
-  | "unverified"
-  | "editing"
-  | "submitted"
-  | "opaque";
-
-/** Server-validated shell lifecycle snapshot for one terminal incarnation. */
-export type TerminalLifecycleEvent =
-  | {
-      id: string;
-      lifecycle: "submitted";
-      generation: number;
-      /** Exact command emitted by the verified shell marker, when available. */
-      command?: string;
-    }
-  | {
-      id: string;
-      lifecycle: Exclude<TerminalLifecycle, "submitted">;
-      generation: number;
-      command?: never;
-    };
-
