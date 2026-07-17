@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  clampHistoryContextMenuPosition,
   getDropCommitMenuState,
   getEditCommitMessageMenuState,
   getUndoLastCommitMenuState,
@@ -57,16 +56,5 @@ describe("GitLogTree helpers", () => {
     expect(isHeadCommit({ refs: ["HEAD -> main", "origin/main"] })).toBe(true);
     expect(isHeadCommit({ refs: ["HEAD"] })).toBe(true);
     expect(isHeadCommit({ refs: ["origin/main", "tag: v1"] })).toBe(false);
-  });
-
-  it("clamps the history context menu inside the viewport", () => {
-    expect(clampHistoryContextMenuPosition(1200, 900, 1280, 960)).toEqual({
-      x: 1090,
-      y: 706,
-    });
-    expect(clampHistoryContextMenuPosition(120, 80, 1280, 960)).toEqual({
-      x: 120,
-      y: 80,
-    });
   });
 });

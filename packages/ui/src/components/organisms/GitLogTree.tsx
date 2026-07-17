@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useMemo } from "react";
 import { cn } from "@/lib/utils.js";
 import type { GitLogEntry } from "@/api/client.js";
+import { ContextMenu } from "@/components/ui/ContextMenu.js";
 
 const GRAPH_CELL_WIDTH = 14;
 const ROW_HEIGHT = 28;
@@ -29,13 +30,6 @@ interface GitLogTreeProps {
   onEditCommitMessage?: (entry: GitLogEntry) => void;
   onReset?: (entry: GitLogEntry) => void;
   onDropCommit?: (entry: GitLogEntry) => void;
-}
-
-interface HistoryContextMenuState {
-  x: number;
-  y: number;
-  entry: GitLogEntry;
-  isHead: boolean;
 }
 
 interface RenderNode {
@@ -87,21 +81,7 @@ export function isHeadCommit(entry: Pick<GitLogEntry, "refs">) {
   return entry.refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD ->"));
 }
 
-export function clampHistoryContextMenuPosition(
-  x: number,
-  y: number,
-  windowWidth: number,
-  windowHeight: number,
-) {
-  return {
-    x: Math.min(x, windowWidth - 190),
-    y: Math.min(y, windowHeight - 254),
-  };
-}
-
 function HistoryContextMenu({
-  x,
-  y,
   entry,
   isHead,
   onCherryPick,
@@ -110,10 +90,9 @@ function HistoryContextMenu({
   onEditCommitMessage,
   onReset,
   onDropCommit,
-  onClose,
+  onOpen,
+  children,
 }: {
-  x: number;
-  y: number;
   entry: GitLogEntry;
   isHead: boolean;
   onCherryPick?: (entry: GitLogEntry) => void;
@@ -122,9 +101,9 @@ function HistoryContextMenu({
   onEditCommitMessage?: (entry: GitLogEntry) => void;
   onReset?: (entry: GitLogEntry) => void;
   onDropCommit?: (entry: GitLogEntry) => void;
-  onClose: () => void;
+  onOpen: () => void;
+  children: React.ReactElement;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
   const dropCommitState = getDropCommitMenuState(entry);
   const undoLastCommitState = getUndoLastCommitMenuState({
     isHead,
@@ -136,129 +115,74 @@ function HistoryContextMenu({
   const editDisabled = editCommitMessageState.disabled || !onEditCommitMessage;
   const dropDisabled = dropCommitState.disabled || !onDropCommit;
 
-  useEffect(() => {
-    function handleMouseDown(event: MouseEvent) {
-      if (ref.current && !ref.current.contains(event.target as Node)) onClose();
-    }
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    document.addEventListener("mousedown", handleMouseDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handleMouseDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [onClose]);
-
-  const style: React.CSSProperties = {
-    position: "fixed",
-    zIndex: 60,
-    top: y,
-    left: x,
-  };
-
   return (
-    <div
-      ref={ref}
-      style={style}
-      className="w-44 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-xl"
-    >
-      <div className="px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-        Safe actions
-      </div>
-      <button
-        type="button"
-        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-2)]"
-        onClick={() => {
-          onRevertCommit?.(entry);
-          onClose();
-        }}
-      >
-        Revert commit
-      </button>
-      <button
-        type="button"
-        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-2)]"
-        onClick={() => {
-          onCherryPick?.(entry);
-          onClose();
-        }}
-      >
-        Cherry-pick commit
-      </button>
-      <div className="my-1 border-t border-[var(--color-border)]" />
-      <div className="px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-        Rewrite actions
-      </div>
-      <button
-        type="button"
-        disabled={editDisabled}
-        title={
-          editCommitMessageState.title ??
-          (!onEditCommitMessage
-            ? "Edit Commit Message is only available while viewing the checked-out branch"
-            : undefined)
-        }
-        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-        onClick={() => {
-          onEditCommitMessage?.(entry);
-          onClose();
-        }}
-      >
-        Edit Commit Message
-      </button>
-      <button
-        type="button"
-        disabled={undoDisabled}
-        title={
-          undoLastCommitState.title ??
-          (!onUndoLastCommit
-            ? "Undo Last Commit is only available while viewing the checked-out branch"
-            : undefined)
-        }
-        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-        onClick={() => {
-          onUndoLastCommit?.(entry);
-          onClose();
-        }}
-      >
-        Undo Last Commit
-      </button>
-      <button
-        type="button"
-        disabled={resetDisabled}
-        title={
-          !onReset
-            ? "Reset is only available while viewing the checked-out branch"
-            : undefined
-        }
-        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-        onClick={() => {
-          onReset?.(entry);
-          onClose();
-        }}
-      >
-        Reset to this commit
-      </button>
-      <button
-        type="button"
-        disabled={dropDisabled}
-        title={
-          dropCommitState.title ??
-          (!onDropCommit
-            ? "Drop commit is only available while viewing the checked-out branch"
-            : undefined)
-        }
-        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-        onClick={() => {
-          onDropCommit?.(entry);
-          onClose();
-        }}
-      >
-        Drop commit
-      </button>
-    </div>
+    <ContextMenu.Root onOpenChange={(open) => open && onOpen()}>
+      <ContextMenu.Trigger>{children}</ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className="w-48">
+          <ContextMenu.Label>Safe actions</ContextMenu.Label>
+          <ContextMenu.Item onSelect={() => onRevertCommit?.(entry)}>
+            Revert commit
+          </ContextMenu.Item>
+          <ContextMenu.Item onSelect={() => onCherryPick?.(entry)}>
+            Cherry-pick commit
+          </ContextMenu.Item>
+          <ContextMenu.Separator />
+          <ContextMenu.Label>Rewrite actions</ContextMenu.Label>
+          <ContextMenu.Item
+            disabled={editDisabled}
+            title={
+              editCommitMessageState.title ??
+              (!onEditCommitMessage
+                ? "Edit Commit Message is only available while viewing the checked-out branch"
+                : undefined)
+            }
+            onSelect={() => onEditCommitMessage?.(entry)}
+            className="text-[var(--color-danger)] focus:bg-[var(--color-danger)]/10 focus:text-[var(--color-danger)]"
+          >
+            Edit Commit Message
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            disabled={undoDisabled}
+            title={
+              undoLastCommitState.title ??
+              (!onUndoLastCommit
+                ? "Undo Last Commit is only available while viewing the checked-out branch"
+                : undefined)
+            }
+            onSelect={() => onUndoLastCommit?.(entry)}
+            className="text-[var(--color-danger)] focus:bg-[var(--color-danger)]/10 focus:text-[var(--color-danger)]"
+          >
+            Undo Last Commit
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            disabled={resetDisabled}
+            title={
+              !onReset
+                ? "Reset is only available while viewing the checked-out branch"
+                : undefined
+            }
+            onSelect={() => onReset?.(entry)}
+            className="text-[var(--color-danger)] focus:bg-[var(--color-danger)]/10 focus:text-[var(--color-danger)]"
+          >
+            Reset to this commit
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            disabled={dropDisabled}
+            title={
+              dropCommitState.title ??
+              (!onDropCommit
+                ? "Drop commit is only available while viewing the checked-out branch"
+                : undefined)
+            }
+            onSelect={() => onDropCommit?.(entry)}
+            className="text-[var(--color-danger)] focus:bg-[var(--color-danger)]/10 focus:text-[var(--color-danger)]"
+          >
+            Drop commit
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }
 
@@ -274,30 +198,6 @@ export function GitLogTree({
   onReset,
   onDropCommit,
 }: GitLogTreeProps) {
-  const [contextMenu, setContextMenu] =
-    useState<HistoryContextMenuState | null>(null);
-
-  function openContextMenu(
-    entry: GitLogEntry,
-    isHead: boolean,
-    x: number,
-    y: number,
-  ) {
-    onSelectCommit?.(entry);
-    const position = clampHistoryContextMenuPosition(
-      x,
-      y,
-      window.innerWidth,
-      window.innerHeight,
-    );
-    setContextMenu({
-      x: position.x,
-      y: position.y,
-      entry,
-      isHead,
-    });
-  }
-
   const parsedGraph = useMemo(() => {
     const tracks: string[] = []; // the hash expected at each track index
     const renderNodes: RenderNode[] = [];
@@ -386,107 +286,95 @@ export function GitLogTree({
             const isSelected = selectedHash === node.entry.hash;
 
             return (
-              <tr
+              <HistoryContextMenu
                 key={node.entry.hash}
-                tabIndex={0}
-                aria-haspopup="menu"
-                onClick={() => onSelectCommit?.(node.entry)}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  openContextMenu(
-                    node.entry,
-                    isHeadCommit(node.entry),
-                    event.clientX,
-                    event.clientY,
-                  );
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onSelectCommit?.(node.entry);
-                    return;
-                  }
-                  if (
-                    event.key === "ContextMenu" ||
-                    (event.shiftKey && event.key === "F10")
-                  ) {
-                    event.preventDefault();
-                    const rect = event.currentTarget.getBoundingClientRect();
-                    openContextMenu(
-                      node.entry,
-                      isHeadCommit(node.entry),
-                      rect.left + 24,
-                      rect.top + 20,
-                    );
-                  }
-                }}
-                className={cn(
-                  "border-b border-[var(--color-border)] hover:bg-[var(--color-border)]/20 transition-colors cursor-pointer focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]/40",
-                  isSelected &&
-                    "bg-[var(--color-primary)]/10 hover:bg-[var(--color-primary)]/15",
-                )}
-                style={{ height: `${ROW_HEIGHT}px` }}
+                entry={node.entry}
+                isHead={isHeadCommit(node.entry)}
+                onCherryPick={onCherryPick}
+                onRevertCommit={onRevertCommit}
+                onUndoLastCommit={onUndoLastCommit}
+                onEditCommitMessage={onEditCommitMessage}
+                onReset={onReset}
+                onDropCommit={onDropCommit}
+                onOpen={() => onSelectCommit?.(node.entry)}
               >
-                <td
+                <tr
+                  tabIndex={0}
+                  aria-haspopup="menu"
+                  onClick={() => onSelectCommit?.(node.entry)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelectCommit?.(node.entry);
+                    }
+                  }}
                   className={cn(
-                    "px-4 py-1 flex items-center gap-2 sticky left-0 z-10 bg-[var(--color-surface)]",
-                    isSelected
-                      ? "bg-[var(--color-primary)]/10"
-                      : "group-hover:bg-[#f8f9fa] dark:group-hover:bg-[#1a1b1e]",
+                    "border-b border-[var(--color-border)] hover:bg-[var(--color-border)]/20 transition-colors cursor-pointer focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]/40",
+                    isSelected &&
+                      "bg-[var(--color-primary)]/10 hover:bg-[var(--color-primary)]/15",
                   )}
+                  style={{ height: `${ROW_HEIGHT}px` }}
                 >
-                  <div
-                    className="relative shrink-0 flex items-center justify-center"
-                    style={{ width: graphWidth, height: ROW_HEIGHT }}
+                  <td
+                    className={cn(
+                      "px-4 py-1 flex items-center gap-2 sticky left-0 z-10 bg-[var(--color-surface)]",
+                      isSelected
+                        ? "bg-[var(--color-primary)]/10"
+                        : "group-hover:bg-[#f8f9fa] dark:group-hover:bg-[#1a1b1e]",
+                    )}
                   >
-                    <svg
-                      className="absolute inset-0"
-                      width={graphWidth}
-                      height={ROW_HEIGHT}
+                    <div
+                      className="relative shrink-0 flex items-center justify-center"
+                      style={{ width: graphWidth, height: ROW_HEIGHT }}
                     >
-                      {/* Draw lines from previous row */}
-                      {node.prevTracks.map((hash: string, tIdx: number) => {
-                        if (!hash) return null;
-                        const color = COLORS[tIdx % COLORS.length];
-                        const startX = SVG_PADDING + tIdx * GRAPH_CELL_WIDTH;
-                        let endX = startX;
-                        // If this track flows into the current node's track
-                        if (hash === node.entry.hash) {
-                          endX =
-                            SVG_PADDING + node.trackIndex * GRAPH_CELL_WIDTH;
-                        }
+                      <svg
+                        className="absolute inset-0"
+                        width={graphWidth}
+                        height={ROW_HEIGHT}
+                      >
+                        {/* Draw lines from previous row */}
+                        {node.prevTracks.map((hash: string, tIdx: number) => {
+                          if (!hash) return null;
+                          const color = COLORS[tIdx % COLORS.length];
+                          const startX = SVG_PADDING + tIdx * GRAPH_CELL_WIDTH;
+                          let endX = startX;
+                          // If this track flows into the current node's track
+                          if (hash === node.entry.hash) {
+                            endX =
+                              SVG_PADDING + node.trackIndex * GRAPH_CELL_WIDTH;
+                          }
 
+                          return (
+                            <path
+                              key={`prev-${tIdx}`}
+                              d={`M ${startX} 0 C ${startX} ${ROW_HEIGHT / 2}, ${endX} ${ROW_HEIGHT / 2}, ${endX} ${ROW_HEIGHT}`}
+                              fill="none"
+                              stroke={color}
+                              strokeWidth={2}
+                            />
+                          );
+                        })}
+                        {/* Draw commit dot */}
+                        <circle
+                          cx={SVG_PADDING + node.trackIndex * GRAPH_CELL_WIDTH}
+                          cy={ROW_HEIGHT / 2}
+                          r={RADIUS}
+                          fill={COLORS[node.trackIndex % COLORS.length]}
+                          stroke="var(--color-surface)"
+                          strokeWidth={1}
+                          className="z-10 relative"
+                        />
+                      </svg>
+                    </div>
+
+                    <div className="flex-1 min-w-0 pr-4 flex items-center gap-2">
+                      {node.entry.refs.map((ref: string) => {
+                        const isHead = ref.includes("HEAD");
+                        const isRemote = ref.startsWith("origin/");
                         return (
-                          <path
-                            key={`prev-${tIdx}`}
-                            d={`M ${startX} 0 C ${startX} ${ROW_HEIGHT / 2}, ${endX} ${ROW_HEIGHT / 2}, ${endX} ${ROW_HEIGHT}`}
-                            fill="none"
-                            stroke={color}
-                            strokeWidth={2}
-                          />
-                        );
-                      })}
-                      {/* Draw commit dot */}
-                      <circle
-                        cx={SVG_PADDING + node.trackIndex * GRAPH_CELL_WIDTH}
-                        cy={ROW_HEIGHT / 2}
-                        r={RADIUS}
-                        fill={COLORS[node.trackIndex % COLORS.length]}
-                        stroke="var(--color-surface)"
-                        strokeWidth={1}
-                        className="z-10 relative"
-                      />
-                    </svg>
-                  </div>
-
-                  <div className="flex-1 min-w-0 pr-4 flex items-center gap-2">
-                    {node.entry.refs.map((ref: string) => {
-                      const isHead = ref.includes("HEAD");
-                      const isRemote = ref.startsWith("origin/");
-                      return (
-                        <span
-                          key={ref}
-                          className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border
+                          <span
+                            key={ref}
+                            className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border
                              ${
                                isHead
                                  ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
@@ -494,48 +382,34 @@ export function GitLogTree({
                                    ? "bg-blue-500/10 text-blue-600 border-blue-500/20"
                                    : "bg-gray-500/10 text-gray-600 border-gray-500/20"
                              }`}
-                        >
-                          {ref}
-                        </span>
-                      );
-                    })}
-                    <span className="truncate text-[var(--color-text)] font-medium">
-                      {node.entry.message}
-                    </span>
-                  </div>
-                </td>
-                <td
-                  className="px-4 py-1 text-[var(--color-text-muted)] truncate max-w-[120px]"
-                  title={node.entry.authorEmail}
-                >
-                  {node.entry.authorName}
-                </td>
-                <td className="px-4 py-1 text-[var(--color-text-muted)]">
-                  {formatRelativeDate(node.entry.timestamp)}
-                </td>
-                <td className="px-4 py-1 font-mono text-[var(--color-text-muted)] opacity-60">
-                  {node.entry.hash.substring(0, 7)}
-                </td>
-              </tr>
+                          >
+                            {ref}
+                          </span>
+                        );
+                      })}
+                      <span className="truncate text-[var(--color-text)] font-medium">
+                        {node.entry.message}
+                      </span>
+                    </div>
+                  </td>
+                  <td
+                    className="px-4 py-1 text-[var(--color-text-muted)] truncate max-w-[120px]"
+                    title={node.entry.authorEmail}
+                  >
+                    {node.entry.authorName}
+                  </td>
+                  <td className="px-4 py-1 text-[var(--color-text-muted)]">
+                    {formatRelativeDate(node.entry.timestamp)}
+                  </td>
+                  <td className="px-4 py-1 font-mono text-[var(--color-text-muted)] opacity-60">
+                    {node.entry.hash.substring(0, 7)}
+                  </td>
+                </tr>
+              </HistoryContextMenu>
             );
           })}
         </tbody>
       </table>
-      {contextMenu && (
-        <HistoryContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          entry={contextMenu.entry}
-          isHead={contextMenu.isHead}
-          onCherryPick={onCherryPick}
-          onRevertCommit={onRevertCommit}
-          onUndoLastCommit={onUndoLastCommit}
-          onEditCommitMessage={onEditCommitMessage}
-          onReset={onReset}
-          onDropCommit={onDropCommit}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
     </div>
   );
 }

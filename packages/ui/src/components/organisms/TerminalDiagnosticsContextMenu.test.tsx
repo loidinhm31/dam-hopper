@@ -1,22 +1,22 @@
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment jsdom
+
+import * as React from "react";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  clampTerminalDiagnosticsContextMenuPosition,
   openTerminalDiagnosticsContextMenu,
   TerminalDiagnosticsContextMenu,
 } from "./TerminalDiagnosticsContextMenu.js";
 
+(
+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
+
+let root: Root | null = null;
+
 describe("TerminalDiagnosticsContextMenu", () => {
   afterEach(() => vi.unstubAllGlobals());
-
-  it("clamps both menu edges inside the viewport", () => {
-    expect(
-      clampTerminalDiagnosticsContextMenuPosition(-20, -10, 1280, 960),
-    ).toEqual({ x: 8, y: 8 });
-    expect(
-      clampTerminalDiagnosticsContextMenuPosition(1250, 940, 1280, 960),
-    ).toEqual({ x: 1080, y: 800 });
-  });
 
   it("opens the exact session menu target and suppresses the browser menu", () => {
     const preventDefault = vi.fn();
@@ -31,26 +31,44 @@ describe("TerminalDiagnosticsContextMenu", () => {
 
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(stopPropagation).toHaveBeenCalledOnce();
-    expect(onOpenDiagnosticsMenu).toHaveBeenCalledWith("session-bash-2", 120, 80);
+    expect(onOpenDiagnosticsMenu).toHaveBeenCalledWith(
+      "session-bash-2",
+      120,
+      80,
+    );
   });
 
-  it("renders pending and error feedback without exposing another action", () => {
-    vi.stubGlobal("window", { innerWidth: 1280, innerHeight: 960 });
+  it("renders pending and error feedback without exposing another action", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
 
-    const markup = renderToStaticMarkup(
-      <TerminalDiagnosticsContextMenu
-        x={40}
-        y={60}
-        isPending
-        error="Export unavailable"
-        onExport={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
+    await act(async () => {
+      root?.render(
+        <TerminalDiagnosticsContextMenu
+          x={40}
+          y={60}
+          isPending
+          error="Export unavailable"
+          onExport={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+    });
 
-    expect(markup).toContain("Exporting…");
-    expect(markup).toContain("Export unavailable");
-    expect(markup).toContain("disabled");
-    expect(markup.match(/role="menuitem"/g)).toHaveLength(1);
+    expect(document.body.textContent).toContain("Exporting…");
+    expect(document.body.textContent).toContain("Export unavailable");
+    expect(
+      document
+        .querySelector('[role="menuitem"]')
+        ?.hasAttribute("data-disabled"),
+    ).toBe(true);
+    expect(document.querySelectorAll('[role="menuitem"]')).toHaveLength(1);
+  });
+
+  afterEach(() => {
+    act(() => root?.unmount());
+    root = null;
+    document.body.innerHTML = "";
   });
 });

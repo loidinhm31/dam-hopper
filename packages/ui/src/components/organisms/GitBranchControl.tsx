@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { GitBranch, Plus } from "lucide-react";
 import {
   useBranches,
@@ -18,10 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/Select.js";
 import { cn } from "@/lib/utils.js";
-import {
-  GitBranchContextMenu,
-  clampBranchContextMenuPosition,
-} from "@/components/organisms/GitBranchContextMenu.js";
+import { GitBranchContextMenu } from "@/components/organisms/GitBranchContextMenu.js";
 import {
   GitBranchCreateDialog,
   GitBranchDeleteDialog,
@@ -39,14 +36,14 @@ interface GitBranchControlProps {
   onSelectedBranchChange?: (branch: string) => void;
 }
 
-type CheckoutRetryStrategy = "normal" | "stash" | "force";
-
 interface BranchContextMenuState {
   x: number;
   y: number;
   branchName: string;
   isCurrent: boolean;
 }
+
+type CheckoutRetryStrategy = "normal" | "stash" | "force";
 
 interface GitBranchFeedbackProps {
   message: string | null;
@@ -101,10 +98,11 @@ export function GitBranchControl({
   const [checkoutAfterCreate, setCheckoutAfterCreate] = useState(true);
   const [dirtyTarget, setDirtyTarget] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-  const [contextMenu, setContextMenu] = useState<BranchContextMenuState | null>(null);
+  const [contextMenu, setContextMenu] = useState<BranchContextMenuState | null>(
+    null,
+  );
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const suppressBrowserContextMenuRef = useRef(false);
 
   const currentBranch =
     branches.find((branch) => branch.isCurrent)?.name ??
@@ -113,40 +111,33 @@ export function GitBranchControl({
     mode === "view" ? selectedBranch || currentBranch : currentBranch;
   const defaultStartPoint = useMemo(() => {
     const localBranches = branches.filter((branch) => !branch.isRemote);
-    return (
-      currentBranch ||
-      localBranches[0]?.name ||
-      branches[0]?.name ||
-      ""
-    );
+    return currentBranch || localBranches[0]?.name || branches[0]?.name || "";
   }, [branches, currentBranch]);
 
   const localBranches = useMemo(
-    () => branches.filter((b) => !b.isRemote).sort((a, b) => a.name.localeCompare(b.name)),
+    () =>
+      branches
+        .filter((b) => !b.isRemote)
+        .sort((a, b) => a.name.localeCompare(b.name)),
     [branches],
   );
 
   const remoteBranches = useMemo(
-    () => branches.filter((b) => b.isRemote).sort((a, b) => a.name.localeCompare(b.name)),
+    () =>
+      branches
+        .filter((b) => b.isRemote)
+        .sort((a, b) => a.name.localeCompare(b.name)),
     [branches],
   );
 
-  const allSortedBranches = useMemo(() => [...localBranches, ...remoteBranches], [localBranches, remoteBranches]);
+  const allSortedBranches = useMemo(
+    () => [...localBranches, ...remoteBranches],
+    [localBranches, remoteBranches],
+  );
   const isMutating =
-    checkoutBranch.isPending || createBranch.isPending || deleteBranch.isPending;
-
-  useEffect(() => {
-    function handleContextMenu(event: MouseEvent) {
-      if (!suppressBrowserContextMenuRef.current) return;
-      event.preventDefault();
-      event.stopPropagation();
-    }
-
-    document.addEventListener("contextmenu", handleContextMenu, true);
-    return () => {
-      document.removeEventListener("contextmenu", handleContextMenu, true);
-    };
-  }, []);
+    checkoutBranch.isPending ||
+    createBranch.isPending ||
+    deleteBranch.isPending;
 
   async function runCheckout(
     branch: string,
@@ -168,7 +159,9 @@ export function GitBranchControl({
       }
       setError(result.message ?? `Failed to check out ${branch}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : `Failed to check out ${branch}`);
+      setError(
+        err instanceof Error ? err.message : `Failed to check out ${branch}`,
+      );
     }
   }
 
@@ -206,7 +199,11 @@ export function GitBranchControl({
       const result = await deleteBranch.mutateAsync({ name: deleteTarget });
       setDeleteTarget(null);
       if (result.ok) {
-        if (mode === "view" && selectedBranch === deleteTarget && currentBranch) {
+        if (
+          mode === "view" &&
+          selectedBranch === deleteTarget &&
+          currentBranch
+        ) {
           onSelectedBranchChange?.(currentBranch);
         }
         setMessage(result.message ?? `Deleted branch ${deleteTarget}`);
@@ -225,17 +222,10 @@ export function GitBranchControl({
     x: number,
     y: number,
   ) {
-    const position = clampBranchContextMenuPosition(
-      x,
-      y,
-      window.innerWidth,
-      window.innerHeight,
-    );
-    suppressBrowserContextMenuRef.current = true;
     setSelectOpen(false);
     setContextMenu({
-      x: position.x,
-      y: position.y,
+      x,
+      y,
       branchName: branch.name,
       isCurrent: branch.isCurrent,
     });
@@ -257,7 +247,6 @@ export function GitBranchControl({
           disabled={isMutating}
           onOpenChange={setSelectOpen}
           onValueChange={(value) => {
-            setContextMenu(null);
             if (!value || value === branchValue) return;
             if (mode === "view") {
               onSelectedBranchChange?.(value);
@@ -270,7 +259,9 @@ export function GitBranchControl({
             className={cn(
               "min-w-0 h-8 font-bold px-3 glass-input font-sans tracking-tight",
               compact && compactTextClass,
-              compact ? "w-[132px] sm:w-[168px] lg:w-[200px]" : "w-[300px] text-[11px]",
+              compact
+                ? "w-[132px] sm:w-[168px] lg:w-[200px]"
+                : "w-[300px] text-[11px]",
             )}
           >
             <SelectValue placeholder="Select branch" />
@@ -287,16 +278,6 @@ export function GitBranchControl({
                     value={branch.name}
                     onPointerDown={(event) => {
                       if (event.button === 2) event.preventDefault();
-                    }}
-                    onPointerUp={(event) => {
-                      if (event.button !== 2) return;
-                      event.preventDefault();
-                      event.stopPropagation();
-                      openBranchContextMenu(
-                        branch,
-                        event.clientX,
-                        event.clientY,
-                      );
                     }}
                     onContextMenu={(event) => {
                       event.preventDefault();
@@ -315,7 +296,11 @@ export function GitBranchControl({
                         event.preventDefault();
                         const rect =
                           event.currentTarget.getBoundingClientRect();
-                        openBranchContextMenu(branch, rect.left + 24, rect.top + 20);
+                        openBranchContextMenu(
+                          branch,
+                          rect.left + 24,
+                          rect.top + 20,
+                        );
                       }
                     }}
                     title="Right-click for branch actions"
@@ -334,7 +319,9 @@ export function GitBranchControl({
                   <SelectItem key={branch.name} value={branch.name}>
                     <span className="flex items-center gap-2">
                       <span className="truncate">{branch.name}</span>
-                      <span className="text-[9px] opacity-40 px-1 border border-current rounded-[2px]">REMOTE</span>
+                      <span className="text-[9px] opacity-40 px-1 border border-current rounded-[2px]">
+                        REMOTE
+                      </span>
                     </span>
                   </SelectItem>
                 ))}
@@ -363,11 +350,27 @@ export function GitBranchControl({
             {!compact ? (
               <span className="ml-1">New Branch</span>
             ) : (
-              <span className={cn("sr-only", compactTextClass)}>New Branch</span>
+              <span className={cn("sr-only", compactTextClass)}>
+                New Branch
+              </span>
             )}
           </Button>
         ) : null}
       </div>
+
+      {contextMenu ? (
+        <GitBranchContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          branchName={contextMenu.branchName}
+          isCurrent={contextMenu.isCurrent}
+          onDelete={() => {
+            setContextMenu(null);
+            setDeleteTarget(contextMenu.branchName);
+          }}
+          onClose={() => setContextMenu(null)}
+        />
+      ) : null}
 
       <GitBranchFeedback
         message={message}
@@ -387,25 +390,6 @@ export function GitBranchControl({
           onStartPointChange={setStartPoint}
           onCheckoutAfterCreateChange={setCheckoutAfterCreate}
           onSubmit={() => void handleCreateBranch()}
-        />
-      ) : null}
-
-      {contextMenu ? (
-        <GitBranchContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          branchName={contextMenu.branchName}
-          isCurrent={contextMenu.isCurrent}
-          onDelete={() => {
-            setContextMenu(null);
-            setSelectOpen(false);
-            suppressBrowserContextMenuRef.current = false;
-            setDeleteTarget(contextMenu.branchName);
-          }}
-          onClose={() => {
-            setContextMenu(null);
-            suppressBrowserContextMenuRef.current = false;
-          }}
         />
       ) : null}
 

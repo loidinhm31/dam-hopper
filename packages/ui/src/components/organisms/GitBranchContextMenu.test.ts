@@ -1,21 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  clampBranchContextMenuPosition,
-  getDeleteBranchMenuState,
-} from "./GitBranchContextMenu.js";
-
-describe("clampBranchContextMenuPosition", () => {
-  it("keeps the menu inside the viewport", () => {
-    expect(clampBranchContextMenuPosition(1200, 900, 1280, 960)).toEqual({
-      x: 1090,
-      y: 864,
-    });
-    expect(clampBranchContextMenuPosition(40, 60, 1280, 960)).toEqual({
-      x: 40,
-      y: 60,
-    });
-  });
-});
+import { getDeleteBranchMenuState } from "./GitBranchContextMenu.js";
 
 describe("getDeleteBranchMenuState", () => {
   it("disables deletion for the checked-out branch", () => {

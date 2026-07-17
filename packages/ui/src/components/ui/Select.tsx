@@ -117,13 +117,13 @@ function SelectLabel({
   );
 }
 
-function SelectItem({
-  className,
-  children,
-  ...props
-}: React.ComponentProps<typeof SelectPrimitive.Item>) {
+const SelectItem = React.forwardRef<
+  React.ElementRef<typeof SelectPrimitive.Item>,
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>
+>(function SelectItem({ className, children, ...props }, ref) {
   return (
     <SelectPrimitive.Item
+      ref={ref}
       className={cn(
         "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-xs outline-none",
         "text-[var(--color-text)] hover:bg-[var(--color-surface-2)]",
@@ -141,7 +141,7 @@ function SelectItem({
       <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
     </SelectPrimitive.Item>
   );
-}
+});
 
 function SelectSeparator({
   className,

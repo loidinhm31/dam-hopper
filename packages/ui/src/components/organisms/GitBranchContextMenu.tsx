@@ -1,17 +1,5 @@
-import { useEffect, useMemo, useRef } from "react";
-import { createPortal } from "react-dom";
-
-export function clampBranchContextMenuPosition(
-  x: number,
-  y: number,
-  windowWidth: number,
-  windowHeight: number,
-) {
-  return {
-    x: Math.min(x, windowWidth - 190),
-    y: Math.min(y, windowHeight - 96),
-  };
-}
+import { useEffect, useRef, useState } from "react";
+import { ContextMenu } from "@/components/ui/ContextMenu.js";
 
 export function getDeleteBranchMenuState({
   isCurrent,
@@ -20,9 +8,7 @@ export function getDeleteBranchMenuState({
 }) {
   return {
     disabled: isCurrent,
-    title: isCurrent
-      ? "Cannot delete the checked-out branch"
-      : undefined,
+    title: isCurrent ? "Cannot delete the checked-out branch" : undefined,
   };
 }
 
@@ -35,6 +21,11 @@ interface GitBranchContextMenuProps {
   onClose: () => void;
 }
 
+/**
+ * Branch items live inside Radix Select, so the context-menu root is lifted
+ * beside Select. Its synthetic native event preserves Radix pointer anchoring
+ * while allowing Select to close before this menu opens.
+ */
 export function GitBranchContextMenu({
   x,
   y,
@@ -43,78 +34,51 @@ export function GitBranchContextMenu({
   onDelete,
   onClose,
 }: GitBranchContextMenuProps) {
-  const ref = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(true);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const deleteState = getDeleteBranchMenuState({ isCurrent });
 
   useEffect(() => {
-    function handleMouseDown(event: MouseEvent) {
-      if (ref.current && !ref.current.contains(event.target as Node)) {
-        onClose();
-      }
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-
-    document.addEventListener("mousedown", handleMouseDown);
-    document.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      document.removeEventListener("mousedown", handleMouseDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [onClose]);
-
-  const style = useMemo(
-    () =>
-      ({
-        position: "fixed",
-        top: y,
-        left: x,
-        zIndex: 70,
-      }) as const,
-    [x, y],
-  );
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    trigger.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        clientX: x,
+        clientY: y,
+      }),
+    );
+  }, [x, y]);
 
   return (
-    typeof document === "undefined"
-      ? null
-      : createPortal(
-          <div
-            ref={ref}
-            role="menu"
-            style={style}
-            className="w-44 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-xl"
-            onContextMenu={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-            }}
+    <ContextMenu.Root
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) onClose();
+      }}
+    >
+      <ContextMenu.Trigger ref={triggerRef}>
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
+          className="absolute -left-[9999px] h-px w-px opacity-0"
+        />
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className="w-44">
+          <ContextMenu.Label>{branchName}</ContextMenu.Label>
+          <ContextMenu.Item
+            disabled={deleteState.disabled}
+            title={deleteState.title}
+            onSelect={onDelete}
+            className="text-[var(--color-danger)] focus:bg-[var(--color-danger)]/10 focus:text-[var(--color-danger)]"
           >
-            <div className="px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-              {branchName}
-            </div>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={deleteState.disabled}
-              title={deleteState.title}
-              className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-              onPointerDown={(event) => {
-                if (deleteState.disabled) return;
-                event.preventDefault();
-                event.stopPropagation();
-                onDelete();
-              }}
-              onClick={(event) => {
-                if (deleteState.disabled || event.detail !== 0) return;
-                onDelete();
-              }}
-            >
-              Delete branch
-            </button>
-          </div>,
-          document.body,
-        )
+            Delete branch
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }

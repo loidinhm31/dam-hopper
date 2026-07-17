@@ -1,4 +1,11 @@
-import { useRef, useState, useEffect, useCallback } from "react";
+import {
+  forwardRef,
+  useRef,
+  useState,
+  useEffect,
+  useCallback,
+  type ComponentPropsWithoutRef,
+} from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ChevronRight,
@@ -9,13 +16,11 @@ import {
   Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
-import {
-  useGitDiff,
-  useGitUntracked,
-} from "@/api/queries.js";
+import { useGitDiff, useGitUntracked } from "@/api/queries.js";
 import { api } from "@/api/client.js";
 import type { DiffFileEntry } from "@/api/client.js";
 import { FilePathLabel } from "@/components/atoms/FilePathLabel.js";
+import { ContextMenu } from "@/components/ui/ContextMenu.js";
 
 // ---------------------------------------------------------------------------
 // ChangedFilesList — IntelliJ-style local changes panel
@@ -25,13 +30,6 @@ export interface ChangedFilesListProps {
   project: string;
   selectedFile: string | null;
   onSelectFile: (path: string, isConflict: boolean) => void;
-}
-
-interface GitContextMenuState {
-  x: number;
-  y: number;
-  entry: DiffFileEntry;
-  section: "changes" | "unversioned";
 }
 
 function gitStatusColor(status: string, staged: boolean): string {
@@ -111,111 +109,92 @@ function GitSectionHeader({
   );
 }
 
-function GitFileRow({
-  entry,
-  isSelected,
-  checked,
-  isMutating,
-  onSelect,
-  onContextMenu,
-  onToggle,
-}: {
+type GitFileRowProps = Omit<
+  ComponentPropsWithoutRef<"div">,
+  "onClick" | "role"
+> & {
   entry: DiffFileEntry;
   isSelected: boolean;
   checked: boolean;
   isMutating: boolean;
   onSelect: () => void;
-  onContextMenu: (e: React.MouseEvent) => void;
   onToggle: () => void;
-}) {
-  const filename = entry.path.split("/").pop() ?? entry.path;
-  const color = gitStatusColor(entry.status, checked);
-  const badge = gitStatusBadge(entry.status, checked);
+};
 
-  return (
-    <div
-      role="row"
-      className={cn(
-        "flex items-center gap-1.5 px-2 py-[3px] cursor-pointer",
-        "hover:bg-[var(--color-surface-2)] transition-colors",
-        isSelected && "bg-[var(--color-primary)]/15",
-      )}
-      onClick={onSelect}
-      onContextMenu={onContextMenu}
-    >
-      {isMutating ? (
-        <span className="h-3 w-3 shrink-0 inline-block animate-spin rounded-full border border-current border-t-transparent opacity-40" />
-      ) : (
-        <input
-          type="checkbox"
-          checked={checked}
-          readOnly
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggle();
-          }}
-          className="h-3 w-3 shrink-0 cursor-pointer accent-[var(--color-primary)]"
-          aria-label={checked ? `Unstage ${filename}` : `Stage ${filename}`}
-        />
-      )}
-      <span
+const GitFileRow = forwardRef<HTMLDivElement, GitFileRowProps>(
+  function GitFileRow(
+    { entry, isSelected, checked, isMutating, onSelect, onToggle, ...props },
+    ref,
+  ) {
+    const filename = entry.path.split("/").pop() ?? entry.path;
+    const color = gitStatusColor(entry.status, checked);
+    const badge = gitStatusBadge(entry.status, checked);
+
+    return (
+      <div
+        {...props}
+        ref={ref}
+        role="row"
         className={cn(
-          "text-[9px] font-bold w-3 shrink-0 text-center leading-none",
-          color,
+          "flex items-center gap-1.5 px-2 py-[3px] cursor-pointer",
+          "hover:bg-[var(--color-surface-2)] transition-colors",
+          isSelected && "bg-[var(--color-primary)]/15",
         )}
+        onClick={onSelect}
       >
-        {badge}
-      </span>
-      <FilePathLabel
-        path={entry.path}
-        className={cn(
-          "text-[11px]",
-          color,
-          isSelected && "!text-[var(--color-primary)]",
+        {isMutating ? (
+          <span className="h-3 w-3 shrink-0 inline-block animate-spin rounded-full border border-current border-t-transparent opacity-40" />
+        ) : (
+          <input
+            type="checkbox"
+            checked={checked}
+            readOnly
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle();
+            }}
+            className="h-3 w-3 shrink-0 cursor-pointer accent-[var(--color-primary)]"
+            aria-label={checked ? `Unstage ${filename}` : `Stage ${filename}`}
+          />
         )}
-        fileNameClassName="text-[11px] text-current font-normal"
-        dirClassName="text-[9px] text-[var(--color-text-muted)]/60"
-      />
-    </div>
-  );
-}
+        <span
+          className={cn(
+            "text-[9px] font-bold w-3 shrink-0 text-center leading-none",
+            color,
+          )}
+        >
+          {badge}
+        </span>
+        <FilePathLabel
+          path={entry.path}
+          className={cn(
+            "text-[11px]",
+            color,
+            isSelected && "!text-[var(--color-primary)]",
+          )}
+          fileNameClassName="text-[11px] text-current font-normal"
+          dirClassName="text-[9px] text-[var(--color-text-muted)]/60"
+        />
+      </div>
+    );
+  },
+);
 
 function GitContextMenuPopover({
-  x,
-  y,
   entry,
   section,
   onStage,
   onUnstage,
   onDiscard,
-  onClose,
+  children,
 }: {
-  x: number;
-  y: number;
   entry: DiffFileEntry;
   section: "changes" | "unversioned";
   onStage: () => void;
   onUnstage: () => void;
   onDiscard: () => void;
-  onClose: () => void;
+  children: React.ReactElement;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    function onDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
-
   type Action = { label: string; onClick: () => void; danger?: boolean };
   const actions: Action[] = [];
 
@@ -233,37 +212,26 @@ function GitContextMenuPopover({
     });
   }
 
-  const style: React.CSSProperties = {
-    position: "fixed",
-    zIndex: 60,
-    top: Math.min(y, window.innerHeight - 120),
-    left: Math.min(x, window.innerWidth - 170),
-  };
-
   return (
-    <div
-      ref={ref}
-      style={style}
-      className="w-44 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl py-1"
-    >
-      {actions.map((a) => (
-        <button
-          key={a.label}
-          onClick={() => {
-            a.onClick();
-            onClose();
-          }}
-          className={cn(
-            "w-full flex items-center px-3 py-1.5 text-xs text-left transition-colors",
-            a.danger
-              ? "text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
-              : "text-[var(--color-text)] hover:bg-[var(--color-surface-2)]",
-          )}
-        >
-          {a.label}
-        </button>
-      ))}
-    </div>
+    <ContextMenu.Root>
+      <ContextMenu.Trigger>{children}</ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className="w-44">
+          {actions.map((action) => (
+            <ContextMenu.Item
+              key={action.label}
+              onSelect={action.onClick}
+              className={cn(
+                action.danger &&
+                  "text-[var(--color-danger)] focus:bg-[var(--color-danger)]/10 focus:text-[var(--color-danger)]",
+              )}
+            >
+              {action.label}
+            </ContextMenu.Item>
+          ))}
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }
 
@@ -276,7 +244,12 @@ export function entryRootId(entry: DiffFileEntry) {
 }
 
 export function entryRootLabel(entry: DiffFileEntry) {
-  return entry.rootPath ?? (entryRootId(entry) === PRIMARY_ROOT_ID ? "Project root" : entryRootId(entry));
+  return (
+    entry.rootPath ??
+    (entryRootId(entry) === PRIMARY_ROOT_ID
+      ? "Project root"
+      : entryRootId(entry))
+  );
 }
 
 export function projectPathForEntry(entry: DiffFileEntry) {
@@ -320,9 +293,6 @@ export function ChangedFilesList({
   const [isCommitting, setIsCommitting] = useState(false);
   const [mutatingPaths, setMutatingPaths] = useState<Set<string>>(new Set());
   const [mutationError, setMutationError] = useState<string | null>(null);
-  const [contextMenu, setContextMenu] = useState<GitContextMenuState | null>(
-    null,
-  );
   const [discardConfirm, setDiscardConfirm] = useState<DiffFileEntry | null>(
     null,
   );
@@ -651,33 +621,32 @@ export function ChangedFilesList({
                         group.entries.map((f) => {
                           const projectPath = projectPathForEntry(f);
                           return (
-                            <GitFileRow
+                            <GitContextMenuPopover
                               key={projectPath}
-                              entry={{ ...f, path: projectPath }}
-                              isSelected={selectedFile === projectPath}
-                              checked={f.staged}
-                              isMutating={mutatingPaths.has(projectPath)}
-                              onSelect={() =>
-                                onSelectFile(
-                                  projectPath,
-                                  f.status === "conflicted",
-                                )
-                              }
-                              onContextMenu={(e) => {
-                                e.preventDefault();
-                                setContextMenu({
-                                  x: e.clientX,
-                                  y: e.clientY,
-                                  entry: f,
-                                  section: "changes",
-                                });
-                              }}
-                              onToggle={() =>
-                                void (f.staged
-                                  ? handleUnstage(f)
-                                  : handleStage(f))
-                              }
-                            />
+                              entry={f}
+                              section="changes"
+                              onStage={() => void handleStage(f)}
+                              onUnstage={() => void handleUnstage(f)}
+                              onDiscard={() => setDiscardConfirm(f)}
+                            >
+                              <GitFileRow
+                                entry={{ ...f, path: projectPath }}
+                                isSelected={selectedFile === projectPath}
+                                checked={f.staged}
+                                isMutating={mutatingPaths.has(projectPath)}
+                                onSelect={() =>
+                                  onSelectFile(
+                                    projectPath,
+                                    f.status === "conflicted",
+                                  )
+                                }
+                                onToggle={() =>
+                                  void (f.staged
+                                    ? handleUnstage(f)
+                                    : handleStage(f))
+                                }
+                              />
+                            </GitContextMenuPopover>
                           );
                         })}
                     </div>
@@ -698,9 +667,7 @@ export function ChangedFilesList({
                   open={unversionedOpen}
                   onToggle={() => setUnversionedOpen((v) => !v)}
                   checkState="none"
-                  onCheckAll={() =>
-                    void handleStageAll(unversionedFiles)
-                  }
+                  onCheckAll={() => void handleStageAll(unversionedFiles)}
                 />
                 {unversionedOpen && (
                   <>
@@ -710,40 +677,39 @@ export function ChangedFilesList({
                         {untrackedTotal.toLocaleString()} unversioned files
                       </div>
                     )}
-                    {unversionedFileGroups.map(
-                      ([rootId, group]) => (
-                        <div key={rootId}>
-                          {hasMultipleUnversionedRoots && (
-                            <div className="px-2 py-1 text-[10px] font-semibold text-[var(--color-text-muted)] bg-[var(--color-surface)]/70">
-                              {group.label}
-                            </div>
-                          )}
-                          {group.entries.map((f) => {
-                            const projectPath = projectPathForEntry(f);
-                            return (
+                    {unversionedFileGroups.map(([rootId, group]) => (
+                      <div key={rootId}>
+                        {hasMultipleUnversionedRoots && (
+                          <div className="px-2 py-1 text-[10px] font-semibold text-[var(--color-text-muted)] bg-[var(--color-surface)]/70">
+                            {group.label}
+                          </div>
+                        )}
+                        {group.entries.map((f) => {
+                          const projectPath = projectPathForEntry(f);
+                          return (
+                            <GitContextMenuPopover
+                              key={projectPath}
+                              entry={f}
+                              section="unversioned"
+                              onStage={() => void handleStage(f)}
+                              onUnstage={() => void handleUnstage(f)}
+                              onDiscard={() => setDiscardConfirm(f)}
+                            >
                               <GitFileRow
-                                key={projectPath}
                                 entry={{ ...f, path: projectPath }}
                                 isSelected={selectedFile === projectPath}
                                 checked={false}
                                 isMutating={mutatingPaths.has(projectPath)}
-                                onSelect={() => onSelectFile(projectPath, false)}
-                                onContextMenu={(e) => {
-                                  e.preventDefault();
-                                  setContextMenu({
-                                    x: e.clientX,
-                                    y: e.clientY,
-                                    entry: f,
-                                    section: "unversioned",
-                                  });
-                                }}
+                                onSelect={() =>
+                                  onSelectFile(projectPath, false)
+                                }
                                 onToggle={() => void handleStage(f)}
                               />
-                            );
-                          })}
-                        </div>
-                      ),
-                    )}
+                            </GitContextMenuPopover>
+                          );
+                        })}
+                      </div>
+                    ))}
                     {hasMoreUntracked && (
                       <button
                         onClick={handleLoadMoreUntracked}
@@ -817,20 +783,6 @@ export function ChangedFilesList({
             : ""}
         </button>
       </div>
-
-      {/* Git file context menu */}
-      {contextMenu && (
-        <GitContextMenuPopover
-          x={contextMenu.x}
-          y={contextMenu.y}
-          entry={contextMenu.entry}
-          section={contextMenu.section}
-          onStage={() => void handleStage(contextMenu.entry)}
-          onUnstage={() => void handleUnstage(contextMenu.entry)}
-          onDiscard={() => setDiscardConfirm(contextMenu.entry)}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
     </div>
   );
 }

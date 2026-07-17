@@ -1,21 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  clampEditorTabContextMenuPosition,
-  getEditorTabContextMenuItems,
-} from "./EditorTabContextMenu.js";
+import { getEditorTabContextMenuItems } from "./EditorTabContextMenu.js";
 
 describe("editor tab context menu helpers", () => {
-  it("clamps the menu inside the viewport", () => {
-    expect(clampEditorTabContextMenuPosition(1200, 900, 1280, 960)).toEqual({
-      x: 1090,
-      y: 830,
-    });
-    expect(clampEditorTabContextMenuPosition(40, 60, 1280, 960)).toEqual({
-      x: 40,
-      y: 60,
-    });
-  });
-
   it("disables close others when only one tab is open", () => {
     const items = getEditorTabContextMenuItems({
       tabCount: 1,
