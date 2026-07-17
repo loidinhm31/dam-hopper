@@ -81,7 +81,7 @@ export function isHeadCommit(entry: Pick<GitLogEntry, "refs">) {
   return entry.refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD ->"));
 }
 
-function HistoryContextMenu({
+export function HistoryContextMenu({
   entry,
   isHead,
   onCherryPick,

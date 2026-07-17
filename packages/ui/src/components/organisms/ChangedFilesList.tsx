@@ -180,7 +180,7 @@ const GitFileRow = forwardRef<HTMLDivElement, GitFileRowProps>(
   },
 );
 
-function GitContextMenuPopover({
+export function GitContextMenuPopover({
   entry,
   section,
   onStage,

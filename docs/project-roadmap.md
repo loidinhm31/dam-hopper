@@ -207,6 +207,21 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-07-17:** Completed context-menu placement Phase 02: consumer migration.
+  - ✅ Routed the existing context-menu consumers through the shared Radix foundation with forwarded trigger refs.
+  - ✅ Kept branch `Select` isolated from the generic context-menu trigger path.
+  - ✅ Lifted the diagnostics trigger into dedicated consumer wiring; Phase 01 foundation stays unchanged.
+
+- **2026-07-17:** Completed context-menu placement Phase 03: unit and component verification.
+  - ✅ Marked Radix wrapper and consumer coverage complete in the Phase 03 plan.
+  - ✅ Recorded Phase 03 status as Done with 2026-07-17 23:17 +0700 timestamp.
+
+- **2026-07-17:** Completed context-menu placement Phase 01: Radix shared foundation.
+  - ✅ Added direct `@radix-ui/react-context-menu` integration with body-only portal protection, `Trigger asChild`, collision defaults, and available-space sizing.
+  - ✅ Added module-scoped one-open coordination and capture-level scroll close without app-wide state.
+  - ✅ Added JSDOM wrapper, lifecycle, and five-category trigger compatibility coverage; UI validation passed: 107 files / 556 tests and TypeScript check.
+  - ⏭️ Phase 02 will migrate the seven existing context-menu consumers; Phase 03/04 retain keyboard/focus and Chromium geometry regression coverage.
+
 - **2026-07-16:** Completed Codex terminal notification replay Phase 01: Replay-safe delivery lifecycle (review approved 13:14 +07).
   - ✅ Replayed OSC 9 is suppressed until xterm reports buffer-write completion; concurrent live chunks flush in order afterward.
   - ✅ Focused lifecycle and affected UI validation passed; Phase 02 regression coverage remains pending.

@@ -72,7 +72,36 @@ const ContextMenuTrigger = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Trigger>,
   TriggerProps
 >(function ContextMenuTrigger(props, ref) {
-  return <ContextMenuPrimitive.Trigger {...props} asChild ref={ref} />;
+  const { onKeyDown, ...triggerProps } = props;
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    onKeyDown?.(event);
+    if (
+      event.defaultPrevented ||
+      (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey))
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    event.currentTarget.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2,
+      }),
+    );
+  };
+
+  return (
+    <ContextMenuPrimitive.Trigger
+      {...triggerProps}
+      asChild
+      ref={ref}
+      onKeyDown={handleKeyDown}
+    />
+  );
 });
 
 /** Body-only portal; Content also self-portals when used without this wrapper. */
@@ -93,12 +122,7 @@ const ContextMenuContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>
 >(function ContextMenuContent(
-  {
-    className,
-    avoidCollisions = true,
-    collisionPadding = 8,
-    ...props
-  },
+  { className, avoidCollisions = true, collisionPadding = 8, ...props },
   ref,
 ) {
   const inPortal = React.useContext(PortalScope);
@@ -115,10 +139,17 @@ const ContextMenuContent = React.forwardRef<
       {...props}
     />
   );
-  return inPortal ? content : <ContextMenuPrimitive.Portal>{content}</ContextMenuPrimitive.Portal>;
+  return inPortal ? (
+    content
+  ) : (
+    <ContextMenuPrimitive.Portal>{content}</ContextMenuPrimitive.Portal>
+  );
 });
 
-function ContextMenuItem({ className, ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Item>) {
+function ContextMenuItem({
+  className,
+  ...props
+}: React.ComponentProps<typeof ContextMenuPrimitive.Item>) {
   return (
     <ContextMenuPrimitive.Item
       {...props}
@@ -149,11 +180,17 @@ function ContextMenuCheckboxItem({
   );
 }
 
-function ContextMenuLabel({ className, ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Label>) {
+function ContextMenuLabel({
+  className,
+  ...props
+}: React.ComponentProps<typeof ContextMenuPrimitive.Label>) {
   return (
     <ContextMenuPrimitive.Label
       {...props}
-      className={cn("px-2 py-1.5 text-xs font-semibold text-[var(--color-text-muted)]", className)}
+      className={cn(
+        "px-2 py-1.5 text-xs font-semibold text-[var(--color-text-muted)]",
+        className,
+      )}
     />
   );
 }
@@ -181,6 +218,14 @@ const ContextMenu = {
   Separator: ContextMenuSeparator,
 } as const;
 
-export { ContextMenu, ContextMenuRoot, ContextMenuTrigger, ContextMenuPortal,
-  ContextMenuContent, ContextMenuItem, ContextMenuCheckboxItem,
-  ContextMenuLabel, ContextMenuSeparator };
+export {
+  ContextMenu,
+  ContextMenuRoot,
+  ContextMenuTrigger,
+  ContextMenuPortal,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuCheckboxItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+};
