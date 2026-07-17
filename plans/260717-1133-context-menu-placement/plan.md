@@ -22,7 +22,7 @@ Fix the deterministic `backdrop-filter` containing-block bug that adds floating-
 | 1   | Radix context-menu foundation                   | Done    |   3.5h | [phase-01](./phase-01-shared-context-menu-surface.md)       |
 | 2   | Migrate all menu consumers                      | Done    |   3.5h | [phase-02](./phase-02-migrate-context-menu-consumers.md)    |
 | 3   | Unit and component verification                 | Done    |   2.5h | [phase-03](./phase-03-unit-component-tests.md)              |
-| 4   | Chromium geometry regression and release checks | Pending |   3.5h | [phase-04](./phase-04-browser-regression-and-validation.md) |
+| 4   | Chromium geometry regression and release checks | Done    |   3.5h | [phase-04](./phase-04-browser-regression-and-validation.md) |
 
 ## Dependencies
 
