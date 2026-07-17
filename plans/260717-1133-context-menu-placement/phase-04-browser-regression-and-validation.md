@@ -10,10 +10,11 @@
 ## Overview
 
 - Priority: P2
-- Status: Pending
+- Status: DONE
+- Completed: 2026-07-17 +07
 - Effort: 3.5h
 - Description: verify Radix's real portal, collision, containing-block escape, and release acceptance across viewport edges and zoom.
-- Review status: Not started
+- Review status: Approved
 
 ## Key insights
 
@@ -54,11 +55,11 @@ Delete: none.
 
 ## Todo list
 
-- [ ] Radix body portal and clipping assertion.
-- [ ] Four-edge collision cases.
-- [ ] Dynamic-size/reanchor behavior.
-- [ ] Keyboard/focus/dismissal behavior.
-- [ ] Zoom matrix and full validation commands.
+- [x] Radix body portal and clipping assertion.
+- [x] Four-edge collision cases.
+- [x] Dynamic-size/reanchor behavior.
+- [x] Keyboard/focus/dismissal behavior.
+- [x] Zoom matrix and full validation commands.
 
 ## Success criteria
 
