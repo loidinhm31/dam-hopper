@@ -7,7 +7,7 @@
  * - MonacoHost / MarkdownHost are lazy-loaded (dynamic import) to keep the main chunk clean.
  * - ConflictDialog is shown when save returns a conflict.
  */
-import { lazy, Suspense, useState, useEffect, useCallback, useRef } from "react";
+import { lazy, Suspense, useState, useEffect, useCallback } from "react";
 import type * as monacoNs from "monaco-editor";
 import { FileCode, Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -22,6 +22,7 @@ import { mimeToLanguage } from "@/lib/mime-to-language.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useEncryptedWrite } from "@/hooks/use-encrypted-write.js";
 import { LockToggle } from "@/components/atoms/LockToggle.js";
+import { ContextMenu } from "@/components/ui/ContextMenu.js";
 import {
   invalidateGitFileOperation,
   useGitDiff,
@@ -29,7 +30,6 @@ import {
 } from "@/api/queries.js";
 import { buildGitFileStateIndex } from "@/lib/git-file-state.js";
 import {
-  clampEditorTabContextMenuPosition,
   EditorTabContextMenu,
   getEditorTabContextMenuItems,
 } from "@/components/organisms/EditorTabContextMenu.js";
@@ -47,7 +47,6 @@ const MarkdownHost = lazy(() =>
 );
 
 export function EditorTabs({ project }: { project: string | null }) {
-  const containerRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
   const {
     tabs,
@@ -79,11 +78,6 @@ export function EditorTabs({ project }: { project: string | null }) {
 
   const [activeEditor, setActiveEditor] =
     useState<monacoNs.editor.IStandaloneCodeEditor | null>(null);
-  const [contextMenu, setContextMenu] = useState<{
-    key: string;
-    x: number;
-    y: number;
-  } | null>(null);
   const { data: gitDiff } = useGitDiff(project ?? "", "*");
 
   const handleSave = useCallback(
@@ -157,7 +151,7 @@ export function EditorTabs({ project }: { project: string | null }) {
     activeDiffRoot,
   );
   const activeLineChanges = activeFileDiff.data?.lineChanges ?? [];
-  const openActiveDiff = useCallback(() => {
+  const openActiveDiff = () => {
     if (!project || !activeGitState) return;
     openDiff(
       project,
@@ -169,24 +163,7 @@ export function EditorTabs({ project }: { project: string | null }) {
       activeGitState.rootId,
       activeGitState.rootRelativePath,
     );
-  }, [activeGitState, openDiff, project]);
-  const contextTab =
-    contextMenu && project
-      ? (projectTabs.find((tab) => tab.key === contextMenu.key) ?? null)
-      : null;
-  const contextMenuItems = contextTab
-    ? getEditorTabContextMenuItems({
-        tabCount: projectTabs.length,
-        onCloseTab: () => close(contextTab.key),
-        onCloseOthers: () => {
-          if (project) closeOthers(project, contextTab.key);
-        },
-        onCloseAll: () => {
-          if (project) closeAll(project);
-        },
-      })
-    : [];
-
+  };
   // Auto-hydrate active tab if content is not loaded
   useEffect(() => {
     if (activeTab?.hydrated && !activeTab.loading) {
@@ -206,7 +183,7 @@ export function EditorTabs({ project }: { project: string | null }) {
   }
 
   return (
-    <div ref={containerRef} className="relative h-full flex flex-col glass-card">
+    <div className="relative h-full flex flex-col glass-card">
       {/* Tab bar */}
       <div className="shrink-0 flex items-stretch border-b border-[var(--color-border)] bg-[var(--color-surface-2)]">
         <div
@@ -215,48 +192,49 @@ export function EditorTabs({ project }: { project: string | null }) {
           style={{ scrollbarWidth: "none" }}
         >
           {projectTabs.map((tab) => (
-            <EditorTab
-              key={tab.key}
-              name={tab.name}
-              path={tab.path}
-              active={tab.key === activeKey}
-              dirty={tab.dirty}
-              gitState={
-                tab.tier === "diff" ? undefined : gitIndex.files.get(tab.path)
-              }
-              onGitIndicatorClick={() => {
-                const state = gitIndex.files.get(tab.path);
-                if (!project || !state) return;
-                openDiff(
-                  project,
-                  state.path,
-                  state.status,
-                  state.additions,
-                  state.deletions,
-                  undefined,
-                  state.rootId,
-                  state.rootRelativePath,
-                );
-              }}
-              onClick={() => project && setActive(project, tab.key)}
-              onClose={() => close(tab.key)}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                const containerRect = containerRef.current?.getBoundingClientRect();
-                if (!containerRect) return;
-                const position = clampEditorTabContextMenuPosition(
-                  event.clientX - containerRect.left,
-                  event.clientY - containerRect.top,
-                  containerRect.width,
-                  containerRect.height,
-                );
-                setContextMenu({
-                  key: tab.key,
-                  x: position.x,
-                  y: position.y,
-                });
-              }}
-            />
+            <ContextMenu.Root key={tab.key}>
+              <ContextMenu.Trigger>
+                <EditorTab
+                  name={tab.name}
+                  path={tab.path}
+                  active={tab.key === activeKey}
+                  dirty={tab.dirty}
+                  gitState={
+                    tab.tier === "diff"
+                      ? undefined
+                      : gitIndex.files.get(tab.path)
+                  }
+                  onGitIndicatorClick={() => {
+                    const state = gitIndex.files.get(tab.path);
+                    if (!project || !state) return;
+                    openDiff(
+                      project,
+                      state.path,
+                      state.status,
+                      state.additions,
+                      state.deletions,
+                      undefined,
+                      state.rootId,
+                      state.rootRelativePath,
+                    );
+                  }}
+                  onClick={() => project && setActive(project, tab.key)}
+                  onClose={() => close(tab.key)}
+                />
+              </ContextMenu.Trigger>
+              <EditorTabContextMenu
+                items={getEditorTabContextMenuItems({
+                  tabCount: projectTabs.length,
+                  onCloseTab: () => close(tab.key),
+                  onCloseOthers: () => {
+                    if (project) closeOthers(project, tab.key);
+                  },
+                  onCloseAll: () => {
+                    if (project) closeAll(project);
+                  },
+                })}
+              />
+            </ContextMenu.Root>
           ))}
         </div>
         {project && (
@@ -265,15 +243,6 @@ export function EditorTabs({ project }: { project: string | null }) {
           </div>
         )}
       </div>
-
-      {contextMenu && contextTab && (
-        <EditorTabContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          items={contextMenuItems}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
 
       {/* Editor area + status bar */}
       <div className="flex-1 overflow-hidden flex flex-col min-h-0">

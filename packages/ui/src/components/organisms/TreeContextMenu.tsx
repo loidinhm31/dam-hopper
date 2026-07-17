@@ -1,4 +1,3 @@
-import { useEffect, useRef } from "react";
 import {
   ClipboardCopy,
   Copy,
@@ -10,6 +9,7 @@ import {
   Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
+import { ContextMenu } from "@/components/ui/ContextMenu.js";
 
 export interface ContextMenuAction {
   label: string;
@@ -107,67 +107,36 @@ export function getTreeContextMenuItems({
 }
 
 interface Props extends BuildItemsArgs {
-  x: number;
-  y: number;
+  children: React.ReactElement;
+  onOpen: () => void;
   onClose: () => void;
 }
 
 export function TreeContextMenu(props: Props) {
-  const { x, y, onClose } = props;
-  const ref = useRef<HTMLDivElement>(null);
-
-  // Close on outside click or Escape
-  useEffect(() => {
-    function handleDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    }
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("mousedown", handleDown);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handleDown);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [onClose]);
-
-  // Clamp to viewport
-  const style: React.CSSProperties = {
-    position: "fixed",
-    zIndex: 60,
-    top: Math.min(y, window.innerHeight - 200),
-    left: Math.min(x, window.innerWidth - 180),
-  };
-
+  const { onOpen, onClose } = props;
   const items = getTreeContextMenuItems(props);
 
   return (
-    <div
-      ref={ref}
-      style={style}
-      className="w-44 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl py-1"
-    >
-      {items.map((item) => (
-        <button
-          key={item.label}
-          disabled={item.disabled}
-          onClick={() => {
-            if (item.disabled) return;
-            item.onClick();
-            onClose();
-          }}
-          className={cn(
-            "w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors disabled:cursor-not-allowed disabled:opacity-40",
-            item.danger
-              ? "text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
-              : "text-[var(--color-text)] hover:bg-[var(--color-surface-2)]",
-          )}
-        >
-          {item.icon}
-          {item.label}
-        </button>
-      ))}
-    </div>
+    <ContextMenu.Root onOpenChange={(open) => (open ? onOpen() : onClose())}>
+      <ContextMenu.Trigger>{props.children}</ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className="w-44">
+          {items.map((item) => (
+            <ContextMenu.Item
+              key={item.label}
+              disabled={item.disabled}
+              onSelect={item.onClick}
+              className={cn(
+                item.danger &&
+                  "text-[var(--color-danger)] focus:bg-[var(--color-danger)]/10 focus:text-[var(--color-danger)]",
+              )}
+            >
+              {item.icon}
+              {item.label}
+            </ContextMenu.Item>
+          ))}
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }

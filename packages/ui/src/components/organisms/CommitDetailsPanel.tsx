@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, MouseEvent } from "react";
+import { useState } from "react";
+import type { MouseEvent } from "react";
 import type { GitLogEntry, DiffFileEntry } from "@/api/client.js";
 import { useGitCommitFiles } from "@/api/queries.js";
 import { Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils.js";
+import { ContextMenu } from "@/components/ui/ContextMenu.js";
 
 interface CommitDetailsPanelProps {
   project: string;
@@ -20,12 +21,6 @@ interface CommitDetailsPanelProps {
     files: DiffFileEntry[],
   ) => void;
   onDropSelectedChanges?: (commit: GitLogEntry, files: DiffFileEntry[]) => void;
-}
-
-interface FileContextMenuState {
-  commitHash: string;
-  x: number;
-  y: number;
 }
 
 interface FileSelectionState {
@@ -54,15 +49,9 @@ export function CommitDetailsPanel({
     paths: new Set(),
     lastSelectedIndex: null,
   });
-  const [contextMenu, setContextMenu] = useState<FileContextMenuState | null>(
-    null,
-  );
 
   const selectedPaths =
     selection.commitHash === commit.hash ? selection.paths : new Set<string>();
-  const activeContextMenu =
-    contextMenu?.commitHash === commit.hash ? contextMenu : null;
-
   const selectedFiles =
     files?.filter((file) => selectedPaths.has(file.path)) ?? [];
 
@@ -105,12 +94,7 @@ export function CommitDetailsPanel({
     });
   }
 
-  function openContextMenu(
-    file: DiffFileEntry,
-    index: number,
-    x: number,
-    y: number,
-  ) {
+  function selectContextFile(file: DiffFileEntry, index: number) {
     if (!selectedPaths.has(file.path)) {
       setSelection({
         commitHash: commit.hash,
@@ -118,26 +102,18 @@ export function CommitDetailsPanel({
         lastSelectedIndex: index,
       });
     }
-    setContextMenu({
-      commitHash: commit.hash,
-      x: Math.min(x, window.innerWidth - 230),
-      y: Math.min(y, window.innerHeight - 130),
-    });
   }
 
   function handleCherryPickSelectedChanges() {
     onCherryPickSelectedChanges?.(commit, selectedFiles);
-    setContextMenu(null);
   }
 
   function handleRevertSelectedChanges() {
     onRevertSelectedChanges?.(commit, selectedFiles);
-    setContextMenu(null);
   }
 
   function handleDropSelectedChanges() {
     onDropSelectedChanges?.(commit, selectedFiles);
-    setContextMenu(null);
   }
 
   return (
@@ -190,57 +166,47 @@ export function CommitDetailsPanel({
             {files?.map((file, index) => {
               const isSelected = selectedPaths.has(file.path);
               return (
-                <div
+                <CommitFileContextMenu
                   key={file.path}
-                  tabIndex={0}
-                  aria-selected={isSelected}
-                  aria-haspopup="menu"
-                  onClick={(event) => selectFile(file, index, event)}
-                  onDoubleClick={() => onFileDoubleClick(file)}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    openContextMenu(file, index, event.clientX, event.clientY);
-                  }}
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === "ContextMenu" ||
-                      (event.shiftKey && event.key === "F10")
-                    ) {
-                      event.preventDefault();
-                      const rect = event.currentTarget.getBoundingClientRect();
-                      openContextMenu(
-                        file,
-                        index,
-                        rect.left + 24,
-                        rect.top + 20,
-                      );
-                    }
-                  }}
-                  className={cn(
-                    "group flex items-center justify-between px-2 py-1 rounded cursor-default select-none transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]/40",
-                    isSelected
-                      ? "bg-[var(--color-primary)]/10"
-                      : "hover:bg-[var(--color-primary)]/5",
-                  )}
-                  title="Double-click to see historical diff"
+                  count={selectedFiles.length}
+                  canDrop={Boolean(onDropSelectedChanges) && !commit.isPushed}
+                  onOpen={() => selectContextFile(file, index)}
+                  onCherryPick={handleCherryPickSelectedChanges}
+                  onRevert={handleRevertSelectedChanges}
+                  onDrop={handleDropSelectedChanges}
                 >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <StatusBadge status={file.status} />
-                    <span className="text-[11px] truncate text-[var(--color-text)] group-hover:text-[var(--color-primary)] transition-colors">
-                      {file.path}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5 text-[10px] font-mono shrink-0 opacity-80 group-hover:opacity-100">
-                    {file.additions > 0 && (
-                      <span className="text-emerald-500">
-                        +{file.additions}
+                  <div
+                    tabIndex={0}
+                    aria-selected={isSelected}
+                    aria-haspopup="menu"
+                    onClick={(event) => selectFile(file, index, event)}
+                    onDoubleClick={() => onFileDoubleClick(file)}
+                    className={cn(
+                      "group flex items-center justify-between px-2 py-1 rounded cursor-default select-none transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]/40",
+                      isSelected
+                        ? "bg-[var(--color-primary)]/10"
+                        : "hover:bg-[var(--color-primary)]/5",
+                    )}
+                    title="Double-click to see historical diff"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <StatusBadge status={file.status} />
+                      <span className="text-[11px] truncate text-[var(--color-text)] group-hover:text-[var(--color-primary)] transition-colors">
+                        {file.path}
                       </span>
-                    )}
-                    {file.deletions > 0 && (
-                      <span className="text-rose-500">-{file.deletions}</span>
-                    )}
+                    </div>
+                    <div className="flex items-center gap-1.5 text-[10px] font-mono shrink-0 opacity-80 group-hover:opacity-100">
+                      {file.additions > 0 && (
+                        <span className="text-emerald-500">
+                          +{file.additions}
+                        </span>
+                      )}
+                      {file.deletions > 0 && (
+                        <span className="text-rose-500">-{file.deletions}</span>
+                      )}
+                    </div>
                   </div>
-                </div>
+                </CommitFileContextMenu>
               );
             })}
             {!files?.length && (
@@ -251,101 +217,53 @@ export function CommitDetailsPanel({
           </div>
         )}
       </div>
-      {activeContextMenu && (
-        <CommitFileContextMenu
-          x={activeContextMenu.x}
-          y={activeContextMenu.y}
-          count={selectedFiles.length}
-          canDrop={Boolean(onDropSelectedChanges) && !commit.isPushed}
-          onCherryPick={handleCherryPickSelectedChanges}
-          onRevert={handleRevertSelectedChanges}
-          onDrop={handleDropSelectedChanges}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
     </div>
   );
 }
 
 function CommitFileContextMenu({
-  x,
-  y,
   count,
   canDrop,
+  onOpen,
   onCherryPick,
   onRevert,
   onDrop,
-  onClose,
+  children,
 }: {
-  x: number;
-  y: number;
   count: number;
   canDrop: boolean;
+  onOpen: () => void;
   onCherryPick: () => void;
   onRevert: () => void;
   onDrop: () => void;
-  onClose: () => void;
+  children: React.ReactElement;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    function handleMouseDown(event: globalThis.MouseEvent) {
-      if (ref.current && !ref.current.contains(event.target as Node)) onClose();
-    }
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    document.addEventListener("mousedown", handleMouseDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handleMouseDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [onClose]);
-
-  const style: CSSProperties = {
-    position: "fixed",
-    zIndex: 60,
-    top: y,
-    left: x,
-  };
-
   return (
-    <div
-      ref={ref}
-      style={style}
-      className="w-56 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-xl"
-    >
-      <button
-        type="button"
-        disabled={count === 0}
-        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-50"
-        onClick={onCherryPick}
-      >
-        Cherry-Pick Selected Changes
-      </button>
-      <button
-        type="button"
-        disabled={count === 0}
-        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-50"
-        onClick={onRevert}
-      >
-        Revert Selected Changes
-      </button>
-      <button
-        type="button"
-        disabled={count === 0 || !canDrop}
-        title={
-          canDrop
-            ? undefined
-            : "Drop Selected Changes is only available while viewing the checked-out branch and for commits not pushed upstream"
-        }
-        className="w-full px-3 py-1.5 text-left text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-        onClick={onDrop}
-      >
-        Drop Selected Changes
-      </button>
-    </div>
+    <ContextMenu.Root onOpenChange={(open) => open && onOpen()}>
+      <ContextMenu.Trigger>{children}</ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className="w-56">
+          <ContextMenu.Item disabled={count === 0} onSelect={onCherryPick}>
+            Cherry-Pick Selected Changes
+          </ContextMenu.Item>
+          <ContextMenu.Item disabled={count === 0} onSelect={onRevert}>
+            Revert Selected Changes
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            disabled={count === 0 || !canDrop}
+            title={
+              canDrop
+                ? undefined
+                : "Drop Selected Changes is only available while viewing the checked-out branch and for commits not pushed upstream"
+            }
+            onSelect={onDrop}
+            className="text-[var(--color-danger)] focus:bg-[var(--color-danger)]/10 focus:text-[var(--color-danger)]"
+          >
+            Drop Selected Changes
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }
 

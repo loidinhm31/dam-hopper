@@ -1,4 +1,12 @@
-import { useRef, useState, useEffect, useCallback, useMemo } from "react";
+import {
+  forwardRef,
+  useRef,
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  type ComponentPropsWithoutRef,
+} from "react";
 import { Tree } from "react-arborist";
 import type { NodeApi, NodeRendererProps, TreeApi } from "react-arborist";
 import {
@@ -94,123 +102,159 @@ function getNodeDecorationPath(node: FsArborNode): string {
   return node.name;
 }
 
+function assignRef<T>(ref: React.Ref<T> | undefined, value: T | null) {
+  if (typeof ref === "function") ref(value);
+  else if (ref) ref.current = value;
+}
+
 // ---------------------------------------------------------------------------
 // Node renderer
 // ---------------------------------------------------------------------------
 
-interface NodeRendererWithContextProps extends NodeRendererProps<FsArborNode> {
-  onContextMenu: (e: React.MouseEvent, node: NodeApi<FsArborNode>) => void;
-  gitState?: GitFileState;
-  hasChangedDescendant?: boolean;
-  onOpenDiff?: (state: GitFileState) => void;
-}
+type NodeRendererWithContextProps = Omit<
+  NodeRendererProps<FsArborNode>,
+  "style"
+> &
+  Omit<ComponentPropsWithoutRef<"div">, "style" | "onContextMenu"> & {
+    style: React.CSSProperties;
+    onContextMenu?: React.MouseEventHandler<HTMLDivElement>;
+    onNodeContextMenu: (
+      e: React.MouseEvent,
+      node: NodeApi<FsArborNode>,
+    ) => void;
+    gitState?: GitFileState;
+    hasChangedDescendant?: boolean;
+    onOpenDiff?: (state: GitFileState) => void;
+  };
 
-function NodeRenderer({
-  node,
-  style,
-  dragHandle,
-  onContextMenu,
-  gitState,
-  hasChangedDescendant,
-  onOpenDiff,
-}: NodeRendererWithContextProps) {
-  if (isLoadingSentinel(node.data.id)) {
+const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
+  function NodeRenderer(
+    {
+      node,
+      style,
+      dragHandle,
+      onNodeContextMenu,
+      gitState,
+      hasChangedDescendant,
+      onOpenDiff,
+      onContextMenu,
+      ...props
+    },
+    forwardedRef,
+  ) {
+    const combinedRef = useCallback(
+      (element: HTMLDivElement | null) => {
+        assignRef(dragHandle, element);
+        assignRef(forwardedRef, element);
+      },
+      [dragHandle, forwardedRef],
+    );
+
+    const handleContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
+      onContextMenu?.(event);
+      onNodeContextMenu(event, node);
+    };
+
+    if (isLoadingSentinel(node.data.id)) {
+      return (
+        <div
+          {...props}
+          ref={combinedRef}
+          style={style}
+          className="flex items-center gap-1.5 px-1 py-0.5 text-xs text-[var(--color-text-muted)] opacity-40 select-none"
+        >
+          <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+          Loading…
+        </div>
+      );
+    }
+
+    const isDir = node.data.kind === "dir";
+    const isHidden = node.data.name.startsWith(".");
+    const isLarge = !isDir && node.data.size > 5 * 1024 * 1024;
+
     return (
       <div
-        ref={dragHandle}
+        {...props}
+        ref={combinedRef}
         style={style}
-        className="flex items-center gap-1.5 px-1 py-0.5 text-xs text-[var(--color-text-muted)] opacity-40 select-none"
+        className={cn(
+          "flex items-center gap-1.5 px-1 py-0.5 cursor-pointer rounded-sm select-none",
+          "hover:bg-[var(--color-surface-2)] text-xs",
+          node.isSelected
+            ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+            : "text-[var(--color-text)]",
+          node.isFocused &&
+            !node.isSelected &&
+            "outline outline-1 outline-[var(--color-primary)]/40",
+          isHidden && "opacity-50",
+          node.isDragging && "opacity-40",
+          node.willReceiveDrop &&
+            "bg-[var(--color-primary)]/10 ring-1 ring-[var(--color-primary)]",
+        )}
+        onContextMenu={handleContextMenu}
       >
-        <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-        Loading…
+        <span className="w-4 shrink-0 flex items-center justify-center">
+          {isDir ? (
+            node.isOpen ? (
+              <ChevronDown className="h-3 w-3 text-[var(--color-text-muted)]" />
+            ) : (
+              <ChevronRight className="h-3 w-3 text-[var(--color-text-muted)]" />
+            )
+          ) : null}
+        </span>
+
+        <TreeNodeIcon
+          path={getNodeDecorationPath(node.data)}
+          isDir={isDir}
+          isOpen={node.isOpen}
+        />
+
+        <span
+          className="truncate"
+          title={
+            isLarge
+              ? `${node.data.name} — large file (read-only preview)`
+              : node.data.name
+          }
+        >
+          {node.data.name}
+        </span>
+
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          {isDir && hasChangedDescendant && (
+            <span
+              className="h-1.5 w-1.5 rounded-full bg-[var(--color-primary)]"
+              title="Contains changed files"
+            />
+          )}
+          {!isDir && gitState && (
+            <button
+              type="button"
+              className={cn(
+                "h-4 min-w-4 rounded-[2px] border px-0.5 text-[9px] font-black leading-none",
+                gitStatusClassName(gitState),
+              )}
+              title={`Open diff: ${gitStateTitle(gitState)}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenDiff?.(gitState);
+              }}
+              aria-label={`Open diff for ${node.data.name}`}
+            >
+              {gitStatusShortLabel(gitState)}
+            </button>
+          )}
+          {isLarge && (
+            <span className="text-[10px] text-[var(--color-text-muted)] opacity-60">
+              {(node.data.size / (1024 * 1024)).toFixed(0)}MB
+            </span>
+          )}
+        </span>
       </div>
     );
-  }
-
-  const isDir = node.data.kind === "dir";
-  const isHidden = node.data.name.startsWith(".");
-  const isLarge = !isDir && node.data.size > 5 * 1024 * 1024;
-
-  return (
-    <div
-      ref={dragHandle}
-      style={style}
-      className={cn(
-        "flex items-center gap-1.5 px-1 py-0.5 cursor-pointer rounded-sm select-none",
-        "hover:bg-[var(--color-surface-2)] text-xs",
-        node.isSelected
-          ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
-          : "text-[var(--color-text)]",
-        node.isFocused &&
-          !node.isSelected &&
-          "outline outline-1 outline-[var(--color-primary)]/40",
-        isHidden && "opacity-50",
-        node.isDragging && "opacity-40",
-        node.willReceiveDrop &&
-          "bg-[var(--color-primary)]/10 ring-1 ring-[var(--color-primary)]",
-      )}
-      onContextMenu={(e) => onContextMenu(e, node)}
-    >
-      <span className="w-4 shrink-0 flex items-center justify-center">
-        {isDir ? (
-          node.isOpen ? (
-            <ChevronDown className="h-3 w-3 text-[var(--color-text-muted)]" />
-          ) : (
-            <ChevronRight className="h-3 w-3 text-[var(--color-text-muted)]" />
-          )
-        ) : null}
-      </span>
-
-      <TreeNodeIcon
-        path={getNodeDecorationPath(node.data)}
-        isDir={isDir}
-        isOpen={node.isOpen}
-      />
-
-      <span
-        className="truncate"
-        title={
-          isLarge
-            ? `${node.data.name} — large file (read-only preview)`
-            : node.data.name
-        }
-      >
-        {node.data.name}
-      </span>
-
-      <span className="ml-auto flex shrink-0 items-center gap-1">
-        {isDir && hasChangedDescendant && (
-          <span
-            className="h-1.5 w-1.5 rounded-full bg-[var(--color-primary)]"
-            title="Contains changed files"
-          />
-        )}
-        {!isDir && gitState && (
-          <button
-            type="button"
-            className={cn(
-              "h-4 min-w-4 rounded-[2px] border px-0.5 text-[9px] font-black leading-none",
-              gitStatusClassName(gitState),
-            )}
-            title={`Open diff: ${gitStateTitle(gitState)}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpenDiff?.(gitState);
-            }}
-            aria-label={`Open diff for ${node.data.name}`}
-          >
-            {gitStatusShortLabel(gitState)}
-          </button>
-        )}
-        {isLarge && (
-          <span className="text-[10px] text-[var(--color-text-muted)] opacity-60">
-            {(node.data.size / (1024 * 1024)).toFixed(0)}MB
-          </span>
-        )}
-      </span>
-    </div>
-  );
-}
+  },
+);
 
 // ---------------------------------------------------------------------------
 // FileTree
@@ -226,8 +270,6 @@ interface FileTreeProps {
 }
 
 interface ContextMenuState {
-  x: number;
-  y: number;
   node: FsArborNode;
 }
 
@@ -252,15 +294,8 @@ export function FileTree({
 }: FileTreeProps) {
   const { explorerShowHidden: showHidden, saveDebounced } = useSettingsStore();
   const [encUploadOpen, setEncUploadOpen] = useState(false);
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    loadChildren,
-    refetch,
-    isFetching,
-  } = useFsSubscription(project, path);
+  const { data, isLoading, isError, error, loadChildren, refetch, isFetching } =
+    useFsSubscription(project, path);
   const { data: gitDiff } = useGitDiff(project, "*");
   const openDiff = useEditorStore((s) => s.openDiff);
   const ops = useFsOps(project, path);
@@ -301,7 +336,10 @@ export function FileTree({
   }, [data, loadChildren]);
 
   useEffect(() => {
-    if (!revealRequest || handledRevealNonceRef.current === revealRequest.nonce) {
+    if (
+      !revealRequest ||
+      handledRevealNonceRef.current === revealRequest.nonce
+    ) {
       return;
     }
     if (revealRequest.project !== project) return;
@@ -356,8 +394,7 @@ export function FileTree({
   }
 
   function handleContextMenu(e: React.MouseEvent, node: NodeApi<FsArborNode>) {
-    e.preventDefault();
-    setMenu({ x: e.clientX, y: e.clientY, node: node.data });
+    setMenu({ node: node.data });
   }
 
   function handleCopyAbsolutePath() {
@@ -637,26 +674,41 @@ export function FileTree({
               width={treeBodyWidth || undefined}
             >
               {(props) => (
-                <NodeRenderer
-                  {...props}
-                  gitState={gitIndex.files.get(props.node.data.id)}
-                  hasChangedDescendant={gitIndex.changedDirs.has(
-                    props.node.data.id,
-                  )}
-                  onOpenDiff={(state) =>
-                    openDiff(
-                      project,
-                      state.path,
-                      state.status,
-                      state.additions,
-                      state.deletions,
-                      undefined,
-                      state.rootId,
-                      state.rootRelativePath,
-                    )
-                  }
-                  onContextMenu={handleContextMenu}
-                />
+                <TreeContextMenu
+                  isDir={props.node.data.kind === "dir"}
+                  onCopyAbsolutePath={handleCopyAbsolutePath}
+                  onCopyRelativePath={handleCopyRelativePath}
+                  absolutePathDisabled={!projectRoot}
+                  onNewFile={handleNewFile}
+                  onNewFolder={handleNewFolder}
+                  onRename={handleRenameStart}
+                  onDelete={handleDeleteStart}
+                  onDownload={handleDownload}
+                  onUpload={handleUploadHere}
+                  onOpen={() => setMenu({ node: props.node.data })}
+                  onClose={() => setMenu(null)}
+                >
+                  <NodeRenderer
+                    {...props}
+                    gitState={gitIndex.files.get(props.node.data.id)}
+                    hasChangedDescendant={gitIndex.changedDirs.has(
+                      props.node.data.id,
+                    )}
+                    onOpenDiff={(state) =>
+                      openDiff(
+                        project,
+                        state.path,
+                        state.status,
+                        state.additions,
+                        state.deletions,
+                        undefined,
+                        state.rootId,
+                        state.rootRelativePath,
+                      )
+                    }
+                    onNodeContextMenu={handleContextMenu}
+                  />
+                </TreeContextMenu>
               )}
             </Tree>
           )}
@@ -703,25 +755,6 @@ export function FileTree({
           className="hidden"
           onChange={handleFileInputChange}
         />
-
-        {/* Context menu */}
-        {menu && (
-          <TreeContextMenu
-            x={menu.x}
-            y={menu.y}
-            isDir={menu.node.kind === "dir"}
-            onCopyAbsolutePath={handleCopyAbsolutePath}
-            onCopyRelativePath={handleCopyRelativePath}
-            absolutePathDisabled={!projectRoot}
-            onNewFile={handleNewFile}
-            onNewFolder={handleNewFolder}
-            onRename={handleRenameStart}
-            onDelete={handleDeleteStart}
-            onDownload={handleDownload}
-            onUpload={handleUploadHere}
-            onClose={() => setMenu(null)}
-          />
-        )}
 
         {/* Delete confirm dialog */}
         <ConfirmDeleteDialog
