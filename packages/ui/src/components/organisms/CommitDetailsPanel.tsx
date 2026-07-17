@@ -221,7 +221,7 @@ export function CommitDetailsPanel({
   );
 }
 
-function CommitFileContextMenu({
+export function CommitFileContextMenu({
   count,
   canDrop,
   onOpen,
