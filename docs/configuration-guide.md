@@ -220,7 +220,7 @@ terminal_codex_notification_sound_pattern = "default"
 
 The API exposes these UI fields in `camelCase` (for example, `terminalCodexNotificationToastEnabled`) and persists them as the snake_case TOML keys shown above. Older `terminal_agent_notifications_enabled` and `terminalAgentNotificationsEnabled` values remain read-compatible aliases for the master switch. Missing child preferences default to enabled, volume `100`, and pattern `"default"`.
 
-Only updates to `terminalCodexNotificationsEnabled` synchronize `~/.codex/config.toml`. Toast, browser-popup, sound, volume, and pattern updates persist only to DamHopper's global UI config. Browser notification permission is not persisted; it is requested per browser from Settings > Appearance > Terminal agent notifications.
+Only updates to `terminalCodexNotificationsEnabled` synchronize `~/.codex/config.toml`. Toast, browser-popup, sound, volume, and pattern updates persist only to DamHopper's global UI config. Browser notification permission is browser-managed and runtime-only: only the explicit **Request permission** action can request it; toggling or saving a browser-popup preference never requests, revokes, or persists it. **Play sound** previews the selected synthesized in-app pattern and volume only; it does not create a browser popup or request permission.
 
 Shortcuts are normalized by the client config layer and can be captured/reset from Settings > Appearance > Keyboard Shortcuts. Git, Ports, and Fleet Terminal shortcuts toggle their target in both IDE and Terminal modes; opening one closes the other two target panels.
 

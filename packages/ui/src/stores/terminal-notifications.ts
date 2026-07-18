@@ -10,10 +10,17 @@ export interface TerminalNotificationRecord {
   read: boolean;
 }
 
+export interface AddTerminalNotificationOptions {
+  showToast?: boolean;
+}
+
 interface TerminalNotificationsState {
   notifications: TerminalNotificationRecord[];
   toasts: string[];
-  addNotification: (event: TerminalAgentNotification) => string;
+  addNotification: (
+    event: TerminalAgentNotification,
+    options?: AddTerminalNotificationOptions,
+  ) => string;
   markRead: (id: string) => void;
   markAllRead: () => void;
   clearNotifications: () => void;
@@ -27,24 +34,26 @@ function createNotificationId(event: TerminalAgentNotification): string {
   return `${event.receivedAt}-${notificationSequence}`;
 }
 
-export const useTerminalNotificationsStore =
-  create<TerminalNotificationsState>((set) => ({
+export const useTerminalNotificationsStore = create<TerminalNotificationsState>(
+  (set) => ({
     notifications: [],
     toasts: [],
-    addNotification: (event) => {
+    addNotification: (event, { showToast = true } = {}) => {
       const id = createNotificationId(event);
       const record: TerminalNotificationRecord = { id, event, read: false };
 
-      set((state) => ({
-        notifications: [record, ...state.notifications].slice(
+      set((state) => {
+        const notifications = [record, ...state.notifications].slice(
           0,
           MAX_TERMINAL_NOTIFICATION_HISTORY,
-        ),
-        toasts: [id, ...state.toasts].slice(
-          0,
-          MAX_TERMINAL_NOTIFICATION_TOASTS,
-        ),
-      }));
+        );
+        return {
+          notifications,
+          toasts: showToast
+            ? [id, ...state.toasts].slice(0, MAX_TERMINAL_NOTIFICATION_TOASTS)
+            : state.toasts,
+        };
+      });
 
       return id;
     },
@@ -67,7 +76,8 @@ export const useTerminalNotificationsStore =
       set((state) => ({
         toasts: state.toasts.filter((toastId) => toastId !== id),
       })),
-  }));
+  }),
+);
 
 export function selectUnreadTerminalNotificationCount(
   state: Pick<TerminalNotificationsState, "notifications">,

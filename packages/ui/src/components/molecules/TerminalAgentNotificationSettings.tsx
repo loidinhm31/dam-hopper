@@ -4,24 +4,31 @@ import { Badge } from "@/components/atoms/Badge.js";
 import { Button } from "@/components/atoms/Button.js";
 import { Switch } from "@/components/atoms/Switch.js";
 import { SettingRow } from "@/components/molecules/SettingRow.js";
+import { TerminalNotificationSoundControls } from "@/components/molecules/TerminalNotificationSoundControls.js";
+import type { TerminalCodexNotificationSoundPattern } from "@/api/client.js";
 import {
   getBrowserNotificationPermissionState,
   requestBrowserNotificationPermission,
   type BrowserNotificationPermissionState,
 } from "@/lib/browser-notification-service.js";
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
-import { playTerminalNotificationSound } from "@/lib/terminal-notification-sound.js";
 
-type TerminalAgentNotificationSettingsPatch = Partial<{
+export type TerminalAgentNotificationSettingsPatch = Partial<{
   terminalCodexNotificationsEnabled: boolean;
+  terminalCodexNotificationToastEnabled: boolean;
+  terminalCodexBrowserNotificationsEnabled: boolean;
   terminalCodexNotificationSoundEnabled: boolean;
   terminalCodexNotificationSoundVolume: number;
+  terminalCodexNotificationSoundPattern: TerminalCodexNotificationSoundPattern;
 }>;
 
 interface TerminalAgentNotificationSettingsProps {
   enabled: boolean;
+  toastEnabled: boolean;
+  browserEnabled: boolean;
   soundEnabled: boolean;
   soundVolume: number;
+  soundPattern: TerminalCodexNotificationSoundPattern;
   onSave: (partial: TerminalAgentNotificationSettingsPatch) => void;
 }
 
@@ -44,20 +51,25 @@ const PERMISSION_LABEL: Record<BrowserNotificationPermissionState, string> = {
 
 export function TerminalAgentNotificationSettings({
   enabled,
+  toastEnabled,
+  browserEnabled,
   soundEnabled,
   soundVolume,
+  soundPattern,
   onSave,
 }: TerminalAgentNotificationSettingsProps) {
-  const [permission, setPermission] = useState<BrowserNotificationPermissionState>(() =>
-    getBrowserNotificationPermissionState(),
-  );
+  const [permission, setPermission] =
+    useState<BrowserNotificationPermissionState>(() =>
+      getBrowserNotificationPermissionState(),
+    );
   const [permissionPending, setPermissionPending] = useState(false);
   useEffect(() => {
     const syncPermission = () =>
       setPermission(getBrowserNotificationPermissionState());
     syncPermission();
     globalThis.window?.addEventListener("focus", syncPermission);
-    return () => globalThis.window?.removeEventListener("focus", syncPermission);
+    return () =>
+      globalThis.window?.removeEventListener("focus", syncPermission);
   }, []);
 
   async function handleRequestPermission() {
@@ -84,12 +96,9 @@ export function TerminalAgentNotificationSettings({
             Codex terminal notifications
           </h4>
           <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
-            Browser notifications for Codex running inside DamHopper terminals.
-            DamHopper syncs your home
-            {" "}
-            <code>~/.codex/config.toml</code>
-            {" "}
-            TUI notification block for you.
+            Delivery controls for Codex running inside DamHopper terminals.
+            DamHopper syncs your home <code>~/.codex/config.toml</code> TUI
+            notification block for you.
           </p>
         </div>
       </div>
@@ -107,70 +116,64 @@ export function TerminalAgentNotificationSettings({
       </SettingRow>
       <div className="border-t border-[var(--color-border)]" />
       <SettingRow
-        title="Notification sound"
-        description="Play an in-app chime when Codex needs attention"
+        title="In-app toast"
+        description="Show a transient app alert. Turning this off still keeps the bell and notification history."
       >
         <Switch
-          checked={soundEnabled}
-          ariaLabel="Enable notification sound"
+          checked={toastEnabled}
+          ariaLabel="Enable in-app toast"
           disabled={!enabled}
           onCheckedChange={(checked) =>
-            onSave({ terminalCodexNotificationSoundEnabled: checked })
+            onSave({ terminalCodexNotificationToastEnabled: checked })
           }
         />
       </SettingRow>
       <div className="border-t border-[var(--color-border)]" />
       <SettingRow
-        title="Notification sound volume"
-        description={`${soundVolume}% of the notification chime level`}
+        title="Browser popup"
+        description="Show a native browser notification when permission is granted. Browser or OS popup sound is controlled by the browser."
       >
-        <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
-          <input
-            aria-label="Notification sound volume"
-            type="range"
-            min={0}
-            max={100}
-            step={1}
-            value={soundVolume}
-            disabled={!enabled || !soundEnabled}
-            onChange={(event) =>
-              onSave({
-                terminalCodexNotificationSoundVolume: Number(event.target.value),
-              })
-            }
-            className="w-28 accent-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-50"
-          />
-          <span className="w-9 text-right">{soundVolume}%</span>
-        </label>
+        <Switch
+          checked={browserEnabled}
+          ariaLabel="Enable browser popup"
+          disabled={!enabled}
+          onCheckedChange={(checked) =>
+            onSave({ terminalCodexBrowserNotificationsEnabled: checked })
+          }
+        />
       </SettingRow>
       <div className="border-t border-[var(--color-border)]" />
-      <SettingRow
-        title="Test notification sound"
-        description="Plays the selected volume and enables audio for future notification chimes"
-      >
-        <Button
-          type="button"
-          size="sm"
-          disabled={!enabled || !soundEnabled}
-          onClick={() => playTerminalNotificationSound(soundVolume)}
-        >
-          Play sound
-        </Button>
-      </SettingRow>
+      <TerminalNotificationSoundControls
+        masterEnabled={enabled}
+        soundEnabled={soundEnabled}
+        soundPattern={soundPattern}
+        soundVolume={soundVolume}
+        onSoundEnabledChange={(checked) =>
+          onSave({ terminalCodexNotificationSoundEnabled: checked })
+        }
+        onSoundPatternChange={(pattern) =>
+          onSave({ terminalCodexNotificationSoundPattern: pattern })
+        }
+        onSoundVolumeChange={(volume) =>
+          onSave({ terminalCodexNotificationSoundVolume: volume })
+        }
+      />
       <div className="border-t border-[var(--color-border)]" />
       <SettingRow
         title="Browser permission"
         description="Permission must be requested from an explicit click"
       >
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <Badge variant={PERMISSION_VARIANT[permission]}>
-            {PERMISSION_LABEL[permission]}
-          </Badge>
+          <span aria-live="polite" role="status">
+            <Badge variant={PERMISSION_VARIANT[permission]}>
+              {PERMISSION_LABEL[permission]}
+            </Badge>
+          </span>
           <Button
             type="button"
             size="sm"
             loading={permissionPending}
-            disabled={permission === "unsupported"}
+            disabled={!enabled || permission === "unsupported"}
             onClick={() => void handleRequestPermission()}
           >
             Request permission
