@@ -3,7 +3,7 @@
 import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiffFileEntry, GitLogEntry } from "@/api/client.js";
 import { ContextMenu } from "@/components/ui/ContextMenu.js";
 import { CommitFileContextMenu } from "./CommitDetailsPanel.js";
@@ -19,6 +19,111 @@ import {
 import { HistoryContextMenu } from "./GitLogTree.js";
 import { TerminalDiagnosticsContextMenu } from "./TerminalDiagnosticsContextMenu.js";
 import { TreeContextMenu } from "./TreeContextMenu.js";
+import { FileTree } from "./FileTree.js";
+
+const fileTreeHarness = vi.hoisted(() => ({
+  node: {
+    id: "src/main.ts",
+    name: "main.ts",
+    kind: "file",
+    size: 42,
+    mtime: 0,
+    isSymlink: false,
+    children: null,
+  },
+  treeRenderCount: 0,
+  dragHandle: vi.fn(),
+  upload: vi.fn(),
+  ops: {
+    createFile: vi.fn().mockResolvedValue({ ok: true }),
+    createDir: vi.fn().mockResolvedValue({ ok: true }),
+    rename: vi.fn().mockResolvedValue({ ok: true }),
+    deleteEntry: vi.fn().mockResolvedValue({ ok: true }),
+    move: vi.fn().mockResolvedValue({ ok: true }),
+    download: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock("react-arborist", async () => {
+  const React = await import("react");
+  return {
+    Tree: React.forwardRef(function VirtualTree(
+      { children }: { children: (props: unknown) => React.ReactNode },
+      ref,
+    ) {
+      void ref;
+      fileTreeHarness.treeRenderCount += 1;
+      return React.createElement(
+        "div",
+        { "data-testid": "virtual-tree" },
+        children({
+          node: {
+            data: fileTreeHarness.node,
+            isSelected: false,
+            isFocused: true,
+            isOpen: false,
+            isDragging: false,
+            willReceiveDrop: false,
+            toggle: vi.fn(),
+          },
+          style: {},
+          dragHandle: fileTreeHarness.dragHandle,
+          tabIndex: 0,
+          "data-testid": "virtual-tree-row",
+        }),
+      );
+    }),
+  };
+});
+
+vi.mock("@/hooks/use-fs-subscription.js", () => ({
+  useFsSubscription: () => ({
+    data: { nodes: [fileTreeHarness.node] },
+    isLoading: false,
+    isError: false,
+    error: null,
+    loadChildren: vi.fn(),
+    refetch: vi.fn(),
+    isFetching: false,
+  }),
+}));
+
+vi.mock("@/hooks/use-fs-ops.js", () => ({
+  useFsOps: () => fileTreeHarness.ops,
+}));
+
+vi.mock("@/hooks/use-fs-upload.js", () => ({
+  useFsUpload: () => ({
+    progress: null,
+    upload: fileTreeHarness.upload,
+    clearProgress: vi.fn(),
+  }),
+}));
+
+vi.mock("@/api/queries.js", () => ({
+  useGitDiff: () => ({ data: undefined }),
+  useProject: () => ({ data: { path: "/workspace/demo" } }),
+}));
+
+vi.mock("@/contexts/EncryptContext.js", () => ({
+  useEncryptMode: () => ({ isEncryptEnabled: () => false }),
+}));
+
+vi.mock("@/stores/settings.js", () => ({
+  useSettingsStore: () => ({
+    explorerShowHidden: true,
+    saveDebounced: vi.fn(),
+  }),
+}));
+
+vi.mock("@/stores/editor.js", () => ({
+  useEditorStore: (selector: (state: { openDiff: () => void }) => unknown) =>
+    selector({ openDiff: vi.fn() }),
+}));
+
+vi.mock("@/hooks/use-clipboard.js", () => ({
+  useCopyToClipboard: () => ({ copied: false, copy: vi.fn() }),
+}));
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -46,10 +151,50 @@ async function openMenu(trigger: HTMLElement) {
   });
 }
 
+async function pressKey(target: Element | null, key: string, shiftKey = false) {
+  expect(target).not.toBeNull();
+  await act(async () => {
+    target?.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key,
+        shiftKey,
+      }),
+    );
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 afterEach(() => {
   act(() => root?.unmount());
   root = null;
   document.body.innerHTML = "";
+});
+
+beforeEach(() => {
+  fileTreeHarness.node = {
+    id: "src/main.ts",
+    name: "main.ts",
+    kind: "file",
+    size: 42,
+    mtime: 0,
+    isSymlink: false,
+    children: null,
+  };
+  fileTreeHarness.treeRenderCount = 0;
+  fileTreeHarness.dragHandle.mockClear();
+  fileTreeHarness.upload.mockClear();
+  Object.values(fileTreeHarness.ops).forEach((operation) =>
+    operation.mockClear(),
+  );
+  globalThis.ResizeObserver = class {
+    disconnect() {}
+    observe() {}
+    unobserve() {}
+  };
 });
 
 function treeHandlers() {
@@ -68,16 +213,9 @@ function treeHandlers() {
 describe("migrated context-menu consumers", () => {
   it("preserves tree actions and closes after one selected action", async () => {
     const handlers = treeHandlers();
-    const onOpen = vi.fn();
-    const onClose = vi.fn();
 
     await mount(
-      <TreeContextMenu
-        {...handlers}
-        isDir={false}
-        onOpen={onOpen}
-        onClose={onClose}
-      >
+      <TreeContextMenu {...handlers} isDir={false}>
         <button data-trigger="tree" type="button">
           README.md
         </button>
@@ -94,8 +232,85 @@ describe("migrated context-menu consumers", () => {
     await act(async () => rename?.click());
 
     expect(handlers.onRename).toHaveBeenCalledOnce();
-    expect(onOpen).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a virtual file row mounted while targeting its download action", async () => {
+    await mount(<FileTree project="demo" />);
+    const row = document.querySelector<HTMLElement>(
+      "[data-testid=virtual-tree-row]",
+    );
+    expect(row).not.toBeNull();
+
+    await openMenu(row!);
+    expect(fileTreeHarness.treeRenderCount).toBe(1);
+    expect(fileTreeHarness.dragHandle).toHaveBeenCalledWith(row);
+    expect(row?.isConnected).toBe(true);
+
+    const download = [
+      ...document.querySelectorAll<HTMLElement>("[role=menuitem]"),
+    ].find((item) => item.textContent === "Download");
+    await act(async () => download?.click());
+    expect(fileTreeHarness.ops.download).toHaveBeenCalledWith("src/main.ts");
+  });
+
+  it("opens and dismisses a virtual row menu from the keyboard", async () => {
+    await mount(<FileTree project="demo" />);
+    const row = document.querySelector<HTMLElement>(
+      "[data-testid=virtual-tree-row]",
+    );
+    expect(row).not.toBeNull();
+
+    row?.focus();
+    await pressKey(row, "ContextMenu");
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    expect(fileTreeHarness.treeRenderCount).toBe(1);
+
+    await pressKey(document.activeElement, "Escape");
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(row);
+
+    await pressKey(row, "F10", true);
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    await pressKey(document.activeElement, "Escape");
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("binds directory uploads to the originating virtual row", async () => {
+    fileTreeHarness.node = {
+      id: "src/components",
+      name: "components",
+      kind: "dir",
+      size: 0,
+      mtime: 0,
+      isSymlink: false,
+      children: [],
+    };
+    await mount(<FileTree project="demo" />);
+    const row = document.querySelector<HTMLElement>(
+      "[data-testid=virtual-tree-row]",
+    );
+    expect(row).not.toBeNull();
+
+    await openMenu(row!);
+    const uploadHere = [
+      ...document.querySelectorAll<HTMLElement>("[role=menuitem]"),
+    ].find((item) => item.textContent === "Upload Here");
+    await act(async () => uploadHere?.click());
+
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
+    const file = new File(["icon"], "icon.svg", {
+      type: "image/svg+xml",
+    });
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: [file],
+    });
+    await act(async () =>
+      input?.dispatchEvent(new Event("change", { bubbles: true })),
+    );
+
+    expect(fileTreeHarness.upload).toHaveBeenCalledWith("src/components", file);
   });
 
   it("preserves editor-tab disabled state and callback identity", async () => {
