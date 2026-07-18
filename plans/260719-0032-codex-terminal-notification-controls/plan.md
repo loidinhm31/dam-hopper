@@ -34,7 +34,7 @@ Use four fixed **synthesized patterns**. Web Audio needs no asset pipeline, down
 | # | Phase | Status | Effort | Link |
 |---|---|---|---|---|
 | 1 | Persist delivery and pattern preferences | Completed 2026-07-19 01:07 +0700 | 1.5h | [phase-01](./phase-01-persist-notification-preferences.md) |
-| 2 | Implement selectable synthesized chimes | Pending | 1.5h | [phase-02](./phase-02-implement-synthesized-chimes.md) |
+| 2 | Implement selectable synthesized chimes | Completed 2026-07-19 01:22 +0700 | 1.5h | [phase-02](./phase-02-implement-synthesized-chimes.md) |
 | 3 | Wire delivery gates and Settings UI | Pending | 2h | [phase-03](./phase-03-wire-delivery-and-settings-ui.md) |
 | 4 | Validate behavior and document contracts | Pending | 1h | [phase-04](./phase-04-validate-and-document.md) |
 
