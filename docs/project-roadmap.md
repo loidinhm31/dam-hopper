@@ -207,6 +207,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-07-18:** Completed context-menu trigger refactor Phase 03: consumer integration and browser regression coverage.
+  - ✅ Verified production `FileTree` / Arborist lifecycle coverage, production `GitBranchControl` / `SelectItem` handoff coverage, and shared context-menu dynamic positioning behavior.
+  - ✅ Focused tests/build validation passed for the targeted consumer and browser checks.
+  - ⚠️ Touch long-press not run; environment is headless Linux and cannot validate the gesture deterministically.
+
 - **2026-07-18:** Completed context-menu trigger refactor Phase 02: Git branch Select handoff.
   - ✅ Restored the local-branch right-click handoff without changing Select value or checkout behavior.
   - ✅ Preserved the lifted Radix presenter, keyboard invocation, dismissal behavior, and current-branch delete guard.
