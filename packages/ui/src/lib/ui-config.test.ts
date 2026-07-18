@@ -13,8 +13,11 @@ describe("withUiConfigDefaults", () => {
     expect(ui.portsPanelShortcut).toBe("Mod+Shift+KeyP");
     expect(ui.fleetTerminalShortcut).toBe("Mod+Shift+KeyM");
     expect(ui.terminalCodexNotificationsEnabled).toBe(false);
+    expect(ui.terminalCodexNotificationToastEnabled).toBe(true);
+    expect(ui.terminalCodexBrowserNotificationsEnabled).toBe(true);
     expect(ui.terminalCodexNotificationSoundEnabled).toBe(true);
     expect(ui.terminalCodexNotificationSoundVolume).toBe(100);
+    expect(ui.terminalCodexNotificationSoundPattern).toBe("default");
     expect(ui.mobileCustomKeyboardEnabled).toBe(true);
     expect(ui.mobileCustomKeyboardFontSize).toBe(11);
     expect(ui.mobileCustomKeyboardPadding).toBe(6);
@@ -39,8 +42,11 @@ describe("withUiConfigDefaults", () => {
       portsPanelShortcut: "ctrl+shift+p",
       fleetTerminalShortcut: "ctrl+shift+m",
       terminalCodexNotificationsEnabled: true,
+      terminalCodexNotificationToastEnabled: false,
+      terminalCodexBrowserNotificationsEnabled: false,
       terminalCodexNotificationSoundEnabled: false,
       terminalCodexNotificationSoundVolume: 45,
+      terminalCodexNotificationSoundPattern: "urgent",
       mobileCustomKeyboardEnabled: false,
       mobileCustomKeyboardFontSize: 14,
       mobileCustomKeyboardPadding: 9,
@@ -60,8 +66,11 @@ describe("withUiConfigDefaults", () => {
     expect(ui.portsPanelShortcut).toBe("Ctrl+Shift+KeyP");
     expect(ui.fleetTerminalShortcut).toBe("Ctrl+Shift+KeyM");
     expect(ui.terminalCodexNotificationsEnabled).toBe(true);
+    expect(ui.terminalCodexNotificationToastEnabled).toBe(false);
+    expect(ui.terminalCodexBrowserNotificationsEnabled).toBe(false);
     expect(ui.terminalCodexNotificationSoundEnabled).toBe(false);
     expect(ui.terminalCodexNotificationSoundVolume).toBe(45);
+    expect(ui.terminalCodexNotificationSoundPattern).toBe("urgent");
     expect(ui.mobileCustomKeyboardEnabled).toBe(false);
     expect(ui.mobileCustomKeyboardFontSize).toBe(14);
     expect(ui.mobileCustomKeyboardPadding).toBe(9);

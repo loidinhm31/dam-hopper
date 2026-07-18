@@ -183,7 +183,7 @@ All features are enabled by default.
 
 ### UI Configuration
 
-The global UI config includes terminal workspace/panel shortcuts, inline terminal suggestions, and agent notification settings.
+The global UI config includes terminal workspace/panel shortcuts, inline terminal suggestions, and Codex terminal notification settings.
 
 | Field                               | Type     | Default                   | Notes |
 | ----------------------------------- | -------- | ------------------------- | ----- |
@@ -193,12 +193,12 @@ The global UI config includes terminal workspace/panel shortcuts, inline termina
 | fleet_terminal_shortcut             | string   | `Mod+Shift+KeyM`          | Toggle the Fleet Terminal panel in IDE or Terminal mode |
 | terminal_suggestions_enabled         | bool     | `true`                    | Kill switch for automatic suggestions and lifecycle-driven history writes |
 | terminal_scroll_buttons_enabled     | bool     | `false`                   | Show floating Page Up/Down buttons in terminal |
-| terminal_agent_notifications_enabled | bool     | `false`                   | Enable browser notifications for terminal agent activity |
-| terminal_agent_notification_policy  | string   | `"always"`                | Notification policy for agent activity |
-| terminal_agent_signals_enabled      | bool     | `true`                    | Show terminal agent signal events |
-| terminal_agent_quiet_tracking_enabled | bool   | `true`                    | Track quiet periods before notifications |
-| terminal_agent_quiet_timeout_ms     | u64      | `30000`                   | Quiet window in milliseconds |
-| terminal_agent_command_patterns     | array    | default literal pattern objects for `codex`, `claude`, `claude-code`, `antigravity` | Command patterns treated as terminal agents |
+| terminal_codex_notifications_enabled | bool    | `false`                   | Master switch for Codex OSC 9 notifications and Codex TUI synchronization |
+| terminal_codex_notification_toast_enabled | bool | `true`                    | Persisted preference for transient in-app toasts; notification history remains independent |
+| terminal_codex_browser_notifications_enabled | bool | `true`                 | Persisted preference for native browser popups; browser permission remains runtime-only |
+| terminal_codex_notification_sound_enabled | bool | `true`                    | Persisted preference for the in-app chime |
+| terminal_codex_notification_sound_volume | u8   | `100`                     | In-app chime volume, from `0` to `100` |
+| terminal_codex_notification_sound_pattern | string | `"default"`             | One of `"default"`, `"soft"`, `"two-tone"`, or `"urgent"` |
 
 Example:
 
@@ -210,22 +210,19 @@ ports_panel_shortcut = "Mod+Shift+KeyP"
 fleet_terminal_shortcut = "Mod+Shift+KeyM"
 terminal_suggestions_enabled = true
 terminal_scroll_buttons_enabled = false
-terminal_agent_notifications_enabled = false
-terminal_agent_notification_policy = "always"
-terminal_agent_signals_enabled = true
-terminal_agent_quiet_tracking_enabled = true
-terminal_agent_quiet_timeout_ms = 30000
-
-[[ui.terminal_agent_command_patterns]]
-id = "codex"
-label = "Codex"
-kind = "literal"
-pattern = "codex"
-agent = "codex"
-enabled = true
+terminal_codex_notifications_enabled = false
+terminal_codex_notification_toast_enabled = true
+terminal_codex_browser_notifications_enabled = true
+terminal_codex_notification_sound_enabled = true
+terminal_codex_notification_sound_volume = 100
+terminal_codex_notification_sound_pattern = "default"
 ```
 
-Shortcuts are normalized by the client config layer and can be captured/reset from Settings > Appearance > Keyboard Shortcuts. Git, Ports, and Fleet Terminal shortcuts toggle their target in both IDE and Terminal modes; opening one closes the other two target panels. Browser notification permission is not persisted; it is requested per browser from Settings > Appearance > Terminal agent notifications.
+The API exposes these UI fields in `camelCase` (for example, `terminalCodexNotificationToastEnabled`) and persists them as the snake_case TOML keys shown above. Older `terminal_agent_notifications_enabled` and `terminalAgentNotificationsEnabled` values remain read-compatible aliases for the master switch. Missing child preferences default to enabled, volume `100`, and pattern `"default"`.
+
+Only updates to `terminalCodexNotificationsEnabled` synchronize `~/.codex/config.toml`. Toast, browser-popup, sound, volume, and pattern updates persist only to DamHopper's global UI config. Browser notification permission is not persisted; it is requested per browser from Settings > Appearance > Terminal agent notifications.
+
+Shortcuts are normalized by the client config layer and can be captured/reset from Settings > Appearance > Keyboard Shortcuts. Git, Ports, and Fleet Terminal shortcuts toggle their target in both IDE and Terminal modes; opening one closes the other two target panels.
 
 #### Inline terminal suggestions
 
@@ -250,13 +247,7 @@ next token, and `Ctrl+Alt+H` for command history. Acceptance writes only the ver
 suffix and never executes the command. All other terminal keys and paste data pass to
 the PTY unchanged.
 
-Pattern rows are editable from the same Settings subsection:
-
-- `kind=literal` matches the executable token exactly and is the recommended choice for wrappers such as `CODEXNSB`
-- `kind=regex` is trimmed locally, but syntax compatibility is finalized by the server config layer on save
-- `agent` selects the notification persona shown in browser copy and diagnostics metadata
-
-Only DamHopper-managed xterm sessions participate in this feature. External terminals remain out of scope even if they launch the same agent commands.
+Only DamHopper-managed xterm sessions participate in this feature. External terminals remain out of scope even if they launch Codex.
 
 ### Server Configuration
 
