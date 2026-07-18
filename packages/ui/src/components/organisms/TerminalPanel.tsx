@@ -37,6 +37,10 @@ import {
   createTerminalStreamReplayGate,
   resetTerminalStreamReplayGateForAttach,
 } from "@/lib/terminal-stream-replay-gate.js";
+import {
+  TerminalAttachRecoveryController,
+  type TerminalConnectionStatus,
+} from "@/lib/terminal-attach-recovery-controller.js";
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 import {
   attachTerminalAgentNotifications,
@@ -270,15 +274,9 @@ export function TerminalPanel({
     let releaseCompositionGuards = () => {};
     let agentNotifications: TerminalAgentNotificationIntegration | null = null;
     let observer: ResizeObserver | null = null;
-    let attachTimeout: ReturnType<typeof setTimeout> | null = null;
+    let recoveryController: TerminalAttachRecoveryController | null = null;
     let releaseTouchScroll = () => {};
     let geometryAdapter: TerminalCursorGeometryAdapter | null = null;
-
-    const clearAttachTimeout = () => {
-      if (!attachTimeout) return;
-      clearTimeout(attachTimeout);
-      attachTimeout = null;
-    };
 
     // Register in global registry so PaneContainer can reparent the terminal element
     const terminalEntry = registerTerminal(
@@ -353,6 +351,7 @@ export function TerminalPanel({
     // 2. Handle PTY buffer (response to terminal:attach)
     if (transport.onTerminalBuffer) {
       unsubBuffer = transport.onTerminalBuffer(safeSessionId, (replay) => {
+        recoveryController?.onBuffer();
         suggestionsRef.current.handleReplay();
         streamReplayGate.hasAttachBufferBeenReceived = true;
         streamReplayGate.isReplayWriting = true;
@@ -392,7 +391,6 @@ export function TerminalPanel({
           hadSuppressedOutput: recordedSuppressedOutput,
         });
         setAttachState("attached");
-        clearAttachTimeout();
       });
     }
 
@@ -504,6 +502,7 @@ export function TerminalPanel({
 
     // Helper: Create a new session
     const createSession = () => {
+      if (disposed) return Promise.resolve();
       setAttachState("creating");
       recordClientDiagnostic("transport", "terminal-panel", "terminal.create", {
         sessionId: safeSessionId,
@@ -518,51 +517,48 @@ export function TerminalPanel({
           cols: finalCols,
           rows: finalRows,
         })
-        .then(() => {
-          // Creation only starts the PTY. Attach immediately so replay owns the
-          // initial output ordering and the buffer callback alone marks it ready.
-          attachToSession();
-        });
+        .then(() => undefined);
     };
 
-    // Helper: Attach to existing session
-    const attachToSession = (fromOffset?: number) => {
+    const sendAttach = (fromOffset?: number, retryAttempt = 0) => {
       suggestionsRef.current.handleReplay();
       // Every attach starts a new replay ownership window. In particular, a
       // reconnect must close the prior live-ready gate before sending attach so
       // old-stream output cannot render ahead of the replacement replay.
       resetTerminalStreamReplayGateForAttach(streamReplayGate);
       setAttachState("attaching");
-      recordClientDiagnostic("transport", "terminal-panel", "terminal.attach", {
-        sessionId: safeSessionId,
-        fromOffset,
-      });
-      clearAttachTimeout();
-
-      const attachSent = transport.terminalAttach
-        ? transport.terminalAttach(safeSessionId, fromOffset) !== false
-        : false;
-      if (!attachSent) {
+      if (retryAttempt === 0) {
         recordClientDiagnostic(
           "transport",
           "terminal-panel",
-          "terminal.attach_deferred",
-          { sessionId: safeSessionId },
+          "terminal.attach",
+          {
+            sessionId: safeSessionId,
+            fromOffset,
+          },
         );
-        return;
       }
 
-      attachTimeout = setTimeout(() => {
-        attachTimeout = null;
-        if (
-          streamReplayGate.hasAttachBufferBeenReceived ||
-          attachStateRef.current === "attached"
-        ) {
-          return;
-        }
+      return transport.terminalAttach
+        ? transport.terminalAttach(safeSessionId, fromOffset) !== false
+        : false;
+    };
+
+    recoveryController = new TerminalAttachRecoveryController({
+      sendAttach,
+      checkAlive: () =>
+        transport
+          .invoke<SessionInfo[]>("terminal:listDetailed")
+          .then((sessions) =>
+            sessions.some(
+              (session) => session.id === safeSessionId && session.alive,
+            ),
+          ),
+      create: createSession,
+      onTimeout: () => {
         logger.warn(
           "TerminalPanel",
-          "terminal attach timeout; creating new session",
+          "terminal attach timed out; retrying with backoff",
           {
             sessionId: safeSessionId,
           },
@@ -570,68 +566,37 @@ export function TerminalPanel({
         recordClientDiagnostic(
           "transport",
           "terminal-panel",
-          "terminal.attach_timeout",
+          "terminal.attach_timeout_retrying",
           { sessionId: safeSessionId },
         );
-        void transport
-          .invoke<SessionInfo[]>("terminal:listDetailed")
-          .then((sessions) => {
-            const stillAlive = sessions.some(
-              (s) => s.id === safeSessionId && s.alive,
-            );
-            if (stillAlive) {
-              recordClientDiagnostic(
-                "transport",
-                "terminal-panel",
-                "terminal.attach_timeout_alive",
-                { sessionId: safeSessionId },
-              );
-              attachToSession(fromOffset);
-            } else {
-              void createSession();
-            }
-          })
-          .catch((err: unknown) => {
-            recordClientDiagnostic(
-              "transport",
-              "terminal-panel",
-              "terminal.attach_timeout_check_failed",
-              {
-                sessionId: safeSessionId,
-                error: err instanceof Error ? err.message : String(err),
-              },
-            );
-          });
-      }, 3000);
-    };
+      },
+      onCreateFailed: (err: unknown) => {
+        recordClientDiagnostic(
+          "transport",
+          "terminal-panel",
+          "terminal.create_failed",
+          {
+            sessionId: safeSessionId,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        );
+      },
+      onAttachUnavailable: () => {
+        recordClientDiagnostic(
+          "transport",
+          "terminal-panel",
+          "terminal.attach_deferred",
+          { sessionId: safeSessionId },
+        );
+      },
+    });
 
     if (transport.onStatusChange) {
       unsubStatus = transport.onStatusChange((status) => {
-        if (
-          status !== "connected" &&
-          !streamReplayGate.hasAttachBufferBeenReceived &&
-          attachStateRef.current === "attaching"
-        ) {
-          clearAttachTimeout();
-          return;
-        }
-
-        if (
-          status === "connected" &&
-          !streamReplayGate.hasAttachBufferBeenReceived &&
-          attachStateRef.current === "attaching"
-        ) {
-          attachToSession();
-          return;
-        }
-
-        if (
-          status === "connected" &&
-          streamReplayGate.hasAttachBufferBeenReceived &&
-          attachStateRef.current === "attached"
-        ) {
-          attachToSession(lastServerOffset);
-        }
+        recoveryController?.onConnectionStatus(
+          status as TerminalConnectionStatus,
+          lastServerOffset,
+        );
       });
     }
 
@@ -640,10 +605,11 @@ export function TerminalPanel({
       .status()
       .then(() => transport.invoke<SessionInfo[]>("terminal:listDetailed"))
       .then((sessions) => {
+        if (disposed) return;
         if (sessions.some((s) => s.id === safeSessionId && s.alive)) {
-          attachToSession();
+          recoveryController?.start();
         } else {
-          return createSession();
+          return createSession().then(() => recoveryController?.start());
         }
       })
       .then(() => {
@@ -679,11 +645,11 @@ export function TerminalPanel({
       unsubBuffer?.();
       unsubLifecycle?.();
       unsubStatus?.();
+      recoveryController?.dispose();
       inputDisposable?.dispose();
       releaseCompositionGuards();
       titleDisposable.dispose();
       agentNotifications?.dispose();
-      clearAttachTimeout();
       observer?.disconnect();
       releaseTouchScroll();
       geometryAdapter?.dispose();

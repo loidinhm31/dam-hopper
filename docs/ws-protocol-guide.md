@@ -16,13 +16,13 @@ All messages use JSON with `kind` tag (not legacy `type`). Phase 02 hard-cut fro
 
 ### Terminal
 
-| Command           | Payload                            | Response                                           |
-| ----------------- | ---------------------------------- | -------------------------------------------------- |
-| `terminal:spawn`  | `project, profile, env_overrides?` | `terminal:spawned { id, ... }`                     |
-| `terminal:write`  | `id, data`                         | (no response; server queues)                       |
-| `terminal:resize` | `id, cols, rows`                   | (ACK implicit)                                     |
+| Command           | Payload                            | Response                                                 |
+| ----------------- | ---------------------------------- | -------------------------------------------------------- |
+| `terminal:spawn`  | `project, profile, env_overrides?` | `terminal:spawned { id, ... }`                           |
+| `terminal:write`  | `id, data`                         | (no response; server queues)                             |
+| `terminal:resize` | `id, cols, rows`                   | (ACK implicit)                                           |
 | `terminal:attach` | `id, from_offset?`                 | `terminal:buffer { id, data, offset, reset, truncated }` |
-| `terminal:kill`   | `id`                               | (ACK implicit)                                     |
+| `terminal:kill`   | `id`                               | (ACK implicit)                                           |
 
 #### Terminal Attach (Phase 02+)
 
@@ -64,7 +64,7 @@ Request buffer replay from a session (for reconnection or delta sync):
 - `reset` — Clear the terminal before writing `data` when true; append `data` when false.
 - `truncated` — Requested offset was older than the retained 1 MB tail, so the response is the newest available full snapshot.
 
-**Error behavior:** If session not found, server logs warning and sends no response. Client should interpret timeout as session dead and create new session via `terminal:spawn`.
+**Error behavior:** If session not found, server logs warning and sends no response. A missing response is not itself proof that a session is dead: the client checks `terminal:listDetailed` before creating a replacement.
 
 **Use Case:** On WebSocket reconnect, client sends `terminal:attach` with stored offset instead of re-requesting full buffer, reducing bandwidth ~90% in typical scenarios.
 
@@ -77,7 +77,10 @@ Request buffer replay from a session (for reconnection or delta sync):
 3. If session found → call `terminalAttach()` without `from_offset` (initial attach) or with stored offset (delta attach)
 4. Register `onTerminalBuffer()` listener BEFORE sending attach request
 5. On buffer response → clear xterm only when `reset=true`; otherwise append the delta
-6. Timeout fallback (3s): if no buffer response, create new session via `terminal:spawn`
+6. If no buffer response arrives within 3 seconds, check `terminal:listDetailed`:
+   - an alive session is retried by the same panel, one attach at a time, using capped exponential backoff;
+   - a missing/dead session is created once, then attached again.
+7. The panel cancels pending retries when it receives a buffer, disconnects, or unmounts.
 
 **TerminalPanel xterm integration:**
 
@@ -91,14 +94,14 @@ Request buffer replay from a session (for reconnection or delta sync):
 - `idle` — Ready for attach
 - `attaching` — Waiting for buffer response; show spinner overlay with "Reconnecting…"
 - `attached` — Buffer received/session created; hide overlay and resume output streaming
-- `creating` — Creating new session (timeout fallback or no existing session)
+- `creating` — Creating a replacement only after the session is confirmed missing/dead, or when no existing session was found during initialization
 
 **Overlay:**
 
 - Rendered when `attachState === "attaching"`
 - Semi-transparent dark backdrop (`bg-slate-900/50`) with blur
 - Animated spinner with "Reconnecting…" text
-- Auto-dismisses on buffer response or timeout
+- Auto-dismisses on buffer response; transient timeouts stay in recovery and retry without creating duplicate sessions
 
 ### File System — Subscribe (Phase 02+)
 
