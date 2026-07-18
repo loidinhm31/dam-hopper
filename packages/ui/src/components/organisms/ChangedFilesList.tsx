@@ -29,7 +29,16 @@ import { ContextMenu } from "@/components/ui/ContextMenu.js";
 export interface ChangedFilesListProps {
   project: string;
   selectedFile: string | null;
-  onSelectFile: (path: string, isConflict: boolean) => void;
+  onSelectFile: (selection: ChangedFileSelection) => void;
+}
+
+export interface ChangedFileSelection {
+  projectPath: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  gitRootId: string;
+  diffPath: string;
 }
 
 function gitStatusColor(status: string, staged: boolean): string {
@@ -258,6 +267,19 @@ export function projectPathForEntry(entry: DiffFileEntry) {
     return entry.path;
   }
   return `${rootId}/${entry.path}`;
+}
+
+export function createChangedFileSelection(
+  entry: DiffFileEntry,
+): ChangedFileSelection {
+  return {
+    projectPath: projectPathForEntry(entry),
+    status: entry.status,
+    additions: entry.additions,
+    deletions: entry.deletions,
+    gitRootId: entryRootId(entry),
+    diffPath: entry.path,
+  };
 }
 
 export function groupedByRoot(entries: DiffFileEntry[]) {
@@ -635,10 +657,7 @@ export function ChangedFilesList({
                                 checked={f.staged}
                                 isMutating={mutatingPaths.has(projectPath)}
                                 onSelect={() =>
-                                  onSelectFile(
-                                    projectPath,
-                                    f.status === "conflicted",
-                                  )
+                                  onSelectFile(createChangedFileSelection(f))
                                 }
                                 onToggle={() =>
                                   void (f.staged
@@ -701,7 +720,7 @@ export function ChangedFilesList({
                                 checked={false}
                                 isMutating={mutatingPaths.has(projectPath)}
                                 onSelect={() =>
-                                  onSelectFile(projectPath, false)
+                                  onSelectFile(createChangedFileSelection(f))
                                 }
                                 onToggle={() => void handleStage(f)}
                               />

@@ -1,14 +1,18 @@
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WorkspacePage, {
+  openChangedFileDiff,
   resolveActiveCompactSurfaceId,
   resolveRevealActiveFileOutcome,
 } from "./WorkspacePage.js";
+import { createChangedFileSelection } from "@/components/organisms/ChangedFilesList.js";
 import { COMPACT_WORKSPACE_QUERY } from "@/hooks/compact-workspace-media-query.js";
 import { TERMINAL_FILE_PANEL_OPEN_KEY } from "@/lib/terminal-floating-file-panel-state.js";
 
 let mockWorkspaceMode: "ide" | "terminal" = "ide";
+let mockActiveProject: string | null = null;
+let mockProjects = [{ name: "demo-project" }];
 let lastTerminalWorkspaceShellProps: Record<string, unknown> | null = null;
 const localStorageState = new Map<string, string>();
 
@@ -30,7 +34,7 @@ vi.mock("react-router-dom", () => ({
 }));
 
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: () => ({ data: [{ name: "demo-project" }] }),
+  useQuery: () => ({ data: mockProjects }),
   useMutation: () => ({
     mutateAsync: vi.fn(),
     isPending: false,
@@ -59,21 +63,27 @@ vi.mock("@/hooks/use-sidebar-collapse.js", () => ({
 }));
 
 vi.mock("@/components/atoms/Button.js", () => ({
-  Button: ({ children }: { children?: ReactNode }) => <button>{children}</button>,
+  Button: ({ children }: { children?: ReactNode }) => (
+    <button>{children}</button>
+  ),
   inputClass: "input-class",
 }));
 
 vi.mock("@/components/ui/Select.js", () => ({
   Select: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  SelectContent: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  SelectContent: ({ children }: { children?: ReactNode }) => (
+    <div>{children}</div>
+  ),
   SelectItem: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  SelectTrigger: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  SelectTrigger: ({ children }: { children?: ReactNode }) => (
+    <div>{children}</div>
+  ),
   SelectValue: () => <div />,
 }));
 
 vi.mock("@/stores/workspace.js", () => ({
   useWorkspaceStore: () => ({
-    activeProject: null,
+    activeProject: mockActiveProject,
     setActiveProject: vi.fn(),
   }),
 }));
@@ -185,6 +195,8 @@ function stubMatchMedia(matches: boolean) {
 describe("WorkspacePage", () => {
   beforeEach(() => {
     mockWorkspaceMode = "ide";
+    mockActiveProject = null;
+    mockProjects = [{ name: "demo-project" }];
     lastTerminalWorkspaceShellProps = null;
     localStorageState.clear();
     localStorageMock.getItem.mockClear();
@@ -244,7 +256,9 @@ describe("WorkspacePage", () => {
     );
 
     expect(markup).toContain('data-shell="terminal-shell"');
-    expect(lastTerminalWorkspaceShellProps?.terminalOverlayContent).toBeTruthy();
+    expect(
+      lastTerminalWorkspaceShellProps?.terminalOverlayContent,
+    ).toBeTruthy();
     expect(lastTerminalWorkspaceShellProps?.toolbarActions).toBeUndefined();
     expect(terminalMarkup).toContain('aria-label="Diagnostics time window"');
     expect(terminalMarkup).toContain('value="10" selected=""');
@@ -261,11 +275,80 @@ describe("WorkspacePage", () => {
 
     renderToStaticMarkup(<WorkspacePage />);
     const overlayMarkup = renderToStaticMarkup(
-      <>{lastTerminalWorkspaceShellProps?.terminalOverlayContent as ReactNode}</>,
+      <>
+        {lastTerminalWorkspaceShellProps?.terminalOverlayContent as ReactNode}
+      </>,
     );
 
     expect(overlayMarkup).toContain("Workspace Files");
     expect(overlayMarkup).toContain("Close files panel");
+    expect(overlayMarkup).toContain("terminal-file-panel-changes-panel");
+  });
+
+  it("provides a no-project Changes fallback in the terminal panel", () => {
+    stubMatchMedia(false);
+    mockWorkspaceMode = "terminal";
+    mockProjects = [];
+    localStorage.setItem(TERMINAL_FILE_PANEL_OPEN_KEY, "true");
+
+    renderToStaticMarkup(<WorkspacePage />);
+    const overlay =
+      lastTerminalWorkspaceShellProps?.terminalOverlayContent as ReactElement<{
+        changesContent: ReactNode;
+      }>;
+    const changesMarkup = renderToStaticMarkup(
+      <>{overlay.props.changesContent}</>,
+    );
+
+    expect(changesMarkup).toContain("No projects configured");
+  });
+
+  it("opens changed-file diffs with their original metadata and root routing", () => {
+    const openDiff = vi.fn();
+    const selections = [
+      createChangedFileSelection({
+        path: "removed.ts",
+        status: "deleted",
+        staged: false,
+        additions: 0,
+        deletions: 8,
+      }),
+      createChangedFileSelection({
+        path: "conflict.ts",
+        status: "conflicted",
+        staged: false,
+        additions: 3,
+        deletions: 2,
+        rootId: "packages/app",
+      }),
+    ];
+
+    for (const selection of selections) {
+      openChangedFileDiff("demo-project", selection, openDiff);
+    }
+
+    expect(openDiff).toHaveBeenNthCalledWith(
+      1,
+      "demo-project",
+      "removed.ts",
+      "deleted",
+      0,
+      8,
+      undefined,
+      ".",
+      "removed.ts",
+    );
+    expect(openDiff).toHaveBeenNthCalledWith(
+      2,
+      "demo-project",
+      "packages/app/conflict.ts",
+      "conflicted",
+      3,
+      2,
+      undefined,
+      "packages/app",
+      "conflict.ts",
+    );
   });
 
   it("falls back to a valid compact surface when the current one disappears", () => {
