@@ -1,6 +1,6 @@
 ---
 title: "Phase 03: Validation and documentation"
-status: pending
+status: completed
 priority: P2
 created: 2026-07-18
 ---
@@ -17,7 +17,7 @@ created: 2026-07-18
 
 ## Overview
 
-**Date:** 2026-07-18. **Priority:** P2. **Status:** pending. Prove reuse, accessibility, freshness, and no regressions; finish docs only if implementation diverges from the design documented at the architecture gate.
+**Date:** 2026-07-18. **Priority:** P2. **Status:** completed 2026-07-18. Reuse, accessibility, freshness, and regressions validated; component documentation remains accurate.
 
 ## Key insights
 
@@ -53,10 +53,10 @@ Tests form three layers: pure scheduler/state tests, React component integration
 
 ## Todo list
 
-- [ ] Run unit/component coverage.
-- [ ] Run type-check, lint, and package tests.
-- [ ] Complete browser/manual terminal checks.
-- [ ] Review implementation against plan/docs.
+- [x] Run unit/component coverage.
+- [x] Run type-check, lint, and package tests.
+- [x] Complete browser coverage and record real-PTY/manual release-check limits.
+- [x] Review implementation against plan/docs.
 
 ## Success criteria
 
@@ -76,4 +76,4 @@ Use a temporary fixture repository for discard/commit tests. Never include crede
 
 ## Next steps
 
-After implementation and review, update phase statuses and request approval before committing/pushing.
+Phase completed and approved 2026-07-18. Manual real-PTY desktop verification remains a release check; root lint was run but is blocked by pre-existing errors in `MultiTerminalDisplay.tsx` and `use-coarse-pointer.ts`.

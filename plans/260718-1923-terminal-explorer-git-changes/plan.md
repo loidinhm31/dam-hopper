@@ -1,7 +1,7 @@
 ---
 title: "Terminal Files Explorer and Git Changes"
 description: "Add accessible Explorer and Changes tabs to terminal mode's floating Files panel while sharing Git-diff state."
-status: in_progress
+status: completed
 priority: P2
 effort: 6h
 issue: null
@@ -48,7 +48,7 @@ In terminal workspace mode, extend the floating Files panel's left pane with Exp
 |---|---|---|---|---|
 | 1 | Compose accessible terminal tabs | Completed 2026-07-18 | 2h | [phase-01](./phase-01-accessible-terminal-tabs.md) |
 | 2 | Centralize Git refresh from FS events | Completed 2026-07-18 | 2h | [phase-02](./phase-02-git-diff-fs-invalidation.md) |
-| 3 | Validate reuse and regressions | Pending | 2h | [phase-03](./phase-03-validation-and-documentation.md) |
+| 3 | Validate reuse and regressions | Completed 2026-07-18 | 2h | [phase-03](./phase-03-validation-and-documentation.md) |
 
 ## Affected files
 
@@ -67,4 +67,10 @@ Implement phases in order. Do not replace `ChangedFilesList` or duplicate its mu
 
 - Completed 2026-07-18: Explorer and Changes tabs are composed in the terminal floating Files panel while preserving the editor and separate Git popup.
 - Validation passed: 595 UI tests, 28 browser tests, TypeScript check, and Prettier check.
-- Review approved at 9/10. Phases 02 and 03 remain pending.
+- Review approved at 9/10. Subsequent phases were pending at that review point.
+
+## Phase 03 completion evidence
+
+- Completed 2026-07-18: validated the shared Explorer/Changes implementation, FS-event Git refresh behavior, and panel lifecycle lint regression fix without changing the Git popup's ownership of branch, history, or remotes.
+- Automated validation passed: UI build, 601 unit tests, and 28 browser tests.
+- Known verification limits: real-PTY/manual desktop checks (keyboard, watcher timing, resize, and destructive Git actions) remain release verification; root lint was run but remains blocked by pre-existing errors in `MultiTerminalDisplay.tsx` and `use-coarse-pointer.ts`.

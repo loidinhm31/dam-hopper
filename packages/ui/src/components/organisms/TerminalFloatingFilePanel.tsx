@@ -41,6 +41,11 @@ interface TerminalFloatingFilePanelProps {
   onClose: () => void;
 }
 
+type TerminalFloatingFilePanelContentProps = Omit<
+  TerminalFloatingFilePanelProps,
+  "open"
+>;
+
 export function handleTerminalFloatingFilePanelKeyDown(
   event: Pick<KeyboardEvent, "key">,
   onClose: () => void,
@@ -52,6 +57,13 @@ export function handleTerminalFloatingFilePanelKeyDown(
 
 export function TerminalFloatingFilePanel({
   open,
+  ...props
+}: TerminalFloatingFilePanelProps) {
+  if (!open) return null;
+  return <TerminalFloatingFilePanelContent {...props} />;
+}
+
+function TerminalFloatingFilePanelContent({
   treeWidth,
   isDragging = false,
   focusEditorSignal = 0,
@@ -60,39 +72,32 @@ export function TerminalFloatingFilePanel({
   editorContent,
   treeResizeHandleProps,
   onClose,
-}: TerminalFloatingFilePanelProps) {
+}: TerminalFloatingFilePanelContentProps) {
   const boundsRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const editorRegionRef = useRef<HTMLDivElement>(null);
   const tabRefs = useRef<
     Partial<Record<TerminalFloatingFilePanelTab, HTMLButtonElement>>
   >({});
-  const wasOpenRef = useRef(open);
   const [layout, setLayout] = useState(loadTerminalFloatingFilePanelLayout);
   const [activeTab, setActiveTab] =
     useState<TerminalFloatingFilePanelTab>("explorer");
 
   useEffect(() => {
-    if (open && !wasOpenRef.current) setActiveTab("explorer");
-    wasOpenRef.current = open;
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       handleTerminalFloatingFilePanelKeyDown(event, onClose);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose, open]);
+  }, [onClose]);
 
   useEffect(() => {
-    if (!open || focusEditorSignal <= 0) return;
+    if (focusEditorSignal <= 0) return;
     editorRegionRef.current?.focus();
-  }, [focusEditorSignal, open]);
+  }, [focusEditorSignal]);
 
   useEffect(() => {
-    if (!open || !boundsRef.current) return;
+    if (!boundsRef.current) return;
     const bounds = boundsRef.current.getBoundingClientRect();
     setLayout((current) =>
       clampTerminalFloatingFilePanelLayout(current, {
@@ -100,7 +105,7 @@ export function TerminalFloatingFilePanel({
         height: bounds.height,
       }),
     );
-  }, [open]);
+  }, []);
 
   const updateLayout = (
     nextLayout:
@@ -231,8 +236,6 @@ export function TerminalFloatingFilePanel({
     event.preventDefault();
     selectTab(nextTab, true);
   };
-
-  if (!open) return null;
 
   return (
     <div ref={boundsRef} className="pointer-events-none absolute inset-0 z-20">
