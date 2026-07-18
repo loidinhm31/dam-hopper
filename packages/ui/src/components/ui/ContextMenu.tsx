@@ -5,6 +5,7 @@ import {
   claimContextMenu,
   releaseContextMenu,
 } from "@/lib/context-menu-coordinator.js";
+import { contextMenuTriggerMarker } from "@/lib/context-menu-trigger-marker.js";
 
 type RootProps = React.ComponentProps<typeof ContextMenuPrimitive.Root> & {
   defaultOpen?: boolean;
@@ -73,6 +74,9 @@ const ContextMenuTrigger = React.forwardRef<
   TriggerProps
 >(function ContextMenuTrigger(props, ref) {
   const { onKeyDown, ...triggerProps } = props;
+  const markerProps = triggerProps.disabled
+    ? {}
+    : { [contextMenuTriggerMarker]: "" };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     onKeyDown?.(event);
@@ -100,6 +104,7 @@ const ContextMenuTrigger = React.forwardRef<
       asChild
       ref={ref}
       onKeyDown={handleKeyDown}
+      {...markerProps}
     />
   );
 });
