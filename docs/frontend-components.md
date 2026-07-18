@@ -168,7 +168,7 @@ The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose
 
 **Behavior:**
 
-- Renders the selected Git, Ports, or Fleet Terminal panel as a floating overlay in terminal mode.
+- Renders the selected Files, Git, Ports, or Fleet Terminal panel as a floating overlay in terminal mode.
 - The floating panel matches the Explorer interaction model: it can be dragged or resized within the terminal workspace.
 - Terminal panel shortcuts and visible terminal-header controls are mutually exclusive: opening one panel replaces the other two, and repeating the active control closes the overlay.
 - Keeps the main terminal area full-height below the top nav.
@@ -454,7 +454,7 @@ interface TerminalPanelProps {
 
 **Purpose:** Reuses shared file decorations in Git-aware file rows so file identity stays consistent across the explorer and Git views. The Explorer header area also hosts `GitBranchControl` so users can switch or create branches without leaving the file browser.
 
-**Terminal mode:** The floating Files panel keeps Explorer as its default left-pane tab and adds a sibling Changes tab. Explorer continues to render `FileTree` with its Git status badges; Changes reuses `ChangedFilesList` for local stage/unstage, discard, commit, and diff-opening actions. The separate floating Git panel remains the surface for branch, history, and remote operations.
+**Terminal mode:** The floating Files panel defaults to its Explorer left-pane tab each time it opens and adds a sibling Changes tab. Closing it unmounts its content, so it reopens in Explorer rather than retaining a prior Changes selection. Explorer continues to render `FileTree` with its Git status badges; Changes reuses `ChangedFilesList` for local stage/unstage, discard, commit, and diff-opening actions. The separate floating Git panel remains the surface for branch, history, and remote operations.
 
 ### GitPage
 
