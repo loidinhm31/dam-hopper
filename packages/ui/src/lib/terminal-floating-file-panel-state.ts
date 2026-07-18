@@ -15,10 +15,8 @@ export const TERMINAL_FILE_PANEL_TREE_WIDTH_KEY =
 
 export const TERMINAL_FILE_PANEL_MARGIN = 16;
 export const TERMINAL_FILE_PANEL_MIN_WIDTH = 720;
-export const TERMINAL_FILE_PANEL_MAX_WIDTH = 1280;
 export const TERMINAL_FILE_PANEL_DEFAULT_WIDTH = 960;
 export const TERMINAL_FILE_PANEL_MIN_HEIGHT = 420;
-export const TERMINAL_FILE_PANEL_MAX_HEIGHT = 920;
 export const TERMINAL_FILE_PANEL_DEFAULT_HEIGHT = 680;
 export const TERMINAL_FILE_PANEL_DEFAULT_TOP = TERMINAL_FILE_PANEL_MARGIN;
 
@@ -128,9 +126,9 @@ export function clampTerminalFloatingFilePanelLayout(
 ) {
   return clampTerminalFloatingPanelLayout(layout, bounds, {
     minWidth: TERMINAL_FILE_PANEL_MIN_WIDTH,
-    maxWidth: TERMINAL_FILE_PANEL_MAX_WIDTH,
+    maxWidth: Number.POSITIVE_INFINITY,
     minHeight: TERMINAL_FILE_PANEL_MIN_HEIGHT,
-    maxHeight: TERMINAL_FILE_PANEL_MAX_HEIGHT,
+    maxHeight: Number.POSITIVE_INFINITY,
   });
 }
 
