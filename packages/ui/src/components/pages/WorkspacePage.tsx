@@ -24,6 +24,7 @@ import { IdeShell } from "@/components/templates/IdeShell.js";
 import { MobileWorkspaceShell } from "@/components/templates/MobileWorkspaceShell.js";
 import { TerminalWorkspaceShell } from "@/components/templates/TerminalWorkspaceShell.js";
 import { TerminalFloatingFilePanel } from "@/components/organisms/TerminalFloatingFilePanel.js";
+import type { ChangedFileSelection } from "@/components/organisms/ChangedFilesList.js";
 import { DiagnosticsTimeWindowSelect } from "@/components/molecules/DiagnosticsTimeWindowSelect.js";
 import { TerminalDiagnosticsContextMenu } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 
@@ -96,6 +97,34 @@ import {
   type DiagnosticsTimeWindowMinutes,
 } from "@/lib/diagnostics-export.js";
 export { resolveRevealActiveFileOutcome };
+
+type OpenDiff = (
+  project: string,
+  path: string,
+  fileStatus: string,
+  additions: number,
+  deletions: number,
+  commitHash?: string,
+  gitRootId?: string,
+  diffPath?: string,
+) => void;
+
+export function openChangedFileDiff(
+  project: string,
+  selection: ChangedFileSelection,
+  openDiff: OpenDiff,
+) {
+  openDiff(
+    project,
+    selection.projectPath,
+    selection.status,
+    selection.additions,
+    selection.deletions,
+    undefined,
+    selection.gitRootId,
+    selection.diffPath,
+  );
+}
 
 const FileTree = lazy(() =>
   import("@/components/organisms/FileTree.js").then((m) => ({
@@ -1267,10 +1296,9 @@ export default function WorkspacePage() {
               <ChangedFilesList
                 project={projectName}
                 selectedFile={null}
-                onSelectFile={(path) => {
-                  if (projectName)
-                    openDiff(projectName, path, "modified", 0, 0);
-                }}
+                onSelectFile={(selection) =>
+                  openChangedFileDiff(projectName, selection, openDiff)
+                }
               />
             </Suspense>
           </div>
@@ -1542,6 +1570,22 @@ export default function WorkspacePage() {
             renderCompactPlaceholder("No projects configured")
           )
         }
+        changesContent={
+          projectName ? (
+            <Suspense fallback={<PanelFallback label="Loading changes…" />}>
+              <ChangedFilesList
+                key={`terminal-panel-changes-${projectName}`}
+                project={projectName}
+                selectedFile={null}
+                onSelectFile={(selection) =>
+                  openChangedFileDiff(projectName, selection, openDiff)
+                }
+              />
+            </Suspense>
+          ) : (
+            renderCompactPlaceholder("No projects configured")
+          )
+        }
         editorContent={
           <Suspense fallback={<PanelFallback label="Loading editor…" />}>
             <EditorTabs project={projectName} />
@@ -1554,6 +1598,7 @@ export default function WorkspacePage() {
       handleFileOpen,
       handleLaunchShell,
       isTerminalFileTreeResizing,
+      openDiff,
       projectName,
       setTerminalFilePanelOpen,
       fileTreeRevealRequest,

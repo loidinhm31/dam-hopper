@@ -454,6 +454,8 @@ interface TerminalPanelProps {
 
 **Purpose:** Reuses shared file decorations in Git-aware file rows so file identity stays consistent across the explorer and Git views. The Explorer header area also hosts `GitBranchControl` so users can switch or create branches without leaving the file browser.
 
+**Terminal mode:** The floating Files panel keeps Explorer as its default left-pane tab and adds a sibling Changes tab. Explorer continues to render `FileTree` with its Git status badges; Changes reuses `ChangedFilesList` for local stage/unstage, discard, commit, and diff-opening actions. The separate floating Git panel remains the surface for branch, history, and remote operations.
+
 ### GitPage
 
 **Location:** `packages/ui/src/components/pages/GitPage.tsx`
