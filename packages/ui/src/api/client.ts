@@ -371,6 +371,11 @@ export interface DiscoverResponse {
 export type AgentCommandPatternKind = "literal" | "regex";
 export type TerminalAgentType = "codex" | "claude" | "antigravity" | "unknown";
 export type TerminalAgentNotificationPolicy = "always";
+export type TerminalCodexNotificationSoundPattern =
+  | "default"
+  | "soft"
+  | "two-tone"
+  | "urgent";
 
 export interface AgentCommandPattern {
   id: string;
@@ -395,8 +400,11 @@ export interface UiConfig {
   fleetTerminalShortcut: string;
   terminalSuggestionsEnabled?: boolean;
   terminalCodexNotificationsEnabled?: boolean;
+  terminalCodexNotificationToastEnabled?: boolean;
+  terminalCodexBrowserNotificationsEnabled?: boolean;
   terminalCodexNotificationSoundEnabled?: boolean;
   terminalCodexNotificationSoundVolume?: number;
+  terminalCodexNotificationSoundPattern?: TerminalCodexNotificationSoundPattern;
   terminalScrollButtonsEnabled?: boolean;
   terminalScrollStep?: number;
   explorerShowHidden?: boolean;

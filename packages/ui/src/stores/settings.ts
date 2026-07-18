@@ -6,6 +6,7 @@
  */
 import { create } from "zustand";
 import { api } from "@/api/client.js";
+import type { TerminalCodexNotificationSoundPattern } from "@/api/client.js";
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 import { withUiConfigDefaults } from "@/lib/ui-config.js";
 import {
@@ -76,8 +77,11 @@ interface PersistedSettingsState {
   fleetTerminalShortcut: string;
   terminalSuggestionsEnabled: boolean;
   terminalCodexNotificationsEnabled: boolean;
+  terminalCodexNotificationToastEnabled: boolean;
+  terminalCodexBrowserNotificationsEnabled: boolean;
   terminalCodexNotificationSoundEnabled: boolean;
   terminalCodexNotificationSoundVolume: number;
+  terminalCodexNotificationSoundPattern: TerminalCodexNotificationSoundPattern;
   terminalScrollButtonsEnabled: boolean;
   terminalScrollStep: number;
   explorerShowHidden: boolean;
@@ -97,6 +101,7 @@ interface SettingsState extends PersistedSettingsState {
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSavedSettings: PersistedSettingsState | null = null;
+let pendingPersistedPatch: Partial<PersistedSettingsState> = {};
 let latestLocalEditId = 0;
 let saveChain: Promise<void> = Promise.resolve();
 
@@ -117,10 +122,16 @@ function pickPersistedSettings(
     fleetTerminalShortcut: state.fleetTerminalShortcut,
     terminalSuggestionsEnabled: state.terminalSuggestionsEnabled,
     terminalCodexNotificationsEnabled: state.terminalCodexNotificationsEnabled,
+    terminalCodexNotificationToastEnabled:
+      state.terminalCodexNotificationToastEnabled,
+    terminalCodexBrowserNotificationsEnabled:
+      state.terminalCodexBrowserNotificationsEnabled,
     terminalCodexNotificationSoundEnabled:
       state.terminalCodexNotificationSoundEnabled,
     terminalCodexNotificationSoundVolume:
       state.terminalCodexNotificationSoundVolume,
+    terminalCodexNotificationSoundPattern:
+      state.terminalCodexNotificationSoundPattern,
     terminalScrollButtonsEnabled: state.terminalScrollButtonsEnabled,
     terminalScrollStep: state.terminalScrollStep,
     explorerShowHidden: state.explorerShowHidden,
@@ -129,6 +140,19 @@ function pickPersistedSettings(
     mobileCustomKeyboardPadding: state.mobileCustomKeyboardPadding,
     mobileCustomKeyboardRowGap: state.mobileCustomKeyboardRowGap,
   };
+}
+
+function pickPersistedSettingsPatch(
+  partial: Partial<PersistedSettingsState>,
+  state: PersistedSettingsState | SettingsState,
+): Partial<PersistedSettingsState> {
+  const persisted = pickPersistedSettings(state);
+  return Object.fromEntries(
+    Object.keys(partial).map((key) => [
+      key,
+      persisted[key as keyof PersistedSettingsState],
+    ]),
+  ) as Partial<PersistedSettingsState>;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -145,8 +169,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   fleetTerminalShortcut: DEFAULT_FLEET_TERMINAL_SHORTCUT,
   terminalSuggestionsEnabled: true,
   terminalCodexNotificationsEnabled: false,
+  terminalCodexNotificationToastEnabled: true,
+  terminalCodexBrowserNotificationsEnabled: true,
   terminalCodexNotificationSoundEnabled: true,
   terminalCodexNotificationSoundVolume: 100,
+  terminalCodexNotificationSoundPattern: "default",
   terminalScrollButtonsEnabled: false,
   terminalScrollStep: 3,
   explorerShowHidden: false,
@@ -179,12 +206,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
             ui as { terminalAgentNotificationsEnabled?: boolean } | undefined
           )?.terminalAgentNotificationsEnabled ??
           false,
+        terminalCodexNotificationToastEnabled:
+          ui.terminalCodexNotificationToastEnabled ?? true,
+        terminalCodexBrowserNotificationsEnabled:
+          ui.terminalCodexBrowserNotificationsEnabled ?? true,
         terminalCodexNotificationSoundEnabled:
           ui.terminalCodexNotificationSoundEnabled ?? true,
         terminalCodexNotificationSoundVolume:
           clampTerminalNotificationSoundVolume(
             ui.terminalCodexNotificationSoundVolume ?? 100,
           ),
+        terminalCodexNotificationSoundPattern:
+          ui.terminalCodexNotificationSoundPattern ?? "default",
         terminalScrollButtonsEnabled: ui.terminalScrollButtonsEnabled ?? false,
         terminalScrollStep: ui.terminalScrollStep ?? 3,
         explorerShowHidden: ui.explorerShowHidden ?? false,
@@ -231,6 +264,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (partial.terminalCodexNotificationsEnabled !== undefined)
       clamped.terminalCodexNotificationsEnabled =
         partial.terminalCodexNotificationsEnabled;
+    if (partial.terminalCodexNotificationToastEnabled !== undefined)
+      clamped.terminalCodexNotificationToastEnabled =
+        partial.terminalCodexNotificationToastEnabled;
+    if (partial.terminalCodexBrowserNotificationsEnabled !== undefined)
+      clamped.terminalCodexBrowserNotificationsEnabled =
+        partial.terminalCodexBrowserNotificationsEnabled;
     if (partial.terminalCodexNotificationSoundEnabled !== undefined)
       clamped.terminalCodexNotificationSoundEnabled =
         partial.terminalCodexNotificationSoundEnabled;
@@ -239,6 +278,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         clampTerminalNotificationSoundVolume(
           partial.terminalCodexNotificationSoundVolume,
         );
+    if (partial.terminalCodexNotificationSoundPattern !== undefined)
+      clamped.terminalCodexNotificationSoundPattern =
+        partial.terminalCodexNotificationSoundPattern;
     if (partial.terminalScrollButtonsEnabled !== undefined)
       clamped.terminalScrollButtonsEnabled = partial.terminalScrollButtonsEnabled;
     if (partial.terminalScrollStep !== undefined)
@@ -266,16 +308,24 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   saveDebounced: (partial) => {
     const localEditId = ++latestLocalEditId;
     get().set(partial);
+    pendingPersistedPatch = {
+      ...pendingPersistedPatch,
+      ...pickPersistedSettingsPatch(partial, get()),
+    };
     if (debounceTimer !== null) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
-      const payload = pickPersistedSettings(get());
+      const payload = pendingPersistedPatch;
+      pendingPersistedPatch = {};
       saveChain = saveChain.catch(() => {}).then(async () => {
         try {
           await api.globalConfig.updateUi(payload);
-          lastSavedSettings = payload;
+          lastSavedSettings = {
+            ...(lastSavedSettings ?? pickPersistedSettings(get())),
+            ...payload,
+          };
           if (localEditId === latestLocalEditId) {
-            set(payload);
+            set(lastSavedSettings);
           }
         } catch (error) {
           if (localEditId === latestLocalEditId && lastSavedSettings) {
@@ -303,6 +353,7 @@ export function __resetSettingsStoreTestState(): void {
     debounceTimer = null;
   }
   latestLocalEditId = 0;
+  pendingPersistedPatch = {};
   saveChain = Promise.resolve();
   lastSavedSettings = pickPersistedSettings(useSettingsStore.getState());
 }

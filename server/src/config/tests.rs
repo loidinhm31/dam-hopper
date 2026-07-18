@@ -9,7 +9,8 @@ use super::{
     presets::{get_effective_command, get_preset},
     resolve::{resolve_startup_config, ConfigResolutionInput, ConfigSource},
     schema::{
-        CommandKind, GlobalConfig, KnownWorkspace, ProjectType, RestartPolicy, UiConfig,
+        CommandKind, GlobalConfig, KnownWorkspace, ProjectType, RestartPolicy,
+        TerminalCodexNotificationSoundPattern, UiConfig,
     },
 };
 
@@ -771,9 +772,13 @@ fn global_config_writes_snake_case_ui_and_server_keys() {
     let written = std::fs::read_to_string(&cfg_path).unwrap();
 
     assert!(written.contains("terminal_codex_notifications_enabled = true"));
+    assert!(written.contains("terminal_codex_notification_toast_enabled = true"));
+    assert!(written.contains("terminal_codex_browser_notifications_enabled = true"));
+    assert!(written.contains("terminal_codex_notification_sound_pattern = \"default\""));
     assert!(written.contains("session_db_path = \"/tmp/sessions.db\""));
     assert!(written.contains("session_buffer_ttl_hours = 12"));
     assert!(!written.contains("terminalAgentNotificationsEnabled"));
+    assert!(!written.contains("terminalCodexNotificationToastEnabled"));
     assert!(!written.contains("sessionDbPath"));
 }
 
@@ -1134,8 +1139,14 @@ fn ui_config_defaults() {
     assert_eq!(ui.ports_panel_shortcut, "Mod+Shift+KeyP");
     assert_eq!(ui.fleet_terminal_shortcut, "Mod+Shift+KeyM");
     assert!(!ui.terminal_codex_notifications_enabled);
+    assert!(ui.terminal_codex_notification_toast_enabled);
+    assert!(ui.terminal_codex_browser_notifications_enabled);
     assert!(ui.terminal_codex_notification_sound_enabled);
     assert_eq!(ui.terminal_codex_notification_sound_volume, 100);
+    assert_eq!(
+        ui.terminal_codex_notification_sound_pattern,
+        TerminalCodexNotificationSoundPattern::Default
+    );
     assert!(ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 11);
     assert_eq!(ui.mobile_custom_keyboard_padding, 6);
@@ -1164,8 +1175,12 @@ fn ui_config_serde_roundtrip() {
             fleet_terminal_shortcut: "Ctrl+Shift+KeyM".to_string(),
             terminal_suggestions_enabled: true,
             terminal_codex_notifications_enabled: true,
+            terminal_codex_notification_toast_enabled: false,
+            terminal_codex_browser_notifications_enabled: false,
             terminal_codex_notification_sound_enabled: false,
             terminal_codex_notification_sound_volume: 45,
+            terminal_codex_notification_sound_pattern:
+                TerminalCodexNotificationSoundPattern::TwoTone,
             explorer_show_hidden: false,
             mobile_custom_keyboard_enabled: false,
             mobile_custom_keyboard_font_size: 13,
@@ -1190,6 +1205,13 @@ fn ui_config_serde_roundtrip() {
         server: crate::config::ServerConfig::default(),
     };
 
+    let json = serde_json::to_value(cfg.ui.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        json["terminalCodexNotificationSoundPattern"],
+        serde_json::json!("two-tone")
+    );
+    assert!(json.get("terminal_codex_notification_sound_pattern").is_none());
+
     write_global_config_at(&cfg_path, &cfg).unwrap();
     let loaded = read_global_config_at(&cfg_path).unwrap().unwrap();
     let ui = loaded.ui.unwrap();
@@ -1205,8 +1227,14 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(ui.ports_panel_shortcut, "Ctrl+Shift+KeyP");
     assert_eq!(ui.fleet_terminal_shortcut, "Ctrl+Shift+KeyM");
     assert!(ui.terminal_codex_notifications_enabled);
+    assert!(!ui.terminal_codex_notification_toast_enabled);
+    assert!(!ui.terminal_codex_browser_notifications_enabled);
     assert!(!ui.terminal_codex_notification_sound_enabled);
     assert_eq!(ui.terminal_codex_notification_sound_volume, 45);
+    assert_eq!(
+        ui.terminal_codex_notification_sound_pattern,
+        TerminalCodexNotificationSoundPattern::TwoTone
+    );
     assert!(!ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 13);
     assert_eq!(ui.mobile_custom_keyboard_padding, 8);
@@ -1315,6 +1343,12 @@ terminal_agent_notifications_enabled = true
     let ui = loaded.ui.unwrap();
     assert_eq!(ui.system_font_size, 18);
     assert!(ui.terminal_codex_notifications_enabled);
+    assert!(ui.terminal_codex_notification_toast_enabled);
+    assert!(ui.terminal_codex_browser_notifications_enabled);
+    assert_eq!(
+        ui.terminal_codex_notification_sound_pattern,
+        TerminalCodexNotificationSoundPattern::Default
+    );
 }
 
 #[test]
