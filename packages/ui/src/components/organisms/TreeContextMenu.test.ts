@@ -15,9 +15,7 @@ function baseHandlers() {
 }
 
 function labels(items: ReturnType<typeof getTreeContextMenuItems>) {
-  return items.map(
-    (i) => [i.label, Boolean(i.disabled)] as const,
-  );
+  return items.map((i) => [i.label, Boolean(i.disabled)] as const);
 }
 
 describe("getTreeContextMenuItems", () => {
@@ -80,5 +78,15 @@ describe("getTreeContextMenuItems", () => {
     items[1].onClick();
     expect(h.onCopyAbsolutePath).toHaveBeenCalledTimes(1);
     expect(h.onCopyRelativePath).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires directory creation to the originating menu callback", () => {
+    const h = baseHandlers();
+    const items = getTreeContextMenuItems({ ...h, isDir: true });
+    items.find((item) => item.label === "New File")?.onClick();
+    items.find((item) => item.label === "New Folder")?.onClick();
+
+    expect(h.onNewFile).toHaveBeenCalledOnce();
+    expect(h.onNewFolder).toHaveBeenCalledOnce();
   });
 });

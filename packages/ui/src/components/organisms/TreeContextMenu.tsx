@@ -108,16 +108,13 @@ export function getTreeContextMenuItems({
 
 interface Props extends BuildItemsArgs {
   children: React.ReactElement;
-  onOpen: () => void;
-  onClose: () => void;
 }
 
 export function TreeContextMenu(props: Props) {
-  const { onOpen, onClose } = props;
   const items = getTreeContextMenuItems(props);
 
   return (
-    <ContextMenu.Root onOpenChange={(open) => (open ? onOpen() : onClose())}>
+    <ContextMenu.Root>
       <ContextMenu.Trigger>{props.children}</ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Content className="w-44">
