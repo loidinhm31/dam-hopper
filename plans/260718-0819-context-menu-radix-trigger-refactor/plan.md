@@ -7,7 +7,7 @@ effort: 4.5h
 branch: main
 tags: [bugfix, refactor, frontend, accessibility]
 created: 2026-07-18
-updated: 2026-07-18 10:25:14 +0700
+updated: 2026-07-18 11:08:06 +0700
 ---
 
 # Stabilize Radix context menus
@@ -21,7 +21,7 @@ Repair the two consumers that regress under virtual-row and Select-dismissal lif
 | # | Phase | Status | Effort | Link |
 | --- | --- | --- | ---: | --- |
 | 1 | Stabilize Explorer tree trigger ownership | Done (2026-07-18 10:25:14 +0700) | 1.5h | [phase-01](./phase-01-stabilize-explorer-tree-trigger.md) |
-| 2 | Harden Git branch Select handoff | Pending | 1h | [phase-02](./phase-02-harden-git-branch-select-handoff.md) |
+| 2 | Harden Git branch Select handoff | Done (2026-07-18 11:08:06 +0700) | 1h | [phase-02](./phase-02-harden-git-branch-select-handoff.md) |
 | 3 | Add consumer integration and browser regression coverage | Pending | 2h | [phase-03-add-consumer-integration-browser-coverage.md) |
 
 ## Design invariant
