@@ -1,6 +1,6 @@
 ---
 title: "Phase 02: Debounced Git-diff refresh from filesystem events"
-status: pending
+status: completed 2026-07-18
 priority: P2
 created: 2026-07-18
 ---
@@ -17,7 +17,7 @@ created: 2026-07-18
 
 ## Overview
 
-**Date:** 2026-07-18. **Priority:** P2. **Status:** pending. Coalesce filesystem activity into one project-scoped invalidation so Explorer badges and Changes reuse fresh Git-diff cache state.
+**Date:** 2026-07-18. **Priority:** P2. **Status:** completed 2026-07-18. Coalesce filesystem activity into one project-scoped invalidation so Explorer badges and Changes reuse fresh Git-diff cache state.
 
 ## Key insights
 
@@ -55,10 +55,17 @@ Create a small `git-fs-invalidation` utility owning a `WeakMap<QueryClient, Map<
 
 ## Todo list
 
-- [ ] Add central scheduler and fake-timer tests.
-- [ ] Attach it to the FS event path.
-- [ ] Verify one project cannot invalidate another.
-- [ ] Verify known mutation actions still use their existing invalidation path.
+- [x] Add central scheduler and fake-timer tests.
+- [x] Attach it to the FS event path.
+- [x] Verify one project cannot invalidate another.
+- [x] Verify known mutation actions still use their existing invalidation path.
+
+## Completion evidence
+
+- Completed 2026-07-18.
+- Central scheduler now coalesces FS-triggered Git invalidation per project.
+- FS subscription path schedules Git refresh after the tree update flow.
+- Tests cover project isolation and preserved mutation invalidation behavior.
 
 ## Success criteria
 

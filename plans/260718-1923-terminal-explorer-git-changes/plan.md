@@ -47,7 +47,7 @@ In terminal workspace mode, extend the floating Files panel's left pane with Exp
 | # | Phase | Status | Effort | Link |
 |---|---|---|---|---|
 | 1 | Compose accessible terminal tabs | Completed 2026-07-18 | 2h | [phase-01](./phase-01-accessible-terminal-tabs.md) |
-| 2 | Centralize Git refresh from FS events | Pending | 2h | [phase-02](./phase-02-git-diff-fs-invalidation.md) |
+| 2 | Centralize Git refresh from FS events | Completed 2026-07-18 | 2h | [phase-02](./phase-02-git-diff-fs-invalidation.md) |
 | 3 | Validate reuse and regressions | Pending | 2h | [phase-03](./phase-03-validation-and-documentation.md) |
 
 ## Affected files
