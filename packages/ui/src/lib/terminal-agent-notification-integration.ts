@@ -48,14 +48,21 @@ export function attachTerminalAgentNotifications({
       );
     },
   });
-  const notifyTerminalAgent = (event: TerminalAgentNotification) => {
-    const settings = useSettingsStore.getState();
-    useTerminalNotificationsStore.getState().addNotification(event);
+  const notifyTerminalAgent = (
+    event: TerminalAgentNotification,
+    settings: ReturnType<typeof useSettingsStore.getState>,
+  ) => {
+    useTerminalNotificationsStore.getState().addNotification(event, {
+      showToast: settings.terminalCodexNotificationToastEnabled,
+    });
     if (settings.terminalCodexNotificationSoundEnabled) {
-      playTerminalNotificationSound(settings.terminalCodexNotificationSoundVolume);
+      playTerminalNotificationSound(
+        settings.terminalCodexNotificationSoundPattern,
+        settings.terminalCodexNotificationSoundVolume,
+      );
     }
     notificationService.notifyTerminalAgent(event, {
-      enabled: settings.terminalCodexNotificationsEnabled,
+      enabled: settings.terminalCodexBrowserNotificationsEnabled,
       rateLimitMs: CODEX_OSC9_RATE_LIMIT_MS,
       terminalOrder: getTerminalOrder?.(),
       onSelect: ({ sessionId: selectedSessionId }) =>
@@ -75,7 +82,7 @@ export function attachTerminalAgentNotifications({
     if (!settings.terminalCodexNotificationsEnabled) return true;
 
     const event = parse();
-    if (event && !replayActive) notifyTerminalAgent(event);
+    if (event && !replayActive) notifyTerminalAgent(event, settings);
     return true;
   };
 

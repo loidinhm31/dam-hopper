@@ -92,8 +92,11 @@ describe("attachTerminalAgentNotifications", () => {
     playTerminalNotificationSound.mockReset();
     useSettingsStore.setState({
       terminalCodexNotificationsEnabled: true,
+      terminalCodexNotificationToastEnabled: true,
+      terminalCodexBrowserNotificationsEnabled: true,
       terminalCodexNotificationSoundEnabled: true,
       terminalCodexNotificationSoundVolume: 100,
+      terminalCodexNotificationSoundPattern: "default",
     });
     useTerminalNotificationsStore.setState({ notifications: [], toasts: [] });
   });
@@ -101,8 +104,11 @@ describe("attachTerminalAgentNotifications", () => {
   afterEach(() => {
     useSettingsStore.setState({
       terminalCodexNotificationsEnabled: false,
+      terminalCodexNotificationToastEnabled: true,
+      terminalCodexBrowserNotificationsEnabled: true,
       terminalCodexNotificationSoundEnabled: true,
       terminalCodexNotificationSoundVolume: 100,
+      terminalCodexNotificationSoundPattern: "default",
     });
     useTerminalNotificationsStore.setState({ notifications: [], toasts: [] });
     restoreNotificationGlobal();
@@ -134,7 +140,16 @@ describe("attachTerminalAgentNotifications", () => {
     expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(
       2,
     );
-    expect(playTerminalNotificationSound).toHaveBeenCalledTimes(2);
+    expect(playTerminalNotificationSound).toHaveBeenNthCalledWith(
+      1,
+      "default",
+      100,
+    );
+    expect(playTerminalNotificationSound).toHaveBeenNthCalledWith(
+      2,
+      "default",
+      100,
+    );
     expect(created[0]).toEqual({
       title: "Codex done",
       options: {
@@ -248,7 +263,10 @@ describe("attachTerminalAgentNotifications", () => {
       body: "Review the answer",
     });
     expect(state.toasts).toEqual([state.notifications[0]?.id]);
-    expect(playTerminalNotificationSound).toHaveBeenCalledExactlyOnceWith(45);
+    expect(playTerminalNotificationSound).toHaveBeenCalledExactlyOnceWith(
+      "default",
+      45,
+    );
   });
 
   it("delivers notifications without sound when the sound setting is disabled", () => {
@@ -268,6 +286,58 @@ describe("attachTerminalAgentNotifications", () => {
       1,
     );
     expect(playTerminalNotificationSound).not.toHaveBeenCalled();
+  });
+
+  it("keeps bell history while suppressing only in-app toasts", () => {
+    const created = installFakeNotification();
+    useSettingsStore.setState({
+      terminalCodexNotificationToastEnabled: false,
+      terminalCodexNotificationSoundPattern: "urgent",
+      terminalCodexNotificationSoundVolume: 45,
+    });
+    const { term, getHandler } = createTerminal();
+
+    attachTerminalAgentNotifications({
+      term,
+      sessionId: "term-no-toast",
+      project: "web",
+    });
+
+    expect(getHandler()?.("notify;Codex done;Review the answer")).toBe(true);
+    const state = useTerminalNotificationsStore.getState();
+    expect(state.notifications).toHaveLength(1);
+    expect(state.toasts).toEqual([]);
+    expect(created).toHaveLength(1);
+    expect(playTerminalNotificationSound).toHaveBeenCalledExactlyOnceWith(
+      "urgent",
+      45,
+    );
+  });
+
+  it("suppresses only browser popups when browser delivery is disabled", () => {
+    const created = installFakeNotification();
+    useSettingsStore.setState({
+      terminalCodexBrowserNotificationsEnabled: false,
+      terminalCodexNotificationSoundPattern: "soft",
+      terminalCodexNotificationSoundVolume: 60,
+    });
+    const { term, getHandler } = createTerminal();
+
+    attachTerminalAgentNotifications({
+      term,
+      sessionId: "term-no-browser",
+      project: "web",
+    });
+
+    expect(getHandler()?.("notify;Codex done;Review the answer")).toBe(true);
+    const state = useTerminalNotificationsStore.getState();
+    expect(state.notifications).toHaveLength(1);
+    expect(state.toasts).toEqual([state.notifications[0]?.id]);
+    expect(created).toEqual([]);
+    expect(playTerminalNotificationSound).toHaveBeenCalledExactlyOnceWith(
+      "soft",
+      60,
+    );
   });
 
   it("adds the current project and open-terminal order to the body", () => {

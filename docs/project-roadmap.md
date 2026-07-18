@@ -207,6 +207,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-07-19:** Completed Codex terminal notification controls Phase 03: Wire delivery gates and Settings UI (review approved 01:45 +07).
+  - ✅ Kept notification history independent while gating in-app toast, browser popup, and synthesized chime delivery from their persisted preferences.
+  - ✅ Added accessible child controls, selected sound style/volume preview, and preserved master-switch-only Codex TUI synchronization.
+  - ✅ Retained explicit browser permission/audio interactions and delivery bounds for replay, rate limits, toast, and history.
+
 - **2026-07-19:** Completed Codex terminal notification controls Phase 02: Implement selectable synthesized chimes (review approved 01:22 +07).
   - ✅ Added fixed Default, Soft, Two-tone, and Urgent Web Audio patterns with one reusable audio context.
   - ✅ Preserved the legacy Default 880 Hz sine timing and normalized volume semantics.

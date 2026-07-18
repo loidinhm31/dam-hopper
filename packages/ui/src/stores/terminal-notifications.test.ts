@@ -42,6 +42,19 @@ describe("useTerminalNotificationsStore", () => {
     expect(selectUnreadTerminalNotificationCount(state)).toBe(2);
   });
 
+  it("keeps history and unread state when toast delivery is disabled", () => {
+    const id = useTerminalNotificationsStore
+      .getState()
+      .addNotification(notification(1_000), { showToast: false });
+    const state = useTerminalNotificationsStore.getState();
+
+    expect(state.notifications).toEqual([
+      expect.objectContaining({ id, event: notification(1_000), read: false }),
+    ]);
+    expect(selectUnreadTerminalNotificationCount(state)).toBe(1);
+    expect(state.toasts).toEqual([]);
+  });
+
   it("marks one or all notifications read without dismissing toasts", () => {
     const store = useTerminalNotificationsStore.getState();
     const firstId = store.addNotification(notification(1));
@@ -71,7 +84,11 @@ describe("useTerminalNotificationsStore", () => {
 
   it("bounds history and visible toasts", () => {
     const store = useTerminalNotificationsStore.getState();
-    for (let index = 0; index < MAX_TERMINAL_NOTIFICATION_HISTORY + 5; index += 1) {
+    for (
+      let index = 0;
+      index < MAX_TERMINAL_NOTIFICATION_HISTORY + 5;
+      index += 1
+    ) {
       store.addNotification(notification(index));
     }
 
