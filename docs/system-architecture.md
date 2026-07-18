@@ -90,7 +90,7 @@ Pure frontend notification pipeline in `packages/ui/src/lib/`:
 - `agent-activity-tracker.ts` turns submitted command, output, user input, and enhanced exit events into activity state changes
 - `terminal-notification-signal-parser.ts` converts BEL and OSC 9/777/99 terminal signals into normalized notification events
 - `terminal-notifications.ts` keeps a bounded, memory-only notification history and transient toast IDs in Zustand
-- `terminal-notification-sound.ts` attempts a short in-app Web Audio chime through a reused context at the persisted sound volume; unavailable or blocked audio is a silent no-op
+- `terminal-notification-sound.ts` reuses one Web Audio context to synthesize the built-in `default`, `soft`, `two-tone`, and `urgent` in-app chimes at the persisted volume. `default` preserves the existing single-chime behavior for compatible configurations; sound has no effect on native browser popups and requires no audio assets or dependencies. Unavailable or blocked audio is a silent no-op.
 - `browser-notification-service.ts` applies permission, rate-limit, and delivery guards before creating browser `Notification` objects
 - `TerminalNotificationCenter` and `TerminalNotificationToastViewport` render the shared in-app bell/feed and top-right live alerts
 
