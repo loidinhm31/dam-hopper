@@ -69,7 +69,11 @@ import {
   TERMINAL_FILE_PANEL_TREE_WIDTH_KEY,
 } from "@/lib/terminal-floating-file-panel-state.js";
 import { cn } from "@/lib/utils.js";
-import type { FsArborNode, PathSearchMatch, SearchMatch } from "@/api/fs-types.js";
+import type {
+  FsArborNode,
+  PathSearchMatch,
+  SearchMatch,
+} from "@/api/fs-types.js";
 import type { ToolWindowDef } from "@/types/ide.js";
 import type { MobileWorkspaceSurface } from "@/components/templates/MobileWorkspaceShell.js";
 import type { ActivateToolRequest } from "@/lib/reveal-active-file.js";
@@ -235,6 +239,13 @@ function buildSearchMatchFileNode(path: string): FsArborNode {
   };
 }
 
+function sessionIdSetsEqual(
+  left: ReadonlySet<string>,
+  right: ReadonlySet<string>,
+): boolean {
+  return left.size === right.size && [...left].every((id) => right.has(id));
+}
+
 export default function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { activeProject, setActiveProject } = useWorkspaceStore();
@@ -242,6 +253,9 @@ export default function WorkspacePage() {
     useState<WorkspaceMode>(loadWorkspaceMode);
   const [terminalUsageMode, setTerminalUsageModeState] =
     useState<TerminalUsageMode>(loadTerminalUsageMode);
+  const [visibleSplitSessionIds, setVisibleSplitSessionIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const [diagnosticsWindowMinutes, setDiagnosticsWindowMinutes] =
     useState<DiagnosticsTimeWindowMinutes>(10);
   const [terminalDiagnosticsMenuTarget, setTerminalDiagnosticsMenuTarget] =
@@ -263,8 +277,10 @@ export default function WorkspacePage() {
     useState<ActivateToolRequest | null>(null);
   const [terminalWorkspacePanelRequest, setTerminalWorkspacePanelRequest] =
     useState<TerminalWorkspacePanelRequest | null>(null);
-  const [terminalFilePanelEditorFocusSignal, setTerminalFilePanelEditorFocusSignal] =
-    useState(0);
+  const [
+    terminalFilePanelEditorFocusSignal,
+    setTerminalFilePanelEditorFocusSignal,
+  ] = useState(0);
   const [terminalLayoutRevision, setTerminalLayoutRevision] = useState(0);
   const revealRequestNonceRef = useRef(0);
   const panelShortcutNonceRef = useRef(0);
@@ -361,6 +377,22 @@ export default function WorkspacePage() {
     setFreeTerminalSavePrompt,
     setLaunchForm,
   } = actions;
+
+  const handleVisibleSplitSessionsChange = useCallback(
+    (sessionIds: ReadonlySet<string>) => {
+      setVisibleSplitSessionIds((current) =>
+        sessionIdSetsEqual(current, sessionIds) ? current : new Set(sessionIds),
+      );
+    },
+    [],
+  );
+  const webglEnabledSessionIds = useMemo(
+    () =>
+      terminalUsageMode === "runtime"
+        ? new Set(activeTab ? [activeTab] : [])
+        : visibleSplitSessionIds,
+    [activeTab, terminalUsageMode, visibleSplitSessionIds],
+  );
 
   const projectName =
     activeProject ?? (projects.length > 0 ? projects[0].name : null);
@@ -530,7 +562,7 @@ export default function WorkspacePage() {
     const activePath =
       projectName === null
         ? null
-        : useEditorStore.getState().getActiveTab(projectName)?.path ?? null;
+        : (useEditorStore.getState().getActiveTab(projectName)?.path ?? null);
     const nonce = revealRequestNonceRef.current + 1;
     const outcome = resolveRevealActiveFileOutcome({
       projectName,
@@ -636,12 +668,7 @@ export default function WorkspacePage() {
       }
       return openFile(targetProject, node);
     },
-    [
-      isCompactWorkspace,
-      openFile,
-      setTerminalFilePanelOpen,
-      workspaceMode,
-    ],
+    [isCompactWorkspace, openFile, setTerminalFilePanelOpen, workspaceMode],
   );
 
   const handleFileOpen = useCallback(
@@ -664,7 +691,10 @@ export default function WorkspacePage() {
       if (match.project && match.project !== projectName) {
         setActiveProject(match.project);
       }
-      void openWorkspaceFile(targetProject, buildSearchMatchFileNode(match.path));
+      void openWorkspaceFile(
+        targetProject,
+        buildSearchMatchFileNode(match.path),
+      );
     },
     [closeSearch, openWorkspaceFile, projectName, setActiveProject],
   );
@@ -750,10 +780,7 @@ export default function WorkspacePage() {
     ],
   );
 
-  useEffect(
-    () => () => terminalNotificationActivationRef.current(),
-    [],
-  );
+  useEffect(() => () => terminalNotificationActivationRef.current(), []);
 
   const terminalContent = useMemo(
     () => (
@@ -974,6 +1001,7 @@ export default function WorkspacePage() {
                 onNewTerminal={handleOpenCurrentTerminal}
                 suppressAutoFocus
                 suppressNativeKeyboard={false}
+                webglEnabledSessionIds={webglEnabledSessionIds}
               />
             </Suspense>
           )}
@@ -1008,6 +1036,7 @@ export default function WorkspacePage() {
                 onSelectTab={handleSelectTab}
                 onCloseTab={handleCloseTab}
                 onOpenDiagnosticsMenu={openTerminalDiagnosticsMenu}
+                onVisibleSessionIdsChange={handleVisibleSplitSessionsChange}
               />
             </Suspense>
           ) : projects.length === 0 ? (
@@ -1095,6 +1124,8 @@ export default function WorkspacePage() {
       toggleTerminalFilePanel,
       diagnosticsWindowMinutes,
       openTerminalDiagnosticsMenu,
+      webglEnabledSessionIds,
+      handleVisibleSplitSessionsChange,
     ],
   );
 
@@ -1184,7 +1215,10 @@ export default function WorkspacePage() {
         icon: Search,
         content: projectName ? (
           <Suspense fallback={<PanelFallback label="Loading search…" />}>
-            <SearchPanel project={projectName} onResultClick={handleSearchResultOpen} />
+            <SearchPanel
+              project={projectName}
+              onResultClick={handleSearchResultOpen}
+            />
           </Suspense>
         ) : (
           <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
@@ -1571,16 +1605,17 @@ export default function WorkspacePage() {
         />
       )}
 
-      {terminalDiagnosticsMenuTarget && isTerminalDiagnosticsMenuTargetAvailable && (
-        <TerminalDiagnosticsContextMenu
-          x={terminalDiagnosticsMenuTarget.x}
-          y={terminalDiagnosticsMenuTarget.y}
-          isPending={exportDiagnostics.isPending}
-          error={terminalDiagnosticsError}
-          onExport={() => void handleExportTerminalDiagnostics()}
-          onClose={closeTerminalDiagnosticsMenu}
-        />
-      )}
+      {terminalDiagnosticsMenuTarget &&
+        isTerminalDiagnosticsMenuTargetAvailable && (
+          <TerminalDiagnosticsContextMenu
+            x={terminalDiagnosticsMenuTarget.x}
+            y={terminalDiagnosticsMenuTarget.y}
+            isPending={exportDiagnostics.isPending}
+            error={terminalDiagnosticsError}
+            onExport={() => void handleExportTerminalDiagnostics()}
+            onClose={closeTerminalDiagnosticsMenu}
+          />
+        )}
 
       {/* Floating search dialog */}
       {searchOpen && projectName && (

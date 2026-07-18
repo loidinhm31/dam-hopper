@@ -34,7 +34,7 @@ export function GitBranchContextMenu({
   onDelete,
   onClose,
 }: GitBranchContextMenuProps) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const deleteState = getDeleteBranchMenuState({ isCurrent });
 

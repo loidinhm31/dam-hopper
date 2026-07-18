@@ -46,10 +46,10 @@ export function TerminalDiagnosticsContextMenu({
   onExport,
   onClose,
 }: TerminalDiagnosticsContextMenuProps) {
-  // The page mounts this component only while a target exists. Starting open
-  // keeps SSR and the first client render consistent; the effect below still
-  // supplies Radix with the exact pointer coordinates for placement.
-  const [open, setOpen] = useState(true);
+  // The synthetic trigger event below opens this controlled menu and supplies
+  // Radix with its pointer coordinates. Starting closed avoids an unanchored
+  // initial open state.
+  const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
