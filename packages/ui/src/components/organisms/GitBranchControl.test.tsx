@@ -9,15 +9,23 @@ import { GitBranchControl, GitBranchFeedback } from "./GitBranchControl.js";
 
 const checkoutBranch = vi.fn();
 const deleteBranch = vi.fn();
+const queryState = vi.hoisted(() => ({
+  branches: [] as Array<{
+    name: string;
+    isCurrent: boolean;
+    isRemote: boolean;
+  }>,
+  projectStatus: undefined as { branch: string } | undefined,
+}));
+
+const loadedBranches = [
+  { name: "main", isCurrent: true, isRemote: false },
+  { name: "feature/demo", isCurrent: false, isRemote: false },
+];
 
 vi.mock("@/api/queries.js", () => ({
-  useBranches: () => ({
-    data: [
-      { name: "main", isCurrent: true, isRemote: false },
-      { name: "feature/demo", isCurrent: false, isRemote: false },
-    ],
-  }),
-  useProjectStatus: () => ({ data: { branch: "main" } }),
+  useBranches: () => ({ data: queryState.branches }),
+  useProjectStatus: () => ({ data: queryState.projectStatus }),
   useGitCheckoutBranch: () => ({
     isPending: false,
     mutateAsync: checkoutBranch,
@@ -34,6 +42,8 @@ let root: Root | null = null;
 
 beforeEach(() => {
   Element.prototype.scrollIntoView ??= () => undefined;
+  queryState.branches = loadedBranches;
+  queryState.projectStatus = { branch: "main" };
 });
 
 async function mountBranchControl() {
@@ -109,6 +119,40 @@ describe("GitBranchFeedback", () => {
     );
 
     expect(markup).toBe("");
+  });
+
+  it("remains controlled while branch data loads", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {
+      // The assertion below inspects React's warning output.
+    });
+    queryState.branches = [];
+    queryState.projectStatus = undefined;
+
+    try {
+      await mountBranchControl();
+      expect(document.querySelector("[role=combobox]")?.textContent).toContain(
+        "Select branch",
+      );
+
+      queryState.branches = loadedBranches;
+      queryState.projectStatus = { branch: "main" };
+      await act(async () => root?.render(<GitBranchControl project="demo" />));
+
+      expect(document.querySelector("[role=combobox]")?.textContent).toContain(
+        "main",
+      );
+      expect(
+        consoleWarn.mock.calls.some(([message]) =>
+          typeof message === "string"
+            ? message.includes(
+                "Select is changing from uncontrolled to controlled",
+              )
+            : false,
+        ),
+      ).toBe(false);
+    } finally {
+      consoleWarn.mockRestore();
+    }
   });
 
   it("opens one lifted menu from the right-pointer lifecycle without checkout", async () => {

@@ -10,6 +10,7 @@ interface TerminalKeepAliveHostProps {
   onTerminalReady?: (sessionId: string) => void;
   suppressAutoFocus?: boolean;
   suppressNativeKeyboard?: boolean;
+  webglEnabledSessionIds?: ReadonlySet<string>;
 }
 
 export function TerminalKeepAliveHost({
@@ -20,6 +21,7 @@ export function TerminalKeepAliveHost({
   onTerminalReady,
   suppressAutoFocus = false,
   suppressNativeKeyboard = suppressAutoFocus,
+  webglEnabledSessionIds,
 }: TerminalKeepAliveHostProps) {
   return (
     <div
@@ -58,6 +60,9 @@ export function TerminalKeepAliveHost({
             suppressAutoFocus={suppressAutoFocus}
             suppressNativeKeyboard={suppressNativeKeyboard}
             terminalOrder={terminalOrder}
+            webglEnabled={
+              webglEnabledSessionIds?.has(session.sessionId) ?? false
+            }
           />
         );
       })}

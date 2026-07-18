@@ -253,7 +253,7 @@ export function GitBranchControl({
         <GitBranch className="h-4 w-4 shrink-0 text-[var(--color-primary)] opacity-80" />
         <Select
           open={selectOpen}
-          value={branchValue || undefined}
+          value={branchValue}
           disabled={isMutating}
           onOpenChange={setSelectOpen}
           onValueChange={(value) => {

@@ -54,4 +54,31 @@ describe("TerminalKeepAliveHost", () => {
       }),
     );
   });
+
+  it("enables WebGL only for sessions active in visible panes", () => {
+    renderedPanelProps.length = 0;
+
+    renderToStaticMarkup(
+      <TerminalKeepAliveHost
+        mountedSessions={[
+          { sessionId: "visible-left", project: "web", command: "bash" },
+          { sessionId: "hidden-tab", project: "web", command: "bash" },
+          { sessionId: "visible-right", project: "api", command: "bash" },
+        ]}
+        webglEnabledSessionIds={new Set(["visible-left", "visible-right"])}
+      />,
+    );
+
+    expect(renderedPanelProps).toEqual([
+      expect.objectContaining({
+        sessionId: "visible-left",
+        webglEnabled: true,
+      }),
+      expect.objectContaining({ sessionId: "hidden-tab", webglEnabled: false }),
+      expect.objectContaining({
+        sessionId: "visible-right",
+        webglEnabled: true,
+      }),
+    ]);
+  });
 });

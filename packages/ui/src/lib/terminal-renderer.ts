@@ -9,7 +9,6 @@ interface WebglAddonLike extends ITerminalAddon {
 
 interface TerminalRendererOptions {
   createAddon?: () => WebglAddonLike;
-  supportsWebgl2?: () => boolean;
 }
 
 export interface TerminalRendererHandle {
@@ -17,29 +16,10 @@ export interface TerminalRendererHandle {
   dispose: () => void;
 }
 
-function supportsWebgl2(): boolean {
-  if (typeof document === "undefined") return false;
-
-  try {
-    return document.createElement("canvas").getContext("webgl2") !== null;
-  } catch {
-    return false;
-  }
-}
-
 export function activateTerminalWebglRenderer(
   terminal: Pick<Terminal, "loadAddon" | "refresh" | "rows">,
   options: TerminalRendererOptions = {},
 ): TerminalRendererHandle {
-  const isSupported = options.supportsWebgl2 ?? supportsWebgl2;
-  if (!isSupported()) {
-    logger.debug("TerminalRenderer", "WebGL2 unavailable; using DOM renderer");
-    recordClientDiagnostic("custom", "terminal-renderer", "renderer:dom", {
-      reason: "webgl2_unavailable",
-    });
-    return { renderer: "dom", dispose: () => {} };
-  }
-
   const createAddon = options.createAddon ?? (() => new WebglAddon());
   let addon: WebglAddonLike | null = null;
   let contextLossDisposable: IDisposable | null = null;
