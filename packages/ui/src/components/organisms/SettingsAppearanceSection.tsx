@@ -18,8 +18,11 @@ export function SettingsAppearanceSection() {
     editorZoomWheelEnabled,
     terminalSuggestionsEnabled,
     terminalCodexNotificationsEnabled,
+    terminalCodexNotificationToastEnabled,
+    terminalCodexBrowserNotificationsEnabled,
     terminalCodexNotificationSoundEnabled,
     terminalCodexNotificationSoundVolume,
+    terminalCodexNotificationSoundPattern,
     terminalScrollButtonsEnabled,
     terminalScrollStep,
     explorerShowHidden,
@@ -132,8 +135,11 @@ export function SettingsAppearanceSection() {
 
       <TerminalAgentNotificationSettings
         enabled={terminalCodexNotificationsEnabled}
+        toastEnabled={terminalCodexNotificationToastEnabled}
+        browserEnabled={terminalCodexBrowserNotificationsEnabled}
         soundEnabled={terminalCodexNotificationSoundEnabled}
         soundVolume={terminalCodexNotificationSoundVolume}
+        soundPattern={terminalCodexNotificationSoundPattern}
         onSave={saveDebounced}
       />
 

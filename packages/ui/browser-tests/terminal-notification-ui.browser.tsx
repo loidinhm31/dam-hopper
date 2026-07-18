@@ -1,6 +1,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TerminalAgentNotificationSettings } from "@/components/molecules/TerminalAgentNotificationSettings.js";
 import { TerminalNotificationCenter } from "@/components/organisms/TerminalNotificationCenter.js";
 import { TerminalNotificationToastViewport } from "@/components/organisms/TerminalNotificationToastViewport.js";
 import { subscribeToTerminalNotificationSelection } from "@/lib/terminal-notification-navigation.js";
@@ -69,8 +70,9 @@ describe("terminal notification UI in Chromium", () => {
 
     await act(async () => trigger?.click());
     expect(container.querySelector('[role="dialog"]')).not.toBeNull();
-    const firstItem = [...container.querySelectorAll<HTMLButtonElement>("li button")]
-      .find((button) => button.textContent?.includes("Codex is ready"));
+    const firstItem = [
+      ...container.querySelectorAll<HTMLButtonElement>("li button"),
+    ].find((button) => button.textContent?.includes("Codex is ready"));
     await act(async () => firstItem?.click());
 
     expect(selectedSessionId).toBe("terminal-1000");
@@ -132,7 +134,9 @@ describe("terminal notification UI in Chromium", () => {
     await act(async () => trigger?.click());
     outside?.focus();
     await act(async () => {
-      outside?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      outside?.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true }),
+      );
       outside?.click();
     });
     expect(container.querySelector('[role="dialog"]')).toBeNull();
@@ -158,8 +162,64 @@ describe("terminal notification UI in Chromium", () => {
     await act(async () => vi.advanceTimersByTime(6_000));
     const state = useTerminalNotificationsStore.getState();
     expect(state.toasts).toEqual([]);
-    expect(state.notifications.find((item) => item.id === id)?.read).toBe(false);
+    expect(state.notifications.find((item) => item.id === id)?.read).toBe(
+      false,
+    );
     expect(container.textContent).not.toContain("Codex is ready");
+  });
+
+  it("keeps bell history visible when an event opts out of the transient toast", async () => {
+    useTerminalNotificationsStore
+      .getState()
+      .addNotification(event(1_000), { showToast: false });
+    await render(
+      <>
+        <TerminalNotificationCenter />
+        <TerminalNotificationToastViewport />
+      </>,
+    );
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="dialog"]',
+    );
+    expect(trigger?.getAttribute("aria-label")).toContain("1 unread");
+    expect(container.querySelector("article")).toBeNull();
+    await act(async () => trigger?.click());
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain(
+      "Codex is ready",
+    );
+  });
+
+  it("saves independent in-app and browser delivery choices", async () => {
+    const onSave = vi.fn();
+    await render(
+      <TerminalAgentNotificationSettings
+        enabled
+        toastEnabled
+        browserEnabled
+        soundEnabled
+        soundPattern="default"
+        soundVolume={100}
+        onSave={onSave}
+      />,
+    );
+    const toast = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Enable in-app toast"]',
+    );
+    const browser = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Enable browser popup"]',
+    );
+
+    await act(async () => toast?.click());
+    await act(async () => browser?.click());
+
+    expect(onSave).toHaveBeenNthCalledWith(1, {
+      terminalCodexNotificationToastEnabled: false,
+    });
+    expect(onSave).toHaveBeenNthCalledWith(2, {
+      terminalCodexBrowserNotificationsEnabled: false,
+    });
+    expect(container.querySelector('[role="status"]')).not.toBeNull();
   });
 
   it("manual toast dismissal also preserves unread state", async () => {
@@ -174,7 +234,9 @@ describe("terminal notification UI in Chromium", () => {
     await act(async () => dismiss?.click());
     const state = useTerminalNotificationsStore.getState();
     expect(state.toasts).toEqual([]);
-    expect(state.notifications.find((item) => item.id === id)?.read).toBe(false);
+    expect(state.notifications.find((item) => item.id === id)?.read).toBe(
+      false,
+    );
   });
 
   it("keeps a polite live region mounted and selects a toast", async () => {
