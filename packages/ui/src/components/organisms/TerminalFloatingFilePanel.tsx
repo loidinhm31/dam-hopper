@@ -2,6 +2,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
@@ -13,7 +14,16 @@ import {
   TERMINAL_FILE_PANEL_MARGIN,
   type TerminalFloatingFilePanelLayout,
 } from "@/lib/terminal-floating-file-panel-state.js";
+import {
+  getTerminalFloatingFilePanelTabForKey,
+  type TerminalFloatingFilePanelTab,
+} from "@/lib/terminal-floating-file-panel-tabs.js";
 import { cn } from "@/lib/utils.js";
+
+const EXPLORER_TAB_ID = "terminal-file-panel-explorer-tab";
+const CHANGES_TAB_ID = "terminal-file-panel-changes-tab";
+const EXPLORER_PANEL_ID = "terminal-file-panel-explorer-panel";
+const CHANGES_PANEL_ID = "terminal-file-panel-changes-panel";
 
 interface ResizeHandleProps {
   onMouseDown: (event: ReactMouseEvent) => void;
@@ -25,6 +35,7 @@ interface TerminalFloatingFilePanelProps {
   isDragging?: boolean;
   focusEditorSignal?: number;
   explorerContent: ReactNode;
+  changesContent: ReactNode;
   editorContent: ReactNode;
   treeResizeHandleProps: ResizeHandleProps;
   onClose: () => void;
@@ -45,6 +56,7 @@ export function TerminalFloatingFilePanel({
   isDragging = false,
   focusEditorSignal = 0,
   explorerContent,
+  changesContent,
   editorContent,
   treeResizeHandleProps,
   onClose,
@@ -52,7 +64,18 @@ export function TerminalFloatingFilePanel({
   const boundsRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const editorRegionRef = useRef<HTMLDivElement>(null);
+  const tabRefs = useRef<
+    Partial<Record<TerminalFloatingFilePanelTab, HTMLButtonElement>>
+  >({});
+  const wasOpenRef = useRef(open);
   const [layout, setLayout] = useState(loadTerminalFloatingFilePanelLayout);
+  const [activeTab, setActiveTab] =
+    useState<TerminalFloatingFilePanelTab>("explorer");
+
+  useEffect(() => {
+    if (open && !wasOpenRef.current) setActiveTab("explorer");
+    wasOpenRef.current = open;
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -82,7 +105,9 @@ export function TerminalFloatingFilePanel({
   const updateLayout = (
     nextLayout:
       | TerminalFloatingFilePanelLayout
-      | ((current: TerminalFloatingFilePanelLayout) => TerminalFloatingFilePanelLayout),
+      | ((
+          current: TerminalFloatingFilePanelLayout,
+        ) => TerminalFloatingFilePanelLayout),
   ) => {
     setLayout((current) => {
       const resolved =
@@ -195,13 +220,22 @@ export function TerminalFloatingFilePanel({
     document.addEventListener("mouseup", onMouseUp);
   };
 
+  const selectTab = (tab: TerminalFloatingFilePanelTab, focus = false) => {
+    setActiveTab(tab);
+    if (focus) tabRefs.current[tab]?.focus();
+  };
+
+  const handleTabKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    const nextTab = getTerminalFloatingFilePanelTabForKey(activeTab, event.key);
+    if (!nextTab) return;
+    event.preventDefault();
+    selectTab(nextTab, true);
+  };
+
   if (!open) return null;
 
   return (
-    <div
-      ref={boundsRef}
-      className="pointer-events-none absolute inset-0 z-20"
-    >
+    <div ref={boundsRef} className="pointer-events-none absolute inset-0 z-20">
       <div
         ref={panelRef}
         className={cn(
@@ -246,12 +280,72 @@ export function TerminalFloatingFilePanel({
               className="flex min-h-0 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)]/80"
               style={{ width: treeWidth }}
             >
-              <div className="flex h-8 shrink-0 items-center border-b border-[var(--color-border)] px-3">
-                <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--color-text-muted)]">
+              <div
+                role="tablist"
+                aria-label="Files panel"
+                className="flex h-8 shrink-0 items-center gap-1 border-b border-[var(--color-border)] px-2"
+              >
+                <button
+                  ref={(element) => {
+                    tabRefs.current.explorer = element ?? undefined;
+                  }}
+                  id={EXPLORER_TAB_ID}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === "explorer"}
+                  aria-controls={EXPLORER_PANEL_ID}
+                  tabIndex={activeTab === "explorer" ? 0 : -1}
+                  onClick={() => selectTab("explorer")}
+                  onKeyDown={handleTabKeyDown}
+                  className={cn(
+                    "rounded-sm px-1.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] transition-colors",
+                    activeTab === "explorer"
+                      ? "bg-[var(--color-surface-2)] text-[var(--color-text)]"
+                      : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
+                  )}
+                >
                   Explorer
-                </span>
+                </button>
+                <button
+                  ref={(element) => {
+                    tabRefs.current.changes = element ?? undefined;
+                  }}
+                  id={CHANGES_TAB_ID}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === "changes"}
+                  aria-controls={CHANGES_PANEL_ID}
+                  tabIndex={activeTab === "changes" ? 0 : -1}
+                  onClick={() => selectTab("changes")}
+                  onKeyDown={handleTabKeyDown}
+                  className={cn(
+                    "rounded-sm px-1.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] transition-colors",
+                    activeTab === "changes"
+                      ? "bg-[var(--color-surface-2)] text-[var(--color-text)]"
+                      : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
+                  )}
+                >
+                  Changes
+                </button>
               </div>
-              <div className="min-h-0 flex-1 overflow-hidden">{explorerContent}</div>
+              <div
+                id={EXPLORER_PANEL_ID}
+                role="tabpanel"
+                aria-labelledby={EXPLORER_TAB_ID}
+                hidden={activeTab !== "explorer"}
+                className="min-h-0 flex-1 overflow-hidden"
+              >
+                {activeTab === "explorer" ? explorerContent : null}
+              </div>
+              <div
+                id={CHANGES_PANEL_ID}
+                role="tabpanel"
+                aria-labelledby={CHANGES_TAB_ID}
+                hidden={activeTab !== "changes"}
+                className="min-h-0 flex-1 overflow-hidden"
+              >
+                {activeTab === "changes" ? changesContent : null}
+              </div>
             </section>
 
             <div

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DiffFileEntry } from "@/api/client.js";
 import {
+  createChangedFileSelection,
   groupedByRoot,
   projectPathForEntry,
   stagedRootIdsForEntries,
@@ -53,5 +54,44 @@ describe("ChangedFilesList VCS root helpers", () => {
         entry({ path: "notes.md", rootId: "modules/child", staged: false }),
       ]),
     ).toEqual([".", "modules/child"]);
+  });
+
+  it("retains diff metadata for deleted, conflicted, and child-root files", () => {
+    expect(
+      createChangedFileSelection(
+        entry({
+          path: "removed.ts",
+          status: "deleted",
+          additions: 0,
+          deletions: 12,
+        }),
+      ),
+    ).toMatchObject({
+      projectPath: "removed.ts",
+      status: "deleted",
+      additions: 0,
+      deletions: 12,
+      gitRootId: ".",
+      diffPath: "removed.ts",
+    });
+
+    expect(
+      createChangedFileSelection(
+        entry({
+          path: "src/conflict.ts",
+          status: "conflicted",
+          additions: 4,
+          deletions: 3,
+          rootId: "packages/app",
+        }),
+      ),
+    ).toMatchObject({
+      projectPath: "packages/app/src/conflict.ts",
+      status: "conflicted",
+      additions: 4,
+      deletions: 3,
+      gitRootId: "packages/app",
+      diffPath: "src/conflict.ts",
+    });
   });
 });
