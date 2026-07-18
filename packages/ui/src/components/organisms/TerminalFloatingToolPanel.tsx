@@ -15,9 +15,9 @@ const TOOL_PANEL_LAYOUT: TerminalFloatingFilePanelLayout = {
 
 const TOOL_PANEL_CONSTRAINTS = {
   minWidth: 480,
-  maxWidth: 960,
+  maxWidth: Number.POSITIVE_INFINITY,
   minHeight: 360,
-  maxHeight: 820,
+  maxHeight: Number.POSITIVE_INFINITY,
 };
 
 interface TerminalFloatingToolPanelProps {
@@ -34,6 +34,17 @@ export function handleTerminalFloatingToolPanelKeyDown(
   if (event.key !== "Escape") return false;
   onClose();
   return true;
+}
+
+export function clampTerminalFloatingToolPanelLayout(
+  layout: TerminalFloatingFilePanelLayout,
+  bounds: { width: number; height: number },
+) {
+  return clampTerminalFloatingPanelLayout(
+    layout,
+    bounds,
+    TOOL_PANEL_CONSTRAINTS,
+  );
 }
 
 export function TerminalFloatingToolPanel({
@@ -77,7 +88,7 @@ export function TerminalFloatingToolPanel({
   const updateLayout = (
     nextLayout: TerminalFloatingFilePanelLayout,
     bounds: { width: number; height: number },
-  ) => setLayout(clampTerminalFloatingPanelLayout(nextLayout, bounds, TOOL_PANEL_CONSTRAINTS));
+  ) => setLayout(clampTerminalFloatingToolPanelLayout(nextLayout, bounds));
 
   const handleDragStart = (event: ReactMouseEvent) => {
     if (event.button !== 0) return;

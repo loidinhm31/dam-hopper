@@ -141,4 +141,23 @@ describe("terminal-floating-file-panel-state", () => {
       left: 16,
     });
   });
+
+  it("allows Explorer to resize to the viewport bounds while preserving gutters", () => {
+    expect(
+      clampTerminalFloatingFilePanelLayout(
+        {
+          width: 4000,
+          height: 2000,
+          top: -20,
+          left: 9999,
+        },
+        { width: 1920, height: 1080 },
+      ),
+    ).toEqual({
+      width: 1888,
+      height: 1048,
+      top: 16,
+      left: 16,
+    });
+  });
 });
