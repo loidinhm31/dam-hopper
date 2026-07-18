@@ -28,6 +28,7 @@ import { TerminalNotificationToastViewport } from "@/components/organisms/Termin
 import { EncryptProvider } from "@/contexts/EncryptContext.js";
 import { PassphrasePrompt } from "@/components/molecules/PassphrasePrompt.js";
 import { useBrowserShortcutGuard } from "@/hooks/use-browser-shortcut-guard.js";
+import { useBrowserContextMenuSuppression } from "@/hooks/use-browser-context-menu-suppression.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { matchesNewTerminalShortcut } from "@/lib/shortcuts.js";
 import { normalizeRouterBasename } from "@/lib/router-basename.js";
@@ -267,6 +268,7 @@ function WorkspaceGuard({ children }: { children: React.ReactNode }) {
 
 export function DamHopperApp() {
   useBrowserShortcutGuard();
+  useBrowserContextMenuSuppression();
   const qc = useQueryClient();
   const routerBasename = normalizeRouterBasename(import.meta.env.BASE_URL);
 

@@ -263,8 +263,7 @@ describe("viewport context menu in Chromium", () => {
     const expand = document.querySelector<HTMLElement>('[data-testid="open-space-expand"]');
     await act(async () => expand?.click());
     await vi.waitFor(() => expect(secondMenu.getBoundingClientRect().width).toBeGreaterThan(300));
-    await act(async () => await new Promise((resolve) => setTimeout(resolve, 0)));
-    assertInsideViewport(secondMenu);
+    await vi.waitFor(() => assertInsideViewport(secondMenu));
   });
 
   it("fires an action once and dismisses on Escape, outside pointer, and scroll", async () => {
