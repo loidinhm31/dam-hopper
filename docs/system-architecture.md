@@ -707,15 +707,15 @@ New WebSocket protocol messages enable explicit buffer attachment:
 
 - `ClientMsg::TermAttach { id, from_offset }` — client requests buffer replay
 - Handler calls `get_buffer_with_offset()` → sends `ServerMsg::TermBuffer`
-- Error behavior: session not found → logs warning, no response (client creates new session via `terminal:spawn`)
+- Error behavior: session not found → logs warning and sends no response; the client confirms absence with `terminal:listDetailed` before creating a replacement
 - Response `ServerMsg::TermBuffer { id, data, offset, reset, truncated }` — contains delta or full buffer plus client replay instructions
 
 **Use Case (Phase 02+)**: On WebSocket reconnect, client sends `terminal:attach` with last stored offset instead of requesting full buffer, reducing data transfer by ~90% in typical scenarios.
 
 **Error Handling:**
 
-- Silent failure (no response) on session-not-found enables graceful client fallback: interpret timeout as session dead, re-create via `terminal:spawn`
-- No error response required; client implements timeout-based detection
+- Silent failure (no response) on session-not-found requires guarded client recovery: a timeout probes `terminal:listDetailed`; alive sessions retry with capped exponential backoff, while missing/dead sessions are created once before reattach
+- No error response required; client uses timeout as a trigger to verify session state, not as proof of session death
 - Server logs warning for diagnostics
 
 **Buffer States:**
@@ -1036,7 +1036,7 @@ Frontend now uses a split host/package layout: `apps/web` is the thin Vite brows
   - Exit: Green (code=0), Red (code≠0, no restart), Yellow (willRestart)
   - Restart: Yellow `[Process restarted (#N)]`
   - Reconnect: Dim `[Reconnecting…]` / `[Reconnected]`
-- Creates/reconnects to PTY session on mount via `terminal:spawn` command
+- Reconnects through one in-flight `terminal:attach`; a timeout verifies session liveness, then retries with capped exponential backoff or creates one confirmed-dead replacement
 
 **TerminalTreeView** (`packages/ui/src/components/organisms/TerminalTreeView.tsx`)
 
