@@ -9,6 +9,7 @@ import type {
   FsTreeData,
 } from "@/api/fs-types.js";
 import { api } from "@/api/client.js";
+import { scheduleGitFsInvalidation } from "@/lib/git-fs-invalidation.js";
 
 // ---------------------------------------------------------------------------
 // Delta application
@@ -116,6 +117,7 @@ export function useFsSubscription(project: string, path: string) {
         }
         return next;
       });
+      scheduleGitFsInvalidation(qc, project);
     });
 
     return () => {
