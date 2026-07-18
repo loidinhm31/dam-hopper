@@ -4,7 +4,6 @@ import {
 } from "@/lib/shortcuts.js";
 
 const BLOCKED_BROWSER_SHORTCUTS = [
-  "F12",
   "Mod+Shift+KeyI",
   "Mod+Shift+KeyJ",
   "Mod+Shift+KeyC",

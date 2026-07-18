@@ -21,8 +21,8 @@ function keydown(
 }
 
 describe("shouldSuppressBrowserShortcut", () => {
-  it("blocks denylisted browser and devtools shortcuts", () => {
-    expect(shouldSuppressBrowserShortcut(keydown({ code: "F12" }))).toBe(true);
+  it("allows F12 while blocking other denylisted browser shortcuts", () => {
+    expect(shouldSuppressBrowserShortcut(keydown({ code: "F12" }))).toBe(false);
     expect(
       shouldSuppressBrowserShortcut(
         keydown({ code: "KeyI", ctrlKey: true, shiftKey: true }),
