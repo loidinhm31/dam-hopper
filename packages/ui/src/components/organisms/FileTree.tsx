@@ -118,10 +118,6 @@ type NodeRendererWithContextProps = Omit<
   Omit<ComponentPropsWithoutRef<"div">, "style" | "onContextMenu"> & {
     style: React.CSSProperties;
     onContextMenu?: React.MouseEventHandler<HTMLDivElement>;
-    onNodeContextMenu: (
-      e: React.MouseEvent,
-      node: NodeApi<FsArborNode>,
-    ) => void;
     gitState?: GitFileState;
     hasChangedDescendant?: boolean;
     onOpenDiff?: (state: GitFileState) => void;
@@ -133,7 +129,6 @@ const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
       node,
       style,
       dragHandle,
-      onNodeContextMenu,
       gitState,
       hasChangedDescendant,
       onOpenDiff,
@@ -149,11 +144,6 @@ const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
       },
       [dragHandle, forwardedRef],
     );
-
-    const handleContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
-      onContextMenu?.(event);
-      onNodeContextMenu(event, node);
-    };
 
     if (isLoadingSentinel(node.data.id)) {
       return (
@@ -192,7 +182,7 @@ const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
           node.willReceiveDrop &&
             "bg-[var(--color-primary)]/10 ring-1 ring-[var(--color-primary)]",
         )}
-        onContextMenu={handleContextMenu}
+        onContextMenu={onContextMenu}
       >
         <span className="w-4 shrink-0 flex items-center justify-center">
           {isDir ? (
@@ -269,10 +259,6 @@ interface FileTreeProps {
   revealRequest?: FileTreeRevealRequest | null;
 }
 
-interface ContextMenuState {
-  node: FsArborNode;
-}
-
 interface RenameState {
   path: string;
   currentName: string;
@@ -305,7 +291,6 @@ export function FileTree({
   const projectRoot = projectData?.path ?? "";
   const { copied, copy } = useCopyToClipboard();
 
-  const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [newItemDialog, setNewItemDialog] = useState<{
     open: boolean;
     type: "file" | "folder";
@@ -393,43 +378,33 @@ export function FileTree({
     }
   }
 
-  function handleContextMenu(e: React.MouseEvent, node: NodeApi<FsArborNode>) {
-    setMenu({ node: node.data });
-  }
-
-  function handleCopyAbsolutePath() {
-    if (!menu) return;
+  function handleCopyAbsolutePath(node: FsArborNode) {
     const { absolutePath } = buildTreeCopyPaths({
       projectRoot,
       subPath: path,
-      nodeId: menu.node.id,
+      nodeId: node.id,
     });
     void copy(absolutePath);
   }
 
-  function handleCopyRelativePath() {
-    if (!menu) return;
+  function handleCopyRelativePath(node: FsArborNode) {
     const { relativePath } = buildTreeCopyPaths({
       projectRoot,
       subPath: path,
-      nodeId: menu.node.id,
+      nodeId: node.id,
     });
     void copy(relativePath);
   }
 
   // ── Context menu actions ────────────────────────────────────────────────
 
-  function handleNewFile() {
-    if (!menu) return;
-    const dir =
-      menu.node.kind === "dir" ? menu.node.id : parentDir(menu.node.id);
+  function handleNewFile(node: FsArborNode) {
+    const dir = node.kind === "dir" ? node.id : parentDir(node.id);
     setNewItemDialog({ open: true, type: "file", parentPath: dir });
   }
 
-  function handleNewFolder() {
-    if (!menu) return;
-    const dir =
-      menu.node.kind === "dir" ? menu.node.id : parentDir(menu.node.id);
+  function handleNewFolder(node: FsArborNode) {
+    const dir = node.kind === "dir" ? node.id : parentDir(node.id);
     setNewItemDialog({ open: true, type: "folder", parentPath: dir });
   }
 
@@ -447,10 +422,9 @@ export function FileTree({
     });
   }
 
-  function handleRenameStart() {
-    if (!menu) return;
-    setRenameValue(menu.node.name);
-    setRename({ path: menu.node.id, currentName: menu.node.name });
+  function handleRenameStart(node: FsArborNode) {
+    setRenameValue(node.name);
+    setRename({ path: node.id, currentName: node.name });
   }
 
   function handleRenameSubmit() {
@@ -467,11 +441,10 @@ export function FileTree({
     setRename(null);
   }
 
-  function handleDeleteStart() {
-    if (!menu) return;
+  function handleDeleteStart(node: FsArborNode) {
     setDeleteState({
-      path: menu.node.id,
-      isDir: menu.node.kind === "dir",
+      path: node.id,
+      isDir: node.kind === "dir",
       loading: false,
     });
   }
@@ -485,18 +458,15 @@ export function FileTree({
     });
   }
 
-  function handleDownload() {
-    if (!menu || menu.node.kind !== "file") return;
-    void ops.download(menu.node.id).catch((error) => {
+  function handleDownload(node: FsArborNode) {
+    if (node.kind !== "file") return;
+    void ops.download(node.id).catch((error) => {
       setOpError(error?.message ?? "Download failed");
     });
   }
 
-  function handleUploadHere() {
-    if (!menu) return;
-    setUploadDir(
-      menu.node.kind === "dir" ? menu.node.id : parentDir(menu.node.id),
-    );
+  function handleUploadHere(node: FsArborNode) {
+    setUploadDir(node.kind === "dir" ? node.id : parentDir(node.id));
     fileInputRef.current?.click();
   }
 
@@ -676,17 +646,19 @@ export function FileTree({
               {(props) => (
                 <TreeContextMenu
                   isDir={props.node.data.kind === "dir"}
-                  onCopyAbsolutePath={handleCopyAbsolutePath}
-                  onCopyRelativePath={handleCopyRelativePath}
+                  onCopyAbsolutePath={() =>
+                    handleCopyAbsolutePath(props.node.data)
+                  }
+                  onCopyRelativePath={() =>
+                    handleCopyRelativePath(props.node.data)
+                  }
                   absolutePathDisabled={!projectRoot}
-                  onNewFile={handleNewFile}
-                  onNewFolder={handleNewFolder}
-                  onRename={handleRenameStart}
-                  onDelete={handleDeleteStart}
-                  onDownload={handleDownload}
-                  onUpload={handleUploadHere}
-                  onOpen={() => setMenu({ node: props.node.data })}
-                  onClose={() => setMenu(null)}
+                  onNewFile={() => handleNewFile(props.node.data)}
+                  onNewFolder={() => handleNewFolder(props.node.data)}
+                  onRename={() => handleRenameStart(props.node.data)}
+                  onDelete={() => handleDeleteStart(props.node.data)}
+                  onDownload={() => handleDownload(props.node.data)}
+                  onUpload={() => handleUploadHere(props.node.data)}
                 >
                   <NodeRenderer
                     {...props}
@@ -706,7 +678,6 @@ export function FileTree({
                         state.rootRelativePath,
                       )
                     }
-                    onNodeContextMenu={handleContextMenu}
                   />
                 </TreeContextMenu>
               )}
