@@ -131,6 +131,7 @@ const ContextMenuContent = React.forwardRef<
       ref={ref}
       avoidCollisions={avoidCollisions}
       collisionPadding={collisionPadding}
+      updatePositionStrategy="always"
       className={cn(
         "z-[100] max-h-[var(--radix-context-menu-content-available-height)] max-w-[var(--radix-context-menu-content-available-width)] min-w-40 overflow-y-auto overflow-x-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-1 text-[var(--color-text)] shadow-xl outline-none",
         "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
