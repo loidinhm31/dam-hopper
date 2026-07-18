@@ -207,6 +207,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-07-18:** Completed context-menu trigger refactor Phase 02: Git branch Select handoff.
+  - ✅ Restored the local-branch right-click handoff without changing Select value or checkout behavior.
+  - ✅ Preserved the lifted Radix presenter, keyboard invocation, dismissal behavior, and current-branch delete guard.
+
 - **2026-07-17:** Completed context-menu placement Phase 02: consumer migration.
   - ✅ Routed the existing context-menu consumers through the shared Radix foundation with forwarded trigger refs.
   - ✅ Kept branch `Select` isolated from the generic context-menu trigger path.

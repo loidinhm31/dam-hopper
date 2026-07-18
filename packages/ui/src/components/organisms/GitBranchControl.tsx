@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { GitBranch, Plus } from "lucide-react";
 import {
   useBranches,
@@ -101,6 +101,7 @@ export function GitBranchControl({
   const [contextMenu, setContextMenu] = useState<BranchContextMenuState | null>(
     null,
   );
+  const selectTriggerRef = useRef<HTMLButtonElement>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -231,6 +232,15 @@ export function GitBranchControl({
     });
   }
 
+  function closeBranchContextMenu() {
+    setContextMenu(null);
+    window.setTimeout(() => {
+      if (!selectTriggerRef.current?.disabled) {
+        selectTriggerRef.current?.focus();
+      }
+    }, 0);
+  }
+
   return (
     <>
       <div
@@ -256,6 +266,7 @@ export function GitBranchControl({
           }}
         >
           <SelectTrigger
+            ref={selectTriggerRef}
             className={cn(
               "min-w-0 h-8 font-bold px-3 glass-input font-sans tracking-tight",
               compact && compactTextClass,
@@ -278,6 +289,16 @@ export function GitBranchControl({
                     value={branch.name}
                     onPointerDown={(event) => {
                       if (event.button === 2) event.preventDefault();
+                    }}
+                    onPointerUp={(event) => {
+                      if (event.button !== 2) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      openBranchContextMenu(
+                        branch,
+                        event.clientX,
+                        event.clientY,
+                      );
                     }}
                     onContextMenu={(event) => {
                       event.preventDefault();
@@ -368,7 +389,7 @@ export function GitBranchControl({
             setContextMenu(null);
             setDeleteTarget(contextMenu.branchName);
           }}
-          onClose={() => setContextMenu(null)}
+          onClose={closeBranchContextMenu}
         />
       ) : null}
 
