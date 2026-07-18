@@ -11,7 +11,7 @@
 
 - **Date:** 2026-07-19
 - **Priority:** P2
-- **Status:** Pending
+- **Status:** Completed 2026-07-19 01:22 +0700
 - **Goal:** Evolve the one-tone helper into a small, deterministic Web Audio pattern scheduler without adding audio files or dependencies.
 
 ## Key Insights
@@ -50,10 +50,10 @@ Represent a pattern as typed note descriptors (`frequency`, `startOffset`, `dura
 
 ## Todo List
 
-- [ ] Add exhaustive fixed pattern map.
-- [ ] Preserve Default waveform/timing exactly.
-- [ ] Schedule and clean multi-note patterns safely.
-- [ ] Cover fallback and error paths with unit tests.
+- [x] Add exhaustive fixed pattern map.
+- [x] Preserve Default waveform/timing exactly.
+- [x] Schedule and clean multi-note patterns safely.
+- [x] Cover fallback and error paths with unit tests.
 
 ## Success Criteria
 

@@ -207,6 +207,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-07-19:** Completed Codex terminal notification controls Phase 02: Implement selectable synthesized chimes (review approved 01:22 +07).
+  - ✅ Added fixed Default, Soft, Two-tone, and Urgent Web Audio patterns with one reusable audio context.
+  - ✅ Preserved the legacy Default 880 Hz sine timing and normalized volume semantics.
+  - ✅ Added scheduling, cleanup, unavailable-API, autoplay-rejection, and zero-volume coverage.
+
 - **2026-07-19:** Completed Codex terminal notification controls Phase 01: Persist delivery and pattern preferences (review approved 01:07 +07).
   - ✅ Added backward-compatible persisted toast/browser delivery preferences and constrained synthesized-chime pattern selection.
   - ✅ Preserved Codex TUI synchronization as a master-switch-only side effect; child-setting changes are config-only.
