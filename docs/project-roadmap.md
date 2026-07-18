@@ -207,6 +207,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Recent Milestones
 
+- **2026-07-19:** Completed Codex terminal notification controls Phase 01: Persist delivery and pattern preferences (review approved 01:07 +07).
+  - ✅ Added backward-compatible persisted toast/browser delivery preferences and constrained synthesized-chime pattern selection.
+  - ✅ Preserved Codex TUI synchronization as a master-switch-only side effect; child-setting changes are config-only.
+  - ✅ Added compatibility, partial-merge, invalid-pattern, and sync-isolation coverage.
+
 - **2026-07-18:** Completed context-menu trigger refactor Phase 03: consumer integration and browser regression coverage.
   - ✅ Verified production `FileTree` / Arborist lifecycle coverage, production `GitBranchControl` / `SelectItem` handoff coverage, and shared context-menu dynamic positioning behavior.
   - ✅ Focused tests/build validation passed for the targeted consumer and browser checks.

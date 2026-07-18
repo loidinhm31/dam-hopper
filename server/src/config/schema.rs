@@ -363,6 +363,16 @@ fn default_terminal_codex_notification_sound_volume() -> u8 {
     100
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TerminalCodexNotificationSoundPattern {
+    #[default]
+    Default,
+    Soft,
+    TwoTone,
+    Urgent,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiConfig {
@@ -421,6 +431,18 @@ pub struct UiConfig {
     pub terminal_codex_notifications_enabled: bool,
     #[serde(
         default = "default_true",
+        alias = "terminal_codex_notification_toast_enabled",
+        alias = "terminalCodexNotificationToastEnabled"
+    )]
+    pub terminal_codex_notification_toast_enabled: bool,
+    #[serde(
+        default = "default_true",
+        alias = "terminal_codex_browser_notifications_enabled",
+        alias = "terminalCodexBrowserNotificationsEnabled"
+    )]
+    pub terminal_codex_browser_notifications_enabled: bool,
+    #[serde(
+        default = "default_true",
         alias = "terminal_codex_notification_sound_enabled",
         alias = "terminalCodexNotificationSoundEnabled"
     )]
@@ -431,6 +453,12 @@ pub struct UiConfig {
         alias = "terminalCodexNotificationSoundVolume"
     )]
     pub terminal_codex_notification_sound_volume: u8,
+    #[serde(
+        default,
+        alias = "terminal_codex_notification_sound_pattern",
+        alias = "terminalCodexNotificationSoundPattern"
+    )]
+    pub terminal_codex_notification_sound_pattern: TerminalCodexNotificationSoundPattern,
     #[serde(default, alias = "explorer_show_hidden", alias = "explorerShowHidden")]
     pub explorer_show_hidden: bool,
     #[serde(
@@ -505,9 +533,13 @@ impl Default for UiConfig {
             fleet_terminal_shortcut: default_fleet_terminal_shortcut(),
             terminal_suggestions_enabled: true,
             terminal_codex_notifications_enabled: false,
+            terminal_codex_notification_toast_enabled: true,
+            terminal_codex_browser_notifications_enabled: true,
             terminal_codex_notification_sound_enabled: true,
             terminal_codex_notification_sound_volume:
                 default_terminal_codex_notification_sound_volume(),
+            terminal_codex_notification_sound_pattern:
+                TerminalCodexNotificationSoundPattern::default(),
             explorer_show_hidden: false,
             mobile_custom_keyboard_enabled: true,
             mobile_custom_keyboard_font_size: default_mobile_custom_keyboard_font_size(),

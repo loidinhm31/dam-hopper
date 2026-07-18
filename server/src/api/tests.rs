@@ -1519,6 +1519,19 @@ fn merge_global_ui_config_rejects_non_object_payloads() {
     assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
 }
 
+#[test]
+fn merge_global_ui_config_rejects_invalid_notification_sound_pattern() {
+    let err = crate::api::config::merge_global_ui_config(
+        Some(crate::config::schema::UiConfig::default()),
+        &serde_json::json!({
+            "terminalCodexNotificationSoundPattern": "bell",
+        }),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+}
+
 #[tokio::test]
 async fn update_global_ui_at_path_persists_partial_merge_and_updates_state() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1569,6 +1582,111 @@ async fn update_global_ui_at_path_persists_terminal_notification_sound_settings(
     let ui = state.global_config.read().await.ui.clone().unwrap();
     assert!(!ui.terminal_codex_notification_sound_enabled);
     assert_eq!(ui.terminal_codex_notification_sound_volume, 45);
+}
+
+#[tokio::test]
+async fn update_global_ui_at_path_persists_notification_delivery_and_pattern_settings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalCodexNotificationToastEnabled": false,
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalCodexBrowserNotificationsEnabled": false,
+            "terminalCodexNotificationSoundPattern": "soft",
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+
+    let written = std::fs::read_to_string(&gc_path).unwrap();
+    assert!(written.contains("terminal_codex_notification_toast_enabled = false"));
+    assert!(written.contains("terminal_codex_browser_notifications_enabled = false"));
+    assert!(written.contains("terminal_codex_notification_sound_pattern = \"soft\""));
+
+    let ui = state.global_config.read().await.ui.clone().unwrap();
+    assert!(!ui.terminal_codex_notification_toast_enabled);
+    assert!(!ui.terminal_codex_browser_notifications_enabled);
+    assert_eq!(
+        ui.terminal_codex_notification_sound_pattern,
+        crate::config::schema::TerminalCodexNotificationSoundPattern::Soft
+    );
+}
+
+#[tokio::test]
+async fn update_global_ui_at_path_rejects_invalid_pattern_without_mutating_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalCodexNotificationToastEnabled": false,
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+    let before = std::fs::read_to_string(&gc_path).unwrap();
+
+    let err = crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalCodexNotificationSoundPattern": "bell",
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+    assert_eq!(std::fs::read_to_string(&gc_path).unwrap(), before);
+}
+
+#[tokio::test]
+async fn update_global_ui_at_path_does_not_sync_codex_tui_for_child_settings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+    let codex_dir = tmp.path().join(".codex");
+    std::fs::create_dir_all(&codex_dir).unwrap();
+    let codex_config_path = codex_dir.join("config.toml");
+    let original_codex_config = "[tui]\nnotifications = false\n";
+    std::fs::write(&codex_config_path, original_codex_config).unwrap();
+
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalCodexNotificationToastEnabled": false,
+            "terminalCodexBrowserNotificationsEnabled": false,
+            "terminalCodexNotificationSoundPattern": "urgent",
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(codex_config_path).unwrap(),
+        original_codex_config
+    );
 }
 
 #[tokio::test]

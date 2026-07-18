@@ -46,8 +46,11 @@ function resetSettingsStore() {
     fleetTerminalShortcut: "Mod+Shift+KeyM",
     terminalSuggestionsEnabled: true,
     terminalCodexNotificationsEnabled: false,
+    terminalCodexNotificationToastEnabled: true,
+    terminalCodexBrowserNotificationsEnabled: true,
     terminalCodexNotificationSoundEnabled: true,
     terminalCodexNotificationSoundVolume: 100,
+    terminalCodexNotificationSoundPattern: "default",
     terminalScrollButtonsEnabled: false,
     terminalScrollStep: 3,
     explorerShowHidden: false,
@@ -86,8 +89,11 @@ describe("settings store terminal agent notification fields", () => {
     expect(state.hydrated).toBe(true);
     expect(state.systemFontSize).toBe(16);
     expect(state.terminalCodexNotificationsEnabled).toBe(false);
+    expect(state.terminalCodexNotificationToastEnabled).toBe(true);
+    expect(state.terminalCodexBrowserNotificationsEnabled).toBe(true);
     expect(state.terminalCodexNotificationSoundEnabled).toBe(true);
     expect(state.terminalCodexNotificationSoundVolume).toBe(100);
+    expect(state.terminalCodexNotificationSoundPattern).toBe("default");
   });
 
   it("persists codex notification changes", async () => {
@@ -122,6 +128,24 @@ describe("settings store terminal agent notification fields", () => {
         terminalCodexNotificationSoundVolume: 100,
       }),
     );
+  });
+
+  it("persists delivery and sound pattern settings", async () => {
+    updateUi.mockResolvedValue({ updated: true });
+
+    useSettingsStore.getState().saveDebounced({
+      terminalCodexNotificationToastEnabled: false,
+      terminalCodexBrowserNotificationsEnabled: false,
+      terminalCodexNotificationSoundPattern: "two-tone",
+    });
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(updateUi).toHaveBeenCalledWith({
+      terminalCodexNotificationToastEnabled: false,
+      terminalCodexBrowserNotificationsEnabled: false,
+      terminalCodexNotificationSoundPattern: "two-tone",
+    });
   });
 
   it("marks hydrate complete when global config load fails", async () => {
@@ -244,5 +268,35 @@ describe("settings store terminal agent notification fields", () => {
       expect.objectContaining({ systemFontSize: 16 }),
     );
     expect(useSettingsStore.getState().systemFontSize).toBe(16);
+  });
+
+  it("restores a rejected older patch when a newer patch succeeds", async () => {
+    let rejectFirst: ((reason?: unknown) => void) | undefined;
+
+    updateUi
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectFirst = reject;
+          }),
+      )
+      .mockResolvedValueOnce({ updated: true });
+
+    useSettingsStore.getState().saveDebounced({ systemFontSize: 15 });
+    await vi.advanceTimersByTimeAsync(500);
+
+    useSettingsStore.getState().saveDebounced({ editorFontSize: 16 });
+    await vi.advanceTimersByTimeAsync(500);
+
+    rejectFirst?.(new Error("first failed"));
+    await flushMicrotasks();
+
+    expect(updateUi).toHaveBeenNthCalledWith(2, { editorFontSize: 16 });
+    expect(useSettingsStore.getState().systemFontSize).toBe(15);
+
+    await flushMicrotasks();
+
+    expect(useSettingsStore.getState().systemFontSize).toBe(14);
+    expect(useSettingsStore.getState().editorFontSize).toBe(16);
   });
 });

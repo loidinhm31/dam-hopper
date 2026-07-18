@@ -99,7 +99,7 @@ the retained buffer is written and remains suppressed until xterm invokes that w
 completion callback. Live chunks queue during that interval, so historical OSC 9
 signals cannot alert while an identical signal received after replay completion can.
 
-Runtime delivery is intentionally UI-only; the Sound switch and Volume slider use the existing global UI-config persistence path. It is covered by unit tests around parsing, recognition, tracking, notification gating, callback-gated replay suppression, restart suppression, and cleanup behavior, plus a Chromium regression test that verifies queued live chunks resume only after retained replay completes.
+Runtime delivery is intentionally UI-only, while its preferences use the server-backed global UI-config persistence path. The API uses camelCase and global TOML uses snake_case: the master `terminalCodexNotificationsEnabled` / `terminal_codex_notifications_enabled` defaults to off, while toast, browser-popup, and sound preferences default to on, volume defaults to `100`, and the sound pattern defaults to `"default"`. Valid patterns are `"default"`, `"soft"`, `"two-tone"`, and `"urgent"`; invalid values are rejected during config deserialization. Only the master setting synchronizes Codex TUI configuration; child delivery and sound preference updates do not modify `~/.codex/config.toml`. It is covered by unit tests around parsing, recognition, tracking, notification gating, callback-gated replay suppression, restart suppression, and cleanup behavior, plus a Chromium regression test that verifies queued live chunks resume only after retained replay completes.
 
 Phase 04 adds a settings surface in the shared UI package:
 
