@@ -17,7 +17,10 @@ import {
   cancelScheduledTerminalFit,
   scheduleTerminalFit,
 } from "@/lib/terminal-fit-scheduler.js";
-import { activateTerminalWebglRenderer } from "@/lib/terminal-renderer.js";
+import {
+  activateTerminalWebglRenderer,
+  type TerminalRendererHandle,
+} from "@/lib/terminal-renderer.js";
 import { handleSharedTerminalKeyEvent } from "@/lib/terminal-keyboard-shortcuts.js";
 import { handleTerminalSuggestionKeyEvent } from "@/lib/terminal-suggestion-key-handler.js";
 import { getTerminalSuggestionSuffix } from "@/lib/terminal-suggestion-acceptance.js";
@@ -68,6 +71,8 @@ interface TerminalPanelProps {
   suppressNativeKeyboard?: boolean;
   /** Current 1-based position in the open terminal list. */
   terminalOrder?: number;
+  /** Enables WebGL only while this kept-alive terminal is visible. */
+  webglEnabled?: boolean;
   className?: string;
 }
 
@@ -135,6 +140,7 @@ export function TerminalPanel({
   suppressAutoFocus = false,
   suppressNativeKeyboard = suppressAutoFocus,
   terminalOrder,
+  webglEnabled = false,
   className,
 }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -155,6 +161,7 @@ export function TerminalPanel({
 
   // Terminal instance ref — set after term.open(), used by useTerminalSuggestions
   const termRef = useRef<Terminal | null>(null);
+  const rendererRef = useRef<TerminalRendererHandle | null>(null);
   // Term element state — triggers re-render to mount portal after open()
   const [termElement, setTermElement] = useState<HTMLElement | null>(null);
   const findControllerRef = useRef<TerminalFindController | null>(null);
@@ -238,8 +245,6 @@ export function TerminalPanel({
     const unicode11Addon = new Unicode11Addon();
     term.loadAddon(unicode11Addon);
     term.unicode.activeVersion = "11";
-
-    const renderer = activateTerminalWebglRenderer(term);
 
     // Expose terminal instance and element for suggestions hook + portal
     termRef.current = term;
@@ -693,11 +698,30 @@ export function TerminalPanel({
       removeTerminal(safeSessionId);
       termRef.current = null;
       openedRef.current = false;
-      renderer.dispose();
+      rendererRef.current?.dispose();
+      rendererRef.current = null;
       term.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intentionally run once per mount — use key prop to force remount
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term || !webglEnabled) {
+      rendererRef.current?.dispose();
+      rendererRef.current = null;
+      return;
+    }
+
+    if (rendererRef.current) return;
+
+    rendererRef.current = activateTerminalWebglRenderer(term);
+
+    return () => {
+      rendererRef.current?.dispose();
+      rendererRef.current = null;
+    };
+  }, [webglEnabled]);
 
   useEffect(() => {
     const controller = findControllerRef.current;

@@ -43,11 +43,10 @@ describe("activateTerminalWebglRenderer", () => {
     diagCalls.length = 0;
   });
 
-  it("activates WebGL when WebGL2 is supported", () => {
+  it("activates WebGL when the addon can attach", () => {
     const { addon, terminal } = rendererFixture();
 
     const handle = activateTerminalWebglRenderer(terminal, {
-      supportsWebgl2: () => true,
       createAddon: () => addon,
     });
 
@@ -61,12 +60,24 @@ describe("activateTerminalWebglRenderer", () => {
     });
   });
 
-  it("keeps the DOM renderer when WebGL2 is unavailable", () => {
+  it("releases the WebGL addon when its visible pane is disabled", () => {
     const { addon, terminal } = rendererFixture();
 
     const handle = activateTerminalWebglRenderer(terminal, {
-      supportsWebgl2: () => false,
       createAddon: () => addon,
+    });
+    handle.dispose();
+
+    expect(addon.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("uses addon construction as the WebGL capability check", () => {
+    const { terminal } = rendererFixture();
+
+    const handle = activateTerminalWebglRenderer(terminal, {
+      createAddon: () => {
+        throw new Error("webgl init failed");
+      },
     });
 
     expect(handle.renderer).toBe("dom");
@@ -75,35 +86,27 @@ describe("activateTerminalWebglRenderer", () => {
       type: "custom",
       scope: "terminal-renderer",
       message: "renderer:dom",
-      metadata: { reason: "webgl2_unavailable" },
+      metadata: { reason: "webgl_init_failed" },
     });
   });
 
-  it("falls back when WebGL addon initialization fails", () => {
+  it("falls back and disposes when addon loading fails", () => {
     const { addon, terminal } = rendererFixture();
     terminal.loadAddon.mockImplementation(() => {
       throw new Error("webgl init failed");
     });
 
     const handle = activateTerminalWebglRenderer(terminal, {
-      supportsWebgl2: () => true,
       createAddon: () => addon,
     });
 
     expect(handle.renderer).toBe("dom");
     expect(addon.dispose).toHaveBeenCalledOnce();
-    expect(diagCalls).toContainEqual({
-      type: "custom",
-      scope: "terminal-renderer",
-      message: "renderer:dom",
-      metadata: { reason: "webgl_init_failed" },
-    });
   });
 
   it("disposes WebGL and refreshes the DOM viewport after context loss", () => {
     const { addon, terminal, loseContext } = rendererFixture();
     activateTerminalWebglRenderer(terminal, {
-      supportsWebgl2: () => true,
       createAddon: () => addon,
     });
 

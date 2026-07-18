@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useMemo } from "react";
 import { Terminal as TerminalIcon } from "lucide-react";
 import { MobileTerminalAccessoryBar } from "@/components/organisms/MobileTerminalAccessoryBar.js";
 import { TerminalKeepAliveHost } from "@/components/organisms/TerminalKeepAliveHost.js";
@@ -30,6 +30,7 @@ interface Props {
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   layoutRevision?: number;
   renderTerminals?: boolean;
+  onVisibleSessionIdsChange?: (sessionIds: ReadonlySet<string>) => void;
 }
 
 export function MultiTerminalDisplay({
@@ -43,6 +44,7 @@ export function MultiTerminalDisplay({
   onOpenDiagnosticsMenu,
   layoutRevision = 0,
   renderTerminals = true,
+  onVisibleSessionIdsChange,
 }: Props) {
   const layout = useTerminalLayout();
   const isCompactWorkspace = useCompactWorkspace();
@@ -55,6 +57,22 @@ export function MultiTerminalDisplay({
     isCompactWorkspace && isCoarsePointer && !!activeSessionId;
   const suppressTerminalFocus =
     showMobileAccessoryBar && mobileCustomKeyboardEnabled;
+  const visibleSessionIds = useMemo(
+    () =>
+      new Set(
+        layout
+          .getPanes()
+          .flatMap((pane) =>
+            pane.activeSessionId ? [pane.activeSessionId] : [],
+          ),
+      ),
+    [layout.root],
+  );
+
+  useEffect(() => {
+    onVisibleSessionIdsChange?.(visibleSessionIds);
+    return () => onVisibleSessionIdsChange?.(new Set());
+  }, [onVisibleSessionIdsChange, visibleSessionIds]);
 
   // ── sync new sessions into the split layout ──────────────────────────────
   useEffect(() => {
@@ -121,6 +139,7 @@ export function MultiTerminalDisplay({
           onNewTerminal={onNewTerminal}
           onTerminalReady={handleTerminalReady}
           suppressAutoFocus={suppressTerminalFocus}
+          webglEnabledSessionIds={visibleSessionIds}
         />
       )}
 
