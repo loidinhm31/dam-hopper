@@ -36,9 +36,11 @@
 │  │  ├─ /api/fs/* → [conditional] List/read/stat (per-proj)│
 │  │  ├─ /api/agent-store/* → Distribution/import           │
 │  │  ├─ /api/workspace/* → Config switching                │
+│  │  ├─ /api/usage/* → [planned] Aggregate terminal usage  │
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
 │     ├─ PtySessionManager (Arc<Mutex<Map<uuid, ...>>>)     │
+│     ├─ TelemetryStore/Worker (planned, separate SQLite)   │
 │     ├─ FsSubsystem (Arc<Mutex<ProjectSandbox>>)           │
 │     ├─ AgentStoreService (symlink distribution)           │
 │     ├─ CommandRegistry (BM25 search)                      │
@@ -216,6 +218,73 @@ History stores exact raw commands separately from normalized search fields, rema
 local-only, and provides clear/disable controls. Desktop is the first support boundary;
 mobile direct-write paths remain explicitly unsupported until all input routes share the
 same controller.
+
+### terminal usage analytics (planned)
+
+Terminal analytics extends the validated shell lifecycle; it does not infer commands from
+xterm input, PTY output, silence, or browser history. Scope is DamHopper-launched,
+integration-enabled interactive shells only. External terminals, nested shells, SSH internals,
+and host-wide process auditing stay outside this boundary.
+
+```mermaid
+flowchart LR
+  Shell[Nonce-validated shell lifecycle] --> Normalize[In-memory metadata normalizer]
+  Codex[Codex OTel response events] --> Receiver[Authenticated loopback OTLP receiver]
+  Normalize --> Worker[Bounded telemetry worker]
+  Receiver --> Worker
+  Worker --> DB[(telemetry.db)]
+  DB --> API[Authenticated aggregate usage API]
+  API --> Page[Compact Usage page]
+```
+
+The shell `D` completion marker carries exit status when the adapter can observe it. The PTY
+manager timestamps validated submission/completion events before WebSocket fan-out and assigns
+a stable identity from PTY session, generation, and lifecycle sequence. Reconnect, replay, or
+fan-out lag therefore cannot create duplicate analytics rows. Unsupported or ambiguous shell
+activity records coverage as `partial` or `unavailable`; the system never fabricates missing
+commands.
+
+Raw command text is transient classifier input only. Persisted command facts are limited to an
+allowlisted executable/category, argument count, project identity, timestamps, duration, exit
+status, capture quality/version, and a keyed HMAC fingerprint for repeat counting. Telemetry
+never stores command text, argv, cwd strings, environment values, PTY output, AI prompts,
+responses, tool arguments, or tool output.
+
+`telemetry.db` is separate from session persistence because `sessions.db` has different restore
+and privacy semantics. Planned logical tables:
+
+| Table | Contract |
+| --- | --- |
+| `terminal_runs` | PTY run/project/shell/generation/start/end/status/coverage |
+| `command_events` | Stable sequence/category/executable/HMAC/time/duration/status/source |
+| `agent_runs` | Provider conversation/run correlation, model, time, status, source quality |
+| `agent_usage_events` | Deduped input/cached/output/reasoning token counters and source version |
+| `daily_usage_rollups` | UTC daily counts/outcomes/token sums retained after detail purge |
+| `telemetry_health` | Dropped, rejected, invalid, purge, and checkpoint counters |
+
+The store uses mode `0600`, WAL, a busy timeout, one bounded non-blocking writer, and a separate
+read connection. Database lock/full/error paths drop or coalesce telemetry and increment health
+counters; they never block PTY reads or writes. Detail retention defaults to 90 days and remains
+configurable. Purge, per-project exclusion, global pause, and delete-all are server operations.
+
+Codex integration is optional and disabled by default. It uses a separate OTLP/HTTP listener
+bound to `127.0.0.1` with a generated bearer secret, not MCP or a model-visible tool. Only
+allowlisted metadata and token fields are accepted; prompt/output fields are rejected even if an
+upstream client enables them. Missing telemetry is `unavailable`, not zero. Correlation is exact
+only with an explicit provider/run mapping; project/time fallback is labeled approximate.
+
+The protected usage API returns aggregates only. It does not expose raw event rows. The shared UI
+adds a `/usage` route plus a dashboard teaser. Navigation becomes more compact and uses responsive
+overflow rather than placing full analytics on the operational dashboard.
+
+Key invariants:
+
+- Shell lifecycle validation remains the only command boundary.
+- Telemetry persistence stays off the PTY hot path.
+- Raw commands and AI content never cross the persistence boundary.
+- Coverage/confidence is queryable and visible in UI.
+- Codex telemetry adds no MCP call or model-token consumption.
+- Metrics stay descriptive; no productivity or employee scoring.
 
 Notification selection also stays frontend-only. Native notification clicks
 publish a typed browser event keyed by the stable PTY `sessionId`;
