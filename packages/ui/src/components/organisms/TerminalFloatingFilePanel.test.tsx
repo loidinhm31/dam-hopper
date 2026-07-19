@@ -105,6 +105,17 @@ describe("TerminalFloatingFilePanel", () => {
     expect(markup).toContain("Resize files panel");
   });
 
+  it("bounds each tab panel for scrollable active content", async () => {
+    await renderPanel(true);
+
+    for (const panel of document.querySelectorAll('[role="tabpanel"]')) {
+      expect(panel.classList.contains("flex")).toBe(true);
+      expect(panel.classList.contains("flex-col")).toBe(true);
+      expect(panel.classList.contains("min-h-0")).toBe(true);
+      expect(panel.classList.contains("overflow-hidden")).toBe(true);
+    }
+  });
+
   it("closes on Escape", () => {
     const onClose = vi.fn();
 
