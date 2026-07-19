@@ -336,7 +336,7 @@ function TerminalFloatingFilePanelContent({
                 role="tabpanel"
                 aria-labelledby={EXPLORER_TAB_ID}
                 hidden={activeTab !== "explorer"}
-                className="min-h-0 flex-1 overflow-hidden"
+                className="flex min-h-0 flex-1 flex-col overflow-hidden"
               >
                 {activeTab === "explorer" ? explorerContent : null}
               </div>
@@ -345,7 +345,7 @@ function TerminalFloatingFilePanelContent({
                 role="tabpanel"
                 aria-labelledby={CHANGES_TAB_ID}
                 hidden={activeTab !== "changes"}
-                className="min-h-0 flex-1 overflow-hidden"
+                className="flex min-h-0 flex-1 flex-col overflow-hidden"
               >
                 {activeTab === "changes" ? changesContent : null}
               </div>
