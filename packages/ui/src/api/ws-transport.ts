@@ -834,6 +834,15 @@ function channelToEndpoint(
         url: `/api/tunnels/${encodeURIComponent(d.id)}`,
       };
     }
+    case "browser-debug:create":
+      return { method: "POST", url: "/api/browser-debug/artifacts", body: data };
+    case "browser-debug:delete": {
+      const { artifactId } = data as { artifactId: string };
+      return {
+        method: "DELETE",
+        url: `/api/browser-debug/artifacts/${encodeURIComponent(artifactId)}`,
+      };
+    }
 
     default:
       throw new Error(`Unknown channel for WsTransport: ${channel}`);
@@ -1742,6 +1751,31 @@ export class WsTransport implements Transport {
       }
       throw error;
     }
+  }
+
+  async uploadBrowserDebugPng(
+    artifactId: string,
+    png: Blob,
+  ): Promise<import("./client.js").BrowserDebugArtifactResponse> {
+    if (png.type !== "image/png") {
+      throw new Error("Browser screenshot upload must be a PNG");
+    }
+    const response = await fetch(
+      `${this.baseUrl}/api/browser-debug/artifacts/${encodeURIComponent(artifactId)}/png`,
+      {
+        method: "PUT",
+        headers: { ...buildAuthHeaders(), "Content-Type": "image/png" },
+        credentials: "include",
+        body: png,
+      },
+    );
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({ error: response.statusText }))) as {
+        error?: string;
+      };
+      throw new Error(error.error ?? `HTTP ${response.status}`);
+    }
+    return response.json();
   }
 
   onTerminalData(id: string, cb: (data: string) => void): () => void {

@@ -231,8 +231,10 @@ describe("WorkspacePage", () => {
 
     expect(markup).toContain("Terminal companion");
     expect(markup).toContain("Terminal");
+    expect(markup).toContain("Browser");
     expect(markup).toContain("Fleet");
     expect(markup).toContain("Ports");
+    expect(markup).toContain("Browser");
     expect(markup).toContain("Git");
     expect(markup).toContain("Project");
   });

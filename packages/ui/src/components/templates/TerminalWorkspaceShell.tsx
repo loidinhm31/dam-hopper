@@ -15,6 +15,7 @@ export function TerminalWorkspaceShell({
   fleetContent,
   gitContent,
   portsContent,
+  browserContent,
   activatePanelRequest,
   workspaceMode,
   onWorkspaceModeChange,
@@ -26,6 +27,7 @@ export function TerminalWorkspaceShell({
   fleetContent: ReactNode;
   gitContent: ReactNode;
   portsContent?: ReactNode;
+  browserContent?: ReactNode;
   activatePanelRequest?: TerminalWorkspacePanelRequest | null;
   workspaceMode: WorkspaceMode;
   onWorkspaceModeChange: (mode: WorkspaceMode) => void;
@@ -61,7 +63,9 @@ export function TerminalWorkspaceShell({
       ? { label: "Git", content: gitContent }
       : activePanelId === "ports"
         ? { label: "Ports", content: portsContent }
-        : { label: "Fleet Terminal", content: fleetContent };
+        : activePanelId === "browser"
+          ? { label: "Browser", content: browserContent }
+          : { label: "Fleet Terminal", content: fleetContent };
 
   return (
     <div className="flex h-screen flex-col overflow-hidden gradient-bg">
