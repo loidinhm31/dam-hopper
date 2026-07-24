@@ -1,4 +1,4 @@
-export type TerminalWorkspacePanelId = "git" | "ports" | "terminals";
+export type TerminalWorkspacePanelId = "git" | "ports" | "terminals" | "browser";
 
 export interface TerminalWorkspacePanelRequest {
   nonce: number;

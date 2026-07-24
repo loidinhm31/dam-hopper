@@ -17,6 +17,7 @@ import {
   GitMerge,
   LayoutGrid,
   Folder,
+  Globe2,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -24,6 +25,11 @@ import { IdeShell } from "@/components/templates/IdeShell.js";
 import { MobileWorkspaceShell } from "@/components/templates/MobileWorkspaceShell.js";
 import { TerminalWorkspaceShell } from "@/components/templates/TerminalWorkspaceShell.js";
 import { TerminalFloatingFilePanel } from "@/components/organisms/TerminalFloatingFilePanel.js";
+import {
+  BrowserDebugKeepAliveHost,
+  type BrowserDebugKeepAliveHandle,
+} from "@/components/organisms/BrowserDebugKeepAliveHost.js";
+import { BrowserDebugPanel } from "@/components/organisms/BrowserDebugPanel.js";
 import type { ChangedFileSelection } from "@/components/organisms/ChangedFilesList.js";
 import { DiagnosticsTimeWindowSelect } from "@/components/molecules/DiagnosticsTimeWindowSelect.js";
 import { TerminalDiagnosticsContextMenu } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
@@ -41,6 +47,7 @@ import { useEditorStore } from "@/stores/editor.js";
 import { useSearchUiStore } from "@/stores/search-ui.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalManager } from "@/hooks/use-terminal-manager.js";
+import { useBrowserDebug } from "@/hooks/use-browser-debug.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
@@ -198,6 +205,7 @@ const IDE_COMPACT_SURFACE_IDS = [
   "search",
   "editor",
   "terminal",
+  "browser",
   "git",
   "project",
 ] as const;
@@ -205,6 +213,7 @@ const TERMINAL_COMPACT_SURFACE_IDS = [
   "terminal",
   "fleet",
   "ports",
+  "browser",
   "git",
   "project",
 ] as const;
@@ -306,6 +315,10 @@ export default function WorkspacePage() {
     useState<ActivateToolRequest | null>(null);
   const [terminalWorkspacePanelRequest, setTerminalWorkspacePanelRequest] =
     useState<TerminalWorkspacePanelRequest | null>(null);
+  const browserDebug = useBrowserDebug();
+  const browserViewportRef = useRef<HTMLDivElement>(null);
+  const browserKeepAliveRef = useRef<BrowserDebugKeepAliveHandle>(null);
+  const [browserViewportVersion, setBrowserViewportVersion] = useState(0);
   const [
     terminalFilePanelEditorFocusSignal,
     setTerminalFilePanelEditorFocusSignal,
@@ -330,6 +343,8 @@ export default function WorkspacePage() {
     availableCompactSurfaceIds,
     defaultCompactSurfaceId,
   );
+  const isBrowserViewportVisible =
+    !isCompactWorkspace || activeCompactSurface === "browser";
   const compactTerminalLayoutRevision =
     isCompactWorkspace &&
     workspaceMode === "terminal" &&
@@ -526,6 +541,17 @@ export default function WorkspacePage() {
       const next = !current;
       saveTerminalFilePanelOpen(next);
       return next;
+    });
+  }, []);
+
+  const notifyBrowserViewportChanged = useCallback(() => {
+    setBrowserViewportVersion((version) => version + 1);
+  }, []);
+
+  const openBrowserTerminalPanel = useCallback(() => {
+    setTerminalWorkspacePanelRequest({
+      nonce: ++panelShortcutNonceRef.current,
+      targetId: "browser",
     });
   }, []);
 
@@ -867,12 +893,15 @@ export default function WorkspacePage() {
                   { id: "git", label: "Git" },
                   { id: "ports", label: "Ports" },
                   { id: "terminals", label: "Fleet" },
+                  { id: "browser", label: "Browser" },
                 ].map(({ id, label }) => (
                   <button
                     key={id}
                     type="button"
                     onClick={() =>
-                      activateTerminalPanelShortcut(id as TerminalPanelToolId)
+                      id === "browser"
+                        ? openBrowserTerminalPanel()
+                        : activateTerminalPanelShortcut(id as TerminalPanelToolId)
                     }
                     className="rounded-[3px] px-2 py-1 text-[11px] font-medium text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
                   >
@@ -1146,6 +1175,7 @@ export default function WorkspacePage() {
       handleAddFreeTerminal,
       projectName,
       handleLaunchShell,
+      openBrowserTerminalPanel,
       terminalFilePanelOpen,
       workspaceMode,
       isCompactWorkspace,
@@ -1220,6 +1250,35 @@ export default function WorkspacePage() {
       </Suspense>
     ),
     [],
+  );
+
+  const browserContent = useMemo(
+    () => (
+      <BrowserDebugPanel
+        url={browserDebug.inputUrl}
+        bridgeStatus={browserDebug.bridgeStatus}
+        viewportRef={browserViewportRef}
+        onViewportReady={notifyBrowserViewportChanged}
+        selection={browserDebug.selection}
+        error={browserDebug.error}
+        loading={browserDebug.bridgeStatus === "loading"}
+        onUrlChange={browserDebug.setInputUrl}
+        onNavigate={browserDebug.navigate}
+        onStartPicker={() => browserKeepAliveRef.current?.startPicker()}
+        onStopPicker={() => browserKeepAliveRef.current?.stopPicker()}
+        pickerActive={browserDebug.pickerActive}
+      />
+    ),
+    [
+      browserDebug.bridgeStatus,
+      browserDebug.error,
+      browserDebug.inputUrl,
+      browserDebug.navigate,
+      browserDebug.pickerActive,
+      browserDebug.selection,
+      browserDebug.setInputUrl,
+      notifyBrowserViewportChanged,
+    ],
   );
 
   const terminalGitContent = useMemo(
@@ -1337,6 +1396,13 @@ export default function WorkspacePage() {
         position: "bottom",
         content: portsContent,
       },
+      {
+        id: "browser",
+        label: "Browser",
+        icon: Globe2,
+        position: "bottom",
+        content: browserContent,
+      },
     ],
     [
       projectName,
@@ -1347,6 +1413,7 @@ export default function WorkspacePage() {
       fileTreeRevealRequest,
       terminalContent,
       portsContent,
+      browserContent,
     ],
   );
 
@@ -1484,6 +1551,12 @@ export default function WorkspacePage() {
         icon: TerminalIcon,
         content: terminalContent,
       },
+      {
+        id: "browser",
+        label: "Browser",
+        icon: Globe2,
+        content: browserContent,
+      },
       compactGitSurface,
       compactProjectSurface,
     ],
@@ -1496,6 +1569,7 @@ export default function WorkspacePage() {
       fileTreeRevealRequest,
       projectName,
       terminalContent,
+      browserContent,
     ],
   );
 
@@ -1519,6 +1593,12 @@ export default function WorkspacePage() {
         icon: Radio,
         content: portsContent,
       },
+      {
+        id: "browser",
+        label: "Browser",
+        icon: Globe2,
+        content: browserContent,
+      },
       compactGitSurface,
       compactProjectSurface,
     ],
@@ -1528,6 +1608,7 @@ export default function WorkspacePage() {
       fleetContent,
       portsContent,
       terminalContent,
+      browserContent,
     ],
   );
 
@@ -1611,6 +1692,13 @@ export default function WorkspacePage() {
 
   return (
     <>
+      <BrowserDebugKeepAliveHost
+        ref={browserKeepAliveRef}
+        browser={browserDebug}
+        viewportRef={browserViewportRef}
+        viewportVersion={browserViewportVersion}
+        isViewportVisible={isBrowserViewportVisible}
+      />
       {isCompactWorkspace ? (
         <MobileWorkspaceShell
           surfaces={compactSurfaces}
@@ -1627,6 +1715,7 @@ export default function WorkspacePage() {
           fleetContent={fleetContent}
           gitContent={terminalGitContent}
           portsContent={portsContent}
+          browserContent={browserContent}
           activatePanelRequest={terminalWorkspacePanelRequest}
           workspaceMode={workspaceMode}
           onWorkspaceModeChange={setWorkspaceMode}
