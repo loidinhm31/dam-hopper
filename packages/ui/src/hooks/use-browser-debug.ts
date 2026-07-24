@@ -56,6 +56,7 @@ export function useBrowserDebug(): BrowserDebugController {
   const [selection, setSelection] = useState<BrowserSelectionV1 | null>(null);
   const [pickerActive, setPickerActive] = useState(false);
   const capture = useBrowserCapture(selection);
+  const { stopCapture } = capture;
   const [error, setError] = useState<string | null>(null);
 
   const invalidateTarget = useCallback(
@@ -64,11 +65,11 @@ export function useBrowserDebug(): BrowserDebugController {
       setTarget(null);
       setSelection(null);
       setPickerActive(false);
-      capture.stopCapture();
+      stopCapture();
       setBridgeStatus("error");
       setError(message);
     },
-    [capture.stopCapture],
+    [stopCapture],
   );
 
   const refreshTunnels = useCallback(async () => {
@@ -119,7 +120,7 @@ export function useBrowserDebug(): BrowserDebugController {
       setTarget(null);
       setSelection(null);
       setPickerActive(false);
-      capture.stopCapture();
+      stopCapture();
       setBridgeStatus("error");
       setError("Enter an exact HTTP loopback origin or a ready tunnel URL.");
       return;
@@ -129,17 +130,17 @@ export function useBrowserDebug(): BrowserDebugController {
     setTarget(nextTarget);
     setSelection(null);
     setPickerActive(false);
-    capture.stopCapture();
+    stopCapture();
     setBridgeStatus("loading");
     setError(null);
-  }, [capture.stopCapture, inputUrl, parentOrigin, tunnels]);
+  }, [inputUrl, parentOrigin, stopCapture, tunnels]);
 
   const updateSelection = useCallback(
     (nextSelection: BrowserSelectionV1 | null) => {
-      capture.stopCapture();
+      stopCapture();
       setSelection(nextSelection);
     },
-    [capture.stopCapture],
+    [stopCapture],
   );
 
   return {
@@ -161,6 +162,6 @@ export function useBrowserDebug(): BrowserDebugController {
     setError,
     startCapture: capture.startCapture,
     setManualImage: capture.setManualImage,
-    stopCapture: capture.stopCapture,
+    stopCapture,
   };
 }

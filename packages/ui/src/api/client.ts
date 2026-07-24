@@ -143,6 +143,10 @@ export interface BrowserDebugArtifactResponse {
   pngSha256?: string;
 }
 
+export interface BrowserDebugHandoffResponse {
+  inserted: boolean;
+}
+
 // ── Port Detection Types ──────────────────────────────────────────────────────
 
 export interface DetectedPort {
@@ -1126,9 +1130,17 @@ export const api = {
       ),
     deleteArtifact: (artifactId: string) =>
       getTransport().invoke<void>("browser-debug:delete", { artifactId }),
+    handoff: (artifactId: string) =>
+      getTransport().invoke<BrowserDebugHandoffResponse>(
+        "browser-debug:handoff",
+        { artifactId },
+      ),
     uploadPng: (artifactId: string, png: Blob) => {
       const upload = getTransport().uploadBrowserDebugPng;
-      if (!upload) throw new Error("Browser screenshot upload is unsupported by this transport");
+      if (!upload)
+        throw new Error(
+          "Browser screenshot upload is unsupported by this transport",
+        );
       return upload.call(getTransport(), artifactId, png);
     },
   },

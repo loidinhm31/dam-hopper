@@ -182,6 +182,10 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
                 .layer(RequestBodyLimitLayer::new(crate::browser_debug::MAX_PNG_BYTES)),
         )
         .route(
+            "/api/browser-debug/artifacts/{id}/handoff",
+            post(browser_debug::handoff),
+        )
+        .route(
             "/api/browser-debug/artifacts/{id}",
             delete(browser_debug::delete),
         )

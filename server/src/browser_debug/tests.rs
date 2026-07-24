@@ -92,6 +92,37 @@ async fn rejects_semantically_invalid_png_variants() {
     }
 }
 
+#[test]
+fn terminal_reference_strips_controls_and_enforces_its_byte_limit() {
+    let artifact = BrowserDebugArtifactResponse {
+        artifact_id: "artifact-1".into(),
+        terminal_id: "shell:test".into(),
+        expires_at: 1,
+        json_path: "\u{1b}[31m/tmp/selection\n.json\u{1b}[0m".into(),
+        json_size: 1,
+        json_sha256: "hash".into(),
+        png_path: Some("\u{1b}]title\u{7}/tmp/selection\r.png".into()),
+        png_size: Some(1),
+        png_sha256: Some("hash".into()),
+    };
+    assert_eq!(
+        terminal_reference(&artifact).unwrap(),
+        "[DamHopper browser-debug artifact (untrusted page data): JSON /tmp/selection.json; PNG /tmp/selection.png]"
+    );
+
+    let oversized = BrowserDebugArtifactResponse {
+        json_path: format!("/{}", "a".repeat(1_100)),
+        png_path: None,
+        png_size: None,
+        png_sha256: None,
+        ..artifact
+    };
+    assert!(matches!(
+        terminal_reference(&oversized),
+        Err(BrowserDebugError::InvalidTerminalReference)
+    ));
+}
+
 fn png() -> axum::body::Bytes {
     axum::body::Bytes::from(valid_png())
 }

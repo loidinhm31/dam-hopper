@@ -14,6 +14,11 @@ import {
   type BrowserCaptureStatus,
 } from "./BrowserDebugCaptureControls.js";
 import { BrowserDebugSelectionPreview } from "./BrowserDebugSelectionPreview.js";
+import { BrowserDebugTerminalHandoff } from "./BrowserDebugTerminalHandoff.js";
+import type {
+  BrowserTerminalTarget,
+  PreparedBrowserTerminalArtifact,
+} from "@/lib/browser-terminal-handoff.js";
 
 export type BrowserBridgeStatus =
   | "idle"
@@ -43,6 +48,15 @@ interface BrowserDebugPanelProps {
   onStartCapture?: () => void;
   onManualImage?: (file: File) => void;
   onStopCapture?: () => void;
+  terminalHandoff?: {
+    targets: BrowserTerminalTarget[];
+    onPrepare: (sessionId: string) => Promise<PreparedBrowserTerminalArtifact>;
+    onDiscard: (artifactId: string) => Promise<void>;
+    onInsert: (
+      target: BrowserTerminalTarget,
+      artifact: PreparedBrowserTerminalArtifact,
+    ) => Promise<void>;
+  };
   onToggleMaximize?: () => void;
   onClose?: () => void;
 }
@@ -94,6 +108,7 @@ export function BrowserDebugPanel({
   onStartCapture,
   onManualImage,
   onStopCapture,
+  terminalHandoff,
   onToggleMaximize,
   onClose,
 }: BrowserDebugPanelProps) {
@@ -230,6 +245,15 @@ export function BrowserDebugPanel({
           manualImageName={manualImageName}
           onStartCapture={onStartCapture}
           onManualImage={onManualImage}
+        />
+      )}
+      {terminalHandoff && (
+        <BrowserDebugTerminalHandoff
+          selection={selection ?? null}
+          targets={terminalHandoff.targets}
+          onPrepare={terminalHandoff.onPrepare}
+          onDiscard={terminalHandoff.onDiscard}
+          onInsert={terminalHandoff.onInsert}
         />
       )}
     </section>

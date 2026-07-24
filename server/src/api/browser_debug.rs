@@ -8,7 +8,10 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    browser_debug::{BrowserDebugArtifactResponse, BrowserDebugError, BrowserSelectionV1},
+    browser_debug::{
+        terminal_reference, BrowserDebugArtifactResponse, BrowserDebugError,
+        BrowserDebugHandoffResponse, BrowserSelectionV1,
+    },
     error::AppError,
     state::AppState,
 };
@@ -79,6 +82,40 @@ pub async fn delete(
         .await
         .map_err(browser_debug_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn handoff(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<BrowserDebugHandoffResponse>, ApiError> {
+    let id = Uuid::parse_str(&id)
+        .map_err(|_| ApiError::from_app(AppError::BrowserDebug(BrowserDebugError::NotFound)))?;
+    let artifact = state
+        .browser_debug_artifacts
+        .claim_handoff(id)
+        .await
+        .map_err(browser_debug_error)?;
+    if !state.pty_manager.is_alive(&artifact.terminal_id) {
+        state.browser_debug_artifacts.release_handoff(id).await;
+        return Err(ApiError::from_app(AppError::BrowserDebug(
+            BrowserDebugError::NotFound,
+        )));
+    }
+    let reference = match terminal_reference(&artifact) {
+        Ok(reference) => reference,
+        Err(error) => {
+            state.browser_debug_artifacts.release_handoff(id).await;
+            return Err(browser_debug_error(error));
+        }
+    };
+    if let Err(error) = state
+        .pty_manager
+        .write(&artifact.terminal_id, reference.as_bytes())
+    {
+        state.browser_debug_artifacts.release_handoff(id).await;
+        return Err(ApiError::from_app(error));
+    }
+    Ok(Json(BrowserDebugHandoffResponse { inserted: true }))
 }
 
 fn json_rejection(error: JsonRejection) -> ApiError {

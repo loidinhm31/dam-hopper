@@ -14,6 +14,7 @@ pub use store::BrowserDebugArtifactManager;
 pub const MAX_SELECTION_JSON_BYTES: usize = 64 * 1024;
 pub const MAX_PNG_BYTES: usize = 4 * 1024 * 1024;
 pub const ARTIFACT_TTL_MS: i64 = 10 * 60 * 1000;
+const MAX_TERMINAL_REFERENCE_LENGTH: usize = 1024;
 
 const MAX_TEXT_LENGTH: usize = 512;
 const MAX_ACCESSIBLE_NAME_LENGTH: usize = 256;
@@ -108,4 +109,78 @@ pub struct BrowserDebugArtifactResponse {
     pub png_size: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub png_sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserDebugHandoffResponse {
+    pub inserted: bool,
+}
+
+/// Builds the only terminal payload accepted for an artifact handoff.
+///
+/// The paths originate from the server-managed private artifact directory;
+/// browser selection content is never written into the terminal.
+pub fn terminal_reference(
+    artifact: &BrowserDebugArtifactResponse,
+) -> Result<String, BrowserDebugError> {
+    let json_path = strip_terminal_controls(&artifact.json_path);
+    let png = artifact
+        .png_path
+        .as_deref()
+        .map(|path| format!("; PNG {}", strip_terminal_controls(path)))
+        .unwrap_or_default();
+    let reference = format!(
+        "[DamHopper browser-debug artifact (untrusted page data): JSON {}{}]",
+        json_path, png
+    );
+    if json_path.is_empty() || reference.len() > MAX_TERMINAL_REFERENCE_LENGTH {
+        return Err(BrowserDebugError::InvalidTerminalReference);
+    }
+    Ok(reference)
+}
+
+fn strip_terminal_controls(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\u{1b}' {
+            match chars.next() {
+                Some('[') => consume_csi(&mut chars),
+                Some(']') => consume_osc(&mut chars),
+                Some('P' | '^' | '_') => consume_st_terminated(&mut chars),
+                _ => {}
+            }
+        } else if !character.is_control() {
+            output.push(character);
+        }
+    }
+    output
+}
+
+fn consume_csi(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    while let Some(character) = chars.next() {
+        if ('@'..='~').contains(&character) {
+            return;
+        }
+    }
+}
+
+fn consume_osc(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    while let Some(character) = chars.next() {
+        if character == '\u{7}' {
+            return;
+        }
+        if character == '\u{1b}' && chars.next_if_eq(&'\\').is_some() {
+            return;
+        }
+    }
+}
+
+fn consume_st_terminated(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    while let Some(character) = chars.next() {
+        if character == '\u{1b}' && chars.next_if_eq(&'\\').is_some() {
+            return;
+        }
+    }
 }
