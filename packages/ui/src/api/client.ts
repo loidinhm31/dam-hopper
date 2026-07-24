@@ -120,6 +120,29 @@ export interface TunnelInfo {
   pid?: number;
 }
 
+export interface BrowserSelectionV1 {
+  version: 1;
+  tag: string;
+  role: string | null;
+  accessibleName: string | null;
+  text: string | null;
+  attributes: Record<string, string>;
+  locator: string;
+  bounds: { x: number; y: number; width: number; height: number };
+}
+
+export interface BrowserDebugArtifactResponse {
+  artifactId: string;
+  terminalId: string;
+  expiresAt: number;
+  jsonPath: string;
+  jsonSize: number;
+  jsonSha256: string;
+  pngPath?: string;
+  pngSize?: number;
+  pngSha256?: string;
+}
+
 // ── Port Detection Types ──────────────────────────────────────────────────────
 
 export interface DetectedPort {
@@ -1094,5 +1117,19 @@ export const api = {
     create: (port: number, label: string) =>
       getTransport().invoke<TunnelInfo>("tunnel:create", { port, label }),
     stop: (id: string) => getTransport().invoke<void>("tunnel:stop", { id }),
+  },
+  browserDebug: {
+    createArtifact: (terminalId: string, selection: BrowserSelectionV1) =>
+      getTransport().invoke<BrowserDebugArtifactResponse>(
+        "browser-debug:create",
+        { terminalId, selection },
+      ),
+    deleteArtifact: (artifactId: string) =>
+      getTransport().invoke<void>("browser-debug:delete", { artifactId }),
+    uploadPng: (artifactId: string, png: Blob) => {
+      const upload = getTransport().uploadBrowserDebugPng;
+      if (!upload) throw new Error("Browser screenshot upload is unsupported by this transport");
+      return upload.call(getTransport(), artifactId, png);
+    },
   },
 };

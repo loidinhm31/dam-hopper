@@ -136,6 +136,22 @@ Bearer token required. Deletes files and returns `204 No Content`.
 
 Artifacts expire after 10 minutes, are swept every 60 seconds, and are removed during graceful shutdown. Paths are generated under a temporary browser-debug root; files are not readable through this API.
 
+### Browser tool host policy (Phase 3)
+
+The UI Browser tool is a cooperative iframe, not a general-purpose proxy. The
+target URL must be an exact HTTP `localhost`, `127.0.0.1`, or `[::1]` origin, or
+an exact origin belonging to a tunnel whose status is currently `ready`.
+Workspace-origin targets, URL paths/query/hash/credentials, unready tunnels,
+and stale tunnel URLs are rejected before navigation. The target must also
+permit the workspace origin with `Content-Security-Policy: frame-ancestors`;
+`X-Frame-Options` can still prevent embedding.
+
+The host keeps one iframe alive while Browser is moved between IDE, Terminal,
+and compact surfaces. Bridge messages are accepted only when their origin and
+`source` match the iframe, and their nonce/request ID belongs to the current
+handshake. A failed or timed-out handshake unloads the iframe and reports an
+error; origin checks are never weakened to recover from framing failures.
+
 ## Backend Diagnostics Export (Phase 04)
 
 Protected local export for backend diagnostics. The endpoint reads from the local JSONL store and does not upload data anywhere. The UI entry point is Settings > Maintenance > Export Diagnostics.

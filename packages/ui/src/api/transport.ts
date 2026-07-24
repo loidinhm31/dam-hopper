@@ -5,7 +5,10 @@
  * All other modules use getTransport() to get the singleton.
  */
 
-import type { TerminalLifecycleEvent } from "./client.js";
+import type {
+  BrowserDebugArtifactResponse,
+  TerminalLifecycleEvent,
+} from "./client.js";
 
 export interface Transport {
   /** Request/response — maps to fetch (REST) */
@@ -54,6 +57,12 @@ export interface Transport {
 
   /** Fire-and-forget terminal resize */
   terminalResize(id: string, cols: number, rows: number): void;
+
+  /** Authenticated binary upload for a browser-debug screenshot. */
+  uploadBrowserDebugPng?(
+    artifactId: string,
+    png: Blob,
+  ): Promise<BrowserDebugArtifactResponse>;
 
   /** Terminal attach for reconnect with buffer replay. Return false if not sent. */
   terminalAttach?(id: string, fromOffset?: number): boolean | void;

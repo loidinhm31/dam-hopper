@@ -155,6 +155,7 @@ The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose
 - The same terminal manager state is reused across mode switches, so PTY lifecycle is not duplicated.
 - Terminal panes refit when switching modes or when the Fleet Terminal rail changes size/collapse state.
 - Compact view swaps to `MobileWorkspaceShell`, which shows one surface at a time with bottom-tab navigation for Explorer, Editor, Terminal, Git, Ports, and Project.
+- The Browser surface is available in IDE and Terminal modes and in compact layouts. It uses the same terminal-panel routing as Git/Ports and does not create a PTY.
 
 **Persistence keys:**
 
@@ -171,7 +172,18 @@ The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose
 - Renders the selected Files, Git, Ports, or Fleet Terminal panel as a floating overlay in terminal mode.
 - The floating panel matches the Explorer interaction model: it can be dragged or resized within the terminal workspace.
 - Terminal panel shortcuts and visible terminal-header controls are mutually exclusive: opening one panel replaces the other two, and repeating the active control closes the overlay.
+- Browser is exposed as a `browser` panel target and receives the shared `BrowserDebugPanel` content.
 - Keeps the main terminal area full-height below the top nav.
+
+### Browser Debug Tool
+
+**Locations:** `packages/ui/src/components/organisms/BrowserDebugPanel.tsx`, `packages/ui/src/components/organisms/BrowserDebugKeepAliveHost.tsx`, `packages/ui/src/hooks/use-browser-debug.ts`
+
+The Browser tool previews a cooperative development target and lets the user select one semantic DOM element for later artifact/terminal handoff. It accepts only an exact HTTP loopback origin or an exact origin from a currently-ready DamHopper tunnel; the workspace origin, URLs with paths/query/hash/credentials, and unready or stale tunnels are rejected.
+
+The iframe is hosted by a singleton `BrowserDebugKeepAliveHost` outside the conditional IDE/Terminal/compact shells. The host keeps its DOM node stable and positions it over the active viewport, avoiding Chromium reloads caused by physical iframe reparenting. Switching surfaces, maximizing panels, or changing compact tabs therefore does not unload the target document. A load handshake uses a fresh nonce and request IDs; incoming `postMessage` events must match the exact target origin and `iframe.contentWindow` before they are accepted. Handshake timeout unloads the target and reports an unsupported/error state.
+
+The panel renders bridge status, target URL, picker controls, and bounded selection metadata. It does not execute page commands or expose raw HTML, cookies, storage, credentials, or other browser secrets. Screenshot capture and artifact upload are separate later-phase capabilities; closing the Browser surface stops any capture stream but intentionally does not unload the iframe.
 
 ### Multi Terminal Display
 
@@ -529,9 +541,9 @@ surface that load failure instead of weakening its origin policy.
 Selection payloads are versioned semantic data only: bounded tag/role/name/text,
 an allow-listed set of attributes, a bounded locator, and finite bounds. They
 never contain HTML, input values, passwords/files, cookies, storage, or other
-browser secrets. The bridge package is the Phase 1 protocol/target-side install
-surface; the long-lived iframe owner, navigation/load-error UX, and CSP guidance
-in the Browser tool remain deferred to the planned Phase 3 host integration.
+browser secrets. The bridge package is the target-side install surface; the
+Phase 3 host provides the long-lived iframe owner, exact-origin navigation
+policy, handshake/load-error UX, and CSP framing guidance.
 
 ## Related Documentation
 
