@@ -2,6 +2,7 @@ use thiserror::Error;
 
 use crate::fs::FsError;
 use crate::tunnel::TunnelError;
+use crate::browser_debug::BrowserDebugError;
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -43,6 +44,9 @@ pub enum AppError {
 
     #[error("Tunnel error: {0}")]
     Tunnel(TunnelError),
+
+    #[error("Browser debug error: {0}")]
+    BrowserDebug(#[from] BrowserDebugError),
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
@@ -69,6 +73,7 @@ impl AppError {
             AppError::Config(_) | AppError::InvalidInput(_) => 400,
             AppError::Fs(e) => e.status_code(),
             AppError::Tunnel(e) => tunnel_error_status(e),
+            AppError::BrowserDebug(e) => e.status_code(),
             _ => 500,
         }
     }

@@ -30,7 +30,7 @@ axum-extra = { version = "0.10", features = ["cookie", "typed-header"] }
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "fs"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "limit"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -126,6 +126,9 @@ aes-gcm = "0.10"
 
 # SHA-512 for OPAQUE TripleDH key exchange type parameter
 sha2 = "0.10"
+
+# Bounded decode verification for browser-debug screenshot uploads
+png = "0.17"
 
 # Zeroize — wipe key material from memory after use
 zeroize = "1"
