@@ -6,6 +6,7 @@ import {
   useMemo,
   useCallback,
   useState,
+  useSyncExternalStore,
 } from "react";
 import {
   Terminal as TerminalIcon,
@@ -92,8 +93,16 @@ import { resolveRevealActiveFileOutcome } from "@/lib/reveal-active-file.js";
 import { scheduleTerminalFit } from "@/lib/terminal-fit-scheduler.js";
 import {
   subscribeToRegistry,
+  subscribeToRegistryChanges,
   terminalRegistry,
+  getTerminalRegistrySnapshot,
 } from "@/lib/terminal-registry.js";
+import {
+  isBrowserTerminalTargetReady,
+  prepareBrowserTerminalArtifact as createPreparedBrowserTerminalArtifact,
+  type BrowserTerminalTarget,
+  type PreparedBrowserTerminalArtifact,
+} from "@/lib/browser-terminal-handoff.js";
 import {
   activateTerminalAfterNavigation,
   navigateToTerminalNotification,
@@ -316,6 +325,11 @@ export default function WorkspacePage() {
   const [terminalWorkspacePanelRequest, setTerminalWorkspacePanelRequest] =
     useState<TerminalWorkspacePanelRequest | null>(null);
   const browserDebug = useBrowserDebug();
+  const registeredTerminalIds = useSyncExternalStore(
+    subscribeToRegistryChanges,
+    getTerminalRegistrySnapshot,
+    getTerminalRegistrySnapshot,
+  );
   const browserViewportRef = useRef<HTMLDivElement>(null);
   const browserKeepAliveRef = useRef<BrowserDebugKeepAliveHandle>(null);
   const [browserViewportVersion, setBrowserViewportVersion] = useState(0);
@@ -385,6 +399,7 @@ export default function WorkspacePage() {
   );
   const {
     activeTab,
+    openTabs,
     mountedSessions,
     launchForm,
     freeTerminalSavePrompt,
@@ -421,6 +436,90 @@ export default function WorkspacePage() {
     setFreeTerminalSavePrompt,
     setLaunchForm,
   } = actions;
+
+  const browserTerminalTargets = useMemo<BrowserTerminalTarget[]>(() => {
+    const mountedById = new Map(
+      mountedSessions.map((session) => [session.sessionId, session]),
+    );
+    const tabsById = new Map(openTabs.map((tab) => [tab.sessionId, tab]));
+    const sessionIds = new Set([...mountedById.keys(), ...tabsById.keys()]);
+    return [...sessionIds].map((sessionId) => {
+      const mounted = mountedById.get(sessionId);
+      const tab = tabsById.get(sessionId);
+      return {
+        sessionId,
+        label:
+          tab?.label ??
+          (mounted ? `${mounted.project} · ${mounted.command}` : sessionId),
+        mounted: Boolean(mounted),
+        registered: registeredTerminalIds.has(sessionId),
+        alive: sessionMap.get(sessionId)?.alive,
+        current: activeTab === sessionId,
+      };
+    });
+  }, [activeTab, mountedSessions, openTabs, registeredTerminalIds, sessionMap]);
+
+  const prepareBrowserTerminalArtifact = useCallback(
+    async (sessionId: string) => {
+      const target = browserTerminalTargets.find(
+        (candidate) => candidate.sessionId === sessionId,
+      );
+      if (!browserDebug.selection || !isBrowserTerminalTargetReady(target)) {
+        throw new Error("terminal unavailable");
+      }
+
+      let artifact = await api.browserDebug.createArtifact(
+        sessionId,
+        browserDebug.selection,
+      );
+      try {
+        if (browserDebug.captureImage) {
+          artifact = await api.browserDebug.uploadPng(
+            artifact.artifactId,
+            browserDebug.captureImage,
+          );
+        }
+        browserDebug.stopCapture();
+        return createPreparedBrowserTerminalArtifact(artifact);
+      } catch (error) {
+        await api.browserDebug
+          .deleteArtifact(artifact.artifactId)
+          .catch(() => {});
+        throw error;
+      }
+    },
+    [browserDebug, browserTerminalTargets],
+  );
+
+  const discardBrowserTerminalArtifact = useCallback(
+    async (artifactId: string) => {
+      await api.browserDebug.deleteArtifact(artifactId).catch(() => {});
+    },
+    [],
+  );
+
+  const insertBrowserTerminalReference = useCallback(
+    async (
+      target: BrowserTerminalTarget,
+      artifact: PreparedBrowserTerminalArtifact,
+    ) => {
+      const currentTarget = browserTerminalTargets.find(
+        (candidate) => candidate.sessionId === target.sessionId,
+      );
+      if (
+        !isBrowserTerminalTargetReady(currentTarget) ||
+        artifact.artifact.terminalId !== target.sessionId
+      ) {
+        throw new Error("terminal unavailable");
+      }
+      const result = await api.browserDebug.handoff(
+        artifact.artifact.artifactId,
+      );
+      if (!result.inserted)
+        throw new Error("terminal insertion was not confirmed");
+    },
+    [browserTerminalTargets],
+  );
 
   const handleVisibleSplitSessionsChange = useCallback(
     (sessionIds: ReadonlySet<string>) => {
@@ -1287,23 +1386,21 @@ export default function WorkspacePage() {
         }}
         onManualImage={browserDebug.setManualImage}
         onStopCapture={browserDebug.stopCapture}
+        terminalHandoff={{
+          targets: browserTerminalTargets,
+          onPrepare: prepareBrowserTerminalArtifact,
+          onDiscard: discardBrowserTerminalArtifact,
+          onInsert: insertBrowserTerminalReference,
+        }}
       />
     ),
     [
-      browserDebug.bridgeStatus,
-      browserDebug.captureMessage,
-      browserDebug.captureStatus,
-      browserDebug.error,
-      browserDebug.inputUrl,
-      browserDebug.manualImageName,
-      browserDebug.navigate,
-      browserDebug.pickerActive,
-      browserDebug.selection,
-      browserDebug.setManualImage,
-      browserDebug.setInputUrl,
-      browserDebug.startCapture,
-      browserDebug.stopCapture,
+      browserDebug,
+      browserTerminalTargets,
+      discardBrowserTerminalArtifact,
+      insertBrowserTerminalReference,
       notifyBrowserViewportChanged,
+      prepareBrowserTerminalArtifact,
     ],
   );
 

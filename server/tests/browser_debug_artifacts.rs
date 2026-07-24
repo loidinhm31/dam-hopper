@@ -1,6 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     body::Body,
@@ -328,6 +329,84 @@ async fn png_upload_enforces_the_four_megabyte_cap() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn artifact_handoff_writes_once_and_requires_acknowledgement() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = make_state(&temp);
+    create_terminal(&state, temp.path());
+    let created = request(
+        state.clone(),
+        "POST",
+        "/api/browser-debug/artifacts",
+        Some("application/json"),
+        Body::from(selection("shell:browser-debug").to_string()),
+        true,
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let value: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let id = value["artifactId"].as_str().unwrap();
+    let json_path = value["jsonPath"].as_str().unwrap();
+
+    let handoff_path = format!("/api/browser-debug/artifacts/{id}/handoff");
+    let (first, second) = tokio::join!(
+        request(
+            state.clone(),
+            "POST",
+            &handoff_path,
+            None,
+            Body::empty(),
+            true,
+        ),
+        request(
+            state.clone(),
+            "POST",
+            &handoff_path,
+            None,
+            Body::empty(),
+            true,
+        )
+    );
+    let (handed_off, duplicate) = if first.status() == StatusCode::OK {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    assert_eq!(handed_off.status(), StatusCode::OK);
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+    let body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(handed_off.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(body["inserted"], true);
+
+    let reference =
+        format!("[DamHopper browser-debug artifact (untrusted page data): JSON {json_path}]");
+    for _ in 0..20 {
+        if state
+            .pty_manager
+            .get_buffer("shell:browser-debug")
+            .unwrap()
+            .contains(&reference)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(state
+        .pty_manager
+        .get_buffer("shell:browser-debug")
+        .unwrap()
+        .contains(&reference));
 }
 
 fn png() -> axum::body::Bytes {

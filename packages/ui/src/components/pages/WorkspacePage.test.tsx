@@ -110,6 +110,7 @@ vi.mock("@/hooks/use-terminal-manager.js", () => ({
   useTerminalManager: () => ({
     state: {
       activeTab: null,
+      openTabs: [],
       mountedSessions: [],
       launchForm: null,
       freeTerminalSavePrompt: null,

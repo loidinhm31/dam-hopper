@@ -24,7 +24,6 @@ export function useCoarsePointer() {
       setIsCoarsePointer(event.matches);
     };
 
-    setIsCoarsePointer(mediaQuery.matches);
     if (mediaQuery.addEventListener && mediaQuery.removeEventListener) {
       mediaQuery.addEventListener("change", handleChange);
       return () => mediaQuery.removeEventListener("change", handleChange);

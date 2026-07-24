@@ -836,6 +836,13 @@ function channelToEndpoint(
     }
     case "browser-debug:create":
       return { method: "POST", url: "/api/browser-debug/artifacts", body: data };
+    case "browser-debug:handoff": {
+      const { artifactId } = data as { artifactId: string };
+      return {
+        method: "POST",
+        url: `/api/browser-debug/artifacts/${encodeURIComponent(artifactId)}/handoff`,
+      };
+    }
     case "browser-debug:delete": {
       const { artifactId } = data as { artifactId: string };
       return {
