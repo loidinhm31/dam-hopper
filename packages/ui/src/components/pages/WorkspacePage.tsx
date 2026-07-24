@@ -901,7 +901,9 @@ export default function WorkspacePage() {
                     onClick={() =>
                       id === "browser"
                         ? openBrowserTerminalPanel()
-                        : activateTerminalPanelShortcut(id as TerminalPanelToolId)
+                        : activateTerminalPanelShortcut(
+                            id as TerminalPanelToolId,
+                          )
                     }
                     className="rounded-[3px] px-2 py-1 text-[11px] font-medium text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
                   >
@@ -1267,16 +1269,40 @@ export default function WorkspacePage() {
         onStartPicker={() => browserKeepAliveRef.current?.startPicker()}
         onStopPicker={() => browserKeepAliveRef.current?.stopPicker()}
         pickerActive={browserDebug.pickerActive}
+        captureStatus={browserDebug.captureStatus}
+        captureMessage={browserDebug.captureMessage}
+        manualImageName={browserDebug.manualImageName}
+        onStartCapture={() => {
+          const frame = browserViewportRef.current?.getBoundingClientRect();
+          void browserDebug.startCapture(
+            frame
+              ? {
+                  left: frame.left,
+                  top: frame.top,
+                  width: frame.width,
+                  height: frame.height,
+                }
+              : null,
+          );
+        }}
+        onManualImage={browserDebug.setManualImage}
+        onStopCapture={browserDebug.stopCapture}
       />
     ),
     [
       browserDebug.bridgeStatus,
+      browserDebug.captureMessage,
+      browserDebug.captureStatus,
       browserDebug.error,
       browserDebug.inputUrl,
+      browserDebug.manualImageName,
       browserDebug.navigate,
       browserDebug.pickerActive,
       browserDebug.selection,
+      browserDebug.setManualImage,
       browserDebug.setInputUrl,
+      browserDebug.startCapture,
+      browserDebug.stopCapture,
       notifyBrowserViewportChanged,
     ],
   );

@@ -18,7 +18,9 @@ const selection: BrowserSelectionV1 = {
   bounds: { x: 12, y: 24, width: 96, height: 36 },
 };
 
-function renderPanel(overrides: Partial<ComponentProps<typeof BrowserDebugPanel>> = {}) {
+function renderPanel(
+  overrides: Partial<ComponentProps<typeof BrowserDebugPanel>> = {},
+) {
   return renderToStaticMarkup(
     <BrowserDebugPanel
       url="http://localhost:3000"
@@ -73,6 +75,22 @@ describe("BrowserDebugPanel", () => {
     expect(markup).toContain("Maximize browser panel");
     expect(markup).toContain("Close browser panel");
     expect(markup).not.toContain("Select element");
+  });
+
+  it("renders explicit local-only capture and manual-image actions", () => {
+    const markup = renderPanel({
+      selection,
+      onStartCapture: vi.fn(),
+      onManualImage: vi.fn(),
+      captureStatus: "denied",
+    });
+
+    expect(markup).toContain("Capture browser tab");
+    expect(markup).toContain("Choose PNG or JPEG");
+    expect(markup).toContain("Paste image");
+    expect(markup).toContain("Screen capture was not granted");
+    expect(markup).toContain('accept="image/png,image/jpeg"');
+    expect(markup).toContain("nothing is attached or sent from this panel");
   });
 
   it("cancels an active picker before Escape reaches its containing panel", () => {
