@@ -19,6 +19,14 @@ export const terminalRegistry = new Map<string, TerminalEntry>();
 
 type RegistrySubscriber = (id: string) => void;
 const subscribers = new Set<RegistrySubscriber>();
+const changeSubscribers = new Set<() => void>();
+let registrySnapshot: ReadonlySet<string> = new Set();
+
+function notifyRegistryChange(id: string): void {
+  registrySnapshot = new Set(terminalRegistry.keys());
+  subscribers.forEach((callback) => callback(id));
+  changeSubscribers.forEach((callback) => callback());
+}
 
 export function registerTerminal(
   id: string,
@@ -29,7 +37,7 @@ export function registerTerminal(
   const entry = { terminal, fitAddon, findController };
   terminalRegistry.set(id, entry);
   // Notify subscribers that a new terminal is ready
-  subscribers.forEach((cb) => cb(id));
+  notifyRegistryChange(id);
   return entry;
 }
 
@@ -38,11 +46,21 @@ export function subscribeToRegistry(callback: RegistrySubscriber): () => void {
   return () => subscribers.delete(callback);
 }
 
+/** React-safe subscription for consumers that render registry availability. */
+export function subscribeToRegistryChanges(callback: () => void): () => void {
+  changeSubscribers.add(callback);
+  return () => changeSubscribers.delete(callback);
+}
+
+export function getTerminalRegistrySnapshot(): ReadonlySet<string> {
+  return registrySnapshot;
+}
+
 export function getTerminal(id: string): TerminalEntry | undefined {
   return terminalRegistry.get(id);
 }
 
 export function removeTerminal(id: string): void {
   cancelScheduledTerminalFit(terminalRegistry.get(id));
-  terminalRegistry.delete(id);
+  if (terminalRegistry.delete(id)) notifyRegistryChange(id);
 }

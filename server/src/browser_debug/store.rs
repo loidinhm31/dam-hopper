@@ -30,6 +30,7 @@ pub(super) struct ArtifactMetadata {
     json: ArtifactFile,
     png: Option<ArtifactFile>,
     png_uploading: bool,
+    handoff_claimed: bool,
 }
 
 #[derive(Clone)]
@@ -73,6 +74,7 @@ impl BrowserDebugArtifactManager {
             json: json_file,
             png: None,
             png_uploading: false,
+            handoff_claimed: false,
         };
         let response = response_for(id, &metadata);
         self.entries.write().await.insert(id, metadata);
@@ -99,6 +101,9 @@ impl BrowserDebugArtifactManager {
                 Err(entries.remove(&id))
             } else {
                 let metadata = entries.get_mut(&id).expect("entry was checked above");
+                if metadata.handoff_claimed {
+                    return Err(BrowserDebugError::AlreadyHandedOff);
+                }
                 if metadata.png.is_some() || metadata.png_uploading {
                     return Err(BrowserDebugError::PngAlreadyUploaded);
                 }
@@ -152,18 +157,72 @@ impl BrowserDebugArtifactManager {
     }
 
     pub async fn delete(&self, id: Uuid) -> Result<(), BrowserDebugError> {
-        let metadata = self
-            .entries
-            .write()
-            .await
-            .remove(&id)
-            .ok_or(BrowserDebugError::NotFound)?;
+        let metadata = {
+            let mut entries = self.entries.write().await;
+            let metadata = entries.get(&id).ok_or(BrowserDebugError::NotFound)?;
+            if metadata.handoff_claimed {
+                return Err(BrowserDebugError::AlreadyHandedOff);
+            }
+            entries.remove(&id).expect("entry was checked above")
+        };
         if let Err(error) = remove_files(paths_for(&metadata)).await {
             self.entries.write().await.insert(id, metadata);
             return Err(error);
         }
         tracing::info!(artifact_id = %id, "browser debug artifact deleted");
         Ok(())
+    }
+
+    /// Atomically reserves an artifact for its one permitted terminal write.
+    /// A failed terminal write must call `release_handoff` so a later retry can
+    /// still succeed while the artifact remains available.
+    pub async fn claim_handoff(
+        &self,
+        id: Uuid,
+    ) -> Result<BrowserDebugArtifactResponse, BrowserDebugError> {
+        enum Claim {
+            Claimed(BrowserDebugArtifactResponse),
+            Expired(ArtifactMetadata),
+            Missing,
+            Unavailable(BrowserDebugError),
+        }
+
+        let claim = {
+            let mut entries = self.entries.write().await;
+            match entries.get(&id) {
+                None => Claim::Missing,
+                Some(metadata) if expired(metadata) => {
+                    Claim::Expired(entries.remove(&id).expect("entry was checked above"))
+                }
+                Some(metadata) if metadata.handoff_claimed => {
+                    Claim::Unavailable(BrowserDebugError::AlreadyHandedOff)
+                }
+                Some(metadata) if metadata.png_uploading => {
+                    Claim::Unavailable(BrowserDebugError::ArtifactBusy)
+                }
+                Some(_) => {
+                    let metadata = entries.get_mut(&id).expect("entry was checked above");
+                    metadata.handoff_claimed = true;
+                    Claim::Claimed(response_for(id, metadata))
+                }
+            }
+        };
+        match claim {
+            Claim::Claimed(response) => Ok(response),
+            Claim::Expired(metadata) => {
+                self.retry_expired_cleanup(id, metadata, "before terminal handoff")
+                    .await;
+                Err(BrowserDebugError::NotFound)
+            }
+            Claim::Missing => Err(BrowserDebugError::NotFound),
+            Claim::Unavailable(error) => Err(error),
+        }
+    }
+
+    pub async fn release_handoff(&self, id: Uuid) {
+        if let Some(metadata) = self.entries.write().await.get_mut(&id) {
+            metadata.handoff_claimed = false;
+        }
     }
 
     pub async fn sweep_expired(&self) {

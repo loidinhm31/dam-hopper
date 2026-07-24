@@ -93,4 +93,70 @@ describe("BrowserDebugPanel capture controls in Chromium", () => {
     await act(async () => root.render(null));
     expect(onStopCapture).toHaveBeenCalledOnce();
   });
+
+  it("requires a review before writing one browser artifact reference", async () => {
+    const onInsert = vi.fn();
+    await act(async () => {
+      root.render(
+        <BrowserDebugPanel
+          url="http://localhost:3000"
+          bridgeStatus="ready"
+          selection={selection}
+          onUrlChange={vi.fn()}
+          onNavigate={vi.fn()}
+          terminalHandoff={{
+            targets: [
+              {
+                sessionId: "shell:demo",
+                label: "Demo shell",
+                mounted: true,
+                registered: true,
+                alive: true,
+                current: false,
+              },
+            ],
+            onPrepare: vi.fn().mockResolvedValue({
+              artifact: {
+                artifactId: "artifact-1",
+                terminalId: "shell:demo",
+                expiresAt: Date.now() + 60_000,
+                jsonPath: "/tmp/selection.json",
+                jsonSize: 1,
+                jsonSha256: "hash",
+              },
+              reference:
+                "[DamHopper browser-debug artifact (untrusted page data): JSON /tmp/selection.json]",
+            }),
+            onDiscard: vi.fn().mockResolvedValue(undefined),
+            onInsert,
+          }}
+        />,
+      );
+    });
+
+    await act(async () =>
+      container.querySelector<HTMLInputElement>("input[type=radio]")?.click(),
+    );
+    const create = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) =>
+      button.textContent?.includes("Create reviewable artifact"),
+    );
+    await act(async () => create?.click());
+    expect(onInsert).not.toHaveBeenCalled();
+
+    const review = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent?.includes("Review & insert"));
+    await act(async () => review?.click());
+    const insert = [
+      ...document.body.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent?.includes("Insert reference"));
+    await act(async () => insert?.click());
+
+    expect(onInsert).toHaveBeenCalledOnce();
+    expect(onInsert.mock.calls[0]?.[1].reference).not.toMatch(
+      /[\r\n\u001b\u009b]/,
+    );
+  });
 });

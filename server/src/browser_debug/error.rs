@@ -8,6 +8,12 @@ pub enum BrowserDebugError {
     NotFound,
     #[error("browser debug artifact already has a PNG")]
     PngAlreadyUploaded,
+    #[error("browser debug artifact handoff is already in progress or complete")]
+    AlreadyHandedOff,
+    #[error("browser debug artifact is still being prepared")]
+    ArtifactBusy,
+    #[error("browser debug terminal reference is invalid")]
+    InvalidTerminalReference,
     #[error("browser debug artifact is too large")]
     TooLarge,
     #[error("browser debug upload must be a PNG")]
@@ -21,9 +27,9 @@ pub enum BrowserDebugError {
 impl BrowserDebugError {
     pub fn status_code(&self) -> u16 {
         match self {
-            Self::InvalidSelection | Self::InvalidPng => 400,
+            Self::InvalidSelection | Self::InvalidPng | Self::InvalidTerminalReference => 400,
             Self::NotFound => 404,
-            Self::PngAlreadyUploaded => 409,
+            Self::PngAlreadyUploaded | Self::AlreadyHandedOff | Self::ArtifactBusy => 409,
             Self::TooLarge => 413,
             Self::Io(_) | Self::Task(_) => 500,
         }

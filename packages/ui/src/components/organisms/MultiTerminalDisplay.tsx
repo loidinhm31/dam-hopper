@@ -6,7 +6,10 @@ import { SplitLayout } from "@/components/organisms/SplitLayout.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { useSettingsStore } from "@/stores/settings.js";
-import { useTerminalLayout } from "@/hooks/use-terminal-layout.js";
+import {
+  collectPanes,
+  useTerminalLayout,
+} from "@/hooks/use-terminal-layout.js";
 import { fitAllTerminals } from "@/lib/terminal-fit-scheduler.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
@@ -60,11 +63,9 @@ export function MultiTerminalDisplay({
   const visibleSessionIds = useMemo(
     () =>
       new Set(
-        layout
-          .getPanes()
-          .flatMap((pane) =>
-            pane.activeSessionId ? [pane.activeSessionId] : [],
-          ),
+        collectPanes(layout.root).flatMap((pane) =>
+          pane.activeSessionId ? [pane.activeSessionId] : [],
+        ),
       ),
     [layout.root],
   );
