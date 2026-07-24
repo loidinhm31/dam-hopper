@@ -2,6 +2,7 @@ pub mod agent_import;
 pub mod agent_memory;
 pub mod agent_store;
 pub mod auth;
+pub mod browser_debug;
 pub mod commands;
 pub mod config;
 pub mod diagnostics;

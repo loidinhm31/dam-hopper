@@ -7,6 +7,7 @@ use tokio::sync::RwLock;
 use std::path::PathBuf as StdPathBuf;
 
 use crate::agent_store::AgentStoreService;
+use crate::browser_debug::BrowserDebugArtifactManager;
 use crate::commands::CommandRegistry;
 use crate::config::{DamHopperConfig, GlobalConfig};
 use crate::crypto::{DamHopperOpaqueSuite, OpaqueRegistrations};
@@ -72,6 +73,8 @@ pub struct AppState {
     pub host_metrics: HostMetricsSampler,
     /// Backend diagnostics ring and JSONL persistence handle.
     pub diagnostics: DiagnosticStore,
+    /// Short-lived browser selection bundles, isolated from workspace roots.
+    pub browser_debug_artifacts: BrowserDebugArtifactManager,
 }
 
 impl AppState {
@@ -151,6 +154,9 @@ impl AppState {
             tracing::error!("⚠️  NO-AUTH mode enabled — authentication bypassed");
         }
 
+        let browser_debug_artifacts = BrowserDebugArtifactManager::new()
+            .map_err(|error| anyhow::anyhow!("browser debug artifacts unavailable: {error}"))?;
+
         Ok(Self {
             workspace_dir: Arc::new(RwLock::new(workspace_dir)),
             config: Arc::new(RwLock::new(config)),
@@ -170,6 +176,7 @@ impl AppState {
             opaque_registrations: OpaqueRegistrations::default(),
             host_metrics: HostMetricsSampler::new(),
             diagnostics,
+            browser_debug_artifacts,
         })
     }
 }

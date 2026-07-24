@@ -275,6 +275,17 @@ async fn main() -> anyhow::Result<()> {
     )?;
 
     let tunnel_manager_shutdown = state.tunnel_manager.clone();
+    let browser_debug_artifacts_shutdown = state.browser_debug_artifacts.clone();
+    let browser_debug_artifacts_sweeper = state.browser_debug_artifacts.clone();
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            browser_debug_artifacts_sweeper.sweep_expired().await;
+        }
+    });
 
     // Spawn /proc/net/tcp polling loop for port detection (Linux-only; warns on other OS).
     tokio::spawn(proc_poll_loop(port_forward_manager));
@@ -312,6 +323,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Reap all tunnel children before exit — no orphaned cloudflared processes.
     tunnel_manager_shutdown.dispose_all().await;
+    browser_debug_artifacts_shutdown.dispose_all().await;
 
     // Graceful shutdown: snapshot live PTY buffers, ask the worker to flush, then wait.
     pty_manager.snapshot_live_buffers();

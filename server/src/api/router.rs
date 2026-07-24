@@ -8,7 +8,10 @@ use axum::{
     routing::{delete, get, patch, post, put},
     Router,
 };
-use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::{
+    cors::{AllowOrigin, CorsLayer},
+    limit::RequestBodyLimitLayer,
+};
 
 /// 10 MB — generous for config/settings payloads, blocks accidental multi-GB uploads.
 const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
@@ -16,7 +19,7 @@ const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 use crate::state::AppState;
 
 use super::{
-    agent_import, agent_memory, agent_store, auth, commands, config, diagnostics, fs as fs_api,
+    agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics, fs as fs_api,
     git, git_diff, port_forward as port_forward_api, settings, ssh, system, terminal, tunnel,
     workspace, ws,
 };
@@ -165,6 +168,22 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route(
             "/api/terminal/{id}/remove",
             delete(terminal::remove_session),
+        )
+        // Browser debug artifacts — no read/list endpoint by design.
+        .route(
+            "/api/browser-debug/artifacts",
+            post(browser_debug::create).layer(RequestBodyLimitLayer::new(
+                crate::browser_debug::MAX_SELECTION_JSON_BYTES,
+            )),
+        )
+        .route(
+            "/api/browser-debug/artifacts/{id}/png",
+            put(browser_debug::upload_png)
+                .layer(RequestBodyLimitLayer::new(crate::browser_debug::MAX_PNG_BYTES)),
+        )
+        .route(
+            "/api/browser-debug/artifacts/{id}",
+            delete(browser_debug::delete),
         )
         // Tunnels
         .route(
