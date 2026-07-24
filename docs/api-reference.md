@@ -103,6 +103,39 @@ Phase 01 adds a client-side diagnostics ring for local troubleshooting. It is wr
 
 This phase does not expose a backend export endpoint yet.
 
+## Browser Debug Artifacts (Phase 2)
+
+Authenticated, ephemeral storage for a browser-debug selection and optional screenshot. Artifacts are scoped to a live PTY terminal; no read or list endpoint exists.
+
+**POST /api/browser-debug/artifacts**
+
+Bearer token required. JSON body is limited to 64 KiB and uses camelCase:
+
+```json
+{
+  "terminalId": "pty-uuid",
+  "selection": {
+    "version": 1, "tag": "button", "role": "button",
+    "accessibleName": "Save", "text": "Save",
+    "attributes": { "data-testid": "save" },
+    "locator": "button[data-testid=save]",
+    "bounds": { "x": 10, "y": 20, "width": 80, "height": 32 }
+  }
+}
+```
+
+`terminalId` must identify a live PTY. Selection structure and bounded fields are validated. Response: `201` with `artifactId`, `terminalId`, `expiresAt`, generated `jsonPath`, `jsonSize`, and `jsonSha256`.
+
+**PUT /api/browser-debug/artifacts/{id}/png**
+
+Bearer token required; `Content-Type: image/png`; body limited to 4 MiB. Structural PNG checks and decoded-image verification must both pass. Response adds generated `pngPath`, `pngSize`, and `pngSha256`. One PNG upload per artifact.
+
+**DELETE /api/browser-debug/artifacts/{id}**
+
+Bearer token required. Deletes files and returns `204 No Content`.
+
+Artifacts expire after 10 minutes, are swept every 60 seconds, and are removed during graceful shutdown. Paths are generated under a temporary browser-debug root; files are not readable through this API.
+
 ## Backend Diagnostics Export (Phase 04)
 
 Protected local export for backend diagnostics. The endpoint reads from the local JSONL store and does not upload data anywhere. The UI entry point is Settings > Maintenance > Export Diagnostics.
