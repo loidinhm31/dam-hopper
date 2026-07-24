@@ -110,6 +110,18 @@ importers:
         specifier: ^6.0.0
         version: 6.4.1(jiti@2.6.1)(lightningcss@1.32.0)
 
+  packages/browser-bridge:
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vite:
+        specifier: ^6.0.0
+        version: 6.4.1(jiti@2.6.1)(lightningcss@1.32.0)
+      vitest:
+        specifier: ^4.1.5
+        version: 4.1.5(@vitest/browser-playwright@4.1.5)(jsdom@26.1.0)(vite@6.4.1(jiti@2.6.1)(lightningcss@1.32.0))
+
   packages/shared:
     devDependencies:
       typescript:
@@ -121,6 +133,9 @@ importers:
 
   packages/ui:
     dependencies:
+      '@dam-hopper/browser-bridge':
+        specifier: workspace:*
+        version: link:../browser-bridge
       '@dam-hopper/shared':
         specifier: workspace:*
         version: link:../shared
