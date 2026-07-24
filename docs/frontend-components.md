@@ -485,6 +485,54 @@ interface TerminalPanelProps {
 export type SessionStatus = "alive" | "restarting" | "crashed" | "exited";
 ```
 
+## Cooperative Browser Debug Bridge
+
+**Package:** `@dam-hopper/browser-bridge`
+
+The optional bridge runs inside a development target that explicitly permits
+DamHopper framing. It has no DamHopper token, filesystem, PTY, storage, or
+network capability. Its only task is to return a bounded, semantic selection
+after a user click; returned text is preview data, never HTML.
+
+The host must use the exact origin of the embedding page (the parent, not an
+assumed server or wildcard origin) and the exact `iframe.contentWindow` when
+parsing messages. It issues a fresh nonce after every load/navigation or
+reconnect and accepts only request IDs it created for that nonce. The bridge
+and host both fail closed on origin, source, nonce, request-ID, version, and
+schema mismatches; neither side uses `*` for `postMessage`.
+
+For ESM consumers:
+
+```ts
+import { installBrowserBridge } from "@dam-hopper/browser-bridge";
+
+installBrowserBridge({ parentOrigin: "http://127.0.0.1:4800" });
+```
+
+The library build emits both `dist/index.js` (ES module) and
+`dist/index.iife.js` (IIFE global named `DamHopperBrowserBridge`):
+
+```html
+<script src="/assets/browser-bridge/index.iife.js"></script>
+<script>
+  DamHopperBrowserBridge.installBrowserBridge({
+    parentOrigin: "http://127.0.0.1:4800",
+  });
+</script>
+```
+
+Target deployments need a compatible framing policy, for example
+`Content-Security-Policy: frame-ancestors http://127.0.0.1:4800`; an existing
+`X-Frame-Options` header may still prevent embedding. The Browser tool must
+surface that load failure instead of weakening its origin policy.
+
+Selection payloads are versioned semantic data only: bounded tag/role/name/text,
+an allow-listed set of attributes, a bounded locator, and finite bounds. They
+never contain HTML, input values, passwords/files, cookies, storage, or other
+browser secrets. The bridge package is the Phase 1 protocol/target-side install
+surface; the long-lived iframe owner, navigation/load-error UX, and CSP guidance
+in the Browser tool remain deferred to the planned Phase 3 host integration.
+
 ## Related Documentation
 
 - [System Architecture](./system-architecture.md)

@@ -10,6 +10,7 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
+      "@dam-hopper/browser-bridge": ["../browser-bridge/src/index.ts"],
       "@dam-hopper/shared": ["../shared/src/index.ts"],
       "@dam-hopper/shared/*": ["../shared/src/*"]
     }
