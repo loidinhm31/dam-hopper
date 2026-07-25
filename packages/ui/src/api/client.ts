@@ -388,10 +388,33 @@ export interface UsageTokens {
   reasoningTokens: number | null;
 }
 
+/** Privacy-safe aggregate bucket; no command, event, or conversation data. */
+export interface UsageTimeBucket {
+  startUtcMs: number;
+  terminal: UsageAggregate;
+  codex: UsageTokens | null;
+}
+
+export interface UsageDimensionAggregate {
+  name: string;
+  terminal: UsageAggregate;
+}
+
+/** Available only while the selected window is entirely in detail retention. */
+export interface UsageDetailMetrics {
+  durationP50Ms: number | null;
+  durationP95Ms: number | null;
+  repeatedCommandCount: number;
+}
+
 export interface UsageSummary {
   range: { from: number; to: number; bucket: UsageBucket };
   terminal: UsageAggregate;
   codex: UsageTokens | null;
+  timeSeries: UsageTimeBucket[];
+  categories: UsageDimensionAggregate[];
+  projects: UsageDimensionAggregate[];
+  detailMetrics: UsageDetailMetrics | null;
   coverage: {
     detailOnly: boolean;
     captureQualityFilter: UsageCaptureQuality | null;

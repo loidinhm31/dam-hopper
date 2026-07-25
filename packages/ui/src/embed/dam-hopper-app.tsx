@@ -62,6 +62,11 @@ const AgentStorePage = lazy(() =>
     default: m.AgentStorePage,
   })),
 );
+const UsagePage = lazy(() =>
+  import("@/components/pages/UsagePage.js").then((m) => ({
+    default: m.UsagePage,
+  })),
+);
 
 const LOADING_FALLBACK = (
   <div className="h-screen flex items-center justify-center text-xs text-[var(--color-text-muted)]">
@@ -359,6 +364,16 @@ export function DamHopperApp() {
                     <ErrorBoundary>
                       <Suspense fallback={LOADING_FALLBACK}>
                         <AgentStorePage />
+                      </Suspense>
+                    </ErrorBoundary>
+                  }
+                />
+                <Route
+                  path="/usage"
+                  element={
+                    <ErrorBoundary>
+                      <Suspense fallback={LOADING_FALLBACK}>
+                        <UsagePage />
                       </Suspense>
                     </ErrorBoundary>
                   }

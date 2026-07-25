@@ -9,6 +9,7 @@ import {
   Wrench,
   Square,
   RotateCw,
+  ChartNoAxesCombined,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -242,6 +243,26 @@ export function DashboardPage() {
           />
         </Link>
       </div>
+
+      <Link
+        to="/usage"
+        className="mb-5 flex items-center justify-between gap-4 rounded glass-card p-4 transition-colors hover:bg-[var(--color-surface-2)]"
+      >
+        <div className="flex min-w-0 items-center gap-3">
+          <ChartNoAxesCombined className="h-4 w-4 shrink-0 text-[var(--color-primary)]" />
+          <div className="min-w-0">
+            <p className="text-[10px] tracking-widest text-[var(--color-primary)]/60 uppercase">
+              // USAGE_ANALYTICS
+            </p>
+            <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+              Review privacy-safe terminal and Codex aggregate usage.
+            </p>
+          </div>
+        </div>
+        <span className="shrink-0 text-[10px] font-semibold tracking-widest text-[var(--color-primary)]">
+          OPEN →
+        </span>
+      </Link>
 
       {/* Status bar */}
       {projects.length > 0 && (
