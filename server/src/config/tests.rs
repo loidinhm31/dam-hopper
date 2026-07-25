@@ -68,6 +68,67 @@ type = "cargo"
     assert_eq!(cfg.projects[0].name, "api");
     assert_eq!(cfg.projects[0].project_type, ProjectType::Cargo);
     assert!(cfg.projects[0].path.starts_with('/'));
+    assert!(!cfg.server.telemetry.enabled);
+    assert_eq!(cfg.server.telemetry.detail_retention_days, 90);
+}
+
+#[test]
+fn telemetry_config_uses_snake_case_toml_and_camel_case_api() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(&config_path, r#"
+[workspace]
+name = "telemetry"
+
+[server.telemetry]
+enabled = true
+db_path = "/tmp/telemetry.db"
+detail_retention_days = 30
+aggregate_retention_days = 730
+excluded_projects = ["private"]
+
+[server.telemetry.collector]
+enabled = true
+host = "127.0.0.1"
+port = 4811
+"#).unwrap();
+    let config = read_config(&config_path).unwrap();
+    assert!(config.server.telemetry.enabled);
+    assert_eq!(config.server.telemetry.db_path, "/tmp/telemetry.db");
+    assert_eq!(config.server.telemetry.collector.port, 4811);
+    assert_eq!(serde_json::to_value(&config.server.telemetry).unwrap()["dbPath"], "/tmp/telemetry.db");
+    write_config(&config_path, &config).unwrap();
+    let written = std::fs::read_to_string(&config_path).unwrap();
+    assert!(written.contains("detail_retention_days = 30"));
+    assert!(!written.contains("detailRetentionDays"));
+}
+
+#[test]
+fn telemetry_config_rejects_non_loopback_collector() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(&config_path, r#"
+[workspace]
+name = "telemetry"
+
+[server.telemetry.collector]
+host = "0.0.0.0"
+"#).unwrap();
+    assert!(read_config(&config_path).is_err());
+}
+
+#[test]
+fn telemetry_config_rejects_invalid_retention() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(&config_path, r#"
+[workspace]
+name = "telemetry"
+
+[server.telemetry]
+detail_retention_days = 0
+"#).unwrap();
+    assert!(read_config(&config_path).is_err());
 }
 
 #[test]
@@ -765,6 +826,7 @@ fn global_config_writes_snake_case_ui_and_server_keys() {
         server: crate::config::ServerConfig {
             session_db_path: "/tmp/sessions.db".to_string(),
             session_buffer_ttl_hours: 12,
+            telemetry: crate::config::TelemetryConfig::default(),
         },
     };
 

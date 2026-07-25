@@ -1,0 +1,6 @@
+Captured from codex-cli 0.145.0 on 2026-07-26 using OTLP/HTTP binary.
+The source run used log_user_prompt=false and a synthetic reply-only prompt.
+The checked-in protobuf retains only response.completed plus these attributes:
+event.name, event.kind, input/output/cached/reasoning token counts, conversation.id,
+model, and service.version. Conversation and model values were replaced with fixtures.
+Each future supported Codex CLI version requires a separately captured and sanitized fixture.

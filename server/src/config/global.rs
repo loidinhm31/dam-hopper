@@ -92,7 +92,26 @@ fn normalize_server_json_for_toml(value: &mut Value) {
             "sessionBufferTtlHours" => "session_buffer_ttl_hours",
             other => other,
         };
+        let mut value = value;
+        if toml_key == "telemetry" {
+            normalize_telemetry_json_for_toml(&mut value);
+        }
         server.insert(toml_key.to_string(), value);
+    }
+}
+
+fn normalize_telemetry_json_for_toml(value: &mut Value) {
+    let Some(telemetry) = value.as_object_mut() else { return; };
+    let entries = std::mem::take(telemetry);
+    for (key, value) in entries {
+        let toml_key = match key.as_str() {
+            "dbPath" => "db_path",
+            "detailRetentionDays" => "detail_retention_days",
+            "aggregateRetentionDays" => "aggregate_retention_days",
+            "excludedProjects" => "excluded_projects",
+            other => other,
+        };
+        telemetry.insert(toml_key.to_string(), value);
     }
 }
 

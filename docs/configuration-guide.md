@@ -345,6 +345,42 @@ When the database opens successfully:
 - Exact shell/process memory continuity is not guaranteed across server or host restart
 - Dead sessions are kept for 60 seconds to allow reconnection; buffers are cleaned up per TTL
 
+### Telemetry Configuration
+
+Telemetry is opt-in and disabled by default. The settings live under `[server.telemetry]` in
+the registry file. Omitting the section leaves collection and the Codex OTLP collector off;
+enabling the collector does not change the loopback-only network boundary.
+
+```toml
+[server.telemetry]
+enabled = false
+db_path = "~/.config/dam-hopper/telemetry.db"
+detail_retention_days = 90
+# aggregate_retention_days = 365
+# excluded_projects = ["local-secret-project"]
+
+[server.telemetry.collector]
+enabled = false
+host = "127.0.0.1"
+port = 4811
+```
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `enabled` | bool | `false` | Master switch for telemetry collection and persistence |
+| `db_path` | string | `~/.config/dam-hopper/telemetry.db` | SQLite telemetry database path |
+| `detail_retention_days` | u16 | `90` | Detailed-event retention, from 1 to 3650 days |
+| `aggregate_retention_days` | u32 or omitted | omitted | Optional aggregate retention; when set, must be positive |
+| `excluded_projects` | array of strings | `[]` | Project names excluded from collection; entries must be unique and non-empty |
+| `collector.enabled` | bool | `false` | Enables the authenticated Codex OTLP/HTTP receiver |
+| `collector.host` | IP address | `127.0.0.1` | Must be a loopback address |
+| `collector.port` | u16 | `4811` | Must be non-zero |
+
+TOML uses snake_case keys; the corresponding API representation uses camelCase (for example,
+`dbPath`, `detailRetentionDays`, and `aggregateRetentionDays`). The telemetry database is
+separate from session persistence. Telemetry stores bounded, privacy-filtered metadata rather
+than command text, prompts, responses, or tool output; see the [telemetry architecture notes](./system-architecture.md#terminal-usage-analytics-planned).
+
 ### Diagnostics Storage
 
 Diagnostics export does not currently add user-configurable knobs to `dam-hopper.toml`.
