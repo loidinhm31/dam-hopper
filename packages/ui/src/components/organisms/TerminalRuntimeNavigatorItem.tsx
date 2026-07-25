@@ -2,6 +2,7 @@ import {
   Circle,
   Cloud,
   ExternalLink,
+  PanelRightOpen,
   Radio,
   Terminal as TerminalIcon,
   X,
@@ -16,6 +17,7 @@ import type {
   RuntimeSessionItem,
   RuntimeTreeItem,
 } from "@/lib/terminal-runtime-tree.js";
+import type { TunnelInfo } from "@/api/client.js";
 
 interface Props {
   activeSessionId: string | null;
@@ -37,6 +39,7 @@ interface Props {
   ) => void;
   onStartTunnel: (port: number, label: string) => Promise<void>;
   onStopTunnel: (id: string) => Promise<void>;
+  onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
   touchOptimized?: boolean;
 }
 
@@ -44,16 +47,38 @@ function RuntimePortChip({
   port,
   onStartTunnel,
   onStopTunnel,
+  onOpenTunnelInBrowser,
 }: {
   port: RuntimePort;
   onStartTunnel: (port: number, label: string) => Promise<void>;
   onStopTunnel: (id: string) => Promise<void>;
+  onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
 }) {
+  const readyTunnelUrl =
+    port.tunnelStatus === "ready" ? port.tunnelUrl : undefined;
+
   return (
     <div className="flex items-center gap-1 rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-muted)]">
       <Radio className="h-3 w-3 shrink-0" />
       <span className="font-mono text-[var(--color-text)]">:{port.port}</span>
       <span>{port.tunnelStatus ?? port.state}</span>
+      {readyTunnelUrl && onOpenTunnelInBrowser ? (
+        <button
+          type="button"
+          title={`Open ${readyTunnelUrl} in embedded Browser`}
+          aria-label={`Open ${readyTunnelUrl} in embedded Browser`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenTunnelInBrowser(readyTunnelUrl, port.tunnel!);
+          }}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+          }}
+          className="rounded p-1 hover:bg-[var(--color-background)]"
+        >
+          <PanelRightOpen className="h-3 w-3" />
+        </button>
+      ) : null}
       {port.tunnelUrl ? (
         <a
           href={port.tunnelUrl}
@@ -100,6 +125,7 @@ function RuntimeSessionLeaf({
   onOpenDiagnosticsMenu,
   onStartTunnel,
   onStopTunnel,
+  onOpenTunnelInBrowser,
   touchOptimized = false,
 }: {
   active: boolean;
@@ -109,6 +135,7 @@ function RuntimeSessionLeaf({
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   onStartTunnel: (port: number, label: string) => Promise<void>;
   onStopTunnel: (id: string) => Promise<void>;
+  onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
   touchOptimized?: boolean;
 }) {
   return (
@@ -172,6 +199,7 @@ function RuntimeSessionLeaf({
               port={port}
               onStartTunnel={onStartTunnel}
               onStopTunnel={onStopTunnel}
+              onOpenTunnelInBrowser={onOpenTunnelInBrowser}
             />
           ))}
         </div>
@@ -192,6 +220,7 @@ export function TerminalRuntimeNavigatorItem({
   onSetDragState,
   onStartTunnel,
   onStopTunnel,
+  onOpenTunnelInBrowser,
   touchOptimized = false,
 }: Props) {
   const isTopLevelActive =
@@ -254,6 +283,7 @@ export function TerminalRuntimeNavigatorItem({
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           onStartTunnel={onStartTunnel}
           onStopTunnel={onStopTunnel}
+          onOpenTunnelInBrowser={onOpenTunnelInBrowser}
           touchOptimized={touchOptimized}
         />
       ) : item.kind === "service-group" ? (
@@ -278,6 +308,7 @@ export function TerminalRuntimeNavigatorItem({
                 onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
                 onStartTunnel={onStartTunnel}
                 onStopTunnel={onStopTunnel}
+                onOpenTunnelInBrowser={onOpenTunnelInBrowser}
                 touchOptimized={touchOptimized}
               />
             ))}
@@ -297,6 +328,7 @@ export function TerminalRuntimeNavigatorItem({
                 port={port}
                 onStartTunnel={onStartTunnel}
                 onStopTunnel={onStopTunnel}
+                onOpenTunnelInBrowser={onOpenTunnelInBrowser}
               />
             ))}
           </div>

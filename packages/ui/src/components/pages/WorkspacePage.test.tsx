@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WorkspacePage, {
   openChangedFileDiff,
+  resolveOpenTunnelInBrowserReveal,
   resolveActiveCompactSurfaceId,
   resolveRevealActiveFileOutcome,
 } from "./WorkspacePage.js";
@@ -438,6 +439,22 @@ describe("WorkspacePage", () => {
         nonce: 11,
       },
       compactSurfaceId: "explorer",
+    });
+  });
+
+  it("chooses the right browser reveal mode for tunnel handoff", () => {
+    expect(resolveOpenTunnelInBrowserReveal("ide", false)).toEqual({
+      openBrowser: true,
+      activateTerminalBrowserSplit: true,
+    });
+    expect(resolveOpenTunnelInBrowserReveal("terminal", false)).toEqual({
+      openBrowser: true,
+      activateTerminalBrowserSplit: false,
+    });
+    expect(resolveOpenTunnelInBrowserReveal("ide", true)).toEqual({
+      compactSurfaceId: "browser",
+      openBrowser: false,
+      activateTerminalBrowserSplit: false,
     });
   });
 });

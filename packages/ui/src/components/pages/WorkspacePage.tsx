@@ -78,6 +78,7 @@ import {
   TERMINAL_FILE_PANEL_TREE_WIDTH_KEY,
 } from "@/lib/terminal-floating-file-panel-state.js";
 import { cn } from "@/lib/utils.js";
+import type { TunnelInfo } from "@/api/client.js";
 import type {
   FsArborNode,
   PathSearchMatch,
@@ -293,6 +294,30 @@ function sessionIdSetsEqual(
   return left.size === right.size && [...left].every((id) => right.has(id));
 }
 
+export interface OpenTunnelInBrowserRevealOutcome {
+  compactSurfaceId?: "browser";
+  openBrowser: boolean;
+  activateTerminalBrowserSplit: boolean;
+}
+
+export function resolveOpenTunnelInBrowserReveal(
+  workspaceMode: WorkspaceMode,
+  isCompactWorkspace: boolean,
+): OpenTunnelInBrowserRevealOutcome {
+  if (isCompactWorkspace) {
+    return {
+      compactSurfaceId: "browser",
+      openBrowser: false,
+      activateTerminalBrowserSplit: false,
+    };
+  }
+
+  return {
+    openBrowser: true,
+    activateTerminalBrowserSplit: workspaceMode === "ide",
+  };
+}
+
 export default function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { activeProject, setActiveProject } = useWorkspaceStore();
@@ -326,6 +351,7 @@ export default function WorkspacePage() {
     useState<TerminalWorkspacePanelRequest | null>(null);
   const [browserOpen, setBrowserOpen] = useState(false);
   const browserDebug = useBrowserDebug();
+  const navigateBrowserTo = browserDebug.navigateTo;
   const registeredTerminalIds = useSyncExternalStore(
     subscribeToRegistryChanges,
     getTerminalRegistrySnapshot,
@@ -684,6 +710,45 @@ export default function WorkspacePage() {
       }
     },
     [isCompactWorkspace, workspaceMode],
+  );
+
+  const focusEmbeddedBrowserAddress = useCallback(() => {
+    queueMicrotask(() =>
+      document.getElementById("browser-debug-url")?.focus(),
+    );
+  }, []);
+
+  const handleOpenTunnelInBrowser = useCallback(
+    (url: string, tunnel: TunnelInfo) => {
+      if (!navigateBrowserTo(url, [tunnel])) return;
+
+      const reveal = resolveOpenTunnelInBrowserReveal(
+        workspaceMode,
+        isCompactWorkspace,
+      );
+
+      if (reveal.compactSurfaceId) {
+        setRequestedCompactSurface(reveal.compactSurfaceId);
+      }
+      if (reveal.openBrowser) {
+        setBrowserOpen(true);
+      }
+      if (reveal.activateTerminalBrowserSplit) {
+        panelShortcutNonceRef.current += 1;
+        setIdeBottomToolRequest({
+          nonce: panelShortcutNonceRef.current,
+          toolId: "terminal",
+        });
+      }
+      focusEmbeddedBrowserAddress();
+    },
+    [
+      focusEmbeddedBrowserAddress,
+      isCompactWorkspace,
+      navigateBrowserTo,
+      setRequestedCompactSurface,
+      workspaceMode,
+    ],
   );
 
   useDocumentKeyboardShortcut(searchTextShortcut, () => openSearch("content"));
@@ -1269,6 +1334,7 @@ export default function WorkspacePage() {
                 onNewFreeTerminal={handleAddFreeTerminal}
                 onSelectTab={handleSelectTab}
                 onOpenDiagnosticsMenu={openTerminalDiagnosticsMenu}
+                onOpenTunnelInBrowser={handleOpenTunnelInBrowser}
                 browserOpen={browserOpen && !isCompactWorkspace}
                 renderBrowserContent={(onClose) =>
                   renderBrowserContent(onClose, "active")
@@ -1373,6 +1439,7 @@ export default function WorkspacePage() {
       mountedSessions,
       handleSessionExit,
       handleAddFreeTerminal,
+      handleOpenTunnelInBrowser,
       projectName,
       handleLaunchShell,
       browserOpen,
@@ -1449,10 +1516,10 @@ export default function WorkspacePage() {
   const portsContent = useMemo(
     () => (
       <Suspense fallback={<PanelFallback label="Loading ports…" />}>
-        <PortsPanel />
+        <PortsPanel onOpenTunnelInBrowser={handleOpenTunnelInBrowser} />
       </Suspense>
     ),
-    [],
+    [handleOpenTunnelInBrowser],
   );
 
   const browserContent = useMemo(
