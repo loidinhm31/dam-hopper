@@ -12,10 +12,7 @@
  */
 
 import type { Transport } from "./transport.js";
-import type {
-  TerminalLifecycle,
-  TerminalLifecycleEvent,
-} from "./client.js";
+import type { TerminalLifecycle, TerminalLifecycleEvent } from "./client.js";
 import { logger } from "@dam-hopper/shared/logger";
 import {
   buildAuthHeaders,
@@ -818,6 +815,29 @@ function channelToEndpoint(
     case "system:metrics":
       return { method: "GET", url: "/api/system/metrics" };
 
+    // Usage analytics (REST only; never sent to the terminal WebSocket).
+    case "usage:summary": {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(
+        data as Record<string, unknown>,
+      )) {
+        if (value !== undefined) params.set(key, String(value));
+      }
+      const query = params.toString();
+      return {
+        method: "GET",
+        url: `/api/usage/summary${query ? `?${query}` : ""}`,
+      };
+    }
+    case "usage:health":
+      return { method: "GET", url: "/api/usage/health" };
+    case "usage:settings":
+      return { method: "GET", url: "/api/usage/settings" };
+    case "usage:updateSettings":
+      return { method: "PATCH", url: "/api/usage/settings", body: data };
+    case "usage:deleteAll":
+      return { method: "DELETE", url: "/api/usage", body: data };
+
     // Tunnels
     case "tunnel:install:status":
       return { method: "GET", url: "/api/tunnels/install" };
@@ -835,7 +855,11 @@ function channelToEndpoint(
       };
     }
     case "browser-debug:create":
-      return { method: "POST", url: "/api/browser-debug/artifacts", body: data };
+      return {
+        method: "POST",
+        url: "/api/browser-debug/artifacts",
+        body: data,
+      };
     case "browser-debug:handoff": {
       const { artifactId } = data as { artifactId: string };
       return {
@@ -1777,7 +1801,9 @@ export class WsTransport implements Transport {
       },
     );
     if (!response.ok) {
-      const error = (await response.json().catch(() => ({ error: response.statusText }))) as {
+      const error = (await response
+        .json()
+        .catch(() => ({ error: response.statusText }))) as {
         error?: string;
       };
       throw new Error(error.error ?? `HTTP ${response.status}`);

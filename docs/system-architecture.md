@@ -297,9 +297,20 @@ allowlisted metadata and token fields are accepted; prompt/output fields are rej
 upstream client enables them. Missing telemetry is `unavailable`, not zero. Correlation is exact
 only with an explicit provider/run mapping; project/time fallback is labeled approximate.
 
-The protected usage API (Phase 04) returns aggregates only. It does not expose raw event rows. The shared UI
-adds a `/usage` route plus a dashboard teaser. Navigation becomes more compact and uses responsive
-overflow rather than placing full analytics on the operational dashboard.
+The protected usage API (Phase 04) returns aggregates only. It does not expose raw event rows.
+`GET /api/usage/summary` supports bounded hour/day windows and filters; detail reads cannot
+cross the configured detail-retention boundary except for UTC-day-aligned, unfiltered day
+queries backed by rollups. `GET /api/usage/health` reports availability and writer/rejection
+counters. `GET/PATCH /api/usage/settings` controls pause, retention, exclusions, and collector
+configuration; retention changes roll up/purge synchronously before publication. `DELETE
+/api/usage` requires the exact `delete-usage-data` confirmation string and optionally accepts
+UTC-day-aligned `[from,to)` ranges (maximum five years), pausing capture behind an ordered
+deletion barrier. The shared UI adds a `/usage` route plus a dashboard teaser. Navigation
+becomes more compact and uses responsive overflow rather than placing full analytics on the
+operational dashboard.
+
+Live HMAC-key rotation and coordination with destructive deletion remain follow-up work; the
+current API does not claim rotation is complete.
 
 Key invariants:
 

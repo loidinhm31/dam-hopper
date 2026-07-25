@@ -354,6 +354,82 @@ export interface GitStatus {
   untracked: string[];
 }
 
+export type UsageBucket = "hour" | "day";
+export type UsageWindow = "24h" | "7d" | "30d";
+export type UsageShell = "bash" | "zsh" | "fish";
+export type UsageCaptureQuality = "rich" | "partial" | "unavailable";
+
+export interface UsageSummaryQuery {
+  from?: number;
+  to?: number;
+  window?: UsageWindow;
+  bucket?: UsageBucket;
+  project?: string;
+  shell?: UsageShell;
+  captureQuality?: UsageCaptureQuality;
+  category?: string;
+  agent?: "codex";
+  model?: "gpt-5.6-sol";
+}
+
+export interface UsageAggregate {
+  commandCount: number;
+  succeededCount: number;
+  failedCount: number;
+  interruptedCount: number;
+  unknownCount: number;
+  durationMsSum: number;
+}
+
+export interface UsageTokens {
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+}
+
+export interface UsageSummary {
+  range: { from: number; to: number; bucket: UsageBucket };
+  terminal: UsageAggregate;
+  codex: UsageTokens | null;
+  coverage: {
+    detailOnly: boolean;
+    captureQualityFilter: UsageCaptureQuality | null;
+  };
+  health: UsageHealth;
+}
+
+export interface UsageHealth {
+  available: boolean;
+  paused: boolean;
+  writerErrors: number;
+  rejectedEvents: number;
+  sampledAt: number;
+}
+
+export interface UsageCollectorSettings {
+  enabled: boolean;
+  host: string;
+  port: number;
+}
+
+export interface UsageSettings {
+  enabled: boolean;
+  paused: boolean;
+  detailRetentionDays: number;
+  aggregateRetentionDays: number | null;
+  excludedProjects: string[];
+  collector: UsageCollectorSettings;
+}
+
+export interface UsageSettingsPatch {
+  paused?: boolean;
+  detailRetentionDays?: number;
+  aggregateRetentionDays?: number | null;
+  excludedProjects?: string[];
+  collector?: UsageCollectorSettings;
+}
+
 export interface ProjectWithStatus extends ProjectConfig {
   status: GitStatus | null;
 }
@@ -1111,6 +1187,21 @@ export const api = {
   },
   system: {
     metrics: () => getTransport().invoke<HostMetrics>("system:metrics"),
+  },
+  usage: {
+    summary: (query: UsageSummaryQuery = {}) =>
+      getTransport().invoke<UsageSummary>("usage:summary", query),
+    health: () => getTransport().invoke<UsageHealth>("usage:health"),
+    settings: () => getTransport().invoke<UsageSettings>("usage:settings"),
+    updateSettings: (patch: UsageSettingsPatch) =>
+      getTransport().invoke<UsageSettings>("usage:updateSettings", patch),
+    delete: (request: { confirmation: string; from?: number; to?: number }) =>
+      getTransport().invoke<{ deleted: true }>("usage:deleteAll", {
+        ...request,
+      }),
+    deleteAll: () => api.usage.delete({ confirmation: "delete-usage-data" }),
+    deleteRange: (from: number, to: number) =>
+      api.usage.delete({ confirmation: "delete-usage-data", from, to }),
   },
   fs: {
     list: (project: string, path: string) =>

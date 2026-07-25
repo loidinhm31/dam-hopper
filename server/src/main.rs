@@ -181,8 +181,8 @@ async fn main() -> anyhow::Result<()> {
                 Ok((std::sync::Arc::new(store), std::sync::Arc::new(CommandClassifier::new(std::sync::Arc::new(key)))))
             }) {
                 Ok((store, classifier)) => {
-                    let control = std::sync::Arc::new(TelemetryControl::new(true, config.server.telemetry.excluded_projects.clone()));
-                    let (sink, receiver) = ChannelTelemetrySink::channel(512);
+                    let control = std::sync::Arc::new(TelemetryControl::new(!config.server.telemetry.paused, config.server.telemetry.excluded_projects.clone()));
+                    let (sink, receiver) = ChannelTelemetrySink::channel_with_control(512, control.clone());
                     let sender = sink.sender();
                     match TelemetryWorker::new(receiver, store.clone()).spawn() {
                         Ok(worker) => {
@@ -192,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
                                 detail_retention_days: config.server.telemetry.detail_retention_days,
                                 aggregate_retention_days: config.server.telemetry.aggregate_retention_days,
                             });
-                            (std::sync::Arc::new(sink) as std::sync::Arc<dyn dam_hopper_server::telemetry::TelemetrySink>, Some(classifier), Some(control.clone()), TelemetryHandle::active(control, store), Some(sender), Some(worker))
+                            (std::sync::Arc::new(sink) as std::sync::Arc<dyn dam_hopper_server::telemetry::TelemetrySink>, Some(classifier), Some(control.clone()), TelemetryHandle::active(control, store, Some(sender.clone())), Some(sender), Some(worker))
                         }
                         Err(error) => {
                             tracing::warn!(error = %error, "Telemetry worker failed to start; analytics disabled");
