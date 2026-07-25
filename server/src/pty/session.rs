@@ -76,6 +76,8 @@ pub struct RespawnOpts {
     pub command: String,
     pub cwd: String,
     pub env: HashMap<String, String>,
+    /// Runtime-only OTel marker: retained for in-memory respawns only.
+    pub runtime_otlp_run_marker: Option<String>,
     pub cols: u16,
     pub rows: u16,
     pub project: Option<String>,

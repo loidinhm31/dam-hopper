@@ -27,7 +27,7 @@ mod pty_tests {
         shell_lifecycle::{LifecycleEvent, LifecycleState},
     };
     use crate::telemetry::{
-        load_or_create_hmac_key, ChannelTelemetrySink, CommandClassifier, CommandOutcome,
+        ChannelTelemetrySink, CommandClassifier, CommandOutcome, TelemetryKeyRing,
     };
 
     // Shared multi-thread Tokio runtime for tests. PtySessionManager::new
@@ -86,6 +86,7 @@ mod pty_tests {
             command: command.to_string(),
             cwd: "/tmp".to_string(),
             env,
+            runtime_otlp_run_marker: None,
             cols: 80,
             rows: 24,
             project: None,
@@ -733,7 +734,7 @@ mod pty_tests {
     fn real_pty_emits_normalized_command_to_bounded_telemetry_sink() {
         let directory = tempfile::tempdir().unwrap();
         let classifier = Arc::new(CommandClassifier::new(Arc::new(
-            load_or_create_hmac_key(&directory.path().join("telemetry-key")).unwrap(),
+            TelemetryKeyRing::load_or_create(directory.path().join("telemetry-key")).unwrap(),
         )));
         let (telemetry_sink, receiver) = ChannelTelemetrySink::channel(8);
         let mgr = test_rt().block_on(async {
@@ -1343,6 +1344,25 @@ mod pty_tests {
     }
 
     #[test]
+    fn runtime_otlp_marker_is_excluded_from_persisted_session_environment() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        let mgr = test_rt().block_on(async {
+            PtySessionManager::with_persist(Arc::new(NoopEventSink), Some(tx), None)
+        });
+        let mut create = opts("shell:runtime-otel-marker", "sleep 1");
+        create.runtime_otlp_run_marker = Some("run-marker-safe".to_string());
+
+        mgr.create(create).unwrap();
+        let persisted = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let PersistCmd::SessionCreated { env, .. } = persisted else {
+            panic!("expected SessionCreated before reader output");
+        };
+        assert!(!env.contains_key("OTEL_RESOURCE_ATTRIBUTES"));
+        assert!(!format!("{env:?}").contains("run-marker-safe"));
+        mgr.remove("shell:runtime-otel-marker").unwrap();
+    }
+
+    #[test]
     fn live_buffers_are_snapshotted_before_shutdown() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         let store = Arc::new(SessionStore::open(temp.path()).unwrap());
@@ -1651,6 +1671,7 @@ mod pty_tests {
                 .into_iter()
                 .chain([("SHELL".into(), shell_value)])
                 .collect(),
+            runtime_otlp_run_marker: None,
             cols,
             rows,
             project,

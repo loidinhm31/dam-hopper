@@ -113,6 +113,7 @@ fn create_terminal(state: &AppState, root: &std::path::Path) {
             command: "cat".into(),
             cwd: root.display().to_string(),
             env: Default::default(),
+            runtime_otlp_run_marker: None,
             cols: 80,
             rows: 24,
             project: None,
