@@ -2,7 +2,7 @@
 
 Date: 2026-07-25  
 Priority: medium  
-Status: pending
+Status: complete (2026-07-25 15:18 +07; automated validation complete, native release gate carried into parent phase 6)
 
 ## Context Links
 
@@ -50,10 +50,10 @@ test using a temporary extension profile.
 
 ## Todo List
 
-- [ ] Build/UI tests.
-- [ ] Chromium test.
-- [ ] Documentation.
-- [ ] Release validation.
+- [x] Build/UI tests.
+- [x] Chromium protocol/host-origin regression tests.
+- [x] Documentation.
+- [ ] Native Chromium extension load and deployed-origin release validation.
 
 ## Success Criteria
 
@@ -71,4 +71,6 @@ never in the target app, and that it only runs on declared host patterns.
 
 ## Next Steps
 
-Hand off to implementation.
+Manual next step: load the staged archive in Chromium, verify the parent marker
+after reload, confirm a configured deployed parent origin, exercise a framed
+loopback/tunnel target, and complete the real terminal handoff check.

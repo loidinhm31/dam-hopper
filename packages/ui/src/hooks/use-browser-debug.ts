@@ -11,6 +11,10 @@ import {
   type BrowserDebugTarget,
 } from "@/lib/browser-debug-origin.js";
 import type { CaptureRect } from "@/lib/browser-capture.js";
+import {
+  useBrowserExtensionPresence,
+  type BrowserExtensionPresence,
+} from "@/hooks/use-browser-extension-presence.js";
 
 export type BrowserDebugBridgeStatus =
   | "idle"
@@ -22,6 +26,7 @@ export type BrowserDebugBridgeStatus =
 export type { BrowserCaptureStatus } from "@/hooks/use-browser-capture.js";
 
 export interface BrowserDebugController {
+  extensionPresence: BrowserExtensionPresence;
   inputUrl: string;
   target: BrowserDebugTarget | null;
   bridgeStatus: BrowserDebugBridgeStatus;
@@ -45,6 +50,7 @@ export interface BrowserDebugController {
 
 /** Owns Browser tool state while its iframe is kept alive outside tool shells. */
 export function useBrowserDebug(): BrowserDebugController {
+  const extensionPresence = useBrowserExtensionPresence();
   const parentOrigin =
     typeof window === "undefined" ? undefined : window.location?.origin;
   const [inputUrl, setInputUrl] = useState("");
@@ -144,6 +150,7 @@ export function useBrowserDebug(): BrowserDebugController {
   );
 
   return {
+    extensionPresence,
     inputUrl,
     target,
     bridgeStatus,

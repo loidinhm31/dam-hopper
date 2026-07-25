@@ -16,6 +16,7 @@ const target = {
 
 function controller(): BrowserDebugController {
   return {
+    extensionPresence: "detected",
     inputUrl: target.url,
     target,
     bridgeStatus: "loading",

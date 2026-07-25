@@ -14,9 +14,9 @@ created: 2026-07-24
 ## Overview
 
 Add a web-only Browser tool for controlled loopback applications and exact
-currently-ready DamHopper tunnel origins. A dev-only target bridge returns
-bounded DOM/ARIA/locator data through authenticated `postMessage`; optional
-user-mediated current-tab capture supplies pixels. The user previews a
+currently-ready DamHopper tunnel origins. An extension-assisted target bridge
+returns bounded DOM/ARIA/locator data through origin-bound `postMessage`;
+optional user-mediated current-tab capture supplies pixels. The user previews a
 sanitized selection, then attaches short-lived JSON/PNG paths to a chosen xterm
 without auto-submit.
 
@@ -28,19 +28,20 @@ without auto-submit.
 | 2 | Ephemeral artifacts and REST API | Done (2026-07-24 15:46 +07) | 10h | [phase-02-artifact-manager-and-api.md](./phase-02-artifact-manager-and-api.md) |
 | 3 | Browser tool, iframe, origin policy | Done (2026-07-24 17:27 +07) | 10h | [phase-03-browser-tool-and-iframe-bridge.md](./phase-03-browser-tool-and-iframe-bridge.md) |
 | 4 | Screen capture, crop, fallback | Done (2026-07-24 18:20 +07) | 8h | [phase-04-capture-and-image-fallback.md](./phase-04-capture-and-image-fallback.md) |
-| 5 | Terminal handoff and workspace integration | Pending | 8h | [phase-05-terminal-handoff-and-workspace-integration.md](./phase-05-terminal-handoff-and-workspace-integration.md) |
+| 5 | Terminal handoff and workspace integration | Done (2026-07-25 15:18 +07) | 8h | [phase-05-terminal-handoff-and-workspace-integration.md](./phase-05-terminal-handoff-and-workspace-integration.md) |
 | 6 | Hardening, tests, docs, manual gate | Pending | 10h | [phase-06-hardening-tests-and-docs.md](./phase-06-hardening-tests-and-docs.md) |
 
 ## Dependencies
 
 - Existing authenticated REST/WS transport and PTY sessions.
 - `TunnelSessionManager` ready URLs and lifecycle events.
-- Target app can include the framework-neutral dev bridge and allow the parent
-  origin through CSP `frame-ancestors`.
+- Client browser can load the packaged Chromium extension; target app still
+  permits the parent through CSP `frame-ancestors`.
 - Browser supports iframe messaging and, optionally, `getDisplayMedia`.
 - A singleton keep-alive host preserves one iframe DOM node for the full
   Workspace lifetime, reparenting it into visible or parked containers.
-- No extension, reverse proxy, Electron migration, or Tauri sidecar in V1.
+- No reverse proxy, Electron migration, or Tauri sidecar in V1. Chromium
+  extension distribution and setup are now the V1 bridge delivery path.
 
 ## Release gate
 
@@ -81,3 +82,11 @@ permission checks pass.
 - Completed implementation and user-approved review: 2026-07-24 17:27 +07 (Asia/Ho_Chi_Minh).
 - Browser tool is mounted across Workspace IDE, terminal, and compact surfaces with a singleton stable iframe overlay and exact-origin allowlist.
 - Validation covers origin parsing, stable iframe behavior, panel rendering, workspace integration, and Chromium browser-flow screenshots/tests.
+
+### Phase 5 validation
+
+- Approved after terminal handoff, extension setup, and origin-bound bridge review: 2026-07-25 15:06 +07 (Asia/Ho_Chi_Minh).
+- Handoff requires explicit review/confirmation, a mounted/registered/live terminal, server-generated artifact paths, one-time server claim, control-free single-line PTY input, and no Enter submission.
+- Web build stages a deterministic MV3 archive; the client presence marker is onboarding telemetry only. Bridge activation requires loopback or configured exact DamHopper parent origins.
+- `@dam-hopper/browser-bridge`: 11 tests passed; `@dam-hopper/ui`: 684 tests passed; Chromium: 38 tests passed; Rust: all suites passed (439 unit, 50 integration); build/lint passed with 0 errors and 14 existing warnings.
+- Manual Chromium extension installation, permission, deployed-origin, tunnel, and real-xterm checks remain Phase 6 release gates.

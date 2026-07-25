@@ -13,8 +13,8 @@
 - Description: Attach an approved bundle to a chosen live xterm session without
   raw DOM insertion or implicit command submission.
 - Priority: P1
-- Implementation status: Complete
-- Review status: Approved
+- Implementation status: Complete (2026-07-25 15:18 +07)
+- Review status: Approved after origin-bound extension review (2026-07-25 15:18 +07)
 
 ## Key Insights
 
@@ -80,7 +80,9 @@ IDE/terminal/compact shells. Browser overlay additions to
 - [x] Test no active session, dead session, stale ID, and terminal close race.
 - [x] Test exact one-time handoff acknowledgement and no CR/LF/escape bytes.
 - [x] Test reactive terminal registration and Browser panel shell/mode state.
-- [ ] Decide whether insert prefix should be shell-comment-compatible on Windows.
+- [x] Keep the reference prefix shell-neutral on Windows; it is bounded inert
+  text and handoff never appends Enter or executes it. Revisit with remote
+  agent/resource transport in Phase 6 if required.
 
 ## Success Criteria
 
@@ -105,7 +107,7 @@ IDE/terminal/compact shells. Browser overlay additions to
 
 ## Next steps
 
-Run full browser and Rust integration tests, then document the agent workflow
+Run the Phase 6 hostile/manual browser gate, then document the agent workflow
 and artifact retention. Consider an MCP resource only after V1 usage validates
 path insertion.
 

@@ -260,14 +260,14 @@ responses, tool arguments, or tool output.
 `telemetry.db` is separate from session persistence because `sessions.db` has different restore
 and privacy semantics. Planned logical tables:
 
-| Table | Contract |
-| --- | --- |
-| `terminal_runs` | PTY run/project/shell/generation/start/end/status/coverage |
-| `command_events` | Stable sequence/category/executable/HMAC/time/duration/status/source |
-| `agent_runs` | Provider conversation/run correlation, model, time, status, source quality |
-| `agent_usage_events` | Deduped input/cached/output/reasoning token counters and source version |
-| `daily_usage_rollups` | UTC daily counts/outcomes/token sums retained after detail purge |
-| `telemetry_health` | Dropped, rejected, invalid, purge, and checkpoint counters |
+| Table                 | Contract                                                                   |
+| --------------------- | -------------------------------------------------------------------------- |
+| `terminal_runs`       | PTY run/project/shell/generation/start/end/status/coverage                 |
+| `command_events`      | Stable sequence/category/executable/HMAC/time/duration/status/source       |
+| `agent_runs`          | Provider conversation/run correlation, model, time, status, source quality |
+| `agent_usage_events`  | Deduped input/cached/output/reasoning token counters and source version    |
+| `daily_usage_rollups` | UTC daily counts/outcomes/token sums retained after detail purge           |
+| `telemetry_health`    | Dropped, rejected, invalid, purge, and checkpoint counters                 |
 
 The store uses mode `0600`, WAL, a busy timeout, one bounded non-blocking writer, and a separate
 read connection. Database lock/full/error paths drop or coalesce telemetry and increment health
@@ -412,9 +412,12 @@ content script into the cross-origin iframe. The target application does not
 install anything. The extension owns element highlighting and
 DOM/accessibility extraction. Parent and extension communicate through a
 versioned `postMessage` protocol with WindowProxy/source checks, a per-load
-nonce, request IDs, schema validation, and bounded payloads. The target route
-must still permit iframe embedding through its browser policy; DamHopper does
-not bypass `X-Frame-Options` or restrictive CSP.
+nonce, exact target/parent-origin checks, request IDs, schema validation, and
+bounded payloads. Loopback parent origins are allowed for local development;
+deployed parent origins are compiled into the extension from
+`VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS`. The target route must still permit
+iframe embedding through its browser policy; DamHopper does not bypass
+`X-Frame-Options` or restrictive CSP.
 
 The web build packages the extension as
 `/browser-debug-extension/dam-hopper-browser-debug.zip`. When the Browser

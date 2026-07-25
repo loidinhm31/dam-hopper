@@ -80,21 +80,43 @@ describe("BrowserDebugPanel", () => {
   it("offers the bundled extension download and setup steps when the bridge is unavailable", () => {
     const markup = renderPanel({
       bridgeStatus: "unsupported",
+      extensionPresence: "missing",
       error: "No Browser Debug response from http://localhost:3001.",
+      onReloadPage: vi.fn(),
     });
 
     expect(markup).toContain("Browser Debug extension required");
     expect(markup).toContain("Download extension ZIP");
-    expect(markup).toContain("Download extension");
-    expect(markup).toContain("Download Browser Debug extension");
     expect(markup).toContain(
       'href="./browser-debug-extension/dam-hopper-browser-debug.zip"',
     );
     expect(markup).toContain("chrome://extensions");
     expect(markup).toContain("Load unpacked");
+    expect(markup).toContain("Reload DamHopper page");
     expect(markup).toContain(
       "target app does not need any package or code change",
     );
+  });
+
+  it("distinguishes a detected extension from a target handshake failure", () => {
+    const markup = renderPanel({
+      bridgeStatus: "unsupported",
+      extensionPresence: "detected",
+    });
+
+    expect(markup).toContain("Extension detected in this browser");
+    expect(markup).not.toContain("Browser Debug extension required");
+  });
+
+  it("does not show extension setup after the bridge is connected", () => {
+    const markup = renderPanel({
+      bridgeStatus: "ready",
+      extensionPresence: "missing",
+    });
+
+    expect(markup).toContain("Bridge connected");
+    expect(markup).not.toContain("Download extension ZIP");
+    expect(markup).not.toContain("Browser Debug extension required");
   });
 
   it("renders explicit local-only capture and manual-image actions", () => {

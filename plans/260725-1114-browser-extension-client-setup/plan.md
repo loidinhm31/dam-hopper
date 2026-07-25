@@ -1,7 +1,7 @@
 # Browser Extension Client Setup
 
 Date: 2026-07-25  
-Status: planned
+Status: complete (2026-07-25 15:18 +07; native release checks carried into parent phase 6)
 
 ## Outcome
 
@@ -34,7 +34,10 @@ selection behind a client-side setup flow. The target app remains unchanged.
 - Auth: archive is a static public asset; it contains no server token or user data.
 - Permissions: user explicitly loads the extension and grants site access.
 - Compatibility: Chromium only; Browser Debug preview remains available after setup.
-- Security: target DOM access is restricted to extension match patterns and the
+- Security: target DOM access is restricted to declared extension match
+  patterns, loopback or configured exact DamHopper parent origins, and the
   existing source/nonce/request/schema bridge checks.
 - Performance: one small content-script marker on the Dam Hopper page.
 - Deployment: archive is generated with the web bundle, not from a local source path.
+- Automated validation is complete; native Chromium install and deployed-origin
+  permission checks remain pending.

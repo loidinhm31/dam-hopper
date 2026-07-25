@@ -50,7 +50,7 @@ describe("parseTrustedBrowserBridgeEvent", () => {
     ).toMatchObject({ type: "dam-hopper:selection", selection });
   });
 
-  it("accepts a sandboxed iframe event when its origin is null", () => {
+  it("rejects an opaque or redirected iframe origin", () => {
     expect(
       parseTrustedBrowserBridgeEvent(
         event(
@@ -64,7 +64,7 @@ describe("parseTrustedBrowserBridgeEvent", () => {
         ),
         trust,
       ),
-    ).toMatchObject({ type: "dam-hopper:bridge-ready" });
+    ).toBeNull();
   });
 
   it.each([

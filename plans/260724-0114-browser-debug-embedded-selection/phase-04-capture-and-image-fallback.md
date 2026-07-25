@@ -99,7 +99,8 @@ surface metadata; clamp at final bitmap operation. Feature-detect
 
 Pass the resulting optional PNG plus semantic JSON to the artifact API. If crop
 reliability is below the release bar, ship DOM-only + manual upload and defer
-automatic crop rather than adding a proxy or extension.
+automatic crop rather than adding a proxy or changing the extension trust
+boundary.
 
 ## Validation
 

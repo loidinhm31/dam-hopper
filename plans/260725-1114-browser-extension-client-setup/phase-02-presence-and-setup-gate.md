@@ -2,7 +2,7 @@
 
 Date: 2026-07-25  
 Priority: high  
-Status: pending
+Status: completed (2026-07-25 15:06 +07)
 
 ## Context Links
 
@@ -59,10 +59,10 @@ existing iframe host; the marker is only onboarding telemetry.
 
 ## Todo List
 
-- [ ] Parent marker and event.
-- [ ] UI presence hook.
-- [ ] Download/setup UI.
-- [ ] State and regression tests.
+- [x] Parent marker and event.
+- [x] UI presence hook.
+- [x] Download/setup UI.
+- [x] State and regression tests.
 
 ## Success Criteria
 
@@ -83,3 +83,6 @@ request ID, and protocol validation for all bridge events.
 ## Next Steps
 
 Validate release packaging and document the client workflow.
+
+Validation: marker, hook, panel state, setup reload action, target-handshake
+copy, and duplicate-download regression are covered by unit/browser tests.

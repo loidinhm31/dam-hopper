@@ -20,6 +20,7 @@ import type {
   BrowserTerminalTarget,
   PreparedBrowserTerminalArtifact,
 } from "@/lib/browser-terminal-handoff.js";
+import type { BrowserExtensionPresence } from "@/hooks/use-browser-extension-presence.js";
 
 export type BrowserBridgeStatus =
   | "idle"
@@ -40,6 +41,8 @@ interface BrowserDebugPanelProps {
   maximized?: boolean;
   onUrlChange: (url: string) => void;
   onNavigate: () => void;
+  extensionPresence?: BrowserExtensionPresence;
+  onReloadPage?: () => void;
   onStartPicker?: () => void;
   onStopPicker?: () => void;
   pickerActive?: boolean;
@@ -80,7 +83,11 @@ function statusClass(status: BrowserBridgeStatus) {
   return "bg-[var(--color-text-muted)]";
 }
 
-function BrowserDebugExtensionSetup() {
+function BrowserDebugExtensionSetup({
+  onReloadPage,
+}: {
+  onReloadPage?: () => void;
+}) {
   return (
     <aside
       aria-label="Browser Debug extension setup"
@@ -113,8 +120,13 @@ function BrowserDebugExtensionSetup() {
           </code>{" "}
           folder.
         </li>
-        <li>Return here and click Load again.</li>
+        <li>Reload this DamHopper page after loading the extension.</li>
       </ol>
+      {onReloadPage && (
+        <Button type="button" size="sm" className="mt-2" onClick={onReloadPage}>
+          Reload DamHopper page
+        </Button>
+      )}
       <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
         This is a one-time client-browser setup. The target app does not need
         any package or code change.
@@ -146,6 +158,8 @@ export function BrowserDebugPanel({
   maximized = false,
   onUrlChange,
   onNavigate,
+  extensionPresence = "detected",
+  onReloadPage,
   onStartPicker,
   onStopPicker,
   pickerActive = false,
@@ -257,29 +271,16 @@ export function BrowserDebugPanel({
           />
           <span className="truncate">{STATUS_COPY[bridgeStatus]}</span>
         </p>
-        {bridgeStatus === "unsupported" ? (
-          <a
-            href={BROWSER_DEBUG_EXTENSION_DOWNLOAD}
-            download="dam-hopper-browser-debug.zip"
-            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded bg-[var(--color-primary)] px-2.5 font-medium text-white transition-colors hover:bg-[var(--color-primary-hover)]"
-            title="Download Browser Debug extension"
+        {onStartPicker && bridgeStatus === "ready" && (
+          <Button
+            type="button"
+            size="sm"
+            variant={pickerActive ? "secondary" : "ghost"}
+            onClick={pickerActive ? onStopPicker : onStartPicker}
           >
-            <Download className="h-3.5 w-3.5" aria-hidden="true" />
-            <span className="hidden sm:inline">Download extension</span>
-          </a>
-        ) : (
-          onStartPicker &&
-          bridgeStatus === "ready" && (
-            <Button
-              type="button"
-              size="sm"
-              variant={pickerActive ? "secondary" : "ghost"}
-              onClick={pickerActive ? onStopPicker : onStartPicker}
-            >
-              <MousePointer2 className="h-3.5 w-3.5" aria-hidden="true" />
-              {pickerActive ? "Cancel selection" : "Select element"}
-            </Button>
-          )
+            <MousePointer2 className="h-3.5 w-3.5" aria-hidden="true" />
+            {pickerActive ? "Cancel selection" : "Select element"}
+          </Button>
         )}
       </div>
 
@@ -291,7 +292,15 @@ export function BrowserDebugPanel({
           {error}
         </p>
       )}
-      {bridgeStatus === "unsupported" && <BrowserDebugExtensionSetup />}
+      {bridgeStatus === "unsupported" && extensionPresence === "missing" && (
+        <BrowserDebugExtensionSetup onReloadPage={onReloadPage} />
+      )}
+      {bridgeStatus === "unsupported" && extensionPresence === "detected" && (
+        <p className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-[var(--color-text-muted)]">
+          Extension detected in this browser, but the target frame did not
+          respond. Check the target URL, reachability, and frame permissions.
+        </p>
+      )}
       <div
         ref={viewportRef}
         className="min-h-0 flex-1 bg-[var(--color-surface-2)]"
