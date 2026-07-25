@@ -264,6 +264,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
   - ✅ Kept unsupported shells fail-closed; Bash support uses guarded exact-command capture
   - ✅ Validation passed: focused shell lifecycle parser tests (7/7) and lifecycle protocol coverage
 
+- **2026-07-26:** Completed Phase 02: Validated shell lifecycle capture.
+  - ✅ Bash, Zsh, and Fish completion markers now carry optional bounded exit status with versioned adapter capabilities and legacy status-less compatibility.
+  - ✅ PTY lifecycle capture emits privacy-safe normalized command events with terminal-run/sequence identity through a bounded non-blocking sink; raw command text does not cross the event contract.
+  - ✅ The default path remains no-op and non-durable. `ChannelTelemetrySink` is the intentional Phase 03 durable-worker boundary; telemetry storage, worker processing, and usage APIs remain out of scope.
+
 - **2026-07-16:** Completed Safe Inline Terminal Suggestions Phase 01: Security containment and history privacy.
   - ✅ Removed PTY-silence authorization, automatic overlay rendering, input interception, and automatic command recording
   - ✅ Kept all native terminal input byte-for-byte passive while automatic suggestions are unavailable

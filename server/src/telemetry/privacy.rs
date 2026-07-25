@@ -20,6 +20,7 @@ pub const FORBIDDEN_CONTENT_FIELDS: &[&str] = &[
     "raw_otlp",
 ];
 
+#[derive(Clone)]
 pub struct TelemetryHmacKey([u8; HMAC_KEY_LENGTH]);
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
