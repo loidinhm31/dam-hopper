@@ -30,6 +30,9 @@ export interface BrowserDebugKeepAliveHostProps {
 export interface BrowserDebugKeepAliveHandle {
   startPicker: () => void;
   stopPicker: () => void;
+  goBack: () => void;
+  goForward: () => void;
+  reload: () => void;
 }
 
 /**
@@ -68,6 +71,7 @@ export const BrowserDebugKeepAliveHost = forwardRef<
     // capture state from the previous document cross that trust boundary.
     browser.setSelection(null);
     browser.setPickerActive(false);
+    browser.setBridgeCapabilities([]);
     browser.setError(null);
 
     const nonce = createBrowserDebugId();
@@ -102,8 +106,15 @@ export const BrowserDebugKeepAliveHost = forwardRef<
     }, 5_000);
   }, [browser]);
 
-  const sendPickerCommand = useCallback(
-    (type: "dam-hopper:start-picker" | "dam-hopper:stop-picker") => {
+  const sendBrowserCommand = useCallback(
+    (
+      type:
+        | "dam-hopper:start-picker"
+        | "dam-hopper:stop-picker"
+        | "dam-hopper:go-back"
+        | "dam-hopper:go-forward"
+        | "dam-hopper:reload",
+    ) => {
       const trust = trustRef.current;
       const source = iframeRef.current?.contentWindow;
       if (!trust || !source) return;
@@ -121,7 +132,15 @@ export const BrowserDebugKeepAliveHost = forwardRef<
         requestId,
       };
       source.postMessage(command, trust.origin);
-      browser.setPickerActive(type === "dam-hopper:start-picker");
+      if (
+        type === "dam-hopper:start-picker" ||
+        type === "dam-hopper:stop-picker"
+      ) {
+        browser.setPickerActive(type === "dam-hopper:start-picker");
+      } else {
+        browser.setSelection(null);
+        browser.setPickerActive(false);
+      }
     },
     [browser],
   );
@@ -129,10 +148,13 @@ export const BrowserDebugKeepAliveHost = forwardRef<
   useImperativeHandle(
     ref,
     () => ({
-      startPicker: () => sendPickerCommand("dam-hopper:start-picker"),
-      stopPicker: () => sendPickerCommand("dam-hopper:stop-picker"),
+      startPicker: () => sendBrowserCommand("dam-hopper:start-picker"),
+      stopPicker: () => sendBrowserCommand("dam-hopper:stop-picker"),
+      goBack: () => sendBrowserCommand("dam-hopper:go-back"),
+      goForward: () => sendBrowserCommand("dam-hopper:go-forward"),
+      reload: () => sendBrowserCommand("dam-hopper:reload"),
     }),
-    [sendPickerCommand],
+    [sendBrowserCommand],
   );
 
   useEffect(() => {
@@ -144,12 +166,24 @@ export const BrowserDebugKeepAliveHost = forwardRef<
       if (message.type === "dam-hopper:bridge-ready") {
         if (bridgeTimeoutRef.current) clearTimeout(bridgeTimeoutRef.current);
         browser.setBridgeStatus("ready");
+        browser.setBridgeCapabilities(message.capabilities ?? []);
         browser.setError(null);
         return;
       }
       if (message.type === "dam-hopper:selection") {
         browser.setSelection(message.selection);
         browser.setPickerActive(false);
+        return;
+      }
+      if (message.type === "dam-hopper:navigation") {
+        browser.syncCurrentUrl(message.url);
+        return;
+      }
+      if (message.type === "dam-hopper:console") {
+        browser.appendConsoleEntry({
+          level: message.level,
+          message: message.message,
+        });
         return;
       }
       browser.setBridgeStatus("error");
