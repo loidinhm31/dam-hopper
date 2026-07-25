@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BrowserSelectionV1 } from "@dam-hopper/browser-bridge";
+import type {
+  BrowserBridgeCapability,
+  BrowserSelectionV1,
+} from "@dam-hopper/browser-bridge";
 import {
   useBrowserCapture,
   type BrowserCaptureStatus,
@@ -10,6 +13,10 @@ import {
   resolveBrowserDebugTarget,
   type BrowserDebugTarget,
 } from "@/lib/browser-debug-origin.js";
+import {
+  loadBrowserDebugAddressHistory,
+  recordBrowserDebugAddress,
+} from "@/lib/browser-debug-address-history.js";
 import type { CaptureRect } from "@/lib/browser-capture.js";
 import {
   useBrowserExtensionPresence,
@@ -25,11 +32,23 @@ export type BrowserDebugBridgeStatus =
 
 export type { BrowserCaptureStatus } from "@/hooks/use-browser-capture.js";
 
+export interface BrowserConsoleEntry {
+  id: number;
+  level: "debug" | "log" | "info" | "warn" | "error";
+  message: string;
+}
+
+export type BrowserConsolePreview = Omit<BrowserConsoleEntry, "id">;
+
+const MAX_CONSOLE_ENTRIES = 100;
+
 export interface BrowserDebugController {
   extensionPresence: BrowserExtensionPresence;
   inputUrl: string;
+  addressHistory: string[];
   target: BrowserDebugTarget | null;
   bridgeStatus: BrowserDebugBridgeStatus;
+  bridgeCapabilities: BrowserBridgeCapability[];
   selection: BrowserSelectionV1 | null;
   pickerActive: boolean;
   captureStatus: BrowserCaptureStatus;
@@ -37,12 +56,17 @@ export interface BrowserDebugController {
   manualImageName: string | null;
   captureImage: Blob | null;
   error: string | null;
+  consoleEntries: BrowserConsoleEntry[];
   setInputUrl: (value: string) => void;
   navigate: () => void;
   setBridgeStatus: (status: BrowserDebugBridgeStatus) => void;
   setSelection: (selection: BrowserSelectionV1 | null) => void;
   setPickerActive: (active: boolean) => void;
   setError: (message: string | null) => void;
+  syncCurrentUrl: (url: string) => void;
+  setBridgeCapabilities: (capabilities: BrowserBridgeCapability[]) => void;
+  appendConsoleEntry: (entry: BrowserConsolePreview) => void;
+  clearConsole: () => void;
   startCapture: (targetFrame: CaptureRect | null) => Promise<void>;
   setManualImage: (file: Blob) => Promise<void>;
   stopCapture: () => void;
@@ -54,16 +78,26 @@ export function useBrowserDebug(): BrowserDebugController {
   const parentOrigin =
     typeof window === "undefined" ? undefined : window.location?.origin;
   const [inputUrl, setInputUrl] = useState("");
+  const [addressHistory, setAddressHistory] = useState(
+    loadBrowserDebugAddressHistory,
+  );
   const [tunnels, setTunnels] = useState<TunnelInfo[]>([]);
   const [target, setTarget] = useState<BrowserDebugTarget | null>(null);
   const targetRef = useRef<BrowserDebugTarget | null>(null);
   const [bridgeStatus, setBridgeStatus] =
     useState<BrowserDebugBridgeStatus>("idle");
+  const [bridgeCapabilities, setBridgeCapabilities] = useState<
+    BrowserBridgeCapability[]
+  >([]);
+  const consoleEntryIdRef = useRef(0);
   const [selection, setSelection] = useState<BrowserSelectionV1 | null>(null);
   const [pickerActive, setPickerActive] = useState(false);
   const capture = useBrowserCapture(selection);
   const { stopCapture } = capture;
   const [error, setError] = useState<string | null>(null);
+  const [consoleEntries, setConsoleEntries] = useState<BrowserConsoleEntry[]>(
+    [],
+  );
 
   const invalidateTarget = useCallback(
     (message: string) => {
@@ -71,6 +105,7 @@ export function useBrowserDebug(): BrowserDebugController {
       setTarget(null);
       setSelection(null);
       setPickerActive(false);
+      setBridgeCapabilities([]);
       stopCapture();
       setBridgeStatus("error");
       setError(message);
@@ -126,17 +161,21 @@ export function useBrowserDebug(): BrowserDebugController {
       setTarget(null);
       setSelection(null);
       setPickerActive(false);
+      setBridgeCapabilities([]);
       stopCapture();
       setBridgeStatus("error");
-      setError("Enter an exact HTTP loopback origin or a ready tunnel URL.");
+      setError("Enter an HTTP loopback URL or a URL on a ready tunnel.");
       return;
     }
     setInputUrl(nextTarget.url);
+    setAddressHistory(recordBrowserDebugAddress(nextTarget.url));
     targetRef.current = nextTarget;
     setTarget(nextTarget);
     setSelection(null);
     setPickerActive(false);
     stopCapture();
+    setConsoleEntries([]);
+    setBridgeCapabilities([]);
     setBridgeStatus("loading");
     setError(null);
   }, [inputUrl, parentOrigin, stopCapture, tunnels]);
@@ -149,11 +188,33 @@ export function useBrowserDebug(): BrowserDebugController {
     [stopCapture],
   );
 
+  const syncCurrentUrl = useCallback((url: string) => {
+    const currentTarget = targetRef.current;
+    try {
+      if (currentTarget && new URL(url).origin === currentTarget.origin)
+        setInputUrl(url);
+    } catch {
+      // The trusted protocol parser rejects control characters; malformed URLs
+      // still never replace the address displayed to the user.
+    }
+  }, []);
+
+  const appendConsoleEntry = useCallback((entry: BrowserConsolePreview) => {
+    setConsoleEntries((current) => [
+      ...current.slice(-(MAX_CONSOLE_ENTRIES - 1)),
+      { ...entry, id: ++consoleEntryIdRef.current },
+    ]);
+  }, []);
+
+  const clearConsole = useCallback(() => setConsoleEntries([]), []);
+
   return {
     extensionPresence,
     inputUrl,
+    addressHistory,
     target,
     bridgeStatus,
+    bridgeCapabilities,
     selection,
     pickerActive,
     captureStatus: capture.captureStatus,
@@ -161,12 +222,17 @@ export function useBrowserDebug(): BrowserDebugController {
     manualImageName: capture.manualImageName,
     captureImage: capture.captureImage,
     error,
+    consoleEntries,
     setInputUrl,
     navigate,
     setBridgeStatus,
+    setBridgeCapabilities,
     setSelection: updateSelection,
     setPickerActive,
     setError,
+    syncCurrentUrl,
+    appendConsoleEntry,
+    clearConsole,
     startCapture: capture.startCapture,
     setManualImage: capture.setManualImage,
     stopCapture,

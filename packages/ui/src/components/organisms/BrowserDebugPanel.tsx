@@ -1,5 +1,8 @@
 import { useEffect, type RefObject } from "react";
 import {
+  ArrowLeft,
+  ArrowRight,
+  ChevronDown,
   Download,
   Maximize2,
   Minimize2,
@@ -16,11 +19,13 @@ import {
 } from "./BrowserDebugCaptureControls.js";
 import { BrowserDebugSelectionPreview } from "./BrowserDebugSelectionPreview.js";
 import { BrowserDebugTerminalHandoff } from "./BrowserDebugTerminalHandoff.js";
+import { BrowserDebugConsole } from "./BrowserDebugConsole.js";
 import type {
   BrowserTerminalTarget,
   PreparedBrowserTerminalArtifact,
 } from "@/lib/browser-terminal-handoff.js";
 import type { BrowserExtensionPresence } from "@/hooks/use-browser-extension-presence.js";
+import type { BrowserConsoleEntry } from "@/hooks/use-browser-debug.js";
 
 export type BrowserBridgeStatus =
   | "idle"
@@ -39,8 +44,16 @@ interface BrowserDebugPanelProps {
   error?: string | null;
   loading?: boolean;
   maximized?: boolean;
+  addressHistory?: string[];
   onUrlChange: (url: string) => void;
   onNavigate: () => void;
+  onBack?: () => void;
+  onForward?: () => void;
+  onReload?: () => void;
+  navigationAvailable?: boolean;
+  consoleEntries?: BrowserConsoleEntry[];
+  consoleAvailable?: boolean;
+  onClearConsole?: () => void;
   extensionPresence?: BrowserExtensionPresence;
   onReloadPage?: () => void;
   onStartPicker?: () => void;
@@ -53,7 +66,9 @@ interface BrowserDebugPanelProps {
   onManualImage?: (file: File) => void;
   onStopCapture?: () => void;
   terminalHandoff?: {
-    targets: BrowserTerminalTarget[];
+    mode?: "active" | "select";
+    target?: BrowserTerminalTarget;
+    targets?: BrowserTerminalTarget[];
     onPrepare: (sessionId: string) => Promise<PreparedBrowserTerminalArtifact>;
     onDiscard: (artifactId: string) => Promise<void>;
     onInsert: (
@@ -156,8 +171,16 @@ export function BrowserDebugPanel({
   error,
   loading = false,
   maximized = false,
+  addressHistory = [],
   onUrlChange,
   onNavigate,
+  onBack,
+  onForward,
+  onReload,
+  navigationAvailable = false,
+  consoleEntries = [],
+  consoleAvailable = false,
+  onClearConsole,
   extensionPresence = "detected",
   onReloadPage,
   onStartPicker,
@@ -201,6 +224,30 @@ export function BrowserDebugPanel({
           onNavigate();
         }}
       >
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={onBack}
+          disabled={!onBack || !navigationAvailable}
+          aria-label="Go back"
+          title="Go back"
+          className="h-8 w-8 px-0"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={onForward}
+          disabled={!onForward || !navigationAvailable}
+          aria-label="Go forward"
+          title="Go forward"
+          className="h-8 w-8 px-0"
+        >
+          <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+        </Button>
         <label className="sr-only" htmlFor="browser-debug-url">
           Target URL
         </label>
@@ -210,19 +257,36 @@ export function BrowserDebugPanel({
           onChange={(event) => onUrlChange(event.target.value)}
           placeholder="http://localhost:3000"
           inputMode="url"
+          list="browser-debug-address-history"
           autoComplete="off"
           spellCheck={false}
           className="h-8 min-w-0 flex-1 font-mono text-xs"
         />
+        <datalist id="browser-debug-address-history">
+          {addressHistory.map((address) => (
+            <option key={address} value={address} />
+          ))}
+        </datalist>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={onReload}
+          disabled={!onReload || !navigationAvailable}
+          aria-label="Reload current page"
+          title="Reload current page"
+          className="h-8 w-8 px-0"
+        >
+          <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+        </Button>
         <Button
           type="submit"
           size="sm"
           loading={loading}
-          aria-label="Load target URL"
-          title="Load target URL"
+          aria-label="Load address"
+          title="Load address"
         >
-          <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-          <span className="hidden sm:inline">Load</span>
+          <span>Go</span>
         </Button>
         {onToggleMaximize && (
           <button
@@ -306,20 +370,44 @@ export function BrowserDebugPanel({
         className="min-h-0 flex-1 bg-[var(--color-surface-2)]"
         data-testid="browser-debug-viewport"
       />
+      <BrowserDebugConsole
+        entries={consoleEntries}
+        onClear={onClearConsole ?? (() => {})}
+        available={consoleAvailable}
+      />
       {selection && <BrowserDebugSelectionPreview selection={selection} />}
       {(onStartCapture || onManualImage) && (
-        <BrowserDebugCaptureControls
-          hasSelection={Boolean(selection)}
-          captureStatus={captureStatus}
-          captureMessage={captureMessage}
-          manualImageName={manualImageName}
-          onStartCapture={onStartCapture}
-          onManualImage={onManualImage}
-        />
+        <details
+          aria-label="Optional browser image capture"
+          className="group shrink-0 border-t border-[var(--color-border)] bg-[var(--color-surface-2)]/50"
+        >
+          <summary className="flex cursor-pointer items-center justify-between gap-3 px-3 py-2 text-xs text-[var(--color-text-muted)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]">
+            <span className="font-medium text-[var(--color-text)]">
+              Optional screenshot capture
+            </span>
+            <span className="flex items-center gap-1.5">
+              Capture or add an image
+              <ChevronDown
+                className="h-3.5 w-3.5 transition-transform group-open:rotate-180"
+                aria-hidden="true"
+              />
+            </span>
+          </summary>
+          <BrowserDebugCaptureControls
+            hasSelection={Boolean(selection)}
+            captureStatus={captureStatus}
+            captureMessage={captureMessage}
+            manualImageName={manualImageName}
+            onStartCapture={onStartCapture}
+            onManualImage={onManualImage}
+          />
+        </details>
       )}
       {terminalHandoff && (
         <BrowserDebugTerminalHandoff
           selection={selection ?? null}
+          mode={terminalHandoff.mode}
+          target={terminalHandoff.target}
           targets={terminalHandoff.targets}
           onPrepare={terminalHandoff.onPrepare}
           onDiscard={terminalHandoff.onDiscard}

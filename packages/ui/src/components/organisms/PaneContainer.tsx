@@ -1,5 +1,6 @@
-import { memo, useState, useEffect, useRef } from "react";
+import { memo, useState, useEffect, useRef, type ReactNode } from "react";
 import { useDndMonitor } from "@dnd-kit/core";
+import { Group, Panel, Separator } from "react-resizable-panels";
 import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { attachTerminalsToHost } from "@/lib/terminal-host-attachment.js";
@@ -27,6 +28,9 @@ interface PaneContainerProps {
   onCloseTab: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   suppressTerminalFocus?: boolean;
+  browserOpen?: boolean;
+  renderBrowserContent?: (onClose: () => void) => ReactNode;
+  onCloseBrowser?: () => void;
 }
 
 export const PaneContainer = memo(function PaneContainer({
@@ -38,6 +42,9 @@ export const PaneContainer = memo(function PaneContainer({
   onCloseTab,
   onOpenDiagnosticsMenu,
   suppressTerminalFocus = false,
+  browserOpen = false,
+  renderBrowserContent,
+  onCloseBrowser,
 }: PaneContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const isFocused = layout.focusedPaneId === node.id;
@@ -233,6 +240,56 @@ export const PaneContainer = memo(function PaneContainer({
 
   const hasSplit = layout.getPanes().length > 1;
   const isEmpty = paneTabs.length === 0;
+  const browserVisible = browserOpen && isFocused && !isEmpty;
+  const terminalHost = (
+    <div
+      ref={containerRef}
+      className="flex-1 min-h-0 overflow-hidden relative bg-[#0f172a]"
+      onClick={() => {
+        layout.setFocusedPaneId(node.id);
+        if (node.activeSessionId) {
+          onSelectTab(node.activeSessionId);
+          if (!suppressTerminalFocus) {
+            terminalRegistry.get(node.activeSessionId)?.terminal.focus();
+          }
+        }
+      }}
+    >
+      {isEmpty && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-[var(--color-text-muted)] bg-[var(--color-background)]/50">
+          <TerminalIcon className="h-10 w-10 opacity-10" />
+          <div className="flex flex-col items-center gap-2">
+            <p className="text-xs font-medium">Empty Pane</p>
+            <div className="flex gap-2">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onNewTerminal();
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium bg-[var(--color-primary)] text-white rounded hover:opacity-90 transition-opacity"
+              >
+                <Plus className="h-3 w-3" />
+                New Terminal
+              </button>
+              {hasSplit && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    layout.closePane(node.id);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium border border-[var(--color-border)] hover:bg-[var(--color-surface-2)] transition-colors rounded"
+                >
+                  <X className="h-3 w-3" />
+                  Close Pane
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      <TerminalDockPreview paneId={node.id} isDragging={isDragging} />
+    </div>
+  );
 
   return (
     <div
@@ -260,55 +317,26 @@ export const PaneContainer = memo(function PaneContainer({
         onClosePane={() => layout.closePane(node.id)}
       />
 
-      {/* Terminal host div — terminal elements are reparented into here */}
-      {/* relative + overflow-hidden so drop zone overlays are clipped to this area */}
-      <div
-        ref={containerRef}
-        className="flex-1 min-h-0 overflow-hidden relative bg-[#0f172a]"
-        onClick={() => {
-          layout.setFocusedPaneId(node.id);
-          if (node.activeSessionId) {
-            onSelectTab(node.activeSessionId);
-            if (!suppressTerminalFocus) {
-              terminalRegistry.get(node.activeSessionId)?.terminal.focus();
-            }
-          }
-        }}
-      >
-        {isEmpty && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-[var(--color-text-muted)] bg-[var(--color-background)]/50">
-            <TerminalIcon className="h-10 w-10 opacity-10" />
-            <div className="flex flex-col items-center gap-2">
-              <p className="text-xs font-medium">Empty Pane</p>
-              <div className="flex gap-2">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onNewTerminal();
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium bg-[var(--color-primary)] text-white rounded hover:opacity-90 transition-opacity"
-                >
-                  <Plus className="h-3 w-3" />
-                  New Terminal
-                </button>
-                {hasSplit && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      layout.closePane(node.id);
-                    }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium border border-[var(--color-border)] hover:bg-[var(--color-surface-2)] transition-colors rounded"
-                  >
-                    <X className="h-3 w-3" />
-                    Close Pane
-                  </button>
-                )}
-              </div>
+      {/* The focused terminal owns the browser split, so handoff never asks to choose a terminal. */}
+      {browserVisible ? (
+        <Group
+          orientation="horizontal"
+          className="min-h-0 flex-1"
+          data-testid="terminal-browser-split"
+        >
+          <Panel id={`${node.id}:terminal`} defaultSize={60} minSize={30}>
+            {terminalHost}
+          </Panel>
+          <Separator className="w-1 shrink-0 bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] data-[orientation=vertical]:cursor-col-resize" />
+          <Panel id={`${node.id}:browser`} defaultSize={40} minSize={20}>
+            <div className="h-full min-w-0 overflow-hidden">
+              {renderBrowserContent?.(onCloseBrowser ?? (() => {}))}
             </div>
-          </div>
-        )}
-        <TerminalDockPreview paneId={node.id} isDragging={isDragging} />
-      </div>
+          </Panel>
+        </Group>
+      ) : (
+        terminalHost
+      )}
     </div>
   );
 });

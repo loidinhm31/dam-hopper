@@ -155,7 +155,7 @@ The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose
 - The same terminal manager state is reused across mode switches, so PTY lifecycle is not duplicated.
 - Terminal panes refit when switching modes or when the Fleet Terminal rail changes size/collapse state.
 - Compact view swaps to `MobileWorkspaceShell`, which shows one surface at a time with bottom-tab navigation for Explorer, Editor, Terminal, Git, Ports, and Project.
-- The Browser surface is available in IDE and Terminal modes and in compact layouts. It uses the same terminal-panel routing as Git/Ports and does not create a PTY.
+- On wide screens, Browser opens inside the Terminal tool beside its active terminal. Compact layouts retain Browser as a separate surface. It does not create a PTY.
 
 **Persistence keys:**
 
@@ -171,19 +171,18 @@ The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose
 
 - Renders the selected Files, Git, Ports, or Fleet Terminal panel as a floating overlay in terminal mode.
 - The floating panel matches the Explorer interaction model: it can be dragged or resized within the terminal workspace.
-- Terminal panel shortcuts and visible terminal-header controls are mutually exclusive: opening one panel replaces the other two, and repeating the active control closes the overlay.
-- Browser is exposed as a `browser` panel target and receives the shared `BrowserDebugPanel` content.
+- Git, Ports, and Fleet controls are mutually exclusive. Browser is not a floating tool; it is rendered by the active terminal pane.
 - Keeps the main terminal area full-height below the top nav.
 
 ### Browser Debug Tool
 
 **Locations:** `packages/ui/src/components/organisms/BrowserDebugPanel.tsx`, `packages/ui/src/components/organisms/BrowserDebugKeepAliveHost.tsx`, `packages/ui/src/hooks/use-browser-debug.ts`
 
-The Browser tool previews a development target and lets the user select one semantic DOM element for later artifact/terminal handoff. It accepts only an exact HTTP loopback origin or an exact origin from a currently-ready DamHopper tunnel; the workspace origin, URLs with paths/query/hash/credentials, and unready or stale tunnels are rejected.
+The Browser tool previews a development target and lets the user select one semantic DOM element for later artifact/terminal handoff. It accepts HTTP loopback URLs and URLs whose origin matches a currently-ready DamHopper tunnel, including paths, query strings, and hashes; credentials, the workspace origin, and unready or stale tunnel origins are rejected.
 
 The iframe is hosted by a singleton `BrowserDebugKeepAliveHost` outside the conditional IDE/Terminal/compact shells. The host keeps its DOM node stable and positions it over the active viewport, avoiding Chromium reloads caused by physical iframe reparenting. Switching surfaces, maximizing panels, or changing compact tabs therefore does not unload the target document. A load handshake uses a fresh nonce and request IDs; incoming `postMessage` events must match the active `iframe.contentWindow`, exact target origin, nonce, request ID, protocol version, and schema before they are accepted. Redirected or opaque-origin frames fail closed. A timeout keeps the target visible and presents the extension setup flow.
 
-The panel renders bridge status, target URL, picker controls, and bounded selection metadata. It does not execute page commands or expose raw HTML, cookies, storage, credentials, or other browser secrets. When a selection exists, capture controls can request a browser-tab capture from an explicit user gesture, crop the selected region locally, or accept a PNG/JPEG file or pasted image. Manual JPEG input is converted to PNG locally because the authenticated artifact endpoint accepts PNG only. Capture is optional: denial, unsupported APIs, wrong-surface selection, or crop failure leave semantic selection available. Images remain local until the explicit artifact attach action; closing the Browser surface stops every capture track but intentionally does not unload the iframe.
+The panel renders bridge status, a live address bar, Back/Forward/Reload controls, a bounded local console, picker controls, and bounded selection metadata. Successfully loaded browser targets are retained as 12 local-only recent-address suggestions in the address input; saved entries contain only origin and path (never credentials, query strings, or hashes), are deduplicated, and are revalidated before each load. The bridge reports full same-origin paths after document loads, History API changes, browser back/forward, and hash changes, so the address bar tracks the actual iframe location. Navigation and console forwarding require an extension built for the exact DamHopper parent origin; they are unavailable to generic loopback parents. Console data is bounded, redacted for common credentials, rendered as text, retained only in the browser session, and never included in terminal artifacts. It does not execute page commands or expose raw HTML, cookies, storage, credentials, or other browser secrets. In wide Terminal and IDE mode, the Browser is a resizable sibling of the focused terminal; that ready terminal is selected automatically for artifact preparation, and a prepared artifact remains bound to it through review/insertion. The compact Browser surface retains its explicit live-terminal chooser. When a selection exists, capture controls can request a browser-tab capture from an explicit user gesture, crop the selected region locally, or accept a PNG/JPEG file or pasted image. Manual JPEG input is converted to PNG locally because the authenticated artifact endpoint accepts PNG only. Capture is optional: denial, unsupported APIs, wrong-surface selection, or crop failure leave semantic selection available. Images remain local until the explicit artifact attach action; closing the Browser surface stops every capture track but intentionally does not unload the iframe.
 
 #### Browser Debug extension
 
@@ -195,8 +194,10 @@ The client must extract the ZIP, open `chrome://extensions`, enable Developer
 mode, select Load unpacked, and choose the extracted
 `dam-hopper-browser-debug` folder. This one-time Chromium setup is required
 because a website cannot install an extension silently. Its content script runs
-in framed development pages and uses the bounded bridge protocol to return
-semantic DOM metadata to DamHopper. It never receives DamHopper tokens or
+in the target page's main world so it can observe the page console and History
+API, then uses the bounded bridge protocol to return semantic DOM metadata,
+location updates, and redacted console previews to DamHopper. It never receives
+DamHopper tokens; console output stays local and users should avoid logging
 target secrets.
 
 The iframe still must be embeddable: target `X-Frame-Options` or restrictive

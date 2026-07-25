@@ -202,12 +202,16 @@ extension build time. For a deployed DamHopper parent, set
 `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS` to a comma-separated list of exact
 origins before `pnpm build`, for example
 `https://damhopper.example.com,https://staging.damhopper.example.com`.
+This exact-origin configuration is required for Browser address synchronization,
+Back/Forward/Reload, and console forwarding. The bundled development defaults
+cover `localhost` and `127.0.0.1` on ports 5173 and 4800.
 
 The extension uses the existing bounded bridge protocol and does not receive a
 DamHopper server token.
 
-Use exact HTTP loopback origins or currently-ready tunnel origins in the
-Browser URL field. The extension does not bypass a browser-level frame policy;
+Use HTTP loopback URLs or URLs on currently-ready tunnel origins in the
+Browser URL field; paths, query strings, and hashes are supported, but
+credentials are rejected. The extension does not bypass a browser-level frame policy;
 a target with `X-Frame-Options` or restrictive CSP may still refuse embedding.
 For a controlled debug route, allow the exact DamHopper parent origin in
 `frame-ancestors` and remove a conflicting `X-Frame-Options` header on that

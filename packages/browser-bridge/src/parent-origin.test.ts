@@ -16,6 +16,7 @@ describe("isAllowedParentOrigin", () => {
     expect(
       isAllowedParentOrigin("https://damhopper.example.com:8443", options),
     ).toBe(false);
+    expect(isAllowedParentOrigin("http://localhost:5173", options)).toBe(false);
   });
 
   it("keeps the default parent boundary limited to HTTP loopback", () => {

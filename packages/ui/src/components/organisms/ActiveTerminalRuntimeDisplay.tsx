@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { ListTree, Plus } from "lucide-react";
+import { Group, Panel, Separator } from "react-resizable-panels";
 import { useGlobalConfig } from "@/api/queries.js";
 import { TerminalRuntimeNavigator } from "@/components/organisms/TerminalRuntimeNavigator.js";
 import { TerminalRuntimeOutput } from "@/components/organisms/TerminalRuntimeOutput.js";
@@ -39,6 +40,9 @@ interface ActiveTerminalRuntimeDisplayProps {
   onSelectTab?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+  browserOpen?: boolean;
+  renderBrowserContent?: (onClose: () => void) => ReactNode;
+  onCloseBrowser?: () => void;
 }
 
 export function RuntimeActiveSessionTitle({
@@ -85,6 +89,9 @@ export function ActiveTerminalRuntimeDisplay({
   onSelectTab,
   onCloseSession,
   onOpenDiagnosticsMenu,
+  browserOpen = false,
+  renderBrowserContent,
+  onCloseBrowser,
 }: ActiveTerminalRuntimeDisplayProps) {
   const { data: globalConfig } = useGlobalConfig();
   const { ports, createTunnel, stopTunnel } = usePorts();
@@ -237,15 +244,41 @@ export function ActiveTerminalRuntimeDisplay({
         <div className="absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-[var(--color-primary)]/50 opacity-0 transition-opacity group-hover:opacity-100" />
       </div>
       <main className="min-w-0 flex-1">
-        <TerminalRuntimeOutput
-          activeSessionId={activeSessionId}
-          mountedSessions={mountedSessions}
-          layoutRevision={layoutRevision}
-          renderTerminals={renderTerminals}
-          onSessionExit={onSessionExit}
-          onNewTerminal={handleNewTerminal}
-          onSelectActive={onSelectTab}
-        />
+        {browserOpen ? (
+          <Group
+            orientation="horizontal"
+            className="h-full"
+            data-testid="terminal-browser-split"
+          >
+            <Panel id="runtime-terminal" defaultSize={60} minSize={30}>
+              <TerminalRuntimeOutput
+                activeSessionId={activeSessionId}
+                mountedSessions={mountedSessions}
+                layoutRevision={layoutRevision}
+                renderTerminals={renderTerminals}
+                onSessionExit={onSessionExit}
+                onNewTerminal={handleNewTerminal}
+                onSelectActive={onSelectTab}
+              />
+            </Panel>
+            <Separator className="w-1 shrink-0 bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] data-[orientation=vertical]:cursor-col-resize" />
+            <Panel id="runtime-browser" defaultSize={40} minSize={20}>
+              <div className="h-full min-w-0 overflow-hidden">
+                {renderBrowserContent?.(onCloseBrowser ?? (() => {}))}
+              </div>
+            </Panel>
+          </Group>
+        ) : (
+          <TerminalRuntimeOutput
+            activeSessionId={activeSessionId}
+            mountedSessions={mountedSessions}
+            layoutRevision={layoutRevision}
+            renderTerminals={renderTerminals}
+            onSessionExit={onSessionExit}
+            onNewTerminal={handleNewTerminal}
+            onSelectActive={onSelectTab}
+          />
+        )}
       </main>
     </div>
   );
