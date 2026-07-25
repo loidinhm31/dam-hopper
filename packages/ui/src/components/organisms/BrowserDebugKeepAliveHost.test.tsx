@@ -66,9 +66,7 @@ describe("BrowserDebugKeepAliveHost", () => {
     });
     const iframe = container.querySelector("iframe");
     expect(iframe).not.toBeNull();
-    expect(iframe?.getAttribute("sandbox")).toBe(
-      "allow-scripts allow-same-origin",
-    );
+    expect(iframe?.hasAttribute("sandbox")).toBe(false);
 
     viewportRef.current = viewport;
     await act(async () => {
@@ -100,7 +98,34 @@ describe("BrowserDebugKeepAliveHost", () => {
     viewport.remove();
   });
 
-  it("unloads an uncooperative or redirected target after handshake timeout", async () => {
+  it("invalidates selection state when the target document reloads", async () => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    const viewportRef = { current: null as HTMLDivElement | null };
+    root = createRoot(container);
+    const browser = controller();
+
+    await act(async () => {
+      root?.render(
+        <BrowserDebugKeepAliveHost
+          browser={browser}
+          viewportRef={viewportRef}
+          viewportVersion={0}
+          isViewportVisible
+        />,
+      );
+    });
+
+    await act(async () => {
+      container.querySelector("iframe")?.dispatchEvent(new Event("load"));
+    });
+
+    expect(browser.setSelection).toHaveBeenCalledWith(null);
+    expect(browser.setPickerActive).toHaveBeenCalledWith(false);
+    expect(browser.setError).toHaveBeenCalledWith(null);
+  });
+
+  it("keeps an uncooperative target visible after handshake timeout", async () => {
     vi.useFakeTimers();
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -126,15 +151,18 @@ describe("BrowserDebugKeepAliveHost", () => {
       vi.advanceTimersByTime(5_000);
     });
 
-    expect(iframe?.getAttribute("src")).toBeNull();
+    expect(iframe?.getAttribute("src")).toBe(target.url);
     expect(browser.setError).toHaveBeenCalledWith(
-      expect.stringContaining("was unloaded"),
+      expect.stringContaining("No Browser Debug response"),
+    );
+    expect(browser.setError).toHaveBeenCalledWith(
+      expect.stringContaining("forward the target port over SSH"),
     );
 
     await act(async () => {
       iframe?.dispatchEvent(new Event("load"));
     });
-    expect(browser.setError).toHaveBeenCalledTimes(1);
+    expect(browser.setError).toHaveBeenLastCalledWith(null);
   });
 
   it("hides the overlay while a compact Browser surface is inactive", async () => {

@@ -181,7 +181,7 @@ export function BrowserDebugTerminalHandoff({
   return (
     <section
       aria-label="Send reference to terminal"
-      className="shrink-0 border-t border-[var(--color-border)] px-3 py-3"
+      className="max-h-40 shrink-0 overflow-y-auto border-t border-[var(--color-border)] px-3 py-3"
     >
       <BrowserDebugTerminalTargetList
         disabled={!selection || pending}

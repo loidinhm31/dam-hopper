@@ -136,21 +136,40 @@ Bearer token required. Deletes files and returns `204 No Content`.
 
 Artifacts expire after 10 minutes, are swept every 60 seconds, and are removed during graceful shutdown. Paths are generated under a temporary browser-debug root; files are not readable through this API.
 
+**POST /api/browser-debug/artifacts/{id}/handoff**
+
+Bearer token required. The artifact must be unexpired, not already claimed,
+and its original PTY must still be alive. The server writes one bounded,
+control-free reference containing only its generated JSON/PNG paths to that
+PTY and returns `{ "inserted": true }`. This endpoint is one-time and does
+not append a carriage return or submit the shell command. A failed write
+releases the claim for retry; a concurrent or completed handoff returns
+`409 Conflict`. Expired, unknown, deleted, or dead-terminal artifacts return
+the existing safe not-found response.
+
 ### Browser tool host policy (Phase 3)
 
-The UI Browser tool is a cooperative iframe, not a general-purpose proxy. The
-target URL must be an exact HTTP `localhost`, `127.0.0.1`, or `[::1]` origin, or
-an exact origin belonging to a tunnel whose status is currently `ready`.
-Workspace-origin targets, URL paths/query/hash/credentials, unready tunnels,
-and stale tunnel URLs are rejected before navigation. The target must also
-permit the workspace origin with `Content-Security-Policy: frame-ancestors`;
-`X-Frame-Options` can still prevent embedding.
+The UI Browser tool embeds a development target directly and uses the
+DamHopper Browser Debug extension for DOM selection; the target app does not
+need to install a package or script. The target URL must be an exact HTTP
+`localhost`, `127.0.0.1`, or `[::1]` origin, or an exact origin belonging to a
+tunnel whose status is currently `ready`. Workspace-origin targets, URL
+paths/query/hash/credentials, unready tunnels, and stale tunnel URLs are
+rejected before navigation. `X-Frame-Options` or restrictive
+`Content-Security-Policy: frame-ancestors` can still prevent embedding.
 
 The host keeps one iframe alive while Browser is moved between IDE, Terminal,
-and compact surfaces. Bridge messages are accepted only when their origin and
-`source` match the iframe, and their nonce/request ID belongs to the current
-handshake. A failed or timed-out handshake unloads the iframe and reports an
-error; origin checks are never weakened to recover from framing failures.
+and compact surfaces. Extension messages are accepted only when their
+`source` matches the iframe and their nonce/request ID belongs to the current
+handshake; target-origin checks are intentionally not used so sandboxed or
+forwarded development frames can communicate. A failed or timed-out handshake
+keeps the iframe visible and presents a client-browser extension setup action.
+
+Screen capture is optional and remains browser-local until handoff. It requires
+an explicit user gesture, accepts only a browser-tab surface, and stops tracks
+when Browser closes or selection changes. Permission denial, unsupported capture,
+wrong-surface selection, coordinate changes, or crop failure preserve the
+semantic selection and offer manual image input instead.
 
 ## Backend Diagnostics Export (Phase 04)
 

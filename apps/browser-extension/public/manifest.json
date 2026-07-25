@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "DamHopper Browser Debug",
+  "version": "0.1.0",
+  "description": "Enables DamHopper element selection in framed development apps.",
+  "content_scripts": [
+    {
+      "all_frames": true,
+      "matches": [
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "http://[::1]/*",
+        "https://*/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "http://[::1]/*",
+    "https://*/*"
+  ]
+}

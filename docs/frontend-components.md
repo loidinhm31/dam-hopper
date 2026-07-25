@@ -179,11 +179,29 @@ The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose
 
 **Locations:** `packages/ui/src/components/organisms/BrowserDebugPanel.tsx`, `packages/ui/src/components/organisms/BrowserDebugKeepAliveHost.tsx`, `packages/ui/src/hooks/use-browser-debug.ts`
 
-The Browser tool previews a cooperative development target and lets the user select one semantic DOM element for later artifact/terminal handoff. It accepts only an exact HTTP loopback origin or an exact origin from a currently-ready DamHopper tunnel; the workspace origin, URLs with paths/query/hash/credentials, and unready or stale tunnels are rejected.
+The Browser tool previews a development target and lets the user select one semantic DOM element for later artifact/terminal handoff. It accepts only an exact HTTP loopback origin or an exact origin from a currently-ready DamHopper tunnel; the workspace origin, URLs with paths/query/hash/credentials, and unready or stale tunnels are rejected.
 
-The iframe is hosted by a singleton `BrowserDebugKeepAliveHost` outside the conditional IDE/Terminal/compact shells. The host keeps its DOM node stable and positions it over the active viewport, avoiding Chromium reloads caused by physical iframe reparenting. Switching surfaces, maximizing panels, or changing compact tabs therefore does not unload the target document. A load handshake uses a fresh nonce and request IDs; incoming `postMessage` events must match the exact target origin and `iframe.contentWindow` before they are accepted. Handshake timeout unloads the target and reports an unsupported/error state.
+The iframe is hosted by a singleton `BrowserDebugKeepAliveHost` outside the conditional IDE/Terminal/compact shells. The host keeps its DOM node stable and positions it over the active viewport, avoiding Chromium reloads caused by physical iframe reparenting. Switching surfaces, maximizing panels, or changing compact tabs therefore does not unload the target document. A load handshake uses a fresh nonce and request IDs; incoming `postMessage` events must match the active `iframe.contentWindow`, nonce, request ID, protocol version, and schema before they are accepted. Target-origin checks are intentionally not used so forwarded development frames work. A timeout keeps the target visible and presents the extension setup flow.
 
 The panel renders bridge status, target URL, picker controls, and bounded selection metadata. It does not execute page commands or expose raw HTML, cookies, storage, credentials, or other browser secrets. When a selection exists, capture controls can request a browser-tab capture from an explicit user gesture, crop the selected region locally, or accept a PNG/JPEG file or pasted image. Capture is optional: denial, unsupported APIs, wrong-surface selection, or crop failure leave semantic selection available. Images remain local until the explicit artifact attach action; closing the Browser surface stops every capture track but intentionally does not unload the iframe.
+
+#### Browser Debug extension
+
+The target application does not install a bridge. Every DamHopper web `dev` or
+`build` command creates and serves
+`/browser-debug-extension/dam-hopper-browser-debug.zip`. When the Browser tool
+does not receive a bridge response, it shows a Download extension ZIP action.
+The client must extract the ZIP, open `chrome://extensions`, enable Developer
+mode, select Load unpacked, and choose the extracted
+`dam-hopper-browser-debug` folder. This one-time Chromium setup is required
+because a website cannot install an extension silently. Its content script runs
+in framed development pages and uses the bounded bridge protocol to return
+semantic DOM metadata to DamHopper. It never receives DamHopper tokens or
+target secrets.
+
+The iframe still must be embeddable: target `X-Frame-Options` or restrictive
+`Content-Security-Policy: frame-ancestors` can reject the preview before the
+extension runs.
 
 ### Multi Terminal Display
 
@@ -499,49 +517,35 @@ export type SessionStatus = "alive" | "restarting" | "crashed" | "exited";
 
 ## Cooperative Browser Debug Bridge
 
-**Package:** `@dam-hopper/browser-bridge`
+**Package:** `@dam-hopper/browser-bridge` (used by `apps/browser-extension`)
 
-The optional bridge runs inside a development target that explicitly permits
-DamHopper framing. It has no DamHopper token, filesystem, PTY, storage, or
-network capability. Its only task is to return a bounded, semantic selection
-after a user click; returned text is preview data, never HTML.
+The extension content script runs inside a framed development target without
+requiring target application changes. It has no DamHopper token, filesystem,
+PTY, storage, or network capability. Its only task is to return a bounded,
+semantic selection after a user click; returned text is preview data, never
+HTML.
 
-The host must use the exact origin of the embedding page (the parent, not an
-assumed server or wildcard origin) and the exact `iframe.contentWindow` when
-parsing messages. It issues a fresh nonce after every load/navigation or
-reconnect and accepts only request IDs it created for that nonce. The bridge
-and host both fail closed on origin, source, nonce, request-ID, version, and
-schema mismatches; neither side uses `*` for `postMessage`.
+The host uses the exact `iframe.contentWindow` when parsing messages. It issues
+a fresh nonce after every load/navigation or reconnect and accepts only request
+IDs it created for that nonce. The extension and host fail closed on source,
+nonce, request-ID, version, and schema mismatches; target-origin checks are not
+used so sandboxed or forwarded development frames work without configuration.
 
-For ESM consumers:
+Every DamHopper web build includes
+`/browser-debug-extension/dam-hopper-browser-debug.zip`. In the client
+browser, extract that download, open `chrome://extensions`, enable Developer
+mode, select Load unpacked, and choose the extracted
+`dam-hopper-browser-debug` folder. The target app does not install a package
+or script.
 
-```ts
-import { installBrowserBridge } from "@dam-hopper/browser-bridge";
-
-installBrowserBridge({ parentOrigin: "http://127.0.0.1:4800" });
-```
-
-The library build emits both `dist/index.js` (ES module) and
-`dist/index.iife.js` (IIFE global named `DamHopperBrowserBridge`):
-
-```html
-<script src="/assets/browser-bridge/index.iife.js"></script>
-<script>
-  DamHopperBrowserBridge.installBrowserBridge({
-    parentOrigin: "http://127.0.0.1:4800",
-  });
-</script>
-```
-
-Target deployments need a compatible framing policy, for example
-`Content-Security-Policy: frame-ancestors http://127.0.0.1:4800`; an existing
-`X-Frame-Options` header may still prevent embedding. The Browser tool must
-surface that load failure instead of weakening its origin policy.
+An existing `X-Frame-Options` or restrictive CSP header may still prevent
+embedding; the Browser tool surfaces that load failure instead of weakening
+browser framing policy.
 
 Selection payloads are versioned semantic data only: bounded tag/role/name/text,
 an allow-listed set of attributes, a bounded locator, and finite bounds. They
 never contain HTML, input values, passwords/files, cookies, storage, or other
-browser secrets. The bridge package is the target-side install surface; the
+browser secrets. The bridge package is used by the browser extension; the
 Phase 3 host provides the long-lived iframe owner, exact-origin navigation
 policy, handshake/load-error UX, and CSP framing guidance.
 

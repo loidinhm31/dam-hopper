@@ -148,6 +148,44 @@ describe("browser bridge in Chromium", () => {
     window.removeEventListener("message", onMessage);
   });
 
+  it("works without parent-origin configuration", async () => {
+    const frame = document.createElement("iframe");
+    const received: BrowserBridgeEvent[] = [];
+    const onMessage = (event: MessageEvent<unknown>): void => {
+      const source = frame.contentWindow;
+      if (!source) return;
+      const message = parseTrustedBrowserBridgeEvent(event, {
+        origin: window.location.origin,
+        source,
+        nonce: "loopback-nonce",
+        requestIds: new Set(["loopback-connect"]),
+      });
+      if (message) received.push(message);
+    };
+    window.addEventListener("message", onMessage);
+    frame.srcdoc = `<script type="module">
+      import { installBrowserBridge } from ${JSON.stringify(bridgeEntryUrl)};
+      installBrowserBridge({ parentOrigin: "https://stale.example.test" });
+    </script>`;
+    document.body.append(frame);
+    await new Promise<void>((resolve) =>
+      frame.addEventListener("load", () => resolve(), { once: true }),
+    );
+    frame.contentWindow!.postMessage(
+      {
+        version: BROWSER_BRIDGE_VERSION,
+        type: "dam-hopper:connect",
+        nonce: "loopback-nonce",
+        requestId: "loopback-connect",
+      },
+      window.location.origin,
+    );
+    await vi.waitFor(() =>
+      expect(received.at(-1)?.type).toBe("dam-hopper:bridge-ready"),
+    );
+    window.removeEventListener("message", onMessage);
+  });
+
   it("fails closed when a real iframe is not the trusted source", async () => {
     const frame = document.createElement("iframe");
     frame.srcdoc = "<p>fixture</p>";

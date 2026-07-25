@@ -181,6 +181,45 @@ If omitted, defaults to `.dam-hopper/agent-store/` relative to the loaded regist
 
 All features are enabled by default.
 
+### Browser Debug Preview
+
+The Browser tool has no server configuration flag. It embeds the selected
+development app directly and uses the DamHopper Browser Debug extension for
+DOM selection; the target application does not need a package, script, or CSP
+change for the bridge.
+
+The web build bundles the extension at
+`/browser-debug-extension/dam-hopper-browser-debug.zip`. If the Browser tool
+reports that the bridge is unavailable, use its Download extension ZIP action,
+extract the archive, open `chrome://extensions` in the client browser, enable
+Developer mode, choose Load unpacked, and select the extracted
+`dam-hopper-browser-debug` folder. A website cannot perform this browser
+extension installation automatically. Reload the extension after a new
+DamHopper deployment. Its content script runs only in framed pages and accepts
+loopback apps and HTTPS development/tunnel pages.
+
+The extension uses the existing bounded bridge protocol and does not receive a
+DamHopper server token.
+
+Use exact HTTP loopback origins or currently-ready tunnel origins in the
+Browser URL field. The extension does not bypass a browser-level frame policy;
+a target with `X-Frame-Options` or restrictive CSP may still refuse embedding.
+
+Headless browser tests cover protocol and mocked capture behavior. Before
+release, manually verify the Chromium permission chooser, browser-tab-only
+selection, crop coordinates at the supported zoom/HiDPI settings, live tunnel
+navigation, and insertion into a real xterm. Those OS-level checks cannot be
+automated by the repository's headless suite.
+
+Selections are bounded DOM/ARIA metadata. Optional screenshots are captured by
+an explicit browser permission gesture or supplied manually, then uploaded as
+an authenticated PNG artifact. Artifacts live outside project roots for 10
+minutes, are capped at 64 KiB JSON and 4 MiB PNG, and are removed on delete,
+expiry sweep, or graceful server shutdown. When attached, the PTY receives only
+generated local paths in a single control-free reference; page text is never
+inserted and Enter is never sent. This local-path handoff assumes the PTY and
+server share a filesystem; remote/container agents need a future resource API.
+
 ### UI Configuration
 
 The global UI config includes terminal workspace/panel shortcuts, inline terminal suggestions, and Codex terminal notification settings.
