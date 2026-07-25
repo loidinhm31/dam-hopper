@@ -23,5 +23,6 @@ pub use resolve::{
 pub use schema::{
     AgentAssignment, AgentStoreConfig, CommandKind, DamHopperConfig, FeaturesConfig, GlobalConfig,
     KnownWorkspace, ProjectAgents, ProjectConfig, ProjectType, RestartPolicy, ServerConfig,
-    ServiceConfig, TerminalProfile, WorkspaceInfo, DEFAULT_RESTART_MAX_RETRIES,
+    ServiceConfig, TelemetryCollectorConfig, TelemetryConfig, TerminalProfile, WorkspaceInfo,
+    DEFAULT_RESTART_MAX_RETRIES,
 };
