@@ -126,6 +126,13 @@ aes-gcm = "0.10"
 
 # SHA-512 for OPAQUE TripleDH key exchange type parameter
 sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+libc = "0.2"
+
+# OTLP binary messages only. The receiver remains disabled until Phase 05.
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "logs"] }
+prost = "0.14"
 
 # Bounded decode verification for browser-debug screenshot uploads
 png = "0.17"

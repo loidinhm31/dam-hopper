@@ -14,8 +14,8 @@
 - Date: 2026-07-18
 - Description: Freeze internal contracts, config semantics, privacy boundary, and OTLP decoder choice before feature code expands.
 - Priority: P1 gate
-- Implementation status: Pending
-- Review status: Pending
+- Implementation status: Complete (2026-07-26)
+- Review status: Approved pending user gate
 - Effort: 24h
 
 ## Key Insights
@@ -75,12 +75,12 @@ Core contracts:
 
 ## Todo list
 
-- [ ] Config defaults and validation tested.
-- [ ] Normalized contracts reviewed against privacy allowlist.
-- [ ] Binary fixture checked in without user/model content.
-- [ ] Decoder dependency decision benchmarked and recorded.
-- [ ] HMAC lifecycle specified.
-- [ ] No product listener enabled yet.
+- [x] Config defaults and validation tested.
+- [x] Normalized contracts reviewed against privacy allowlist.
+- [x] Binary fixture checked in without user/model content.
+- [x] Decoder dependency decision benchmarked and recorded.
+- [x] HMAC lifecycle specified.
+- [x] No product listener enabled yet.
 
 ## Success Criteria
 
