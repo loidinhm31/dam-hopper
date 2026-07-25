@@ -1,4 +1,6 @@
-use rusqlite::{params, params_from_iter};
+use std::collections::BTreeMap;
+
+use rusqlite::{params, params_from_iter, types::Value};
 use serde::Serialize;
 
 use super::{
@@ -32,6 +34,37 @@ pub struct CorrelationCoverage {
     pub exact: u64,
     pub approximate: u64,
     pub unattributed: u64,
+}
+
+/// One privacy-safe UTC bucket. The bucket contains only aggregate counts and
+/// nullable token totals; it can never identify an individual command or turn.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageTimeBucket {
+    pub start_utc_ms: i64,
+    pub terminal: UsageAggregate,
+    pub codex: Option<TokenAggregate>,
+}
+
+/// Aggregate for a low-cardinality, allowlisted dimension such as project or
+/// command category. The value is a configured project name or classifier
+/// category, never an executable or command argument.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageDimensionAggregate {
+    pub name: String,
+    pub terminal: UsageAggregate,
+}
+
+/// Detail-window-only metrics. Daily rollups intentionally omit fingerprints
+/// and duration distributions, so these fields are absent for mixed/history
+/// ranges instead of being guessed from totals.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetailUsageMetrics {
+    pub duration_p50_ms: Option<u64>,
+    pub duration_p95_ms: Option<u64>,
+    pub repeated_command_count: u64,
 }
 
 pub fn aggregate_token_correlation(
@@ -265,12 +298,370 @@ pub fn add_tokens(
     }
 }
 
+pub fn aggregate_usage_series(
+    store: &TelemetryStore,
+    detail_query: &UsageQuery,
+    rollup_query: &UsageQuery,
+    boundary_utc_ms: i64,
+    bucket_ms: i64,
+) -> Result<Vec<UsageTimeBucket>, TelemetryStoreError> {
+    let mut buckets = BTreeMap::<i64, UsageTimeBucket>::new();
+    for (start, terminal) in command_series(store, detail_query, bucket_ms)? {
+        buckets.entry(start).or_default().terminal = terminal;
+    }
+    if bucket_ms == 86_400_000 {
+        for (start, terminal) in command_rollup_series(store, rollup_query, boundary_utc_ms)? {
+            buckets.entry(start).or_default().terminal = terminal;
+        }
+    }
+    for (start, codex) in token_series(store, detail_query, bucket_ms)? {
+        buckets.entry(start).or_default().codex = codex;
+    }
+    if bucket_ms == 86_400_000 {
+        for (start, codex) in token_rollup_series(store, rollup_query, boundary_utc_ms)? {
+            let bucket = buckets.entry(start).or_default();
+            bucket.codex = add_tokens(bucket.codex.clone(), codex);
+        }
+    }
+    Ok(buckets
+        .into_iter()
+        .map(|(start_utc_ms, mut bucket)| {
+            bucket.start_utc_ms = start_utc_ms;
+            bucket
+        })
+        .collect())
+}
+
+pub fn aggregate_command_dimensions(
+    store: &TelemetryStore,
+    detail_query: &UsageQuery,
+    rollup_query: &UsageQuery,
+    boundary_utc_ms: i64,
+    dimension: UsageDimension,
+) -> Result<Vec<UsageDimensionAggregate>, TelemetryStoreError> {
+    let mut aggregates = BTreeMap::<String, UsageAggregate>::new();
+    for (name, aggregate) in command_dimensions(store, detail_query, dimension)? {
+        aggregates.insert(name, aggregate);
+    }
+    for (name, aggregate) in
+        command_rollup_dimensions(store, rollup_query, boundary_utc_ms, dimension)?
+    {
+        let current = aggregates.remove(&name).unwrap_or_default();
+        aggregates.insert(name, add_usage(current, aggregate));
+    }
+    Ok(aggregates
+        .into_iter()
+        .map(|(name, terminal)| UsageDimensionAggregate { name, terminal })
+        .collect())
+}
+
+#[derive(Clone, Copy)]
+pub enum UsageDimension {
+    Category,
+    Project,
+}
+
+pub fn aggregate_detail_metrics(
+    store: &TelemetryStore,
+    query: &UsageQuery,
+) -> Result<DetailUsageMetrics, TelemetryStoreError> {
+    let connection = store.open_read()?;
+    let (where_clause, values) = command_where(query, "c");
+    let duration_count: i64 = connection.query_row(
+        &format!(
+            "SELECT count(*) FROM command_events c JOIN terminal_runs r ON r.run_id = c.run_id {where_clause} AND c.duration_ms IS NOT NULL"
+        ),
+        params_from_iter(values.iter()),
+        |row| row.get(0),
+    )?;
+    let percentile = |percent: i64| -> Result<Option<u64>, rusqlite::Error> {
+        if duration_count == 0 {
+            return Ok(None);
+        }
+        // Nearest-rank percentile: p50 of two sorted samples selects the
+        // first, while p95 selects the second. This stays deterministic
+        // without retaining a histogram after detail expiration.
+        let offset = ((duration_count * percent + 99) / 100).saturating_sub(1);
+        let mut percentile_values = values.clone();
+        percentile_values.push(Value::Integer(offset));
+        connection
+            .query_row(
+                &format!(
+                    "SELECT c.duration_ms FROM command_events c JOIN terminal_runs r ON r.run_id = c.run_id {where_clause} AND c.duration_ms IS NOT NULL ORDER BY c.duration_ms LIMIT 1 OFFSET ?"
+                ),
+                params_from_iter(percentile_values.iter()),
+                |row| row.get::<_, i64>(0).map(|value| value as u64),
+            )
+            .map(Some)
+    };
+    let repeated_command_count: i64 = connection.query_row(
+        &format!(
+            "SELECT coalesce(sum(count - 1), 0) FROM (SELECT c.fingerprint, count(*) AS count FROM command_events c JOIN terminal_runs r ON r.run_id = c.run_id {where_clause} GROUP BY c.fingerprint HAVING count > 1)"
+        ),
+        params_from_iter(values.iter()),
+        |row| row.get(0),
+    )?;
+    Ok(DetailUsageMetrics {
+        duration_p50_ms: percentile(50)?,
+        duration_p95_ms: percentile(95)?,
+        repeated_command_count: repeated_command_count as u64,
+    })
+}
+
+fn command_series(
+    store: &TelemetryStore,
+    query: &UsageQuery,
+    bucket_ms: i64,
+) -> Result<Vec<(i64, UsageAggregate)>, TelemetryStoreError> {
+    let connection = store.open_read()?;
+    let (where_clause, mut values) = command_where(query, "c");
+    values.insert(0, Value::Integer(bucket_ms));
+    values.insert(1, Value::Integer(bucket_ms));
+    let sql = format!(
+        "SELECT (c.occurred_at_utc_ms / ?1) * ?2, count(*), coalesce(sum(c.outcome = 'succeeded'), 0), coalesce(sum(c.outcome = 'failed'), 0), coalesce(sum(c.outcome = 'interrupted'), 0), coalesce(sum(c.outcome = 'unknown'), 0), coalesce(sum(c.duration_ms), 0) FROM command_events c JOIN terminal_runs r ON r.run_id = c.run_id {where_clause} GROUP BY 1 ORDER BY 1"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.iter()), |row| {
+        Ok((row.get(0)?, usage_from_row_at(row, 1)?))
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(TelemetryStoreError::Sqlite)
+}
+
+fn command_rollup_series(
+    store: &TelemetryStore,
+    query: &UsageQuery,
+    boundary_utc_ms: i64,
+) -> Result<Vec<(i64, UsageAggregate)>, TelemetryStoreError> {
+    let connection = store.open_read()?;
+    let (where_clause, mut values) = rollup_where(query, boundary_utc_ms);
+    let sql = format!(
+        "SELECT strftime('%s', utc_day) * 1000, coalesce(sum(command_count), 0), coalesce(sum(succeeded_count), 0), coalesce(sum(failed_count), 0), coalesce(sum(interrupted_count), 0), coalesce(sum(unknown_count), 0), coalesce(sum(duration_ms_sum), 0) FROM daily_usage_rollups {where_clause} GROUP BY utc_day ORDER BY utc_day"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.drain(..)), |row| {
+        Ok((row.get(0)?, usage_from_row_at(row, 1)?))
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(TelemetryStoreError::Sqlite)
+}
+
+fn token_series(
+    store: &TelemetryStore,
+    query: &UsageQuery,
+    bucket_ms: i64,
+) -> Result<Vec<(i64, Option<TokenAggregate>)>, TelemetryStoreError> {
+    let connection = store.open_read()?;
+    let (where_clause, mut values) = token_where(query, "a");
+    values.insert(0, Value::Integer(bucket_ms));
+    values.insert(1, Value::Integer(bucket_ms));
+    let sql = format!(
+        "SELECT (a.occurred_at_utc_ms / ?1) * ?2, count(*), sum(a.input_tokens), sum(a.cached_input_tokens), sum(a.output_tokens), sum(a.reasoning_tokens) FROM agent_usage_events a {where_clause} GROUP BY 1 ORDER BY 1"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.iter()), |row| {
+        Ok((row.get(0)?, tokens_from_row(row, 1)?))
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(TelemetryStoreError::Sqlite)
+}
+
+fn token_rollup_series(
+    store: &TelemetryStore,
+    query: &UsageQuery,
+    boundary_utc_ms: i64,
+) -> Result<Vec<(i64, Option<TokenAggregate>)>, TelemetryStoreError> {
+    let connection = store.open_read()?;
+    let (where_clause, values) = token_rollup_where(query, boundary_utc_ms);
+    let sql = format!(
+        "SELECT strftime('%s', utc_day) * 1000, coalesce(sum(input_tokens_count + cached_input_tokens_count + output_tokens_count + reasoning_tokens_count), 0), CASE WHEN sum(input_tokens_count) > 0 THEN sum(input_tokens_sum) END, CASE WHEN sum(cached_input_tokens_count) > 0 THEN sum(cached_input_tokens_sum) END, CASE WHEN sum(output_tokens_count) > 0 THEN sum(output_tokens_sum) END, CASE WHEN sum(reasoning_tokens_count) > 0 THEN sum(reasoning_tokens_sum) END FROM daily_usage_rollups {where_clause} GROUP BY utc_day ORDER BY utc_day"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.iter()), |row| {
+        Ok((row.get(0)?, tokens_from_row(row, 1)?))
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(TelemetryStoreError::Sqlite)
+}
+
 fn add_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
     match (left, right) {
         (Some(left), Some(right)) => Some(left + right),
         (Some(value), None) | (None, Some(value)) => Some(value),
         (None, None) => None,
     }
+}
+
+fn command_dimensions(
+    store: &TelemetryStore,
+    query: &UsageQuery,
+    dimension: UsageDimension,
+) -> Result<Vec<(String, UsageAggregate)>, TelemetryStoreError> {
+    let connection = store.open_read()?;
+    let (where_clause, values) = command_where(query, "c");
+    let key = match dimension {
+        UsageDimension::Category => "c.category",
+        UsageDimension::Project => "coalesce(r.project, 'unassigned')",
+    };
+    let sql = format!(
+        "SELECT {key}, count(*), coalesce(sum(c.outcome = 'succeeded'), 0), coalesce(sum(c.outcome = 'failed'), 0), coalesce(sum(c.outcome = 'interrupted'), 0), coalesce(sum(c.outcome = 'unknown'), 0), coalesce(sum(c.duration_ms), 0) FROM command_events c JOIN terminal_runs r ON r.run_id = c.run_id {where_clause} GROUP BY 1 ORDER BY 1"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.iter()), |row| {
+        Ok((row.get(0)?, usage_from_row_at(row, 1)?))
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(TelemetryStoreError::Sqlite)
+}
+
+fn command_rollup_dimensions(
+    store: &TelemetryStore,
+    query: &UsageQuery,
+    boundary_utc_ms: i64,
+    dimension: UsageDimension,
+) -> Result<Vec<(String, UsageAggregate)>, TelemetryStoreError> {
+    let connection = store.open_read()?;
+    let (where_clause, values) = rollup_where(query, boundary_utc_ms);
+    let key = match dimension {
+        UsageDimension::Category => "category",
+        UsageDimension::Project => "CASE WHEN project = '' THEN 'unassigned' ELSE project END",
+    };
+    let sql = format!(
+        "SELECT {key}, coalesce(sum(command_count), 0), coalesce(sum(succeeded_count), 0), coalesce(sum(failed_count), 0), coalesce(sum(interrupted_count), 0), coalesce(sum(unknown_count), 0), coalesce(sum(duration_ms_sum), 0) FROM daily_usage_rollups {where_clause} GROUP BY 1 ORDER BY 1"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.iter()), |row| {
+        Ok((row.get(0)?, usage_from_row_at(row, 1)?))
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(TelemetryStoreError::Sqlite)
+}
+
+fn command_where(query: &UsageQuery, alias: &str) -> (String, Vec<Value>) {
+    let mut sql = String::from(" WHERE 1 = 1");
+    let mut values = Vec::new();
+    if let Some(from) = query.from_utc_ms {
+        sql.push_str(&format!(" AND {alias}.occurred_at_utc_ms >= ?"));
+        values.push(Value::Integer(from));
+    }
+    if let Some(to) = query.to_utc_ms {
+        sql.push_str(&format!(" AND {alias}.occurred_at_utc_ms < ?"));
+        values.push(Value::Integer(to));
+    }
+    if let Some(project) = &query.project {
+        sql.push_str(" AND r.project = ?");
+        values.push(Value::Text(project.as_str().to_string()));
+    }
+    if let Some(shell) = query.shell {
+        sql.push_str(" AND r.shell = ?");
+        values.push(Value::Text(shell_name(shell).to_string()));
+    }
+    if let Some(quality) = query.capture_quality {
+        sql.push_str(&format!(" AND {alias}.capture_quality = ?"));
+        values.push(Value::Text(capture_quality(quality).to_string()));
+    }
+    if let Some(category) = &query.category {
+        sql.push_str(&format!(" AND {alias}.category = ?"));
+        values.push(Value::Text(category.as_str().to_string()));
+    }
+    (sql, values)
+}
+
+fn rollup_where(query: &UsageQuery, boundary_utc_ms: i64) -> (String, Vec<Value>) {
+    let mut sql = String::from(" WHERE utc_day < strftime('%Y-%m-%d', ? / 1000, 'unixepoch')");
+    let mut values = vec![Value::Integer(boundary_utc_ms)];
+    if let Some(from) = query.from_utc_ms {
+        sql.push_str(" AND utc_day >= strftime('%Y-%m-%d', ? / 1000, 'unixepoch')");
+        values.push(Value::Integer(from));
+    }
+    if let Some(to) = query.to_utc_ms {
+        sql.push_str(" AND utc_day < strftime('%Y-%m-%d', ? / 1000, 'unixepoch')");
+        values.push(Value::Integer(to));
+    }
+    if let Some(project) = &query.project {
+        sql.push_str(" AND project = ?");
+        values.push(Value::Text(project.as_str().to_string()));
+    }
+    if let Some(shell) = query.shell {
+        sql.push_str(" AND shell = ?");
+        values.push(Value::Text(shell_name(shell).to_string()));
+    }
+    if let Some(category) = &query.category {
+        sql.push_str(" AND category = ?");
+        values.push(Value::Text(category.as_str().to_string()));
+    }
+    (sql, values)
+}
+
+fn token_where(query: &UsageQuery, alias: &str) -> (String, Vec<Value>) {
+    let mut sql = String::from(" WHERE 1 = 1");
+    let mut values = Vec::new();
+    if let Some(from) = query.from_utc_ms {
+        sql.push_str(&format!(" AND {alias}.occurred_at_utc_ms >= ?"));
+        values.push(Value::Integer(from));
+    }
+    if let Some(to) = query.to_utc_ms {
+        sql.push_str(&format!(" AND {alias}.occurred_at_utc_ms < ?"));
+        values.push(Value::Integer(to));
+    }
+    if let Some(model) = &query.model {
+        sql.push_str(&format!(" AND {alias}.model = ?"));
+        values.push(Value::Text(String::from(model.clone())));
+    }
+    (sql, values)
+}
+
+fn token_rollup_where(query: &UsageQuery, boundary_utc_ms: i64) -> (String, Vec<Value>) {
+    let mut sql = String::from(" WHERE utc_day < strftime('%Y-%m-%d', ? / 1000, 'unixepoch')");
+    let mut values = vec![Value::Integer(boundary_utc_ms)];
+    if let Some(from) = query.from_utc_ms {
+        sql.push_str(" AND utc_day >= strftime('%Y-%m-%d', ? / 1000, 'unixepoch')");
+        values.push(Value::Integer(from));
+    }
+    if let Some(to) = query.to_utc_ms {
+        sql.push_str(" AND utc_day < strftime('%Y-%m-%d', ? / 1000, 'unixepoch')");
+        values.push(Value::Integer(to));
+    }
+    if let Some(model) = &query.model {
+        sql.push_str(" AND model = ?");
+        values.push(Value::Text(String::from(model.clone())));
+    }
+    (sql, values)
+}
+
+fn usage_from_row_at(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> Result<UsageAggregate, rusqlite::Error> {
+    Ok(UsageAggregate {
+        command_count: row.get::<_, i64>(offset)? as u64,
+        succeeded_count: row.get::<_, i64>(offset + 1)? as u64,
+        failed_count: row.get::<_, i64>(offset + 2)? as u64,
+        interrupted_count: row.get::<_, i64>(offset + 3)? as u64,
+        unknown_count: row.get::<_, i64>(offset + 4)? as u64,
+        duration_ms_sum: row.get::<_, i64>(offset + 5)? as u64,
+    })
+}
+
+fn tokens_from_row(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> Result<Option<TokenAggregate>, rusqlite::Error> {
+    let count: i64 = row.get(offset)?;
+    Ok((count > 0).then_some(TokenAggregate {
+        input_tokens: row
+            .get::<_, Option<i64>>(offset + 1)?
+            .map(|value| value as u64),
+        cached_input_tokens: row
+            .get::<_, Option<i64>>(offset + 2)?
+            .map(|value| value as u64),
+        output_tokens: row
+            .get::<_, Option<i64>>(offset + 3)?
+            .map(|value| value as u64),
+        reasoning_tokens: row
+            .get::<_, Option<i64>>(offset + 4)?
+            .map(|value| value as u64),
+    }))
 }
 
 pub fn health_value(store: &TelemetryStore, name: &str) -> Result<u64, TelemetryStoreError> {
