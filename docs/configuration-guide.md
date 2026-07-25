@@ -196,7 +196,12 @@ Developer mode, choose Load unpacked, and select the extracted
 `dam-hopper-browser-debug` folder. A website cannot perform this browser
 extension installation automatically. Reload the extension after a new
 DamHopper deployment. Its content script runs only in framed pages and accepts
-loopback apps and HTTPS development/tunnel pages.
+loopback apps and HTTPS development/tunnel pages, but the bridge accepts a
+handshake only from loopback DamHopper parents or exact origins configured at
+extension build time. For a deployed DamHopper parent, set
+`VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS` to a comma-separated list of exact
+origins before `pnpm build`, for example
+`https://damhopper.example.com,https://staging.damhopper.example.com`.
 
 The extension uses the existing bounded bridge protocol and does not receive a
 DamHopper server token.

@@ -159,11 +159,14 @@ rejected before navigation. `X-Frame-Options` or restrictive
 `Content-Security-Policy: frame-ancestors` can still prevent embedding.
 
 The host keeps one iframe alive while Browser is moved between IDE, Terminal,
-and compact surfaces. Extension messages are accepted only when their
-`source` matches the iframe and their nonce/request ID belongs to the current
-handshake; target-origin checks are intentionally not used so sandboxed or
-forwarded development frames can communicate. A failed or timed-out handshake
+and compact surfaces. Extension messages are accepted only when their source,
+exact target origin, nonce, and request ID match the current handshake; a
+redirected or opaque-origin frame is rejected. A failed or timed-out handshake
 keeps the iframe visible and presents a client-browser extension setup action.
+The extension accepts the first handshake only from loopback DamHopper parents
+or exact parent origins compiled with
+`VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS`; the presence marker is not an
+authorization signal.
 
 Screen capture is optional and remains browser-local until handoff. It requires
 an explicit user gesture, accepts only a browser-tab surface, and stops tracks
