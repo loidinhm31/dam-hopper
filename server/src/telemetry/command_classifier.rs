@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    privacy::{HmacDigest, TelemetryHmacKey},
+    privacy::{HmacDigest, TelemetryHmacKey, TelemetryKeyRing},
     types::{CaptureQuality, SafeIdentifier},
 };
 
@@ -23,26 +23,29 @@ pub struct NormalizedCommand {
 }
 
 pub struct CommandClassifier {
-    key: Arc<TelemetryHmacKey>,
+    key: Arc<TelemetryKeyRing>,
 }
 
 impl CommandClassifier {
-    pub fn new(key: Arc<TelemetryHmacKey>) -> Self {
+    pub fn new(key: Arc<TelemetryKeyRing>) -> Self {
         Self { key }
     }
 
     pub fn normalize(&self, command: &str) -> NormalizedCommand {
-        normalize_with_key(command, &self.key)
+        normalize_with_digest(command, |domain, fields| self.key.digest(domain, fields))
     }
 }
 
 pub fn normalize_command(command: &str, key: &TelemetryHmacKey) -> NormalizedCommand {
-    normalize_with_key(command, key)
+    normalize_with_digest(command, |domain, fields| key.digest(domain, fields))
 }
 
-fn normalize_with_key(command: &str, key: &TelemetryHmacKey) -> NormalizedCommand {
+fn normalize_with_digest(
+    command: &str,
+    digest: impl Fn(&[u8], &[&[u8]]) -> HmacDigest,
+) -> NormalizedCommand {
     let parsed = parse_simple_command(command);
-    let fingerprint = key.digest(
+    let fingerprint = digest(
         COMMAND_HMAC_DOMAIN,
         &[parsed
             .as_ref()
@@ -145,11 +148,9 @@ fn unavailable(fingerprint: HmacDigest) -> NormalizedCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::telemetry::privacy::load_or_create_hmac_key;
-
     fn classifier() -> (tempfile::TempDir, CommandClassifier) {
         let directory = tempfile::tempdir().unwrap();
-        let key = Arc::new(load_or_create_hmac_key(&directory.path().join("key")).unwrap());
+        let key = Arc::new(TelemetryKeyRing::load_or_create(directory.path().join("key")).unwrap());
         (directory, CommandClassifier::new(key))
     }
 

@@ -21,6 +21,7 @@ Track validated activity only in DamHopper-managed interactive PTYs. Persist no 
 - Raw command, argv, cwd, env, PTY output, prompt, response, tool content, and raw OTLP: never persisted.
 - Detail retention: configurable, default 90 days; longer daily aggregates.
 - Missing/partial/approximate data remains visible; never converted to zero or exact attribution.
+- Codex compatibility is field-based: newer/unverified versions with known `response.completed` core fields remain usable; version alone never hard-rejects an event.
 - No productivity ranking or cost claims.
 - Terminal analytics opt-in on upgrade; Codex collector separately opt-in.
 
@@ -32,16 +33,16 @@ Track validated activity only in DamHopper-managed interactive PTYs. Persist no 
 | 2 | [Validated shell lifecycle capture](./phase-02-validated-shell-lifecycle-capture.md) | Complete (2026-07-26) | 32h | 1 |
 | 3 | [SQLite store, retention, privacy](./phase-03-sqlite-store-retention-privacy.md) | Complete (2026-07-26) | 40h | 1-2 |
 | 4 | [Aggregate API and controls](./phase-04-aggregate-api-and-controls.md) | Complete (2026-07-26; approved with warnings) | 32h | 3 |
-| 5 | [Codex loopback OTel adapter](./phase-05-codex-loopback-otel-adapter.md) | Pending | 32h | 1, 3-4 |
+| 5 | [Codex loopback OTel adapter](./phase-05-codex-loopback-otel-adapter.md) | Complete (2026-07-26; approved) | 32h | 1, 3-4 |
 | 6 | [Usage UI and compact navigation](./phase-06-usage-ui-and-compact-navigation.md) | Pending | 40h | 4-5 |
 | 7 | [Security, fault, performance, docs](./phase-07-security-fault-performance-docs.md) | Pending | 32h | 1-6 |
 
 ## Delivery gates
 
-1. Do not select OTLP dependency until a pinned binary fixture decodes correctly.
+1. Do not select OTLP dependency until a baseline binary fixture decodes correctly; that fixture locks transport/core behavior, not accepted Codex versions.
 2. Do not enable persistence until PTY backpressure/failure tests prove non-blocking behavior.
 3. Do not expose API/UI until DB/API secret scans pass.
-4. Do not enable Codex cards until token counter semantics and replay dedupe pass fixtures.
+4. Do not enable Codex cards until baseline token semantics and replay dedupe pass fixtures. Future-version fixtures improve confidence; they do not gate ingestion when known core fields still decode.
 5. Do not add rollup complexity beyond required post-90-day daily counts/tokens.
 
 ## References
@@ -71,7 +72,8 @@ Track validated activity only in DamHopper-managed interactive PTYs. Persist no 
 ### Action Items
 
 - [x] Phase 04: add authenticated range-delete semantics with UTC bounds, confirmation, and rollup handling (completed 2026-07-26; approved with warnings).
-- [ ] Phase 05: add explicit-confirmation, ownership/conflict checks, atomic rollback for managed Codex config sync; keep snippet-only fallback.
+- [x] Phase 05: add explicit-confirmation, ownership/conflict checks, atomic rollback for managed Codex config sync; keep snippet-only fallback (not needed: Phase 05 provides setup status/instructions and does not modify Codex configuration).
+- [x] Phase 05: implement field-level forward compatibility, safe drift health signals, and partial/unavailable coverage without raw attribute retention or synthetic zero (completed 2026-07-26; approved).
 - [ ] Phase 07: document unlimited aggregate retention and range deletion in the runbook/UI copy.
 
 ### Phase 04 approval follow-ups

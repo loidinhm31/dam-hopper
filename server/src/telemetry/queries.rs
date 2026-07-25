@@ -26,6 +26,49 @@ pub struct TokenAggregate {
     pub reasoning_tokens: Option<u64>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrelationCoverage {
+    pub exact: u64,
+    pub approximate: u64,
+    pub unattributed: u64,
+}
+
+pub fn aggregate_token_correlation(
+    store: &TelemetryStore,
+    query: &UsageQuery,
+) -> Result<Option<CorrelationCoverage>, TelemetryStoreError> {
+    let connection = store.open_read()?;
+    let mut sql = String::from("SELECT count(*), coalesce(sum(correlation_quality = 'exact'), 0), coalesce(sum(correlation_quality = 'approximate'), 0), coalesce(sum(correlation_quality = 'unattributed'), 0) FROM agent_usage_events WHERE 1 = 1");
+    let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(from) = query.from_utc_ms {
+        sql.push_str(" AND occurred_at_utc_ms >= ?");
+        values.push(Box::new(from));
+    }
+    if let Some(to) = query.to_utc_ms {
+        sql.push_str(" AND occurred_at_utc_ms < ?");
+        values.push(Box::new(to));
+    }
+    if let Some(model) = &query.model {
+        sql.push_str(" AND model = ?");
+        values.push(Box::new(String::from(model.clone())));
+    }
+    connection
+        .query_row(
+            &sql,
+            params_from_iter(values.iter().map(|value| value.as_ref())),
+            |row| {
+                let count = row.get::<_, i64>(0)?;
+                Ok((count > 0).then_some(CorrelationCoverage {
+                    exact: row.get::<_, i64>(1)? as u64,
+                    approximate: row.get::<_, i64>(2)? as u64,
+                    unattributed: row.get::<_, i64>(3)? as u64,
+                }))
+            },
+        )
+        .map_err(TelemetryStoreError::Sqlite)
+}
+
 pub fn aggregate_commands(
     store: &TelemetryStore,
     query: &UsageQuery,
@@ -164,7 +207,7 @@ pub fn aggregate_token_rollups(
     boundary_utc_ms: i64,
 ) -> Result<Option<TokenAggregate>, TelemetryStoreError> {
     let connection = store.open_read()?;
-    let mut sql = String::from("SELECT coalesce(sum(input_tokens_sum), 0), coalesce(sum(cached_input_tokens_sum), 0), coalesce(sum(output_tokens_sum), 0), coalesce(sum(reasoning_tokens_sum), 0), coalesce(sum(input_tokens_sum + cached_input_tokens_sum + output_tokens_sum + reasoning_tokens_sum), 0) FROM daily_usage_rollups WHERE utc_day < strftime('%Y-%m-%d', ?1 / 1000, 'unixepoch')");
+    let mut sql = String::from("SELECT CASE WHEN sum(input_tokens_count) > 0 THEN sum(input_tokens_sum) END, CASE WHEN sum(cached_input_tokens_count) > 0 THEN sum(cached_input_tokens_sum) END, CASE WHEN sum(output_tokens_count) > 0 THEN sum(output_tokens_sum) END, CASE WHEN sum(reasoning_tokens_count) > 0 THEN sum(reasoning_tokens_sum) END, coalesce(sum(input_tokens_count + cached_input_tokens_count + output_tokens_count + reasoning_tokens_count), 0) FROM daily_usage_rollups WHERE utc_day < strftime('%Y-%m-%d', ?1 / 1000, 'unixepoch')");
     let mut values: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(boundary_utc_ms)];
     if let Some(from) = query.from_utc_ms {
         sql.push_str(" AND utc_day >= strftime('%Y-%m-%d', ? / 1000, 'unixepoch')");
@@ -185,10 +228,10 @@ pub fn aggregate_token_rollups(
             |row| {
                 let total: i64 = row.get(4)?;
                 Ok((total > 0).then_some(TokenAggregate {
-                    input_tokens: Some(row.get::<_, i64>(0)? as u64),
-                    cached_input_tokens: Some(row.get::<_, i64>(1)? as u64),
-                    output_tokens: Some(row.get::<_, i64>(2)? as u64),
-                    reasoning_tokens: Some(row.get::<_, i64>(3)? as u64),
+                    input_tokens: row.get::<_, Option<i64>>(0)?.map(|value| value as u64),
+                    cached_input_tokens: row.get::<_, Option<i64>>(1)?.map(|value| value as u64),
+                    output_tokens: row.get::<_, Option<i64>>(2)?.map(|value| value as u64),
+                    reasoning_tokens: row.get::<_, Option<i64>>(3)?.map(|value| value as u64),
                 }))
             },
         )

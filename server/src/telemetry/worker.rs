@@ -9,7 +9,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{store::TelemetryStore, TelemetryCmd};
+use super::{
+    privacy::TelemetryKeyRing,
+    store::TelemetryStore,
+    types::{AgentUsageEvent, CodexCorrelationRegistry},
+    TelemetryCmd,
+};
 
 const BATCH_LIMIT: usize = 100;
 const FLUSH_INTERVAL: Duration = Duration::from_millis(250);
@@ -86,6 +91,8 @@ pub struct TelemetryHandle {
     pub control: Arc<TelemetryControl>,
     pub store: Option<Arc<TelemetryStore>>,
     pub command_tx: Option<std::sync::mpsc::SyncSender<TelemetryCmd>>,
+    pub hmac_keys: Option<Arc<TelemetryKeyRing>>,
+    pub codex_correlation: Arc<CodexCorrelationRegistry>,
 }
 
 impl TelemetryHandle {
@@ -94,6 +101,8 @@ impl TelemetryHandle {
             control: Arc::new(TelemetryControl::default()),
             store: None,
             command_tx: None,
+            hmac_keys: None,
+            codex_correlation: Arc::new(CodexCorrelationRegistry::default()),
         }
     }
     pub fn active(
@@ -105,8 +114,39 @@ impl TelemetryHandle {
             control,
             store: Some(store),
             command_tx,
+            hmac_keys: None,
+            codex_correlation: Arc::new(CodexCorrelationRegistry::default()),
         }
     }
+
+    pub fn with_hmac_keys(mut self, hmac_keys: Arc<TelemetryKeyRing>) -> Self {
+        self.hmac_keys = Some(hmac_keys);
+        self
+    }
+
+    /// Queue collector usage through the exact same admission gate used by PTY
+    /// telemetry. This preserves delete-barrier ordering and pause semantics.
+    pub fn try_record_agent_usage(&self, event: AgentUsageEvent) -> TelemetryEnqueue {
+        let _admission = self.control.admission_guard();
+        if !self.control.is_enabled() {
+            return TelemetryEnqueue::Paused;
+        }
+        let Some(sender) = &self.command_tx else {
+            return TelemetryEnqueue::Unavailable;
+        };
+        match sender.try_send(TelemetryCmd::AgentUsage(event)) {
+            Ok(()) => TelemetryEnqueue::Queued,
+            Err(std::sync::mpsc::TrySendError::Full(_)) => TelemetryEnqueue::Dropped,
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => TelemetryEnqueue::Unavailable,
+        }
+    }
+}
+
+pub enum TelemetryEnqueue {
+    Queued,
+    Paused,
+    Dropped,
+    Unavailable,
 }
 
 pub struct TelemetryWorker {

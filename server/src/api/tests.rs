@@ -17,7 +17,7 @@ use crate::{
     state::AppState,
     telemetry::{
         worker::{TelemetryControl, TelemetryHandle},
-        TelemetryStore,
+        TelemetryKeyRing, TelemetryStore,
     },
     tunnel::{CloudflaredDriver, TunnelSessionManager},
 };
@@ -428,6 +428,7 @@ async fn diagnostics_export_includes_live_terminal_tail() {
             command: "printf 'token=secret123\\n'; sleep 5".to_string(),
             cwd: tmp.path().display().to_string(),
             env: std::collections::HashMap::new(),
+            runtime_otlp_run_marker: None,
             cols: 80,
             rows: 24,
             project: Some("demo".to_string()),
@@ -514,6 +515,7 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
                 command: "sleep 5".to_string(),
                 cwd: tmp.path().display().to_string(),
                 env: std::collections::HashMap::new(),
+                runtime_otlp_run_marker: None,
                 cols: 80,
                 rows: 24,
                 project: Some("demo".to_string()),
@@ -1616,7 +1618,9 @@ async fn usage_settings_apply_pause_atomically_and_delete_requires_confirmation(
 fn activate_telemetry(state: &AppState, tmp: &TempDir) {
     let store = Arc::new(TelemetryStore::open(&tmp.path().join("telemetry.db")).unwrap());
     let control = Arc::new(TelemetryControl::new(true, Vec::<String>::new()));
-    state.set_telemetry(TelemetryHandle::active(control, store, None));
+    let keys =
+        Arc::new(TelemetryKeyRing::load_or_create(tmp.path().join("telemetry-key")).unwrap());
+    state.set_telemetry(TelemetryHandle::active(control, store, None).with_hmac_keys(keys));
 }
 
 #[test]

@@ -18,8 +18,9 @@ use crate::port_forward::PortForwardManager;
 use crate::pty::{BroadcastEventSink, PtySessionManager};
 use crate::ssh::SshCredStore;
 use crate::system::HostMetricsSampler;
-use crate::tunnel::TunnelSessionManager;
+use crate::telemetry::codex_otlp::{CollectorHandle, CollectorHealth};
 use crate::telemetry::worker::TelemetryHandle;
+use crate::tunnel::TunnelSessionManager;
 
 /// Shared application state across all Axum handlers.
 ///
@@ -79,6 +80,11 @@ pub struct AppState {
     /// Aggregate-only telemetry query and control handle. It is disabled when
     /// telemetry initialization failed or the user has not opted in.
     pub telemetry: Arc<std::sync::RwLock<TelemetryHandle>>,
+    /// Serializes telemetry queries, deletion, retention, and collector changes.
+    pub telemetry_coordinator: Arc<tokio::sync::Mutex<()>>,
+    /// Isolated local Codex receiver lifecycle. It is never part of the API router.
+    pub codex_collector: Arc<tokio::sync::Mutex<Option<CollectorHandle>>>,
+    pub collector_health: CollectorHealth,
 }
 
 impl AppState {
@@ -182,11 +188,17 @@ impl AppState {
             diagnostics,
             browser_debug_artifacts,
             telemetry: Arc::new(std::sync::RwLock::new(TelemetryHandle::disabled())),
+            telemetry_coordinator: Arc::new(tokio::sync::Mutex::new(())),
+            codex_collector: Arc::new(tokio::sync::Mutex::new(None)),
+            collector_health: CollectorHealth::default(),
         })
     }
 
     pub fn set_telemetry(&self, telemetry: TelemetryHandle) {
-        *self.telemetry.write().expect("telemetry state lock poisoned") = telemetry;
+        *self
+            .telemetry
+            .write()
+            .expect("telemetry state lock poisoned") = telemetry;
     }
 }
 

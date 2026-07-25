@@ -395,6 +395,11 @@ export interface UsageSummary {
   coverage: {
     detailOnly: boolean;
     captureQualityFilter: UsageCaptureQuality | null;
+    codexCorrelation: {
+      exact: number;
+      approximate: number;
+      unattributed: number;
+    } | null;
   };
   health: UsageHealth;
 }
@@ -405,6 +410,20 @@ export interface UsageHealth {
   writerErrors: number;
   rejectedEvents: number;
   sampledAt: number;
+  collector: UsageCollectorHealth;
+}
+
+export interface UsageCollectorHealth {
+  running: boolean;
+  malformed: number;
+  rejected: number;
+  queued: number;
+  dropped: number;
+  duplicate: number;
+  unverifiedVersion: number;
+  coreSchemaDrift: number;
+  unavailableTokenCoverage: number;
+  lastAcceptedAtUtcMs: number | null;
 }
 
 export interface UsageCollectorSettings {
@@ -420,6 +439,14 @@ export interface UsageSettings {
   aggregateRetentionDays: number | null;
   excludedProjects: string[];
   collector: UsageCollectorSettings;
+  collectorSetup: {
+    endpoint: string;
+    authorization: string;
+    restartRequired: boolean;
+    managedConfig: false;
+    serverRestartRequired: true;
+    baselineFixtureVersion: string;
+  };
 }
 
 export interface UsageSettingsPatch {
