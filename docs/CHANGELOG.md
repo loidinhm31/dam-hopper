@@ -9,6 +9,10 @@
   text, terminal controls, or auto-submit. Target reloads invalidate prior
   selection state; CSP/framing failures, capture denial, stale tunnels, and
   closed terminals fail closed. [See plan](../plans/260724-0114-browser-debug-embedded-selection/plan.md).
+  Phase 6 automated hardening covers malformed/nested bridge messages,
+  capture cleanup and JPEG conversion, tunnel invalidation, private artifact
+  boundaries, and the no-read artifact contract. Chromium permission chooser,
+  HiDPI crop, live tunnel, and real-xterm checks remain manual release gates.
 
 ## 2026-07-16
 
