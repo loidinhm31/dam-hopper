@@ -4,12 +4,15 @@ use std::sync::{
     Arc,
 };
 
-use super::types::CommandEvent;
+use super::types::{AgentUsageEvent, CommandEvent, TerminalRunEnd, TerminalRunEvent};
 
 /// Non-blocking boundary between PTY lifecycle code and telemetry persistence.
 pub trait TelemetrySink: Send + Sync + 'static {
     /// Implementations must only enqueue/drop; never wait on a receiver or do I/O.
     fn try_record(&self, event: CommandEvent);
+    fn try_record_run(&self, event: TerminalRunEvent);
+    fn try_finish_run(&self, event: TerminalRunEnd);
+    fn try_record_agent_usage(&self, event: AgentUsageEvent);
     fn dropped_count(&self) -> u64;
 }
 
@@ -27,27 +30,35 @@ impl TelemetrySink for NoopTelemetrySink {
         // Disabled analytics intentionally discards without reporting queue loss.
     }
 
+    fn try_record_run(&self, _event: TerminalRunEvent) {}
+    fn try_finish_run(&self, _event: TerminalRunEnd) {}
+    fn try_record_agent_usage(&self, _event: AgentUsageEvent) {}
+
     fn dropped_count(&self) -> u64 {
         0
     }
 }
 
 pub struct ChannelTelemetrySink {
-    tx: SyncSender<CommandEvent>,
+    tx: SyncSender<TelemetryCmd>,
     dropped: Arc<AtomicU64>,
 }
 
 impl ChannelTelemetrySink {
-    pub fn new(tx: SyncSender<CommandEvent>) -> Self {
+    pub fn new(tx: SyncSender<TelemetryCmd>) -> Self {
         Self {
             tx,
             dropped: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    pub fn channel(capacity: usize) -> (Self, Receiver<CommandEvent>) {
+    pub fn channel(capacity: usize) -> (Self, Receiver<TelemetryCmd>) {
         let (tx, rx) = mpsc::sync_channel(capacity);
         (Self::new(tx), rx)
+    }
+
+    pub fn sender(&self) -> SyncSender<TelemetryCmd> {
+        self.tx.clone()
     }
 
     pub fn dropped_count(&self) -> u64 {
@@ -57,17 +68,50 @@ impl ChannelTelemetrySink {
 
 impl TelemetrySink for ChannelTelemetrySink {
     fn try_record(&self, event: CommandEvent) {
-        if matches!(
-            self.tx.try_send(event),
-            Err(TrySendError::Full(_) | TrySendError::Disconnected(_))
-        ) {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-        }
+        self.try_send(TelemetryCmd::Command(event));
+    }
+
+    fn try_record_run(&self, event: TerminalRunEvent) {
+        self.try_send(TelemetryCmd::TerminalRun(event));
+    }
+
+    fn try_finish_run(&self, event: TerminalRunEnd) {
+        self.try_send(TelemetryCmd::TerminalRunEnded(event));
+    }
+
+    fn try_record_agent_usage(&self, event: AgentUsageEvent) {
+        self.try_send(TelemetryCmd::AgentUsage(event));
     }
 
     fn dropped_count(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
+}
+
+impl ChannelTelemetrySink {
+    fn try_send(&self, command: TelemetryCmd) {
+        if matches!(
+            self.tx.try_send(command),
+            Err(TrySendError::Full(_) | TrySendError::Disconnected(_))
+        ) {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Typed, normalized-only messages accepted by the durable telemetry worker.
+#[derive(Debug)]
+pub enum TelemetryCmd {
+    TerminalRun(TerminalRunEvent),
+    TerminalRunEnded(TerminalRunEnd),
+    Command(CommandEvent),
+    AgentUsage(AgentUsageEvent),
+    Purge {
+        now_utc_ms: i64,
+        detail_retention_days: u16,
+        aggregate_retention_days: Option<u32>,
+    },
+    Shutdown,
 }
 
 #[cfg(test)]

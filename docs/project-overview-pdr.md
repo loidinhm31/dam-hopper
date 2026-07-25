@@ -74,7 +74,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Phase 05: Enhanced WS events — terminal:exit (willRestart field) + process:restarted
 - Phase 07: Idempotency — killed set lifecycle, TOCTOU guard, memory leak fix
 - Phase 02 (shell capture seam): validated Bash/Zsh/Fish lifecycle completion status and privacy-safe command telemetry events
-- Phase 03 (planned): durable telemetry worker, storage, retention, and usage APIs behind the non-blocking sink boundary
+- Phase 03: opt-in durable telemetry worker, private SQLite storage, retention/rollups, privacy controls, and aggregate query foundation behind the non-blocking sink boundary
 
 ### PR-003: Git Operations
 

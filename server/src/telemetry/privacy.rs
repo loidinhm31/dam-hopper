@@ -1,10 +1,10 @@
 use hmac::{Hmac, Mac};
 use rand::RngCore;
 use serde::Serialize;
+use sha2::Sha256;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
-use sha2::Sha256;
 
 pub const HMAC_KEY_LENGTH: usize = 32;
 pub const FORBIDDEN_CONTENT_FIELDS: &[&str] = &[
@@ -30,11 +30,23 @@ pub struct HmacDigest(String);
 impl TryFrom<String> for HmacDigest {
     type Error = String;
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) { Ok(Self(value)) } else { Err("HMAC digest must be 64 lowercase hexadecimal characters".to_string()) }
+        if value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            Ok(Self(value))
+        } else {
+            Err("HMAC digest must be 64 lowercase hexadecimal characters".to_string())
+        }
     }
 }
 
-impl From<HmacDigest> for String { fn from(value: HmacDigest) -> Self { value.0 } }
+impl From<HmacDigest> for String {
+    fn from(value: HmacDigest) -> Self {
+        value.0
+    }
+}
 
 impl TelemetryHmacKey {
     pub fn as_bytes(&self) -> &[u8; HMAC_KEY_LENGTH] {
@@ -44,7 +56,10 @@ impl TelemetryHmacKey {
     pub fn digest(&self, domain: &[u8], fields: &[&[u8]]) -> HmacDigest {
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.0).expect("valid HMAC key length");
         mac.update(domain);
-        for field in fields { mac.update(&(field.len() as u64).to_be_bytes()); mac.update(field); }
+        for field in fields {
+            mac.update(&(field.len() as u64).to_be_bytes());
+            mac.update(field);
+        }
         HmacDigest(hex::encode(mac.finalize().into_bytes()))
     }
 }
@@ -84,7 +99,8 @@ pub fn assert_serialized_without_content<T: Serialize>(
     forbidden_values: &[&str],
 ) -> Result<(), String> {
     let serialized = serde_json::to_string(value).map_err(|error| error.to_string())?;
-    let value: serde_json::Value = serde_json::from_str(&serialized).map_err(|error| error.to_string())?;
+    let value: serde_json::Value =
+        serde_json::from_str(&serialized).map_err(|error| error.to_string())?;
     if contains_forbidden_content(&value, forbidden_values) {
         return Err("serialized telemetry contains forbidden fixture content".to_string());
     }
@@ -93,9 +109,16 @@ pub fn assert_serialized_without_content<T: Serialize>(
 
 fn contains_forbidden_content(value: &serde_json::Value, forbidden: &[&str]) -> bool {
     match value {
-        serde_json::Value::Object(values) => values.iter().any(|(key, value)| FORBIDDEN_CONTENT_FIELDS.contains(&key.as_str()) || contains_forbidden_content(value, forbidden)),
-        serde_json::Value::Array(values) => values.iter().any(|value| contains_forbidden_content(value, forbidden)),
-        serde_json::Value::String(value) => forbidden.iter().any(|forbidden| value.contains(forbidden)),
+        serde_json::Value::Object(values) => values.iter().any(|(key, value)| {
+            FORBIDDEN_CONTENT_FIELDS.contains(&key.as_str())
+                || contains_forbidden_content(value, forbidden)
+        }),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| contains_forbidden_content(value, forbidden)),
+        serde_json::Value::String(value) => {
+            forbidden.iter().any(|forbidden| value.contains(forbidden))
+        }
         _ => false,
     }
 }
@@ -109,7 +132,10 @@ fn read_key(path: &Path) -> io::Result<TelemetryHmacKey> {
         let mut file = options.open(path)?;
         let metadata = file.metadata()?;
         if !metadata.file_type().is_file() || metadata.permissions().mode() & 0o077 != 0 {
-            return Err(io::Error::new(ErrorKind::PermissionDenied, "telemetry HMAC key must be a 0600 regular file"));
+            return Err(io::Error::new(
+                ErrorKind::PermissionDenied,
+                "telemetry HMAC key must be a 0600 regular file",
+            ));
         }
         let mut bytes = Vec::with_capacity(HMAC_KEY_LENGTH);
         file.read_to_end(&mut bytes)?;

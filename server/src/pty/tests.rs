@@ -755,9 +755,16 @@ mod pty_tests {
         };
         mgr.create(options).unwrap();
         mgr.write("terminal:telemetry-e2e", b"false\n").unwrap();
-        let event = receiver
-            .recv_timeout(Duration::from_secs(2))
-            .expect("validated command telemetry");
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let event = loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let event = receiver
+                .recv_timeout(remaining)
+                .expect("validated command telemetry");
+            if let crate::telemetry::TelemetryCmd::Command(event) = event {
+                break event;
+            }
+        };
         assert_eq!(event.outcome, CommandOutcome::Failed);
         assert_eq!(event.exit_code, Some(1));
         assert!(event.duration_ms.is_some());
