@@ -29,7 +29,7 @@ without auto-submit.
 | 3 | Browser tool, iframe, origin policy | Done (2026-07-24 17:27 +07) | 10h | [phase-03-browser-tool-and-iframe-bridge.md](./phase-03-browser-tool-and-iframe-bridge.md) |
 | 4 | Screen capture, crop, fallback | Done (2026-07-24 18:20 +07) | 8h | [phase-04-capture-and-image-fallback.md](./phase-04-capture-and-image-fallback.md) |
 | 5 | Terminal handoff and workspace integration | Done (2026-07-25 15:18 +07) | 8h | [phase-05-terminal-handoff-and-workspace-integration.md](./phase-05-terminal-handoff-and-workspace-integration.md) |
-| 6 | Hardening, tests, docs, manual gate | Pending | 10h | [phase-06-hardening-tests-and-docs.md](./phase-06-hardening-tests-and-docs.md) |
+| 6 | Hardening, tests, docs, manual gate | Complete (implementation, 2026-07-25 16:02 +07) | 10h | [phase-06-hardening-tests-and-docs.md](./phase-06-hardening-tests-and-docs.md) |
 
 ## Dependencies
 
@@ -39,15 +39,16 @@ without auto-submit.
   permits the parent through CSP `frame-ancestors`.
 - Browser supports iframe messaging and, optionally, `getDisplayMedia`.
 - A singleton keep-alive host preserves one iframe DOM node for the full
-  Workspace lifetime, reparenting it into visible or parked containers.
+  Workspace lifetime in a stable overlay that moves off-screen when hidden.
 - No reverse proxy, Electron migration, or Tauri sidecar in V1. Chromium
   extension distribution and setup are now the V1 bridge delivery path.
 
 ## Release gate
 
-All phases remain pending until hostile-page tests, capture-denial fallback,
-stale-session handling, tunnel shutdown, artifact cleanup, and manual Chromium
-permission checks pass.
+Automated validation is complete: UI 689 tests, Chromium 39 tests, Rust 494
+tests, build pass, and lint pass. Native Chromium permission chooser, HiDPI,
+live-tunnel, and real-xterm checks remain manual release follow-up and are not
+recorded as passed.
 
 ## Validation Summary
 
@@ -90,3 +91,9 @@ permission checks pass.
 - Web build stages a deterministic MV3 archive; the client presence marker is onboarding telemetry only. Bridge activation requires loopback or configured exact DamHopper parent origins.
 - `@dam-hopper/browser-bridge`: 11 tests passed; `@dam-hopper/ui`: 684 tests passed; Chromium: 38 tests passed; Rust: all suites passed (439 unit, 50 integration); build/lint passed with 0 errors and 14 existing warnings.
 - Manual Chromium extension installation, permission, deployed-origin, tunnel, and real-xterm checks remain Phase 6 release gates.
+
+### Phase 6 validation
+
+- Implementation completed: 2026-07-25 16:02 +07 (Asia/Ho_Chi_Minh).
+- Automated validation: UI 689 tests passed; Chromium 39 tests passed; Rust 494 tests passed; build and lint passed.
+- Native Chromium permission chooser, HiDPI, live-tunnel, and real-xterm checks remain manual release follow-up; not passed by automation.

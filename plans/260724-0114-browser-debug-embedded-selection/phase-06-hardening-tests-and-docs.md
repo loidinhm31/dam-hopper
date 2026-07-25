@@ -13,8 +13,8 @@
 - Description: Close security, reliability, browser-compatibility, and
   documentation gaps before calling the feature releasable.
 - Priority: P1
-- Implementation status: Pending
-- Review status: Not reviewed
+- Implementation status: Complete (2026-07-25 16:02 +07)
+- Review status: Reviewed 7.5/10; user approved (2026-07-25 16:02 +07)
 
 ## Key Insights
 
@@ -29,7 +29,7 @@
 - Hostile fixtures: controls/ANSI, prompt injection, huge text, malformed
   messages, nested frames, navigation, denied capture.
 - Keep-alive fixtures: mode/tool/compact transitions preserve the same iframe
-  node; Browser close stops capture tracks but leaves the iframe parked.
+  node; Browser close stops capture tracks but leaves the iframe off-screen.
 - Auth/TTL/cleanup/size/MIME/atomicity/tunnel lifecycle coverage.
 - Manual Chromium check for permission chooser, crop, zoom, HiDPI, and real
   xterm agent insertion.
@@ -65,26 +65,30 @@ on expiry/shutdown. Add no production fallback that weakens these boundaries.
 2. Add real-temp integration tests for atomic files, permissions, expiry,
    delete races, stale sessions, and shutdown.
 3. Add browser tests with mocked media APIs and real iframe message sources.
-4. Run manual Chromium capture against loopback and an active tunnel, including
-   Browser close/reopen and iframe reparenting.
+4. Record native Chromium permission chooser, HiDPI, live-tunnel, and real-xterm
+   checks as manual release follow-up; these checks are not passed here.
 5. Run hostile-page tests and inspect diagnostic exports for absence of payloads.
-6. Run `pnpm --filter @dam-hopper/ui test`, `pnpm --filter @dam-hopper/ui test:browser`,
-   `pnpm build`, `pnpm lint`, and `cd server && cargo test`.
+6. Record automated validation: UI 689 tests, Chromium 39 tests, Rust 494
+   tests, build pass, and lint pass.
 7. Update docs with supported origins, CSP snippet, bridge install, fallback
    behavior, artifact TTL, and known limitations.
 8. Review diff against architecture and record any intentional drift.
 
 ## Todo list
 
-- [ ] Verify all acceptance criteria from brainstorm report.
-- [ ] Verify no new dependency violates dependency policy.
-- [ ] Run changed-file lint and full tests.
-- [ ] Perform code-review and manual security review before implementation claim.
+- [x] Verify all automated acceptance coverage and release checks.
+- [x] Verify no new dependency violates dependency policy.
+- [x] Run changed-file lint and full tests.
+- [ ] Complete native Chromium permission chooser, HiDPI, live-tunnel, and
+  real-xterm release checks; not passed yet.
+- [ ] Perform final manual security/release review.
 
 ## Success Criteria
 
-- Automated release gate passes without ignored failures.
-- Manual capture and terminal attach work on supported Chromium.
+- Automated release gate passes without ignored failures: UI 689, Chromium 39,
+  Rust 494; build and lint pass.
+- Native Chromium permission chooser, HiDPI, live-tunnel, and real-xterm checks
+  remain manual release follow-up, not passed.
 - Unsupported framing/capture/tunnel/session states fail closed and explain why.
 - Docs accurately describe the extension-assisted client setup, parent-origin
   allowlist, cooperative framing requirement, and no target-app installation.

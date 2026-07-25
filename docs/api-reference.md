@@ -103,7 +103,7 @@ Phase 01 adds a client-side diagnostics ring for local troubleshooting. It is wr
 
 This phase does not expose a backend export endpoint yet.
 
-## Browser Debug Artifacts (Phase 2)
+## Browser Debug Artifacts (Phase 2; Phase 6 hardened)
 
 Authenticated, ephemeral storage for a browser-debug selection and optional screenshot. Artifacts are scoped to a live PTY terminal; no read or list endpoint exists.
 
