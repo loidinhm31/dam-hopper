@@ -8,6 +8,7 @@ import {
   openTerminalDiagnosticsContextMenu,
   type TerminalDiagnosticsMenuHandler,
 } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
+import type { TunnelInfo } from "@/api/client.js";
 import {
   Dialog,
   DialogContent,
@@ -40,6 +41,7 @@ interface ActiveTerminalRuntimeDisplayProps {
   onSelectTab?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+  onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
   browserOpen?: boolean;
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
@@ -89,6 +91,7 @@ export function ActiveTerminalRuntimeDisplay({
   onSelectTab,
   onCloseSession,
   onOpenDiagnosticsMenu,
+  onOpenTunnelInBrowser,
   browserOpen = false,
   renderBrowserContent,
   onCloseBrowser,
@@ -208,6 +211,7 @@ export function ActiveTerminalRuntimeDisplay({
               onSelectSession={handleMobileSelectSession}
               onStartTunnel={createTunnel}
               onStopTunnel={stopTunnel}
+              onOpenTunnelInBrowser={onOpenTunnelInBrowser}
               touchOptimized
             />
           </DialogContent>
@@ -236,6 +240,7 @@ export function ActiveTerminalRuntimeDisplay({
         onSelectSession={onSelectTab}
         onStartTunnel={createTunnel}
         onStopTunnel={stopTunnel}
+        onOpenTunnelInBrowser={onOpenTunnelInBrowser}
       />
       <div
         {...navigatorResizeProps}

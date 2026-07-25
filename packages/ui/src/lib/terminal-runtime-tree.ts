@@ -12,6 +12,7 @@ export interface RuntimePort {
   project: string;
   state: Exclude<PortEntry["state"], "lost">;
   sessionId: string | null;
+  tunnel: PortEntry["tunnel"];
   tunnelStatus: NonNullable<PortEntry["tunnel"]>["status"] | null;
   tunnelUrl?: string;
   tunnelId?: string;
@@ -112,6 +113,7 @@ function toRuntimePort(port: PortEntry, project: string): RuntimePort {
     project,
     state: port.state as Exclude<PortEntry["state"], "lost">,
     sessionId: port.sessionId,
+    tunnel: port.tunnel,
     tunnelStatus: port.tunnel?.status ?? null,
     tunnelUrl: port.tunnel?.url,
     tunnelId: port.tunnel?.id,

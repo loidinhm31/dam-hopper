@@ -31,6 +31,7 @@ function controller(): BrowserDebugController {
     consoleEntries: [],
     setInputUrl: vi.fn(),
     navigate: vi.fn(),
+    navigateTo: vi.fn(),
     setBridgeStatus: vi.fn(),
     setBridgeCapabilities: vi.fn(),
     setSelection: vi.fn(),

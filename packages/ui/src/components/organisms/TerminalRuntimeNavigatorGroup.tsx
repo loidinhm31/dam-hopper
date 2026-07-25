@@ -5,6 +5,7 @@ import {
   type RuntimeTreeGroup,
 } from "@/lib/terminal-runtime-tree.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
+import type { TunnelInfo } from "@/api/client.js";
 
 interface Props {
   activeSessionId: string | null;
@@ -28,6 +29,7 @@ interface Props {
   ) => void;
   onStartTunnel: (port: number, label: string) => Promise<void>;
   onStopTunnel: (id: string) => Promise<void>;
+  onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
   touchOptimized?: boolean;
 }
 
@@ -45,6 +47,7 @@ export function TerminalRuntimeNavigatorGroup({
   onSetDragState,
   onStartTunnel,
   onStopTunnel,
+  onOpenTunnelInBrowser,
   touchOptimized = false,
 }: Props) {
   const canLaunchInGroup =
@@ -104,6 +107,7 @@ export function TerminalRuntimeNavigatorGroup({
             onSetDragState={onSetDragState}
             onStartTunnel={onStartTunnel}
             onStopTunnel={onStopTunnel}
+            onOpenTunnelInBrowser={onOpenTunnelInBrowser}
             touchOptimized={touchOptimized}
           />
         ))}

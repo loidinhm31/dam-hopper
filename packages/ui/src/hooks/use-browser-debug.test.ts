@@ -2,7 +2,11 @@
 import { act, createElement, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useBrowserDebug, type BrowserDebugController } from "./use-browser-debug.js";
+import {
+  useBrowserDebug,
+  type BrowserDebugController,
+} from "./use-browser-debug.js";
+import type { TunnelInfo } from "@/api/client.js";
 
 const { listTunnels, eventListeners } = vi.hoisted(() => ({
   listTunnels: vi.fn(),
@@ -139,5 +143,98 @@ describe("useBrowserDebug tunnel lifecycle", () => {
     expect(latestRef.current?.inputUrl).toBe(
       "https://example.trycloudflare.com/settings/logs#latest",
     );
+  });
+
+  it("navigates directly to a supplied ready tunnel URL without stale address state", async () => {
+    await act(async () => {
+      root.render(createElement(Harness));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      latestRef.current?.setInputUrl("https://stale.example.test");
+    });
+
+    let accepted = false;
+    await act(async () => {
+      accepted =
+        latestRef.current?.navigateTo(
+          "https://example.trycloudflare.com/dashboard?tab=ports",
+        ) ?? false;
+    });
+
+    expect(accepted).toBe(true);
+    expect(latestRef.current?.target).toMatchObject({
+      url: "https://example.trycloudflare.com/dashboard?tab=ports",
+      origin: "https://example.trycloudflare.com",
+      source: "tunnel",
+    });
+    expect(latestRef.current?.inputUrl).toBe(
+      "https://example.trycloudflare.com/dashboard?tab=ports",
+    );
+    expect(latestRef.current?.bridgeStatus).toBe("loading");
+    expect(latestRef.current?.error).toBeNull();
+  });
+
+  it("accepts a ready tunnel snapshot before the hook tunnel cache loads", async () => {
+    await act(async () => {
+      root.render(createElement(Harness));
+      await Promise.resolve();
+    });
+
+    const tunnel: TunnelInfo = {
+      id: "tunnel-snapshot",
+      port: 3000,
+      label: "web",
+      driver: "cloudflared",
+      status: "ready",
+      url: "https://snapshot.trycloudflare.com",
+      startedAt: 1,
+    };
+
+    let accepted = false;
+    await act(async () => {
+      accepted =
+        latestRef.current?.navigateTo(
+          "https://snapshot.trycloudflare.com/dashboard",
+          [tunnel],
+        ) ?? false;
+    });
+
+    expect(accepted).toBe(true);
+    expect(latestRef.current?.target?.url).toBe(
+      "https://snapshot.trycloudflare.com/dashboard",
+    );
+  });
+
+  it("rejects non-ready tunnel snapshots", async () => {
+    await act(async () => {
+      root.render(createElement(Harness));
+      await Promise.resolve();
+    });
+
+    const tunnel: TunnelInfo = {
+      id: "tunnel-snapshot",
+      port: 3000,
+      label: "web",
+      driver: "cloudflared",
+      status: "starting",
+      url: "https://snapshot.trycloudflare.com",
+      startedAt: 1,
+    };
+
+    let accepted = true;
+    await act(async () => {
+      accepted =
+        latestRef.current?.navigateTo(
+          "https://snapshot.trycloudflare.com/dashboard",
+          [tunnel],
+        ) ?? true;
+    });
+
+    expect(accepted).toBe(false);
+    expect(latestRef.current?.target).toBeNull();
+    expect(latestRef.current?.error).toContain("ready tunnel");
   });
 });

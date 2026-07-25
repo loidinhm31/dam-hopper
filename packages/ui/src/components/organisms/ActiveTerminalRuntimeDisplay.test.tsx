@@ -1,13 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ActiveTerminalRuntimeDisplay,
   RuntimeActiveSessionTitle,
 } from "./ActiveTerminalRuntimeDisplay.js";
 import type { MountedSession } from "./MultiTerminalDisplay.js";
 import type { TabEntry } from "./TerminalTabBar.js";
+import type { PortEntry } from "@/hooks/use-ports.js";
 
 let mockCompactWorkspace = false;
+let mockPorts: PortEntry[] = [];
 
 vi.mock("@/api/queries.js", () => ({
   useGlobalConfig: () => ({ data: undefined }),
@@ -19,7 +21,7 @@ vi.mock("@/hooks/use-compact-workspace.js", () => ({
 
 vi.mock("@/hooks/use-ports.js", () => ({
   usePorts: () => ({
-    ports: [],
+    ports: mockPorts,
     createTunnel: vi.fn(),
     stopTunnel: vi.fn(),
   }),
@@ -76,6 +78,11 @@ function renderDisplay() {
 }
 
 describe("ActiveTerminalRuntimeDisplay", () => {
+  beforeEach(() => {
+    mockCompactWorkspace = false;
+    mockPorts = [];
+  });
+
   it("uses the mobile runtime trigger instead of the desktop resize handle on compact viewports", () => {
     mockCompactWorkspace = true;
 
@@ -115,5 +122,43 @@ describe("ActiveTerminalRuntimeDisplay", () => {
     expect(onOpenDiagnosticsMenu).toHaveBeenCalledWith("session-1", 10, 20);
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(stopPropagation).toHaveBeenCalledOnce();
+  });
+
+  it("forwards ready tunnel browser actions into the runtime navigator", () => {
+    mockPorts = [
+      {
+        port: 3000,
+        project: "demo",
+        state: "listening",
+        sessionId: "session-1",
+        tunnel: {
+          id: "tunnel-1",
+          port: 3000,
+          label: "demo",
+          driver: "cloudflared",
+          status: "ready",
+          url: "https://demo.trycloudflare.com",
+          startedAt: 1,
+        },
+      },
+    ];
+
+    const markup = renderToStaticMarkup(
+      <ActiveTerminalRuntimeDisplay
+        activeSessionId="session-1"
+        mountedSessions={mountedSessions}
+        openTabs={openTabs}
+        currentProjectName="demo"
+        onOpenTunnelInBrowser={() => {}}
+        onNewFreeTerminal={() => {}}
+        onNewProjectTerminal={() => {}}
+        onSelectTab={() => {}}
+        onCloseSession={() => {}}
+      />,
+    );
+
+    expect(markup).toContain(
+      'aria-label="Open https://demo.trycloudflare.com in embedded Browser"',
+    );
   });
 });

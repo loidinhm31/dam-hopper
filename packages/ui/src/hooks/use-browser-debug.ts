@@ -59,6 +59,7 @@ export interface BrowserDebugController {
   consoleEntries: BrowserConsoleEntry[];
   setInputUrl: (value: string) => void;
   navigate: () => void;
+  navigateTo: (value: string, tunnels?: readonly TunnelInfo[]) => boolean;
   setBridgeStatus: (status: BrowserDebugBridgeStatus) => void;
   setSelection: (selection: BrowserSelectionV1 | null) => void;
   setPickerActive: (active: boolean) => void;
@@ -150,6 +151,51 @@ export function useBrowserDebug(): BrowserDebugController {
     }
   }, [refreshTunnels]);
 
+  const applyNavigationTarget = useCallback(
+    (nextTarget: BrowserDebugTarget) => {
+      setInputUrl(nextTarget.url);
+      setAddressHistory(recordBrowserDebugAddress(nextTarget.url));
+      targetRef.current = nextTarget;
+      setTarget(nextTarget);
+      setSelection(null);
+      setPickerActive(false);
+      stopCapture();
+      setConsoleEntries([]);
+      setBridgeCapabilities([]);
+      setBridgeStatus("loading");
+      setError(null);
+    },
+    [stopCapture],
+  );
+
+  const rejectNavigationTarget = useCallback(() => {
+    targetRef.current = null;
+    setTarget(null);
+    setSelection(null);
+    setPickerActive(false);
+    setBridgeCapabilities([]);
+    stopCapture();
+    setBridgeStatus("error");
+    setError("Enter an HTTP loopback URL or a URL on a ready tunnel.");
+  }, [stopCapture]);
+
+  const navigateTo = useCallback(
+    (value: string, extraTunnels: readonly TunnelInfo[] = []) => {
+      const nextTarget = resolveBrowserDebugTarget(
+        value,
+        [...extraTunnels, ...tunnels],
+        parentOrigin,
+      );
+      if (!nextTarget) {
+        rejectNavigationTarget();
+        return false;
+      }
+      applyNavigationTarget(nextTarget);
+      return true;
+    },
+    [applyNavigationTarget, parentOrigin, rejectNavigationTarget, tunnels],
+  );
+
   const navigate = useCallback(() => {
     const nextTarget = resolveBrowserDebugTarget(
       inputUrl,
@@ -157,28 +203,17 @@ export function useBrowserDebug(): BrowserDebugController {
       parentOrigin,
     );
     if (!nextTarget) {
-      targetRef.current = null;
-      setTarget(null);
-      setSelection(null);
-      setPickerActive(false);
-      setBridgeCapabilities([]);
-      stopCapture();
-      setBridgeStatus("error");
-      setError("Enter an HTTP loopback URL or a URL on a ready tunnel.");
+      rejectNavigationTarget();
       return;
     }
-    setInputUrl(nextTarget.url);
-    setAddressHistory(recordBrowserDebugAddress(nextTarget.url));
-    targetRef.current = nextTarget;
-    setTarget(nextTarget);
-    setSelection(null);
-    setPickerActive(false);
-    stopCapture();
-    setConsoleEntries([]);
-    setBridgeCapabilities([]);
-    setBridgeStatus("loading");
-    setError(null);
-  }, [inputUrl, parentOrigin, stopCapture, tunnels]);
+    applyNavigationTarget(nextTarget);
+  }, [
+    applyNavigationTarget,
+    inputUrl,
+    parentOrigin,
+    rejectNavigationTarget,
+    tunnels,
+  ]);
 
   const updateSelection = useCallback(
     (nextSelection: BrowserSelectionV1 | null) => {
@@ -225,6 +260,7 @@ export function useBrowserDebug(): BrowserDebugController {
     consoleEntries,
     setInputUrl,
     navigate,
+    navigateTo,
     setBridgeStatus,
     setBridgeCapabilities,
     setSelection: updateSelection,
