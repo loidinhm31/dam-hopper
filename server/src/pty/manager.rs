@@ -24,8 +24,10 @@ use crate::{
     },
     telemetry::{
         CaptureQuality, CommandClassifier, CommandEvent, CommandEventId, CommandOutcome,
-        NoopTelemetrySink, NormalizedCommand, TelemetrySink, TerminalRunId,
+        NoopTelemetrySink, NormalizedCommand, ShellKind, TelemetrySink, TerminalRunEnd,
+        TerminalRunEvent, TerminalRunId,
         TELEMETRY_SCHEMA_VERSION,
+        worker::TelemetryControl,
     },
 };
 
@@ -154,6 +156,7 @@ pub struct PtySessionManager {
     diagnostics: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
     telemetry_sink: Arc<dyn TelemetrySink>,
     command_classifier: Option<Arc<CommandClassifier>>,
+    telemetry_control: Option<Arc<TelemetryControl>>,
 }
 
 struct Inner {
@@ -216,6 +219,24 @@ impl PtySessionManager {
         telemetry_sink: Arc<dyn TelemetrySink>,
         command_classifier: Option<Arc<CommandClassifier>>,
     ) -> Self {
+        Self::with_persist_and_telemetry_control(
+            sink,
+            persist_tx,
+            session_store,
+            telemetry_sink,
+            command_classifier,
+            Some(Arc::new(TelemetryControl::new(true, Vec::new()))),
+        )
+    }
+
+    pub fn with_persist_and_telemetry_control(
+        sink: Arc<dyn EventSink>,
+        persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+        session_store: Option<std::sync::Arc<crate::persistence::SessionStore>>,
+        telemetry_sink: Arc<dyn TelemetrySink>,
+        command_classifier: Option<Arc<CommandClassifier>>,
+        telemetry_control: Option<Arc<TelemetryControl>>,
+    ) -> Self {
         // Bounded channel prevents DoS if supervisor hangs/panics.
         // 256 slots = ~5× typical max sessions (50). If full, supervisor is dead/slow.
         let (respawn_tx, respawn_rx) = mpsc::channel(256);
@@ -236,6 +257,7 @@ impl PtySessionManager {
             diagnostics: Arc::new(std::sync::RwLock::new(None)),
             telemetry_sink,
             command_classifier,
+            telemetry_control,
         };
 
         // Spawn the supervisor task that handles respawn requests.
@@ -245,6 +267,7 @@ impl PtySessionManager {
         let diag_cell = Arc::clone(&manager.diagnostics);
         let telemetry_sink = Arc::clone(&manager.telemetry_sink);
         let command_classifier = manager.command_classifier.clone();
+        let telemetry_control = manager.telemetry_control.clone();
         tokio::spawn(supervisor_loop(
             respawn_rx,
             inner_clone,
@@ -255,6 +278,7 @@ impl PtySessionManager {
             diag_cell,
             telemetry_sink,
             command_classifier,
+            telemetry_control,
         ));
 
         manager
@@ -348,6 +372,9 @@ impl PtySessionManager {
         );
 
         let lifecycle = integration.as_ref().map(ShellIntegration::lifecycle);
+        let telemetry_shell = integration
+            .as_ref()
+            .and_then(|integration| shell_kind(integration.capabilities().name));
         let run_id = TerminalRunId(Uuid::new_v4());
         let session = LiveSession::new(
             meta.clone(),
@@ -430,6 +457,7 @@ impl PtySessionManager {
         let diag_store = self.diagnostics.read().unwrap().clone();
         let telemetry_sink = Arc::clone(&self.telemetry_sink);
         let command_classifier = self.command_classifier.clone();
+        let telemetry_control = self.telemetry_control.clone();
 
         std::thread::Builder::new()
             .name(format!("pty-reader:{session_id}"))
@@ -453,6 +481,8 @@ impl PtySessionManager {
                     run_id,
                     telemetry_sink,
                     command_classifier,
+                    telemetry_control,
+                    telemetry_shell,
                 );
             })
             .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
@@ -1032,6 +1062,15 @@ fn combine_capture_quality(
     }
 }
 
+fn shell_kind(name: &str) -> Option<ShellKind> {
+    match name {
+        "bash" => Some(ShellKind::Bash),
+        "zsh" => Some(ShellKind::Zsh),
+        "fish" => Some(ShellKind::Fish),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Reader thread
 // ---------------------------------------------------------------------------
@@ -1055,6 +1094,8 @@ fn reader_thread(
     run_id: TerminalRunId,
     telemetry_sink: Arc<dyn TelemetrySink>,
     command_classifier: Option<Arc<CommandClassifier>>,
+    telemetry_control: Option<Arc<TelemetryControl>>,
+    telemetry_shell: Option<ShellKind>,
 ) {
     // Local helper to record a terminal lifecycle event from the reader thread.
     let record_diag = |message: &str, mut fields: BTreeMap<String, String>| {
@@ -1077,7 +1118,29 @@ fn reader_thread(
                                                  // Marker-only chunks must not announce editing before prompt bytes exist.
     let mut pending_lifecycle_events: Vec<(u64, LifecycleEvent)> = Vec::new();
     let mut visible_output_since_boundary = false;
-    let mut telemetry = TelemetryContext::new(run_id, telemetry_sink, command_classifier);
+    let telemetry_enabled = telemetry_control
+        .as_ref()
+        .is_some_and(|control| control.allows_project(project.as_deref()));
+    let mut telemetry = TelemetryContext::new(
+        run_id,
+        Arc::clone(&telemetry_sink),
+        telemetry_enabled.then_some(command_classifier).flatten(),
+    );
+    if telemetry_enabled {
+        if let Some(shell) = telemetry_shell {
+            telemetry_sink.try_record_run(TerminalRunEvent {
+                schema_version: TELEMETRY_SCHEMA_VERSION,
+                run_id,
+                project: project
+                    .as_deref()
+                    .and_then(|project| crate::telemetry::SafeIdentifier::new(project).ok()),
+                shell,
+                started_at_utc_ms: utc_now_ms(),
+                ended_at_utc_ms: None,
+                capture_quality: CaptureQuality::Rich,
+            });
+        }
+    }
 
     loop {
         if shutdown.load(Ordering::Relaxed) {
@@ -1183,6 +1246,13 @@ fn reader_thread(
     }
 
     telemetry.finish_interrupted();
+    if telemetry_enabled {
+        telemetry_sink.try_finish_run(TerminalRunEnd {
+            run_id,
+            ended_at_utc_ms: utc_now_ms(),
+            capture_quality: CaptureQuality::Rich,
+        });
+    }
 
     // Collect real exit code from child. By the time the PTY reader sees EOF the
     // child has exited (slave-side fd closed), so wait() returns immediately.
@@ -1415,6 +1485,7 @@ async fn supervisor_loop(
     diag_cell: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
     telemetry_sink: Arc<dyn TelemetrySink>,
     command_classifier: Option<Arc<CommandClassifier>>,
+    telemetry_control: Option<Arc<TelemetryControl>>,
 ) {
     while let Some(cmd) = respawn_rx.recv().await {
         let session_id = cmd.id.clone();
@@ -1457,6 +1528,7 @@ async fn supervisor_loop(
             diag_store.clone(),
             Arc::clone(&telemetry_sink),
             command_classifier.clone(),
+            telemetry_control.clone(),
         )
         .await
         {
@@ -1492,6 +1564,7 @@ async fn respawn_internal(
     diag_store: Option<DiagnosticStore>,
     telemetry_sink: Arc<dyn TelemetrySink>,
     command_classifier: Option<Arc<CommandClassifier>>,
+    telemetry_control: Option<Arc<TelemetryControl>>,
 ) -> Result<(), AppError> {
     let opts = &cmd.respawn_opts;
 
@@ -1563,6 +1636,9 @@ async fn respawn_internal(
 
     let child_killer = child.clone_killer();
     let lifecycle = integration.as_ref().map(ShellIntegration::lifecycle);
+    let telemetry_shell = integration
+        .as_ref()
+        .and_then(|integration| shell_kind(integration.capabilities().name));
     let run_id = TerminalRunId(Uuid::new_v4());
     let session = LiveSession::new(
         meta.clone(),
@@ -1637,6 +1713,8 @@ async fn respawn_internal(
                 run_id,
                 telemetry_sink,
                 command_classifier,
+                telemetry_control,
+                telemetry_shell,
             );
         })
         .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
@@ -1979,7 +2057,7 @@ mod tests {
 mod telemetry_context_tests {
     use super::*;
     use crate::telemetry::{
-        privacy::load_or_create_hmac_key, ChannelTelemetrySink, CommandClassifier,
+        privacy::load_or_create_hmac_key, ChannelTelemetrySink, CommandClassifier, TelemetryCmd,
     };
     use std::sync::Arc;
 
@@ -1992,6 +2070,13 @@ mod telemetry_context_tests {
             state,
             command: command.map(str::to_string),
             exit_code,
+        }
+    }
+
+    fn command(command: TelemetryCmd) -> CommandEvent {
+        match command {
+            TelemetryCmd::Command(command) => command,
+            other => panic!("expected command telemetry, got {other:?}"),
         }
     }
 
@@ -2012,7 +2097,7 @@ mod telemetry_context_tests {
         context.observe(&event(LifecycleState::Opaque, None, None));
         context.observe(&event(LifecycleState::Finished, None, Some(0)));
 
-        let recorded = receiver.try_recv().unwrap();
+        let recorded = command(receiver.try_recv().unwrap());
         assert_eq!(recorded.id.run_id, run_id);
         assert_eq!(recorded.id.sequence, 1);
         assert_eq!(recorded.outcome, CommandOutcome::Succeeded);
@@ -2034,8 +2119,8 @@ mod telemetry_context_tests {
         context.observe(&event(LifecycleState::Submitted, Some("true"), None));
         context.finish_interrupted();
 
-        let first = receiver.try_recv().unwrap();
-        let second = receiver.try_recv().unwrap();
+        let first = command(receiver.try_recv().unwrap());
+        let second = command(receiver.try_recv().unwrap());
         assert_eq!(first.id.sequence, 1);
         assert_eq!(first.outcome, CommandOutcome::Unknown);
         assert_eq!(second.id.sequence, 2);
@@ -2055,7 +2140,7 @@ mod telemetry_context_tests {
         context.observe(&event(LifecycleState::Editing, None, None));
         context.observe(&event(LifecycleState::Unverified, None, None));
 
-        let recorded = receiver.try_recv().unwrap();
+        let recorded = command(receiver.try_recv().unwrap());
         assert_eq!(recorded.capture_quality, CaptureQuality::Unavailable);
         assert_eq!(recorded.outcome, CommandOutcome::Unknown);
         assert_eq!(recorded.id.sequence, 1);

@@ -45,11 +45,15 @@ impl CodexModel {
 
 impl TryFrom<String> for CodexModel {
     type Error = String;
-    fn try_from(value: String) -> Result<Self, Self::Error> { Self::new(value) }
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
 }
 
 impl From<CodexModel> for String {
-    fn from(value: CodexModel) -> Self { value.0 }
+    fn from(value: CodexModel) -> Self {
+        value.0
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,7 +65,9 @@ impl CodexVersion {
         let value = value.into();
         if value.is_empty()
             || value.len() > 32
-            || !value.bytes().all(|byte| byte.is_ascii_digit() || byte == b'.' || byte == b'-')
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || byte == b'.' || byte == b'-')
         {
             return Err("version must contain only digits, dots, and hyphens".to_string());
         }
@@ -71,11 +77,15 @@ impl CodexVersion {
 
 impl TryFrom<String> for CodexVersion {
     type Error = String;
-    fn try_from(value: String) -> Result<Self, Self::Error> { Self::new(value) }
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
 }
 
 impl From<CodexVersion> for String {
-    fn from(value: CodexVersion) -> Self { value.0 }
+    fn from(value: CodexVersion) -> Self {
+        value.0
+    }
 }
 
 impl TryFrom<String> for SafeIdentifier {
@@ -150,6 +160,13 @@ pub struct TerminalRunEvent {
     pub shell: ShellKind,
     pub started_at_utc_ms: i64,
     pub ended_at_utc_ms: Option<i64>,
+    pub capture_quality: CaptureQuality,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalRunEnd {
+    pub run_id: TerminalRunId,
+    pub ended_at_utc_ms: i64,
     pub capture_quality: CaptureQuality,
 }
 

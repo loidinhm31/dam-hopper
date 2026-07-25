@@ -71,6 +71,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## 2026-07-26
 
+- **Phase 03: Terminal usage analytics persistence.** Added opt-in telemetry startup/shutdown with a
+  dedicated bounded worker, private `telemetry.db` SQLite/WAL storage, idempotent command and token
+  writes, UTC daily rollups before detail purge, configurable retention and project exclusions, and
+  HMAC-key/file permission hardening. Database failures remain isolated from PTY flow; aggregate API
+  routes remain scheduled for Phase 04.
+
 - **Phase 02: Validated shell lifecycle capture.** Bash, Zsh, and Fish now report
   bounded completion status through versioned OSC 633 adapters. PTY lifecycle events
   carry terminal-run/sequence identity and privacy-safe normalized command metadata

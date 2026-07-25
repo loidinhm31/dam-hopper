@@ -19,6 +19,7 @@ use crate::pty::{BroadcastEventSink, PtySessionManager};
 use crate::ssh::SshCredStore;
 use crate::system::HostMetricsSampler;
 use crate::tunnel::TunnelSessionManager;
+use crate::telemetry::worker::TelemetryHandle;
 
 /// Shared application state across all Axum handlers.
 ///
@@ -75,6 +76,9 @@ pub struct AppState {
     pub diagnostics: DiagnosticStore,
     /// Short-lived browser selection bundles, isolated from workspace roots.
     pub browser_debug_artifacts: BrowserDebugArtifactManager,
+    /// Aggregate-only telemetry query and control handle. It is disabled when
+    /// telemetry initialization failed or the user has not opted in.
+    pub telemetry: Arc<std::sync::RwLock<TelemetryHandle>>,
 }
 
 impl AppState {
@@ -177,7 +181,12 @@ impl AppState {
             host_metrics: HostMetricsSampler::new(),
             diagnostics,
             browser_debug_artifacts,
+            telemetry: Arc::new(std::sync::RwLock::new(TelemetryHandle::disabled())),
         })
+    }
+
+    pub fn set_telemetry(&self, telemetry: TelemetryHandle) {
+        *self.telemetry.write().expect("telemetry state lock poisoned") = telemetry;
     }
 }
 
