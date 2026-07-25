@@ -181,7 +181,7 @@ The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose
 
 The Browser tool previews a development target and lets the user select one semantic DOM element for later artifact/terminal handoff. It accepts only an exact HTTP loopback origin or an exact origin from a currently-ready DamHopper tunnel; the workspace origin, URLs with paths/query/hash/credentials, and unready or stale tunnels are rejected.
 
-The iframe is hosted by a singleton `BrowserDebugKeepAliveHost` outside the conditional IDE/Terminal/compact shells. The host keeps its DOM node stable and positions it over the active viewport, avoiding Chromium reloads caused by physical iframe reparenting. Switching surfaces, maximizing panels, or changing compact tabs therefore does not unload the target document. A load handshake uses a fresh nonce and request IDs; incoming `postMessage` events must match the active `iframe.contentWindow`, nonce, request ID, protocol version, and schema before they are accepted. Target-origin checks are intentionally not used so forwarded development frames work. A timeout keeps the target visible and presents the extension setup flow.
+The iframe is hosted by a singleton `BrowserDebugKeepAliveHost` outside the conditional IDE/Terminal/compact shells. The host keeps its DOM node stable and positions it over the active viewport, avoiding Chromium reloads caused by physical iframe reparenting. Switching surfaces, maximizing panels, or changing compact tabs therefore does not unload the target document. A load handshake uses a fresh nonce and request IDs; incoming `postMessage` events must match the active `iframe.contentWindow`, exact target origin, nonce, request ID, protocol version, and schema before they are accepted. Redirected or opaque-origin frames fail closed. A timeout keeps the target visible and presents the extension setup flow.
 
 The panel renders bridge status, target URL, picker controls, and bounded selection metadata. It does not execute page commands or expose raw HTML, cookies, storage, credentials, or other browser secrets. When a selection exists, capture controls can request a browser-tab capture from an explicit user gesture, crop the selected region locally, or accept a PNG/JPEG file or pasted image. Capture is optional: denial, unsupported APIs, wrong-surface selection, or crop failure leave semantic selection available. Images remain local until the explicit artifact attach action; closing the Browser surface stops every capture track but intentionally does not unload the iframe.
 
@@ -528,8 +528,8 @@ HTML.
 The host uses the exact `iframe.contentWindow` when parsing messages. It issues
 a fresh nonce after every load/navigation or reconnect and accepts only request
 IDs it created for that nonce. The extension and host fail closed on source,
-nonce, request-ID, version, and schema mismatches; target-origin checks are not
-used so sandboxed or forwarded development frames work without configuration.
+exact-origin, nonce, request-ID, version, and schema mismatches; redirects and
+opaque-origin frames are rejected.
 
 Every DamHopper web build includes
 `/browser-debug-extension/dam-hopper-browser-debug.zip`. In the client
@@ -537,6 +537,13 @@ browser, extract that download, open `chrome://extensions`, enable Developer
 mode, select Load unpacked, and choose the extracted
 `dam-hopper-browser-debug` folder. The target app does not install a package
 or script.
+
+The extension marks the parent and framed documents with a versioned DOM
+presence marker for onboarding only. Bridge activation still requires an
+allowed parent origin: loopback parents work by default; deployed parent
+origins must be compiled into the archive with
+`VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS` as a comma-separated exact-origin
+list. The extension download is intentionally a single setup-card action.
 
 An existing `X-Frame-Options` or restrictive CSP header may still prevent
 embedding; the Browser tool surfaces that load failure instead of weakening

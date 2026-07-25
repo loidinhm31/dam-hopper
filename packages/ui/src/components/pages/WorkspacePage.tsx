@@ -1358,6 +1358,8 @@ export default function WorkspacePage() {
       <BrowserDebugPanel
         url={browserDebug.inputUrl}
         bridgeStatus={browserDebug.bridgeStatus}
+        extensionPresence={browserDebug.extensionPresence}
+        onReloadPage={() => window.location.reload()}
         viewportRef={browserViewportRef}
         onViewportReady={notifyBrowserViewportChanged}
         selection={browserDebug.selection}

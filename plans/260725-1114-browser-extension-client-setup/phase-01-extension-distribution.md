@@ -2,7 +2,7 @@
 
 Date: 2026-07-25  
 Priority: high  
-Status: pending
+Status: completed (2026-07-25 15:06 +07)
 
 ## Context Links
 
@@ -53,9 +53,9 @@ the web public directory before Vite copies public assets to the deployment.
 
 ## Todo List
 
-- [ ] Build/stage extension archive.
-- [ ] Wire production build.
-- [ ] Verify archive contents and URL.
+- [x] Build/stage extension archive.
+- [x] Wire production build.
+- [x] Verify archive contents and URL.
 
 ## Success Criteria
 
@@ -73,3 +73,6 @@ Do not include credentials, source maps, or server configuration in the archive.
 ## Next Steps
 
 Expose and consume the archive from the Browser Debug setup gate.
+
+Validation: `pnpm build` stages a deterministic archive containing only the
+MV3 manifest and built content script at the documented relative URL.

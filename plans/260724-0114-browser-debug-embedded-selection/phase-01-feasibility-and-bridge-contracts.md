@@ -37,9 +37,10 @@
 
 ## Architecture
 
-`@dam-hopper/browser-bridge` owns picker UI and DOM extraction inside the target.
-`packages/ui` owns the parent protocol parser and handshake state. The target
-never receives server tokens and the parent never accepts `*` as a target origin.
+`@dam-hopper/browser-bridge` owns picker UI and DOM extraction inside the target
+and is distributed through the Chromium extension. `packages/ui` owns the
+parent protocol parser and handshake state. The target never receives server
+tokens and the parent never accepts `*` as a target origin.
 
 ## Related code files
 

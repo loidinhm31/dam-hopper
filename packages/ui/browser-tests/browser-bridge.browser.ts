@@ -165,7 +165,7 @@ describe("browser bridge in Chromium", () => {
     window.addEventListener("message", onMessage);
     frame.srcdoc = `<script type="module">
       import { installBrowserBridge } from ${JSON.stringify(bridgeEntryUrl)};
-      installBrowserBridge({ parentOrigin: "https://stale.example.test" });
+      installBrowserBridge();
     </script>`;
     document.body.append(frame);
     await new Promise<void>((resolve) =>
@@ -183,6 +183,38 @@ describe("browser bridge in Chromium", () => {
     await vi.waitFor(() =>
       expect(received.at(-1)?.type).toBe("dam-hopper:bridge-ready"),
     );
+    window.removeEventListener("message", onMessage);
+  });
+
+  it("rejects an unapproved parent origin before bridge activation", async () => {
+    const frame = document.createElement("iframe");
+    const received: BrowserBridgeEvent[] = [];
+    const onMessage = (event: MessageEvent<unknown>): void => {
+      if (event.source !== frame.contentWindow) return;
+      received.push(event.data as BrowserBridgeEvent);
+    };
+    window.addEventListener("message", onMessage);
+    frame.srcdoc = `<script type="module">
+      import { installBrowserBridge } from ${JSON.stringify(bridgeEntryUrl)};
+      installBrowserBridge({ parentOrigin: "https://unapproved.example.test" });
+    </script>`;
+    document.body.append(frame);
+    await new Promise<void>((resolve) =>
+      frame.addEventListener("load", () => resolve(), { once: true }),
+    );
+    frame.contentWindow!.postMessage(
+      {
+        version: BROWSER_BRIDGE_VERSION,
+        type: "dam-hopper:connect",
+        nonce: "unapproved-nonce",
+        requestId: "unapproved-connect",
+      },
+      window.location.origin,
+    );
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
+    expect(received).toHaveLength(0);
     window.removeEventListener("message", onMessage);
   });
 

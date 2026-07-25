@@ -86,7 +86,8 @@ on expiry/shutdown. Add no production fallback that weakens these boundaries.
 - Automated release gate passes without ignored failures.
 - Manual capture and terminal attach work on supported Chromium.
 - Unsupported framing/capture/tunnel/session states fail closed and explain why.
-- Docs accurately describe cooperative-app requirement and no-extension scope.
+- Docs accurately describe the extension-assisted client setup, parent-origin
+  allowlist, cooperative framing requirement, and no target-app installation.
 
 ## Risk Assessment
 
@@ -99,6 +100,9 @@ on expiry/shutdown. Add no production fallback that weakens these boundaries.
 
 - Review prompt injection, CSP, XSS, CSRF, SSRF, path traversal, and terminal
   escape handling as one end-to-end boundary.
+- Verify the extension archive's configured parent-origin allowlist and reject
+  unapproved parent handshakes; broad target match patterns must not become
+  broad DamHopper parent authorization.
 - Keep browser artifacts out of logs, diagnostics, persistence, project trees,
   and commits.
 - Confirm auth middleware covers every new route and no token enters URLs.

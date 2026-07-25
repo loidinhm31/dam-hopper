@@ -8,48 +8,49 @@ import {
 } from "./protocol.js";
 
 export * from "./protocol.js";
+export * from "./extension-presence.js";
 
 export interface BrowserBridgeOptions {
-  /** Retained for source compatibility; parent-origin validation is not used. */
+  /** Optional exact parent origin for consumers that know it in advance. */
   parentOrigin?: string;
+  /** Exact deployed DamHopper parent origins in addition to loopback origins. */
+  allowedParentOrigins?: readonly string[];
 }
 
 export interface BrowserBridge {
   destroy(): void;
 }
 
-const BROWSER_DEBUG_LOG_PREFIX = "[DamHopper Browser Debug]";
-
-function shortId(value: string): string {
-  return value.slice(0, 8);
+export function isAllowedParentOrigin(
+  origin: string,
+  options: BrowserBridgeOptions,
+): boolean {
+  if (options.parentOrigin) return options.parentOrigin === origin;
+  if (options.allowedParentOrigins?.includes(origin)) return true;
+  try {
+    const url = new URL(origin);
+    return (
+      url.protocol === "http:" &&
+      (url.hostname === "localhost" ||
+        url.hostname === "127.0.0.1" ||
+        url.hostname === "[::1]" ||
+        url.hostname === "::1")
+    );
+  } catch {
+    return false;
+  }
 }
 
-/**
- * Installs the target-side bridge. It deliberately exposes no host APIs and only
- * communicates with the parent window. Parent-origin validation is deliberately
- * omitted so forwarded localhost ports and development hosts work without
- * target-side configuration; messages remain bound to the parent WindowProxy,
- * active nonce, request ID, and versioned schema.
- */
+/** Installs the target-side bridge without exposing host APIs or page privileges. */
 export function installBrowserBridge(
   options: BrowserBridgeOptions = {},
 ): BrowserBridge {
-  void options;
   let activeNonce: string | null = null;
   let activeRequestId: string | null = null;
-  console.info(`${BROWSER_DEBUG_LOG_PREFIX} bridge-installed`, {
-    origin: window.location.origin,
-    path: window.location.pathname,
-    framed: window.parent !== window,
-  });
+  let activeParentOrigin: string | null = null;
   const post = (event: BrowserBridgeEvent): void => {
-    window.parent.postMessage(event, "*");
-    console.info(`${BROWSER_DEBUG_LOG_PREFIX} event-sent`, {
-      type: event.type,
-      targetOrigin: "*",
-      nonce: shortId(event.nonce),
-      requestId: shortId(event.requestId),
-    });
+    if (activeParentOrigin)
+      window.parent.postMessage(event, activeParentOrigin);
   };
   const sendError = (
     code: BrowserBridgeErrorCode,
@@ -91,18 +92,14 @@ export function installBrowserBridge(
 
   const onMessage = (event: MessageEvent<unknown>): void => {
     if (event.source !== window.parent) return;
+    if (activeParentOrigin && event.origin !== activeParentOrigin) return;
     const command = parseBrowserBridgeCommand(event.data);
     if (!command) return;
 
-    console.info(`${BROWSER_DEBUG_LOG_PREFIX} command-received`, {
-      type: command.type,
-      eventOrigin: event.origin,
-      nonce: shortId(command.nonce),
-      requestId: shortId(command.requestId),
-    });
-
     if (command.type === "dam-hopper:connect") {
+      if (!isAllowedParentOrigin(event.origin, options)) return;
       picker.stop();
+      activeParentOrigin = event.origin;
       activeNonce = command.nonce;
       activeRequestId = command.requestId;
       post({
@@ -118,7 +115,6 @@ export function installBrowserBridge(
     if (command.type === "dam-hopper:start-picker") {
       try {
         picker.start();
-        console.info(`${BROWSER_DEBUG_LOG_PREFIX} picker-started`);
       } catch {
         sendError(
           "picker_unavailable",
@@ -139,6 +135,7 @@ export function installBrowserBridge(
       window.removeEventListener("message", onMessage);
       activeNonce = null;
       activeRequestId = null;
+      activeParentOrigin = null;
     },
   };
 }
