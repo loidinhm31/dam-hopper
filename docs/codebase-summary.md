@@ -22,6 +22,7 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 - **Rendering Wrapper**: `packages/ui/src/lib/file-decoration-icon.tsx` is a thin icon component over the registry.
 - **Shared Surfaces**: explorer tree, editor tabs, search headers, and path labels all read from the same lookup so file identity stays aligned across the UI.
 - **Terminal Find**: `TerminalPanel` and `PaneContainer` route Ctrl/Cmd+F only to the active pane's session-local xterm find controller, suppress the browser default, and keep the key out of PTY input. `PaneContainer` restores the TerminalPanel base key handler after temporary pane routing; inactive, detached, and reparented terminals close find state so queries and decorations do not leak across hosts.
+- **Validated Shell Lifecycle Capture (Phase 02)**: `server/src/pty/` validates nonce-bound OSC 633 lifecycle markers for Bash, Zsh, and Fish, including optional bounded exit status on completion and adapter capability metadata. `PtySessionManager` assigns terminal-run/sequence identity and emits privacy-safe normalized command events through `TelemetrySink`; `NoopTelemetrySink` is the default and `ChannelTelemetrySink` is the non-blocking Phase 03 worker seam. No durable telemetry store or usage API is part of this phase.
 - **Safe Inline Terminal Suggestions**: supported local interactive zsh/fish/Bash sessions expose only a server-validated lifecycle to a fail-closed, per-terminal controller. Bash preserves prompt hooks, records normalized simple-command text from `BASH_COMMAND`, and abandons compound, multiline, substitution, and redirection syntax. Ghost acceptance writes a suffix only; unsupported shells, replay, alternate buffers, and coarse-pointer / native-keyboard-suppressed surfaces show no automatic UI. Command history stays browser-local with clear and disable controls.
 - **Shared Context Menus**: `packages/ui/src/components/ui/ContextMenu.tsx` wraps Radix Context Menu with body-only portal protection, one-open coordination, and capture-level scroll close. Phase 03 keeps the verification boundary in JSDOM wrapper and consumer tests, while Chromium browser coverage owns the real portal geometry and Arrow/Home/End focus behavior.
 - **Workspace Terminal Layout**: `WorkspacePage` switches between IDE and terminal modes, `TerminalWorkspaceShell` renders the full-height terminal workspace with a persisted Fleet Terminal rail, and `MultiTerminalDisplay` reuses the existing terminal manager state across layout changes.
@@ -232,6 +233,8 @@ Infrastructure
 - Terminal env loading reads project `env_file` per session, with request overrides and clear missing/malformed file handling
 - Signal handling (SIGTERM, SIGHUP)
 - Binary and UTF-8 support
+- Validated shell lifecycle capture for Bash, Zsh, and Fish with optional exit status
+- Privacy-safe command classification and non-blocking telemetry sink seam; durable worker/persistence deferred to Phase 03
 
 ### Agent Store (`server/src/agent_store/`)
 

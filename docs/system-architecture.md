@@ -226,7 +226,7 @@ local-only, and provides clear/disable controls. Desktop is the first support bo
 mobile direct-write paths remain explicitly unsupported until all input routes share the
 same controller.
 
-### terminal usage analytics (planned)
+### terminal usage analytics (Phase 02 capture seam; Phase 03 persistence planned)
 
 Terminal analytics extends the validated shell lifecycle; it does not infer commands from
 xterm input, PTY output, silence, or browser history. Scope is DamHopper-launched,
@@ -244,14 +244,23 @@ flowchart LR
   API --> Page[Compact Usage page]
 ```
 
-The shell `D` completion marker carries exit status when the adapter can observe it. The PTY
-manager timestamps validated submission/completion events before WebSocket fan-out and assigns
-a stable identity from PTY session, generation, and lifecycle sequence. Reconnect, replay, or
-fan-out lag therefore cannot create duplicate analytics rows. Unsupported or ambiguous shell
-activity records coverage as `partial` or `unavailable`; the system never fabricates missing
-commands.
+Phase 02 implements the capture boundary only. Bash, Zsh, and Fish adapters emit a versioned
+completion marker with the observed exit status; the bounded `ShellLifecycle` parser validates
+the status, preserves legacy status-less markers, and exposes adapter capabilities. The PTY
+manager assigns a terminal run UUID and monotonic command sequence, timestamps validated
+submission/completion events, classifies only simple commands, and sends privacy-safe
+`CommandEvent` values to a non-blocking `TelemetrySink`. Reconnect, replay, and fan-out lag
+cannot create duplicate events in one run. Unsupported or ambiguous activity is labeled
+`partial` or `unavailable`; missing commands are never fabricated.
 
-Raw command text is transient classifier input only. Persisted command facts are limited to an
+The default server constructor intentionally installs `NoopTelemetrySink` and no classifier.
+`ChannelTelemetrySink` is the tested integration seam for Phase 03's durable worker: it uses a
+bounded `try_send` path and counts drops without blocking PTY reads or writes. Phase 02 does not
+create `telemetry.db`, persist command events, expose usage API routes, or run a telemetry
+worker; those are deliberate Phase 03 responsibilities.
+
+Raw command text is transient classifier input only. The Phase 02 event contract limits command
+facts to an
 allowlisted executable/category, argument count, project identity, timestamps, duration, exit
 status, capture quality/version, and a keyed HMAC fingerprint for repeat counting. Telemetry
 never stores command text, argv, cwd strings, environment values, PTY output, AI prompts,
