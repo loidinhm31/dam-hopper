@@ -134,7 +134,7 @@ describe("TopNav", () => {
 
     expect(markup).toContain("grid-cols-2");
     expect(markup).toContain("sm:hidden");
-    expect(markup).toContain("col-span-2");
+    expect(markup).not.toContain("col-span-2");
     expect(markup).toContain('data-mobile-menu-open="true"');
     expect(markup).toContain("resources");
     expect(markup).toContain("Manage server connections");

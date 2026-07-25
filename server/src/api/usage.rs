@@ -13,9 +13,11 @@ use crate::{
     state::AppState,
     telemetry::{
         queries::{
-            add_tokens, add_usage, aggregate_command_rollups, aggregate_commands,
-            aggregate_token_correlation, aggregate_token_rollups, aggregate_tokens, health_value,
-            TokenAggregate, UsageAggregate,
+            add_tokens, add_usage, aggregate_command_dimensions, aggregate_command_rollups,
+            aggregate_commands, aggregate_detail_metrics, aggregate_token_correlation,
+            aggregate_token_rollups, aggregate_tokens, aggregate_usage_series, health_value,
+            DetailUsageMetrics, TokenAggregate, UsageAggregate, UsageDimension,
+            UsageDimensionAggregate, UsageTimeBucket,
         },
         CaptureQuality, CodexModel, SafeIdentifier, ShellKind, TelemetryCmd, TelemetryStore,
         UsageQuery, TELEMETRY_SCHEMA_VERSION,
@@ -51,6 +53,10 @@ struct SummaryResponse {
     range: UsageRange,
     terminal: UsageAggregate,
     codex: Option<TokenAggregate>,
+    time_series: Vec<UsageTimeBucket>,
+    categories: Vec<UsageDimensionAggregate>,
+    projects: Vec<UsageDimensionAggregate>,
+    detail_metrics: Option<DetailUsageMetrics>,
     coverage: Coverage,
     health: Health,
 }
@@ -157,11 +163,11 @@ pub async fn summary(
         aggregate_commands(&store, &detail_query).map_err(store_error)?,
         aggregate_command_rollups(&store, &query, boundary).map_err(store_error)?,
     );
-    let codex = if query.project.is_some()
-        || query.shell.is_some()
-        || query.capture_quality.is_some()
-        || query.category.is_some()
-    {
+    let codex_available = query.project.is_none()
+        && query.shell.is_none()
+        && query.capture_quality.is_none()
+        && query.category.is_none();
+    let codex = if !codex_available {
         None
     } else {
         add_tokens(
@@ -170,6 +176,49 @@ pub async fn summary(
         )
     };
     let detail_only = range.from >= boundary;
+    let bucket_ms = if range.bucket == "hour" {
+        HOUR_MS
+    } else {
+        DAY_MS
+    };
+    let time_series = fill_usage_series(
+        aggregate_usage_series(&store, &detail_query, &query, boundary, bucket_ms)
+            .map_err(store_error)?,
+        range.from,
+        range.to,
+        bucket_ms,
+    );
+    let time_series = if codex_available {
+        time_series
+    } else {
+        time_series
+            .into_iter()
+            .map(|mut point| {
+                point.codex = None;
+                point
+            })
+            .collect()
+    };
+    let categories = aggregate_command_dimensions(
+        &store,
+        &detail_query,
+        &query,
+        boundary,
+        UsageDimension::Category,
+    )
+    .map_err(store_error)?;
+    let projects = aggregate_command_dimensions(
+        &store,
+        &detail_query,
+        &query,
+        boundary,
+        UsageDimension::Project,
+    )
+    .map_err(store_error)?;
+    let detail_metrics = detail_only
+        .then(|| aggregate_detail_metrics(&store, &detail_query))
+        .transpose()
+        .map_err(store_error)?;
     // Daily rollups intentionally omit correlation detail. Null is more honest
     // than suggesting historical usage was exclusively unattributed.
     let codex_correlation = if detail_only && codex.is_some() {
@@ -191,6 +240,10 @@ pub async fn summary(
         range,
         terminal,
         codex,
+        time_series,
+        categories,
+        projects,
+        detail_metrics,
         coverage: Coverage {
             detail_only,
             capture_quality_filter: query.capture_quality.map(quality_name).map(str::to_string),
@@ -468,6 +521,32 @@ fn now_ms() -> i64 {
 fn detail_boundary(now: i64, retention_days: u16) -> i64 {
     let raw = now.saturating_sub(i64::from(retention_days) * DAY_MS);
     raw - raw.rem_euclid(DAY_MS)
+}
+
+fn fill_usage_series(
+    points: Vec<UsageTimeBucket>,
+    from: i64,
+    to: i64,
+    bucket_ms: i64,
+) -> Vec<UsageTimeBucket> {
+    let mut points = points.into_iter().peekable();
+    let mut start = from - from.rem_euclid(bucket_ms);
+    let mut filled = Vec::new();
+    while start < to {
+        if points
+            .peek()
+            .is_some_and(|point| point.start_utc_ms == start)
+        {
+            filled.push(points.next().expect("peeked usage series point"));
+        } else {
+            filled.push(UsageTimeBucket {
+                start_utc_ms: start,
+                ..UsageTimeBucket::default()
+            });
+        }
+        start = start.saturating_add(bucket_ms);
+    }
+    filled
 }
 fn parse_delete_range(from: Option<i64>, to: Option<i64>) -> Result<Option<(i64, i64)>, ApiError> {
     match (from, to) {

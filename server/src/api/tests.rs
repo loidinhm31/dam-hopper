@@ -16,8 +16,11 @@ use crate::{
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
     telemetry::{
+        load_or_create_hmac_key, normalize_command,
         worker::{TelemetryControl, TelemetryHandle},
-        TelemetryKeyRing, TelemetryStore,
+        CaptureQuality, CommandEvent, CommandEventId, CommandOutcome, ShellKind, TelemetryCmd,
+        TelemetryKeyRing, TelemetryStore, TerminalRunEvent, TerminalRunId,
+        TELEMETRY_SCHEMA_VERSION,
     },
     tunnel::{CloudflaredDriver, TunnelSessionManager},
 };
@@ -39,6 +42,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -1578,6 +1582,46 @@ async fn usage_summary_rejects_unknown_projects_and_injection_like_filters() {
 }
 
 #[tokio::test]
+async fn usage_summary_returns_filled_aggregate_series_and_detail_metrics() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    activate_telemetry(&state, &tmp);
+    let timestamp = i64::try_from(now_ms())
+        .unwrap()
+        .saturating_sub(30 * 60 * 1_000);
+    write_usage_command(&state, &tmp, timestamp, 1, "git status", 100);
+    write_usage_command(&state, &tmp, timestamp + 1_000, 2, "git status", 300);
+
+    let response = get(state, "/api/usage/summary?window=24h&bucket=hour").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let series = value["timeSeries"].as_array().unwrap();
+    assert_eq!(
+        series.len(),
+        25,
+        "24h window includes its current UTC bucket"
+    );
+    assert_eq!(
+        series
+            .iter()
+            .map(|bucket| bucket["terminal"]["commandCount"].as_u64().unwrap())
+            .sum::<u64>(),
+        2
+    );
+    assert_eq!(value["categories"][0]["name"], "git");
+    assert_eq!(value["projects"][0]["name"], "unassigned");
+    assert_eq!(value["detailMetrics"]["durationP50Ms"], 100);
+    assert_eq!(value["detailMetrics"]["durationP95Ms"], 300);
+    assert_eq!(value["detailMetrics"]["repeatedCommandCount"], 1);
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!text.contains("fingerprint"));
+    assert!(!text.contains("git status"));
+}
+
+#[tokio::test]
 async fn usage_settings_apply_pause_atomically_and_delete_requires_confirmation() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
@@ -1621,6 +1665,53 @@ fn activate_telemetry(state: &AppState, tmp: &TempDir) {
     let keys =
         Arc::new(TelemetryKeyRing::load_or_create(tmp.path().join("telemetry-key")).unwrap());
     state.set_telemetry(TelemetryHandle::active(control, store, None).with_hmac_keys(keys));
+}
+
+fn write_usage_command(
+    state: &AppState,
+    tmp: &TempDir,
+    timestamp: i64,
+    sequence: u64,
+    command: &str,
+    duration_ms: u64,
+) {
+    let key = load_or_create_hmac_key(&tmp.path().join("usage-test-key")).unwrap();
+    let normalized = normalize_command(command, &key);
+    let run_id = TerminalRunId(Uuid::new_v4());
+    let store = state
+        .telemetry
+        .read()
+        .unwrap()
+        .store
+        .as_ref()
+        .unwrap()
+        .clone();
+    store
+        .write_batch(vec![
+            TelemetryCmd::TerminalRun(TerminalRunEvent {
+                schema_version: TELEMETRY_SCHEMA_VERSION,
+                run_id,
+                project: None,
+                shell: ShellKind::Bash,
+                started_at_utc_ms: timestamp,
+                ended_at_utc_ms: None,
+                capture_quality: CaptureQuality::Rich,
+            }),
+            TelemetryCmd::Command(CommandEvent {
+                schema_version: TELEMETRY_SCHEMA_VERSION,
+                id: CommandEventId { run_id, sequence },
+                occurred_at_utc_ms: timestamp,
+                duration_ms: Some(duration_ms),
+                exit_code: Some(0),
+                outcome: CommandOutcome::Succeeded,
+                category: normalized.category,
+                executable: normalized.executable,
+                argument_count: normalized.argument_count,
+                fingerprint: normalized.fingerprint,
+                capture_quality: CaptureQuality::Rich,
+            }),
+        ])
+        .unwrap();
 }
 
 #[test]

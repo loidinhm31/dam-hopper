@@ -13,8 +13,8 @@
 - Date: 2026-07-18
 - Description: Add a shared browser/native `/usage` page, compact top navigation, dashboard teaser, and explicit privacy controls.
 - Priority: P2
-- Implementation status: Pending
-- Review status: Pending
+- Implementation status: Complete (approval recorded 2026-07-26)
+- Review status: Approved (final independent review 9/10, no critical findings or warnings, 2026-07-26)
 - Effort: 40h
 
 ## Key Insights
@@ -82,13 +82,36 @@ Navigation keeps `BASE_NAV` as the single source. Add `/usage` with a compact la
 
 ## Todo list
 
-- [ ] Shared route works in browser and native hosts.
-- [ ] Summary query is bounded and cache-key complete.
-- [ ] Coverage/unavailable states are explicit.
-- [ ] Charts have table/ARIA equivalents.
-- [ ] Nav remains usable at narrow widths and no terminal remount occurs.
-- [ ] Destructive controls require confirmation.
-- [ ] No raw data in client logs/localStorage.
+- [x] Shared lazy `/usage` route, typed aggregate DTOs, dashboard teaser, and compact navigation entry implemented.
+- [x] Summary API corrected with bounded UTC bucket fill plus category/project aggregates; privacy-safe detail metrics are nullable outside detail retention.
+- [x] Coverage/unavailable states and accessible SVG chart/table equivalents implemented.
+- [x] Pause and destructive delete confirmation implemented; custom deletion now uses UTC date boundaries.
+- [x] No raw event data added to client state, logs, or storage.
+- [x] Add project-exclusion editor using the existing protected settings mutation.
+- [x] Add focused `/usage` browser coverage for route reload, filter URL state, keyboard access, UTC range deletion, and narrow navigation.
+- [x] Re-run independent review, obtain explicit approval, and finalize.
+
+## 2026-07-26 Review Follow-up
+
+Initial review found no raw-data or SQL-injection leak. Fixed during the review cycle:
+
+- Suppress Codex bucket data whenever terminal-only filters make top-level Codex totals unavailable.
+- Use UTC date-only inputs for custom/destructive ranges so requests meet the server's UTC-midnight contract.
+- Do not add cached input to total tokens; show cached and reasoning components separately.
+- Prevent desktop navigation links from becoming inaccessible through hidden overflow.
+
+Remaining implementation work is limited to the project-exclusion editor and dedicated browser coverage above. Re-benchmark detail percentile/repeat queries at the Phase 07 100k-row gate.
+
+## 2026-07-26 Finalization Approval
+
+Phase 06 completion was explicitly approved on 2026-07-26 after a final independent review scored the implementation 9/10 with no critical findings or warnings.
+
+Verification completed:
+
+- UI build passed.
+- 702 UI tests passed.
+- 49 browser tests passed.
+- 8 focused Rust tests passed.
 
 ## Success Criteria
 

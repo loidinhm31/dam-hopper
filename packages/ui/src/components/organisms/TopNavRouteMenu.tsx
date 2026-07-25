@@ -20,7 +20,7 @@ export function TopNavRouteMenu({
       <nav
         aria-label="Primary"
         className={cn(
-          "items-center gap-1 overflow-hidden transition-all duration-300 ease-in-out",
+          "items-center gap-1 overflow-x-auto transition-all duration-300 ease-in-out",
           isCompactWorkspace ? "hidden sm:flex" : "flex",
           collapsed
             ? "max-w-0 pointer-events-none opacity-0"
