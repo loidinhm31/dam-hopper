@@ -378,8 +378,10 @@ port = 4811
 
 TOML uses snake_case keys; the corresponding API representation uses camelCase (for example,
 `dbPath`, `detailRetentionDays`, and `aggregateRetentionDays`). The telemetry database is
-separate from session persistence. Telemetry stores bounded, privacy-filtered metadata rather
-than command text, prompts, responses, or tool output; see the [telemetry architecture notes](./system-architecture.md#terminal-usage-analytics-planned).
+separate from session persistence. When enabled, startup creates/opens it and starts a bounded
+worker; initialization failures disable analytics only. SQLite and WAL/SHM files are restricted
+to owner access on Unix. Telemetry stores bounded, privacy-filtered metadata rather than command
+text, prompts, responses, or tool output; see the [telemetry architecture notes](./system-architecture.md#terminal-usage-analytics-phase-03-persistence).
 
 ### Diagnostics Storage
 

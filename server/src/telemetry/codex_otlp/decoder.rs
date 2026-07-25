@@ -60,7 +60,10 @@ fn is_response_completed(record: &LogRecord) -> bool {
         && string_attribute(&record.attributes, "event.kind") == Some(RESPONSE_COMPLETED)
 }
 
-fn decode_record(record: &LogRecord, source_version: Option<CodexVersion>) -> Option<DecodedCodexUsage> {
+fn decode_record(
+    record: &LogRecord,
+    source_version: Option<CodexVersion>,
+) -> Option<DecodedCodexUsage> {
     let milliseconds = timestamp_millis(record);
     Some(DecodedCodexUsage {
         occurred_at_utc_ms: milliseconds,
@@ -77,7 +80,9 @@ fn decode_record(record: &LogRecord, source_version: Option<CodexVersion>) -> Op
 
 fn timestamp_millis(record: &LogRecord) -> Option<i64> {
     let milliseconds = record.time_unix_nano / 1_000_000;
-    if milliseconds > 0 && milliseconds <= i64::MAX as u64 { return Some(milliseconds as i64); }
+    if milliseconds > 0 && milliseconds <= i64::MAX as u64 {
+        return Some(milliseconds as i64);
+    }
     chrono::DateTime::parse_from_rfc3339(string_attribute(&record.attributes, "event.timestamp")?)
         .ok()
         .map(|timestamp| timestamp.timestamp_millis())

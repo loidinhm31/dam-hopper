@@ -37,12 +37,12 @@
 │  │  ├─ /api/fs/* → [conditional] List/read/stat (per-proj)│
 │  │  ├─ /api/agent-store/* → Distribution/import           │
 │  │  ├─ /api/workspace/* → Config switching                │
-│  │  ├─ /api/usage/* → [planned] Aggregate terminal usage  │
+│  │  ├─ /api/usage/* → [Phase 04] Aggregate terminal usage │
 │  │  ├─ /api/browser-debug/* → Ephemeral artifacts         │
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
 │     ├─ PtySessionManager (Arc<Mutex<Map<uuid, ...>>>)     │
-│     ├─ TelemetryStore/Worker (planned, separate SQLite)   │
+│     ├─ TelemetryStore/Worker (opt-in, separate SQLite)     │
 │     ├─ BrowserDebugArtifactManager (ephemeral, TTL/sweep)  │
 │     ├─ FsSubsystem (Arc<Mutex<ProjectSandbox>>)           │
 │     ├─ AgentStoreService (symlink distribution)           │
@@ -226,7 +226,7 @@ local-only, and provides clear/disable controls. Desktop is the first support bo
 mobile direct-write paths remain explicitly unsupported until all input routes share the
 same controller.
 
-### terminal usage analytics (Phase 02 capture seam; Phase 03 persistence planned)
+### terminal usage analytics (Phase 03 persistence)
 
 Terminal analytics extends the validated shell lifecycle; it does not infer commands from
 xterm input, PTY output, silence, or browser history. Scope is DamHopper-launched,
@@ -244,7 +244,7 @@ flowchart LR
   API --> Page[Compact Usage page]
 ```
 
-Phase 02 implements the capture boundary only. Bash, Zsh, and Fish adapters emit a versioned
+Phase 02 implements the capture boundary. Bash, Zsh, and Fish adapters emit a versioned
 completion marker with the observed exit status; the bounded `ShellLifecycle` parser validates
 the status, preserves legacy status-less markers, and exposes adapter capabilities. The PTY
 manager assigns a terminal run UUID and monotonic command sequence, timestamps validated
@@ -253,11 +253,11 @@ submission/completion events, classifies only simple commands, and sends privacy
 cannot create duplicate events in one run. Unsupported or ambiguous activity is labeled
 `partial` or `unavailable`; missing commands are never fabricated.
 
-The default server constructor intentionally installs `NoopTelemetrySink` and no classifier.
-`ChannelTelemetrySink` is the tested integration seam for Phase 03's durable worker: it uses a
-bounded `try_send` path and counts drops without blocking PTY reads or writes. Phase 02 does not
-create `telemetry.db`, persist command events, expose usage API routes, or run a telemetry
-worker; those are deliberate Phase 03 responsibilities.
+Telemetry is opt-in. When enabled at startup, the server opens the separate `telemetry.db`,
+loads a 32-byte HMAC key from the config directory, starts a dedicated worker, and injects the
+bounded `ChannelTelemetrySink` into PTY sessions. Disabled, unavailable, corrupt, or failed
+telemetry initialization falls back to a no-op sink while PTY operation continues. Shutdown sends
+the worker a drain command and performs a passive WAL checkpoint.
 
 Raw command text is transient classifier input only. The Phase 02 event contract limits command
 facts to an
@@ -278,10 +278,18 @@ and privacy semantics. Planned logical tables:
 | `daily_usage_rollups` | UTC daily counts/outcomes/token sums retained after detail purge           |
 | `telemetry_health`    | Dropped, rejected, invalid, purge, and checkpoint counters                 |
 
-The store uses mode `0600`, WAL, a busy timeout, one bounded non-blocking writer, and a separate
-read connection. Database lock/full/error paths drop or coalesce telemetry and increment health
-counters; they never block PTY reads or writes. Detail retention defaults to 90 days and remains
-configurable. Purge, per-project exclusion, global pause, and delete-all are server operations.
+The store uses mode `0600` for the database and WAL/SHM sidecars, WAL, `synchronous=NORMAL`,
+foreign keys, a 5-second busy timeout, one bounded non-blocking writer, and a separate read-only
+connection. Database lock/full/error paths never block PTY reads or writes; worker failures do not
+log event payloads. The worker batches up to
+100 commands or 250 ms. Duplicate commands (`run_id`, `sequence`) and agent events (`dedupe_id`)
+are ignored. Detail retention defaults to 90 days; expired command/token detail is rolled into
+UTC daily buckets before deletion. Optional aggregate retention removes old buckets.
+Project exclusions and the runtime enabled gate are checked before queueing.
+
+The HMAC key is owner-readable only (`0600`), rejects symlinks/permissive existing files on Unix,
+and is never stored in SQLite. Delete-all clears detail, rollups, and health rows; key rotation
+must be coupled to that authenticated destructive operation.
 
 Codex integration is optional and disabled by default. It uses a separate OTLP/HTTP listener
 bound to `127.0.0.1` with a generated bearer secret, not MCP or a model-visible tool. Only
@@ -289,7 +297,7 @@ allowlisted metadata and token fields are accepted; prompt/output fields are rej
 upstream client enables them. Missing telemetry is `unavailable`, not zero. Correlation is exact
 only with an explicit provider/run mapping; project/time fallback is labeled approximate.
 
-The protected usage API returns aggregates only. It does not expose raw event rows. The shared UI
+The protected usage API (Phase 04) returns aggregates only. It does not expose raw event rows. The shared UI
 adds a `/usage` route plus a dashboard teaser. Navigation becomes more compact and uses responsive
 overflow rather than placing full analytics on the operational dashboard.
 
