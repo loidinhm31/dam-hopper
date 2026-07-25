@@ -1,0 +1,92 @@
+[[projects]]
+name = "clickstream"
+path = "/mnt/data/ws/sharing/clickstream"
+restart = "never"
+restart_max_retries = 5
+terminals = []
+type = "maven"
+
+[[projects]]
+name = "compare-diff"
+path = "/mnt/data/ws/sharing/compare-diff"
+restart = "never"
+restart_max_retries = 5
+terminals = []
+type = "pnpm"
+
+[[projects]]
+name = "dam-hopper"
+path = "/mnt/data/ws/sharing/dam-hopper"
+restart = "never"
+restart_max_retries = 5
+terminals = []
+type = "pnpm"
+
+[[projects]]
+name = "glean-oak"
+path = "/mnt/data/ws/sharing/glean-oak"
+restart = "never"
+restart_max_retries = 5
+terminals = []
+type = "pnpm"
+
+[projects.commands]
+app = "cd glean-oak-app && pnpm dev"
+server = "cd glean-oak-server && cargo run"
+
+[[projects]]
+name = "highlight-computer-based-ielts-chrome-ext"
+path = "highlight-computer-based-ielts-chrome-ext"
+restart = "never"
+restart_max_retries = 5
+terminals = []
+type = "npm"
+
+[[projects]]
+name = "devkit"
+path = "/mnt/data/ws/sharing/devkit"
+restart = "never"
+restart_max_retries = 5
+terminals = []
+type = "custom"
+
+[[projects]]
+name = "nonclaw"
+path = "/home/loidinh/WS/nonclaw"
+restart = "never"
+restart_max_retries = 5
+terminals = []
+type = "cargo"
+
+[[projects]]
+env_file = ".env"
+name = "robo-fleet-dora-rs"
+path = "/mnt/data/ws/sharing/robo-fleet-dora-rs"
+restart = "never"
+restart_max_retries = 5
+terminals = []
+type = "cargo"
+
+[projects.commands]
+orchestra = "dora start orchestra/orchestra-dataflow.yml --name orchestra"
+rover-kiwi = "dora start rover-kiwi/rover-kiwi-dataflow.yml --name rover-kiwi"
+
+[[projects]]
+name = "ai-engineering-from-scratch"
+path = "/mnt/data/ws/sharing/ai-engineering-from-scratch"
+restart = "never"
+restart_max_retries = 5
+terminals = []
+type = "custom"
+
+[[projects]]
+name = "acowo"
+path = "/mnt/data/ws/sharing/aicoworker"
+restart = "never"
+restart_max_retries = 5
+terminals = []
+type = "custom"
+
+[workspace]
+name = "sharing"
+root = "."

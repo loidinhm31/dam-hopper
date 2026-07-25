@@ -9,6 +9,7 @@
 │  ├─ Tauri native host (apps/native)                        │
 │  ├─ Shared React UI package (packages/ui)                  │
 │  ├─ Shared runtime utilities (packages/shared)             │
+│  ├─ Cooperative browser-debug preview + picker             │
 │  ├─ fetch(/api/*) for REST queries                         │
 │  └─ WebSocket(/ws) for terminal I/O + events               │
 └──────────────────────┬──────────────────────────────────────┘
@@ -37,10 +38,12 @@
 │  │  ├─ /api/agent-store/* → Distribution/import           │
 │  │  ├─ /api/workspace/* → Config switching                │
 │  │  ├─ /api/usage/* → [planned] Aggregate terminal usage  │
+│  │  ├─ /api/browser-debug/* → Ephemeral artifacts         │
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
 │     ├─ PtySessionManager (Arc<Mutex<Map<uuid, ...>>>)     │
 │     ├─ TelemetryStore/Worker (planned, separate SQLite)   │
+│     ├─ BrowserDebugArtifactManager (ephemeral, TTL/sweep)  │
 │     ├─ FsSubsystem (Arc<Mutex<ProjectSandbox>>)           │
 │     ├─ AgentStoreService (symlink distribution)           │
 │     ├─ CommandRegistry (BM25 search)                      │
@@ -49,6 +52,10 @@
 ```
 
 ## Module Breakdown
+
+### Browser debug artifacts (Phase 2)
+
+The authenticated `/api/browser-debug/artifacts` routes provide ephemeral handoff storage for browser-debug tooling. `BrowserDebugArtifactManager` keeps metadata in memory and writes generated JSON/PNG paths beneath a temporary root; it exposes create, one-shot PNG upload, and delete only—there is intentionally no read/list route. Create accepts a live `terminalId` plus validated `selection` JSON (64 KiB request cap). PNG upload requires `image/png`, is capped at 4 MiB, and performs structural plus decoded-image verification before writing. Artifacts expire after 10 minutes, a 60-second sweeper removes expired files, and shutdown cleanup removes the root.
 
 ### config/
 
@@ -392,6 +399,96 @@ The server now keeps a local-only diagnostics store for backend events and expos
 - `terminalTailBytes` controls how much tail data is returned per session
 - exported files use `dam-hopper-diagnostics-{timestamp}.json`
 - terminal tails may still contain sensitive local/dev output even after best-effort redaction; exported bundles should be reviewed before sharing
+
+### Cooperative browser debug preview
+
+The browser host exposes a global Browser tool for controlled development
+applications. V1 does not inspect arbitrary public pages. Supported preview
+origins are exact loopback origins and exact `Ready` tunnel URLs returned by
+the connected server's `TunnelSessionManager`.
+
+The DamHopper Browser Debug extension injects a framework-neutral, dev-only
+content script into the cross-origin iframe. The target application does not
+install anything. The extension owns element highlighting and
+DOM/accessibility extraction. Parent and extension communicate through a
+versioned `postMessage` protocol with WindowProxy/source checks, a per-load
+nonce, request IDs, schema validation, and bounded payloads. The target route
+must still permit iframe embedding through its browser policy; DamHopper does
+not bypass `X-Frame-Options` or restrictive CSP.
+
+The web build packages the extension as
+`/browser-debug-extension/dam-hopper-browser-debug.zip`. When the Browser
+tool cannot complete the bridge handshake, it offers this download and directs
+the client to extract it and use Chromium's `chrome://extensions` Developer
+mode / Load unpacked flow. The target application remains unmodified; a normal
+website cannot silently install a browser extension.
+
+```mermaid
+flowchart LR
+    U[User opens Browser tool] --> A{Allowed origin?}
+    A -->|No| X[Reject preview]
+    A -->|Loopback or active tunnel| F[Controlled app iframe]
+    F <--> B[Dev-only bridge]
+    B --> S[Bounded DOM and ARIA selection]
+    U --> C[Explicit share-current-tab gesture]
+    C --> D{Capture available?}
+    D -->|Yes| P[Crop selected iframe region]
+    D -->|No or denied| M[DOM-only or manual image fallback]
+    S --> R[Selection preview]
+    P --> R
+    M --> R
+    R -->|Explicit attach| E[Authenticated bundle API]
+    E --> T[Ephemeral JSON and PNG, mode 0600]
+    T --> W[Insert generated paths into chosen PTY]
+```
+
+**Client state and UI rules:**
+
+- `WorkspacePage` registers Browser beside existing tool definitions for IDE,
+  terminal, and compact layouts without creating another PTY lifecycle.
+- One `BrowserDebugKeepAliveHost` owns the iframe for the lifetime of
+  `WorkspacePage`. Visible Browser panels register viewport containers; the
+  host imperatively reparents the same iframe DOM node between the active
+  viewport and a hidden parking container. Tool close, IDE/terminal switching,
+  and compact surface changes do not recreate the iframe or its browsing
+  context. Leaving Workspace, changing server profile, or changing the preview
+  URL disposes it and invalidates the bridge nonce.
+- Preview metadata is browser-local. Captured `MediaStream` objects are never
+  persisted; closing the visible Browser panel stops all capture tracks for
+  privacy even though the iframe stays alive in its parking container.
+- `getDisplayMedia()` is invoked only from a user gesture. Current-tab and
+  browser-surface options are hints, not silent permission or proof of the
+  selected surface. Capture failure degrades to semantic metadata plus manual
+  image upload.
+- Page text renders only as React text. Input values, password/file controls,
+  cookies, storage, auth data, event attributes, hidden surrounding DOM, and
+  unbounded HTML are excluded.
+- Captured content and artifact paths are excluded from frontend diagnostics.
+
+**Artifact and terminal handoff rules:**
+
+- `BrowserDebugArtifactManager` owns a server-instance temporary directory and
+  an in-memory metadata map. Bundle files are random, mode `0600`, size-capped,
+  TTL-bound, and removed on explicit discard, expiry sweep, and server shutdown.
+- The protected browser-debug API accepts one bounded structured selection and
+  optional cropped PNG. It never accepts a client-provided filesystem path.
+- The response includes server-generated bundle paths only after both files are
+  committed. The selected PTY must still be mounted/live and is addressed by
+  stable `sessionId`.
+- Terminal insertion contains generated paths and an untrusted-data warning,
+  not raw page content. Strip CR/LF, C0/C1, ESC/CSI/OSC/DCS sequences; never
+  append Enter or auto-submit.
+- Browser-debug JSON/PNG data never enters diagnostic JSONL, diagnostic export,
+  terminal replay, project roots, or the persistence database.
+
+**Failure invariants:**
+
+- iframe navigation invalidates the nonce and selection;
+- a stopped/replaced tunnel immediately removes its origin from the allowlist;
+- stale, dead, or unmounted terminal targets are safe no-ops;
+- capture denial never blocks DOM-only inspection;
+- disconnect/reconnect does not extend bundle TTL or expose bundles to a
+  different server profile.
 
 ### apps/native
 
