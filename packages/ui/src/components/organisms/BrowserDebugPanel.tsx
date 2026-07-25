@@ -1,5 +1,6 @@
 import { useEffect, type RefObject } from "react";
 import {
+  Download,
   Maximize2,
   Minimize2,
   MousePointer2,
@@ -70,10 +71,56 @@ const STATUS_COPY: Record<BrowserBridgeStatus, string> = {
   error: "Bridge connection failed",
 };
 
+const BROWSER_DEBUG_EXTENSION_DOWNLOAD =
+  "./browser-debug-extension/dam-hopper-browser-debug.zip";
+
 function statusClass(status: BrowserBridgeStatus) {
   if (status === "ready") return "bg-emerald-500";
   if (status === "error" || status === "unsupported") return "bg-amber-500";
   return "bg-[var(--color-text-muted)]";
+}
+
+function BrowserDebugExtensionSetup() {
+  return (
+    <aside
+      aria-label="Browser Debug extension setup"
+      className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 px-3 py-3 text-xs text-[var(--color-text)]"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-medium">Browser Debug extension required</p>
+        <a
+          href={BROWSER_DEBUG_EXTENSION_DOWNLOAD}
+          download="dam-hopper-browser-debug.zip"
+          className="inline-flex h-7 items-center gap-1.5 rounded bg-[var(--color-primary)] px-2.5 font-medium text-white transition-colors hover:bg-[var(--color-primary-hover)]"
+        >
+          <Download className="h-3.5 w-3.5" aria-hidden="true" />
+          Download extension ZIP
+        </a>
+      </div>
+      <ol className="mt-2 list-decimal space-y-1 pl-4 text-[var(--color-text-muted)]">
+        <li>Extract the downloaded ZIP.</li>
+        <li>
+          Open{" "}
+          <code className="font-mono text-[var(--color-text)]">
+            chrome://extensions
+          </code>{" "}
+          in this browser.
+        </li>
+        <li>
+          Enable Developer mode, select Load unpacked, then choose the extracted{" "}
+          <code className="font-mono text-[var(--color-text)]">
+            dam-hopper-browser-debug
+          </code>{" "}
+          folder.
+        </li>
+        <li>Return here and click Load again.</li>
+      </ol>
+      <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+        This is a one-time client-browser setup. The target app does not need
+        any package or code change.
+      </p>
+    </aside>
+  );
 }
 
 export function stopBrowserPickerOnEscape(
@@ -210,16 +257,29 @@ export function BrowserDebugPanel({
           />
           <span className="truncate">{STATUS_COPY[bridgeStatus]}</span>
         </p>
-        {onStartPicker && bridgeStatus === "ready" && (
-          <Button
-            type="button"
-            size="sm"
-            variant={pickerActive ? "secondary" : "ghost"}
-            onClick={pickerActive ? onStopPicker : onStartPicker}
+        {bridgeStatus === "unsupported" ? (
+          <a
+            href={BROWSER_DEBUG_EXTENSION_DOWNLOAD}
+            download="dam-hopper-browser-debug.zip"
+            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded bg-[var(--color-primary)] px-2.5 font-medium text-white transition-colors hover:bg-[var(--color-primary-hover)]"
+            title="Download Browser Debug extension"
           >
-            <MousePointer2 className="h-3.5 w-3.5" aria-hidden="true" />
-            {pickerActive ? "Cancel selection" : "Select element"}
-          </Button>
+            <Download className="h-3.5 w-3.5" aria-hidden="true" />
+            <span className="hidden sm:inline">Download extension</span>
+          </a>
+        ) : (
+          onStartPicker &&
+          bridgeStatus === "ready" && (
+            <Button
+              type="button"
+              size="sm"
+              variant={pickerActive ? "secondary" : "ghost"}
+              onClick={pickerActive ? onStopPicker : onStartPicker}
+            >
+              <MousePointer2 className="h-3.5 w-3.5" aria-hidden="true" />
+              {pickerActive ? "Cancel selection" : "Select element"}
+            </Button>
+          )
         )}
       </div>
 
@@ -231,6 +291,7 @@ export function BrowserDebugPanel({
           {error}
         </p>
       )}
+      {bridgeStatus === "unsupported" && <BrowserDebugExtensionSetup />}
       <div
         ref={viewportRef}
         className="min-h-0 flex-1 bg-[var(--color-surface-2)]"

@@ -77,6 +77,26 @@ describe("BrowserDebugPanel", () => {
     expect(markup).not.toContain("Select element");
   });
 
+  it("offers the bundled extension download and setup steps when the bridge is unavailable", () => {
+    const markup = renderPanel({
+      bridgeStatus: "unsupported",
+      error: "No Browser Debug response from http://localhost:3001.",
+    });
+
+    expect(markup).toContain("Browser Debug extension required");
+    expect(markup).toContain("Download extension ZIP");
+    expect(markup).toContain("Download extension");
+    expect(markup).toContain("Download Browser Debug extension");
+    expect(markup).toContain(
+      'href="./browser-debug-extension/dam-hopper-browser-debug.zip"',
+    );
+    expect(markup).toContain("chrome://extensions");
+    expect(markup).toContain("Load unpacked");
+    expect(markup).toContain(
+      "target app does not need any package or code change",
+    );
+  });
+
   it("renders explicit local-only capture and manual-image actions", () => {
     const markup = renderPanel({
       selection,

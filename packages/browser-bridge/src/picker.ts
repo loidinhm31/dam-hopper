@@ -224,7 +224,7 @@ function createOutline(document: Document): HTMLDivElement {
   return outline;
 }
 
-/** Creates a target-side, DOM-only selection picker. */
+/** Creates a DOM-only selection picker for the Browser Debug extension. */
 export function createPicker(options: PickerOptions): PickerController {
   let active = false;
   let documentRef: Document | null = null;

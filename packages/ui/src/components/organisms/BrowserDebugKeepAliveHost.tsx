@@ -32,8 +32,26 @@ export interface BrowserDebugKeepAliveHandle {
   stopPicker: () => void;
 }
 
+const BROWSER_DEBUG_LOG_PREFIX = "[DamHopper Browser Debug]";
+
+function shortId(value: unknown): string | null {
+  return typeof value === "string" ? value.slice(0, 8) : null;
+}
+
+function messageDetails(value: unknown): Record<string, unknown> {
+  if (value === null) return { dataType: "null" };
+  if (typeof value !== "object") return { dataType: typeof value };
+  const record = value as Record<string, unknown>;
+  return {
+    dataType: "object",
+    type: record.type,
+    version: record.version,
+    requestId: shortId(record.requestId),
+  };
+}
+
 /**
- * Keeps one cooperative iframe alive while tool shells change. The iframe is
+ * Keeps one browser iframe alive while tool shells change. The iframe is
  * moved between a visible viewport and this hidden parking container; it is
  * never recreated merely because Browser is hidden, maximized, or changes shell.
  */
@@ -64,6 +82,19 @@ export const BrowserDebugKeepAliveHost = forwardRef<
     if (!iframe || !target || !source || iframe.getAttribute("src") !== target.url)
       return;
 
+    console.info(`${BROWSER_DEBUG_LOG_PREFIX} iframe-load`, {
+      targetUrl: target.url,
+      iframeSrc: iframe.getAttribute("src"),
+      sourceAvailable: Boolean(source),
+      parentOrigin: window.location.origin,
+    });
+
+    // A target reload gets a fresh bridge nonce. Do not let selection or
+    // capture state from the previous document cross that trust boundary.
+    browser.setSelection(null);
+    browser.setPickerActive(false);
+    browser.setError(null);
+
     const nonce = createBrowserDebugId();
     const requestId = createBrowserDebugId();
     if (!nonce || !requestId) {
@@ -83,16 +114,28 @@ export const BrowserDebugKeepAliveHost = forwardRef<
       nonce,
       requestId,
     };
-    source.postMessage(command, target.origin);
+    source.postMessage(command, "*");
+    console.info(`${BROWSER_DEBUG_LOG_PREFIX} connect-sent`, {
+      targetUrl: target.url,
+      targetOrigin: "*",
+      nonce: shortId(nonce),
+      requestId: shortId(requestId),
+    });
     browser.setBridgeStatus("loading");
     if (bridgeTimeoutRef.current) clearTimeout(bridgeTimeoutRef.current);
     bridgeTimeoutRef.current = setTimeout(() => {
       if (trustRef.current?.nonce !== nonce) return;
       trustRef.current = null;
-      iframe.removeAttribute("src");
+      console.warn(`${BROWSER_DEBUG_LOG_PREFIX} handshake-timeout`, {
+        targetUrl: target.url,
+        iframeSrc: iframe.getAttribute("src"),
+        nonce: shortId(nonce),
+        likelyCause:
+          "No browser-extension response, or the browser loaded a network/error page instead of the target",
+      });
       browser.setBridgeStatus("unsupported");
       browser.setError(
-        "Target did not complete the bridge handshake and was unloaded. Check its origin, framing, and bridge configuration.",
+        `No Browser Debug response from ${target.url}. Verify this URL is reachable from the browser (forward the target port over SSH), then load or reload the unpacked DamHopper Browser Debug extension and click Load again.`,
       );
     }, 5_000);
   }, [browser]);
@@ -115,7 +158,13 @@ export const BrowserDebugKeepAliveHost = forwardRef<
         nonce: trust.nonce,
         requestId,
       };
-      source.postMessage(command, trust.origin);
+      source.postMessage(command, "*");
+      console.info(`${BROWSER_DEBUG_LOG_PREFIX} picker-command-sent`, {
+        type,
+        targetOrigin: "*",
+        nonce: shortId(trust.nonce),
+        requestId: shortId(requestId),
+      });
       browser.setPickerActive(type === "dam-hopper:start-picker");
     },
     [browser],
@@ -134,11 +183,33 @@ export const BrowserDebugKeepAliveHost = forwardRef<
     const listener = (event: MessageEvent<unknown>) => {
       const trust = trustRef.current;
       if (!trust) return;
+      const sourceMatches = event.source === trust.source;
+      const details = messageDetails(event.data);
+      const candidateMessage =
+        details.dataType === "object" &&
+        typeof details.type === "string" &&
+        details.type.startsWith("dam-hopper:");
+      if (sourceMatches || candidateMessage) {
+        console.info(`${BROWSER_DEBUG_LOG_PREFIX} message-received`, {
+          eventOrigin: event.origin,
+          sourceMatches,
+          nonceMatches:
+            details.dataType === "object" &&
+            (event.data as Record<string, unknown>).nonce === trust.nonce,
+          ...details,
+        });
+      }
       const message = parseTrustedBrowserBridgeEvent(event, trust);
       if (!message) return;
+      console.info(`${BROWSER_DEBUG_LOG_PREFIX} message-accepted`, {
+        type: message.type,
+        eventOrigin: event.origin,
+        requestId: shortId(message.requestId),
+      });
       if (message.type === "dam-hopper:bridge-ready") {
         if (bridgeTimeoutRef.current) clearTimeout(bridgeTimeoutRef.current);
         browser.setBridgeStatus("ready");
+        browser.setError(null);
         return;
       }
       if (message.type === "dam-hopper:selection") {
@@ -162,6 +233,10 @@ export const BrowserDebugKeepAliveHost = forwardRef<
       iframe.removeAttribute("src");
       return;
     }
+    console.info(`${BROWSER_DEBUG_LOG_PREFIX} target-assigned`, {
+      targetUrl: browser.target.url,
+      targetOrigin: browser.target.origin,
+    });
     iframe.src = browser.target.url;
   }, [browser.target]);
 
@@ -215,7 +290,6 @@ export const BrowserDebugKeepAliveHost = forwardRef<
         title="Browser debug target"
         className="h-full w-full border-0"
         referrerPolicy="no-referrer"
-        sandbox="allow-scripts allow-same-origin"
         onLoad={sendConnect}
       />
     </div>

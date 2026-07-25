@@ -36,6 +36,33 @@ describe("BrowserDebugTerminalHandoff", () => {
     container.remove();
   });
 
+  it("keeps the terminal handoff list from collapsing the browser viewport", async () => {
+    await act(async () => {
+      root.render(
+        <BrowserDebugTerminalHandoff
+          selection={null}
+          targets={Array.from({ length: 12 }, (_, index) => ({
+            sessionId: `shell:${index}`,
+            label: `Demo shell ${index}`,
+            mounted: true,
+            registered: true,
+            alive: true,
+            current: false,
+          }))}
+          onPrepare={vi.fn()}
+          onDiscard={vi.fn()}
+          onInsert={vi.fn()}
+        />,
+      );
+    });
+
+    const handoff = container.querySelector<HTMLElement>(
+      '[aria-label="Send reference to terminal"]',
+    );
+    expect(handoff?.className).toContain("max-h-40");
+    expect(handoff?.className).toContain("overflow-y-auto");
+  });
+
   it("requires review before one control-free reference write", async () => {
     const onInsert = vi.fn();
     const onPrepare = vi.fn().mockResolvedValue({

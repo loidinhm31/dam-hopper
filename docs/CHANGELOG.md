@@ -1,3 +1,15 @@
+## 2026-07-25
+
+- **Controlled browser debug preview and terminal handoff.** Added an
+  extension-assisted iframe Browser tool with bundled client extension setup,
+  bounded DOM/ARIA
+  selection, optional user-mediated tab capture, manual-image fallback, and
+  short-lived authenticated JSON/PNG artifacts. Explicit confirmation inserts
+  only generated artifact paths into a selected live terminal, without page
+  text, terminal controls, or auto-submit. Target reloads invalidate prior
+  selection state; CSP/framing failures, capture denial, stale tunnels, and
+  closed terminals fail closed. [See plan](../plans/260724-0114-browser-debug-embedded-selection/plan.md).
+
 ## 2026-07-16
 
 - **Configurable terminal panel shortcuts.** Added settings-backed shortcuts for
