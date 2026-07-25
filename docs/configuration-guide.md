@@ -209,6 +209,17 @@ DamHopper server token.
 Use exact HTTP loopback origins or currently-ready tunnel origins in the
 Browser URL field. The extension does not bypass a browser-level frame policy;
 a target with `X-Frame-Options` or restrictive CSP may still refuse embedding.
+For a controlled debug route, allow the exact DamHopper parent origin in
+`frame-ancestors` and remove a conflicting `X-Frame-Options` header on that
+route only:
+
+```http
+Content-Security-Policy: frame-ancestors 'self' http://localhost:4800 http://127.0.0.1:4800;
+```
+
+Replace the loopback entries with the exact deployed DamHopper origin(s); do
+not use `*` or a broad tunnel wildcard. The target application remains
+responsible for its own framing policy.
 
 Headless browser tests cover protocol and mocked capture behavior. Before
 release, manually verify the Chromium permission chooser, browser-tab-only
@@ -217,8 +228,9 @@ navigation, and insertion into a real xterm. Those OS-level checks cannot be
 automated by the repository's headless suite.
 
 Selections are bounded DOM/ARIA metadata. Optional screenshots are captured by
-an explicit browser permission gesture or supplied manually, then uploaded as
-an authenticated PNG artifact. Artifacts live outside project roots for 10
+an explicit browser permission gesture or supplied manually. A manual JPEG is
+converted to PNG in the browser; the authenticated artifact API accepts PNG
+bytes only. Artifacts live outside project roots for 10
 minutes, are capped at 64 KiB JSON and 4 MiB PNG, and are removed on delete,
 expiry sweep, or graceful server shutdown. When attached, the PTY receives only
 generated local paths in a single control-free reference; page text is never

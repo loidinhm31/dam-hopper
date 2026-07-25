@@ -53,7 +53,7 @@
 
 ## Module Breakdown
 
-### Browser debug artifacts (Phase 2)
+### Browser debug artifacts (Phase 2; Phase 6 hardened)
 
 The authenticated `/api/browser-debug/artifacts` routes provide ephemeral handoff storage for browser-debug tooling. `BrowserDebugArtifactManager` keeps metadata in memory and writes generated JSON/PNG paths beneath a temporary root; it exposes create, one-shot PNG upload, and delete only—there is intentionally no read/list route. Create accepts a live `terminalId` plus validated `selection` JSON (64 KiB request cap). PNG upload requires `image/png`, is capped at 4 MiB, and performs structural plus decoded-image verification before writing. Artifacts expire after 10 minutes, a 60-second sweeper removes expired files, and shutdown cleanup removes the root.
 
@@ -450,15 +450,16 @@ flowchart LR
 - `WorkspacePage` registers Browser beside existing tool definitions for IDE,
   terminal, and compact layouts without creating another PTY lifecycle.
 - One `BrowserDebugKeepAliveHost` owns the iframe for the lifetime of
-  `WorkspacePage`. Visible Browser panels register viewport containers; the
-  host imperatively reparents the same iframe DOM node between the active
-  viewport and a hidden parking container. Tool close, IDE/terminal switching,
-  and compact surface changes do not recreate the iframe or its browsing
-  context. Leaving Workspace, changing server profile, or changing the preview
-  URL disposes it and invalidates the bridge nonce.
+  `WorkspacePage`. The host keeps the iframe in one fixed overlay and moves
+  that overlay off-screen when no Browser viewport is active; viewport
+  geometry is recalculated on shell, resize, and compact-surface changes. Tool
+  close, IDE/terminal switching, and compact surface changes do not recreate
+  the iframe or its browsing context. Leaving Workspace, changing server
+  profile, or changing the preview URL disposes it and invalidates the bridge
+  nonce.
 - Preview metadata is browser-local. Captured `MediaStream` objects are never
   persisted; closing the visible Browser panel stops all capture tracks for
-  privacy even though the iframe stays alive in its parking container.
+  privacy even though the iframe stays alive in its off-screen overlay.
 - `getDisplayMedia()` is invoked only from a user gesture. Current-tab and
   browser-surface options are hints, not silent permission or proof of the
   selected surface. Capture failure degrades to semantic metadata plus manual
@@ -475,9 +476,9 @@ flowchart LR
   TTL-bound, and removed on explicit discard, expiry sweep, and server shutdown.
 - The protected browser-debug API accepts one bounded structured selection and
   optional cropped PNG. It never accepts a client-provided filesystem path.
-- The response includes server-generated bundle paths only after both files are
-  committed. The selected PTY must still be mounted/live and is addressed by
-  stable `sessionId`.
+- The create response includes the server-generated JSON path; an optional PNG
+  path appears only after the PNG upload commits. The selected PTY must still
+  be mounted/live and is addressed by stable `sessionId`.
 - Terminal insertion contains generated paths and an untrusted-data warning,
   not raw page content. Strip CR/LF, C0/C1, ESC/CSI/OSC/DCS sequences; never
   append Enter or auto-submit.

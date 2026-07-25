@@ -2,6 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserDebugPanel } from "@/components/organisms/BrowserDebugPanel.js";
+import { captureBrowserSelection } from "@/lib/browser-capture.js";
 
 const selection = {
   version: 1 as const,
@@ -74,6 +75,33 @@ describe("BrowserDebugPanel capture controls in Chromium", () => {
       );
     });
     expect(onManualImage).toHaveBeenCalledWith(image);
+  });
+
+  it("stops a mocked non-tab capture before exposing pixels", async () => {
+    const stop = vi.fn();
+    const track = {
+      getSettings: () => ({ displaySurface: "window" }),
+      stop,
+    } as unknown as MediaStreamTrack;
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getDisplayMedia: vi.fn().mockResolvedValue({
+          getVideoTracks: () => [track],
+          getTracks: () => [track],
+        }),
+      },
+    });
+
+    await expect(
+      captureBrowserSelection(selection, {
+        left: 0,
+        top: 0,
+        width: 320,
+        height: 240,
+      }),
+    ).resolves.toEqual({ kind: "wrong-surface" });
+    expect(stop).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
   });
 
   it("clears local capture state when the Browser panel closes", async () => {

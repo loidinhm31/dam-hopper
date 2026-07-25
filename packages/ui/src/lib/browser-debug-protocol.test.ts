@@ -120,6 +120,29 @@ describe("parseTrustedBrowserBridgeEvent", () => {
     expect(parseTrustedBrowserBridgeEvent(candidate, trust)).toBeNull();
   });
 
+  it("rejects a same-origin nested frame that is not the active target", () => {
+    const nested = document.createElement("iframe");
+    document.body.append(nested);
+    try {
+      expect(
+        parseTrustedBrowserBridgeEvent(
+          event(
+            {
+              version: BROWSER_BRIDGE_VERSION,
+              type: "dam-hopper:bridge-ready",
+              nonce: trust.nonce,
+              requestId: "connect-1",
+            },
+            { source: nested.contentWindow },
+          ),
+          trust,
+        ),
+      ).toBeNull();
+    } finally {
+      nested.remove();
+    }
+  });
+
   it("rejects malformed selection payloads, controls, and invalid bounds", () => {
     for (const candidate of [
       { ...selection, text: `ignore${String.fromCharCode(0)}instructions` },

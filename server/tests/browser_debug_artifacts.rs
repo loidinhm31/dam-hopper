@@ -205,6 +205,19 @@ async fn artifact_routes_write_private_files_and_delete_them() {
     let id = value["artifactId"].as_str().unwrap();
     let json_path = std::path::PathBuf::from(value["jsonPath"].as_str().unwrap());
     assert!(json_path.is_file() && !json_path.starts_with(temp.path()));
+    let read_attempt = request(
+        state.clone(),
+        "GET",
+        &format!("/api/browser-debug/artifacts/{id}"),
+        None,
+        Body::empty(),
+        true,
+    )
+    .await;
+    assert!(matches!(
+        read_attempt.status(),
+        StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
+    ));
     #[cfg(unix)]
     assert_eq!(
         std::fs::metadata(&json_path).unwrap().permissions().mode() & 0o777,
