@@ -324,6 +324,7 @@ export default function WorkspacePage() {
     useState<ActivateToolRequest | null>(null);
   const [terminalWorkspacePanelRequest, setTerminalWorkspacePanelRequest] =
     useState<TerminalWorkspacePanelRequest | null>(null);
+  const [browserOpen, setBrowserOpen] = useState(false);
   const browserDebug = useBrowserDebug();
   const registeredTerminalIds = useSyncExternalStore(
     subscribeToRegistryChanges,
@@ -458,6 +459,14 @@ export default function WorkspacePage() {
       };
     });
   }, [activeTab, mountedSessions, openTabs, registeredTerminalIds, sessionMap]);
+
+  const activeBrowserTerminalTarget = useMemo(
+    () =>
+      browserTerminalTargets.find(
+        (candidate) => candidate.sessionId === activeTab,
+      ),
+    [activeTab, browserTerminalTargets],
+  );
 
   const prepareBrowserTerminalArtifact = useCallback(
     async (sessionId: string) => {
@@ -647,11 +656,12 @@ export default function WorkspacePage() {
     setBrowserViewportVersion((version) => version + 1);
   }, []);
 
-  const openBrowserTerminalPanel = useCallback(() => {
-    setTerminalWorkspacePanelRequest({
-      nonce: ++panelShortcutNonceRef.current,
-      targetId: "browser",
-    });
+  const toggleEmbeddedBrowser = useCallback(() => {
+    setBrowserOpen((current) => !current);
+  }, []);
+
+  const closeEmbeddedBrowser = useCallback(() => {
+    setBrowserOpen(false);
   }, []);
 
   const activateTerminalPanelShortcut = useCallback(
@@ -936,6 +946,75 @@ export default function WorkspacePage() {
 
   useEffect(() => () => terminalNotificationActivationRef.current(), []);
 
+  const renderBrowserContent = useCallback(
+    (
+      onClose?: () => void,
+      handoffMode: "active" | "select" = "select",
+    ) => (
+      <BrowserDebugPanel
+        url={browserDebug.inputUrl}
+        bridgeStatus={browserDebug.bridgeStatus}
+        extensionPresence={browserDebug.extensionPresence}
+        onReloadPage={() => window.location.reload()}
+        viewportRef={browserViewportRef}
+        onViewportReady={notifyBrowserViewportChanged}
+        selection={browserDebug.selection}
+        error={browserDebug.error}
+        loading={browserDebug.bridgeStatus === "loading"}
+        addressHistory={browserDebug.addressHistory}
+        onUrlChange={browserDebug.setInputUrl}
+        onNavigate={browserDebug.navigate}
+        onBack={() => browserKeepAliveRef.current?.goBack()}
+        onForward={() => browserKeepAliveRef.current?.goForward()}
+        onReload={() => browserKeepAliveRef.current?.reload()}
+        navigationAvailable={browserDebug.bridgeCapabilities.includes("navigation")}
+        consoleEntries={browserDebug.consoleEntries}
+        consoleAvailable={browserDebug.bridgeCapabilities.includes("console")}
+        onClearConsole={browserDebug.clearConsole}
+        onStartPicker={() => browserKeepAliveRef.current?.startPicker()}
+        onStopPicker={() => browserKeepAliveRef.current?.stopPicker()}
+        pickerActive={browserDebug.pickerActive}
+        captureStatus={browserDebug.captureStatus}
+        captureMessage={browserDebug.captureMessage}
+        manualImageName={browserDebug.manualImageName}
+        onStartCapture={() => {
+          const frame = browserViewportRef.current?.getBoundingClientRect();
+          void browserDebug.startCapture(
+            frame
+              ? {
+                  left: frame.left,
+                  top: frame.top,
+                  width: frame.width,
+                  height: frame.height,
+                }
+              : null,
+          );
+        }}
+        onManualImage={browserDebug.setManualImage}
+        onStopCapture={browserDebug.stopCapture}
+        terminalHandoff={{
+          mode: handoffMode,
+          target:
+            handoffMode === "active" ? activeBrowserTerminalTarget : undefined,
+          targets: browserTerminalTargets,
+          onPrepare: prepareBrowserTerminalArtifact,
+          onDiscard: discardBrowserTerminalArtifact,
+          onInsert: insertBrowserTerminalReference,
+        }}
+        onClose={onClose}
+      />
+    ),
+    [
+      activeBrowserTerminalTarget,
+      browserDebug,
+      browserTerminalTargets,
+      discardBrowserTerminalArtifact,
+      insertBrowserTerminalReference,
+      notifyBrowserViewportChanged,
+      prepareBrowserTerminalArtifact,
+    ],
+  );
+
   const terminalContent = useMemo(
     () => (
       <div className="flex flex-col h-full">
@@ -986,23 +1065,33 @@ export default function WorkspacePage() {
             >
               <Files className="h-4 w-4" />
             </button>
+            {!isCompactWorkspace && (
+              <button
+                type="button"
+                onClick={toggleEmbeddedBrowser}
+                aria-pressed={browserOpen}
+                className={cn(
+                  "rounded-sm px-2 py-1 text-[11px] font-medium transition-colors",
+                  browserOpen
+                    ? "bg-[var(--color-primary)] text-white"
+                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
+                )}
+              >
+                Browser
+              </button>
+            )}
             {workspaceMode === "terminal" && !isCompactWorkspace && (
               <div className="flex rounded-sm border border-[var(--color-border)] bg-[var(--color-background)] p-0.5">
                 {[
                   { id: "git", label: "Git" },
                   { id: "ports", label: "Ports" },
                   { id: "terminals", label: "Fleet" },
-                  { id: "browser", label: "Browser" },
                 ].map(({ id, label }) => (
                   <button
                     key={id}
                     type="button"
                     onClick={() =>
-                      id === "browser"
-                        ? openBrowserTerminalPanel()
-                        : activateTerminalPanelShortcut(
-                            id as TerminalPanelToolId,
-                          )
+                      activateTerminalPanelShortcut(id as TerminalPanelToolId)
                     }
                     className="rounded-[3px] px-2 py-1 text-[11px] font-medium text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
                   >
@@ -1180,6 +1269,11 @@ export default function WorkspacePage() {
                 onNewFreeTerminal={handleAddFreeTerminal}
                 onSelectTab={handleSelectTab}
                 onOpenDiagnosticsMenu={openTerminalDiagnosticsMenu}
+                browserOpen={browserOpen && !isCompactWorkspace}
+                renderBrowserContent={(onClose) =>
+                  renderBrowserContent(onClose, "active")
+                }
+                onCloseBrowser={closeEmbeddedBrowser}
               />
             </Suspense>
           ) : mountedSessions.length > 0 ? (
@@ -1196,6 +1290,11 @@ export default function WorkspacePage() {
                 onCloseTab={handleCloseTab}
                 onOpenDiagnosticsMenu={openTerminalDiagnosticsMenu}
                 onVisibleSessionIdsChange={handleVisibleSplitSessionsChange}
+                browserOpen={browserOpen && !isCompactWorkspace}
+                renderBrowserContent={(onClose) =>
+                  renderBrowserContent(onClose, "active")
+                }
+                onCloseBrowser={closeEmbeddedBrowser}
               />
             </Suspense>
           ) : projects.length === 0 ? (
@@ -1276,7 +1375,8 @@ export default function WorkspacePage() {
       handleAddFreeTerminal,
       projectName,
       handleLaunchShell,
-      openBrowserTerminalPanel,
+      browserOpen,
+      closeEmbeddedBrowser,
       terminalFilePanelOpen,
       workspaceMode,
       isCompactWorkspace,
@@ -1286,6 +1386,8 @@ export default function WorkspacePage() {
       openTerminalDiagnosticsMenu,
       webglEnabledSessionIds,
       handleVisibleSplitSessionsChange,
+      renderBrowserContent,
+      toggleEmbeddedBrowser,
     ],
   );
 
@@ -1354,56 +1456,8 @@ export default function WorkspacePage() {
   );
 
   const browserContent = useMemo(
-    () => (
-      <BrowserDebugPanel
-        url={browserDebug.inputUrl}
-        bridgeStatus={browserDebug.bridgeStatus}
-        extensionPresence={browserDebug.extensionPresence}
-        onReloadPage={() => window.location.reload()}
-        viewportRef={browserViewportRef}
-        onViewportReady={notifyBrowserViewportChanged}
-        selection={browserDebug.selection}
-        error={browserDebug.error}
-        loading={browserDebug.bridgeStatus === "loading"}
-        onUrlChange={browserDebug.setInputUrl}
-        onNavigate={browserDebug.navigate}
-        onStartPicker={() => browserKeepAliveRef.current?.startPicker()}
-        onStopPicker={() => browserKeepAliveRef.current?.stopPicker()}
-        pickerActive={browserDebug.pickerActive}
-        captureStatus={browserDebug.captureStatus}
-        captureMessage={browserDebug.captureMessage}
-        manualImageName={browserDebug.manualImageName}
-        onStartCapture={() => {
-          const frame = browserViewportRef.current?.getBoundingClientRect();
-          void browserDebug.startCapture(
-            frame
-              ? {
-                  left: frame.left,
-                  top: frame.top,
-                  width: frame.width,
-                  height: frame.height,
-                }
-              : null,
-          );
-        }}
-        onManualImage={browserDebug.setManualImage}
-        onStopCapture={browserDebug.stopCapture}
-        terminalHandoff={{
-          targets: browserTerminalTargets,
-          onPrepare: prepareBrowserTerminalArtifact,
-          onDiscard: discardBrowserTerminalArtifact,
-          onInsert: insertBrowserTerminalReference,
-        }}
-      />
-    ),
-    [
-      browserDebug,
-      browserTerminalTargets,
-      discardBrowserTerminalArtifact,
-      insertBrowserTerminalReference,
-      notifyBrowserViewportChanged,
-      prepareBrowserTerminalArtifact,
-    ],
+    () => renderBrowserContent(),
+    [renderBrowserContent],
   );
 
   const terminalGitContent = useMemo(
@@ -1521,13 +1575,6 @@ export default function WorkspacePage() {
         position: "bottom",
         content: portsContent,
       },
-      {
-        id: "browser",
-        label: "Browser",
-        icon: Globe2,
-        position: "bottom",
-        content: browserContent,
-      },
     ],
     [
       projectName,
@@ -1538,7 +1585,6 @@ export default function WorkspacePage() {
       fileTreeRevealRequest,
       terminalContent,
       portsContent,
-      browserContent,
     ],
   );
 
@@ -1840,7 +1886,6 @@ export default function WorkspacePage() {
           fleetContent={fleetContent}
           gitContent={terminalGitContent}
           portsContent={portsContent}
-          browserContent={browserContent}
           activatePanelRequest={terminalWorkspacePanelRequest}
           workspaceMode={workspaceMode}
           onWorkspaceModeChange={setWorkspaceMode}

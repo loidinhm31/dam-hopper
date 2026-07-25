@@ -404,13 +404,14 @@ The server now keeps a local-only diagnostics store for backend events and expos
 
 The browser host exposes a global Browser tool for controlled development
 applications. V1 does not inspect arbitrary public pages. Supported preview
-origins are exact loopback origins and exact `Ready` tunnel URLs returned by
-the connected server's `TunnelSessionManager`.
+URLs may use an HTTP loopback origin or the origin of a `Ready` tunnel URL
+returned by the connected server's `TunnelSessionManager`; paths, query
+strings, and hashes remain inside that approved origin boundary.
 
 The DamHopper Browser Debug extension injects a framework-neutral, dev-only
 content script into the cross-origin iframe. The target application does not
-install anything. The extension owns element highlighting and
-DOM/accessibility extraction. Parent and extension communicate through a
+install anything. The extension owns element highlighting, DOM/accessibility
+extraction, path synchronization, and bounded console previews. Parent and extension communicate through a
 versioned `postMessage` protocol with WindowProxy/source checks, a per-load
 nonce, exact target/parent-origin checks, request IDs, schema validation, and
 bounded payloads. Loopback parent origins are allowed for local development;

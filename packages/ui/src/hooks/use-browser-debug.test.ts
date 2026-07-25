@@ -33,6 +33,7 @@ describe("useBrowserDebug tunnel lifecycle", () => {
 
   beforeEach(() => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    localStorage.clear();
     listTunnels.mockResolvedValueOnce([
       {
         id: "tunnel-1",
@@ -53,6 +54,7 @@ describe("useBrowserDebug tunnel lifecycle", () => {
     await act(async () => root.unmount());
     container.remove();
     latestRef.current = null;
+    localStorage.clear();
     eventListeners.clear();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
@@ -102,5 +104,40 @@ describe("useBrowserDebug tunnel lifecycle", () => {
     expect(latestRef.current?.pickerActive).toBe(false);
     expect(latestRef.current?.bridgeStatus).toBe("error");
     expect(latestRef.current?.error).toContain("no longer ready");
+  });
+
+  it("keeps the full same-origin path in the address state", async () => {
+    await act(async () => {
+      root.render(createElement(Harness));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      latestRef.current?.setInputUrl("https://example.trycloudflare.com/settings?tab=debug");
+    });
+    await act(async () => latestRef.current?.navigate());
+
+    expect(latestRef.current?.target?.url).toBe(
+      "https://example.trycloudflare.com/settings?tab=debug",
+    );
+    expect(latestRef.current?.addressHistory).toContain(
+      "https://example.trycloudflare.com/settings",
+    );
+    await act(async () =>
+      latestRef.current?.syncCurrentUrl(
+        "https://example.trycloudflare.com/settings/logs#latest",
+      ),
+    );
+    expect(latestRef.current?.inputUrl).toBe(
+      "https://example.trycloudflare.com/settings/logs#latest",
+    );
+
+    await act(async () =>
+      latestRef.current?.syncCurrentUrl("https://untrusted.example.test/"),
+    );
+    expect(latestRef.current?.inputUrl).toBe(
+      "https://example.trycloudflare.com/settings/logs#latest",
+    );
   });
 });

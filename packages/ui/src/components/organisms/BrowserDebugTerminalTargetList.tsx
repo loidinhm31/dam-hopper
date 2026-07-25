@@ -27,33 +27,33 @@ export function BrowserDebugTerminalTargetList({
             Open a live terminal before attaching a browser artifact.
           </p>
         )}
-        {targets.map((target) => {
-          const reason = browserTerminalTargetReason(target);
-          const id = `browser-terminal-${target.sessionId}`;
+        {targets.map((candidate) => {
+          const reason = browserTerminalTargetReason(candidate);
+          const id = `browser-terminal-${candidate.sessionId}`;
           return (
             <label
-              key={target.sessionId}
+              key={candidate.sessionId}
               className="flex min-h-11 items-center gap-2 rounded border border-[var(--color-border)] px-2 text-xs has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-[var(--color-ring)]"
             >
               <input
                 id={id}
                 type="radio"
                 name="browser-terminal"
-                checked={target.sessionId === selectedId}
+                checked={candidate.sessionId === selectedId}
                 disabled={reason !== null}
-                onChange={() => onSelect(target.sessionId)}
+                onChange={() => onSelect(candidate.sessionId)}
                 aria-describedby={`${id}-status`}
               />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[var(--color-text)]">
-                  {target.label}
-                  {target.current ? " · Current terminal" : ""}
+                  {candidate.label}
+                  {candidate.current ? " · Current terminal" : ""}
                 </span>
                 <span
                   id={`${id}-status`}
                   className="block truncate font-mono text-[10px] text-[var(--color-text-muted)]"
                 >
-                  {reason ?? target.sessionId}
+                  {reason ?? candidate.sessionId}
                 </span>
               </span>
             </label>

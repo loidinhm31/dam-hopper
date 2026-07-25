@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useMemo } from "react";
+import { useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import { Terminal as TerminalIcon } from "lucide-react";
 import { MobileTerminalAccessoryBar } from "@/components/organisms/MobileTerminalAccessoryBar.js";
 import { TerminalKeepAliveHost } from "@/components/organisms/TerminalKeepAliveHost.js";
@@ -34,6 +34,9 @@ interface Props {
   layoutRevision?: number;
   renderTerminals?: boolean;
   onVisibleSessionIdsChange?: (sessionIds: ReadonlySet<string>) => void;
+  browserOpen?: boolean;
+  renderBrowserContent?: (onClose: () => void) => ReactNode;
+  onCloseBrowser?: () => void;
 }
 
 export function MultiTerminalDisplay({
@@ -48,6 +51,9 @@ export function MultiTerminalDisplay({
   layoutRevision = 0,
   renderTerminals = true,
   onVisibleSessionIdsChange,
+  browserOpen = false,
+  renderBrowserContent,
+  onCloseBrowser,
 }: Props) {
   const layout = useTerminalLayout();
   const isCompactWorkspace = useCompactWorkspace();
@@ -157,6 +163,9 @@ export function MultiTerminalDisplay({
           onCloseTab={onCloseTab ?? (() => {})}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           suppressTerminalFocus={suppressTerminalFocus}
+          browserOpen={browserOpen}
+          renderBrowserContent={renderBrowserContent}
+          onCloseBrowser={onCloseBrowser}
         />
       </div>
       {showMobileAccessoryBar && activeSessionId ? (

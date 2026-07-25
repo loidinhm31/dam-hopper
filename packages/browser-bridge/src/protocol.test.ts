@@ -17,7 +17,7 @@ const selection = {
 };
 
 describe("browser bridge protocol", () => {
-  it("parses only the versioned picker commands", () => {
+  it("parses only the versioned Browser commands", () => {
     expect(
       parseBrowserBridgeCommand({
         version: BROWSER_BRIDGE_VERSION,
@@ -26,6 +26,14 @@ describe("browser bridge protocol", () => {
         requestId: "request",
       })?.type,
     ).toBe("dam-hopper:start-picker");
+    expect(
+      parseBrowserBridgeCommand({
+        version: BROWSER_BRIDGE_VERSION,
+        type: "dam-hopper:go-back",
+        nonce: "nonce",
+        requestId: "request",
+      })?.type,
+    ).toBe("dam-hopper:go-back");
     expect(
       parseBrowserBridgeCommand({
         version: BROWSER_BRIDGE_VERSION,
@@ -46,6 +54,40 @@ describe("browser bridge protocol", () => {
         selection,
       }),
     ).toMatchObject({ type: "dam-hopper:selection", selection });
+  });
+
+  it("parses bounded navigation and local console events", () => {
+    expect(
+      parseBrowserBridgeEvent({
+        version: BROWSER_BRIDGE_VERSION,
+        type: "dam-hopper:navigation",
+        nonce: "nonce",
+        requestId: "request",
+        url: "http://localhost:3000/settings?tab=debug",
+      }),
+    ).toMatchObject({ type: "dam-hopper:navigation" });
+    expect(
+      parseBrowserBridgeEvent({
+        version: BROWSER_BRIDGE_VERSION,
+        type: "dam-hopper:console",
+        nonce: "nonce",
+        requestId: "request",
+        level: "warn",
+        message: "Slow response",
+      }),
+    ).toMatchObject({ type: "dam-hopper:console", level: "warn" });
+  });
+
+  it("accepts optional capabilities on a ready event", () => {
+    expect(
+      parseBrowserBridgeEvent({
+        version: BROWSER_BRIDGE_VERSION,
+        type: "dam-hopper:bridge-ready",
+        nonce: "nonce",
+        requestId: "request",
+        capabilities: ["navigation", "console"],
+      }),
+    ).toMatchObject({ capabilities: ["navigation", "console"] });
   });
 
   it.each([
