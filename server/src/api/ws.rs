@@ -1619,7 +1619,9 @@ async fn do_fs_op(
         .map_err(|e| crate::fs::FsError::MutationRefused(e.to_string()))?;
 
     let sandbox = state.fs.sandbox()?;
-    let project_root = sandbox.project_root(project).ok_or(crate::fs::FsError::NotFound)?;
+    let project_root = sandbox
+        .project_root(project)
+        .ok_or(crate::fs::FsError::NotFound)?;
 
     match op {
         "create_file" | "create_dir" => {
@@ -2003,9 +2005,12 @@ async fn do_enc_put_begin(
         .fs
         .sandbox()
         .map_err(|e| ("FS_UNAVAILABLE".into(), e.to_string()))?;
-    let project_root = sandbox
-        .project_root(project)
-        .ok_or_else(|| ("PROJECT_NOT_FOUND".into(), format!("Project not found: {project}")))?;
+    let project_root = sandbox.project_root(project).ok_or_else(|| {
+        (
+            "PROJECT_NOT_FOUND".into(),
+            format!("Project not found: {project}"),
+        )
+    })?;
 
     let dir_abs = project_root.join(dir.trim_start_matches('/'));
 
@@ -2053,12 +2058,15 @@ async fn do_enc_put_begin(
     })?;
 
     // FIX-01: final canonicalize + sandbox check on now-existing dir
-    let dir_validated = sandbox.validate(project, dir_abs).await.map_err(|e| match e {
-        crate::fs::FsError::PathEscape | crate::fs::FsError::PermissionDenied => {
-            ("FORBIDDEN".into(), "dir resolves outside workspace".into())
-        }
-        _ => ("INVALID_PATH".into(), e.to_string()),
-    })?;
+    let dir_validated = sandbox
+        .validate(project, dir_abs)
+        .await
+        .map_err(|e| match e {
+            crate::fs::FsError::PathEscape | crate::fs::FsError::PermissionDenied => {
+                ("FORBIDDEN".into(), "dir resolves outside workspace".into())
+            }
+            _ => ("INVALID_PATH".into(), e.to_string()),
+        })?;
 
     let target_abs = sandbox
         .validate_new_path(project, dir_validated, filename)
@@ -2130,16 +2138,18 @@ async fn do_fs_subscribe(
         .await
         .map_err(|e| ("PATH_REJECTED".to_string(), e.to_string()))?;
 
-    let (sub_id, fs_rx) = state
-        .fs
-        .subscribe_tree(project, abs_path.clone())
-        .map_err(|e| match e {
-            crate::fs::FsError::NotFound => {
-                ("PROJECT_NOT_FOUND".to_string(), format!("Project not found: {project}"))
-            }
-            crate::fs::FsError::PathEscape => ("PATH_REJECTED".to_string(), e.to_string()),
-            _ => ("WATCHER_ERROR".to_string(), e.to_string()),
-        })?;
+    let (sub_id, fs_rx) =
+        state
+            .fs
+            .subscribe_tree(project, abs_path.clone())
+            .map_err(|e| match e {
+                crate::fs::FsError::NotFound => (
+                    "PROJECT_NOT_FOUND".to_string(),
+                    format!("Project not found: {project}"),
+                ),
+                crate::fs::FsError::PathEscape => ("PATH_REJECTED".to_string(), e.to_string()),
+                _ => ("WATCHER_ERROR".to_string(), e.to_string()),
+            })?;
 
     debug!(sub_id, project, path, "fs:subscribe_tree");
 

@@ -244,10 +244,18 @@ fn default_session_buffer_ttl_hours() -> u64 {
     24
 }
 
-fn default_telemetry_db_path() -> String { "~/.config/dam-hopper/telemetry.db".to_string() }
-fn default_telemetry_detail_retention_days() -> u16 { 90 }
-fn default_telemetry_collector_host() -> String { "127.0.0.1".to_string() }
-fn default_telemetry_collector_port() -> u16 { 4811 }
+fn default_telemetry_db_path() -> String {
+    "~/.config/dam-hopper/telemetry.db".to_string()
+}
+fn default_telemetry_detail_retention_days() -> u16 {
+    90
+}
+fn default_telemetry_collector_host() -> String {
+    "127.0.0.1".to_string()
+}
+fn default_telemetry_collector_port() -> u16 {
+    4811
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -262,7 +270,11 @@ pub struct TelemetryCollectorConfig {
 
 impl Default for TelemetryCollectorConfig {
     fn default() -> Self {
-        Self { enabled: false, host: default_telemetry_collector_host(), port: default_telemetry_collector_port() }
+        Self {
+            enabled: false,
+            host: default_telemetry_collector_host(),
+            port: default_telemetry_collector_port(),
+        }
     }
 }
 
@@ -271,9 +283,15 @@ impl Default for TelemetryCollectorConfig {
 pub struct TelemetryConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// Stops new capture while preserving existing aggregate history.
+    #[serde(default)]
+    pub paused: bool,
     #[serde(default = "default_telemetry_db_path", alias = "db_path")]
     pub db_path: String,
-    #[serde(default = "default_telemetry_detail_retention_days", alias = "detail_retention_days")]
+    #[serde(
+        default = "default_telemetry_detail_retention_days",
+        alias = "detail_retention_days"
+    )]
     pub detail_retention_days: u16,
     #[serde(default, alias = "aggregate_retention_days")]
     pub aggregate_retention_days: Option<u32>,
@@ -287,6 +305,7 @@ impl Default for TelemetryConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            paused: false,
             db_path: default_telemetry_db_path(),
             detail_retention_days: default_telemetry_detail_retention_days(),
             aggregate_retention_days: None,
@@ -298,15 +317,45 @@ impl Default for TelemetryConfig {
 
 impl TelemetryConfig {
     pub fn validate(&self) -> Result<(), String> {
-        if self.db_path.trim().is_empty() { return Err("server.telemetry.db_path must not be empty".to_string()); }
-        if !(1..=3650).contains(&self.detail_retention_days) { return Err("server.telemetry.detail_retention_days must be between 1 and 3650".to_string()); }
-        if self.aggregate_retention_days == Some(0) { return Err("server.telemetry.aggregate_retention_days must be positive when set".to_string()); }
-        if self.collector.port == 0 { return Err("server.telemetry.collector.port must be non-zero".to_string()); }
-        let host = self.collector.host.parse::<IpAddr>().map_err(|_| "server.telemetry.collector.host must be a loopback IP address".to_string())?;
-        if !host.is_loopback() { return Err("server.telemetry.collector.host must be a loopback IP address".to_string()); }
-        if self.excluded_projects.iter().any(|project| project.trim().is_empty()) { return Err("server.telemetry.excluded_projects must not contain empty names".to_string()); }
+        if self.db_path.trim().is_empty() {
+            return Err("server.telemetry.db_path must not be empty".to_string());
+        }
+        if !(1..=3650).contains(&self.detail_retention_days) {
+            return Err(
+                "server.telemetry.detail_retention_days must be between 1 and 3650".to_string(),
+            );
+        }
+        if self.aggregate_retention_days == Some(0) {
+            return Err(
+                "server.telemetry.aggregate_retention_days must be positive when set".to_string(),
+            );
+        }
+        if self.collector.port == 0 {
+            return Err("server.telemetry.collector.port must be non-zero".to_string());
+        }
+        let host = self.collector.host.parse::<IpAddr>().map_err(|_| {
+            "server.telemetry.collector.host must be a loopback IP address".to_string()
+        })?;
+        if !host.is_loopback() {
+            return Err(
+                "server.telemetry.collector.host must be a loopback IP address".to_string(),
+            );
+        }
+        if self
+            .excluded_projects
+            .iter()
+            .any(|project| project.trim().is_empty())
+        {
+            return Err(
+                "server.telemetry.excluded_projects must not contain empty names".to_string(),
+            );
+        }
         let unique: std::collections::HashSet<_> = self.excluded_projects.iter().collect();
-        if unique.len() != self.excluded_projects.len() { return Err("server.telemetry.excluded_projects must not contain duplicates".to_string()); }
+        if unique.len() != self.excluded_projects.len() {
+            return Err(
+                "server.telemetry.excluded_projects must not contain duplicates".to_string(),
+            );
+        }
         Ok(())
     }
 }
@@ -484,7 +533,10 @@ pub struct UiConfig {
     pub reveal_active_file_shortcut: String,
     #[serde(default = "default_git_panel_shortcut", alias = "git_panel_shortcut")]
     pub git_panel_shortcut: String,
-    #[serde(default = "default_ports_panel_shortcut", alias = "ports_panel_shortcut")]
+    #[serde(
+        default = "default_ports_panel_shortcut",
+        alias = "ports_panel_shortcut"
+    )]
     pub ports_panel_shortcut: String,
     #[serde(
         default = "default_fleet_terminal_shortcut",
