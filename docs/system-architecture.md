@@ -297,6 +297,14 @@ allowlisted metadata and token fields are accepted; prompt/output fields are rej
 upstream client enables them. Missing telemetry is `unavailable`, not zero. Correlation is exact
 only with an explicit provider/run mapping; project/time fallback is labeled approximate.
 
+Codex-version compatibility is availability-first: an unrecognized but syntactically safe source
+version may emit the established allowlisted `response.completed` token fields. It is accepted as
+**unverified** and increments a health/status signal so the UI can request a fixture update; it is
+never rejected solely for being newer. A changed or missing core event shape produces no usage row
+and remains unavailable/partial rather than zero. New sanitized fixtures raise confidence and may
+add fields, but are not a runtime availability gate. Raw attributes, payloads, and unrecognized
+strings remain excluded in every compatibility path.
+
 The protected usage API (Phase 04) returns aggregates only. It does not expose raw event rows.
 `GET /api/usage/summary` supports bounded hour/day windows and filters; detail reads cannot
 cross the configured detail-retention boundary except for UTC-day-aligned, unfiltered day
@@ -309,8 +317,8 @@ deletion barrier. The shared UI adds a `/usage` route plus a dashboard teaser. N
 becomes more compact and uses responsive overflow rather than placing full analytics on the
 operational dashboard.
 
-Live HMAC-key rotation and coordination with destructive deletion remain follow-up work; the
-current API does not claim rotation is complete.
+Full delete serializes both terminal and collector admission, purges the store, then rotates the
+shared HMAC key before capture is restored. Range deletion does not rotate the key.
 
 Key invariants:
 

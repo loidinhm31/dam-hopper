@@ -7,8 +7,8 @@ use dam_hopper_server::{
     agent_store::AgentStoreService,
     api::build_router,
     config::{
-        global_config_path, global_registry_path, read_global_config_at, DamHopperConfig,
-        resolve_startup_config, ConfigResolutionInput, ConfigSource,
+        global_config_path, global_registry_path, read_global_config_at, resolve_startup_config,
+        ConfigResolutionInput, ConfigSource, DamHopperConfig,
     },
     crypto::load_or_create_server_setup,
     diagnostics::{DiagnosticStore, DiagnosticTracingLayer},
@@ -17,8 +17,11 @@ use dam_hopper_server::{
     probe_inotify_limit,
     pty::{BroadcastEventSink, PtySessionManager},
     state::AppState,
-    telemetry::{load_or_create_hmac_key, hmac_key_path, ChannelTelemetrySink, CommandClassifier, TelemetryCmd, TelemetryStore},
     telemetry::worker::{TelemetryControl, TelemetryHandle, TelemetryWorker},
+    telemetry::{
+        hmac_key_path, ChannelTelemetrySink, CommandClassifier, TelemetryCmd, TelemetryKeyRing,
+        TelemetryStore,
+    },
     tunnel::{CloudflaredDriver, TunnelSessionManager},
 };
 
@@ -172,42 +175,98 @@ async fn main() -> anyhow::Result<()> {
 
     // Telemetry is opt-in. A failed or corrupt telemetry database disables only
     // analytics; PTY startup and I/O remain available.
-    let (telemetry_sink, telemetry_classifier, telemetry_control, telemetry_handle, telemetry_tx, telemetry_worker_handle) =
-        if config.server.telemetry.enabled {
-            let telemetry_path = expand_home_path(&config.server.telemetry.db_path);
-            match TelemetryStore::open(&telemetry_path).and_then(|store| {
-                let key_path = hmac_key_path().map_err(dam_hopper_server::telemetry::store::TelemetryStoreError::Io)?;
-                let key = load_or_create_hmac_key(&key_path).map_err(dam_hopper_server::telemetry::store::TelemetryStoreError::Io)?;
-                Ok((std::sync::Arc::new(store), std::sync::Arc::new(CommandClassifier::new(std::sync::Arc::new(key)))))
-            }) {
-                Ok((store, classifier)) => {
-                    let control = std::sync::Arc::new(TelemetryControl::new(!config.server.telemetry.paused, config.server.telemetry.excluded_projects.clone()));
-                    let (sink, receiver) = ChannelTelemetrySink::channel_with_control(512, control.clone());
-                    let sender = sink.sender();
-                    match TelemetryWorker::new(receiver, store.clone()).spawn() {
-                        Ok(worker) => {
-                            tracing::info!("Telemetry store opened");
-                            let _ = sender.try_send(TelemetryCmd::Purge {
-                                now_utc_ms: chrono::Utc::now().timestamp_millis(),
-                                detail_retention_days: config.server.telemetry.detail_retention_days,
-                                aggregate_retention_days: config.server.telemetry.aggregate_retention_days,
-                            });
-                            (std::sync::Arc::new(sink) as std::sync::Arc<dyn dam_hopper_server::telemetry::TelemetrySink>, Some(classifier), Some(control.clone()), TelemetryHandle::active(control, store, Some(sender.clone())), Some(sender), Some(worker))
-                        }
-                        Err(error) => {
-                            tracing::warn!(error = %error, "Telemetry worker failed to start; analytics disabled");
-                            (std::sync::Arc::new(dam_hopper_server::telemetry::NoopTelemetrySink::new()) as std::sync::Arc<dyn dam_hopper_server::telemetry::TelemetrySink>, None, None, TelemetryHandle::disabled(), None, None)
-                        }
+    let (
+        telemetry_sink,
+        telemetry_classifier,
+        telemetry_control,
+        telemetry_handle,
+        telemetry_tx,
+        telemetry_worker_handle,
+    ) = if config.server.telemetry.enabled {
+        let telemetry_path = expand_home_path(&config.server.telemetry.db_path);
+        match TelemetryStore::open(&telemetry_path).and_then(|store| {
+            let key_path = hmac_key_path()
+                .map_err(dam_hopper_server::telemetry::store::TelemetryStoreError::Io)?;
+            let key = std::sync::Arc::new(
+                TelemetryKeyRing::load_or_create(key_path)
+                    .map_err(dam_hopper_server::telemetry::store::TelemetryStoreError::Io)?,
+            );
+            Ok((
+                std::sync::Arc::new(store),
+                key.clone(),
+                std::sync::Arc::new(CommandClassifier::new(key)),
+            ))
+        }) {
+            Ok((store, keys, classifier)) => {
+                let control = std::sync::Arc::new(TelemetryControl::new(
+                    !config.server.telemetry.paused,
+                    config.server.telemetry.excluded_projects.clone(),
+                ));
+                let (sink, receiver) =
+                    ChannelTelemetrySink::channel_with_control(512, control.clone());
+                let sender = sink.sender();
+                match TelemetryWorker::new(receiver, store.clone()).spawn() {
+                    Ok(worker) => {
+                        tracing::info!("Telemetry store opened");
+                        let _ = sender.try_send(TelemetryCmd::Purge {
+                            now_utc_ms: chrono::Utc::now().timestamp_millis(),
+                            detail_retention_days: config.server.telemetry.detail_retention_days,
+                            aggregate_retention_days: config
+                                .server
+                                .telemetry
+                                .aggregate_retention_days,
+                        });
+                        (
+                            std::sync::Arc::new(sink)
+                                as std::sync::Arc<dyn dam_hopper_server::telemetry::TelemetrySink>,
+                            Some(classifier),
+                            Some(control.clone()),
+                            TelemetryHandle::active(control, store, Some(sender.clone()))
+                                .with_hmac_keys(keys),
+                            Some(sender),
+                            Some(worker),
+                        )
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "Telemetry worker failed to start; analytics disabled");
+                        (
+                            std::sync::Arc::new(
+                                dam_hopper_server::telemetry::NoopTelemetrySink::new(),
+                            )
+                                as std::sync::Arc<dyn dam_hopper_server::telemetry::TelemetrySink>,
+                            None,
+                            None,
+                            TelemetryHandle::disabled(),
+                            None,
+                            None,
+                        )
                     }
                 }
-                Err(error) => {
-                    tracing::warn!(error = %error, "Telemetry database unavailable; analytics disabled");
-                    (std::sync::Arc::new(dam_hopper_server::telemetry::NoopTelemetrySink::new()) as std::sync::Arc<dyn dam_hopper_server::telemetry::TelemetrySink>, None, None, TelemetryHandle::disabled(), None, None)
-                }
             }
-        } else {
-            (std::sync::Arc::new(dam_hopper_server::telemetry::NoopTelemetrySink::new()) as std::sync::Arc<dyn dam_hopper_server::telemetry::TelemetrySink>, None, None, TelemetryHandle::disabled(), None, None)
-        };
+            Err(error) => {
+                tracing::warn!(error = %error, "Telemetry database unavailable; analytics disabled");
+                (
+                    std::sync::Arc::new(dam_hopper_server::telemetry::NoopTelemetrySink::new())
+                        as std::sync::Arc<dyn dam_hopper_server::telemetry::TelemetrySink>,
+                    None,
+                    None,
+                    TelemetryHandle::disabled(),
+                    None,
+                    None,
+                )
+            }
+        }
+    } else {
+        (
+            std::sync::Arc::new(dam_hopper_server::telemetry::NoopTelemetrySink::new())
+                as std::sync::Arc<dyn dam_hopper_server::telemetry::TelemetrySink>,
+            None,
+            None,
+            TelemetryHandle::disabled(),
+            None,
+            None,
+        )
+    };
 
     let pty_manager = PtySessionManager::with_persist_and_telemetry_control(
         std::sync::Arc::new(event_sink.clone()),
@@ -319,6 +378,29 @@ async fn main() -> anyhow::Result<()> {
     )?;
     state.set_telemetry(telemetry_handle);
 
+    // The Codex receiver is deliberately a second loopback-only listener. A
+    // bind or decoder failure must never make the LAN API or PTYs unavailable.
+    let collector_config = state.config.read().await.server.telemetry.collector.clone();
+    if collector_config.enabled {
+        let telemetry = state
+            .telemetry
+            .read()
+            .expect("telemetry state lock poisoned")
+            .clone();
+        match dam_hopper_server::telemetry::codex_otlp::start_collector(
+            &collector_config,
+            &telemetry,
+            state.collector_health.clone(),
+        )
+        .await
+        {
+            Ok(collector) => *state.codex_collector.lock().await = Some(collector),
+            Err(error) => {
+                tracing::warn!(error = %error, "Codex OTLP collector unavailable; telemetry continues")
+            }
+        }
+    }
+
     let tunnel_manager_shutdown = state.tunnel_manager.clone();
     let browser_debug_artifacts_shutdown = state.browser_debug_artifacts.clone();
     let browser_debug_artifacts_sweeper = state.browser_debug_artifacts.clone();
@@ -335,6 +417,7 @@ async fn main() -> anyhow::Result<()> {
     // Spawn /proc/net/tcp polling loop for port detection (Linux-only; warns on other OS).
     tokio::spawn(proc_poll_loop(port_forward_manager));
 
+    let collector_shutdown = state.codex_collector.clone();
     let router = build_router(state, allowed_origins);
 
     // ── Serve ─────────────────────────────────────────────────────────────────
@@ -369,6 +452,9 @@ async fn main() -> anyhow::Result<()> {
     // Reap all tunnel children before exit — no orphaned cloudflared processes.
     tunnel_manager_shutdown.dispose_all().await;
     browser_debug_artifacts_shutdown.dispose_all().await;
+    if let Some(collector) = collector_shutdown.lock().await.take() {
+        collector.stop().await;
+    }
 
     // Graceful shutdown: snapshot live PTY buffers, ask the worker to flush, then wait.
     pty_manager.snapshot_live_buffers();
@@ -413,8 +499,13 @@ fn project_roots(config: &DamHopperConfig) -> Vec<(String, std::path::PathBuf)> 
 }
 
 fn expand_home_path(value: &str) -> PathBuf {
-    value.strip_prefix("~/")
-        .map(|suffix| dirs::home_dir().unwrap_or_else(|| PathBuf::from("~")).join(suffix))
+    value
+        .strip_prefix("~/")
+        .map(|suffix| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("~"))
+                .join(suffix)
+        })
         .unwrap_or_else(|| PathBuf::from(value))
 }
 

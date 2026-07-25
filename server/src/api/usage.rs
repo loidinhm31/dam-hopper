@@ -14,8 +14,8 @@ use crate::{
     telemetry::{
         queries::{
             add_tokens, add_usage, aggregate_command_rollups, aggregate_commands,
-            aggregate_token_rollups, aggregate_tokens, health_value, TokenAggregate,
-            UsageAggregate,
+            aggregate_token_correlation, aggregate_token_rollups, aggregate_tokens, health_value,
+            TokenAggregate, UsageAggregate,
         },
         CaptureQuality, CodexModel, SafeIdentifier, ShellKind, TelemetryCmd, TelemetryStore,
         UsageQuery, TELEMETRY_SCHEMA_VERSION,
@@ -68,6 +68,7 @@ struct UsageRange {
 struct Coverage {
     detail_only: bool,
     capture_quality_filter: Option<String>,
+    codex_correlation: Option<crate::telemetry::queries::CorrelationCoverage>,
 }
 
 #[derive(Serialize)]
@@ -78,6 +79,7 @@ struct Health {
     writer_errors: u64,
     rejected_events: u64,
     sampled_at: i64,
+    collector: crate::telemetry::codex_otlp::CollectorHealthSnapshot,
 }
 
 #[derive(Serialize)]
@@ -89,6 +91,18 @@ struct SettingsResponse {
     aggregate_retention_days: Option<u32>,
     excluded_projects: Vec<String>,
     collector: TelemetryCollectorConfig,
+    collector_setup: CollectorSetup,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectorSetup {
+    endpoint: String,
+    authorization: String,
+    restart_required: bool,
+    managed_config: bool,
+    server_restart_required: bool,
+    baseline_fixture_version: String,
 }
 
 #[derive(Deserialize)]
@@ -112,6 +126,7 @@ pub async fn summary(
     State(state): State<AppState>,
     Query(params): Query<SummaryParams>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let _coordination = state.telemetry_coordinator.lock().await;
     let (query, range) = parse_query(&state, params).await?;
     let telemetry = state
         .telemetry
@@ -155,12 +170,22 @@ pub async fn summary(
         )
     };
     let detail_only = range.from >= boundary;
+    // Daily rollups intentionally omit correlation detail. Null is more honest
+    // than suggesting historical usage was exclusively unattributed.
+    let codex_correlation = if detail_only && codex.is_some() {
+        aggregate_token_correlation(&store, &detail_query).map_err(store_error)?
+    } else {
+        None
+    };
     let health = Health {
         available: true,
         paused: !telemetry.control.is_enabled(),
         writer_errors: health_value(&store, "writer_errors").map_err(store_error)?,
         rejected_events: telemetry.control.rejected_count(),
         sampled_at: now_ms(),
+        collector: state.collector_health.snapshot_with_duplicates(
+            health_value(&store, "collector_duplicates").map_err(store_error)?,
+        ),
     };
     Ok(Json(SummaryResponse {
         range,
@@ -169,12 +194,14 @@ pub async fn summary(
         coverage: Coverage {
             detail_only,
             capture_quality_filter: query.capture_quality.map(quality_name).map(str::to_string),
+            codex_correlation,
         },
         health,
     }))
 }
 
 pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let _coordination = state.telemetry_coordinator.lock().await;
     let telemetry = state
         .telemetry
         .read()
@@ -193,10 +220,20 @@ pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, 
         writer_errors,
         rejected_events: telemetry.control.rejected_count(),
         sampled_at: now_ms(),
+        collector: state.collector_health.snapshot_with_duplicates(
+            telemetry
+                .store
+                .as_ref()
+                .map(|store| health_value(store, "collector_duplicates"))
+                .transpose()
+                .map_err(store_error)?
+                .unwrap_or(0),
+        ),
     }))
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> impl IntoResponse {
+    let _coordination = state.telemetry_coordinator.lock().await;
     let telemetry = state.config.read().await.server.telemetry.clone();
     Json(settings_response(telemetry))
 }
@@ -205,6 +242,7 @@ pub async fn update_settings(
     State(state): State<AppState>,
     Json(patch): Json<SettingsPatch>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let _coordination = state.telemetry_coordinator.lock().await;
     let mut config = state.config.read().await.clone();
     {
         let telemetry = &mut config.server.telemetry;
@@ -249,6 +287,7 @@ pub async fn delete_all(
     State(state): State<AppState>,
     Json(body): Json<DeleteRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let _coordination = state.telemetry_coordinator.lock().await;
     let DeleteRequest {
         confirmation,
         from,
@@ -277,7 +316,15 @@ pub async fn delete_all(
         .control
         .with_exclusive_admission(|| {
             telemetry.control.set_enabled(false);
-            execute_delete(&telemetry, &store, range)
+            execute_delete(&telemetry, &store, range).and_then(|_| {
+                if range.is_none() {
+                    telemetry.hmac_keys.as_ref().map_or(Ok(()), |keys| {
+                        keys.rotate_after_delete().map_err(Into::into)
+                    })
+                } else {
+                    Ok(())
+                }
+            })
         })
         .map_err(store_error)?;
     let paused = state.config.read().await.server.telemetry.paused;
@@ -286,6 +333,10 @@ pub async fn delete_all(
 }
 
 fn settings_response(telemetry: crate::config::TelemetryConfig) -> SettingsResponse {
+    let endpoint = format!(
+        "http://{}:{}/v1/logs",
+        telemetry.collector.host, telemetry.collector.port
+    );
     SettingsResponse {
         enabled: telemetry.enabled,
         paused: telemetry.paused,
@@ -293,6 +344,14 @@ fn settings_response(telemetry: crate::config::TelemetryConfig) -> SettingsRespo
         aggregate_retention_days: telemetry.aggregate_retention_days,
         excluded_projects: telemetry.excluded_projects,
         collector: telemetry.collector,
+        collector_setup: CollectorSetup {
+            endpoint,
+            authorization: "Bearer <DAM_HOPPER_OTLP_TOKEN>".to_string(),
+            restart_required: true,
+            managed_config: false,
+            server_restart_required: true,
+            baseline_fixture_version: "0.145.0".to_string(),
+        },
     }
 }
 

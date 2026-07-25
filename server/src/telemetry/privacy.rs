@@ -91,6 +91,45 @@ pub fn load_or_create_hmac_key(path: &Path) -> io::Result<TelemetryHmacKey> {
     }
 }
 
+/// Shared, replaceable HMAC material for terminal and Codex telemetry. Replacing
+/// it is only safe while telemetry admission is paused and all persisted rows
+/// have been deleted.
+pub struct TelemetryKeyRing {
+    path: PathBuf,
+    key: std::sync::RwLock<TelemetryHmacKey>,
+}
+
+impl TelemetryKeyRing {
+    pub fn load_or_create(path: PathBuf) -> io::Result<Self> {
+        let key = load_or_create_hmac_key(&path)?;
+        Ok(Self {
+            path,
+            key: std::sync::RwLock::new(key),
+        })
+    }
+
+    pub fn digest(&self, domain: &[u8], fields: &[&[u8]]) -> HmacDigest {
+        self.key
+            .read()
+            .expect("telemetry HMAC key lock poisoned")
+            .digest(domain, fields)
+    }
+
+    pub fn rotate_after_delete(&self) -> io::Result<()> {
+        let parent = self.path.parent().ok_or_else(|| {
+            io::Error::new(ErrorKind::InvalidInput, "HMAC key path has no parent")
+        })?;
+        let replacement = parent.join("telemetry-hmac-key.next");
+        let _ = fs::remove_file(&replacement);
+        let mut bytes = [0_u8; HMAC_KEY_LENGTH];
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        create_key(&replacement, &bytes)?;
+        fs::rename(&replacement, &self.path)?;
+        *self.key.write().expect("telemetry HMAC key lock poisoned") = TelemetryHmacKey(bytes);
+        Ok(())
+    }
+}
+
 // Replacing this key must be coupled with the authenticated delete-all operation
 // in the telemetry store so existing fingerprints never become orphaned.
 
@@ -170,7 +209,10 @@ fn create_key(path: &Path, bytes: &[u8; HMAC_KEY_LENGTH]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{assert_serialized_without_content, load_or_create_hmac_key, HMAC_KEY_LENGTH};
+    use super::{
+        assert_serialized_without_content, load_or_create_hmac_key, TelemetryKeyRing,
+        HMAC_KEY_LENGTH,
+    };
 
     #[test]
     fn creates_a_stable_32_byte_key() {
@@ -225,5 +267,22 @@ mod tests {
         assert_eq!(first, key.digest(b"cmd:v1", &[b"git"]));
         assert_ne!(first, key.digest(b"agent:v1", &[b"git"]));
         assert!(serde_json::from_str::<super::HmacDigest>("\"invalid\"").is_err());
+    }
+
+    #[test]
+    fn rotation_replaces_the_persisted_key_and_changes_digests() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("telemetry-hmac-key");
+        let keys = TelemetryKeyRing::load_or_create(path.clone()).unwrap();
+        let before = keys.digest(b"test", &[b"value"]);
+        keys.rotate_after_delete().unwrap();
+        let after = keys.digest(b"test", &[b"value"]);
+        assert_ne!(before, after);
+        assert_eq!(
+            after,
+            TelemetryKeyRing::load_or_create(path)
+                .unwrap()
+                .digest(b"test", &[b"value"])
+        );
     }
 }
