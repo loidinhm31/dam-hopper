@@ -11,13 +11,20 @@ __dh_prompt_seen=0
 __dh_in_prompt=0
 __dh_in_preexec=0
 __dh_command_captured=0
-__dh_emit() { printf '\e]633;%s;%s\a' "$1" "$__dh_nonce"; }
+__dh_emit() {
+  if (( $# > 1 )); then
+    printf '\e]633;%s;%s;%s\a' "$1" "$2" "$__dh_nonce"
+  else
+    printf '\e]633;%s;%s\a' "$1" "$__dh_nonce"
+  fi
+}
 __dh_b64() { printf '%s' "$1" | base64 | tr '+/' '-_' | tr -d '=\n'; }
 
 __dh_prompt_start() {
+  local __dh_exit_status=$?
   __dh_in_prompt=1
   __dh_command_captured=0
-  if (( __dh_prompt_seen )); then __dh_emit D; fi
+  if (( __dh_prompt_seen )); then __dh_emit D "$__dh_exit_status"; fi
   __dh_prompt_seen=1
   __dh_emit A
   __dh_emit B

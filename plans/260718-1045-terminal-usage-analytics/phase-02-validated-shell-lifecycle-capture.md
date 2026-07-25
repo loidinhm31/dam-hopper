@@ -13,8 +13,8 @@
 - Date: 2026-07-18
 - Description: Emit idempotent privacy-normalized command lifecycle facts from trusted shell markers without changing terminal behavior.
 - Priority: P1
-- Implementation status: Pending
-- Review status: Pending
+- Implementation status: Complete (2026-07-26)
+- Review status: Approved (2026-07-26)
 - Effort: 32h
 
 ## Key Insights
@@ -74,12 +74,12 @@ Raw command is consumed by `CommandClassifier::normalize()` and dropped before q
 
 ## Todo list
 
-- [ ] Cross-shell exit status fixtures pass.
-- [ ] Run IDs differ on respawn while session ID stays stable.
-- [ ] Command sequence/dedupe deterministic.
-- [ ] Classifier stores no raw input.
-- [ ] Unsupported cases expose partial/unavailable.
-- [ ] Existing terminal/suggestion/notification tests unchanged.
+- [x] Cross-shell exit status fixtures pass.
+- [x] Run IDs differ on respawn while session ID stays stable.
+- [x] Command sequence/dedupe deterministic.
+- [x] Classifier stores no raw input.
+- [x] Unsupported cases expose partial/unavailable.
+- [x] Existing terminal/suggestion/notification tests unchanged.
 
 ## Success Criteria
 

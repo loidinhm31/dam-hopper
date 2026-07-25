@@ -68,6 +68,15 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+
+## 2026-07-26
+
+- **Phase 02: Validated shell lifecycle capture.** Bash, Zsh, and Fish now report
+  bounded completion status through versioned OSC 633 adapters. PTY lifecycle events
+  carry terminal-run/sequence identity and privacy-safe normalized command metadata
+  through a bounded non-blocking telemetry sink. The default path is no-op and
+  non-durable; `ChannelTelemetrySink` is reserved as the Phase 03 durable-worker
+  boundary.
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]

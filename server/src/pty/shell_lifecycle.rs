@@ -5,6 +5,7 @@ use subtle::ConstantTimeEq;
 
 const PREFIX: &[u8] = b"\x1b]633;";
 const MAX: usize = 8 * 1024;
+const MAX_EXIT_STATUS: i32 = 255;
 const ALT_BUFFER_ENTER: &[u8] = b"\x1b[?1049h";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,12 +22,15 @@ pub enum LifecycleState {
 pub struct LifecycleEvent {
     pub state: LifecycleState,
     pub command: Option<String>,
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Debug)]
 pub struct ShellLifecycle {
     nonce: String,
     generation: u64,
+    adapter_version: &'static str,
+    supports_exit_status: bool,
     state: LifecycleState,
     marker: Option<Vec<u8>>,
     pending_prefix: Vec<u8>,
@@ -34,9 +38,20 @@ pub struct ShellLifecycle {
 
 impl ShellLifecycle {
     pub fn new(nonce: String, generation: u64) -> Self {
+        Self::new_with_capabilities(nonce, generation, "unknown", false)
+    }
+
+    pub fn new_with_capabilities(
+        nonce: String,
+        generation: u64,
+        adapter_version: &'static str,
+        supports_exit_status: bool,
+    ) -> Self {
         Self {
             nonce,
             generation,
+            adapter_version,
+            supports_exit_status,
             state: LifecycleState::Unverified,
             marker: None,
             pending_prefix: Vec::new(),
@@ -44,6 +59,14 @@ impl ShellLifecycle {
     }
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    pub fn adapter_version(&self) -> &'static str {
+        self.adapter_version
+    }
+
+    pub fn supports_exit_status(&self) -> bool {
+        self.supports_exit_status
     }
 
     pub fn is_editing(&self) -> bool {
@@ -59,6 +82,7 @@ impl ShellLifecycle {
         LifecycleEvent {
             state: self.state,
             command: None,
+            exit_code: None,
         }
     }
 
@@ -158,6 +182,7 @@ impl ShellLifecycle {
                 Some(LifecycleEvent {
                     state: self.state,
                     command: None,
+                    exit_code: None,
                 })
             }
             "E" if self.state == LifecycleState::Editing => {
@@ -173,6 +198,7 @@ impl ShellLifecycle {
                     Some(LifecycleEvent {
                         state: self.state,
                         command,
+                        exit_code: None,
                     })
                 } else {
                     return (false, vec![self.reset()]);
@@ -186,29 +212,42 @@ impl ShellLifecycle {
                 Some(LifecycleEvent {
                     state: self.state,
                     command: None,
+                    exit_code: None,
                 })
             }
             // A shell may abandon an edit before it can emit an exact E/C pair
             // (for example Bash compound syntax, Ctrl-C, or an empty submit).
             // Treat the next trusted prompt boundary as a private reset so the
             // marker is not replayed into visible terminal output.
-            "D" if self.valid(parts.next())
-                && parts.next().is_none()
-                && matches!(
+            "D" => {
+                let fields = parts.collect::<Vec<_>>();
+                let (exit_code, nonce) = match fields.as_slice() {
+                    [nonce] => (None, *nonce),
+                    [status, nonce] => (parse_exit_status(status), *nonce),
+                    _ => return (false, vec![self.reset()]),
+                };
+                if !self.valid(Some(nonce))
+                    || (fields.len() == 2 && (!self.supports_exit_status || exit_code.is_none()))
+                {
+                    return (false, vec![self.reset()]);
+                }
+                if !matches!(
                     self.state,
-                    LifecycleState::Prompt | LifecycleState::Editing | LifecycleState::Submitted
-                ) =>
-            {
-                Some(self.reset())
-            }
-            "D" if self.valid(parts.next())
-                && parts.next().is_none()
-                && self.state == LifecycleState::Opaque =>
-            {
+                    LifecycleState::Prompt
+                        | LifecycleState::Editing
+                        | LifecycleState::Submitted
+                        | LifecycleState::Opaque
+                ) {
+                    return (false, vec![self.reset()]);
+                }
+                if self.state != LifecycleState::Opaque {
+                    return (true, vec![self.reset()]);
+                }
                 self.state = LifecycleState::Finished;
                 Some(LifecycleEvent {
-                    state: LifecycleState::Unverified,
+                    state: LifecycleState::Finished,
                     command: None,
+                    exit_code,
                 })
             }
             _ => return (false, vec![self.reset()]),
@@ -223,6 +262,13 @@ impl ShellLifecycle {
     }
 }
 
+fn parse_exit_status(value: &str) -> Option<i32> {
+    let status = value.parse::<i32>().ok()?;
+    (-MAX_EXIT_STATUS..=MAX_EXIT_STATUS)
+        .contains(&status)
+        .then_some(status)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,7 +277,7 @@ mod tests {
     }
     #[test]
     fn validates_order_nonce_and_exact_command() {
-        let mut lifecycle = ShellLifecycle::new("nonce".into(), 7);
+        let mut lifecycle = ShellLifecycle::new_with_capabilities("nonce".into(), 7, "1", true);
         assert!(lifecycle.feed(&marker("A;nonce")).is_empty());
         assert_eq!(
             lifecycle.feed(&marker("B;nonce"))[0].state,
@@ -249,8 +295,12 @@ mod tests {
             LifecycleState::Opaque
         );
         assert_eq!(
-            lifecycle.feed(&marker("D;nonce"))[0].state,
-            LifecycleState::Unverified
+            lifecycle.feed(&marker("D;7;nonce"))[0].state,
+            LifecycleState::Finished
+        );
+        assert_eq!(
+            lifecycle.feed(&marker("A;nonce")),
+            Vec::<LifecycleEvent>::new()
         );
         assert_eq!(
             lifecycle.feed(&marker("B;wrong"))[0].state,
@@ -330,5 +380,61 @@ mod tests {
         assert!(visible.is_empty());
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].state, LifecycleState::Unverified);
+    }
+
+    #[test]
+    fn completion_status_is_optional_and_bounded() {
+        let mut lifecycle = ShellLifecycle::new_with_capabilities("nonce".into(), 7, "1", true);
+        lifecycle.feed(&marker("A;nonce"));
+        lifecycle.feed(&marker("B;nonce"));
+        let command = URL_SAFE_NO_PAD.encode("echo ok");
+        lifecycle.feed(&marker(&format!("E;{command};nonce")));
+        lifecycle.feed(&marker("C;nonce"));
+        let event = lifecycle.feed(&marker("D;-1;nonce"));
+        assert_eq!(event[0].state, LifecycleState::Finished);
+        assert_eq!(event[0].exit_code, Some(-1));
+
+        lifecycle.feed(&marker("A;nonce"));
+        lifecycle.feed(&marker("B;nonce"));
+        lifecycle.feed(&marker(&format!("E;{command};nonce")));
+        lifecycle.feed(&marker("C;nonce"));
+        let unknown = lifecycle.feed(&marker("D;nonce"));
+        assert_eq!(unknown[0].exit_code, None);
+    }
+
+    #[test]
+    fn invalid_completion_status_remains_visible_and_resets_trust() {
+        let mut lifecycle = ShellLifecycle::new_with_capabilities("nonce".into(), 7, "1", true);
+        lifecycle.feed(&marker("A;nonce"));
+        lifecycle.feed(&marker("B;nonce"));
+        let command = URL_SAFE_NO_PAD.encode("echo bad");
+        lifecycle.feed(&marker(&format!("E;{command};nonce")));
+        lifecycle.feed(&marker("C;nonce"));
+        let raw = marker("D;256;nonce");
+        let (visible, events) = lifecycle.feed_visible(&raw);
+        assert_eq!(visible, raw);
+        assert_eq!(events[0].state, LifecycleState::Unverified);
+    }
+
+    #[test]
+    fn unknown_adapter_rejects_status_but_accepts_legacy_completion() {
+        let mut lifecycle = ShellLifecycle::new("nonce".into(), 7);
+        lifecycle.feed(&marker("A;nonce"));
+        lifecycle.feed(&marker("B;nonce"));
+        let command = URL_SAFE_NO_PAD.encode("echo old");
+        lifecycle.feed(&marker(&format!("E;{command};nonce")));
+        lifecycle.feed(&marker("C;nonce"));
+        let raw = marker("D;0;nonce");
+        let (visible, events) = lifecycle.feed_visible(&raw);
+        assert_eq!(visible, raw);
+        assert_eq!(events[0].state, LifecycleState::Unverified);
+
+        lifecycle.feed(&marker("A;nonce"));
+        lifecycle.feed(&marker("B;nonce"));
+        lifecycle.feed(&marker(&format!("E;{command};nonce")));
+        lifecycle.feed(&marker("C;nonce"));
+        let event = lifecycle.feed(&marker("D;nonce"));
+        assert_eq!(event[0].state, LifecycleState::Finished);
+        assert_eq!(event[0].exit_code, None);
     }
 }
