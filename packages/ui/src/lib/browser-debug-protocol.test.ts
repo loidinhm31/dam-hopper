@@ -50,19 +50,24 @@ describe("parseTrustedBrowserBridgeEvent", () => {
     ).toMatchObject({ type: "dam-hopper:selection", selection });
   });
 
-  it.each([
-    [
-      "wrong origin",
-      event(
-        {
-          version: 1,
-          type: "dam-hopper:bridge-ready",
-          nonce: trust.nonce,
-          requestId: "connect-1",
-        },
-        { origin: "https://attacker.example.test" },
+  it("accepts a sandboxed iframe event when its origin is null", () => {
+    expect(
+      parseTrustedBrowserBridgeEvent(
+        event(
+          {
+            version: BROWSER_BRIDGE_VERSION,
+            type: "dam-hopper:bridge-ready",
+            nonce: trust.nonce,
+            requestId: "connect-1",
+          },
+          { origin: "null" },
+        ),
+        trust,
       ),
-    ],
+    ).toMatchObject({ type: "dam-hopper:bridge-ready" });
+  });
+
+  it.each([
     [
       "wrong source",
       event(
