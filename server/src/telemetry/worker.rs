@@ -19,6 +19,7 @@ const FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 pub struct TelemetryControl {
     enabled: AtomicBool,
     excluded_projects: RwLock<HashSet<String>>,
+    admission: RwLock<()>,
     rejected: AtomicU64,
 }
 
@@ -27,6 +28,7 @@ impl TelemetryControl {
         Self {
             enabled: AtomicBool::new(enabled),
             excluded_projects: RwLock::new(excluded_projects.into_iter().collect()),
+            admission: RwLock::new(()),
             rejected: AtomicU64::new(0),
         }
     }
@@ -49,6 +51,31 @@ impl TelemetryControl {
     pub fn set_enabled(&self, enabled: bool) {
         self.enabled.store(enabled, Ordering::Relaxed);
     }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn set_excluded_projects(&self, excluded_projects: impl IntoIterator<Item = String>) {
+        *self
+            .excluded_projects
+            .write()
+            .expect("telemetry exclusions lock poisoned") = excluded_projects.into_iter().collect();
+    }
+
+    pub fn with_exclusive_admission<T>(&self, operation: impl FnOnce() -> T) -> T {
+        let _guard = self
+            .admission
+            .write()
+            .expect("telemetry admission lock poisoned");
+        operation()
+    }
+
+    pub(crate) fn admission_guard(&self) -> std::sync::RwLockReadGuard<'_, ()> {
+        self.admission
+            .read()
+            .expect("telemetry admission lock poisoned")
+    }
     pub fn rejected_count(&self) -> u64 {
         self.rejected.load(Ordering::Relaxed)
     }
@@ -58,6 +85,7 @@ impl TelemetryControl {
 pub struct TelemetryHandle {
     pub control: Arc<TelemetryControl>,
     pub store: Option<Arc<TelemetryStore>>,
+    pub command_tx: Option<std::sync::mpsc::SyncSender<TelemetryCmd>>,
 }
 
 impl TelemetryHandle {
@@ -65,12 +93,18 @@ impl TelemetryHandle {
         Self {
             control: Arc::new(TelemetryControl::default()),
             store: None,
+            command_tx: None,
         }
     }
-    pub fn active(control: Arc<TelemetryControl>, store: Arc<TelemetryStore>) -> Self {
+    pub fn active(
+        control: Arc<TelemetryControl>,
+        store: Arc<TelemetryStore>,
+        command_tx: Option<std::sync::mpsc::SyncSender<TelemetryCmd>>,
+    ) -> Self {
         Self {
             control,
             store: Some(store),
+            command_tx,
         }
     }
 }
@@ -100,6 +134,38 @@ impl TelemetryWorker {
                 Ok(TelemetryCmd::Shutdown) => {
                     self.flush(&mut batch);
                     break;
+                }
+                Ok(TelemetryCmd::Delete {
+                    from_utc_ms,
+                    to_utc_ms,
+                    completion,
+                }) => {
+                    self.flush(&mut batch);
+                    let result = self
+                        .store
+                        .delete_range(from_utc_ms, to_utc_ms)
+                        .and_then(|_| self.store.checkpoint())
+                        .map_err(|error| error.to_string());
+                    let _ = completion.send(result);
+                    last_flush = Instant::now();
+                }
+                Ok(TelemetryCmd::ApplyRetention {
+                    now_utc_ms,
+                    detail_retention_days,
+                    aggregate_retention_days,
+                    completion,
+                }) => {
+                    self.flush(&mut batch);
+                    let result = self
+                        .store
+                        .write_batch(vec![TelemetryCmd::Purge {
+                            now_utc_ms,
+                            detail_retention_days,
+                            aggregate_retention_days,
+                        }])
+                        .map_err(|error| error.to_string());
+                    let _ = completion.send(result);
+                    last_flush = Instant::now();
                 }
                 Ok(command) => {
                     batch.push(command);

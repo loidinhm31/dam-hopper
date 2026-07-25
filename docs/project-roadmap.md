@@ -18,6 +18,14 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [x] UTC rollup/purge, project exclusion, delete-all, and retention controls
 - [x] DB secret scan; 100k-row aggregate benchmark deferred to Phase 04 API work
 
+**Phase 04: Aggregate API and Controls — [COMPLETED 2026-07-26; APPROVED WITH WARNINGS]**
+
+- [x] Protected, bounded aggregate endpoints and privacy-safe response contracts
+- [x] Settings roundtrip/runtime apply and explicit delete confirmation/reset behavior
+- [x] Client DTOs/query keys and API response content scan
+- [ ] Follow-up: live HMAC rotation/reset in the shared collector/runtime path
+- [ ] Follow-up: shared coordination for concurrent settings/retention reads
+
 ## Roadmap Phases
 
 ### Phase 01: IDE File Explorer

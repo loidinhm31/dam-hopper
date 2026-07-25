@@ -31,7 +31,7 @@ Track validated activity only in DamHopper-managed interactive PTYs. Persist no 
 | 1 | [Contracts, config, OTLP spike](./phase-01-contracts-config-otlp-spike.md) | Complete (2026-07-26) | 24h | None |
 | 2 | [Validated shell lifecycle capture](./phase-02-validated-shell-lifecycle-capture.md) | Complete (2026-07-26) | 32h | 1 |
 | 3 | [SQLite store, retention, privacy](./phase-03-sqlite-store-retention-privacy.md) | Complete (2026-07-26) | 40h | 1-2 |
-| 4 | [Aggregate API and controls](./phase-04-aggregate-api-and-controls.md) | Pending | 32h | 3 |
+| 4 | [Aggregate API and controls](./phase-04-aggregate-api-and-controls.md) | Complete (2026-07-26; approved with warnings) | 32h | 3 |
 | 5 | [Codex loopback OTel adapter](./phase-05-codex-loopback-otel-adapter.md) | Pending | 32h | 1, 3-4 |
 | 6 | [Usage UI and compact navigation](./phase-06-usage-ui-and-compact-navigation.md) | Pending | 40h | 4-5 |
 | 7 | [Security, fault, performance, docs](./phase-07-security-fault-performance-docs.md) | Pending | 32h | 1-6 |
@@ -70,6 +70,11 @@ Track validated activity only in DamHopper-managed interactive PTYs. Persist no 
 
 ### Action Items
 
-- [ ] Phase 04: add authenticated range-delete semantics with UTC bounds, confirmation, and rollup handling.
+- [x] Phase 04: add authenticated range-delete semantics with UTC bounds, confirmation, and rollup handling (completed 2026-07-26; approved with warnings).
 - [ ] Phase 05: add explicit-confirmation, ownership/conflict checks, atomic rollback for managed Codex config sync; keep snippet-only fallback.
 - [ ] Phase 07: document unlimited aggregate retention and range deletion in the runbook/UI copy.
+
+### Phase 04 approval follow-ups
+
+- Live HMAC rotation/reset remains outstanding for the shared collector/runtime path.
+- Settings and retention reads require shared coordination/serialization under concurrent access.

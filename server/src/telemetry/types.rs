@@ -208,6 +208,11 @@ pub struct UsageQuery {
     pub to_utc_ms: Option<i64>,
     pub project: Option<SafeIdentifier>,
     pub shell: Option<ShellKind>,
+    pub capture_quality: Option<CaptureQuality>,
+    pub category: Option<SafeIdentifier>,
+    /// Current collection supports the Codex provider only. Kept as a bounded
+    /// identifier so future providers do not turn query filters into raw input.
+    pub agent: Option<SafeIdentifier>,
     pub model: Option<CodexModel>,
 }
 

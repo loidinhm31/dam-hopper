@@ -12,8 +12,8 @@
 - Date: 2026-07-18
 - Description: Expose protected, bounded aggregate queries and explicit privacy/retention controls; never expose event rows.
 - Priority: P1
-- Implementation status: Pending
-- Review status: Pending
+- Implementation status: Complete (2026-07-26 03:50 +07)
+- Review status: Approved with warnings (2026-07-26 03:50 +07)
 - Effort: 32h
 
 ## Key Insights
@@ -73,12 +73,17 @@ Query service builds parameterized SQL from validated enums/IDs. Recent windows 
 
 ## Todo list
 
-- [ ] Aggregate endpoints protected and bounded.
-- [ ] Detail/rollup boundary has no gap/double count.
-- [ ] Settings roundtrip and runtime apply pass.
-- [ ] Delete confirmation/reset pass.
-- [ ] Client DTOs and query keys typed.
-- [ ] API response content scan passes.
+- [x] Aggregate endpoints protected and bounded.
+- [x] Detail/rollup boundary has no gap/double count.
+- [x] Settings roundtrip and runtime apply pass.
+- [x] Delete confirmation/reset pass.
+- [x] Client DTOs and query keys typed.
+- [x] API response content scan passes.
+
+### Approval warnings and follow-ups
+
+- Live HMAC rotation/reset remains a follow-up for the shared collector/runtime path; the approved Phase 04 surface must not expose key material.
+- Coordinate settings and retention reads through one shared service/lock so concurrent requests cannot observe or apply inconsistent values.
 
 ## Success Criteria
 
@@ -111,3 +116,5 @@ Query service builds parameterized SQL from validated enums/IDs. Recent windows 
 ## Unresolved questions
 
 - Maximum custom range proposed 5 years for daily aggregates and 90 days for detail-only metrics; validate with product preference.
+- What is the ownership and rollout trigger for live HMAC rotation/reset?
+- Which shared coordination primitive will serialize concurrent settings/retention reads and writes?

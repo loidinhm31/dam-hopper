@@ -11,8 +11,7 @@ use crate::config::{
     discovery::{discover_projects, DiscoveredProject},
     global_config_path, list_known_workspaces_at, load_workspace_config,
     parser::write_config,
-    read_config,
-    remove_known_workspace_at,
+    read_config, remove_known_workspace_at,
     schema::{
         DamHopperConfig, FeaturesConfig, ProjectConfig, WorkspaceInfo as WorkspaceInfoSchema,
     },
@@ -195,7 +194,9 @@ pub async fn switch_workspace(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-fn load_config_from_workspace_or_file(path: &std::path::Path) -> Result<DamHopperConfig, crate::error::AppError> {
+fn load_config_from_workspace_or_file(
+    path: &std::path::Path,
+) -> Result<DamHopperConfig, crate::error::AppError> {
     if path.is_file() {
         return read_config(path);
     }

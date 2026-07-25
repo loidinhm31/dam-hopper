@@ -15,6 +15,8 @@ import type {
   ConflictFile,
   ResetMode,
   UiConfig,
+  UsageSettingsPatch,
+  UsageSummaryQuery,
   HostMetrics,
   SshCredentialStatus,
   SshForgetCredentialResult,
@@ -813,6 +815,53 @@ export function useImportSettings() {
         void qc.invalidateQueries({ queryKey: ["workspace"] });
       }
     },
+  });
+}
+
+export function useUsageSummary(query: UsageSummaryQuery = {}) {
+  return useQuery({
+    queryKey: ["usage", "summary", query],
+    queryFn: () => api.usage.summary(query),
+  });
+}
+
+export function useUsageHealth() {
+  return useQuery({
+    queryKey: ["usage", "health"],
+    queryFn: () => api.usage.health(),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useUsageSettings() {
+  return useQuery({
+    queryKey: ["usage", "settings"],
+    queryFn: () => api.usage.settings(),
+  });
+}
+
+export function useUpdateUsageSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (patch: UsageSettingsPatch) => api.usage.updateSettings(patch),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["usage"] }),
+  });
+}
+
+export function useDeleteUsageData() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.usage.deleteAll(),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["usage"] }),
+  });
+}
+
+export function useDeleteUsageRange() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ from, to }: { from: number; to: number }) =>
+      api.usage.deleteRange(from, to),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["usage"] }),
   });
 }
 

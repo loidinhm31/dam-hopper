@@ -17,6 +17,7 @@ pub mod ssh;
 pub mod system;
 pub mod terminal;
 pub mod tunnel;
+pub mod usage;
 pub mod workspace;
 pub mod ws;
 pub mod ws_protocol;

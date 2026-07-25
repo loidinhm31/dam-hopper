@@ -101,10 +101,7 @@ fn validate_config(raw: &DamHopperConfigRaw) -> Result<(), AppError> {
             for terminal in terminals {
                 validate_relative_path(
                     &terminal.cwd,
-                    &format!(
-                        "projects.{}.terminals.{}.cwd",
-                        project.name, terminal.name
-                    ),
+                    &format!("projects.{}.terminals.{}.cwd", project.name, terminal.name),
                 )?;
             }
         }
@@ -200,7 +197,9 @@ fn resolve_project_path(config_dir: &Path, raw_project_path: &Path) -> PathBuf {
 
 fn join_validated_relative_path(base_dir: &Path, relative_path: &Path) -> PathBuf {
     debug_assert!(
-        !relative_path.components().any(|component| component == Component::ParentDir),
+        !relative_path
+            .components()
+            .any(|component| component == Component::ParentDir),
         "Relative path must be validated before joining"
     );
 
@@ -298,20 +297,59 @@ fn build_raw_toml(config: &DamHopperConfig, config_dir: &Path) -> toml::Value {
 fn server_to_toml(server: &super::schema::ServerConfig) -> toml::Value {
     use toml::Value;
     let mut config = toml::map::Map::new();
-    config.insert("session_db_path".to_string(), Value::String(server.session_db_path.clone()));
-    config.insert("session_buffer_ttl_hours".to_string(), Value::Integer(server.session_buffer_ttl_hours as i64));
+    config.insert(
+        "session_db_path".to_string(),
+        Value::String(server.session_db_path.clone()),
+    );
+    config.insert(
+        "session_buffer_ttl_hours".to_string(),
+        Value::Integer(server.session_buffer_ttl_hours as i64),
+    );
     if server.telemetry != Default::default() {
         let telemetry = &server.telemetry;
         let mut table = toml::map::Map::new();
         table.insert("enabled".to_string(), Value::Boolean(telemetry.enabled));
-        table.insert("db_path".to_string(), Value::String(telemetry.db_path.clone()));
-        table.insert("detail_retention_days".to_string(), Value::Integer(telemetry.detail_retention_days.into()));
-        if let Some(days) = telemetry.aggregate_retention_days { table.insert("aggregate_retention_days".to_string(), Value::Integer(days.into())); }
-        if !telemetry.excluded_projects.is_empty() { table.insert("excluded_projects".to_string(), Value::Array(telemetry.excluded_projects.iter().cloned().map(Value::String).collect())); }
+        table.insert("paused".to_string(), Value::Boolean(telemetry.paused));
+        table.insert(
+            "db_path".to_string(),
+            Value::String(telemetry.db_path.clone()),
+        );
+        table.insert(
+            "detail_retention_days".to_string(),
+            Value::Integer(telemetry.detail_retention_days.into()),
+        );
+        if let Some(days) = telemetry.aggregate_retention_days {
+            table.insert(
+                "aggregate_retention_days".to_string(),
+                Value::Integer(days.into()),
+            );
+        }
+        if !telemetry.excluded_projects.is_empty() {
+            table.insert(
+                "excluded_projects".to_string(),
+                Value::Array(
+                    telemetry
+                        .excluded_projects
+                        .iter()
+                        .cloned()
+                        .map(Value::String)
+                        .collect(),
+                ),
+            );
+        }
         let mut collector = toml::map::Map::new();
-        collector.insert("enabled".to_string(), Value::Boolean(telemetry.collector.enabled));
-        collector.insert("host".to_string(), Value::String(telemetry.collector.host.clone()));
-        collector.insert("port".to_string(), Value::Integer(telemetry.collector.port.into()));
+        collector.insert(
+            "enabled".to_string(),
+            Value::Boolean(telemetry.collector.enabled),
+        );
+        collector.insert(
+            "host".to_string(),
+            Value::String(telemetry.collector.host.clone()),
+        );
+        collector.insert(
+            "port".to_string(),
+            Value::Integer(telemetry.collector.port.into()),
+        );
         table.insert("collector".to_string(), Value::Table(collector));
         config.insert("telemetry".to_string(), Value::Table(table));
     }

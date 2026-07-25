@@ -252,6 +252,49 @@ Notes:
 - when `terminalIds` is provided, backend events with `sessionId` are scoped to those ids while global events remain included
 - **Phase 04:** `system` field contains host metrics sampled from the config directory (`~/.config/dam-hopper/` by default) for host-context only, not project sandboxes
 
+## Terminal Usage Analytics (Phase 04)
+
+Protected aggregate-only analytics for the local telemetry store. All routes require
+the same Bearer token as other `/api/*` routes; raw command, prompt, output, and event
+rows are never returned. The UI calls these through `WsTransport` methods
+`usage:summary`, `usage:health`, `usage:settings`, `usage:updateSettings`, and
+`usage:deleteAll`, which map to the REST routes below.
+
+### GET /api/usage/summary
+
+Returns terminal aggregates, optional Codex token aggregates, coverage, and writer
+health. Query parameters use camelCase: `from`/`to` (UTC milliseconds) or `window`
+(`24h`, `7d`, `30d`), `bucket` (`hour` or `day`), plus optional `project`, `shell`
+(`bash`, `zsh`, `fish`), `captureQuality`, `category`, `agent` (`codex`), and `model`.
+Ranges must be positive, contain at most 1,000 buckets, and are capped at 90 days for
+hour buckets or five years for day buckets. Detail queries cannot precede the configured
+detail-retention boundary unless they are UTC-day aligned, unfiltered day queries; the
+response identifies the requested range and whether coverage is detail-only.
+
+### GET /api/usage/health
+
+Returns availability, paused state, writer error count, rejected event count, and the
+sampling timestamp. Unavailable telemetry is reported as unavailable rather than as
+zero-valued usage.
+
+### GET/PATCH /api/usage/settings
+
+Reads or updates `paused`, `detailRetentionDays`, `aggregateRetentionDays` (nullable),
+`excludedProjects`, and collector settings. Retention changes synchronously roll up and
+purge before the new configuration is published.
+
+### DELETE /api/usage
+
+Destructive deletion requires the exact JSON confirmation string
+`"delete-usage-data"`. Omitting `from` and `to` deletes all detail, rollups, and health
+rows. To delete a range, provide both `from` and `to` as non-negative UTC milliseconds,
+strictly increasing and aligned to UTC-day boundaries; ranges are limited to five years.
+Capture is paused behind an ordered deletion barrier and resumes according to the saved
+pause setting. The UI must present an explicit confirmation before calling this route.
+
+Operational follow-up: live HMAC-key rotation and its coordinated destructive workflow
+remain pending; this API documents the current deletion semantics only.
+
 ## Session Persistence API (Phase 05)
 
 Terminal session buffers and metadata are persisted to SQLite when the configured database can be opened. This supports live cross-device resume and DamHopper server-restart relaunch with recovered scrollback; it does not preserve exact shell/process memory across server or host restart.

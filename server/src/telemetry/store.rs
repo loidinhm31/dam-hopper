@@ -68,6 +68,16 @@ impl TelemetryStore {
                         aggregate_retention_days,
                     )?;
                 }
+                TelemetryCmd::Delete { completion, .. } => {
+                    let _ = completion.send(Err(
+                        "telemetry delete bypassed its worker barrier".to_string()
+                    ));
+                }
+                TelemetryCmd::ApplyRetention { completion, .. } => {
+                    let _ = completion.send(Err(
+                        "telemetry retention bypassed its worker barrier".to_string()
+                    ));
+                }
                 TelemetryCmd::Shutdown => {}
             }
         }
@@ -99,9 +109,28 @@ impl TelemetryStore {
     }
 
     pub fn delete_all(&self) -> Result<(), TelemetryStoreError> {
+        self.delete_range(None, None)
+    }
+
+    /// Delete all data, or an exact detail range plus UTC-aligned rollup days.
+    /// The API validates range alignment before calling this method.
+    pub fn delete_range(
+        &self,
+        from_utc_ms: Option<i64>,
+        to_utc_ms: Option<i64>,
+    ) -> Result<(), TelemetryStoreError> {
         let mut connection = self.writer.lock().expect("telemetry writer lock poisoned");
         let transaction = connection.transaction()?;
-        transaction.execute_batch("DELETE FROM agent_usage_events; DELETE FROM agent_runs; DELETE FROM command_events; DELETE FROM terminal_runs; DELETE FROM daily_usage_rollups; DELETE FROM telemetry_health;")?;
+        match (from_utc_ms, to_utc_ms) {
+            (Some(from), Some(to)) => {
+                transaction.execute("DELETE FROM agent_usage_events WHERE occurred_at_utc_ms >= ?1 AND occurred_at_utc_ms < ?2", params![from, to])?;
+                transaction.execute("DELETE FROM command_events WHERE occurred_at_utc_ms >= ?1 AND occurred_at_utc_ms < ?2", params![from, to])?;
+                transaction.execute("DELETE FROM daily_usage_rollups WHERE utc_day >= strftime('%Y-%m-%d', ?1 / 1000, 'unixepoch') AND utc_day < strftime('%Y-%m-%d', ?2 / 1000, 'unixepoch')", params![from, to])?;
+                transaction.execute("DELETE FROM terminal_runs WHERE ended_at_utc_ms IS NOT NULL AND ended_at_utc_ms >= ?1 AND ended_at_utc_ms < ?2 AND NOT EXISTS (SELECT 1 FROM command_events c WHERE c.run_id = terminal_runs.run_id)", params![from, to])?;
+            }
+            (None, None) => transaction.execute_batch("DELETE FROM agent_usage_events; DELETE FROM agent_runs; DELETE FROM command_events; DELETE FROM terminal_runs; DELETE FROM daily_usage_rollups; DELETE FROM telemetry_health;")?,
+            _ => unreachable!("usage range must be fully bounded"),
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -230,7 +259,11 @@ fn rollup_and_purge(
     retention_days: u16,
     aggregate_retention_days: Option<u32>,
 ) -> Result<(), rusqlite::Error> {
-    let cutoff = now_utc_ms.saturating_sub(i64::from(retention_days) * 86_400_000);
+    // Retain the whole UTC boundary day in detail. This avoids making a daily
+    // rollup that contains only part of a day, which would otherwise make a
+    // detail/rollup aggregate query either double-count or leave a gap.
+    let raw_cutoff = now_utc_ms.saturating_sub(i64::from(retention_days) * 86_400_000);
+    let cutoff = raw_cutoff - raw_cutoff.rem_euclid(86_400_000);
     transaction.execute(
         "INSERT INTO daily_usage_rollups(utc_day, project, shell, category, model, command_count, succeeded_count, failed_count, interrupted_count, unknown_count, duration_ms_sum)
          SELECT strftime('%Y-%m-%d', c.occurred_at_utc_ms / 1000, 'unixepoch'), coalesce(r.project, ''), r.shell, c.category, '', count(*),
@@ -364,7 +397,7 @@ mod tests {
                 TelemetryCmd::Command(event(run_id, 1, 1)),
                 TelemetryCmd::Command(event(run_id, 1, 1)),
                 TelemetryCmd::Purge {
-                    now_utc_ms: 86_400_002,
+                    now_utc_ms: 172_800_002,
                     detail_retention_days: 1,
                     aggregate_retention_days: None,
                 },
@@ -447,7 +480,7 @@ mod tests {
             .write_batch(vec![
                 TelemetryCmd::AgentUsage(usage),
                 TelemetryCmd::Purge {
-                    now_utc_ms: 86_400_002,
+                    now_utc_ms: 172_800_002,
                     detail_retention_days: 1,
                     aggregate_retention_days: None,
                 },

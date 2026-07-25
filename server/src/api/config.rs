@@ -6,11 +6,11 @@ use axum::{
 use serde_json::Value;
 use std::path::{Path as FsPath, Path as StdPath, PathBuf};
 
+use crate::config::parser::project_path_for_toml;
 use crate::config::schema::DamHopperConfig;
 use crate::config::{
     global_config_path, read_config, read_global_config_at, write_global_config_at,
 };
-use crate::config::parser::project_path_for_toml;
 use crate::error::AppError;
 use crate::state::{project_roots_from_config, AppState};
 use crate::utils::atomic_write;
@@ -127,7 +127,9 @@ pub(crate) fn merge_global_ui_config(
     merge_json_objects(&mut merged, incoming);
     let new_ui: crate::config::schema::UiConfig = serde_json::from_value(merged)
         .map_err(|e| AppError::InvalidInput(format!("Invalid UI config: {e}")))?;
-    new_ui.validate_font_sizes().map_err(AppError::InvalidInput)?;
+    new_ui
+        .validate_font_sizes()
+        .map_err(AppError::InvalidInput)?;
     new_ui
         .validate_mobile_keyboard_sizes()
         .map_err(AppError::InvalidInput)?;
@@ -198,16 +200,14 @@ fn sync_codex_tui_config(
     }
 
     let mut doc = if config_path.exists() {
-        let raw = std::fs::read_to_string(&config_path)
-            .map_err(|e| AppError::Config(format!("Failed to read {}: {e}", config_path.display())))?;
+        let raw = std::fs::read_to_string(&config_path).map_err(|e| {
+            AppError::Config(format!("Failed to read {}: {e}", config_path.display()))
+        })?;
         if raw.trim().is_empty() {
             toml::Value::Table(toml::map::Map::new())
         } else {
             toml::from_str::<toml::Value>(&raw).map_err(|e| {
-                AppError::InvalidInput(format!(
-                    "Invalid TOML in {}: {e}",
-                    config_path.display()
-                ))
+                AppError::InvalidInput(format!("Invalid TOML in {}: {e}", config_path.display()))
             })?
         }
     } else {
@@ -217,9 +217,12 @@ fn sync_codex_tui_config(
         toml::Value::Table(toml::map::Map::new())
     };
 
-    let root = doc
-        .as_table_mut()
-        .ok_or_else(|| AppError::InvalidInput(format!("{} root must be a TOML table", config_path.display())))?;
+    let root = doc.as_table_mut().ok_or_else(|| {
+        AppError::InvalidInput(format!(
+            "{} root must be a TOML table",
+            config_path.display()
+        ))
+    })?;
     let tui_value = root
         .entry("tui".to_string())
         .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
@@ -240,8 +243,7 @@ fn sync_codex_tui_config(
         toml::Value::String("always".to_string()),
     );
 
-    let serialized =
-        toml::to_string_pretty(&doc).map_err(|e| AppError::Internal(e.to_string()))?;
+    let serialized = toml::to_string_pretty(&doc).map_err(|e| AppError::Internal(e.to_string()))?;
     atomic_write(&config_path, &serialized)?;
     Ok(())
 }
