@@ -34,7 +34,7 @@ Track validated activity only in DamHopper-managed interactive PTYs. Persist no 
 | 3 | [SQLite store, retention, privacy](./phase-03-sqlite-store-retention-privacy.md) | Complete (2026-07-26) | 40h | 1-2 |
 | 4 | [Aggregate API and controls](./phase-04-aggregate-api-and-controls.md) | Complete (2026-07-26; approved with warnings) | 32h | 3 |
 | 5 | [Codex loopback OTel adapter](./phase-05-codex-loopback-otel-adapter.md) | Complete (2026-07-26; approved) | 32h | 1, 3-4 |
-| 6 | [Usage UI and compact navigation](./phase-06-usage-ui-and-compact-navigation.md) | Pending | 40h | 4-5 |
+| 6 | [Usage UI and compact navigation](./phase-06-usage-ui-and-compact-navigation.md) | Complete (2026-07-26; approved) | 40h | 4-5 |
 | 7 | [Security, fault, performance, docs](./phase-07-security-fault-performance-docs.md) | Pending | 32h | 1-6 |
 
 ## Delivery gates
