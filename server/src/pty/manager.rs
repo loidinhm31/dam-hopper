@@ -3,12 +3,13 @@ use std::{
     ffi::OsString,
     io::Read as _,
     sync::{atomic::Ordering, Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use portable_pty::{Child as PtyChild, CommandBuilder, NativePtySystem, PtySize, PtySystem as _};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 use crate::{
     config::schema::RestartPolicy,
@@ -20,6 +21,11 @@ use crate::{
         session::{DeadSession, LiveSession, RespawnOpts, SessionMeta, SessionType},
         shell_integration::{interactive_shell_executable, ShellIntegration},
         shell_lifecycle::{LifecycleEvent, LifecycleState, ShellLifecycle},
+    },
+    telemetry::{
+        CaptureQuality, CommandClassifier, CommandEvent, CommandEventId, CommandOutcome,
+        NoopTelemetrySink, NormalizedCommand, TelemetrySink, TerminalRunId,
+        TELEMETRY_SCHEMA_VERSION,
     },
 };
 
@@ -146,6 +152,8 @@ pub struct PtySessionManager {
     /// Backend diagnostics store — set after construction via `set_diagnostics`.
     /// Reader threads and lifecycle methods record terminal events here (Phase 03).
     diagnostics: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
+    telemetry_sink: Arc<dyn TelemetrySink>,
+    command_classifier: Option<Arc<CommandClassifier>>,
 }
 
 struct Inner {
@@ -180,6 +188,34 @@ impl PtySessionManager {
         persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
         session_store: Option<std::sync::Arc<crate::persistence::SessionStore>>,
     ) -> Self {
+        // Phase 03 supplies the durable telemetry worker. Until then, the
+        // default server path intentionally keeps telemetry disabled.
+        Self::with_persist_and_telemetry(
+            sink,
+            persist_tx,
+            session_store,
+            Arc::new(NoopTelemetrySink::new()),
+            None,
+        )
+    }
+
+    pub fn with_telemetry(
+        sink: Arc<dyn EventSink>,
+        telemetry_sink: Arc<dyn TelemetrySink>,
+        command_classifier: Arc<CommandClassifier>,
+    ) -> Self {
+        // This constructor is the Phase 02 integration seam for the Phase 03
+        // durable worker, while keeping telemetry capture non-blocking.
+        Self::with_persist_and_telemetry(sink, None, None, telemetry_sink, Some(command_classifier))
+    }
+
+    pub fn with_persist_and_telemetry(
+        sink: Arc<dyn EventSink>,
+        persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+        session_store: Option<std::sync::Arc<crate::persistence::SessionStore>>,
+        telemetry_sink: Arc<dyn TelemetrySink>,
+        command_classifier: Option<Arc<CommandClassifier>>,
+    ) -> Self {
         // Bounded channel prevents DoS if supervisor hangs/panics.
         // 256 slots = ~5× typical max sessions (50). If full, supervisor is dead/slow.
         let (respawn_tx, respawn_rx) = mpsc::channel(256);
@@ -198,6 +234,8 @@ impl PtySessionManager {
             session_store,
             port_forward_manager: Arc::new(std::sync::RwLock::new(None)),
             diagnostics: Arc::new(std::sync::RwLock::new(None)),
+            telemetry_sink,
+            command_classifier,
         };
 
         // Spawn the supervisor task that handles respawn requests.
@@ -205,6 +243,8 @@ impl PtySessionManager {
         let sink_clone = Arc::clone(&sink);
         let pfm_cell = Arc::clone(&manager.port_forward_manager);
         let diag_cell = Arc::clone(&manager.diagnostics);
+        let telemetry_sink = Arc::clone(&manager.telemetry_sink);
+        let command_classifier = manager.command_classifier.clone();
         tokio::spawn(supervisor_loop(
             respawn_rx,
             inner_clone,
@@ -213,6 +253,8 @@ impl PtySessionManager {
             persist_tx_clone,
             pfm_cell,
             diag_cell,
+            telemetry_sink,
+            command_classifier,
         ));
 
         manager
@@ -306,6 +348,7 @@ impl PtySessionManager {
         );
 
         let lifecycle = integration.as_ref().map(ShellIntegration::lifecycle);
+        let run_id = TerminalRunId(Uuid::new_v4());
         let session = LiveSession::new(
             meta.clone(),
             pair.master,
@@ -385,6 +428,8 @@ impl PtySessionManager {
         let port_forward_manager = self.port_forward_manager.read().unwrap().clone();
         let rt_handle = tokio::runtime::Handle::try_current().ok();
         let diag_store = self.diagnostics.read().unwrap().clone();
+        let telemetry_sink = Arc::clone(&self.telemetry_sink);
+        let command_classifier = self.command_classifier.clone();
 
         std::thread::Builder::new()
             .name(format!("pty-reader:{session_id}"))
@@ -405,6 +450,9 @@ impl PtySessionManager {
                     diag_store,
                     lifecycle,
                     published_editing,
+                    run_id,
+                    telemetry_sink,
+                    command_classifier,
                 );
             })
             .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
@@ -815,6 +863,175 @@ fn consume_suppressed_exit(inner: &mut Inner, session_id: &str) -> bool {
     true
 }
 
+struct PendingTelemetryCommand {
+    normalized: NormalizedCommand,
+    sequence: u64,
+    occurred_at_utc_ms: i64,
+    submitted_at: Instant,
+    execution_started: bool,
+}
+
+struct TelemetryContext {
+    run_id: TerminalRunId,
+    next_sequence: u64,
+    editing_seen: bool,
+    pending: Option<PendingTelemetryCommand>,
+    sink: Arc<dyn TelemetrySink>,
+    classifier: Option<Arc<CommandClassifier>>,
+}
+
+impl TelemetryContext {
+    fn new(
+        run_id: TerminalRunId,
+        sink: Arc<dyn TelemetrySink>,
+        classifier: Option<Arc<CommandClassifier>>,
+    ) -> Self {
+        Self {
+            run_id,
+            next_sequence: 1,
+            editing_seen: false,
+            pending: None,
+            sink,
+            classifier,
+        }
+    }
+
+    fn observe(&mut self, event: &LifecycleEvent) {
+        match event.state {
+            LifecycleState::Submitted => {
+                let Some(command) = event.command.as_deref() else {
+                    return;
+                };
+                let Some(classifier) = &self.classifier else {
+                    return;
+                };
+                let normalized = classifier.normalize(command);
+                self.finish_pending(CommandOutcome::Unknown, None, CaptureQuality::Partial);
+                let sequence = self.next_sequence;
+                self.next_sequence = self.next_sequence.saturating_add(1);
+                self.pending = Some(PendingTelemetryCommand {
+                    normalized,
+                    sequence,
+                    occurred_at_utc_ms: utc_now_ms(),
+                    submitted_at: Instant::now(),
+                    execution_started: false,
+                });
+            }
+            LifecycleState::Opaque => {
+                if let Some(pending) = &mut self.pending {
+                    pending.execution_started = true;
+                }
+            }
+            LifecycleState::Finished => {
+                let quality = event
+                    .exit_code
+                    .map(|_| CaptureQuality::Rich)
+                    .unwrap_or(CaptureQuality::Partial);
+                let outcome = match event.exit_code {
+                    Some(0) => CommandOutcome::Succeeded,
+                    Some(_) => CommandOutcome::Failed,
+                    None => CommandOutcome::Unknown,
+                };
+                self.finish_pending(outcome, event.exit_code, quality);
+                self.editing_seen = false;
+            }
+            LifecycleState::Unverified => {
+                if self.pending.is_none() && self.editing_seen {
+                    self.record_unavailable();
+                }
+                self.finish_pending(CommandOutcome::Unknown, None, CaptureQuality::Partial);
+                self.editing_seen = false;
+            }
+            LifecycleState::Prompt => {}
+            LifecycleState::Editing => self.editing_seen = true,
+        }
+    }
+
+    fn finish_interrupted(&mut self) {
+        self.finish_pending(CommandOutcome::Interrupted, None, CaptureQuality::Partial);
+    }
+
+    fn finish_pending(
+        &mut self,
+        outcome: CommandOutcome,
+        exit_code: Option<i32>,
+        quality: CaptureQuality,
+    ) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        let duration_ms = pending
+            .submitted_at
+            .elapsed()
+            .as_millis()
+            .min(u64::MAX as u128) as u64;
+        self.sink.try_record(CommandEvent {
+            schema_version: TELEMETRY_SCHEMA_VERSION,
+            id: CommandEventId {
+                run_id: self.run_id,
+                sequence: pending.sequence,
+            },
+            occurred_at_utc_ms: pending.occurred_at_utc_ms,
+            duration_ms: Some(duration_ms),
+            exit_code,
+            outcome,
+            category: pending.normalized.category,
+            executable: pending.normalized.executable,
+            argument_count: pending.normalized.argument_count,
+            fingerprint: pending.normalized.fingerprint,
+            capture_quality: if pending.execution_started {
+                combine_capture_quality(pending.normalized.capture_quality, quality)
+            } else {
+                CaptureQuality::Partial
+            },
+        });
+    }
+
+    fn record_unavailable(&mut self) {
+        let Some(classifier) = &self.classifier else {
+            return;
+        };
+        let normalized = classifier.normalize("");
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        self.sink.try_record(CommandEvent {
+            schema_version: TELEMETRY_SCHEMA_VERSION,
+            id: CommandEventId {
+                run_id: self.run_id,
+                sequence,
+            },
+            occurred_at_utc_ms: utc_now_ms(),
+            duration_ms: None,
+            exit_code: None,
+            outcome: CommandOutcome::Unknown,
+            category: normalized.category,
+            executable: normalized.executable,
+            argument_count: normalized.argument_count,
+            fingerprint: normalized.fingerprint,
+            capture_quality: CaptureQuality::Unavailable,
+        });
+    }
+}
+
+fn utc_now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(i64::MAX as u128) as i64
+}
+
+fn combine_capture_quality(
+    normalized: CaptureQuality,
+    lifecycle: CaptureQuality,
+) -> CaptureQuality {
+    match (normalized, lifecycle) {
+        (CaptureQuality::Rich, CaptureQuality::Rich) => CaptureQuality::Rich,
+        (CaptureQuality::Unavailable, _) => CaptureQuality::Unavailable,
+        _ => CaptureQuality::Partial,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Reader thread
 // ---------------------------------------------------------------------------
@@ -835,6 +1052,9 @@ fn reader_thread(
     diag_store: Option<DiagnosticStore>,
     lifecycle: Option<Arc<Mutex<ShellLifecycle>>>,
     published_editing: Arc<std::sync::atomic::AtomicBool>,
+    run_id: TerminalRunId,
+    telemetry_sink: Arc<dyn TelemetrySink>,
+    command_classifier: Option<Arc<CommandClassifier>>,
 ) {
     // Local helper to record a terminal lifecycle event from the reader thread.
     let record_diag = |message: &str, mut fields: BTreeMap<String, String>| {
@@ -857,6 +1077,7 @@ fn reader_thread(
                                                  // Marker-only chunks must not announce editing before prompt bytes exist.
     let mut pending_lifecycle_events: Vec<(u64, LifecycleEvent)> = Vec::new();
     let mut visible_output_since_boundary = false;
+    let mut telemetry = TelemetryContext::new(run_id, telemetry_sink, command_classifier);
 
     loop {
         if shutdown.load(Ordering::Relaxed) {
@@ -873,20 +1094,26 @@ fn reader_thread(
             Ok(n) => {
                 let data = &chunk[..n];
                 let visible_data = if let Some(lifecycle) = &lifecycle {
-                    let mut lifecycle = lifecycle.lock().unwrap();
-                    let generation = lifecycle.generation();
-                    if let Some(event) = lifecycle.observe_alternate_buffer(data) {
-                        pending_lifecycle_events.push((generation, event));
-                    }
-                    let (visible_data, events) = lifecycle.feed_visible(data);
+                    let (visible_data, generation, events) = {
+                        let mut lifecycle = lifecycle.lock().unwrap();
+                        let generation = lifecycle.generation();
+                        let alternate_buffer_event = lifecycle.observe_alternate_buffer(data);
+                        let (visible_data, mut events) = lifecycle.feed_visible(data);
+                        if let Some(event) = alternate_buffer_event {
+                            events.insert(0, event);
+                        }
+                        (visible_data, generation, events)
+                    };
                     if events
                         .iter()
                         .any(|event| event.state != LifecycleState::Editing)
                     {
                         published_editing.store(false, Ordering::Release);
                     }
-                    pending_lifecycle_events
-                        .extend(events.into_iter().map(|event| (generation, event)));
+                    for event in events {
+                        telemetry.observe(&event);
+                        pending_lifecycle_events.push((generation, event));
+                    }
                     visible_data
                 } else {
                     data.to_vec()
@@ -954,6 +1181,8 @@ fn reader_thread(
             }
         }
     }
+
+    telemetry.finish_interrupted();
 
     // Collect real exit code from child. By the time the PTY reader sees EOF the
     // child has exited (slave-side fd closed), so wait() returns immediately.
@@ -1184,6 +1413,8 @@ async fn supervisor_loop(
     persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     pfm_cell: Arc<std::sync::RwLock<Option<Arc<PortForwardManager>>>>,
     diag_cell: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
+    telemetry_sink: Arc<dyn TelemetrySink>,
+    command_classifier: Option<Arc<CommandClassifier>>,
 ) {
     while let Some(cmd) = respawn_rx.recv().await {
         let session_id = cmd.id.clone();
@@ -1224,6 +1455,8 @@ async fn supervisor_loop(
             persist_tx.clone(),
             pfm,
             diag_store.clone(),
+            Arc::clone(&telemetry_sink),
+            command_classifier.clone(),
         )
         .await
         {
@@ -1257,6 +1490,8 @@ async fn respawn_internal(
     persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     port_forward_manager: Option<Arc<PortForwardManager>>,
     diag_store: Option<DiagnosticStore>,
+    telemetry_sink: Arc<dyn TelemetrySink>,
+    command_classifier: Option<Arc<CommandClassifier>>,
 ) -> Result<(), AppError> {
     let opts = &cmd.respawn_opts;
 
@@ -1328,6 +1563,7 @@ async fn respawn_internal(
 
     let child_killer = child.clone_killer();
     let lifecycle = integration.as_ref().map(ShellIntegration::lifecycle);
+    let run_id = TerminalRunId(Uuid::new_v4());
     let session = LiveSession::new(
         meta.clone(),
         pair.master,
@@ -1398,6 +1634,9 @@ async fn respawn_internal(
                 diag_store,
                 lifecycle,
                 published_editing,
+                run_id,
+                telemetry_sink,
+                command_classifier,
             );
         })
         .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
@@ -1733,5 +1972,92 @@ mod tests {
             matches!(err, AppError::SessionNotFound(_)),
             "Expected SessionNotFound error, got: {err:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod telemetry_context_tests {
+    use super::*;
+    use crate::telemetry::{
+        privacy::load_or_create_hmac_key, ChannelTelemetrySink, CommandClassifier,
+    };
+    use std::sync::Arc;
+
+    fn event(
+        state: LifecycleState,
+        command: Option<&str>,
+        exit_code: Option<i32>,
+    ) -> LifecycleEvent {
+        LifecycleEvent {
+            state,
+            command: command.map(str::to_string),
+            exit_code,
+        }
+    }
+
+    #[test]
+    fn records_normalized_completion_with_monotonic_duration() {
+        let directory = tempfile::tempdir().unwrap();
+        let key = Arc::new(load_or_create_hmac_key(&directory.path().join("key")).unwrap());
+        let classifier = Arc::new(CommandClassifier::new(key));
+        let (sink, receiver) = ChannelTelemetrySink::channel(2);
+        let run_id = TerminalRunId(Uuid::new_v4());
+        let mut context = TelemetryContext::new(run_id, Arc::new(sink), Some(classifier));
+
+        context.observe(&event(
+            LifecycleState::Submitted,
+            Some("git status fixture-secret"),
+            None,
+        ));
+        context.observe(&event(LifecycleState::Opaque, None, None));
+        context.observe(&event(LifecycleState::Finished, None, Some(0)));
+
+        let recorded = receiver.try_recv().unwrap();
+        assert_eq!(recorded.id.run_id, run_id);
+        assert_eq!(recorded.id.sequence, 1);
+        assert_eq!(recorded.outcome, CommandOutcome::Succeeded);
+        assert!(recorded.duration_ms.is_some());
+        assert!(!format!("{recorded:?}").contains("fixture-secret"));
+    }
+
+    #[test]
+    fn incomplete_lifecycle_is_unknown_and_sequence_is_deterministic() {
+        let directory = tempfile::tempdir().unwrap();
+        let key = Arc::new(load_or_create_hmac_key(&directory.path().join("key")).unwrap());
+        let classifier = Arc::new(CommandClassifier::new(key));
+        let (sink, receiver) = ChannelTelemetrySink::channel(4);
+        let run_id = TerminalRunId(Uuid::new_v4());
+        let mut context = TelemetryContext::new(run_id, Arc::new(sink), Some(classifier));
+
+        context.observe(&event(LifecycleState::Submitted, Some("false"), None));
+        context.observe(&event(LifecycleState::Unverified, None, None));
+        context.observe(&event(LifecycleState::Submitted, Some("true"), None));
+        context.finish_interrupted();
+
+        let first = receiver.try_recv().unwrap();
+        let second = receiver.try_recv().unwrap();
+        assert_eq!(first.id.sequence, 1);
+        assert_eq!(first.outcome, CommandOutcome::Unknown);
+        assert_eq!(second.id.sequence, 2);
+        assert_eq!(second.outcome, CommandOutcome::Interrupted);
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn ambiguous_edit_is_recorded_as_unavailable_without_command_content() {
+        let directory = tempfile::tempdir().unwrap();
+        let key = Arc::new(load_or_create_hmac_key(&directory.path().join("key")).unwrap());
+        let classifier = Arc::new(CommandClassifier::new(key));
+        let (sink, receiver) = ChannelTelemetrySink::channel(2);
+        let run_id = TerminalRunId(Uuid::new_v4());
+        let mut context = TelemetryContext::new(run_id, Arc::new(sink), Some(classifier));
+
+        context.observe(&event(LifecycleState::Editing, None, None));
+        context.observe(&event(LifecycleState::Unverified, None, None));
+
+        let recorded = receiver.try_recv().unwrap();
+        assert_eq!(recorded.capture_quality, CaptureQuality::Unavailable);
+        assert_eq!(recorded.outcome, CommandOutcome::Unknown);
+        assert_eq!(recorded.id.sequence, 1);
     }
 }

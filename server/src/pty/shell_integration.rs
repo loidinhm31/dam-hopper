@@ -26,6 +26,35 @@ enum Shell {
     Fish,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShellIntegrationCapabilities {
+    pub name: &'static str,
+    pub version: &'static str,
+    pub supports_exit_status: bool,
+}
+
+impl Shell {
+    fn capabilities(self) -> ShellIntegrationCapabilities {
+        match self {
+            Self::Bash => ShellIntegrationCapabilities {
+                name: "bash",
+                version: "1",
+                supports_exit_status: true,
+            },
+            Self::Zsh => ShellIntegrationCapabilities {
+                name: "zsh",
+                version: "1",
+                supports_exit_status: true,
+            },
+            Self::Fish => ShellIntegrationCapabilities {
+                name: "fish",
+                version: "1",
+                supports_exit_status: true,
+            },
+        }
+    }
+}
+
 pub(super) fn interactive_shell_executable(
     command: &str,
     env: &HashMap<String, String>,
@@ -56,6 +85,7 @@ pub struct ShellIntegration {
     init_file: TempPath,
     init_dir: Option<TempDir>,
     shell: Shell,
+    capabilities: ShellIntegrationCapabilities,
     lifecycle: Arc<Mutex<ShellLifecycle>>,
 }
 
@@ -100,13 +130,17 @@ impl ShellIntegration {
         };
         let mut bytes = [0_u8; 24];
         OsRng.fill_bytes(&mut bytes);
+        let capabilities = shell.capabilities();
         Some(Self {
             init_file,
             init_dir,
             shell,
-            lifecycle: Arc::new(Mutex::new(ShellLifecycle::new(
+            capabilities,
+            lifecycle: Arc::new(Mutex::new(ShellLifecycle::new_with_capabilities(
                 URL_SAFE_NO_PAD.encode(bytes),
                 NEXT_LIFECYCLE_GENERATION.fetch_add(1, Ordering::Relaxed),
+                capabilities.version,
+                capabilities.supports_exit_status,
             ))),
         })
     }
@@ -135,6 +169,10 @@ impl ShellIntegration {
 
     pub fn lifecycle(&self) -> Arc<Mutex<ShellLifecycle>> {
         Arc::clone(&self.lifecycle)
+    }
+
+    pub fn capabilities(&self) -> ShellIntegrationCapabilities {
+        self.capabilities
     }
 }
 
@@ -202,6 +240,41 @@ mod tests {
             String::from_utf8_lossy(&output.stderr),
         );
         assert!(!output.stdout.windows(5).any(|window| window == b"633;"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bash_preserves_command_status_before_user_prompt_hooks() {
+        let env = HashMap::from([("SHELL".into(), "/bin/bash".into())]);
+        let integration = ShellIntegration::prepare("", &env).expect("bash adapter");
+        assert_eq!(integration.capabilities().version, "1");
+        assert!(integration.capabilities().supports_exit_status);
+        let home = tempfile::tempdir().expect("temporary home");
+        fs::write(
+            home.path().join(".bashrc"),
+            "PROMPT_COMMAND='printf user-hook\\n'\n",
+        )
+        .expect("write bashrc");
+        let output = run_bash(&integration, home.path(), b"false\nexit\n");
+        let events = lifecycle_events(&integration, &output);
+        assert!(events.iter().any(|event| {
+            event.state == super::super::shell_lifecycle::LifecycleState::Finished
+                && event.exit_code == Some(1)
+        }));
+    }
+
+    #[test]
+    fn all_shell_adapters_keep_status_and_nonce_in_completion_marker() {
+        let bash = include_str!("../../assets/shell-integration/bash.sh");
+        let zsh = include_str!("../../assets/shell-integration/zsh.zsh");
+        let fish = include_str!("../../assets/shell-integration/fish.fish");
+        for asset in [bash, zsh, fish] {
+            assert!(
+                asset.contains("%s;%s;%s"),
+                "status marker missing nonce: {asset}"
+            );
+        }
+        assert!(zsh.contains("precmd_functions=(__dh_precmd"));
     }
 
     #[cfg(unix)]

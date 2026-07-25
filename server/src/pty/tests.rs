@@ -26,6 +26,9 @@ mod pty_tests {
         },
         shell_lifecycle::{LifecycleEvent, LifecycleState},
     };
+    use crate::telemetry::{
+        load_or_create_hmac_key, ChannelTelemetrySink, CommandClassifier, CommandOutcome,
+    };
 
     // Shared multi-thread Tokio runtime for tests. PtySessionManager::new
     // calls tokio::spawn (supervisor loop) which requires an active runtime.
@@ -538,6 +541,7 @@ mod pty_tests {
             LifecycleEvent {
                 state: LifecycleState::Editing,
                 command: None,
+                exit_code: None,
             },
         )];
 
@@ -569,6 +573,7 @@ mod pty_tests {
             LifecycleEvent {
                 state: LifecycleState::Editing,
                 command: None,
+                exit_code: None,
             },
         )];
 
@@ -593,6 +598,7 @@ mod pty_tests {
             LifecycleEvent {
                 state: LifecycleState::Editing,
                 command: None,
+                exit_code: None,
             },
         )];
 
@@ -621,6 +627,7 @@ mod pty_tests {
                 LifecycleEvent {
                     state: LifecycleState::Unverified,
                     command: None,
+                    exit_code: None,
                 },
             ),
             (
@@ -628,6 +635,7 @@ mod pty_tests {
                 LifecycleEvent {
                     state: LifecycleState::Editing,
                     command: None,
+                    exit_code: None,
                 },
             ),
         ];
@@ -719,6 +727,41 @@ mod pty_tests {
             events.lock().unwrap()
         );
         mgr.remove("terminal:explicit-bash").unwrap();
+    }
+
+    #[test]
+    fn real_pty_emits_normalized_command_to_bounded_telemetry_sink() {
+        let directory = tempfile::tempdir().unwrap();
+        let classifier = Arc::new(CommandClassifier::new(Arc::new(
+            load_or_create_hmac_key(&directory.path().join("telemetry-key")).unwrap(),
+        )));
+        let (telemetry_sink, receiver) = ChannelTelemetrySink::channel(8);
+        let mgr = test_rt().block_on(async {
+            PtySessionManager::with_persist_and_telemetry(
+                Arc::new(NoopEventSink),
+                None,
+                None,
+                Arc::new(telemetry_sink),
+                Some(classifier),
+            )
+        });
+        let home = tempfile::tempdir().unwrap();
+        let options = PtyCreateOpts {
+            env: HashMap::from([
+                ("TERM".into(), "xterm-256color".into()),
+                ("HOME".into(), home.path().to_string_lossy().into_owned()),
+            ]),
+            ..opts("terminal:telemetry-e2e", "bash")
+        };
+        mgr.create(options).unwrap();
+        mgr.write("terminal:telemetry-e2e", b"false\n").unwrap();
+        let event = receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("validated command telemetry");
+        assert_eq!(event.outcome, CommandOutcome::Failed);
+        assert_eq!(event.exit_code, Some(1));
+        assert!(event.duration_ms.is_some());
+        mgr.remove("terminal:telemetry-e2e").unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
