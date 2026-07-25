@@ -28,7 +28,7 @@ Track validated activity only in DamHopper-managed interactive PTYs. Persist no 
 
 | # | Phase | Status | Effort | Dependency |
 |---|---|---|---:|---|
-| 1 | [Contracts, config, OTLP spike](./phase-01-contracts-config-otlp-spike.md) | Pending | 24h | None |
+| 1 | [Contracts, config, OTLP spike](./phase-01-contracts-config-otlp-spike.md) | Complete (2026-07-26) | 24h | None |
 | 2 | [Validated shell lifecycle capture](./phase-02-validated-shell-lifecycle-capture.md) | Pending | 32h | 1 |
 | 3 | [SQLite store, retention, privacy](./phase-03-sqlite-store-retention-privacy.md) | Pending | 40h | 1-2 |
 | 4 | [Aggregate API and controls](./phase-04-aggregate-api-and-controls.md) | Pending | 32h | 3 |
