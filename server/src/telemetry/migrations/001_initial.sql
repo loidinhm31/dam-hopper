@@ -68,6 +68,10 @@ CREATE TABLE IF NOT EXISTS daily_usage_rollups (
     cached_input_tokens_sum INTEGER NOT NULL DEFAULT 0,
     output_tokens_sum INTEGER NOT NULL DEFAULT 0,
     reasoning_tokens_sum INTEGER NOT NULL DEFAULT 0,
+    input_tokens_count INTEGER NOT NULL DEFAULT 0,
+    cached_input_tokens_count INTEGER NOT NULL DEFAULT 0,
+    output_tokens_count INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens_count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (utc_day, project, shell, category, model)
 );
 

@@ -37,6 +37,7 @@ impl TelemetryStore {
         let connection = Connection::open(path)?;
         configure(&connection)?;
         connection.execute_batch(include_str!("migrations/001_initial.sql"))?;
+        ensure_token_rollup_availability_columns(&connection)?;
         restrict_storage_files(path)?;
         Ok(Self {
             path: Arc::new(path.to_path_buf()),
@@ -55,7 +56,14 @@ impl TelemetryStore {
                 TelemetryCmd::TerminalRun(event) => upsert_terminal_run(&transaction, &event)?,
                 TelemetryCmd::TerminalRunEnded(event) => finish_terminal_run(&transaction, &event)?,
                 TelemetryCmd::Command(event) => insert_command(&transaction, &event)?,
-                TelemetryCmd::AgentUsage(event) => insert_agent_usage(&transaction, &event)?,
+                TelemetryCmd::AgentUsage(event) => {
+                    if !insert_agent_usage(&transaction, &event)? {
+                        transaction.execute(
+                            "INSERT INTO telemetry_health(name, value, updated_at_utc_ms) VALUES ('collector_duplicates', 1, ?1) ON CONFLICT(name) DO UPDATE SET value = value + 1, updated_at_utc_ms = excluded.updated_at_utc_ms",
+                            params![event.occurred_at_utc_ms],
+                        )?;
+                    }
+                }
                 TelemetryCmd::Purge {
                     now_utc_ms,
                     detail_retention_days,
@@ -145,6 +153,27 @@ impl TelemetryStore {
     pub fn path_for_tests(&self) -> &Path {
         self.path.as_ref()
     }
+}
+
+fn ensure_token_rollup_availability_columns(
+    connection: &Connection,
+) -> Result<(), rusqlite::Error> {
+    for column in [
+        "input_tokens_count",
+        "cached_input_tokens_count",
+        "output_tokens_count",
+        "reasoning_tokens_count",
+    ] {
+        let exists = connection
+            .prepare("SELECT 1 FROM pragma_table_info('daily_usage_rollups') WHERE name = ?1")?
+            .exists([column])?;
+        if !exists {
+            connection.execute_batch(&format!(
+                "ALTER TABLE daily_usage_rollups ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
+            ))?;
+        }
+    }
+    Ok(())
 }
 
 fn ensure_parent(path: &Path) -> Result<(), std::io::Error> {
@@ -244,13 +273,12 @@ fn insert_command(
 fn insert_agent_usage(
     transaction: &Transaction<'_>,
     event: &AgentUsageEvent,
-) -> Result<(), rusqlite::Error> {
-    transaction.execute(
+) -> Result<bool, rusqlite::Error> {
+    Ok(transaction.execute(
         "INSERT INTO agent_usage_events(dedupe_id, occurred_at_utc_ms, conversation_fingerprint, model, source_version, correlation_quality, counter_semantic, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT(dedupe_id) DO NOTHING",
         params![digest(&event.id), event.occurred_at_utc_ms, event.conversation_fingerprint.as_ref().map(digest), event.model.as_ref().map(|model| String::from(model.clone())), String::from(event.source_version.clone()), correlation(event.correlation_quality), counter_semantic(event.counter_semantic), event.input_tokens.map(|value| value as i64), event.cached_input_tokens.map(|value| value as i64), event.output_tokens.map(|value| value as i64), event.reasoning_tokens.map(|value| value as i64)],
-    )?;
-    Ok(())
+    )? == 1)
 }
 
 fn rollup_and_purge(
@@ -277,15 +305,20 @@ fn rollup_and_purge(
         params![cutoff],
     )?;
     transaction.execute(
-        "INSERT INTO daily_usage_rollups(utc_day, project, shell, category, model, input_tokens_sum, cached_input_tokens_sum, output_tokens_sum, reasoning_tokens_sum)
+        "INSERT INTO daily_usage_rollups(utc_day, project, shell, category, model, input_tokens_sum, cached_input_tokens_sum, output_tokens_sum, reasoning_tokens_sum, input_tokens_count, cached_input_tokens_count, output_tokens_count, reasoning_tokens_count)
          SELECT strftime('%Y-%m-%d', occurred_at_utc_ms / 1000, 'unixepoch'), '', '', '', coalesce(model, ''),
-                coalesce(sum(input_tokens), 0), coalesce(sum(cached_input_tokens), 0), coalesce(sum(output_tokens), 0), coalesce(sum(reasoning_tokens), 0)
+                coalesce(sum(input_tokens), 0), coalesce(sum(cached_input_tokens), 0), coalesce(sum(output_tokens), 0), coalesce(sum(reasoning_tokens), 0),
+                sum(input_tokens IS NOT NULL), sum(cached_input_tokens IS NOT NULL), sum(output_tokens IS NOT NULL), sum(reasoning_tokens IS NOT NULL)
          FROM agent_usage_events WHERE occurred_at_utc_ms < ?1 GROUP BY 1, 5
          ON CONFLICT(utc_day, project, shell, category, model) DO UPDATE SET
            input_tokens_sum = input_tokens_sum + excluded.input_tokens_sum,
            cached_input_tokens_sum = cached_input_tokens_sum + excluded.cached_input_tokens_sum,
            output_tokens_sum = output_tokens_sum + excluded.output_tokens_sum,
-           reasoning_tokens_sum = reasoning_tokens_sum + excluded.reasoning_tokens_sum",
+           reasoning_tokens_sum = reasoning_tokens_sum + excluded.reasoning_tokens_sum,
+           input_tokens_count = input_tokens_count + excluded.input_tokens_count,
+           cached_input_tokens_count = cached_input_tokens_count + excluded.cached_input_tokens_count,
+           output_tokens_count = output_tokens_count + excluded.output_tokens_count,
+           reasoning_tokens_count = reasoning_tokens_count + excluded.reasoning_tokens_count",
         params![cutoff],
     )?;
     if let Some(days) = aggregate_retention_days {
@@ -497,5 +530,48 @@ mod tests {
             0
         );
         assert!(!String::from_utf8_lossy(&fs::read(path).unwrap()).contains("fixture-secret-token"));
+    }
+
+    #[test]
+    fn token_rollups_preserve_component_unavailability() {
+        let temp = TempDir::new().unwrap();
+        let store = TelemetryStore::open(&temp.path().join("telemetry.db")).unwrap();
+        let key = load_or_create_hmac_key(&temp.path().join("key")).unwrap();
+        let usage = AgentUsageEvent {
+            schema_version: TELEMETRY_SCHEMA_VERSION,
+            id: key.digest(b"usage", &[b"partial-components"]),
+            occurred_at_utc_ms: 1,
+            conversation_fingerprint: None,
+            model: Some(CodexModel::new("gpt-5.6-sol").unwrap()),
+            source_version: CodexVersion::unknown(),
+            correlation_quality: CorrelationQuality::Unattributed,
+            counter_semantic: TokenCounterSemantic::Delta,
+            input_tokens: Some(0),
+            cached_input_tokens: None,
+            output_tokens: Some(5),
+            reasoning_tokens: None,
+        };
+        store
+            .write_batch(vec![
+                TelemetryCmd::AgentUsage(usage),
+                TelemetryCmd::Purge {
+                    now_utc_ms: 172_800_002,
+                    detail_retention_days: 1,
+                    aggregate_retention_days: None,
+                },
+            ])
+            .unwrap();
+
+        let aggregate = crate::telemetry::queries::aggregate_token_rollups(
+            &store,
+            &UsageQuery::default(),
+            172_800_002,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(aggregate.input_tokens, Some(0));
+        assert_eq!(aggregate.cached_input_tokens, None);
+        assert_eq!(aggregate.output_tokens, Some(5));
+        assert_eq!(aggregate.reasoning_tokens, None);
     }
 }

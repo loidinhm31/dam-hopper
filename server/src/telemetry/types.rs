@@ -1,3 +1,5 @@
+use std::{collections::HashMap, sync::Mutex};
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -73,6 +75,13 @@ impl CodexVersion {
         }
         Ok(Self(value))
     }
+
+    /// A bounded sentinel for records that omit a usable source version. It
+    /// carries no upstream value and keeps storage compatible with the
+    /// existing non-null column.
+    pub fn unknown() -> Self {
+        Self("unknown".to_string())
+    }
 }
 
 impl TryFrom<String> for CodexVersion {
@@ -116,6 +125,46 @@ pub enum CorrelationQuality {
     Exact,
     Approximate,
     Unattributed,
+}
+
+/// Ephemeral proof that DamHopper launched a direct Codex process with a
+/// matching OTLP resource marker. The marker is safe ASCII, never persisted,
+/// and expires so stale/replayed events degrade to unattributed.
+#[derive(Default)]
+pub struct CodexCorrelationRegistry {
+    markers: Mutex<HashMap<SafeIdentifier, i64>>,
+}
+
+const CODEX_MARKER_TTL_MS: i64 = 24 * 60 * 60 * 1_000;
+const MAX_CODEX_MARKERS: usize = 512;
+
+impl CodexCorrelationRegistry {
+    pub fn register(&self, marker: SafeIdentifier, now_utc_ms: i64) {
+        let mut markers = self
+            .markers
+            .lock()
+            .expect("codex correlation lock poisoned");
+        markers.retain(|_, expires_at| *expires_at > now_utc_ms);
+        if markers.len() >= MAX_CODEX_MARKERS && !markers.contains_key(&marker) {
+            if let Some(oldest) = markers
+                .iter()
+                .min_by_key(|(_, expires_at)| *expires_at)
+                .map(|(marker, _)| marker.clone())
+            {
+                markers.remove(&oldest);
+            }
+        }
+        markers.insert(marker, now_utc_ms.saturating_add(CODEX_MARKER_TTL_MS));
+    }
+
+    pub fn contains(&self, marker: &SafeIdentifier, now_utc_ms: i64) -> bool {
+        let mut markers = self
+            .markers
+            .lock()
+            .expect("codex correlation lock poisoned");
+        markers.retain(|_, expires_at| *expires_at > now_utc_ms);
+        markers.contains_key(marker)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

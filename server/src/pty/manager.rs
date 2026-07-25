@@ -23,11 +23,9 @@ use crate::{
         shell_lifecycle::{LifecycleEvent, LifecycleState, ShellLifecycle},
     },
     telemetry::{
-        CaptureQuality, CommandClassifier, CommandEvent, CommandEventId, CommandOutcome,
-        NoopTelemetrySink, NormalizedCommand, ShellKind, TelemetrySink, TerminalRunEnd,
-        TerminalRunEvent, TerminalRunId,
-        TELEMETRY_SCHEMA_VERSION,
-        worker::TelemetryControl,
+        worker::TelemetryControl, CaptureQuality, CommandClassifier, CommandEvent, CommandEventId,
+        CommandOutcome, NoopTelemetrySink, NormalizedCommand, ShellKind, TelemetrySink,
+        TerminalRunEnd, TerminalRunEvent, TerminalRunId, TELEMETRY_SCHEMA_VERSION,
     },
 };
 
@@ -95,6 +93,8 @@ pub struct PtyCreateOpts {
     pub command: String,
     pub cwd: String,
     pub env: HashMap<String, String>,
+    /// Safe process-local marker, intentionally excluded from persisted env.
+    pub runtime_otlp_run_marker: Option<String>,
     pub cols: u16,
     pub rows: u16,
     pub project: Option<String>,
@@ -111,6 +111,7 @@ impl PtyCreateOpts {
             command: self.command.clone(),
             cwd: self.cwd.clone(),
             env: self.env.clone(),
+            runtime_otlp_run_marker: self.runtime_otlp_run_marker.clone(),
             cols: self.cols,
             rows: self.rows,
             project: self.project.clone(),
@@ -327,7 +328,7 @@ impl PtySessionManager {
 
         let integration = ShellIntegration::prepare(&opts.command, &opts.env);
         let mut cmd = build_command(&opts);
-        apply_child_env(&mut cmd, &opts.env);
+        apply_child_env(&mut cmd, &opts.env, opts.runtime_otlp_run_marker.as_deref());
         if let Some(integration) = &integration {
             integration.apply(&mut cmd);
         }
@@ -1360,6 +1361,7 @@ fn reader_thread(
                     command: String::new(),
                     cwd: String::new(),
                     env: HashMap::new(),
+                    runtime_otlp_run_marker: None,
                     cols: 80,
                     rows: 24,
                     project: None,
@@ -1391,6 +1393,7 @@ fn reader_thread(
                     command: String::new(),
                     cwd: String::new(),
                     env: HashMap::new(),
+                    runtime_otlp_run_marker: None,
                     cols: 80,
                     rows: 24,
                     project: None,
@@ -1603,7 +1606,11 @@ async fn respawn_internal(
     };
 
     build_cmd.cwd(&opts.cwd);
-    apply_child_env(&mut build_cmd, &opts.env);
+    apply_child_env(
+        &mut build_cmd,
+        &opts.env,
+        opts.runtime_otlp_run_marker.as_deref(),
+    );
     if let Some(integration) = &integration {
         integration.apply(&mut build_cmd);
     }
@@ -1799,11 +1806,25 @@ fn build_command(opts: &PtyCreateOpts) -> CommandBuilder {
     cmd
 }
 
-fn apply_child_env(cmd: &mut CommandBuilder, env: &HashMap<String, String>) {
+fn apply_child_env(
+    cmd: &mut CommandBuilder,
+    env: &HashMap<String, String>,
+    runtime_otlp_run_marker: Option<&str>,
+) {
     cmd.env_clear();
     for (key, value) in build_child_env(env) {
         cmd.env(key, value);
     }
+    if let Some(marker) = runtime_otlp_run_marker {
+        cmd.env(
+            "OTEL_RESOURCE_ATTRIBUTES",
+            runtime_otlp_resource_attributes(marker),
+        );
+    }
+}
+
+fn runtime_otlp_resource_attributes(marker: &str) -> String {
+    format!("dam_hopper.run_id={marker}")
 }
 
 fn build_child_env(env: &HashMap<String, String>) -> Vec<(String, OsString)> {
@@ -2057,7 +2078,7 @@ mod tests {
 mod telemetry_context_tests {
     use super::*;
     use crate::telemetry::{
-        privacy::load_or_create_hmac_key, ChannelTelemetrySink, CommandClassifier, TelemetryCmd,
+        ChannelTelemetrySink, CommandClassifier, TelemetryCmd, TelemetryKeyRing,
     };
     use std::sync::Arc;
 
@@ -2083,7 +2104,7 @@ mod telemetry_context_tests {
     #[test]
     fn records_normalized_completion_with_monotonic_duration() {
         let directory = tempfile::tempdir().unwrap();
-        let key = Arc::new(load_or_create_hmac_key(&directory.path().join("key")).unwrap());
+        let key = Arc::new(TelemetryKeyRing::load_or_create(directory.path().join("key")).unwrap());
         let classifier = Arc::new(CommandClassifier::new(key));
         let (sink, receiver) = ChannelTelemetrySink::channel(2);
         let run_id = TerminalRunId(Uuid::new_v4());
@@ -2108,7 +2129,7 @@ mod telemetry_context_tests {
     #[test]
     fn incomplete_lifecycle_is_unknown_and_sequence_is_deterministic() {
         let directory = tempfile::tempdir().unwrap();
-        let key = Arc::new(load_or_create_hmac_key(&directory.path().join("key")).unwrap());
+        let key = Arc::new(TelemetryKeyRing::load_or_create(directory.path().join("key")).unwrap());
         let classifier = Arc::new(CommandClassifier::new(key));
         let (sink, receiver) = ChannelTelemetrySink::channel(4);
         let run_id = TerminalRunId(Uuid::new_v4());
@@ -2131,7 +2152,7 @@ mod telemetry_context_tests {
     #[test]
     fn ambiguous_edit_is_recorded_as_unavailable_without_command_content() {
         let directory = tempfile::tempdir().unwrap();
-        let key = Arc::new(load_or_create_hmac_key(&directory.path().join("key")).unwrap());
+        let key = Arc::new(TelemetryKeyRing::load_or_create(directory.path().join("key")).unwrap());
         let classifier = Arc::new(CommandClassifier::new(key));
         let (sink, receiver) = ChannelTelemetrySink::channel(2);
         let run_id = TerminalRunId(Uuid::new_v4());

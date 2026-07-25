@@ -12,6 +12,8 @@ use crate::config::schema::{RestartPolicy, DEFAULT_RESTART_MAX_RETRIES};
 use crate::error::AppError;
 use crate::pty::manager::PtyCreateOpts;
 use crate::state::AppState;
+use crate::telemetry::SafeIdentifier;
+use uuid::Uuid;
 
 use super::error::ApiError;
 
@@ -49,6 +51,19 @@ pub async fn create_session(
 
     let (restart_policy, restart_max_retries, env) =
         resolve_terminal_env(&state, body.project.as_deref(), body.env).await?;
+    let telemetry = state
+        .telemetry
+        .read()
+        .expect("telemetry state lock poisoned")
+        .clone();
+    let collector_enabled = state.config.read().await.server.telemetry.collector.enabled;
+    let codex_marker = (collector_enabled
+        && telemetry.control.is_enabled()
+        && is_direct_codex_command(&body.command)
+        && !env.contains_key("OTEL_RESOURCE_ATTRIBUTES")
+        // Do not overwrite an inherited collector configuration either.
+        && std::env::var_os("OTEL_RESOURCE_ATTRIBUTES").is_none())
+    .then(|| SafeIdentifier::new(Uuid::new_v4().to_string()).expect("UUID is a safe identifier"));
 
     let meta = state
         .pty_manager
@@ -57,6 +72,9 @@ pub async fn create_session(
             command: body.command,
             cwd,
             env,
+            runtime_otlp_run_marker: codex_marker
+                .as_ref()
+                .map(|marker| marker.as_str().to_string()),
             cols: body.cols,
             rows: body.rows,
             project: body.project,
@@ -64,7 +82,37 @@ pub async fn create_session(
             restart_max_retries,
         })
         .map_err(ApiError::from_app)?;
+    if let Some(marker) = codex_marker {
+        telemetry
+            .codex_correlation
+            .register(marker, chrono::Utc::now().timestamp_millis());
+    }
     Ok(Json(meta))
+}
+
+fn is_direct_codex_command(command: &str) -> bool {
+    let mut words = command.split_ascii_whitespace();
+    matches!(words.next(), Some("codex"))
+        && !command.chars().any(|character| {
+            matches!(
+                character,
+                '|' | ';' | '&' | '>' | '<' | '`' | '$' | '\n' | '\r'
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_direct_codex_command;
+
+    #[test]
+    fn recognizes_only_an_uncomposed_codex_invocation() {
+        assert!(is_direct_codex_command("codex --json"));
+        assert!(!is_direct_codex_command("CODEx --json"));
+        assert!(!is_direct_codex_command("env codex --json"));
+        assert!(!is_direct_codex_command("codex --json && other-command"));
+        assert!(!is_direct_codex_command("codex; other-command"));
+    }
 }
 
 async fn resolve_terminal_cwd(
