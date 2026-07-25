@@ -19,9 +19,9 @@ const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 use crate::state::AppState;
 
 use super::{
-    agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics, fs as fs_api,
-    git, git_diff, port_forward as port_forward_api, settings, ssh, system, terminal, tunnel,
-    workspace, ws,
+    agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
+    fs as fs_api, git, git_diff, port_forward as port_forward_api, settings, ssh, system, terminal,
+    tunnel, usage, workspace, ws,
 };
 
 /// Build the full Axum router with auth middleware, CORS, and all routes.
@@ -69,6 +69,14 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/config", get(config::get_config))
         .route("/api/config", put(config::update_config))
         .route("/api/config/projects/{name}", patch(config::update_project))
+        // Usage analytics is aggregate-only and always protected by this router.
+        .route("/api/usage/summary", get(usage::summary))
+        .route("/api/usage/health", get(usage::health))
+        .route(
+            "/api/usage/settings",
+            get(usage::get_settings).patch(usage::update_settings),
+        )
+        .route("/api/usage", delete(usage::delete_all))
         // Git
         .route("/api/git/fetch", post(git::fetch_projects))
         .route("/api/git/pull", post(git::pull_projects))
@@ -178,8 +186,9 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         )
         .route(
             "/api/browser-debug/artifacts/{id}/png",
-            put(browser_debug::upload_png)
-                .layer(RequestBodyLimitLayer::new(crate::browser_debug::MAX_PNG_BYTES)),
+            put(browser_debug::upload_png).layer(RequestBodyLimitLayer::new(
+                crate::browser_debug::MAX_PNG_BYTES,
+            )),
         )
         .route(
             "/api/browser-debug/artifacts/{id}/handoff",

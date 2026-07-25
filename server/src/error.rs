@@ -1,8 +1,8 @@
 use thiserror::Error;
 
+use crate::browser_debug::BrowserDebugError;
 use crate::fs::FsError;
 use crate::tunnel::TunnelError;
-use crate::browser_debug::BrowserDebugError;
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -20,6 +20,9 @@ pub enum AppError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    #[error("Unavailable: {0}")]
+    Unavailable(String),
 
     #[error("PTY error: {0}")]
     PtyError(String),
@@ -72,6 +75,7 @@ impl AppError {
             | AppError::GitNotFound(_) => 404,
             AppError::Config(_) | AppError::InvalidInput(_) => 400,
             AppError::Fs(e) => e.status_code(),
+            AppError::Unavailable(_) => 503,
             AppError::Tunnel(e) => tunnel_error_status(e),
             AppError::BrowserDebug(e) => e.status_code(),
             _ => 500,

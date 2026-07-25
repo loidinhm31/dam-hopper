@@ -15,6 +15,10 @@ use crate::{
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
+    telemetry::{
+        worker::{TelemetryControl, TelemetryHandle},
+        TelemetryStore,
+    },
     tunnel::{CloudflaredDriver, TunnelSessionManager},
 };
 
@@ -1127,8 +1131,14 @@ async fn config_update_formats_mixed_absolute_project_paths_for_toml() {
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["projects"][0]["path"], inside_dir.to_string_lossy().to_string());
-    assert_eq!(json["projects"][1]["path"], outside_dir.to_string_lossy().to_string());
+    assert_eq!(
+        json["projects"][0]["path"],
+        inside_dir.to_string_lossy().to_string()
+    );
+    assert_eq!(
+        json["projects"][1]["path"],
+        outside_dir.to_string_lossy().to_string()
+    );
 }
 
 #[tokio::test]
@@ -1517,6 +1527,96 @@ fn merge_global_ui_config_rejects_non_object_payloads() {
     .unwrap_err();
 
     assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+}
+
+// ---------------------------------------------------------------------------
+// Usage analytics (aggregate-only)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn usage_summary_requires_auth_and_never_exposes_event_fields() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    activate_telemetry(&state, &tmp);
+
+    let unauthorized = get_without_auth(state.clone(), "/api/usage/summary").await;
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let response = get(state, "/api/usage/summary?window=24h").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(value["terminal"]["commandCount"].is_number());
+    assert!(value["codex"].is_null());
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    for forbidden in [
+        "fingerprint",
+        "command_events",
+        "conversation",
+        "cwd",
+        "path",
+        "modelEvent",
+    ] {
+        assert!(!text.contains(forbidden), "response leaked {forbidden}");
+    }
+}
+
+#[tokio::test]
+async fn usage_summary_rejects_unknown_projects_and_injection_like_filters() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    activate_telemetry(&state, &tmp);
+
+    let unknown = get(state.clone(), "/api/usage/summary?project=missing").await;
+    assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
+    let injection = get(state, "/api/usage/summary?category=x%27%20OR%201%3D1").await;
+    assert_eq!(injection.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn usage_settings_apply_pause_atomically_and_delete_requires_confirmation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    activate_telemetry(&state, &tmp);
+
+    let updated = patch_json(
+        state.clone(),
+        "/api/usage/settings",
+        serde_json::json!({
+            "paused": true,
+            "excludedProjects": ["private"]
+        }),
+    )
+    .await;
+    assert_eq!(updated.status(), StatusCode::OK);
+    let telemetry = state.telemetry.read().unwrap().clone();
+    assert!(!telemetry.control.is_enabled());
+    assert!(std::fs::read_to_string(tmp.path().join("dam-hopper.toml"))
+        .unwrap()
+        .contains("paused = true"));
+
+    let rejected = delete_json(
+        state.clone(),
+        "/api/usage",
+        serde_json::json!({"confirmation": "no"}),
+    )
+    .await;
+    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+    let deleted = delete_json(
+        state,
+        "/api/usage",
+        serde_json::json!({"confirmation": "delete-usage-data"}),
+    )
+    .await;
+    assert_eq!(deleted.status(), StatusCode::OK);
+}
+
+fn activate_telemetry(state: &AppState, tmp: &TempDir) {
+    let store = Arc::new(TelemetryStore::open(&tmp.path().join("telemetry.db")).unwrap());
+    let control = Arc::new(TelemetryControl::new(true, Vec::<String>::new()));
+    state.set_telemetry(TelemetryHandle::active(control, store, None));
 }
 
 #[test]

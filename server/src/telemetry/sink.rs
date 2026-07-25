@@ -42,6 +42,7 @@ impl TelemetrySink for NoopTelemetrySink {
 pub struct ChannelTelemetrySink {
     tx: SyncSender<TelemetryCmd>,
     dropped: Arc<AtomicU64>,
+    control: Option<Arc<super::worker::TelemetryControl>>,
 }
 
 impl ChannelTelemetrySink {
@@ -49,12 +50,28 @@ impl ChannelTelemetrySink {
         Self {
             tx,
             dropped: Arc::new(AtomicU64::new(0)),
+            control: None,
         }
     }
 
     pub fn channel(capacity: usize) -> (Self, Receiver<TelemetryCmd>) {
         let (tx, rx) = mpsc::sync_channel(capacity);
         (Self::new(tx), rx)
+    }
+
+    pub fn channel_with_control(
+        capacity: usize,
+        control: Arc<super::worker::TelemetryControl>,
+    ) -> (Self, Receiver<TelemetryCmd>) {
+        let (tx, rx) = mpsc::sync_channel(capacity);
+        (
+            Self {
+                tx,
+                dropped: Arc::new(AtomicU64::new(0)),
+                control: Some(control),
+            },
+            rx,
+        )
     }
 
     pub fn sender(&self) -> SyncSender<TelemetryCmd> {
@@ -90,6 +107,17 @@ impl TelemetrySink for ChannelTelemetrySink {
 
 impl ChannelTelemetrySink {
     fn try_send(&self, command: TelemetryCmd) {
+        let _admission = self
+            .control
+            .as_ref()
+            .map(|control| control.admission_guard());
+        if self
+            .control
+            .as_ref()
+            .is_some_and(|control| !control.is_enabled())
+        {
+            return;
+        }
         if matches!(
             self.tx.try_send(command),
             Err(TrySendError::Full(_) | TrySendError::Disconnected(_))
@@ -110,6 +138,17 @@ pub enum TelemetryCmd {
         now_utc_ms: i64,
         detail_retention_days: u16,
         aggregate_retention_days: Option<u32>,
+    },
+    Delete {
+        from_utc_ms: Option<i64>,
+        to_utc_ms: Option<i64>,
+        completion: std::sync::mpsc::SyncSender<Result<(), String>>,
+    },
+    ApplyRetention {
+        now_utc_ms: i64,
+        detail_retention_days: u16,
+        aggregate_retention_days: Option<u32>,
+        completion: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
     Shutdown,
 }
