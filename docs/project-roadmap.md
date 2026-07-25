@@ -9,6 +9,15 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Total Phases Completed:** 23 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 5/5, terminal notification center 1/1, inline terminal suggestions 5/5 complete)
 - **Next Milestone:** Complete external release checks: real zsh/fish/Bash PTY, IME, screen-reader, and WebGL/renderer validation
 
+### Terminal Usage Analytics
+
+**Phase 03: SQLite Store, Retention, Privacy — [COMPLETED 2026-07-26]**
+
+- [x] Separate privacy-preserving telemetry SQLite store and migrations
+- [x] Bounded non-blocking writer with WAL and graceful shutdown
+- [x] UTC rollup/purge, project exclusion, delete-all, and retention controls
+- [x] DB secret scan; 100k-row aggregate benchmark deferred to Phase 04 API work
+
 ## Roadmap Phases
 
 ### Phase 01: IDE File Explorer
@@ -268,6 +277,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
   - ✅ Bash, Zsh, and Fish completion markers now carry optional bounded exit status with versioned adapter capabilities and legacy status-less compatibility.
   - ✅ PTY lifecycle capture emits privacy-safe normalized command events with terminal-run/sequence identity through a bounded non-blocking sink; raw command text does not cross the event contract.
   - ✅ The default path remains no-op and non-durable. `ChannelTelemetrySink` is the intentional Phase 03 durable-worker boundary; telemetry storage, worker processing, and usage APIs remain out of scope.
+
+- **2026-07-26:** Completed Terminal Usage Analytics Phase 03: SQLite store, retention, and privacy.
+  - ✅ Added isolated telemetry storage with privacy-safe schema, migrations, and connection pragmas.
+  - ✅ Added bounded non-blocking persistence, UTC rollup/purge, project exclusion, and deletion controls.
+  - ✅ Validated backpressure behavior and database secret scanning; aggregate benchmark remains Phase 04 work.
 
 - **2026-07-16:** Completed Safe Inline Terminal Suggestions Phase 01: Security containment and history privacy.
   - ✅ Removed PTY-silence authorization, automatic overlay rendering, input interception, and automatic command recording

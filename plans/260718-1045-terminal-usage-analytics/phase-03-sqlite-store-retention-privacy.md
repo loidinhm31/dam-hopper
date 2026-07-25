@@ -13,8 +13,8 @@
 - Date: 2026-07-18
 - Description: Add separate durable telemetry storage, bounded writer, rollup/purge, privacy controls, and query foundation.
 - Priority: P1
-- Implementation status: Pending
-- Review status: Pending
+- Implementation status: Complete (2026-07-26)
+- Review status: Complete (2026-07-26)
 - Effort: 40h
 
 ## Key Insights
@@ -76,13 +76,13 @@ Daily rollups contain no HMAC/raw event identity. Historical p50/p95 beyond deta
 
 ## Todo list
 
-- [ ] Separate DB and migrations pass.
-- [ ] WAL/busy/foreign-key pragmas verified per connection.
-- [ ] Bounded writer and graceful shutdown pass.
-- [ ] Rollup/purge idempotent at UTC cutoff.
-- [ ] Pause/exclusion/delete controls pass.
-- [ ] 100k fixture benchmark recorded.
-- [ ] DB content secret scan passes.
+- [x] Separate DB and migrations pass.
+- [x] WAL/busy/foreign-key pragmas verified per connection.
+- [x] Bounded writer and graceful shutdown pass.
+- [x] Rollup/purge idempotent at UTC cutoff.
+- [x] Pause/exclusion/delete controls pass.
+- [ ] 100k fixture benchmark deferred to Phase 04 aggregate API work.
+- [x] DB content secret scan passes.
 
 ## Success Criteria
 
