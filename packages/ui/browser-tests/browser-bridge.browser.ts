@@ -58,6 +58,31 @@ describe("browser bridge in Chromium", () => {
       expect(received.at(-1)?.type).toBe("dam-hopper:bridge-ready"),
     );
 
+    const receivedBeforeMalformed = received.length;
+    source.postMessage(
+      {
+        version: BROWSER_BRIDGE_VERSION,
+        type: "dam-hopper:selection",
+        nonce,
+        requestId: "picker",
+        selection: { text: "not a valid bounded selection" },
+      },
+      window.location.origin,
+    );
+    source.postMessage(
+      {
+        version: BROWSER_BRIDGE_VERSION,
+        type: "dam-hopper:execute-page-command",
+        nonce,
+        requestId: "picker",
+      },
+      window.location.origin,
+    );
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
+    expect(received).toHaveLength(receivedBeforeMalformed);
+
     source.postMessage(
       {
         version: BROWSER_BRIDGE_VERSION,

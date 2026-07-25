@@ -117,6 +117,33 @@ describe("prepareManualBrowserImage", () => {
       kind: "too-large",
     });
   });
+
+  it("converts a valid manual JPEG to the PNG-only artifact format", async () => {
+    const close = vi.fn();
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockResolvedValue({ width: 12, height: 8, close }),
+    );
+    const png = new Blob(["converted"], { type: "image/png" });
+    vi.stubGlobal("document", {
+      createElement: (tag: string) =>
+        tag === "canvas"
+          ? {
+              width: 0,
+              height: 0,
+              getContext: () => ({ drawImage: vi.fn() }),
+              toBlob: (callback: (blob: Blob) => void) => callback(png),
+            }
+          : {},
+    });
+
+    const jpeg = new Blob(["jpeg"], { type: "image/jpeg" });
+    await expect(prepareManualBrowserImage(jpeg)).resolves.toEqual({
+      kind: "manual-image",
+      png,
+    });
+    expect(close).toHaveBeenCalledOnce();
+  });
 });
 
 describe("captureBrowserSelection", () => {
@@ -310,5 +337,18 @@ describe("captureBrowserSelection", () => {
       }),
     ).resolves.toEqual({ kind: "too-large" });
     expect(stop).toHaveBeenCalledOnce();
+  });
+});
+
+describe("stopCaptureStream", () => {
+  it("stops every track when a Browser surface closes", async () => {
+    const { stopCaptureStream } = await import("./browser-capture.js");
+    const first = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const second = { stop: vi.fn() } as unknown as MediaStreamTrack;
+
+    stopCaptureStream({ getTracks: () => [first, second] } as MediaStream);
+
+    expect(first.stop).toHaveBeenCalledOnce();
+    expect(second.stop).toHaveBeenCalledOnce();
   });
 });
