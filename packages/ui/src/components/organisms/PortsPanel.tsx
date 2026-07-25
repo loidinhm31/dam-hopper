@@ -10,6 +10,7 @@ import {
   Download,
   AlertCircle,
   ExternalLink,
+  PanelRightOpen,
 } from "lucide-react";
 import QRCode from "react-qr-code";
 import { Button } from "@/components/atoms/Button.js";
@@ -29,6 +30,7 @@ import {
 } from "@/hooks/use-ports.js";
 import { useCopyToClipboard } from "@/hooks/use-clipboard.js";
 import { isLocalServer } from "@/api/server-config.js";
+import type { TunnelInfo } from "@/api/client.js";
 
 // ── Warning banner ────────────────────────────────────────────────────────────
 
@@ -160,12 +162,14 @@ function PortRow({
   isLocal,
   onStartTunnel,
   onStopTunnel,
+  onOpenTunnelInBrowser,
   onKillSession,
 }: {
   entry: PortEntry;
   isLocal: boolean;
   onStartTunnel: (port: number, label: string) => Promise<void>;
   onStopTunnel: (id: string) => Promise<void>;
+  onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
   onKillSession: (sessionId: string) => Promise<void>;
 }) {
   const [showQr, setShowQr] = useState(false);
@@ -320,7 +324,7 @@ function PortRow({
             "ml-3.5 mt-0.5 flex items-center gap-0.5 transition-opacity",
             launchError || isKilling || killConfirmOpen
               ? "opacity-100"
-              : "opacity-0 group-hover:opacity-100",
+              : "opacity-0 group-hover:opacity-100 focus-within:opacity-100",
           )}
         >
           {/* Open shortcut — only when same-host and port not lost */}
@@ -359,7 +363,25 @@ function PortRow({
             <>
               {entry.tunnel?.url && (
                 <>
+                  {onOpenTunnelInBrowser && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onOpenTunnelInBrowser(
+                          entry.tunnel!.url!,
+                          entry.tunnel!,
+                        )
+                      }
+                      title={`Open ${entry.tunnel.url} in embedded Browser`}
+                      aria-label={`Open ${entry.tunnel.url} in embedded Browser`}
+                      className="rounded p-1 hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+                    >
+                      <PanelRightOpen size={11} />
+                    </button>
+                  )}
+
                   <button
+                    type="button"
                     onClick={() => void copy(entry.tunnel!.url!)}
                     title="Copy URL"
                     aria-label="Copy URL"
@@ -374,6 +396,7 @@ function PortRow({
 
                   <div className="relative" ref={qrRef}>
                     <button
+                      type="button"
                       onClick={() => setShowQr((v) => !v)}
                       title="Show QR code"
                       aria-label="Show QR code"
@@ -390,6 +413,7 @@ function PortRow({
                           fgColor="#000000"
                         />
                         <button
+                          type="button"
                           onClick={() => setShowQr(false)}
                           title="Close QR"
                           aria-label="Close QR code"
@@ -404,6 +428,7 @@ function PortRow({
               )}
 
               <button
+                type="button"
                 onClick={() => void onStopTunnel(entry.tunnel!.id)}
                 title="Stop tunnel"
                 aria-label="Stop tunnel"
@@ -542,7 +567,11 @@ function AddPortForm({
 
 // ── Main panel ────────────────────────────────────────────────────────────────
 
-export function PortsPanel() {
+export function PortsPanel({
+  onOpenTunnelInBrowser,
+}: {
+  onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
+} = {}) {
   const {
     ports,
     isLoading,
@@ -618,6 +647,7 @@ export function PortsPanel() {
                 isLocal={localServer}
                 onStartTunnel={handleStartTunnel}
                 onStopTunnel={stopTunnel}
+                onOpenTunnelInBrowser={onOpenTunnelInBrowser}
                 onKillSession={killPortSession}
               />
             ))}

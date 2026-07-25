@@ -4,6 +4,7 @@ import { TerminalRuntimeNavigatorGroup } from "@/components/organisms/TerminalRu
 import type { RuntimeTreeGroup } from "@/lib/terminal-runtime-tree.js";
 import { cn } from "@/lib/utils.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
+import type { TunnelInfo } from "@/api/client.js";
 
 interface Props {
   activeSessionId: string | null;
@@ -21,6 +22,7 @@ interface Props {
   onMoveItem: (groupId: string, draggedId: string, targetId: string) => void;
   onStartTunnel: (port: number, label: string) => Promise<void>;
   onStopTunnel: (id: string) => Promise<void>;
+  onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
 }
 
 export function TerminalRuntimeNavigator({
@@ -39,6 +41,7 @@ export function TerminalRuntimeNavigator({
   onMoveItem,
   onStartTunnel,
   onStopTunnel,
+  onOpenTunnelInBrowser,
 }: Props) {
   const [dragState, setDragState] = useState<
     { type: "group"; id: string } | { type: "item"; id: string; groupId: string } | null
@@ -83,6 +86,7 @@ export function TerminalRuntimeNavigator({
               onSetDragState={setDragState}
               onStartTunnel={onStartTunnel}
               onStopTunnel={onStopTunnel}
+              onOpenTunnelInBrowser={onOpenTunnelInBrowser}
               touchOptimized={touchOptimized}
             />
           ))

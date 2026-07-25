@@ -158,4 +158,73 @@ describe("TerminalRuntimeNavigatorItem", () => {
 
     expect(onOpenDiagnosticsMenu).toHaveBeenCalledWith("worker", 33, 44);
   });
+
+  it("routes a ready tunnel chip to the embedded browser without selecting the session", () => {
+    const onOpenTunnelInBrowser = vi.fn();
+    const stopPropagation = vi.fn();
+    const tree = TerminalRuntimeNavigatorItem({
+      activeSessionId: "web",
+      dragState: null,
+      item: {
+        kind: "session",
+        id: "session:web",
+        groupId: "web",
+        sessionId: "web",
+        label: "web:bash",
+        project: "web",
+        command: "pnpm dev",
+        startedAt: 1,
+        ports: [
+          {
+            port: 3000,
+            project: "web",
+            state: "listening",
+            sessionId: "web",
+            tunnel: {
+              id: "tunnel-1",
+              port: 3000,
+              label: "web",
+              driver: "cloudflared",
+              status: "ready",
+              url: "https://demo.trycloudflare.com",
+              startedAt: 1,
+            },
+            tunnelStatus: "ready",
+            tunnelUrl: "https://demo.trycloudflare.com",
+            tunnelId: "tunnel-1",
+          },
+        ],
+      },
+      onOpenTunnelInBrowser,
+      onMoveItem: () => {},
+      onSetDragState: () => {},
+      onStartTunnel: async () => {},
+      onStopTunnel: async () => {},
+    });
+    const openProps = findElementByTitle(
+      tree,
+      "Open https://demo.trycloudflare.com in embedded Browser",
+    );
+
+    expect(openProps).not.toBeNull();
+    (openProps?.onClick as (event: { stopPropagation: () => void }) => void)?.({
+      stopPropagation,
+    });
+
+    expect(stopPropagation).toHaveBeenCalledOnce();
+    expect(onOpenTunnelInBrowser).toHaveBeenCalledWith(
+      "https://demo.trycloudflare.com",
+      expect.objectContaining({
+        id: "tunnel-1",
+        status: "ready",
+      }),
+    );
+
+    const keydownStopPropagation = vi.fn();
+    (openProps?.onKeyDown as (event: { stopPropagation: () => void }) => void)?.({
+      stopPropagation: keydownStopPropagation,
+    });
+
+    expect(keydownStopPropagation).toHaveBeenCalledOnce();
+  });
 });
