@@ -47,6 +47,17 @@ describe("BrowserDebugPanel capture controls in Chromium", () => {
       );
     });
 
+    const captureFallback = container.querySelector<HTMLDetailsElement>(
+      'details[aria-label="Optional browser image capture"]',
+    );
+    expect(captureFallback).toBeTruthy();
+    expect(captureFallback?.open).toBe(false);
+
+    await act(async () =>
+      captureFallback?.querySelector<HTMLElement>("summary")?.click(),
+    );
+    expect(captureFallback?.open).toBe(true);
+
     const capture = [
       ...container.querySelectorAll<HTMLButtonElement>("button"),
     ].find((button) => button.textContent?.includes("Capture browser tab"));
@@ -133,16 +144,14 @@ describe("BrowserDebugPanel capture controls in Chromium", () => {
           onUrlChange={vi.fn()}
           onNavigate={vi.fn()}
           terminalHandoff={{
-            targets: [
-              {
-                sessionId: "shell:demo",
-                label: "Demo shell",
-                mounted: true,
-                registered: true,
-                alive: true,
-                current: false,
-              },
-            ],
+            target: {
+              sessionId: "shell:demo",
+              label: "Demo shell",
+              mounted: true,
+              registered: true,
+              alive: true,
+              current: true,
+            },
             onPrepare: vi.fn().mockResolvedValue({
               artifact: {
                 artifactId: "artifact-1",
@@ -162,9 +171,6 @@ describe("BrowserDebugPanel capture controls in Chromium", () => {
       );
     });
 
-    await act(async () =>
-      container.querySelector<HTMLInputElement>("input[type=radio]")?.click(),
-    );
     const create = [
       ...container.querySelectorAll<HTMLButtonElement>("button"),
     ].find((button) =>
@@ -187,4 +193,5 @@ describe("BrowserDebugPanel capture controls in Chromium", () => {
       /[\r\n\u001b\u009b]/,
     );
   });
+
 });

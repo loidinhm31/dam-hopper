@@ -37,9 +37,23 @@ describe("BrowserDebugPanel", () => {
     const markup = renderPanel();
 
     expect(markup).toContain('id="browser-debug-url"');
-    expect(markup).toContain('aria-label="Load target URL"');
+    expect(markup).toContain('aria-label="Load address"');
+    expect(markup).toContain('aria-label="Go back"');
+    expect(markup).toContain('aria-label="Go forward"');
+    expect(markup).toContain('aria-label="Reload current page"');
     expect(markup).toContain('data-testid="browser-debug-viewport"');
     expect(markup).toContain("Bridge connected");
+    expect(markup).toContain("Browser console");
+  });
+
+  it("offers saved addresses through the existing address input", () => {
+    const markup = renderPanel({
+      addressHistory: ["http://localhost:3000/projects"],
+    });
+
+    expect(markup).toContain('list="browser-debug-address-history"');
+    expect(markup).toContain('id="browser-debug-address-history"');
+    expect(markup).toContain('value="http://localhost:3000/projects"');
   });
 
   it("renders selection data as inert text", () => {
@@ -119,7 +133,7 @@ describe("BrowserDebugPanel", () => {
     expect(markup).not.toContain("Browser Debug extension required");
   });
 
-  it("renders explicit local-only capture and manual-image actions", () => {
+  it("keeps optional local-only capture and manual-image actions collapsed", () => {
     const markup = renderPanel({
       selection,
       onStartCapture: vi.fn(),
@@ -127,12 +141,29 @@ describe("BrowserDebugPanel", () => {
       captureStatus: "denied",
     });
 
+    expect(markup).toContain('aria-label="Optional browser image capture"');
+    expect(markup).toContain("Optional screenshot capture");
+    expect(markup).not.toContain("<details open");
     expect(markup).toContain("Capture browser tab");
     expect(markup).toContain("Choose PNG or JPEG");
     expect(markup).toContain("Paste image");
     expect(markup).toContain("Screen capture was not granted");
     expect(markup).toContain('accept="image/png,image/jpeg"');
     expect(markup).toContain("nothing is attached or sent from this panel");
+  });
+
+  it("renders bounded Browser console entries as text", () => {
+    const markup = renderPanel({
+      consoleEntries: [
+        { id: 1, level: "warn", message: "Slow request <script>" },
+      ],
+      onClearConsole: vi.fn(),
+    });
+
+    expect(markup).toContain(">warn<");
+    expect(markup).toContain("Slow request &lt;script&gt;");
+    expect(markup).toContain("Clear browser console");
+    expect(markup).not.toContain("<script>");
   });
 
   it("cancels an active picker before Escape reaches its containing panel", () => {

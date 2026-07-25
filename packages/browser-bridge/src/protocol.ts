@@ -7,6 +7,7 @@ export const BROWSER_BRIDGE_VERSION = 1 as const;
 export const MAX_NONCE_LENGTH = 128;
 export const MAX_REQUEST_ID_LENGTH = 128;
 export const MAX_TEXT_LENGTH = 512;
+export const MAX_URL_LENGTH = 2_048;
 export const MAX_ACCESSIBLE_NAME_LENGTH = 256;
 export const MAX_ATTRIBUTE_COUNT = 12;
 export const MAX_ATTRIBUTE_VALUE_LENGTH = 128;
@@ -27,12 +28,26 @@ export const ALLOWED_SELECTION_ATTRIBUTES = [
 export type BrowserBridgeCommandType =
   | "dam-hopper:connect"
   | "dam-hopper:start-picker"
-  | "dam-hopper:stop-picker";
+  | "dam-hopper:stop-picker"
+  | "dam-hopper:go-back"
+  | "dam-hopper:go-forward"
+  | "dam-hopper:reload";
 
 export type BrowserBridgeEventType =
   | "dam-hopper:bridge-ready"
   | "dam-hopper:selection"
+  | "dam-hopper:navigation"
+  | "dam-hopper:console"
   | "dam-hopper:error";
+
+export type BrowserConsoleLevel =
+  | "debug"
+  | "log"
+  | "info"
+  | "warn"
+  | "error";
+
+export type BrowserBridgeCapability = "navigation" | "console";
 
 export type BrowserBridgeErrorCode =
   | "invalid_message"
@@ -70,6 +85,8 @@ export interface BrowserBridgeCommand extends BrowserBridgeEnvelope {
 
 export interface BrowserBridgeReadyEvent extends BrowserBridgeEnvelope {
   type: "dam-hopper:bridge-ready";
+  /** Absent for extensions built before navigation/console support. */
+  capabilities?: BrowserBridgeCapability[];
 }
 
 export interface BrowserBridgeSelectionEvent extends BrowserBridgeEnvelope {
@@ -83,9 +100,22 @@ export interface BrowserBridgeErrorEvent extends BrowserBridgeEnvelope {
   message: string;
 }
 
+export interface BrowserBridgeNavigationEvent extends BrowserBridgeEnvelope {
+  type: "dam-hopper:navigation";
+  url: string;
+}
+
+export interface BrowserBridgeConsoleEvent extends BrowserBridgeEnvelope {
+  type: "dam-hopper:console";
+  level: BrowserConsoleLevel;
+  message: string;
+}
+
 export type BrowserBridgeEvent =
   | BrowserBridgeReadyEvent
   | BrowserBridgeSelectionEvent
+  | BrowserBridgeNavigationEvent
+  | BrowserBridgeConsoleEvent
   | BrowserBridgeErrorEvent;
 
 function isBoundedString(value: unknown, max: number): value is string {
@@ -151,6 +181,28 @@ function isBrowserBridgeErrorCode(
     value === "invalid_nonce" ||
     value === "picker_unavailable" ||
     value === "picker_failed"
+  );
+}
+
+function isBrowserConsoleLevel(value: unknown): value is BrowserConsoleLevel {
+  return (
+    value === "debug" ||
+    value === "log" ||
+    value === "info" ||
+    value === "warn" ||
+    value === "error"
+  );
+}
+
+function isBrowserBridgeCapabilities(
+  value: unknown,
+): value is BrowserBridgeCapability[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 2 &&
+    value.every((capability) =>
+      capability === "navigation" || capability === "console",
+    )
   );
 }
 
@@ -223,7 +275,10 @@ export function parseBrowserBridgeCommand(
   if (
     value.type !== "dam-hopper:connect" &&
     value.type !== "dam-hopper:start-picker" &&
-    value.type !== "dam-hopper:stop-picker"
+    value.type !== "dam-hopper:stop-picker" &&
+    value.type !== "dam-hopper:go-back" &&
+    value.type !== "dam-hopper:go-forward" &&
+    value.type !== "dam-hopper:reload"
   )
     return null;
   return value as unknown as BrowserBridgeCommand;
@@ -239,11 +294,24 @@ export function parseBrowserBridgeEvent(
     !isBoundedString(value.requestId, MAX_REQUEST_ID_LENGTH)
   )
     return null;
-  if (
-    value.type === "dam-hopper:bridge-ready" &&
-    hasExactKeys(value, ["version", "type", "nonce", "requestId"])
-  )
-    return value as unknown as BrowserBridgeReadyEvent;
+  if (value.type === "dam-hopper:bridge-ready") {
+    const legacyReady = hasExactKeys(value, [
+      "version",
+      "type",
+      "nonce",
+      "requestId",
+    ]);
+    const capabilityReady =
+      hasExactKeys(value, [
+        "version",
+        "type",
+        "nonce",
+        "requestId",
+        "capabilities",
+      ]) && isBrowserBridgeCapabilities(value.capabilities);
+    if (legacyReady || capabilityReady)
+      return value as unknown as BrowserBridgeReadyEvent;
+  }
   if (
     value.type === "dam-hopper:selection" &&
     hasExactKeys(value, [
@@ -256,6 +324,26 @@ export function parseBrowserBridgeEvent(
     isBrowserSelectionV1(value.selection)
   )
     return value as unknown as BrowserBridgeSelectionEvent;
+  if (
+    value.type === "dam-hopper:navigation" &&
+    hasExactKeys(value, ["version", "type", "nonce", "requestId", "url"]) &&
+    isBoundedString(value.url, MAX_URL_LENGTH)
+  )
+    return value as unknown as BrowserBridgeNavigationEvent;
+  if (
+    value.type === "dam-hopper:console" &&
+    hasExactKeys(value, [
+      "version",
+      "type",
+      "nonce",
+      "requestId",
+      "level",
+      "message",
+    ]) &&
+    isBrowserConsoleLevel(value.level) &&
+    isBoundedString(value.message, MAX_TEXT_LENGTH)
+  )
+    return value as unknown as BrowserBridgeConsoleEvent;
   if (
     value.type === "dam-hopper:error" &&
     hasExactKeys(value, [

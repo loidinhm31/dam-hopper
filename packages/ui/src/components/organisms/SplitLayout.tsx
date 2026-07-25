@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect, useState } from "react";
+import { useRef, useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -32,6 +32,9 @@ interface LayoutTreeProps {
   onCloseTab: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   suppressTerminalFocus?: boolean;
+  browserOpen?: boolean;
+  renderBrowserContent?: (onClose: () => void) => ReactNode;
+  onCloseBrowser?: () => void;
 }
 
 function LayoutTree({
@@ -45,6 +48,9 @@ function LayoutTree({
   onCloseTab,
   onOpenDiagnosticsMenu,
   suppressTerminalFocus = false,
+  browserOpen = false,
+  renderBrowserContent,
+  onCloseBrowser,
 }: LayoutTreeProps) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -85,6 +91,9 @@ function LayoutTree({
         onCloseTab={onCloseTab}
         onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
         suppressTerminalFocus={suppressTerminalFocus}
+        browserOpen={browserOpen}
+        renderBrowserContent={renderBrowserContent}
+        onCloseBrowser={onCloseBrowser}
       />
     );
   }
@@ -107,6 +116,9 @@ function LayoutTree({
           onCloseTab={onCloseTab}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           suppressTerminalFocus={suppressTerminalFocus}
+          browserOpen={browserOpen}
+          renderBrowserContent={renderBrowserContent}
+          onCloseBrowser={onCloseBrowser}
         />
       </Panel>
       <Separator className="bg-[var(--color-border)] hover:bg-[var(--color-primary)] transition-colors data-[orientation=vertical]:w-px data-[orientation=vertical]:cursor-col-resize data-[orientation=horizontal]:h-px data-[orientation=horizontal]:cursor-row-resize" />
@@ -122,6 +134,9 @@ function LayoutTree({
           onCloseTab={onCloseTab}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           suppressTerminalFocus={suppressTerminalFocus}
+          browserOpen={browserOpen}
+          renderBrowserContent={renderBrowserContent}
+          onCloseBrowser={onCloseBrowser}
         />
       </Panel>
     </Group>
@@ -139,6 +154,9 @@ export interface SplitLayoutProps {
   onCloseTab: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   suppressTerminalFocus?: boolean;
+  browserOpen?: boolean;
+  renderBrowserContent?: (onClose: () => void) => ReactNode;
+  onCloseBrowser?: () => void;
 }
 
 function parseDockTarget(id: string): DockTarget | null {
@@ -177,6 +195,9 @@ export function SplitLayout({
   onCloseTab,
   onOpenDiagnosticsMenu,
   suppressTerminalFocus = false,
+  browserOpen = false,
+  renderBrowserContent,
+  onCloseBrowser,
 }: SplitLayoutProps) {
   // ── dnd-kit drag sensors (8px activation so clicks still work) ──────────
   const sensors = useSensors(
@@ -250,6 +271,9 @@ export function SplitLayout({
           onCloseTab={onCloseTab}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           suppressTerminalFocus={suppressTerminalFocus}
+          browserOpen={browserOpen}
+          renderBrowserContent={renderBrowserContent}
+          onCloseBrowser={onCloseBrowser}
         />
       </div>
       {/* Drag overlay: floating tab label following the pointer */}

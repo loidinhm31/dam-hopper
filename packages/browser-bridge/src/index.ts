@@ -1,9 +1,12 @@
 import { createPicker } from "./picker.js";
+import { observeConsole, observeNavigation } from "./browser-observers.js";
 import {
   BROWSER_BRIDGE_VERSION,
   parseBrowserBridgeCommand,
   type BrowserBridgeErrorCode,
   type BrowserBridgeEvent,
+  type BrowserBridgeCapability,
+  type BrowserConsoleLevel,
   type BrowserSelectionV1,
 } from "./protocol.js";
 
@@ -26,7 +29,9 @@ export function isAllowedParentOrigin(
   options: BrowserBridgeOptions,
 ): boolean {
   if (options.parentOrigin) return options.parentOrigin === origin;
-  if (options.allowedParentOrigins?.includes(origin)) return true;
+  if (options.allowedParentOrigins) {
+    return options.allowedParentOrigins.includes(origin);
+  }
   try {
     const url = new URL(origin);
     return (
@@ -48,6 +53,10 @@ export function installBrowserBridge(
   let activeNonce: string | null = null;
   let activeRequestId: string | null = null;
   let activeParentOrigin: string | null = null;
+  const capabilities: BrowserBridgeCapability[] =
+    options.parentOrigin || options.allowedParentOrigins?.length
+      ? ["navigation", "console"]
+      : [];
   const post = (event: BrowserBridgeEvent): void => {
     if (activeParentOrigin)
       window.parent.postMessage(event, activeParentOrigin);
@@ -67,6 +76,31 @@ export function installBrowserBridge(
       requestId,
     });
   };
+  const sendNavigation = () => {
+    if (!capabilities.includes("navigation") || !activeNonce || !activeRequestId)
+      return;
+    post({
+      version: BROWSER_BRIDGE_VERSION,
+      type: "dam-hopper:navigation",
+      nonce: activeNonce,
+      requestId: activeRequestId,
+      url: window.location.href,
+    });
+  };
+  const sendConsole = (level: BrowserConsoleLevel, message: string) => {
+    if (!capabilities.includes("console") || !activeNonce || !activeRequestId)
+      return;
+    post({
+      version: BROWSER_BRIDGE_VERSION,
+      type: "dam-hopper:console",
+      nonce: activeNonce,
+      requestId: activeRequestId,
+      level,
+      message,
+    });
+  };
+  const stopNavigationObserver = observeNavigation(sendNavigation);
+  const stopConsoleObserver = observeConsole(sendConsole);
   const picker = createPicker({
     onSelection: (selection: BrowserSelectionV1) => {
       if (activeNonce && activeRequestId) {
@@ -107,7 +141,9 @@ export function installBrowserBridge(
         type: "dam-hopper:bridge-ready",
         nonce: command.nonce,
         requestId: command.requestId,
+        capabilities,
       });
+      sendNavigation();
       return;
     }
     if (command.nonce !== activeNonce) return;
@@ -125,6 +161,30 @@ export function installBrowserBridge(
       }
       return;
     }
+    if (
+      command.type === "dam-hopper:go-back" &&
+      capabilities.includes("navigation")
+    ) {
+      picker.stop();
+      history.back();
+      return;
+    }
+    if (
+      command.type === "dam-hopper:go-forward" &&
+      capabilities.includes("navigation")
+    ) {
+      picker.stop();
+      history.forward();
+      return;
+    }
+    if (
+      command.type === "dam-hopper:reload" &&
+      capabilities.includes("navigation")
+    ) {
+      picker.stop();
+      window.location.reload();
+      return;
+    }
     picker.stop();
   };
 
@@ -132,6 +192,8 @@ export function installBrowserBridge(
   return {
     destroy: () => {
       picker.stop();
+      stopNavigationObserver();
+      stopConsoleObserver();
       window.removeEventListener("message", onMessage);
       activeNonce = null;
       activeRequestId = null;

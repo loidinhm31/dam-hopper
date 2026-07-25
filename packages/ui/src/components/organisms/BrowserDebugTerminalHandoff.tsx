@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { BrowserSelectionV1 } from "@dam-hopper/browser-bridge";
 import { Button } from "@/components/atoms/Button.js";
 import {
+  browserTerminalTargetReason,
   isBrowserTerminalTargetReady,
   type BrowserTerminalTarget,
   type PreparedBrowserTerminalArtifact,
@@ -11,7 +12,9 @@ import { BrowserDebugTerminalTargetList } from "./BrowserDebugTerminalTargetList
 
 interface BrowserDebugTerminalHandoffProps {
   selection: BrowserSelectionV1 | null;
-  targets: BrowserTerminalTarget[];
+  mode?: "active" | "select";
+  target: BrowserTerminalTarget | undefined;
+  targets?: BrowserTerminalTarget[];
   onPrepare: (sessionId: string) => Promise<PreparedBrowserTerminalArtifact>;
   onDiscard: (artifactId: string) => Promise<void>;
   onInsert: (
@@ -22,21 +25,24 @@ interface BrowserDebugTerminalHandoffProps {
 
 const PREPARE_ERROR =
   "Couldn’t create the browser bundle. Nothing was inserted; try again.";
-const INSERT_ERROR =
-  "This terminal closed before insertion. Choose another live terminal.";
+const INSERT_ERROR = "This terminal closed before insertion. Create it again.";
 const EXPIRED_ERROR = "This bundle is no longer available. Create it again.";
 
 export function BrowserDebugTerminalHandoff({
   selection,
-  targets,
+  mode = "active",
+  target,
+  targets = target ? [target] : [],
   onPrepare,
   onDiscard,
   onInsert,
 }: BrowserDebugTerminalHandoffProps) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [artifact, setArtifact] =
     useState<PreparedBrowserTerminalArtifact | null>(null);
+  const [artifactTarget, setArtifactTarget] =
+    useState<BrowserTerminalTarget | null>(null);
   const [pending, setPending] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [inserted, setInserted] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +73,7 @@ export function BrowserDebugTerminalHandoff({
     }
     artifactRef.current = null;
     setArtifact(null);
+    setArtifactTarget(null);
     setInserted(false);
     setDialogOpen(false);
     setNotice(null);
@@ -85,11 +92,19 @@ export function BrowserDebugTerminalHandoff({
   );
 
   const selectedTarget = targets.find(
-    (target) => target.sessionId === selectedId,
+    (candidate) => candidate.sessionId === selectedId,
   );
+  const preparationTarget = mode === "active" ? target : selectedTarget;
+  const currentArtifactTarget = artifactTarget
+    ? targets.find((candidate) => candidate.sessionId === artifactTarget.sessionId)
+    : null;
   const canPrepare = Boolean(
-    selection && isBrowserTerminalTargetReady(selectedTarget),
+    selection && isBrowserTerminalTargetReady(preparationTarget),
   );
+  const visibleTarget = currentArtifactTarget ?? artifactTarget ?? preparationTarget;
+  const visibleTargetReason = visibleTarget
+    ? browserTerminalTargetReason(visibleTarget)
+    : null;
 
   const discardArtifact = () => {
     if (artifact && !insertedRef.current) {
@@ -97,29 +112,18 @@ export function BrowserDebugTerminalHandoff({
     }
     setArtifact(null);
     artifactRef.current = null;
-  };
-
-  const selectTarget = (sessionId: string) => {
-    if (sessionId === selectedId) return;
-    preparationEpochRef.current += 1;
-    discardArtifact();
-    insertedRef.current = false;
-    setInserted(false);
-    setSelectedId(sessionId);
-    setDialogOpen(false);
-    setError(null);
-    setNotice(null);
-    setPending(false);
+    setArtifactTarget(null);
   };
 
   const prepare = async () => {
-    if (!selectedTarget || !canPrepare || pending) return;
+    if (!preparationTarget || !canPrepare || pending) return;
+    const targetAtPreparation = preparationTarget;
     const preparationEpoch = ++preparationEpochRef.current;
     setPending(true);
     setError(null);
     setNotice(null);
     try {
-      const nextArtifact = await onPrepare(selectedTarget.sessionId);
+      const nextArtifact = await onPrepare(targetAtPreparation.sessionId);
       if (
         !mountedRef.current ||
         preparationEpoch !== preparationEpochRef.current
@@ -131,6 +135,7 @@ export function BrowserDebugTerminalHandoff({
       setInserted(false);
       artifactRef.current = nextArtifact;
       setArtifact(nextArtifact);
+      setArtifactTarget(targetAtPreparation);
       setNotice("Reviewable artifact ready. No text has been inserted.");
     } catch {
       if (
@@ -149,9 +154,23 @@ export function BrowserDebugTerminalHandoff({
     }
   };
 
+  const selectTarget = (sessionId: string) => {
+    if (sessionId === selectedId) return;
+    preparationEpochRef.current += 1;
+    discardArtifact();
+    insertedRef.current = false;
+    setInserted(false);
+    setSelectedId(sessionId);
+    setDialogOpen(false);
+    setError(null);
+    setNotice(null);
+    setPending(false);
+  };
+
   const insert = async () => {
     if (insertingRef.current || insertedRef.current) return;
-    if (!artifact || !isBrowserTerminalTargetReady(selectedTarget) || pending) {
+    const targetToInsert = currentArtifactTarget ?? undefined;
+    if (!artifact || !isBrowserTerminalTargetReady(targetToInsert) || pending) {
       setDialogOpen(false);
       setError(INSERT_ERROR);
       return;
@@ -165,7 +184,7 @@ export function BrowserDebugTerminalHandoff({
     insertingRef.current = true;
     setPending(true);
     try {
-      await onInsert(selectedTarget, artifact);
+      await onInsert(targetToInsert, artifact);
       insertedRef.current = true;
       setInserted(true);
       setDialogOpen(false);
@@ -183,12 +202,19 @@ export function BrowserDebugTerminalHandoff({
       aria-label="Send reference to terminal"
       className="max-h-40 shrink-0 overflow-y-auto border-t border-[var(--color-border)] px-3 py-3"
     >
-      <BrowserDebugTerminalTargetList
-        disabled={!selection || pending}
-        selectedId={selectedId}
-        targets={targets}
-        onSelect={selectTarget}
-      />
+      {mode === "select" && (
+        <BrowserDebugTerminalTargetList
+          disabled={!selection || pending}
+          selectedId={selectedId}
+          targets={targets}
+          onSelect={selectTarget}
+        />
+      )}
+      <p className="text-xs text-[var(--color-text-muted)]">
+        {visibleTarget
+          ? `${artifactTarget ? "Artifact terminal" : "Current terminal"}: ${visibleTarget.label}${visibleTargetReason ? ` · ${visibleTargetReason}` : ""}`
+          : "Open a terminal before creating an artifact."}
+      </p>
       {error && (
         <p role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">
           {error}
@@ -218,7 +244,7 @@ export function BrowserDebugTerminalHandoff({
           variant="secondary"
           disabled={
             !artifact ||
-            !isBrowserTerminalTargetReady(selectedTarget) ||
+            !isBrowserTerminalTargetReady(currentArtifactTarget ?? undefined) ||
             inserted
           }
           onClick={() => setDialogOpen(true)}
@@ -234,7 +260,7 @@ export function BrowserDebugTerminalHandoff({
       {artifact && (
         <BrowserDebugTerminalHandoffDialog
           open={dialogOpen}
-          targetLabel={selectedTarget?.label ?? "selected terminal"}
+          targetLabel={artifactTarget?.label ?? "current terminal"}
           reference={artifact.reference}
           pending={pending}
           onClose={() => setDialogOpen(false)}

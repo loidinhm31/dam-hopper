@@ -18,17 +18,23 @@ describe("resolveBrowserDebugTarget", () => {
     "http://localhost:5173",
     "http://127.0.0.1:3000",
     "http://[::1]:8080",
-  ])("allows the exact loopback origin %s", (value) => {
+  ])("allows a loopback URL %s", (value) => {
     expect(resolveBrowserDebugTarget(value, [])).toMatchObject({
       origin: new URL(value).origin,
       source: "loopback",
     });
   });
 
-  it("allows only an exact ready tunnel origin", () => {
+  it("allows paths on a ready tunnel origin", () => {
     expect(
       resolveBrowserDebugTarget("https://example.trycloudflare.com", [readyTunnel]),
     ).toMatchObject({ source: "tunnel", origin: readyTunnel.url });
+    expect(
+      resolveBrowserDebugTarget("https://example.trycloudflare.com/settings?tab=logs", [readyTunnel]),
+    ).toMatchObject({
+      source: "tunnel",
+      url: "https://example.trycloudflare.com/settings?tab=logs",
+    });
     expect(
       resolveBrowserDebugTarget("https://other.trycloudflare.com", [readyTunnel]),
     ).toBeNull();
@@ -36,12 +42,8 @@ describe("resolveBrowserDebugTarget", () => {
 
   it.each([
     "https://localhost:3000",
-    "http://localhost:3000/path",
-    "http://localhost:3000?query=yes",
     "http://user@localhost:3000",
-    "http://localhost:3000#fragment",
     "http://127.0.0.2:3000",
-    "https://example.trycloudflare.com/path",
   ])("rejects a non-exact or unapproved URL %s", (value) => {
     expect(resolveBrowserDebugTarget(value, [readyTunnel])).toBeNull();
   });

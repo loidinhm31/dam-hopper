@@ -55,7 +55,30 @@ describe("browser bridge in Chromium", () => {
       window.location.origin,
     );
     await vi.waitFor(() =>
-      expect(received.at(-1)?.type).toBe("dam-hopper:bridge-ready"),
+      expect(
+        received.some((event) => event.type === "dam-hopper:bridge-ready"),
+      ).toBe(true),
+    );
+    await vi.waitFor(() =>
+      expect(received.some((event) => event.type === "dam-hopper:navigation")).toBe(
+        true,
+      ),
+    );
+    expect(
+      received.find((event) => event.type === "dam-hopper:navigation"),
+    ).toMatchObject({ url: expect.any(String) });
+
+    frame.contentWindow?.console.info(
+      "Target console Authorization: Bearer not-for-display",
+    );
+    await vi.waitFor(() =>
+      expect(
+        received.some(
+          (event) =>
+            event.type === "dam-hopper:console" &&
+            event.message === "Target console Authorization=[REDACTED]",
+        ),
+      ).toBe(true),
     );
 
     const receivedBeforeMalformed = received.length;
@@ -165,10 +188,13 @@ describe("browser bridge in Chromium", () => {
       window.location.origin,
     );
     await vi.waitFor(() =>
-      expect(received.at(-1)).toMatchObject({
-        type: "dam-hopper:bridge-ready",
-        nonce: "browser-nonce-after-navigation",
-      }),
+      expect(
+        received.some(
+          (event) =>
+            event.type === "dam-hopper:bridge-ready" &&
+            event.nonce === "browser-nonce-after-navigation",
+        ),
+      ).toBe(true),
     );
     window.removeEventListener("message", onMessage);
   });
@@ -206,7 +232,9 @@ describe("browser bridge in Chromium", () => {
       window.location.origin,
     );
     await vi.waitFor(() =>
-      expect(received.at(-1)?.type).toBe("dam-hopper:bridge-ready"),
+      expect(
+        received.some((event) => event.type === "dam-hopper:bridge-ready"),
+      ).toBe(true),
     );
     window.removeEventListener("message", onMessage);
   });

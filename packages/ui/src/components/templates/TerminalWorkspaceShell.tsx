@@ -15,7 +15,6 @@ export function TerminalWorkspaceShell({
   fleetContent,
   gitContent,
   portsContent,
-  browserContent,
   activatePanelRequest,
   workspaceMode,
   onWorkspaceModeChange,
@@ -27,7 +26,6 @@ export function TerminalWorkspaceShell({
   fleetContent: ReactNode;
   gitContent: ReactNode;
   portsContent?: ReactNode;
-  browserContent?: ReactNode;
   activatePanelRequest?: TerminalWorkspacePanelRequest | null;
   workspaceMode: WorkspaceMode;
   onWorkspaceModeChange: (mode: WorkspaceMode) => void;
@@ -44,7 +42,6 @@ export function TerminalWorkspaceShell({
       return null;
     });
   }, []);
-
   useEffect(() => {
     if (!activatePanelRequest) return;
     // This request prop is an intentional imperative bridge from WorkspacePage.
@@ -63,9 +60,7 @@ export function TerminalWorkspaceShell({
       ? { label: "Git", content: gitContent }
       : activePanelId === "ports"
         ? { label: "Ports", content: portsContent }
-        : activePanelId === "browser"
-          ? { label: "Browser", content: browserContent }
-          : { label: "Fleet Terminal", content: fleetContent };
+        : { label: "Fleet Terminal", content: fleetContent };
 
   return (
     <div className="flex h-screen flex-col overflow-hidden gradient-bg">

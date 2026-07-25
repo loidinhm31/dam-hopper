@@ -151,11 +151,11 @@ the existing safe not-found response.
 
 The UI Browser tool embeds a development target directly and uses the
 DamHopper Browser Debug extension for DOM selection; the target app does not
-need to install a package or script. The target URL must be an exact HTTP
-`localhost`, `127.0.0.1`, or `[::1]` origin, or an exact origin belonging to a
-tunnel whose status is currently `ready`. Workspace-origin targets, URL
-paths/query/hash/credentials, unready tunnels, and stale tunnel URLs are
-rejected before navigation. `X-Frame-Options` or restrictive
+need to install a package or script. The target URL must use HTTP `localhost`,
+`127.0.0.1`, or `[::1]`, or an origin belonging to a tunnel whose status is
+currently `ready`. Paths, query strings, and hashes are allowed inside that
+approved origin; workspace-origin targets, credentials, unready tunnels, and
+stale tunnel URLs are rejected before navigation. `X-Frame-Options` or restrictive
 `Content-Security-Policy: frame-ancestors` can still prevent embedding.
 
 The host keeps one iframe alive while Browser is moved between IDE, Terminal,
