@@ -8,17 +8,19 @@ const defaultDevelopmentParentOrigins = [
 ];
 
 const configuredParentOrigins = (
-  process["env"]["VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS"] ??
-  defaultDevelopmentParentOrigins.join(",")
+  process["env"]["VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS"] ?? ""
 )
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+const parentOrigins = [
+  ...new Set([...defaultDevelopmentParentOrigins, ...configuredParentOrigins]),
+];
 
 export default defineConfig({
   define: {
     __DAM_HOPPER_EXTENSION_PARENT_ORIGINS__: JSON.stringify(
-      configuredParentOrigins,
+      parentOrigins,
     ),
   },
   build: {
