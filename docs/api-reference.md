@@ -281,15 +281,19 @@ unavailable rather than as zero-valued usage.
 ### GET/PATCH /api/usage/settings
 
 Reads or updates `paused`, `detailRetentionDays`, `aggregateRetentionDays` (nullable),
-`excludedProjects`, and collector settings. Retention changes synchronously roll up and
-purge before the new configuration is published.
+`excludedProjects`, and collector settings. `codexExporter: true|false` explicitly manages the
+local Codex exporter. `collectorSetup.codexExporter` is status-only (`notConfigured`, `managed`,
+or `conflict`); bearer material is never returned. Ownership must match exactly before a file is
+changed or disabled; foreign/malformed config is left untouched. Writes are atomic and the
+secret file is owner-only (`0600`). Retention changes synchronously roll up and purge before the
+new configuration is published.
 
 Updates are live: the server applies the validated runtime transition before writing its
 configuration file. Telemetry enable/disable affects only terminal runs created after the
 transition; a PTY keeps the capture snapshot selected when it started. Collector changes
-restart the loopback listener without a DamHopper server restart. If runtime application or
-the subsequent config write fails, the previous live state is restored and the update is
-rejected.
+restart the loopback listener without a DamHopper server restart. Managing Codex config does not
+restart the Codex process; restart it separately. If runtime application or the subsequent config
+write fails, the previous live state and managed Codex file are restored and the update is rejected.
 
 ### DELETE /api/usage
 
