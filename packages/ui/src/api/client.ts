@@ -589,6 +589,7 @@ export interface UiConfig {
   terminalCodexNotificationSoundVolume?: number;
   terminalCodexNotificationSoundPattern?: TerminalCodexNotificationSoundPattern;
   terminalScrollButtonsEnabled?: boolean;
+  terminalCommitStatusEnabled?: boolean;
   terminalScrollStep?: number;
   explorerShowHidden?: boolean;
   mobileCustomKeyboardEnabled?: boolean;

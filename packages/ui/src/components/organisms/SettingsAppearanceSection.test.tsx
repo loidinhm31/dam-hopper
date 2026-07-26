@@ -21,6 +21,7 @@ const settingsStore = {
   terminalCodexNotificationSoundVolume: 100,
   terminalCodexNotificationSoundPattern: "default" as const,
   terminalScrollButtonsEnabled: false,
+  terminalCommitStatusEnabled: false,
   terminalScrollStep: 3,
   explorerShowHidden: false,
   mobileCustomKeyboardEnabled: true,
@@ -50,6 +51,7 @@ describe("SettingsAppearanceSection", () => {
     expect(markup).toContain("Sound style");
     expect(markup).toContain("Volume");
     expect(markup).toContain("Play sound");
+    expect(markup).toContain("Show latest commit in terminal");
     expect(markup).toContain("Play sound");
     expect(markup).not.toContain("Quiet tracking");
     expect(markup).not.toContain("Command patterns");

@@ -23,6 +23,7 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   terminalCodexNotificationSoundVolume: 100,
   terminalCodexNotificationSoundPattern: "default",
   terminalScrollButtonsEnabled: false,
+  terminalCommitStatusEnabled: false,
   terminalScrollStep: 3,
   explorerShowHidden: false,
   mobileCustomKeyboardEnabled: true,
@@ -58,7 +59,8 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
       ui?.projectCommandOrder ?? DEFAULT_UI_CONFIG.projectCommandOrder,
     runtimeGroupOrder:
       ui?.runtimeGroupOrder ?? DEFAULT_UI_CONFIG.runtimeGroupOrder,
-    runtimeItemOrder: ui?.runtimeItemOrder ?? DEFAULT_UI_CONFIG.runtimeItemOrder,
+    runtimeItemOrder:
+      ui?.runtimeItemOrder ?? DEFAULT_UI_CONFIG.runtimeItemOrder,
     terminalScrollStep:
       ui?.terminalScrollStep ?? DEFAULT_UI_CONFIG.terminalScrollStep,
     mobileCustomKeyboardEnabled:

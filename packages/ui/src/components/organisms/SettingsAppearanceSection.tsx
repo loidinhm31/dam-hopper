@@ -24,6 +24,7 @@ export function SettingsAppearanceSection() {
     terminalCodexNotificationSoundVolume,
     terminalCodexNotificationSoundPattern,
     terminalScrollButtonsEnabled,
+    terminalCommitStatusEnabled,
     terminalScrollStep,
     explorerShowHidden,
     mobileCustomKeyboardEnabled,
@@ -96,6 +97,21 @@ export function SettingsAppearanceSection() {
           ariaLabel="Enable inline terminal suggestions"
           onCheckedChange={(checked) =>
             saveDebounced({ terminalSuggestionsEnabled: checked })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Show latest commit in terminal"
+        description="Show the active terminal project’s branch and latest commit in its header"
+      >
+        <Switch
+          checked={terminalCommitStatusEnabled}
+          ariaLabel="Show latest commit in terminal"
+          onCheckedChange={(checked) =>
+            saveDebounced({ terminalCommitStatusEnabled: checked })
           }
         />
       </SettingRow>
@@ -205,10 +221,7 @@ export function SettingsAppearanceSection() {
 
       <div className="border-t border-[var(--color-border)]" />
 
-      <SettingRow
-        title="Mobile keyboard padding"
-        description="Range: 2-14 px"
-      >
+      <SettingRow title="Mobile keyboard padding" description="Range: 2-14 px">
         <NumberStepper
           value={mobileCustomKeyboardPadding}
           min={2}
@@ -221,10 +234,7 @@ export function SettingsAppearanceSection() {
 
       <div className="border-t border-[var(--color-border)]" />
 
-      <SettingRow
-        title="Mobile keyboard row gap"
-        description="Range: 2-12 px"
-      >
+      <SettingRow title="Mobile keyboard row gap" description="Range: 2-12 px">
         <NumberStepper
           value={mobileCustomKeyboardRowGap}
           min={2}

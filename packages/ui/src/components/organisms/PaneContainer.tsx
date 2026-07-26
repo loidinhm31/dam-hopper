@@ -16,6 +16,7 @@ import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import { TabBar } from "@/components/organisms/TabBar.js";
 import { TerminalDockPreview } from "@/components/organisms/TerminalDockPreview.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
+import { useSettingsStore } from "@/stores/settings.js";
 
 interface PaneContainerProps {
   node: PaneNode;
@@ -36,6 +37,7 @@ interface PaneContainerProps {
 export const PaneContainer = memo(function PaneContainer({
   node,
   layout,
+  mountedSessions,
   openTabs,
   onNewTerminal,
   onSelectTab,
@@ -48,6 +50,12 @@ export const PaneContainer = memo(function PaneContainer({
 }: PaneContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const isFocused = layout.focusedPaneId === node.id;
+  const terminalCommitStatusEnabled = useSettingsStore(
+    (state) => state.terminalCommitStatusEnabled,
+  );
+  const activeProject = mountedSessions.find(
+    (session) => session.sessionId === node.activeSessionId,
+  )?.project;
 
   // Track drag state to show/hide drop zones
   const [isDragging, setIsDragging] = useState(false);
@@ -303,6 +311,8 @@ export const PaneContainer = memo(function PaneContainer({
         paneId={node.id}
         paneTabs={paneTabs}
         activeSessionId={node.activeSessionId}
+        activeProject={activeProject}
+        terminalCommitStatusEnabled={terminalCommitStatusEnabled}
         hasSplit={hasSplit}
         onSelectTab={(sessionId) => {
           layout.setActiveSession(node.id, sessionId);
