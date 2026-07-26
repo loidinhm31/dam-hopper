@@ -21,6 +21,21 @@ Shared runtime libraries:
 - **Tailwind CSS v4** for styling
 - **xterm.js** for terminal rendering
 
+## Usage Insights Settings
+
+**Locations:** `packages/ui/src/components/pages/SettingsPage.tsx`,
+`packages/ui/src/components/organisms/SettingsUsageInsightsSection.tsx`, and
+`packages/ui/src/components/organisms/SettingsUsageInsightsCodexRow.tsx`
+
+The Settings page exposes a **Usage insights** section backed by the authenticated
+`usage:setupStatus` and `usage:configure` transport methods. It lets users enable or pause
+privacy-safe local terminal capture, retry an unavailable loopback receiver, and explicitly
+manage optional Codex token export. Codex setup is reported as `notConfigured`, `managed`, or
+`conflict`; conflicts disable management and leave existing Codex configuration untouched.
+Managing export does not restart Codex, so the UI indicates that a new/restarted Codex session
+is required. When capture is disabled, the Usage page links back to Settings and explains that a
+new terminal is required for complete run boundaries.
+
 ## Shared File Decorations
 
 **Location:** `packages/ui/src/lib/file-decoration.ts`

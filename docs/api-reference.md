@@ -257,8 +257,9 @@ Notes:
 Protected aggregate-only analytics for the local telemetry store. All routes require
 the same Bearer token as other `/api/*` routes; raw command, prompt, output, and event
 rows are never returned. The UI calls these through `WsTransport` methods
-`usage:summary`, `usage:health`, `usage:settings`, `usage:updateSettings`, and
-`usage:deleteAll`, which map to the REST routes below.
+`usage:summary`, `usage:health`, `usage:settings`, `usage:setupStatus`,
+`usage:updateSettings`, `usage:configure`, and `usage:deleteAll`, which map to the
+REST routes below.
 
 ### GET /api/usage/summary
 
@@ -294,6 +295,14 @@ transition; a PTY keeps the capture snapshot selected when it started. Collector
 restart the loopback listener without a DamHopper server restart. Managing Codex config does not
 restart the Codex process; restart it separately. If runtime application or the subsequent config
 write fails, the previous live state and managed Codex file are restored and the update is rejected.
+
+### GET/PATCH /api/usage/setup
+
+Returns the compact setup status used by Settings > Usage insights: telemetry enabled/paused
+state, collector enabled state, runtime/receiver health, and optional local Codex exporter
+status. `PATCH` accepts setup fields including `enabled`, `codexExporter`, and `retryCollector`.
+It returns status only; bearer material is never returned. The Settings flow uses this route for
+live enable/disable, receiver retry, and explicit Codex exporter management.
 
 ### DELETE /api/usage
 

@@ -1,13 +1,6 @@
 import { useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
-import {
-  Activity,
-  Clock3,
-  Pause,
-  Play,
-  RotateCcw,
-  Trash2,
-} from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { Activity, Clock3, Pause, Play, RotateCcw, Trash2 } from "lucide-react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
@@ -193,19 +186,28 @@ export function UsagePage() {
             <Button variant="ghost" size="sm" onClick={reset}>
               <RotateCcw className="h-3.5 w-3.5" /> Reset filters
             </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              loading={updateSettings.isPending}
-              onClick={() => updateSettings.mutate({ paused: !paused })}
-            >
-              {paused ? (
-                <Play className="h-3.5 w-3.5" />
-              ) : (
-                <Pause className="h-3.5 w-3.5" />
-              )}
-              {paused ? "Resume collection" : "Pause collection"}
-            </Button>
+            {settings?.enabled === false ? (
+              <Link
+                to="/settings"
+                className="btn-bracket inline-flex items-center gap-1.5"
+              >
+                Set up insights
+              </Link>
+            ) : (
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={updateSettings.isPending}
+                onClick={() => updateSettings.mutate({ paused: !paused })}
+              >
+                {paused ? (
+                  <Play className="h-3.5 w-3.5" />
+                ) : (
+                  <Pause className="h-3.5 w-3.5" />
+                )}
+                {paused ? "Resume collection" : "Pause collection"}
+              </Button>
+            )}
             <Button
               variant="danger"
               size="sm"
@@ -223,6 +225,20 @@ export function UsagePage() {
             </Button>
           </div>
         </div>
+        {settings?.enabled === false ? (
+          <aside
+            role="status"
+            className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs"
+          >
+            <p className="font-medium text-[var(--color-text)]">
+              Usage insights are disabled.
+            </p>
+            <p className="mt-1 text-[var(--color-text-muted)]">
+              Enable local capture in Settings, then open a new terminal for
+              complete run boundaries.
+            </p>
+          </aside>
+        ) : null}
 
         <UsageFilters
           value={query}

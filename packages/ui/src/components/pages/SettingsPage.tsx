@@ -10,6 +10,7 @@ import {
 } from "@/api/queries.js";
 import { SettingsAppearanceSection } from "@/components/organisms/SettingsAppearanceSection.js";
 import { SettingsKeyboardShortcutsSection } from "@/components/organisms/SettingsKeyboardShortcutsSection.js";
+import { SettingsUsageInsightsSection } from "@/components/organisms/SettingsUsageInsightsSection.js";
 import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
 import { SettingsSectionAccordion } from "@/components/pages/settings-page/SettingsSectionAccordion.js";
 import { SettingsMaintenancePanel } from "@/components/pages/settings-page/SettingsMaintenancePanel.js";
@@ -138,6 +139,14 @@ export function SettingsPage() {
           description="Tune command keys used across workspace navigation and terminals."
         >
           <SettingsKeyboardShortcutsSection />
+        </SettingsSectionAccordion>
+
+        <SettingsSectionAccordion
+          title="Usage insights"
+          description="Opt in to privacy-safe local terminal aggregates and optional Codex token telemetry."
+          defaultOpen
+        >
+          <SettingsUsageInsightsSection />
         </SettingsSectionAccordion>
 
         <SettingsSectionAccordion
