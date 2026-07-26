@@ -97,6 +97,12 @@ fn make_state(tmp: &TempDir) -> AppState {
         ),
     )
     .expect("make_state failed")
+    .with_codex_exporter(
+        crate::telemetry::codex_otlp::CodexExporterManager::with_paths(
+            tmp.path().join(".codex/config.toml"),
+            tmp.path().join("collector-token"),
+        ),
+    )
 }
 
 fn test_jwt() -> String {
@@ -1695,6 +1701,83 @@ async fn usage_settings_enable_and_disable_apply_the_runtime_without_a_server_re
     assert_eq!(disabled.status(), StatusCode::OK);
     assert!(state.telemetry.read().unwrap().store.is_none());
     assert!(!state.config.read().await.server.telemetry.enabled);
+}
+
+#[tokio::test]
+async fn usage_settings_manages_codex_exporter_without_returning_its_bearer_secret() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+
+    let enabled = patch_json(
+        state.clone(),
+        "/api/usage/settings",
+        serde_json::json!({
+            "enabled": true,
+            "collector": {"enabled": true, "host": "127.0.0.1", "port": port},
+            "codexExporter": true
+        }),
+    )
+    .await;
+    assert_eq!(enabled.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(enabled.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let response = String::from_utf8(body.to_vec()).unwrap();
+    assert!(response.contains("\"codexExporter\":\"managed\""));
+    assert!(!response.contains("authorization"));
+    let token = std::fs::read_to_string(tmp.path().join("collector-token")).unwrap();
+    assert!(!response.contains(&token));
+
+    let codex_config = std::fs::read_to_string(tmp.path().join(".codex/config.toml")).unwrap();
+    assert!(codex_config.contains("log_user_prompt = false"));
+    assert!(codex_config.contains(&format!("http://127.0.0.1:{port}/v1/logs")));
+
+    let disabled = patch_json(
+        state.clone(),
+        "/api/usage/settings",
+        serde_json::json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(disabled.status(), StatusCode::OK);
+    assert!(
+        std::fs::read_to_string(tmp.path().join(".codex/config.toml"))
+            .unwrap()
+            .contains("exporter = \"none\"")
+    );
+    state.telemetry_runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn usage_settings_restores_codex_config_when_dam_hopper_config_persist_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let blocker = tmp.path().join("not-a-directory");
+    std::fs::write(&blocker, "blocker").unwrap();
+    state.config.write().await.config_path = blocker.join("dam-hopper.toml");
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+
+    let response = patch_json(
+        state.clone(),
+        "/api/usage/settings",
+        serde_json::json!({
+            "enabled": true,
+            "collector": {"enabled": true, "host": "127.0.0.1", "port": port},
+            "codexExporter": true
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(!tmp.path().join(".codex/config.toml").exists());
+    assert!(!state.telemetry_runtime.status().active);
 }
 
 #[tokio::test]

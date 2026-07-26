@@ -265,8 +265,12 @@ a passive WAL checkpoint.
 loopback listener in place; retention changes run before publication. If collector startup or
 retention fails, the prior collector/runtime state is restored and the new configuration is not
 published. The API also restores the live state if the subsequent registry-file write fails.
-The Codex setup remains instructions-only: after changing Codex's own OTLP configuration, the
-existing Codex process must be restarted separately for it to reconnect.
+The settings API can explicitly manage the local Codex exporter. It writes only the exact
+DamHopper-owned OTLP shape in `~/.codex/config.toml`; malformed or foreign configuration is a
+`Conflict` and is never overwritten. The generated secret is a regular `0600` file at
+`~/.config/dam-hopper/codex-otlp-token` and is never returned by the API. Config writes are
+atomic and preserve unrelated TOML. Managing the file does not restart Codex (restart that
+process separately); collector changes restart only the loopback listener, never the server.
 
 Raw command text is transient classifier input only. The Phase 02 event contract limits command
 facts to an

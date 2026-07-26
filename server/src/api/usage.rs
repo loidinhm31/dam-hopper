@@ -12,6 +12,7 @@ use crate::{
     error::AppError,
     state::AppState,
     telemetry::{
+        codex_otlp::CodexExporterStatus,
         queries::{
             add_tokens, add_usage, aggregate_command_dimensions, aggregate_command_rollups,
             aggregate_commands, aggregate_detail_metrics, aggregate_token_correlation,
@@ -105,9 +106,8 @@ struct SettingsResponse {
 #[serde(rename_all = "camelCase")]
 struct CollectorSetup {
     endpoint: String,
-    authorization: String,
     restart_required: bool,
-    managed_config: bool,
+    codex_exporter: CodexExporterStatus,
     server_restart_required: bool,
     baseline_fixture_version: String,
 }
@@ -121,6 +121,9 @@ pub struct SettingsPatch {
     pub aggregate_retention_days: Option<Option<u32>>,
     pub excluded_projects: Option<Vec<String>>,
     pub collector: Option<TelemetryCollectorConfig>,
+    /// Explicit user opt-in/out for the local Codex exporter. This is never
+    /// persisted; ownership is derived from the local config on every action.
+    pub codex_exporter: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -291,8 +294,9 @@ pub async fn get_settings(State(state): State<AppState>) -> impl IntoResponse {
     let _coordination = state.telemetry_coordinator.lock().await;
     let telemetry = state.config.read().await.server.telemetry.clone();
     Json(settings_response(
-        telemetry,
+        telemetry.clone(),
         state.telemetry_runtime.status(),
+        state.codex_exporter.status(&telemetry.collector),
     ))
 }
 
@@ -326,14 +330,72 @@ pub async fn update_settings(
     }
 
     let previous = state.config.read().await.clone();
+    // Disabling telemetry always relinquishes only a config we can prove is
+    // ours. A foreign exporter remains untouched and is reported as conflict.
+    let codex_action = (!config.server.telemetry.enabled)
+        .then_some(false)
+        .or(patch.codex_exporter);
+    // Snapshot config text without examining the collector token. Token reads
+    // happen only inside the setup transition after the collector is live.
+    let codex_snapshot = codex_action
+        .is_some()
+        .then(|| state.codex_exporter.snapshot())
+        .transpose()
+        .map_err(runtime_error)?;
     state
         .telemetry_runtime
         .apply_config(&previous.server.telemetry, &config.server.telemetry)
         .await
         .map_err(runtime_error)?;
+    let codex_status = match codex_action {
+        Some(true)
+            if !config.server.telemetry.collector.enabled
+                || !state.telemetry_runtime.status().collector.running =>
+        {
+            state
+                .telemetry_runtime
+                .restore_config(&previous.server.telemetry, &config.server.telemetry)
+                .await;
+            return Err(runtime_error("Codex collector is not ready".to_string()));
+        }
+        Some(true) => match state
+            .codex_exporter
+            .configure(&config.server.telemetry.collector)
+        {
+            Ok(status) => status,
+            Err(error) => {
+                state
+                    .telemetry_runtime
+                    .restore_config(&previous.server.telemetry, &config.server.telemetry)
+                    .await;
+                return Err(runtime_error(error));
+            }
+        },
+        Some(false) => match state
+            .codex_exporter
+            .disable(&previous.server.telemetry.collector)
+        {
+            Ok(status) => status,
+            Err(error) => {
+                state
+                    .telemetry_runtime
+                    .restore_config(&previous.server.telemetry, &config.server.telemetry)
+                    .await;
+                return Err(runtime_error(error));
+            }
+        },
+        None => state
+            .codex_exporter
+            .status(&config.server.telemetry.collector),
+    };
     // The runtime transition succeeds before configuration is published. If the
     // atomic disk write fails, restore the previous live state before replying.
     if let Err(error) = write_config(&config.config_path, &config) {
+        if let Some(snapshot) = codex_snapshot {
+            if let Err(rollback_error) = state.codex_exporter.restore(snapshot) {
+                tracing::error!(error = %rollback_error, "Codex exporter rollback failed");
+            }
+        }
         state
             .telemetry_runtime
             .restore_config(&previous.server.telemetry, &config.server.telemetry)
@@ -344,6 +406,7 @@ pub async fn update_settings(
     Ok(Json(settings_response(
         config.server.telemetry,
         state.telemetry_runtime.status(),
+        codex_status,
     )))
 }
 
@@ -406,6 +469,7 @@ pub async fn delete_all(
 fn settings_response(
     telemetry: crate::config::TelemetryConfig,
     runtime: crate::telemetry::TelemetryRuntimeStatus,
+    codex_exporter: CodexExporterStatus,
 ) -> SettingsResponse {
     let endpoint = format!(
         "http://{}:{}/v1/logs",
@@ -421,9 +485,8 @@ fn settings_response(
         runtime,
         collector_setup: CollectorSetup {
             endpoint,
-            authorization: "Bearer <DAM_HOPPER_OTLP_TOKEN>".to_string(),
-            restart_required: true,
-            managed_config: false,
+            restart_required: codex_exporter == CodexExporterStatus::Managed,
+            codex_exporter,
             server_restart_required: false,
             baseline_fixture_version: "0.145.0".to_string(),
         },

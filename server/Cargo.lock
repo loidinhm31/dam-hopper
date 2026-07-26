@@ -735,6 +735,7 @@ dependencies = [
  "tokio-tungstenite 0.26.2",
  "tokio-util",
  "toml",
+ "toml_edit",
  "tower",
  "tower-http",
  "tracing",
