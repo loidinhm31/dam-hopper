@@ -1262,6 +1262,7 @@ fn ui_config_serde_roundtrip() {
                 m
             },
             terminal_scroll_buttons_enabled: false,
+            terminal_commit_status_enabled: true,
             terminal_scroll_step: 3,
         }),
         server: crate::config::ServerConfig::default(),
@@ -1273,8 +1274,12 @@ fn ui_config_serde_roundtrip() {
         serde_json::json!("two-tone")
     );
     assert!(json.get("terminal_codex_notification_sound_pattern").is_none());
+    assert_eq!(json["terminalCommitStatusEnabled"], true);
 
     write_global_config_at(&cfg_path, &cfg).unwrap();
+    let written = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(written.contains("terminal_commit_status_enabled = true"));
+    assert!(!written.contains("terminalCommitStatusEnabled"));
     let loaded = read_global_config_at(&cfg_path).unwrap().unwrap();
     let ui = loaded.ui.unwrap();
     assert_eq!(ui.system_font_size, 16);
@@ -1301,6 +1306,7 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(ui.mobile_custom_keyboard_font_size, 13);
     assert_eq!(ui.mobile_custom_keyboard_padding, 8);
     assert_eq!(ui.mobile_custom_keyboard_row_gap, 5);
+    assert!(ui.terminal_commit_status_enabled);
     assert_eq!(ui.terminal_order, vec!["term1", "term2"]);
     assert_eq!(ui.project_order, vec!["proj1"]);
     assert_eq!(
@@ -1411,6 +1417,15 @@ terminal_agent_notifications_enabled = true
         ui.terminal_codex_notification_sound_pattern,
         TerminalCodexNotificationSoundPattern::Default
     );
+}
+
+#[test]
+fn ui_config_serde_aliases_terminal_commit_status() {
+    for key in ["terminal_commit_status_enabled", "terminalCommitStatusEnabled"] {
+        let toml = format!("[ui]\n{key} = true\n");
+        let loaded: GlobalConfig = toml::from_str(&toml).unwrap();
+        assert!(loaded.ui.unwrap().terminal_commit_status_enabled);
+    }
 }
 
 #[test]
