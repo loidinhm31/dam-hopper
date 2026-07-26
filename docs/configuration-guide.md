@@ -252,7 +252,7 @@ The global UI config includes terminal workspace/panel shortcuts, inline termina
 | ports_panel_shortcut                | string   | `Mod+Shift+KeyP`          | Toggle the Ports panel in IDE or Terminal mode |
 | fleet_terminal_shortcut             | string   | `Mod+Shift+KeyM`          | Toggle the Fleet Terminal panel in IDE or Terminal mode |
 | terminal_suggestions_enabled         | bool     | `true`                    | Kill switch for automatic suggestions and lifecycle-driven history writes |
-| terminal_scroll_buttons_enabled     | bool     | `false`                   | Show floating Page Up/Down buttons in terminal |
+| terminal_scroll_buttons_enabled     | bool     | `false`                   | Show the expandable floating terminal scroll control |
 | terminal_codex_notifications_enabled | bool    | `false`                   | Master switch for Codex OSC 9 notifications and Codex TUI synchronization |
 | terminal_codex_notification_toast_enabled | bool | `true`                    | Persisted preference for transient in-app toasts; notification history remains independent |
 | terminal_codex_browser_notifications_enabled | bool | `true`                 | Persisted preference for native browser popups; browser permission remains runtime-only |
@@ -277,6 +277,12 @@ terminal_codex_notification_sound_enabled = true
 terminal_codex_notification_sound_volume = 100
 terminal_codex_notification_sound_pattern = "default"
 ```
+
+When enabled, the terminal shows a compact floating control in the lower-right
+corner. Activate it to expand keyboard-accessible actions for jump-to-top,
+step up/down (using the configured terminal scroll step), and jump-to-bottom.
+The menu closes on outside click or `Escape`; the preference is UI-only and does
+not affect retained server scrollback.
 
 The API exposes these UI fields in `camelCase` (for example, `terminalCodexNotificationToastEnabled`) and persists them as the snake_case TOML keys shown above. Older `terminal_agent_notifications_enabled` and `terminalAgentNotificationsEnabled` values remain read-compatible aliases for the master switch. Missing child preferences default to enabled, volume `100`, and pattern `"default"`.
 
