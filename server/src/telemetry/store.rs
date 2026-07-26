@@ -35,7 +35,7 @@ impl TelemetryStore {
     pub fn open(path: &Path) -> Result<Self, TelemetryStoreError> {
         ensure_parent(path)?;
         let connection = Connection::open(path)?;
-        configure(&connection)?;
+        configure_writer(&connection)?;
         connection.execute_batch(include_str!("migrations/001_initial.sql"))?;
         ensure_token_rollup_availability_columns(&connection)?;
         restrict_storage_files(path)?;
@@ -146,7 +146,7 @@ impl TelemetryStore {
     pub(crate) fn open_read(&self) -> Result<Connection, TelemetryStoreError> {
         let connection =
             Connection::open_with_flags(&*self.path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        configure(&connection)?;
+        configure_reader(&connection)?;
         Ok(connection)
     }
 
@@ -222,11 +222,16 @@ fn restrict_file(path: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-fn configure(connection: &Connection) -> Result<(), rusqlite::Error> {
+fn configure_writer(connection: &Connection) -> Result<(), rusqlite::Error> {
     connection.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS))?;
     connection.execute_batch(
         "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
     )
+}
+
+fn configure_reader(connection: &Connection) -> Result<(), rusqlite::Error> {
+    connection.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS))?;
+    connection.execute_batch("PRAGMA query_only=ON; PRAGMA foreign_keys=ON;")
 }
 
 fn upsert_terminal_run(
@@ -465,6 +470,93 @@ mod tests {
         );
     }
 
+    #[test]
+    fn read_only_connection_can_query_without_writer_pragmas() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("telemetry.db");
+        let store = TelemetryStore::open(&path).unwrap();
+        store.increment_health("fixture", 1, 1).unwrap();
+
+        let connection = store.open_read().unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT value FROM telemetry_health WHERE name = 'fixture'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert!(connection
+            .execute("DELETE FROM telemetry_health", [])
+            .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_database_file_remains_queryable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("telemetry.db");
+        let store = TelemetryStore::open(&path).unwrap();
+        store.increment_health("fixture", 1, 1).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        let connection = store.open_read().unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM telemetry_health", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn concurrent_readers_do_not_block_writer_commits() {
+        let temp = TempDir::new().unwrap();
+        let store = TelemetryStore::open(&temp.path().join("telemetry.db")).unwrap();
+        let reader_store = store.clone();
+        let reader = std::thread::spawn(move || {
+            for _ in 0..25 {
+                let connection = reader_store.open_read().unwrap();
+                connection
+                    .query_row("SELECT count(*) FROM telemetry_health", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap();
+            }
+        });
+
+        for index in 0..25 {
+            store.increment_health("reader_writer", 1, index).unwrap();
+        }
+        reader.join().unwrap();
+        assert_eq!(
+            store
+                .open_read()
+                .unwrap()
+                .query_row(
+                    "SELECT value FROM telemetry_health WHERE name = 'reader_writer'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            25
+        );
+    }
+
+    #[test]
+    fn corrupt_database_is_rejected_without_partial_initialization() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("telemetry.db");
+        fs::write(&path, b"not a sqlite database").unwrap();
+
+        assert!(TelemetryStore::open(&path).is_err());
+    }
+
     #[cfg(unix)]
     #[test]
     fn reopens_existing_database_and_wal_with_private_permissions() {
@@ -573,5 +665,70 @@ mod tests {
         assert_eq!(aggregate.cached_input_tokens, None);
         assert_eq!(aggregate.output_tokens, Some(5));
         assert_eq!(aggregate.reasoning_tokens, None);
+    }
+
+    #[test]
+    fn aggregate_query_stays_under_200ms_for_100k_detail_rows() {
+        use std::time::{Duration, Instant};
+
+        let temp = TempDir::new().unwrap();
+        let store = TelemetryStore::open(&temp.path().join("telemetry.db")).unwrap();
+        let run_id = Uuid::new_v4().to_string();
+        let connection = store.writer.lock().unwrap();
+        connection
+            .execute(
+                "INSERT INTO terminal_runs(run_id, project, shell, started_at_utc_ms, capture_quality) VALUES (?1, 'benchmark', 'bash', 0, 'rich')",
+                [&run_id],
+            )
+            .unwrap();
+        let transaction = connection.unchecked_transaction().unwrap();
+        {
+            let mut statement = transaction
+                .prepare(
+                    "INSERT INTO command_events(run_id, sequence, occurred_at_utc_ms, duration_ms, exit_code, outcome, category, executable, argument_count, fingerprint, capture_quality) VALUES (?1, ?2, ?2, 1, 0, 'succeeded', 'git', 'git', 1, 'benchmark', 'rich')",
+                )
+                .unwrap();
+            for sequence in 0..100_000_i64 {
+                statement
+                    .execute(rusqlite::params![run_id, sequence])
+                    .unwrap();
+            }
+        }
+        transaction.commit().unwrap();
+        drop(connection);
+
+        let query = UsageQuery {
+            from_utc_ms: Some(0),
+            to_utc_ms: Some(100_000),
+            ..UsageQuery::default()
+        };
+        let plan = store
+            .open_read()
+            .unwrap()
+            .prepare("EXPLAIN QUERY PLAN SELECT count(*) FROM command_events WHERE occurred_at_utc_ms >= 0 AND occurred_at_utc_ms < 100000")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join(" ");
+        assert!(
+            plan.contains("idx_command_events_occurred"),
+            "query plan: {plan}"
+        );
+
+        let mut durations = Vec::new();
+        for _ in 0..5 {
+            let started = Instant::now();
+            let aggregate = crate::telemetry::queries::aggregate_commands(&store, &query).unwrap();
+            assert_eq!(aggregate.command_count, 100_000);
+            durations.push(started.elapsed());
+        }
+        durations.sort_unstable();
+        assert!(
+            durations[4] < Duration::from_millis(200),
+            "100k aggregate query p95 took {:?}; durations: {durations:?}",
+            durations[4]
+        );
     }
 }

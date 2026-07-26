@@ -252,7 +252,7 @@ Notes:
 - when `terminalIds` is provided, backend events with `sessionId` are scoped to those ids while global events remain included
 - **Phase 04:** `system` field contains host metrics sampled from the config directory (`~/.config/dam-hopper/` by default) for host-context only, not project sandboxes
 
-## Terminal Usage Analytics (Phase 04)
+## Terminal Usage Analytics
 
 Protected aggregate-only analytics for the local telemetry store. All routes require
 the same Bearer token as other `/api/*` routes; raw command, prompt, output, and event
@@ -274,8 +274,9 @@ response identifies the requested range and whether coverage is detail-only.
 ### GET /api/usage/health
 
 Returns availability, paused state, writer error count, rejected event count, and the
-sampling timestamp. Unavailable telemetry is reported as unavailable rather than as
-zero-valued usage.
+sampling timestamp. Collector health includes bounded malformed, rejected, queued, dropped,
+duplicate, compatibility-drift, and last-accepted counters. Unavailable telemetry is reported as
+unavailable rather than as zero-valued usage.
 
 ### GET/PATCH /api/usage/settings
 
@@ -292,8 +293,9 @@ strictly increasing and aligned to UTC-day boundaries; ranges are limited to fiv
 Capture is paused behind an ordered deletion barrier and resumes according to the saved
 pause setting. The UI must present an explicit confirmation before calling this route.
 
-Operational follow-up: live HMAC-key rotation and its coordinated destructive workflow
-remain pending; this API documents the current deletion semantics only.
+Full-delete HMAC-key rotation and its coordinated destructive workflow are part of the
+implementation. The key is rotated only after all usage rows are deleted; range deletion keeps
+the key so retained fingerprints remain comparable.
 
 ## Session Persistence API (Phase 05)
 

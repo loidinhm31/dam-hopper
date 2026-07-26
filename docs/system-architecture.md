@@ -37,7 +37,7 @@
 │  │  ├─ /api/fs/* → [conditional] List/read/stat (per-proj)│
 │  │  ├─ /api/agent-store/* → Distribution/import           │
 │  │  ├─ /api/workspace/* → Config switching                │
-│  │  ├─ /api/usage/* → [Phase 04] Aggregate terminal usage │
+│  │  ├─ /api/usage/* → Aggregate terminal usage (opt-in)   │
 │  │  ├─ /api/browser-debug/* → Ephemeral artifacts         │
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
@@ -226,7 +226,7 @@ local-only, and provides clear/disable controls. Desktop is the first support bo
 mobile direct-write paths remain explicitly unsupported until all input routes share the
 same controller.
 
-### terminal usage analytics (Phase 03 persistence)
+### terminal usage analytics
 
 Terminal analytics extends the validated shell lifecycle; it does not infer commands from
 xterm input, PTY output, silence, or browser history. Scope is DamHopper-launched,
@@ -267,7 +267,7 @@ never stores command text, argv, cwd strings, environment values, PTY output, AI
 responses, tool arguments, or tool output.
 
 `telemetry.db` is separate from session persistence because `sessions.db` has different restore
-and privacy semantics. Planned logical tables:
+and privacy semantics. The implemented logical tables are:
 
 | Table                 | Contract                                                                   |
 | --------------------- | -------------------------------------------------------------------------- |
@@ -305,7 +305,7 @@ and remains unavailable/partial rather than zero. New sanitized fixtures raise c
 add fields, but are not a runtime availability gate. Raw attributes, payloads, and unrecognized
 strings remain excluded in every compatibility path.
 
-The protected usage API (Phase 04) returns aggregates only. It does not expose raw event rows.
+The protected usage API returns aggregates only. It does not expose raw event rows.
 `GET /api/usage/summary` supports bounded hour/day windows and filters; detail reads cannot
 cross the configured detail-retention boundary except for UTC-day-aligned, unfiltered day
 queries backed by rollups. `GET /api/usage/health` reports availability and writer/rejection
@@ -319,6 +319,18 @@ operational dashboard.
 
 Full delete serializes both terminal and collector admission, purges the store, then rotates the
 shared HMAC key before capture is restored. Range deletion does not rotate the key.
+
+Release verification covers the Rust PTY, telemetry, API, and Codex fixture suites plus the shared
+UI unit and Chromium browser suites. Real Bash coverage is exercised in-process; Zsh and Fish
+remain external host checks when those executables are installed. A missing shell executable is
+reported as an environment limitation, never treated as passing coverage.
+
+The aggregate performance regression is tracked in
+`server/src/telemetry/store.rs::aggregate_query_stays_under_200ms_for_100k_detail_rows`. It
+inserts 100,000 detail rows, checks `EXPLAIN QUERY PLAN` uses
+`idx_command_events_occurred`, then runs the aggregate query five times and gates p95 below
+200 ms. Run it with `cd server && cargo test telemetry::store --lib` on representative release
+hardware; the threshold is a regression signal, not a universal latency guarantee.
 
 Key invariants:
 
