@@ -16,7 +16,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [x] Live telemetry activation/deactivation with stable PTY runtime proxy
 - [x] Loopback collector reconfiguration with stop-before-bind and rollback
 - [x] Protected setup/status API and serialized delete/retention transitions
-- [ ] Managed Codex exporter, Settings UX, and final verification (Phases 02–04)
+- [x] Managed Codex exporter, Settings UX, and final verification (Phases 02–04)
 
 **Phase 03: SQLite Store, Retention, Privacy — [COMPLETED 2026-07-26]**
 
@@ -36,7 +36,8 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 - [x] Loopback-only authenticated binary receiver with bounded decoding and retry-safe dedupe
 - [x] Field-level forward compatibility with partial/unavailable token coverage
-- [x] Instructions-only setup; no silent Codex configuration edits
+- [x] Explicit managed local exporter setup with exact ownership/conflict protection, atomic
+  `0600` writes, no bearer disclosure; Codex restart remains a separate user action
 
 **Phase 06: Usage UI and Compact Navigation — [COMPLETED 2026-07-26; APPROVED]**
 

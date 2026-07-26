@@ -388,10 +388,17 @@ a positive value to purge older UTC rollups. The Usage page can delete all data 
 UTC-day-aligned `[from,to)` range; deletion requires explicit confirmation. Full deletion also
 rotates the shared telemetry HMAC key, while range deletion does not.
 
-The collector setup response is instructions-only (`managedConfig: false`). DamHopper never
-silently edits `~/.codex/config.toml`; after adding the displayed loopback endpoint and bearer
-secret to Codex, restart the existing Codex process. This restart is a Codex client caveat: it
-is separate from DamHopper's live telemetry reconfiguration.
+The Usage settings API can explicitly manage the local Codex exporter with `codexExporter: true`.
+It writes only the exact DamHopper-owned shape in `~/.codex/config.toml` (loopback `/v1/logs`,
+binary OTLP, one bearer header, and `log_user_prompt = false`). The generated secret is stored
+in `~/.config/dam-hopper/codex-otlp-token` as a regular owner-only (`0600`) file; config writes
+are atomic. Foreign, malformed, or changed exporter configuration is reported as
+`codexExporter: "conflict"` and never overwritten. API responses expose status only
+(`notConfigured`, `managed`, or `conflict`), never the bearer value.
+
+Managing the config does not restart Codex: restart the existing Codex process separately for
+it to reconnect. Collector changes restart only the loopback listener, not the DamHopper server.
+Failed runtime or registry writes roll back both runtime state and the managed Codex file.
 
 `PATCH /api/usage/settings` applies validated telemetry changes to the running server before
 persisting the registry file. Enabling or disabling telemetry changes the capture snapshot used

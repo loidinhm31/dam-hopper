@@ -16,16 +16,8 @@ pub fn default_secret_path() -> io::Result<PathBuf> {
 }
 
 pub fn load_or_create_secret(path: PathBuf) -> io::Result<String> {
-    match read_secret(&path) {
-        Ok(secret) if secret.len() == 64 && secret.bytes().all(|byte| byte.is_ascii_hexdigit()) => {
-            return Ok(secret)
-        }
-        Ok(_) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "invalid collector token",
-            ))
-        }
+    match load_existing_secret(&path) {
+        Ok(secret) => return Ok(secret),
         Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
         Err(_) => {}
     }
@@ -53,6 +45,20 @@ pub fn load_or_create_secret(path: PathBuf) -> io::Result<String> {
     #[cfg(not(unix))]
     std::fs::write(path, &secret)?;
     Ok(secret)
+}
+
+/// Read an existing collector secret without creating a new one. Config setup
+/// uses this only after the loopback collector has started successfully.
+pub(crate) fn load_existing_secret(path: &std::path::Path) -> io::Result<String> {
+    let secret = read_secret(path)?;
+    if secret.len() == 64 && secret.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(secret)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid collector token",
+        ))
+    }
 }
 
 #[cfg(unix)]

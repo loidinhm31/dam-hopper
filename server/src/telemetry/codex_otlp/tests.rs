@@ -13,7 +13,190 @@ use opentelemetry_proto::tonic::{
 };
 use prost::Message;
 
-use super::{health::CollectorHealth, receiver::start_collector_at};
+use super::{
+    config_manager::{CodexExporterManager, CodexExporterStatus},
+    health::CollectorHealth,
+    receiver::start_collector_at,
+    secret::load_or_create_secret,
+};
+
+fn exporter_manager(temp: &tempfile::TempDir) -> (CodexExporterManager, TelemetryCollectorConfig) {
+    let secret_path = temp.path().join("collector-token");
+    load_or_create_secret(secret_path.clone()).unwrap();
+    (
+        CodexExporterManager::with_paths(temp.path().join(".codex/config.toml"), secret_path),
+        TelemetryCollectorConfig {
+            enabled: true,
+            host: "127.0.0.1".to_string(),
+            port: 4811,
+        },
+    )
+}
+
+#[test]
+fn exporter_manager_preserves_unrelated_config_and_manages_none_or_absent_exporters() {
+    let temp = tempfile::tempdir().unwrap();
+    let (manager, collector) = exporter_manager(&temp);
+    let path = temp.path().join(".codex/config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        "# retain this comment\n[model]\nname = \"gpt-5\"\n\n[otel]\nexporter = \"none\"\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        manager.configure(&collector).unwrap(),
+        CodexExporterStatus::Managed
+    );
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("# retain this comment"));
+    assert!(written.contains("name = \"gpt-5\""));
+    assert!(written.contains("log_user_prompt = false"));
+    assert!(written.contains("otlp-http"));
+    assert_eq!(manager.status(&collector), CodexExporterStatus::Managed);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+}
+
+#[test]
+fn exporter_manager_never_overwrites_foreign_or_malformed_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let (manager, collector) = exporter_manager(&temp);
+    let path = temp.path().join(".codex/config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let foreign =
+        "[otel]\nexporter = { otlp-http = { endpoint = \"https://collector.example/v1/logs\" } }\n";
+    std::fs::write(&path, foreign).unwrap();
+    assert_eq!(
+        manager.configure(&collector).unwrap(),
+        CodexExporterStatus::Conflict
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), foreign);
+
+    let malformed = "[otel\nexporter = \"none\"\n";
+    std::fs::write(&path, malformed).unwrap();
+    assert!(manager.configure(&collector).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), malformed);
+
+    let collision = "otel = \"not-a-table\"\n";
+    std::fs::write(&path, collision).unwrap();
+    assert_eq!(manager.status(&collector), CodexExporterStatus::Conflict);
+    assert_eq!(
+        manager.configure(&collector).unwrap(),
+        CodexExporterStatus::Conflict
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), collision);
+}
+
+#[test]
+fn exporter_manager_disables_only_an_exact_owned_exporter() {
+    let temp = tempfile::tempdir().unwrap();
+    let (manager, collector) = exporter_manager(&temp);
+    let path = temp.path().join(".codex/config.toml");
+    assert_eq!(
+        manager.configure(&collector).unwrap(),
+        CodexExporterStatus::Managed
+    );
+    assert_eq!(
+        manager.disable(&collector).unwrap(),
+        CodexExporterStatus::NotConfigured
+    );
+    assert!(std::fs::read_to_string(&path)
+        .unwrap()
+        .contains("exporter = \"none\""));
+
+    assert_eq!(
+        manager.configure(&collector).unwrap(),
+        CodexExporterStatus::Managed
+    );
+    let changed = std::fs::read_to_string(&path).unwrap().replace(
+        "http://127.0.0.1:4811/v1/logs",
+        "http://127.0.0.1:4812/v1/logs",
+    );
+    std::fs::write(&path, &changed).unwrap();
+    assert_eq!(
+        manager.disable(&collector).unwrap(),
+        CodexExporterStatus::Conflict
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), changed);
+
+    std::fs::write(&path, "[otel]\nexporter = \"none\"\n").unwrap();
+    assert_eq!(
+        manager.configure(&collector).unwrap(),
+        CodexExporterStatus::Managed
+    );
+    let changed = std::fs::read_to_string(&path).unwrap().replace(
+        "headers = { authorization",
+        "headers = { extra = \"value\", authorization",
+    );
+    std::fs::write(&path, &changed).unwrap();
+    assert_eq!(
+        manager.disable(&collector).unwrap(),
+        CodexExporterStatus::Conflict
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), changed);
+}
+
+#[test]
+fn exporter_manager_snapshot_restores_the_pre_setup_file_after_a_later_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let (manager, collector) = exporter_manager(&temp);
+    let path = temp.path().join(".codex/config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "# preserve\n[otel]\nexporter = \"none\"\n";
+    std::fs::write(&path, original).unwrap();
+    let snapshot = manager.snapshot().unwrap();
+
+    assert_eq!(
+        manager.configure(&collector).unwrap(),
+        CodexExporterStatus::Managed
+    );
+    manager.restore(snapshot).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+}
+
+#[cfg(unix)]
+#[test]
+fn exporter_manager_rejects_symlinked_config_and_permissive_token_files() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let temp = tempfile::tempdir().unwrap();
+    let (manager, collector) = exporter_manager(&temp);
+    let config_path = temp.path().join(".codex/config.toml");
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    let target = temp.path().join("foreign-config.toml");
+    std::fs::write(&target, "[otel]\nexporter = \"none\"\n").unwrap();
+    symlink(&target, &config_path).unwrap();
+    assert!(manager.configure(&collector).is_err());
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "[otel]\nexporter = \"none\"\n"
+    );
+
+    std::fs::remove_file(&config_path).unwrap();
+    symlink(temp.path().join("missing-config.toml"), &config_path).unwrap();
+    assert!(manager.configure(&collector).is_err());
+    std::fs::remove_file(&config_path).unwrap();
+    std::fs::write(&config_path, "[otel]\nexporter = \"none\"\n").unwrap();
+    let token_path = temp.path().join("collector-token");
+    std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(manager.configure(&collector).is_err());
+    std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(&token_path, "not-a-valid-collector-token").unwrap();
+    assert!(manager.configure(&collector).is_err());
+    assert_eq!(
+        std::fs::read_to_string(config_path).unwrap(),
+        "[otel]\nexporter = \"none\"\n"
+    );
+}
 
 #[tokio::test]
 async fn accepts_pinned_binary_once_and_rejects_invalid_requests() {

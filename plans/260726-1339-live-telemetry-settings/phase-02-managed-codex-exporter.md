@@ -10,7 +10,7 @@
 ## Overview
 
 - Priority: P1
-- Status: pending
+- Status: completed (2026-07-26 15:50 +07)
 - Goal: automatically configure the local Codex exporter without exposing the bearer secret or overwriting another exporter.
 
 ## Requirements
@@ -53,9 +53,14 @@ Settings enable Codex tokens
 
 ## Todo List
 
-- [ ] Ownership-safe config manager
-- [ ] Opaque setup status
-- [ ] Atomic conflict/rollback tests
+- [x] Ownership-safe config manager
+- [x] Opaque setup status
+- [x] Atomic conflict/rollback tests
+
+## Completion Record
+
+- 2026-07-26 15:50 +07: Implemented path-explicit manager with atomic TOML writes, exact ownership/conflict detection, safe disable/rollback, opaque status, and filesystem/security fixtures. Focused Rust tests: 5 passed.
+- Parent plan remains `in-progress`; Phase 3 Settings UX remains `pending`.
 
 ## Success Criteria
 
@@ -76,4 +81,4 @@ Settings enable Codex tokens
 
 ## Next Steps
 
-Expose the status/action in Settings with accessible setup states.
+Next: expose status/action in Settings with accessible setup states (Phase 3, pending). Codex still requires a new process after configuration.

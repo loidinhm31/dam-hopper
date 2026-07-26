@@ -29,7 +29,7 @@ Provide a guided Settings flow for terminal usage analytics and optional Codex t
 | # | Phase | Status | Effort | Link |
 |---|---|---|---:|---|
 | 1 | Runtime lifecycle and API | completed (2026-07-26 15:21 +07) | 8h | [phase 01](./phase-01-live-runtime-and-api.md) |
-| 2 | Managed Codex exporter | pending | 5h | [phase 02](./phase-02-managed-codex-exporter.md) |
+| 2 | Managed Codex exporter | completed (2026-07-26 15:50 +07) | 5h | [phase 02](./phase-02-managed-codex-exporter.md) |
 | 3 | Settings UX and client contracts | pending | 4h | [phase 03](./phase-03-settings-ux.md) |
 | 4 | Verification and documentation | pending | 3h | [phase 04](./phase-04-verification-and-docs.md) |
 
