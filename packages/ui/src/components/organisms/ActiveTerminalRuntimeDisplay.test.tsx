@@ -13,6 +13,7 @@ let mockPorts: PortEntry[] = [];
 
 vi.mock("@/api/queries.js", () => ({
   useGlobalConfig: () => ({ data: undefined }),
+  useProjectStatus: () => ({ data: undefined }),
 }));
 
 vi.mock("@/hooks/use-compact-workspace.js", () => ({
@@ -99,7 +100,7 @@ describe("ActiveTerminalRuntimeDisplay", () => {
     const markup = renderDisplay();
 
     expect(markup).toContain("cursor-col-resize");
-    expect(markup).not.toContain("Full-width terminal");
+    expect(markup).toContain("Full-width terminal");
   });
 
   it("opens diagnostics for the compact runtime title session", () => {
@@ -112,12 +113,14 @@ describe("ActiveTerminalRuntimeDisplay", () => {
     const preventDefault = vi.fn();
     const stopPropagation = vi.fn();
 
-    (title.props.onContextMenu as (event: {
-      clientX: number;
-      clientY: number;
-      preventDefault: () => void;
-      stopPropagation: () => void;
-    }) => void)({ clientX: 10, clientY: 20, preventDefault, stopPropagation });
+    (
+      title.props.onContextMenu as (event: {
+        clientX: number;
+        clientY: number;
+        preventDefault: () => void;
+        stopPropagation: () => void;
+      }) => void
+    )({ clientX: 10, clientY: 20, preventDefault, stopPropagation });
 
     expect(onOpenDiagnosticsMenu).toHaveBeenCalledWith("session-1", 10, 20);
     expect(preventDefault).toHaveBeenCalledOnce();

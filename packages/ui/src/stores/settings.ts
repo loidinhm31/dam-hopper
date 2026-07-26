@@ -83,6 +83,7 @@ interface PersistedSettingsState {
   terminalCodexNotificationSoundVolume: number;
   terminalCodexNotificationSoundPattern: TerminalCodexNotificationSoundPattern;
   terminalScrollButtonsEnabled: boolean;
+  terminalCommitStatusEnabled: boolean;
   terminalScrollStep: number;
   explorerShowHidden: boolean;
   mobileCustomKeyboardEnabled: boolean;
@@ -133,6 +134,7 @@ function pickPersistedSettings(
     terminalCodexNotificationSoundPattern:
       state.terminalCodexNotificationSoundPattern,
     terminalScrollButtonsEnabled: state.terminalScrollButtonsEnabled,
+    terminalCommitStatusEnabled: state.terminalCommitStatusEnabled,
     terminalScrollStep: state.terminalScrollStep,
     explorerShowHidden: state.explorerShowHidden,
     mobileCustomKeyboardEnabled: state.mobileCustomKeyboardEnabled,
@@ -175,6 +177,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   terminalCodexNotificationSoundVolume: 100,
   terminalCodexNotificationSoundPattern: "default",
   terminalScrollButtonsEnabled: false,
+  terminalCommitStatusEnabled: false,
   terminalScrollStep: 3,
   explorerShowHidden: false,
   mobileCustomKeyboardEnabled: true,
@@ -202,9 +205,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         terminalSuggestionsEnabled: ui.terminalSuggestionsEnabled ?? true,
         terminalCodexNotificationsEnabled:
           ui.terminalCodexNotificationsEnabled ??
-          (
-            ui as { terminalAgentNotificationsEnabled?: boolean } | undefined
-          )?.terminalAgentNotificationsEnabled ??
+          (ui as { terminalAgentNotificationsEnabled?: boolean } | undefined)
+            ?.terminalAgentNotificationsEnabled ??
           false,
         terminalCodexNotificationToastEnabled:
           ui.terminalCodexNotificationToastEnabled ?? true,
@@ -219,6 +221,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         terminalCodexNotificationSoundPattern:
           ui.terminalCodexNotificationSoundPattern ?? "default",
         terminalScrollButtonsEnabled: ui.terminalScrollButtonsEnabled ?? false,
+        terminalCommitStatusEnabled: ui.terminalCommitStatusEnabled ?? false,
         terminalScrollStep: ui.terminalScrollStep ?? 3,
         explorerShowHidden: ui.explorerShowHidden ?? false,
         mobileCustomKeyboardEnabled: ui.mobileCustomKeyboardEnabled ?? true,
@@ -282,14 +285,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.terminalCodexNotificationSoundPattern =
         partial.terminalCodexNotificationSoundPattern;
     if (partial.terminalScrollButtonsEnabled !== undefined)
-      clamped.terminalScrollButtonsEnabled = partial.terminalScrollButtonsEnabled;
+      clamped.terminalScrollButtonsEnabled =
+        partial.terminalScrollButtonsEnabled;
+    if (partial.terminalCommitStatusEnabled !== undefined)
+      clamped.terminalCommitStatusEnabled = partial.terminalCommitStatusEnabled;
     if (partial.terminalScrollStep !== undefined)
-      clamped.terminalScrollStep = Math.min(50, Math.max(1, partial.terminalScrollStep));
+      clamped.terminalScrollStep = Math.min(
+        50,
+        Math.max(1, partial.terminalScrollStep),
+      );
     if (partial.explorerShowHidden !== undefined)
       clamped.explorerShowHidden = partial.explorerShowHidden;
     if (partial.mobileCustomKeyboardEnabled !== undefined)
-      clamped.mobileCustomKeyboardEnabled =
-        partial.mobileCustomKeyboardEnabled;
+      clamped.mobileCustomKeyboardEnabled = partial.mobileCustomKeyboardEnabled;
     if (partial.mobileCustomKeyboardFontSize !== undefined)
       clamped.mobileCustomKeyboardFontSize = clampKeyboardFont(
         partial.mobileCustomKeyboardFontSize,
@@ -317,30 +325,32 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       debounceTimer = null;
       const payload = pendingPersistedPatch;
       pendingPersistedPatch = {};
-      saveChain = saveChain.catch(() => {}).then(async () => {
-        try {
-          await api.globalConfig.updateUi(payload);
-          lastSavedSettings = {
-            ...(lastSavedSettings ?? pickPersistedSettings(get())),
-            ...payload,
-          };
-          if (localEditId === latestLocalEditId) {
-            set(lastSavedSettings);
+      saveChain = saveChain
+        .catch(() => {})
+        .then(async () => {
+          try {
+            await api.globalConfig.updateUi(payload);
+            lastSavedSettings = {
+              ...(lastSavedSettings ?? pickPersistedSettings(get())),
+              ...payload,
+            };
+            if (localEditId === latestLocalEditId) {
+              set(lastSavedSettings);
+            }
+          } catch (error) {
+            if (localEditId === latestLocalEditId && lastSavedSettings) {
+              set(lastSavedSettings);
+            }
+            recordClientDiagnostic(
+              "custom",
+              "settings-store",
+              "settings update rejected",
+              {
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
           }
-        } catch (error) {
-          if (localEditId === latestLocalEditId && lastSavedSettings) {
-            set(lastSavedSettings);
-          }
-          recordClientDiagnostic(
-            "custom",
-            "settings-store",
-            "settings update rejected",
-            {
-              error: error instanceof Error ? error.message : String(error),
-            },
-          );
-        }
-      });
+        });
     }, 500);
   },
 }));

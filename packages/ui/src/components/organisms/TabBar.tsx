@@ -14,6 +14,7 @@ import {
   type TerminalDiagnosticsMenuHandler,
 } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import { TerminalTabInsertionZone } from "@/components/organisms/TerminalTabInsertionZone.js";
+import { TerminalCommitStatusChip } from "@/components/organisms/TerminalCommitStatusChip.js";
 
 export function splitActionToPaneDirection(action: "right" | "down") {
   return action === "right" ? "horizontal" : "vertical";
@@ -121,6 +122,8 @@ export interface TabBarProps {
   paneId: string;
   paneTabs: TabEntry[];
   activeSessionId: string | null;
+  activeProject?: string;
+  terminalCommitStatusEnabled: boolean;
   hasSplit: boolean;
   onSelectTab: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
@@ -135,6 +138,8 @@ export function TabBar({
   paneId,
   paneTabs,
   activeSessionId,
+  activeProject,
+  terminalCommitStatusEnabled,
   hasSplit,
   onSelectTab,
   onCloseTab,
@@ -212,6 +217,15 @@ export function TabBar({
           <Plus className="h-3.5 w-3.5" />
         </button>
       </div>
+
+      {terminalCommitStatusEnabled ? (
+        <div className="flex min-w-0 max-w-[34rem] shrink">
+          <TerminalCommitStatusChip
+            project={activeProject}
+            enabled={terminalCommitStatusEnabled}
+          />
+        </div>
+      ) : null}
 
       <div className="flex items-center px-1 border-l border-[var(--color-border)] bg-[var(--color-surface)]">
         {/* Split Horizontal Button */}

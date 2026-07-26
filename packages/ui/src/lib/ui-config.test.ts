@@ -23,6 +23,7 @@ describe("withUiConfigDefaults", () => {
     expect(ui.mobileCustomKeyboardPadding).toBe(6);
     expect(ui.mobileCustomKeyboardRowGap).toBe(4);
     expect(ui.terminalScrollButtonsEnabled).toBe(false);
+    expect(ui.terminalCommitStatusEnabled).toBe(false);
     expect(ui.runtimeGroupOrder).toEqual([]);
     expect(ui.runtimeItemOrder).toEqual({});
   });

@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getGlobalConfig, updateUi, recordClientDiagnostic } = vi.hoisted(() => ({
-  getGlobalConfig: vi.fn(),
-  updateUi: vi.fn(),
-  recordClientDiagnostic: vi.fn(),
-}));
+const { getGlobalConfig, updateUi, recordClientDiagnostic } = vi.hoisted(
+  () => ({
+    getGlobalConfig: vi.fn(),
+    updateUi: vi.fn(),
+    recordClientDiagnostic: vi.fn(),
+  }),
+);
 
 vi.mock("@/api/client.js", () => ({
   api: {
@@ -19,10 +21,7 @@ vi.mock("@/lib/diagnostics-client.js", () => ({
   recordClientDiagnostic,
 }));
 
-import {
-  __resetSettingsStoreTestState,
-  useSettingsStore,
-} from "./settings.js";
+import { __resetSettingsStoreTestState, useSettingsStore } from "./settings.js";
 
 async function flushMicrotasks() {
   await Promise.resolve();
@@ -52,6 +51,7 @@ function resetSettingsStore() {
     terminalCodexNotificationSoundVolume: 100,
     terminalCodexNotificationSoundPattern: "default",
     terminalScrollButtonsEnabled: false,
+    terminalCommitStatusEnabled: false,
     terminalScrollStep: 3,
     explorerShowHidden: false,
     mobileCustomKeyboardEnabled: true,
@@ -94,6 +94,7 @@ describe("settings store terminal agent notification fields", () => {
     expect(state.terminalCodexNotificationSoundEnabled).toBe(true);
     expect(state.terminalCodexNotificationSoundVolume).toBe(100);
     expect(state.terminalCodexNotificationSoundPattern).toBe("default");
+    expect(state.terminalCommitStatusEnabled).toBe(false);
   });
 
   it("persists codex notification changes", async () => {
@@ -109,6 +110,20 @@ describe("settings store terminal agent notification fields", () => {
       expect.objectContaining({
         terminalCodexNotificationsEnabled: true,
       }),
+    );
+  });
+
+  it("persists the terminal commit-status preference", async () => {
+    updateUi.mockResolvedValue({ updated: true });
+
+    useSettingsStore.getState().saveDebounced({
+      terminalCommitStatusEnabled: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(updateUi).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalCommitStatusEnabled: true }),
     );
   });
 

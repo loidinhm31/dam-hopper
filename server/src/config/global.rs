@@ -153,6 +153,7 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
             "runtimeGroupOrder" => "runtime_group_order",
             "runtimeItemOrder" => "runtime_item_order",
             "terminalScrollButtonsEnabled" => "terminal_scroll_buttons_enabled",
+            "terminalCommitStatusEnabled" => "terminal_commit_status_enabled",
             "terminalScrollStep" => "terminal_scroll_step",
             other => other,
         };

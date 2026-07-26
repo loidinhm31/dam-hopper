@@ -36,22 +36,20 @@ Managing export does not restart Codex, so the UI indicates that a new/restarted
 is required. When capture is disabled, the Usage page links back to Settings and explains that a
 new terminal is required for complete run boundaries.
 
-## Project Status Settings
+## Latest Commit in Terminal
 
-**Locations:** `packages/ui/src/components/pages/SettingsPage.tsx`,
-`packages/ui/src/components/organisms/SettingsProjectStatusSection.tsx`, and
-`packages/ui/src/api/queries.ts`
+**Locations:** `packages/ui/src/components/organisms/SettingsAppearanceSection.tsx`,
+`packages/ui/src/components/organisms/TerminalCommitStatusChip.tsx`, and
+`packages/ui/src/components/organisms/ActiveTerminalRuntimeDisplay.tsx`
 
-The Settings page includes a collapsed-by-default **Project status** section for the
-active project. It performs no background polling: selecting **Refresh** explicitly
-requests the project Git status and renders the latest commit message, localized
-commit date, current branch, and seven-character short hash. The full hash remains
-available through the commit value's tooltip.
-
-The section explains non-success states (no active project, loading, unavailable
-project path, non-Git project, empty repository, and Git status errors). The manual
-mutation returns the project name with its result so a response for a previously
-selected project cannot overwrite the current Settings view.
+Settings > Appearance exposes one **Show latest commit in terminal** toggle. When
+enabled, the active terminal header renders a compact status chip containing the
+current branch, latest commit message, localized timestamp, and seven-character short
+hash; hovering exposes full values through the tooltip, and the complete details are
+also included in the chip's accessible label. The chip is passive and does not add a refresh action or polling:
+the shared project-status query supplies data and Git mutations invalidate it when
+fresh status is needed. Missing, invalid, non-Git, or unavailable project status is
+handled fail-closed by hiding the chip.
 
 ## Shared File Decorations
 
