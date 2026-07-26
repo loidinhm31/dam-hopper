@@ -4,10 +4,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Status Overview
 
-- **Current Phase:** Safe Inline Terminal Suggestions Phase 05: Release Validation, Documentation, and Rollout (completed 2026-07-16 +07; review approved)
-- **Last Milestone:** Completed automated release validation, documentation, and fail-closed rollout preparation
-- **Total Phases Completed:** 23 phases (F-01 7/7, F-08 5/6, UI/UX 1/1, Tauri shared UI 5/5, terminal notification center 1/1, inline terminal suggestions 5/5 complete)
-- **Next Milestone:** Complete external release checks: real zsh/fish/Bash PTY, IME, screen-reader, and WebGL/renderer validation
+- **Current Phase:** Terminal Usage Analytics Phase 07: Security, Fault, Performance, Documentation (validated; review approved 2026-07-26; platform checks pending)
+- **Last Milestone:** Completed aggregate analytics, privacy/fault validation, loopback Codex adapter, Usage UI, benchmark regression, and release documentation
+- **Total Phases Completed:** 30 phases (prior roadmap phases plus Terminal Usage Analytics 03–07)
+- **Next Milestone:** Complete environment-dependent Zsh/Fish PTY, IME, screen-reader, and renderer checks
 
 ### Terminal Usage Analytics
 
@@ -16,15 +16,31 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [x] Separate privacy-preserving telemetry SQLite store and migrations
 - [x] Bounded non-blocking writer with WAL and graceful shutdown
 - [x] UTC rollup/purge, project exclusion, delete-all, and retention controls
-- [x] DB secret scan; 100k-row aggregate benchmark deferred to Phase 04 API work
+- [x] DB/API privacy scan and read-only/corrupt store fault coverage
 
 **Phase 04: Aggregate API and Controls — [COMPLETED 2026-07-26; APPROVED WITH WARNINGS]**
 
 - [x] Protected, bounded aggregate endpoints and privacy-safe response contracts
 - [x] Settings roundtrip/runtime apply and explicit delete confirmation/reset behavior
 - [x] Client DTOs/query keys and API response content scan
-- [ ] Follow-up: live HMAC rotation/reset in the shared collector/runtime path
-- [ ] Follow-up: shared coordination for concurrent settings/retention reads
+- [x] Full-delete HMAC rotation and serialized settings/retention/delete coordination
+
+**Phase 05: Codex Loopback OTel Adapter — [COMPLETED 2026-07-26; APPROVED]**
+
+- [x] Loopback-only authenticated binary receiver with bounded decoding and retry-safe dedupe
+- [x] Field-level forward compatibility with partial/unavailable token coverage
+- [x] Instructions-only setup; no silent Codex configuration edits
+
+**Phase 06: Usage UI and Compact Navigation — [COMPLETED 2026-07-26; APPROVED]**
+
+- [x] Responsive aggregate dashboard, UTC filters, coverage state, pause/exclusion controls
+- [x] Explicit all/range deletion confirmation and no-cost/no-productivity interpretation copy
+
+**Phase 07: Security, Fault, Performance, Documentation — [VALIDATED; REVIEW APPROVED 2026-07-26; PLATFORM CHECKS PENDING]**
+
+- [x] Focused PTY, telemetry, API, OTLP, UI unit, and Chromium browser validation
+- [x] SQLite read-only/concurrent/corrupt regression coverage and privacy-safe release documentation
+- [ ] External Zsh/Fish, IME, screen-reader, and renderer checks where host executables/devices are unavailable
 
 ## Roadmap Phases
 
@@ -289,7 +305,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **2026-07-26:** Completed Terminal Usage Analytics Phase 03: SQLite store, retention, and privacy.
   - ✅ Added isolated telemetry storage with privacy-safe schema, migrations, and connection pragmas.
   - ✅ Added bounded non-blocking persistence, UTC rollup/purge, project exclusion, and deletion controls.
-  - ✅ Validated backpressure behavior and database secret scanning; aggregate benchmark remains Phase 04 work.
+  - ✅ Validated backpressure behavior, database/API privacy, and the 100k-row aggregate benchmark (p95 <200 ms on the validation run; hardware-dependent).
 
 - **2026-07-16:** Completed Safe Inline Terminal Suggestions Phase 01: Security containment and history privacy.
   - ✅ Removed PTY-silence authorization, automatic overlay rendering, input interception, and automatic command recording

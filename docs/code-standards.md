@@ -864,3 +864,18 @@ Routes registered conditionally at router construction time.
 - [ ] No symlink traversal (validate all path operations)
 - [ ] CORS configured (default: localhost:5173)
 - [ ] Error messages don't leak paths/credentials
+
+## Telemetry Privacy and Fault Boundaries
+
+- Keep terminal analytics behind the opt-in control; `NoopTelemetrySink` is the safe fallback.
+- Emit only validated shell lifecycle metadata and allowlisted Codex token counters. Never persist
+  commands, argv, cwd, environment, PTY output, prompts, responses, tool content, or raw OTLP.
+- Keep telemetry persistence off the PTY hot path: bounded `try_send`, a dedicated worker, one
+  SQLite writer, and read-only aggregate connections.
+- SQLite fault paths (locked, full, readonly, corrupt, or unavailable) must degrade analytics
+  without blocking or terminating PTY operation. Tests should assert this at the store and API
+  boundaries.
+- Aggregate responses must use nullable values for unavailable token components and expose
+  approximate/unattributed coverage rather than manufacturing zeros or exact attribution.
+- Destructive usage operations require explicit confirmation, UTC-aligned range validation, and an
+  ordered admission barrier. Full deletion rotates the HMAC key only after the store is empty.

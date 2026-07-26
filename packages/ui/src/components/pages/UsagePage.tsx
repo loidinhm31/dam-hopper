@@ -39,7 +39,7 @@ function isWindow(value: string | null): value is UsageWindow {
   return value === "24h" || value === "7d" || value === "30d";
 }
 
-function queryFromSearch(params: URLSearchParams): UsageSummaryQuery {
+export function queryFromSearch(params: URLSearchParams): UsageSummaryQuery {
   const window = params.get("window");
   const bucket = params.get("bucket");
   const fromValue = params.get("from");
@@ -71,7 +71,7 @@ function queryFromSearch(params: URLSearchParams): UsageSummaryQuery {
   };
 }
 
-function searchFromQuery(query: UsageSummaryQuery): URLSearchParams {
+export function searchFromQuery(query: UsageSummaryQuery): URLSearchParams {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined) params.set(key, String(value));
@@ -113,7 +113,7 @@ export function UsagePage() {
 
   const updateQuery = (next: UsageSummaryQuery) => {
     if (next.window) {
-      const { from: _from, to: _to, ...windowQuery } = next;
+      const windowQuery = { ...next, from: undefined, to: undefined };
       setParams(searchFromQuery(windowQuery));
       return;
     }

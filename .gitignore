@@ -15,3 +15,5 @@ server/.fuse_hidden*
 .agents
 .codex
 .gemini
+packages/ui/.vitest-attachments/
+packages/ui/browser-tests/__screenshots__/
