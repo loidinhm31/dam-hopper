@@ -626,6 +626,12 @@ pub struct UiConfig {
     )]
     pub terminal_scroll_buttons_enabled: bool,
     #[serde(
+        default,
+        alias = "terminal_commit_status_enabled",
+        alias = "terminalCommitStatusEnabled"
+    )]
+    pub terminal_commit_status_enabled: bool,
+    #[serde(
         default = "default_terminal_scroll_step",
         alias = "terminal_scroll_step",
         alias = "terminalScrollStep"
@@ -675,6 +681,7 @@ impl Default for UiConfig {
             runtime_group_order: vec![],
             runtime_item_order: std::collections::HashMap::new(),
             terminal_scroll_buttons_enabled: false,
+            terminal_commit_status_enabled: false,
             terminal_scroll_step: default_terminal_scroll_step(),
         }
     }

@@ -4,6 +4,7 @@ import { Group, Panel, Separator } from "react-resizable-panels";
 import { useGlobalConfig } from "@/api/queries.js";
 import { TerminalRuntimeNavigator } from "@/components/organisms/TerminalRuntimeNavigator.js";
 import { TerminalRuntimeOutput } from "@/components/organisms/TerminalRuntimeOutput.js";
+import { TerminalCommitStatusChip } from "@/components/organisms/TerminalCommitStatusChip.js";
 import {
   openTerminalDiagnosticsContextMenu,
   type TerminalDiagnosticsMenuHandler,
@@ -25,6 +26,7 @@ import { useRuntimeTreeOrdering } from "@/hooks/use-runtime-tree-ordering.js";
 import { buildRuntimeTree } from "@/lib/terminal-runtime-tree.js";
 import { cn } from "@/lib/utils.js";
 import { withUiConfigDefaults } from "@/lib/ui-config.js";
+import { useSettingsStore } from "@/stores/settings.js";
 
 const RUNTIME_NAVIGATOR_WIDTH_KEY = "dam-hopper:runtime-navigator-width";
 
@@ -50,10 +52,14 @@ interface ActiveTerminalRuntimeDisplayProps {
 export function RuntimeActiveSessionTitle({
   activeSessionId,
   activeSessionLabel,
+  activeProject,
+  terminalCommitStatusEnabled = false,
   onOpenDiagnosticsMenu,
 }: {
   activeSessionId: string | null;
   activeSessionLabel: string;
+  activeProject?: string;
+  terminalCommitStatusEnabled?: boolean;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
 }) {
   return (
@@ -71,9 +77,17 @@ export function RuntimeActiveSessionTitle({
       <p className="truncate text-xs font-semibold text-[var(--color-text)]">
         {activeSessionLabel}
       </p>
-      <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-        Full-width terminal
-      </p>
+      <div className="flex min-w-0 items-center gap-1.5">
+        <p className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+          Full-width terminal
+        </p>
+        {terminalCommitStatusEnabled ? (
+          <TerminalCommitStatusChip
+            project={activeProject}
+            enabled={terminalCommitStatusEnabled}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -97,6 +111,9 @@ export function ActiveTerminalRuntimeDisplay({
   onCloseBrowser,
 }: ActiveTerminalRuntimeDisplayProps) {
   const { data: globalConfig } = useGlobalConfig();
+  const terminalCommitStatusEnabled = useSettingsStore(
+    (state) => state.terminalCommitStatusEnabled,
+  );
   const { ports, createTunnel, stopTunnel } = usePorts();
   const isCompactWorkspace = useCompactWorkspace();
   const [runtimeSheetOpen, setRuntimeSheetOpen] = useState(false);
@@ -165,6 +182,8 @@ export function ActiveTerminalRuntimeDisplay({
           <RuntimeActiveSessionTitle
             activeSessionId={activeSessionId}
             activeSessionLabel={activeSessionLabel}
+            activeProject={activeSession?.project}
+            terminalCommitStatusEnabled={terminalCommitStatusEnabled}
             onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           />
           <button
@@ -248,42 +267,55 @@ export function ActiveTerminalRuntimeDisplay({
       >
         <div className="absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-[var(--color-primary)]/50 opacity-0 transition-opacity group-hover:opacity-100" />
       </div>
-      <main className="min-w-0 flex-1">
-        {browserOpen ? (
-          <Group
-            orientation="horizontal"
-            className="h-full"
-            data-testid="terminal-browser-split"
-          >
-            <Panel id="runtime-terminal" defaultSize={60} minSize={30}>
-              <TerminalRuntimeOutput
-                activeSessionId={activeSessionId}
-                mountedSessions={mountedSessions}
-                layoutRevision={layoutRevision}
-                renderTerminals={renderTerminals}
-                onSessionExit={onSessionExit}
-                onNewTerminal={handleNewTerminal}
-                onSelectActive={onSelectTab}
-              />
-            </Panel>
-            <Separator className="w-1 shrink-0 bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] data-[orientation=vertical]:cursor-col-resize" />
-            <Panel id="runtime-browser" defaultSize={40} minSize={20}>
-              <div className="h-full min-w-0 overflow-hidden">
-                {renderBrowserContent?.(onCloseBrowser ?? (() => {}))}
-              </div>
-            </Panel>
-          </Group>
-        ) : (
-          <TerminalRuntimeOutput
+      <main className="min-w-0 flex flex-1 flex-col">
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3">
+          <RuntimeActiveSessionTitle
             activeSessionId={activeSessionId}
-            mountedSessions={mountedSessions}
-            layoutRevision={layoutRevision}
-            renderTerminals={renderTerminals}
-            onSessionExit={onSessionExit}
-            onNewTerminal={handleNewTerminal}
-            onSelectActive={onSelectTab}
+            activeSessionLabel={activeSessionLabel}
+            onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           />
-        )}
+          <TerminalCommitStatusChip
+            project={activeSession?.project}
+            enabled={terminalCommitStatusEnabled}
+          />
+        </div>
+        <div className="min-h-0 flex-1">
+          {browserOpen ? (
+            <Group
+              orientation="horizontal"
+              className="h-full"
+              data-testid="terminal-browser-split"
+            >
+              <Panel id="runtime-terminal" defaultSize={60} minSize={30}>
+                <TerminalRuntimeOutput
+                  activeSessionId={activeSessionId}
+                  mountedSessions={mountedSessions}
+                  layoutRevision={layoutRevision}
+                  renderTerminals={renderTerminals}
+                  onSessionExit={onSessionExit}
+                  onNewTerminal={handleNewTerminal}
+                  onSelectActive={onSelectTab}
+                />
+              </Panel>
+              <Separator className="w-1 shrink-0 bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] data-[orientation=vertical]:cursor-col-resize" />
+              <Panel id="runtime-browser" defaultSize={40} minSize={20}>
+                <div className="h-full min-w-0 overflow-hidden">
+                  {renderBrowserContent?.(onCloseBrowser ?? (() => {}))}
+                </div>
+              </Panel>
+            </Group>
+          ) : (
+            <TerminalRuntimeOutput
+              activeSessionId={activeSessionId}
+              mountedSessions={mountedSessions}
+              layoutRevision={layoutRevision}
+              renderTerminals={renderTerminals}
+              onSessionExit={onSessionExit}
+              onNewTerminal={handleNewTerminal}
+              onSelectActive={onSelectTab}
+            />
+          )}
+        </div>
       </main>
     </div>
   );
