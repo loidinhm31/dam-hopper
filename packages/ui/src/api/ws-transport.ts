@@ -833,8 +833,12 @@ function channelToEndpoint(
       return { method: "GET", url: "/api/usage/health" };
     case "usage:settings":
       return { method: "GET", url: "/api/usage/settings" };
+    case "usage:setupStatus":
+      return { method: "GET", url: "/api/usage/setup" };
     case "usage:updateSettings":
       return { method: "PATCH", url: "/api/usage/settings", body: data };
+    case "usage:configure":
+      return { method: "PATCH", url: "/api/usage/setup", body: data };
     case "usage:deleteAll":
       return { method: "DELETE", url: "/api/usage", body: data };
 

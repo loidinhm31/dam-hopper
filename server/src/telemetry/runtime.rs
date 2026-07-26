@@ -147,6 +147,16 @@ impl TelemetryRuntime {
         }
     }
 
+    pub async fn retry_collector(&self, config: &TelemetryConfig) -> Result<(), String> {
+        let _transition = self.transition_lock().await;
+        let handle = self.handle();
+        if handle.store.is_none() {
+            return Err("Usage telemetry is not active".to_string());
+        }
+        self.restart_collector_locked(&config.collector, &config.collector, &handle)
+            .await
+    }
+
     pub async fn shutdown(&self) {
         let _transition = self.transition_lock().await;
         self.disable_locked().await;

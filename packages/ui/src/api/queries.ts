@@ -16,6 +16,7 @@ import type {
   ResetMode,
   UiConfig,
   UsageSettingsPatch,
+  UsageSetupStatus,
   UsageSummaryQuery,
   HostMetrics,
   SshCredentialStatus,
@@ -837,6 +838,25 @@ export function useUsageSettings() {
   return useQuery({
     queryKey: ["usage", "settings"],
     queryFn: () => api.usage.settings(),
+  });
+}
+
+export function useUsageSetupStatus() {
+  return useQuery<UsageSetupStatus>({
+    queryKey: ["usage", "setup"],
+    queryFn: () => api.usage.setupStatus(),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useConfigureUsageInsights() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (patch: UsageSettingsPatch) => api.usage.configure(patch),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["usage"] });
+      void qc.invalidateQueries({ queryKey: ["config"] });
+    },
   });
 }
 
