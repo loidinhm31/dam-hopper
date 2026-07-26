@@ -390,7 +390,15 @@ rotates the shared telemetry HMAC key, while range deletion does not.
 
 The collector setup response is instructions-only (`managedConfig: false`). DamHopper never
 silently edits `~/.codex/config.toml`; after adding the displayed loopback endpoint and bearer
-secret to Codex, restart the existing Codex process. If collection is paused or the collector
+secret to Codex, restart the existing Codex process. This restart is a Codex client caveat: it
+is separate from DamHopper's live telemetry reconfiguration.
+
+`PATCH /api/usage/settings` applies validated telemetry changes to the running server before
+persisting the registry file. Enabling or disabling telemetry changes the capture snapshot used
+by newly created terminal runs; existing PTY runs keep the snapshot they started with. Collector
+host/port or enabled-state changes stop and start the loopback listener while the server remains
+up. If a collector restart or retention operation fails, the previous live collector/configuration
+is restored and the failed update is not published. If collection is paused or the collector
 fails, PTY creation and I/O continue with telemetry disabled or unavailable.
 
 Rollback/runbook: pause collection, optionally delete a UTC range or all usage data, then leave
