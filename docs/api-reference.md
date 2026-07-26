@@ -284,6 +284,13 @@ Reads or updates `paused`, `detailRetentionDays`, `aggregateRetentionDays` (null
 `excludedProjects`, and collector settings. Retention changes synchronously roll up and
 purge before the new configuration is published.
 
+Updates are live: the server applies the validated runtime transition before writing its
+configuration file. Telemetry enable/disable affects only terminal runs created after the
+transition; a PTY keeps the capture snapshot selected when it started. Collector changes
+restart the loopback listener without a DamHopper server restart. If runtime application or
+the subsequent config write fails, the previous live state is restored and the update is
+rejected.
+
 ### DELETE /api/usage
 
 Destructive deletion requires the exact JSON confirmation string

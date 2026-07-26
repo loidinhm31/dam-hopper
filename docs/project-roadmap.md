@@ -11,6 +11,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Terminal Usage Analytics
 
+**Live Usage Insights Settings: Phase 01 Runtime Lifecycle and API — [COMPLETED 2026-07-26]**
+
+- [x] Live telemetry activation/deactivation with stable PTY runtime proxy
+- [x] Loopback collector reconfiguration with stop-before-bind and rollback
+- [x] Protected setup/status API and serialized delete/retention transitions
+- [ ] Managed Codex exporter, Settings UX, and final verification (Phases 02–04)
+
 **Phase 03: SQLite Store, Retention, Privacy — [COMPLETED 2026-07-26]**
 
 - [x] Separate privacy-preserving telemetry SQLite store and migrations

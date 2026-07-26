@@ -98,6 +98,7 @@ struct SettingsResponse {
     excluded_projects: Vec<String>,
     collector: TelemetryCollectorConfig,
     collector_setup: CollectorSetup,
+    runtime: crate::telemetry::TelemetryRuntimeStatus,
 }
 
 #[derive(Serialize)]
@@ -114,6 +115,7 @@ struct CollectorSetup {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsPatch {
+    pub enabled: Option<bool>,
     pub paused: Option<bool>,
     pub detail_retention_days: Option<u16>,
     pub aggregate_retention_days: Option<Option<u32>>,
@@ -226,15 +228,15 @@ pub async fn summary(
     } else {
         None
     };
+    let mut collector = state.telemetry_runtime.status().collector;
+    collector.duplicate = health_value(&store, "collector_duplicates").map_err(store_error)?;
     let health = Health {
         available: true,
         paused: !telemetry.control.is_enabled(),
         writer_errors: health_value(&store, "writer_errors").map_err(store_error)?,
         rejected_events: telemetry.control.rejected_count(),
         sampled_at: now_ms(),
-        collector: state.collector_health.snapshot_with_duplicates(
-            health_value(&store, "collector_duplicates").map_err(store_error)?,
-        ),
+        collector,
     };
     Ok(Json(SummaryResponse {
         range,
@@ -267,28 +269,31 @@ pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, 
         .transpose()
         .map_err(store_error)?
         .unwrap_or(0);
+    let mut collector = state.telemetry_runtime.status().collector;
+    collector.duplicate = telemetry
+        .store
+        .as_ref()
+        .map(|store| health_value(store, "collector_duplicates"))
+        .transpose()
+        .map_err(store_error)?
+        .unwrap_or(0);
     Ok(Json(Health {
         available: telemetry.store.is_some(),
         paused: !telemetry.control.is_enabled(),
         writer_errors,
         rejected_events: telemetry.control.rejected_count(),
         sampled_at: now_ms(),
-        collector: state.collector_health.snapshot_with_duplicates(
-            telemetry
-                .store
-                .as_ref()
-                .map(|store| health_value(store, "collector_duplicates"))
-                .transpose()
-                .map_err(store_error)?
-                .unwrap_or(0),
-        ),
+        collector,
     }))
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> impl IntoResponse {
     let _coordination = state.telemetry_coordinator.lock().await;
     let telemetry = state.config.read().await.server.telemetry.clone();
-    Json(settings_response(telemetry))
+    Json(settings_response(
+        telemetry,
+        state.telemetry_runtime.status(),
+    ))
 }
 
 pub async fn update_settings(
@@ -299,6 +304,9 @@ pub async fn update_settings(
     let mut config = state.config.read().await.clone();
     {
         let telemetry = &mut config.server.telemetry;
+        if let Some(enabled) = patch.enabled {
+            telemetry.enabled = enabled;
+        }
         if let Some(paused) = patch.paused {
             telemetry.paused = paused;
         }
@@ -317,23 +325,26 @@ pub async fn update_settings(
         telemetry.validate().map_err(|_| invalid())?;
     }
 
-    let runtime = state
-        .telemetry
-        .read()
-        .expect("telemetry state lock poisoned")
-        .clone();
-    if patch.detail_retention_days.is_some() || patch.aggregate_retention_days.is_some() {
-        apply_retention(&runtime, &config.server.telemetry).map_err(store_error)?;
+    let previous = state.config.read().await.clone();
+    state
+        .telemetry_runtime
+        .apply_config(&previous.server.telemetry, &config.server.telemetry)
+        .await
+        .map_err(runtime_error)?;
+    // The runtime transition succeeds before configuration is published. If the
+    // atomic disk write fails, restore the previous live state before replying.
+    if let Err(error) = write_config(&config.config_path, &config) {
+        state
+            .telemetry_runtime
+            .restore_config(&previous.server.telemetry, &config.server.telemetry)
+            .await;
+        return Err(ApiError::from_app(error));
     }
-    // Publish the new retention boundary only after its synchronous rollup has
-    // completed, so no summary can observe a detail/rollup gap.
-    write_config(&config.config_path, &config).map_err(ApiError::from_app)?;
-    runtime.control.set_enabled(!config.server.telemetry.paused);
-    runtime
-        .control
-        .set_excluded_projects(config.server.telemetry.excluded_projects.clone());
     *state.config.write().await = config.clone();
-    Ok(Json(settings_response(config.server.telemetry)))
+    Ok(Json(settings_response(
+        config.server.telemetry,
+        state.telemetry_runtime.status(),
+    )))
 }
 
 pub async fn delete_all(
@@ -365,27 +376,37 @@ pub async fn delete_all(
     // Pause first, then wait for a worker-ordered deletion barrier. The queued
     // commands before this request are flushed before deletion; new capture is
     // rejected until the final persisted pause state is read below.
-    telemetry
-        .control
-        .with_exclusive_admission(|| {
-            telemetry.control.set_enabled(false);
-            execute_delete(&telemetry, &store, range).and_then(|_| {
+    let paused = state.config.read().await.server.telemetry.paused;
+    let deletion_telemetry = telemetry.clone();
+    let deletion_store = store.clone();
+    tokio::task::spawn_blocking(move || {
+        deletion_telemetry.control.with_exclusive_admission(|| {
+            deletion_telemetry.control.set_enabled(false);
+            execute_delete(&deletion_telemetry, &deletion_store, range).and_then(|_| {
                 if range.is_none() {
-                    telemetry.hmac_keys.as_ref().map_or(Ok(()), |keys| {
-                        keys.rotate_after_delete().map_err(Into::into)
-                    })
+                    deletion_telemetry
+                        .hmac_keys
+                        .as_ref()
+                        .map_or(Ok(()), |keys| {
+                            keys.rotate_after_delete().map_err(Into::into)
+                        })
                 } else {
                     Ok(())
                 }
             })
         })
-        .map_err(store_error)?;
-    let paused = state.config.read().await.server.telemetry.paused;
+    })
+    .await
+    .map_err(|_| unavailable())?
+    .map_err(store_error)?;
     telemetry.control.set_enabled(!paused);
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 
-fn settings_response(telemetry: crate::config::TelemetryConfig) -> SettingsResponse {
+fn settings_response(
+    telemetry: crate::config::TelemetryConfig,
+    runtime: crate::telemetry::TelemetryRuntimeStatus,
+) -> SettingsResponse {
     let endpoint = format!(
         "http://{}:{}/v1/logs",
         telemetry.collector.host, telemetry.collector.port
@@ -397,12 +418,13 @@ fn settings_response(telemetry: crate::config::TelemetryConfig) -> SettingsRespo
         aggregate_retention_days: telemetry.aggregate_retention_days,
         excluded_projects: telemetry.excluded_projects,
         collector: telemetry.collector,
+        runtime,
         collector_setup: CollectorSetup {
             endpoint,
             authorization: "Bearer <DAM_HOPPER_OTLP_TOKEN>".to_string(),
             restart_required: true,
             managed_config: false,
-            server_restart_required: true,
+            server_restart_required: false,
             baseline_fixture_version: "0.145.0".to_string(),
         },
     }
@@ -599,45 +621,6 @@ fn execute_delete(
         .delete_range(from, to)
         .and_then(|_| store.checkpoint())
 }
-fn apply_retention(
-    telemetry: &crate::telemetry::worker::TelemetryHandle,
-    config: &crate::config::TelemetryConfig,
-) -> Result<(), crate::telemetry::store::TelemetryStoreError> {
-    let now = now_ms();
-    if let Some(sender) = &telemetry.command_tx {
-        let (completion_tx, completion_rx) = std::sync::mpsc::sync_channel(1);
-        let command = TelemetryCmd::ApplyRetention {
-            now_utc_ms: now,
-            detail_retention_days: config.detail_retention_days,
-            aggregate_retention_days: config.aggregate_retention_days,
-            completion: completion_tx,
-        };
-        sender.send(command).map_err(|_| {
-            crate::telemetry::store::TelemetryStoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::WouldBlock,
-                "telemetry worker unavailable",
-            ))
-        })?;
-        return completion_rx
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .map_err(|_| {
-                crate::telemetry::store::TelemetryStoreError::Io(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "telemetry retention timed out",
-                ))
-            })?
-            .map_err(|error| {
-                crate::telemetry::store::TelemetryStoreError::Io(std::io::Error::other(error))
-            });
-    } else if let Some(store) = &telemetry.store {
-        store.write_batch(vec![TelemetryCmd::Purge {
-            now_utc_ms: now,
-            detail_retention_days: config.detail_retention_days,
-            aggregate_retention_days: config.aggregate_retention_days,
-        }])?;
-    }
-    Ok(())
-}
 fn telemetry_path(value: &str) -> std::path::PathBuf {
     value
         .strip_prefix("~/")
@@ -659,5 +642,10 @@ fn unavailable() -> ApiError {
 fn store_error(_: crate::telemetry::store::TelemetryStoreError) -> ApiError {
     ApiError::from_app(AppError::Unavailable(
         "Usage analytics unavailable".to_string(),
+    ))
+}
+fn runtime_error(_: String) -> ApiError {
+    ApiError::from_app(AppError::Unavailable(
+        "Usage analytics setup could not be applied".to_string(),
     ))
 }

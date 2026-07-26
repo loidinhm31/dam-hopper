@@ -253,11 +253,20 @@ submission/completion events, classifies only simple commands, and sends privacy
 cannot create duplicate events in one run. Unsupported or ambiguous activity is labeled
 `partial` or `unavailable`; missing commands are never fabricated.
 
-Telemetry is opt-in. When enabled at startup, the server opens the separate `telemetry.db`,
-loads a 32-byte HMAC key from the config directory, starts a dedicated worker, and injects the
-bounded `ChannelTelemetrySink` into PTY sessions. Disabled, unavailable, corrupt, or failed
-telemetry initialization falls back to a no-op sink while PTY operation continues. Shutdown sends
-the worker a drain command and performs a passive WAL checkpoint.
+Telemetry is opt-in. When enabled, the server opens the separate `telemetry.db`, loads a 32-byte
+HMAC key from the config directory, starts a dedicated worker, and injects the bounded
+`ChannelTelemetrySink` into PTY sessions. Each PTY takes a capture snapshot when it starts, so a
+live enable/disable transition applies to new terminal runs and does not change an existing run
+mid-stream. Disabled, unavailable, corrupt, or failed telemetry initialization falls back to a
+no-op sink while PTY operation continues. Shutdown sends the worker a drain command and performs
+a passive WAL checkpoint.
+
+`PATCH /api/usage/settings` serializes runtime transitions. Collector changes stop and restart the
+loopback listener in place; retention changes run before publication. If collector startup or
+retention fails, the prior collector/runtime state is restored and the new configuration is not
+published. The API also restores the live state if the subsequent registry-file write fails.
+The Codex setup remains instructions-only: after changing Codex's own OTLP configuration, the
+existing Codex process must be restarted separately for it to reconnect.
 
 Raw command text is transient classifier input only. The Phase 02 event contract limits command
 facts to an

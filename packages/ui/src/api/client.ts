@@ -455,6 +455,12 @@ export interface UsageCollectorSettings {
   port: number;
 }
 
+export interface UsageRuntimeStatus {
+  active: boolean;
+  collector: UsageCollectorHealth;
+  collectorError: string | null;
+}
+
 export interface UsageSettings {
   enabled: boolean;
   paused: boolean;
@@ -462,17 +468,19 @@ export interface UsageSettings {
   aggregateRetentionDays: number | null;
   excludedProjects: string[];
   collector: UsageCollectorSettings;
+  runtime: UsageRuntimeStatus;
   collectorSetup: {
     endpoint: string;
     authorization: string;
     restartRequired: boolean;
     managedConfig: false;
-    serverRestartRequired: true;
+    serverRestartRequired: false;
     baselineFixtureVersion: string;
   };
 }
 
 export interface UsageSettingsPatch {
+  enabled?: boolean;
   paused?: boolean;
   detailRetentionDays?: number;
   aggregateRetentionDays?: number | null;
