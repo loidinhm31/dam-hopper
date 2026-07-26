@@ -8,4 +8,5 @@ pub mod secret;
 mod tests;
 
 pub use health::{CollectorHealth, CollectorHealthSnapshot};
+pub(crate) use receiver::start_collector_at;
 pub use receiver::{start_collector, CollectorHandle};

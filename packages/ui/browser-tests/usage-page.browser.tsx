@@ -43,12 +43,28 @@ const settings: UsageSettings = {
     endpoint: "http://127.0.0.1:4318/v1/logs",
     managedConfig: false,
     restartRequired: true,
-    serverRestartRequired: true,
+    serverRestartRequired: false,
   },
   detailRetentionDays: 90,
   enabled: true,
   excludedProjects: ["private"],
   paused: false,
+  runtime: {
+    active: true,
+    collector: {
+      coreSchemaDrift: 0,
+      dropped: 0,
+      duplicate: 0,
+      lastAcceptedAtUtcMs: null,
+      malformed: 0,
+      queued: 0,
+      rejected: 0,
+      running: false,
+      unavailableTokenCoverage: 0,
+      unverifiedVersion: 0,
+    },
+    collectorError: null,
+  },
 };
 
 const emptyUsage = {

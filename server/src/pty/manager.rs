@@ -24,8 +24,8 @@ use crate::{
     },
     telemetry::{
         worker::TelemetryControl, CaptureQuality, CommandClassifier, CommandEvent, CommandEventId,
-        CommandOutcome, NoopTelemetrySink, NormalizedCommand, ShellKind, TelemetrySink,
-        TerminalRunEnd, TerminalRunEvent, TerminalRunId, TELEMETRY_SCHEMA_VERSION,
+        CommandOutcome, NoopTelemetrySink, NormalizedCommand, ShellKind, TelemetryRuntime,
+        TelemetrySink, TerminalRunEnd, TerminalRunEvent, TerminalRunId, TELEMETRY_SCHEMA_VERSION,
     },
 };
 
@@ -158,6 +158,7 @@ pub struct PtySessionManager {
     telemetry_sink: Arc<dyn TelemetrySink>,
     command_classifier: Option<Arc<CommandClassifier>>,
     telemetry_control: Option<Arc<TelemetryControl>>,
+    telemetry_runtime: Option<TelemetryRuntime>,
 }
 
 struct Inner {
@@ -238,6 +239,26 @@ impl PtySessionManager {
         command_classifier: Option<Arc<CommandClassifier>>,
         telemetry_control: Option<Arc<TelemetryControl>>,
     ) -> Self {
+        Self::with_persist_and_telemetry_runtime_inner(
+            sink,
+            persist_tx,
+            session_store,
+            telemetry_sink,
+            command_classifier,
+            telemetry_control,
+            None,
+        )
+    }
+
+    fn with_persist_and_telemetry_runtime_inner(
+        sink: Arc<dyn EventSink>,
+        persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+        session_store: Option<std::sync::Arc<crate::persistence::SessionStore>>,
+        telemetry_sink: Arc<dyn TelemetrySink>,
+        command_classifier: Option<Arc<CommandClassifier>>,
+        telemetry_control: Option<Arc<TelemetryControl>>,
+        telemetry_runtime: Option<TelemetryRuntime>,
+    ) -> Self {
         // Bounded channel prevents DoS if supervisor hangs/panics.
         // 256 slots = ~5× typical max sessions (50). If full, supervisor is dead/slow.
         let (respawn_tx, respawn_rx) = mpsc::channel(256);
@@ -259,6 +280,7 @@ impl PtySessionManager {
             telemetry_sink,
             command_classifier,
             telemetry_control,
+            telemetry_runtime,
         };
 
         // Spawn the supervisor task that handles respawn requests.
@@ -269,6 +291,7 @@ impl PtySessionManager {
         let telemetry_sink = Arc::clone(&manager.telemetry_sink);
         let command_classifier = manager.command_classifier.clone();
         let telemetry_control = manager.telemetry_control.clone();
+        let telemetry_runtime = manager.telemetry_runtime.clone();
         tokio::spawn(supervisor_loop(
             respawn_rx,
             inner_clone,
@@ -280,9 +303,30 @@ impl PtySessionManager {
             telemetry_sink,
             command_classifier,
             telemetry_control,
+            telemetry_runtime,
         ));
 
         manager
+    }
+
+    /// New PTYs take a telemetry snapshot at their run boundary. The runtime
+    /// itself stays stable, letting Settings enable or disable later sessions
+    /// without replacing this manager or touching existing reader threads.
+    pub fn with_persist_and_telemetry_runtime(
+        sink: Arc<dyn EventSink>,
+        persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
+        session_store: Option<std::sync::Arc<crate::persistence::SessionStore>>,
+        telemetry_runtime: TelemetryRuntime,
+    ) -> Self {
+        Self::with_persist_and_telemetry_runtime_inner(
+            sink,
+            persist_tx,
+            session_store,
+            Arc::new(NoopTelemetrySink::new()),
+            None,
+            None,
+            Some(telemetry_runtime),
+        )
     }
 
     /// Wire the backend diagnostics store after construction (Phase 03).
@@ -456,9 +500,22 @@ impl PtySessionManager {
         let port_forward_manager = self.port_forward_manager.read().unwrap().clone();
         let rt_handle = tokio::runtime::Handle::try_current().ok();
         let diag_store = self.diagnostics.read().unwrap().clone();
-        let telemetry_sink = Arc::clone(&self.telemetry_sink);
-        let command_classifier = self.command_classifier.clone();
-        let telemetry_control = self.telemetry_control.clone();
+        let capture = self
+            .telemetry_runtime
+            .as_ref()
+            .map(TelemetryRuntime::capture);
+        let telemetry_sink = capture
+            .as_ref()
+            .map(|capture| capture.sink.clone())
+            .unwrap_or_else(|| Arc::clone(&self.telemetry_sink));
+        let command_classifier = capture
+            .as_ref()
+            .map(|capture| capture.classifier.clone())
+            .unwrap_or_else(|| self.command_classifier.clone());
+        let telemetry_control = capture
+            .as_ref()
+            .map(|capture| capture.control.clone())
+            .unwrap_or_else(|| self.telemetry_control.clone());
 
         std::thread::Builder::new()
             .name(format!("pty-reader:{session_id}"))
@@ -1489,6 +1546,7 @@ async fn supervisor_loop(
     telemetry_sink: Arc<dyn TelemetrySink>,
     command_classifier: Option<Arc<CommandClassifier>>,
     telemetry_control: Option<Arc<TelemetryControl>>,
+    telemetry_runtime: Option<TelemetryRuntime>,
 ) {
     while let Some(cmd) = respawn_rx.recv().await {
         let session_id = cmd.id.clone();
@@ -1532,6 +1590,7 @@ async fn supervisor_loop(
             Arc::clone(&telemetry_sink),
             command_classifier.clone(),
             telemetry_control.clone(),
+            telemetry_runtime.clone(),
         )
         .await
         {
@@ -1568,6 +1627,7 @@ async fn respawn_internal(
     telemetry_sink: Arc<dyn TelemetrySink>,
     command_classifier: Option<Arc<CommandClassifier>>,
     telemetry_control: Option<Arc<TelemetryControl>>,
+    telemetry_runtime: Option<TelemetryRuntime>,
 ) -> Result<(), AppError> {
     let opts = &cmd.respawn_opts;
 
@@ -1697,6 +1757,21 @@ async fn respawn_internal(
     let respawn_tx_clone = respawn_tx.clone();
     let project_name = opts.project.clone();
     let rt_handle = tokio::runtime::Handle::try_current().ok();
+    // Auto-restart is a new run boundary too. Resolve the runtime immediately
+    // before its reader begins so an intervening Settings change is respected.
+    let capture = telemetry_runtime.as_ref().map(TelemetryRuntime::capture);
+    let telemetry_sink = capture
+        .as_ref()
+        .map(|capture| capture.sink.clone())
+        .unwrap_or(telemetry_sink);
+    let command_classifier = capture
+        .as_ref()
+        .map(|capture| capture.classifier.clone())
+        .unwrap_or(command_classifier);
+    let telemetry_control = capture
+        .as_ref()
+        .map(|capture| capture.control.clone())
+        .unwrap_or(telemetry_control);
 
     std::thread::Builder::new()
         .name(format!("pty-reader:{id_clone}"))

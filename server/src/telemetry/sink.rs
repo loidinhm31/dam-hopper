@@ -74,6 +74,17 @@ impl ChannelTelemetrySink {
         )
     }
 
+    pub fn from_sender_with_control(
+        tx: SyncSender<TelemetryCmd>,
+        control: Arc<super::worker::TelemetryControl>,
+    ) -> Self {
+        Self {
+            tx,
+            dropped: Arc::new(AtomicU64::new(0)),
+            control: Some(control),
+        }
+    }
+
     pub fn sender(&self) -> SyncSender<TelemetryCmd> {
         self.tx.clone()
     }
