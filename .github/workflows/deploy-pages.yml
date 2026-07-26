@@ -44,6 +44,8 @@ jobs:
 
       - name: Build Web
         # Dynamically set the base path from GitHub Pages configuration
+        env:
+          VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS: ${{ vars.VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS }}
         run: pnpm --filter @dam-hopper/web build --base=${{ steps.pages.outputs.base_path }}/
 
       - name: 404.html Trick
