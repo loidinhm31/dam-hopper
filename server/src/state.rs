@@ -19,7 +19,7 @@ use crate::pty::{BroadcastEventSink, PtySessionManager};
 use crate::ssh::SshCredStore;
 use crate::system::HostMetricsSampler;
 use crate::telemetry::worker::TelemetryHandle;
-use crate::telemetry::TelemetryRuntime;
+use crate::telemetry::{codex_otlp::CodexExporterManager, TelemetryRuntime};
 use crate::tunnel::TunnelSessionManager;
 
 /// Shared application state across all Axum handlers.
@@ -83,6 +83,8 @@ pub struct AppState {
     /// Live owner of telemetry workers and the optional loopback collector.
     /// PTY creation keeps this stable and snapshots it only at a run boundary.
     pub telemetry_runtime: TelemetryRuntime,
+    /// Owns the narrowly-scoped, secret-safe Codex OTLP configuration mutation.
+    pub codex_exporter: CodexExporterManager,
     /// Serializes telemetry queries, deletion, retention, and collector changes.
     pub telemetry_coordinator: Arc<tokio::sync::Mutex<()>>,
 }
@@ -190,8 +192,16 @@ impl AppState {
             browser_debug_artifacts,
             telemetry: telemetry_runtime.handle_cell(),
             telemetry_runtime,
+            codex_exporter: CodexExporterManager::default_paths()
+                .map_err(|error| anyhow::anyhow!("Codex exporter manager unavailable: {error}"))?,
             telemetry_coordinator: Arc::new(tokio::sync::Mutex::new(())),
         })
+    }
+
+    #[cfg(test)]
+    pub fn with_codex_exporter(mut self, manager: CodexExporterManager) -> Self {
+        self.codex_exporter = manager;
+        self
     }
 
     pub fn set_telemetry(&self, telemetry: TelemetryHandle) {
