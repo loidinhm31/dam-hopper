@@ -10,7 +10,7 @@
 ## Overview
 
 - Priority: P1
-- Status: pending
+- Status: completed (2026-07-26 16:48 +07)
 - Goal: make opt-in understandable without showing ports, bearer tokens, or raw configuration.
 
 ## Requirements
@@ -51,10 +51,10 @@ SettingsUsageInsightsSection
 
 ## Todo List
 
-- [ ] Settings section and API hooks
-- [ ] Usage-page disabled recovery CTA
-- [ ] Accessible state/error handling
-- [ ] Browser coverage
+- [x] Settings section and API hooks
+- [x] Usage-page disabled recovery CTA
+- [x] Accessible state/error handling
+- [x] Browser coverage
 
 ## Success Criteria
 
@@ -75,4 +75,5 @@ SettingsUsageInsightsSection
 
 ## Next Steps
 
-Run real browser and live runtime verification, then update docs.
+Focused unit/API client tests pass (19/19); browser suite passes (58/58 across
+13 files). Remaining verification and documentation belong to Phase 04.

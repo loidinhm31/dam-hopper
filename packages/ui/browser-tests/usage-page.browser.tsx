@@ -36,12 +36,9 @@ vi.mock("@/components/templates/AppLayout.js", () => ({
 
 const settings: UsageSettings = {
   aggregateRetentionDays: null,
-  collector: { enabled: false, host: "127.0.0.1", port: 4318 },
+  collectorEnabled: false,
   collectorSetup: {
-    authorization: "Bearer <DAM_HOPPER_OTLP_TOKEN>",
-    baselineFixtureVersion: "0.145.0",
-    endpoint: "http://127.0.0.1:4318/v1/logs",
-    managedConfig: false,
+    codexExporter: "notConfigured",
     restartRequired: true,
     serverRestartRequired: false,
   },

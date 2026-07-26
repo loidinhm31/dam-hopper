@@ -56,14 +56,11 @@ const mocks = vi.hoisted(() => ({
     detailRetentionDays: 90,
     aggregateRetentionDays: null,
     excludedProjects: [],
-    collector: { enabled: false, host: "127.0.0.1", port: 4811 },
+    collectorEnabled: false,
     collectorSetup: {
-      endpoint: "http://127.0.0.1:4811/v1/logs",
-      authorization: "Bearer <DAM_HOPPER_OTLP_TOKEN>",
+      codexExporter: "notConfigured",
       restartRequired: true,
-      managedConfig: false,
       serverRestartRequired: false,
-      baselineFixtureVersion: "0.145.0",
     },
     runtime: {
       active: true,
@@ -94,7 +91,11 @@ vi.mock("@/api/queries.js", () => ({
   useProjects: () => ({ data: [{ name: "api" }] }),
   useUpdateUsageSettings: () => ({ mutate: vi.fn(), isPending: false }),
   useUsageSettings: () => ({ data: mocks.settings }),
-  useUsageSummary: () => ({ data: mocks.summary, isLoading: false, error: null }),
+  useUsageSummary: () => ({
+    data: mocks.summary,
+    isLoading: false,
+    error: null,
+  }),
 }));
 
 vi.mock("@/components/templates/AppLayout.js", () => ({
@@ -115,7 +116,9 @@ describe("UsagePage", () => {
   it("renders privacy copy, aggregate controls, and coverage state", () => {
     const markup = renderToStaticMarkup(<UsagePage />);
 
-    expect(markup).toContain("Privacy-safe aggregates from DamHopper-managed terminals");
+    expect(markup).toContain(
+      "Privacy-safe aggregates from DamHopper-managed terminals",
+    );
     expect(markup).toContain("No commands or agent content are shown.");
     expect(markup).toContain("Coverage &amp; collection");
     expect(markup).toContain("Pause collection");
@@ -139,12 +142,14 @@ describe("UsagePage", () => {
     const query = queryFromSearch(
       new URLSearchParams("window=30d&bucket=day&project=api"),
     );
-    expect(query).toMatchObject({ window: "30d", bucket: "day", project: "api" });
+    expect(query).toMatchObject({
+      window: "30d",
+      bucket: "day",
+      project: "api",
+    });
 
     const range = queryFromSearch(
-      new URLSearchParams(
-        "from=1782864000000&to=1783036800000&bucket=day",
-      ),
+      new URLSearchParams("from=1782864000000&to=1783036800000&bucket=day"),
     );
     expect(range.from).toBe(1_782_864_000_000);
     expect(range.to).toBe(1_783_036_800_000);

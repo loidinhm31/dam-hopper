@@ -97,7 +97,7 @@ struct SettingsResponse {
     detail_retention_days: u16,
     aggregate_retention_days: Option<u32>,
     excluded_projects: Vec<String>,
-    collector: TelemetryCollectorConfig,
+    collector_enabled: bool,
     collector_setup: CollectorSetup,
     runtime: crate::telemetry::TelemetryRuntimeStatus,
 }
@@ -105,11 +105,27 @@ struct SettingsResponse {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CollectorSetup {
-    endpoint: String,
     restart_required: bool,
     codex_exporter: CodexExporterStatus,
     server_restart_required: bool,
-    baseline_fixture_version: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SetupStatusResponse {
+    enabled: bool,
+    paused: bool,
+    collector_enabled: bool,
+    runtime: crate::telemetry::TelemetryRuntimeStatus,
+    collector_setup: SetupCollectorStatus,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SetupCollectorStatus {
+    codex_exporter: CodexExporterStatus,
+    restart_required: bool,
+    server_restart_required: bool,
 }
 
 #[derive(Deserialize)]
@@ -124,6 +140,7 @@ pub struct SettingsPatch {
     /// Explicit user opt-in/out for the local Codex exporter. This is never
     /// persisted; ownership is derived from the local config on every action.
     pub codex_exporter: Option<bool>,
+    pub retry_collector: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -300,6 +317,23 @@ pub async fn get_settings(State(state): State<AppState>) -> impl IntoResponse {
     ))
 }
 
+pub async fn get_setup_status(State(state): State<AppState>) -> impl IntoResponse {
+    let _coordination = state.telemetry_coordinator.lock().await;
+    let telemetry = state.config.read().await.server.telemetry.clone();
+    let codex_exporter = state.codex_exporter.status(&telemetry.collector);
+    Json(SetupStatusResponse {
+        enabled: telemetry.enabled,
+        paused: telemetry.paused,
+        collector_enabled: telemetry.collector.enabled,
+        runtime: state.telemetry_runtime.status(),
+        collector_setup: SetupCollectorStatus {
+            restart_required: codex_exporter == CodexExporterStatus::Managed,
+            codex_exporter,
+            server_restart_required: false,
+        },
+    })
+}
+
 pub async fn update_settings(
     State(state): State<AppState>,
     Json(patch): Json<SettingsPatch>,
@@ -326,6 +360,9 @@ pub async fn update_settings(
         if let Some(collector) = patch.collector {
             telemetry.collector = collector;
         }
+        if patch.codex_exporter == Some(true) {
+            telemetry.collector.enabled = true;
+        }
         telemetry.validate().map_err(|_| invalid())?;
     }
 
@@ -347,6 +384,19 @@ pub async fn update_settings(
         .apply_config(&previous.server.telemetry, &config.server.telemetry)
         .await
         .map_err(runtime_error)?;
+    if patch.retry_collector.unwrap_or(false) {
+        if let Err(error) = state
+            .telemetry_runtime
+            .retry_collector(&config.server.telemetry)
+            .await
+        {
+            state
+                .telemetry_runtime
+                .restore_config(&config.server.telemetry, &config.server.telemetry)
+                .await;
+            return Err(runtime_error(error));
+        }
+    }
     let codex_status = match codex_action {
         Some(true)
             if !config.server.telemetry.collector.enabled
@@ -471,24 +521,18 @@ fn settings_response(
     runtime: crate::telemetry::TelemetryRuntimeStatus,
     codex_exporter: CodexExporterStatus,
 ) -> SettingsResponse {
-    let endpoint = format!(
-        "http://{}:{}/v1/logs",
-        telemetry.collector.host, telemetry.collector.port
-    );
     SettingsResponse {
         enabled: telemetry.enabled,
         paused: telemetry.paused,
         detail_retention_days: telemetry.detail_retention_days,
         aggregate_retention_days: telemetry.aggregate_retention_days,
         excluded_projects: telemetry.excluded_projects,
-        collector: telemetry.collector,
+        collector_enabled: telemetry.collector.enabled,
         runtime,
         collector_setup: CollectorSetup {
-            endpoint,
             restart_required: codex_exporter == CodexExporterStatus::Managed,
             codex_exporter,
             server_restart_required: false,
-            baseline_fixture_version: "0.145.0".to_string(),
         },
     }
 }

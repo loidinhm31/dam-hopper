@@ -131,6 +131,34 @@ describe("WsTransport terminal lifecycle", () => {
   });
 });
 
+describe("WsTransport usage setup endpoints", () => {
+  it("maps setup status and configuration to protected usage routes", async () => {
+    installMockWebSocket();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ enabled: false }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ enabled: true }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("usage:setupStatus");
+    await transport.invoke("usage:configure", { enabled: true });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/usage/setup",
+    );
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      method: "PATCH",
+      body: JSON.stringify({ enabled: true }),
+    });
+    transport.destroy();
+  });
+});
+
 describe("WsTransport commit message endpoints", () => {
   it("loads and edits the full commit message with root scope", async () => {
     installMockWebSocket();

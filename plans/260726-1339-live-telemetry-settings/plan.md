@@ -15,6 +15,8 @@ created: 2026-07-26
 
 Provide a guided Settings flow for terminal usage analytics and optional Codex token telemetry. DamHopper activates/deactivates its store and loopback collector live; no DamHopper restart. Codex exporter setup is atomically managed only when no competing OTel exporter exists. A restarted/new Codex process remains required because Codex reads OTel configuration at startup.
 
+Progress: 85% (17h/20h; Phases 1–3 complete, Phase 4 pending).
+
 ## Preflight Contract
 
 - Output: Settings > Usage insights section, live runtime lifecycle, managed Codex OTel setup/status, protected API contracts, tests/docs.
@@ -30,7 +32,7 @@ Provide a guided Settings flow for terminal usage analytics and optional Codex t
 |---|---|---|---:|---|
 | 1 | Runtime lifecycle and API | completed (2026-07-26 15:21 +07) | 8h | [phase 01](./phase-01-live-runtime-and-api.md) |
 | 2 | Managed Codex exporter | completed (2026-07-26 15:50 +07) | 5h | [phase 02](./phase-02-managed-codex-exporter.md) |
-| 3 | Settings UX and client contracts | pending | 4h | [phase 03](./phase-03-settings-ux.md) |
+| 3 | Settings UX and client contracts | completed (2026-07-26 16:48 +07) | 4h | [phase 03](./phase-03-settings-ux.md) |
 | 4 | Verification and documentation | pending | 3h | [phase 04](./phase-04-verification-and-docs.md) |
 
 ## Side-Effect Review

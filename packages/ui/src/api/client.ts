@@ -461,22 +461,31 @@ export interface UsageRuntimeStatus {
   collectorError: string | null;
 }
 
+export type UsageCodexExporterStatus = "notConfigured" | "managed" | "conflict";
+
+export interface UsageCollectorSetup {
+  codexExporter: UsageCodexExporterStatus;
+  restartRequired: boolean;
+  serverRestartRequired: boolean;
+}
+
+export interface UsageSetupStatus {
+  enabled: boolean;
+  paused: boolean;
+  collectorEnabled: boolean;
+  runtime: UsageRuntimeStatus;
+  collectorSetup: UsageCollectorSetup;
+}
+
 export interface UsageSettings {
   enabled: boolean;
   paused: boolean;
   detailRetentionDays: number;
   aggregateRetentionDays: number | null;
   excludedProjects: string[];
-  collector: UsageCollectorSettings;
+  collectorEnabled: boolean;
   runtime: UsageRuntimeStatus;
-  collectorSetup: {
-    endpoint: string;
-    authorization: string;
-    restartRequired: boolean;
-    managedConfig: false;
-    serverRestartRequired: false;
-    baselineFixtureVersion: string;
-  };
+  collectorSetup: UsageCollectorSetup;
 }
 
 export interface UsageSettingsPatch {
@@ -486,6 +495,8 @@ export interface UsageSettingsPatch {
   aggregateRetentionDays?: number | null;
   excludedProjects?: string[];
   collector?: UsageCollectorSettings;
+  codexExporter?: boolean;
+  retryCollector?: boolean;
 }
 
 export interface ProjectWithStatus extends ProjectConfig {
@@ -1251,8 +1262,12 @@ export const api = {
       getTransport().invoke<UsageSummary>("usage:summary", query),
     health: () => getTransport().invoke<UsageHealth>("usage:health"),
     settings: () => getTransport().invoke<UsageSettings>("usage:settings"),
+    setupStatus: () =>
+      getTransport().invoke<UsageSetupStatus>("usage:setupStatus"),
     updateSettings: (patch: UsageSettingsPatch) =>
       getTransport().invoke<UsageSettings>("usage:updateSettings", patch),
+    configure: (patch: UsageSettingsPatch) =>
+      getTransport().invoke<UsageSetupStatus>("usage:configure", patch),
     delete: (request: { confirmation: string; from?: number; to?: number }) =>
       getTransport().invoke<{ deleted: true }>("usage:deleteAll", {
         ...request,

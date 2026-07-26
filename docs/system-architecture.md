@@ -323,7 +323,11 @@ The protected usage API returns aggregates only. It does not expose raw event ro
 cross the configured detail-retention boundary except for UTC-day-aligned, unfiltered day
 queries backed by rollups. `GET /api/usage/health` reports availability and writer/rejection
 counters. `GET/PATCH /api/usage/settings` controls pause, retention, exclusions, and collector
-configuration; retention changes roll up/purge synchronously before publication. `DELETE
+configuration; retention changes roll up/purge synchronously before publication. The dedicated
+`GET/PATCH /api/usage/setup` route supplies the compact Settings > Usage insights status and
+applies setup actions (`enabled`, `codexExporter`, and `retryCollector`) without exposing bearer
+material. The shared UI polls setup status, offers receiver retry, and reports Codex ownership
+conflicts without overwriting foreign configuration. `DELETE
 /api/usage` requires the exact `delete-usage-data` confirmation string and optionally accepts
 UTC-day-aligned `[from,to)` ranges (maximum five years), pausing capture behind an ordered
 deletion barrier. The shared UI adds a `/usage` route plus a dashboard teaser. Navigation
