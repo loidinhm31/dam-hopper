@@ -1,4 +1,11 @@
-import { ChevronsDown, ChevronsUp } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  ArrowUpDown,
+  ChevronDown,
+  ChevronUp,
+  ChevronsDown,
+  ChevronsUp,
+} from "lucide-react";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
 import { cn } from "@/lib/utils.js";
 import { useSettingsStore } from "@/stores/settings.js";
@@ -8,83 +15,153 @@ interface TerminalScrollButtonsProps {
   className?: string;
 }
 
+const controlClassName =
+  "flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-muted)] transition-[background-color,color,transform] duration-150 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]";
+
 export function TerminalScrollButtons({
   sessionId,
   className,
 }: TerminalScrollButtonsProps) {
   const terminalScrollStep = useSettingsStore((s) => s.terminalScrollStep);
+  const [isOpen, setIsOpen] = useState(false);
+  const controlsRef = useRef<HTMLDivElement>(null);
+  const controlsId = `terminal-scroll-controls-${sessionId}`;
 
-  const handleScrollToTop = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    terminalRegistry.get(sessionId)?.terminal.scrollToTop();
-  };
+  useEffect(() => {
+    if (!isOpen) return;
 
-  const handleScrollUp = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    terminalRegistry.get(sessionId)?.terminal.scrollLines(-terminalScrollStep);
-  };
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!controlsRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
 
-  const handleScrollDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    terminalRegistry.get(sessionId)?.terminal.scrollLines(terminalScrollStep);
-  };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsOpen(false);
+      }
+    };
 
-  const handleScrollToBottom = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    terminalRegistry.get(sessionId)?.terminal.scrollToBottom();
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [isOpen]);
+
+  const handleTerminalAction = (
+    event: React.MouseEvent,
+    action: () => void,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    action();
   };
 
   return (
     <div
+      ref={controlsRef}
       className={cn(
-        "absolute right-4 bottom-4 flex flex-col gap-2 z-10",
-        className
+        "absolute right-4 bottom-4 z-10 flex flex-col-reverse items-end gap-2",
+        className,
       )}
     >
       <button
         type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={handleScrollToTop}
-        className="flex h-10 w-10 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)]/80 backdrop-blur-sm text-[var(--color-text)] shadow-lg transition-colors hover:bg-[var(--color-surface)] active:bg-[var(--color-border)]"
-        title="Jump to top"
-        aria-label="Jump to top"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setIsOpen((open) => !open);
+        }}
+        className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/90 text-[var(--color-text)] shadow-lg backdrop-blur-md transition-[background-color,box-shadow,transform] duration-150 hover:bg-[var(--color-surface-2)] hover:shadow-xl active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
+        title={
+          isOpen
+            ? "Hide terminal scroll buttons"
+            : "Show terminal scroll buttons"
+        }
+        aria-label={
+          isOpen
+            ? "Hide terminal scroll buttons"
+            : "Show terminal scroll buttons"
+        }
+        aria-expanded={isOpen}
+        aria-controls={isOpen ? controlsId : undefined}
       >
-        <ChevronsUp className="h-5 w-5" />
+        <ArrowUpDown className="h-4 w-4" aria-hidden="true" />
       </button>
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={handleScrollUp}
-        className="flex h-10 w-10 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)]/80 backdrop-blur-sm text-[var(--color-text)] shadow-lg transition-colors hover:bg-[var(--color-surface)] active:bg-[var(--color-border)]"
-        title={`Scroll up ${terminalScrollStep} lines`}
-        aria-label={`Scroll up ${terminalScrollStep} lines`}
-      >
-        <span className="text-base leading-none">^</span>
-      </button>
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={handleScrollDown}
-        className="flex h-10 w-10 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)]/80 backdrop-blur-sm text-[var(--color-text)] shadow-lg transition-colors hover:bg-[var(--color-surface)] active:bg-[var(--color-border)]"
-        title={`Scroll down ${terminalScrollStep} lines`}
-        aria-label={`Scroll down ${terminalScrollStep} lines`}
-      >
-        <span className="text-base leading-none">v</span>
-      </button>
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={handleScrollToBottom}
-        className="flex h-10 w-10 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)]/80 backdrop-blur-sm text-[var(--color-text)] shadow-lg transition-colors hover:bg-[var(--color-surface)] active:bg-[var(--color-border)]"
-        title="Jump to bottom"
-        aria-label="Jump to bottom"
-      >
-        <ChevronsDown className="h-5 w-5" />
-      </button>
+      {isOpen ? (
+        <div
+          id={controlsId}
+          role="group"
+          aria-label="Terminal scroll controls"
+          className="flex flex-col gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/90 p-1 shadow-xl backdrop-blur-md"
+        >
+          <button
+            type="button"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) =>
+              handleTerminalAction(event, () =>
+                terminalRegistry.get(sessionId)?.terminal.scrollToTop(),
+              )
+            }
+            className={controlClassName}
+            title="Jump to top"
+            aria-label="Jump to top"
+          >
+            <ChevronsUp className="h-4 w-4" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) =>
+              handleTerminalAction(event, () =>
+                terminalRegistry
+                  .get(sessionId)
+                  ?.terminal.scrollLines(-terminalScrollStep),
+              )
+            }
+            className={controlClassName}
+            title={`Scroll up ${terminalScrollStep} lines`}
+            aria-label={`Scroll up ${terminalScrollStep} lines`}
+          >
+            <ChevronUp className="h-4 w-4" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) =>
+              handleTerminalAction(event, () =>
+                terminalRegistry
+                  .get(sessionId)
+                  ?.terminal.scrollLines(terminalScrollStep),
+              )
+            }
+            className={controlClassName}
+            title={`Scroll down ${terminalScrollStep} lines`}
+            aria-label={`Scroll down ${terminalScrollStep} lines`}
+          >
+            <ChevronDown className="h-4 w-4" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) =>
+              handleTerminalAction(event, () =>
+                terminalRegistry.get(sessionId)?.terminal.scrollToBottom(),
+              )
+            }
+            className={controlClassName}
+            title="Jump to bottom"
+            aria-label="Jump to bottom"
+          >
+            <ChevronsDown className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
