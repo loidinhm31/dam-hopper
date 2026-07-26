@@ -350,8 +350,19 @@ export interface GitStatus {
   isClean: boolean;
   ahead: number;
   behind: number;
-  modified: string[];
-  untracked: string[];
+  staged: number;
+  modified: number;
+  untracked: number;
+  hasStash: boolean;
+  lastCommit: LastCommit;
+  pathExists?: boolean;
+  statusError?: string;
+}
+
+export interface LastCommit {
+  hash: string;
+  message: string;
+  date: string;
 }
 
 export type UsageBucket = "hour" | "day";
