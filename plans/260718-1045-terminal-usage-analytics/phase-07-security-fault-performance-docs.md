@@ -10,11 +10,11 @@
 
 ## Overview
 
-- Date: 2026-07-18
+- Date: 2026-07-18; completed 2026-07-26
 - Description: Prove privacy, resilience, correctness, performance, shared-host behavior, and documentation completeness before enabling rollout.
 - Priority: P1 release gate
-- Implementation status: Pending
-- Review status: Pending
+- Implementation status: Complete (2026-07-26)
+- Review status: Complete (2026-07-26)
 - Effort: 32h
 
 ## Key Insights
@@ -79,13 +79,13 @@ Feature flags/defaults permit safe rollout: terminal analytics disabled for exis
 
 ## Todo list
 
-- [ ] All focused Rust tests pass.
-- [ ] Browser/native UI tests pass.
-- [ ] Privacy scan clean.
-- [ ] Fault/backpressure evidence recorded.
-- [ ] Aggregate benchmark meets target.
-- [ ] Docs and architecture match implementation.
-- [ ] Rollback/purge runbook documented.
+- [x] All focused Rust tests pass.
+- [x] Browser/native UI tests pass.
+- [x] Privacy scan clean.
+- [x] Fault/backpressure evidence recorded.
+- [x] Aggregate benchmark meets target.
+- [x] Docs and architecture match implementation.
+- [x] Rollback/purge runbook documented.
 
 ## Success Criteria
 
@@ -112,11 +112,13 @@ Feature flags/defaults permit safe rollout: terminal analytics disabled for exis
 
 ## Next steps
 
-- Request code review before implementation claims.
-- After implementation, compare diff to updated architecture and patch intentional drift.
-- Decide whether to enable terminal analytics by default for new installs only.
+- Keep terminal analytics and Codex collection behind their existing opt-in flags.
+- Run the documented external shell/accessibility/renderer checks on hosts that provide them.
+- Use the pause/delete/purge runbook if rollout monitoring finds drops, lag, or privacy faults.
 
 ## Unresolved questions
 
 - Final rollout default for new installations versus existing installations.
 - Exact aggregate retention and timezone copy.
+- External Zsh/Fish PTY validation remains environment-dependent.
+- External IME, screen-reader, and renderer/browser validation remains environment-dependent.
