@@ -7,13 +7,10 @@ import { SettingsUsageInsightsSection } from "@/components/organisms/SettingsUsa
 import "@/index.css";
 
 const mocks = vi.hoisted(() => ({
-  confirm: vi.fn(() => true),
   configure: vi.fn(() => Promise.resolve()),
   pending: false,
   settings: undefined as UsageSetupStatus | undefined,
 }));
-
-vi.stubGlobal("confirm", mocks.confirm);
 
 vi.mock("@/api/queries.js", () => ({
   useConfigureUsageInsights: () => ({
@@ -85,8 +82,6 @@ describe("Settings usage insights in Chromium", () => {
   let root: Root;
 
   beforeEach(() => {
-    mocks.confirm.mockReset();
-    mocks.confirm.mockReturnValue(true);
     mocks.configure.mockReset();
     mocks.configure.mockResolvedValue(undefined);
     mocks.pending = false;
@@ -119,6 +114,14 @@ describe("Settings usage insights in Chromium", () => {
     return result as HTMLButtonElement;
   }
 
+  function dialogButton(name: string) {
+    const result = [
+      ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+    ].find((item) => item.textContent?.includes(name));
+    expect(result).toBeTruthy();
+    return result as HTMLButtonElement;
+  }
+
   it("enables terminal capture and confirms Codex management without exposing secrets", async () => {
     mocks.settings = makeSettings({
       collectorSetup: {
@@ -133,7 +136,13 @@ describe("Settings usage insights in Chromium", () => {
     manage.focus();
     expect(document.activeElement).toBe(manage);
     await act(async () => manage.click());
-    expect(mocks.confirm).toHaveBeenCalledOnce();
+    expect(document.body.textContent).toContain("Manage Codex usage export?");
+    expect(mocks.configure).not.toHaveBeenCalled();
+    await act(async () => dialogButton("Cancel").click());
+    expect(document.activeElement).toBe(manage);
+    expect(mocks.configure).not.toHaveBeenCalled();
+    await act(async () => manage.click());
+    await act(async () => dialogButton("Manage Codex export").click());
     expect(mocks.configure).toHaveBeenCalledWith({ codexExporter: true });
     expect(container.textContent).not.toContain("Bearer");
     expect(container.textContent).not.toContain("127.0.0.1");
@@ -185,12 +194,20 @@ describe("Settings usage insights in Chromium", () => {
   });
 
   it("keeps safe server error detail available for retry", async () => {
-    mocks.configure.mockRejectedValueOnce(new Error("Collector bind failed"));
+    mocks.configure.mockRejectedValueOnce(
+      new Error(
+        "Collector bind failed for Bearer secret at http://127.0.0.1:4318/v1/logs",
+      ),
+    );
     await render();
     await act(async () => button("Manage Codex").click());
+    await act(async () => dialogButton("Manage Codex export").click());
     await vi.waitFor(() =>
       expect(container.textContent).toContain("Collector bind failed"),
     );
+    expect(container.textContent).not.toContain("Bearer secret");
+    expect(container.textContent).not.toContain("127.0.0.1");
+    expect(container.textContent).not.toContain("4318");
   });
 
   it("keeps setup controls within a narrow viewport", async () => {
@@ -199,6 +216,9 @@ describe("Settings usage insights in Chromium", () => {
     await render();
     expect(container.getBoundingClientRect().width).toBe(320);
     expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
+    await act(async () => button("Manage Codex").click());
+    expect(document.querySelector('[role="dialog"]')).toBeTruthy();
+    await act(async () => dialogButton("Cancel").click());
   });
 
   it("preserves a foreign Codex exporter as a visible conflict", async () => {
@@ -213,7 +233,6 @@ describe("Settings usage insights in Chromium", () => {
 
     expect(container.textContent).toContain("Configuration conflict");
     expect(button("Conflict")).toBeDisabled();
-    expect(mocks.confirm).not.toHaveBeenCalled();
   });
 
   it("confirms disabling managed Codex export and explains restart scope", async () => {
@@ -230,7 +249,9 @@ describe("Settings usage insights in Chromium", () => {
       "Restart or start a new Codex session",
     );
     await act(async () => button("Disable Codex export").click());
-    expect(mocks.confirm).toHaveBeenCalledOnce();
+    expect(document.body.textContent).toContain("Disable Codex usage export?");
+    expect(mocks.configure).not.toHaveBeenCalled();
+    await act(async () => dialogButton("Disable Codex export").click());
     expect(mocks.configure).toHaveBeenCalledWith({ codexExporter: false });
   });
 });

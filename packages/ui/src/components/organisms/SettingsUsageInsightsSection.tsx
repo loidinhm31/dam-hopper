@@ -12,6 +12,15 @@ import { SettingsUsageInsightsCodexRow } from "./SettingsUsageInsightsCodexRow.j
 const focusClass =
   "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]";
 
+function sanitizeErrorDetail(detail: string) {
+  return detail
+    .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
+    .replace(
+      /(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/\S*)?/gi,
+      "[local endpoint redacted]",
+    );
+}
+
 export function SettingsUsageInsightsSection() {
   const { data: settings, isLoading, error } = useUsageSetupStatus();
   const configure = useConfigureUsageInsights();
@@ -50,7 +59,7 @@ export function SettingsUsageInsightsSection() {
       setMessage(success);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      const safeDetail = detail.replace(/Bearer\s+\S+/gi, "Bearer [redacted]");
+      const safeDetail = sanitizeErrorDetail(detail);
       setActionError(
         safeDetail || "Could not update Usage insights. Try again.",
       );
@@ -58,18 +67,12 @@ export function SettingsUsageInsightsSection() {
   }
 
   function configureCodex(enabled: boolean) {
-    const confirmed = window.confirm(
+    void update(
+      { codexExporter: enabled },
       enabled
-        ? "Let DamHopper manage Codex usage export? This adds local exporter settings, redacts user prompts, and does not make extra model requests."
-        : "Stop DamHopper-managed Codex usage export? Existing Codex configuration will be left untouched unless it is still managed by DamHopper.",
+        ? "Codex export is managed by DamHopper."
+        : "Codex export management disabled.",
     );
-    if (confirmed)
-      void update(
-        { codexExporter: enabled },
-        enabled
-          ? "Codex export is managed by DamHopper."
-          : "Codex export management disabled.",
-      );
   }
 
   const terminalCopy = {
