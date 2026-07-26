@@ -1,7 +1,7 @@
 ---
 title: "Terminal Usage Analytics"
 description: "Add privacy-preserving terminal lifecycle analytics and optional Codex token telemetry with a server-only SQLite dashboard."
-status: in-progress
+status: completed
 priority: P2
 effort: 232h
 branch: main
@@ -35,7 +35,7 @@ Track validated activity only in DamHopper-managed interactive PTYs. Persist no 
 | 4 | [Aggregate API and controls](./phase-04-aggregate-api-and-controls.md) | Complete (2026-07-26; approved with warnings) | 32h | 3 |
 | 5 | [Codex loopback OTel adapter](./phase-05-codex-loopback-otel-adapter.md) | Complete (2026-07-26; approved) | 32h | 1, 3-4 |
 | 6 | [Usage UI and compact navigation](./phase-06-usage-ui-and-compact-navigation.md) | Complete (2026-07-26; approved) | 40h | 4-5 |
-| 7 | [Security, fault, performance, docs](./phase-07-security-fault-performance-docs.md) | Pending | 32h | 1-6 |
+| 7 | [Security, fault, performance, docs](./phase-07-security-fault-performance-docs.md) | Complete (2026-07-26) | 32h | 1-6 |
 
 ## Delivery gates
 
@@ -74,9 +74,9 @@ Track validated activity only in DamHopper-managed interactive PTYs. Persist no 
 - [x] Phase 04: add authenticated range-delete semantics with UTC bounds, confirmation, and rollup handling (completed 2026-07-26; approved with warnings).
 - [x] Phase 05: add explicit-confirmation, ownership/conflict checks, atomic rollback for managed Codex config sync; keep snippet-only fallback (not needed: Phase 05 provides setup status/instructions and does not modify Codex configuration).
 - [x] Phase 05: implement field-level forward compatibility, safe drift health signals, and partial/unavailable coverage without raw attribute retention or synthetic zero (completed 2026-07-26; approved).
-- [ ] Phase 07: document unlimited aggregate retention and range deletion in the runbook/UI copy.
+- [x] Phase 07: document unlimited aggregate retention and range deletion in the runbook/UI copy (completed 2026-07-26).
 
-### Phase 04 approval follow-ups
+### Release follow-ups
 
-- Live HMAC rotation/reset remains outstanding for the shared collector/runtime path.
-- Settings and retention reads require shared coordination/serialization under concurrent access.
+- Live HMAC rotation/reset and settings/retention/delete coordination are implemented and covered.
+- External Zsh/Fish PTY, IME, screen-reader, and renderer/browser checks remain environment-dependent.

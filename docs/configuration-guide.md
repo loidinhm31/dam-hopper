@@ -381,7 +381,21 @@ TOML uses snake_case keys; the corresponding API representation uses camelCase (
 separate from session persistence. When enabled, startup creates/opens it and starts a bounded
 worker; initialization failures disable analytics only. SQLite and WAL/SHM files are restricted
 to owner access on Unix. Telemetry stores bounded, privacy-filtered metadata rather than command
-text, prompts, responses, or tool output; see the [telemetry architecture notes](./system-architecture.md#terminal-usage-analytics-phase-03-persistence).
+text, prompts, responses, or tool output; see the [telemetry architecture notes](./system-architecture.md#terminal-usage-analytics).
+
+Daily aggregates are retained indefinitely when `aggregate_retention_days` is omitted. Set it to
+a positive value to purge older UTC rollups. The Usage page can delete all data or a selected
+UTC-day-aligned `[from,to)` range; deletion requires explicit confirmation. Full deletion also
+rotates the shared telemetry HMAC key, while range deletion does not.
+
+The collector setup response is instructions-only (`managedConfig: false`). DamHopper never
+silently edits `~/.codex/config.toml`; after adding the displayed loopback endpoint and bearer
+secret to Codex, restart the existing Codex process. If collection is paused or the collector
+fails, PTY creation and I/O continue with telemetry disabled or unavailable.
+
+Rollback/runbook: pause collection, optionally delete a UTC range or all usage data, then leave
+the feature disabled. Existing telemetry is not removed by disabling the flag. Re-enable only
+after confirming database permissions, collector loopback binding, and the Usage health counters.
 
 ### Diagnostics Storage
 
