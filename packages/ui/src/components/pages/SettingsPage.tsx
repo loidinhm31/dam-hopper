@@ -7,8 +7,10 @@ import {
   useResetWorkspace,
   useExportSettings,
   useImportSettings,
+  useManualProjectStatus,
 } from "@/api/queries.js";
 import { SettingsAppearanceSection } from "@/components/organisms/SettingsAppearanceSection.js";
+import { SettingsProjectStatusSection } from "@/components/organisms/SettingsProjectStatusSection.js";
 import { SettingsKeyboardShortcutsSection } from "@/components/organisms/SettingsKeyboardShortcutsSection.js";
 import { SettingsUsageInsightsSection } from "@/components/organisms/SettingsUsageInsightsSection.js";
 import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
@@ -19,6 +21,7 @@ import {
   SettingsGlobalConfigPanel,
   SettingsWorkspaceConfigPanel,
 } from "@/components/pages/settings-page/SettingsConfigPanels.js";
+import { useWorkspaceStore } from "@/stores/workspace.js";
 
 const SETTINGS_DIAGNOSTICS_SCOPE = {
   page: "settings",
@@ -38,6 +41,16 @@ export function SettingsPage() {
   const resetWorkspace = useResetWorkspace();
   const exportSettings = useExportSettings();
   const importSettings = useImportSettings();
+  const activeProject = useWorkspaceStore((state) => state.activeProject);
+  const projectStatus = useManualProjectStatus();
+  const refreshedProjectStatus =
+    projectStatus.data?.project === activeProject
+      ? projectStatus.data.status
+      : undefined;
+  const projectStatusError =
+    projectStatus.variables === activeProject ? projectStatus.error : null;
+  const projectStatusLoading =
+    projectStatus.isPending && projectStatus.variables === activeProject;
 
   const [clearMsg, setClearMsg] = useState<string | null>(null);
   const [clearErr, setClearErr] = useState<string | null>(null);
@@ -169,6 +182,21 @@ export function SettingsPage() {
             onSave={updateConfig}
             isSaving={isPending}
             saveError={saveError}
+          />
+        </SettingsSectionAccordion>
+
+        <SettingsSectionAccordion
+          title="Project status"
+          description="Inspect the latest Git commit for the active project."
+        >
+          <SettingsProjectStatusSection
+            activeProject={activeProject}
+            status={refreshedProjectStatus}
+            isLoading={projectStatusLoading}
+            error={projectStatusError}
+            onRefresh={() => {
+              if (activeProject) projectStatus.mutate(activeProject);
+            }}
           />
         </SettingsSectionAccordion>
 

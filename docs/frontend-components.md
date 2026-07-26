@@ -36,6 +36,23 @@ Managing export does not restart Codex, so the UI indicates that a new/restarted
 is required. When capture is disabled, the Usage page links back to Settings and explains that a
 new terminal is required for complete run boundaries.
 
+## Project Status Settings
+
+**Locations:** `packages/ui/src/components/pages/SettingsPage.tsx`,
+`packages/ui/src/components/organisms/SettingsProjectStatusSection.tsx`, and
+`packages/ui/src/api/queries.ts`
+
+The Settings page includes a collapsed-by-default **Project status** section for the
+active project. It performs no background polling: selecting **Refresh** explicitly
+requests the project Git status and renders the latest commit message, localized
+commit date, current branch, and seven-character short hash. The full hash remains
+available through the commit value's tooltip.
+
+The section explains non-success states (no active project, loading, unavailable
+project path, non-Git project, empty repository, and Git status errors). The manual
+mutation returns the project name with its result so a response for a previously
+selected project cannot overwrite the current Settings view.
+
 ## Shared File Decorations
 
 **Location:** `packages/ui/src/lib/file-decoration.ts`
