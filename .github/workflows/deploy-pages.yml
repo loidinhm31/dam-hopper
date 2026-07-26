@@ -20,6 +20,8 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    env:
+      VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS: ${{ vars.VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,10 +44,16 @@ jobs:
         id: pages
         uses: actions/configure-pages@v5
 
+      - name: Verify Browser Debug extension origin
+        run: |
+          if [ -z "$VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS" ]; then
+            echo "::error::VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS is empty. Add it under the github-pages Environment variables."
+            exit 1
+          fi
+          echo "Browser Debug extension parent origins: $VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS"
+
       - name: Build Web
         # Dynamically set the base path from GitHub Pages configuration
-        env:
-          VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS: ${{ vars.VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS }}
         run: pnpm --filter @dam-hopper/web build --base=${{ steps.pages.outputs.base_path }}/
 
       - name: 404.html Trick
