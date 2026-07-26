@@ -23,7 +23,7 @@ import type {
   SshForgetCredentialResult,
   SshLoadKeyResult,
 } from "./client.js";
-import type { SessionInfo } from "@/api/client.js";
+import type { GitStatus, SessionInfo } from "@/api/client.js";
 
 type QueryInvalidator = Pick<
   ReturnType<typeof useQueryClient>,
@@ -181,6 +181,20 @@ export function useProjectStatus(name: string) {
     queryKey: ["project-status", name],
     queryFn: () => api.projects.status(name),
     enabled: !!name,
+  });
+}
+
+/**
+ * Loads a project's Git status only after an explicit user action.
+ * The returned project name lets callers ignore a result from a previously
+ * selected project without starting a background request.
+ */
+export function useManualProjectStatus() {
+  return useMutation<{ project: string; status: GitStatus | null }, Error, string>({
+    mutationFn: async (project: string) => ({
+      project,
+      status: await api.projects.status(project),
+    }),
   });
 }
 
