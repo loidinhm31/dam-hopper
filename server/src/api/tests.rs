@@ -1673,6 +1673,24 @@ async fn usage_settings_apply_pause_atomically_and_delete_requires_confirmation(
 }
 
 #[tokio::test]
+async fn usage_setup_status_is_opaque_to_the_browser() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let response = get(state, "/api/usage/setup").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("collectorEnabled"));
+    assert!(text.contains("codexExporter"));
+    assert!(!text.contains("127.0.0.1"));
+    assert!(!text.contains("endpoint"));
+    assert!(!text.contains("config.toml"));
+}
+
+#[tokio::test]
 async fn usage_settings_enable_and_disable_apply_the_runtime_without_a_server_restart() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);

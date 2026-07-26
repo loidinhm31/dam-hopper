@@ -78,6 +78,10 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
                 .post(usage::update_settings)
                 .patch(usage::update_settings),
         )
+        .route(
+            "/api/usage/setup",
+            get(usage::get_setup_status).patch(usage::update_settings),
+        )
         .route("/api/usage", delete(usage::delete_all))
         // Git
         .route("/api/git/fetch", post(git::fetch_projects))
