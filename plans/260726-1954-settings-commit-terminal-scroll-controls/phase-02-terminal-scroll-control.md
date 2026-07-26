@@ -8,7 +8,7 @@
 
 ## Overview
 
-Date: 2026-07-26 · Priority: medium · Status: planned
+Date: 2026-07-26 · Priority: medium · Status: completed 2026-07-26
 
 ## Key insights
 
@@ -41,10 +41,16 @@ Keep state local to `TerminalScrollButtons`. Reuse one guarded action helper to 
 
 ## Todo list
 
-- [ ] Implement expandable pill/rail
-- [ ] Preserve behavior and mobile offset
-- [ ] Extend unit/browser tests
-- [ ] Run frontend release gate
+- [x] Implement expandable pill/rail
+- [x] Preserve behavior and mobile offset
+- [x] Extend unit/browser tests
+- [x] Run frontend release gate
+
+## Validation evidence
+
+- Focused terminal scroll unit tests: 2/2 passed.
+- Filtered Chromium browser regression: 3/3 passed.
+- UI production build completed successfully.
 
 ## Success criteria
 
@@ -60,4 +66,4 @@ No API, input, storage, or permission change.
 
 ## Next steps
 
-Run focused and browser validation, then review against the plan and user-approved UX.
+Phase 02 is complete. Proceed to Phase 03 terminal commit status.

@@ -8,7 +8,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Last Milestone:** Completed aggregate analytics, privacy/fault validation, loopback Codex adapter, Usage UI, benchmark regression, and release documentation
 - **Total Phases Completed:** 30 phases (prior roadmap phases plus Terminal Usage Analytics 03–07)
 - **Next Milestone:** Complete environment-dependent Zsh/Fish PTY, IME, screen-reader, and renderer checks
-- **Current Feature:** Settings commit summary Phase 01 completed 2026-07-26; terminal scroll-control redesign Phase 02 planned
+- **Current Feature:** Settings commit summary Phase 01 and terminal scroll-control redesign Phase 02 completed 2026-07-26; terminal commit status Phase 03 planned
 
 ### Terminal Usage Analytics
 
