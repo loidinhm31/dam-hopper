@@ -91,6 +91,7 @@ fn make_state(tmp: &TempDir) -> AppState {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut rand::rngs::OsRng),
         diagnostics,
+        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state failed")
 }

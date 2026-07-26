@@ -18,8 +18,8 @@ use crate::port_forward::PortForwardManager;
 use crate::pty::{BroadcastEventSink, PtySessionManager};
 use crate::ssh::SshCredStore;
 use crate::system::HostMetricsSampler;
-use crate::telemetry::codex_otlp::{CollectorHandle, CollectorHealth};
 use crate::telemetry::worker::TelemetryHandle;
+use crate::telemetry::TelemetryRuntime;
 use crate::tunnel::TunnelSessionManager;
 
 /// Shared application state across all Axum handlers.
@@ -80,11 +80,11 @@ pub struct AppState {
     /// Aggregate-only telemetry query and control handle. It is disabled when
     /// telemetry initialization failed or the user has not opted in.
     pub telemetry: Arc<std::sync::RwLock<TelemetryHandle>>,
+    /// Live owner of telemetry workers and the optional loopback collector.
+    /// PTY creation keeps this stable and snapshots it only at a run boundary.
+    pub telemetry_runtime: TelemetryRuntime,
     /// Serializes telemetry queries, deletion, retention, and collector changes.
     pub telemetry_coordinator: Arc<tokio::sync::Mutex<()>>,
-    /// Isolated local Codex receiver lifecycle. It is never part of the API router.
-    pub codex_collector: Arc<tokio::sync::Mutex<Option<CollectorHandle>>>,
-    pub collector_health: CollectorHealth,
 }
 
 impl AppState {
@@ -128,6 +128,7 @@ impl AppState {
         port_forward_manager: Option<Arc<PortForwardManager>>,
         opaque_server_setup: ServerSetup<DamHopperOpaqueSuite>,
         diagnostics: DiagnosticStore,
+        telemetry_runtime: TelemetryRuntime,
     ) -> anyhow::Result<Self> {
         pty_manager.set_diagnostics(diagnostics.clone());
 
@@ -187,10 +188,9 @@ impl AppState {
             host_metrics: HostMetricsSampler::new(),
             diagnostics,
             browser_debug_artifacts,
-            telemetry: Arc::new(std::sync::RwLock::new(TelemetryHandle::disabled())),
+            telemetry: telemetry_runtime.handle_cell(),
+            telemetry_runtime,
             telemetry_coordinator: Arc::new(tokio::sync::Mutex::new(())),
-            codex_collector: Arc::new(tokio::sync::Mutex::new(None)),
-            collector_health: CollectorHealth::default(),
         })
     }
 

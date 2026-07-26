@@ -91,6 +91,10 @@ fn make_state(tmp: &TempDir) -> AppState {
         None,
         test_opaque_setup(),
         DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
+        crate::telemetry::TelemetryRuntime::with_paths(
+            tmp.path().join("telemetry-key"),
+            tmp.path().join("collector-token"),
+        ),
     )
     .expect("make_state failed")
 }
@@ -1371,6 +1375,7 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         None,
         test_opaque_setup(),
         DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
+        crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project failed")
 }
@@ -1437,6 +1442,7 @@ fn make_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) -> Ap
         None,
         test_opaque_setup(),
         DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
+        crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project_roots failed")
 }
@@ -1520,6 +1526,7 @@ fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> Ap
         None,
         test_opaque_setup(),
         DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
+        crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project_env_file failed")
 }
@@ -1657,6 +1664,66 @@ async fn usage_settings_apply_pause_atomically_and_delete_requires_confirmation(
     )
     .await;
     assert_eq!(deleted.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn usage_settings_enable_and_disable_apply_the_runtime_without_a_server_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let enabled = patch_json(
+        state.clone(),
+        "/api/usage/settings",
+        serde_json::json!({"enabled": true}),
+    )
+    .await;
+    assert_eq!(enabled.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(enabled.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["runtime"]["active"], true);
+    assert_eq!(value["runtime"]["collectorError"], serde_json::Value::Null);
+    assert!(state.telemetry.read().unwrap().store.is_some());
+
+    let disabled = post_json(
+        state.clone(),
+        "/api/usage/settings",
+        serde_json::json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(disabled.status(), StatusCode::OK);
+    assert!(state.telemetry.read().unwrap().store.is_none());
+    assert!(!state.config.read().await.server.telemetry.enabled);
+}
+
+#[tokio::test]
+async fn usage_retention_update_and_delete_are_serialized_while_runtime_is_live() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let enabled = patch_json(
+        state.clone(),
+        "/api/usage/settings",
+        serde_json::json!({"enabled": true}),
+    )
+    .await;
+    assert_eq!(enabled.status(), StatusCode::OK);
+
+    let (retention, deletion) = tokio::join!(
+        patch_json(
+            state.clone(),
+            "/api/usage/settings",
+            serde_json::json!({"detailRetentionDays": 30}),
+        ),
+        delete_json(
+            state.clone(),
+            "/api/usage",
+            serde_json::json!({"confirmation": "delete-usage-data"}),
+        )
+    );
+    assert_eq!(retention.status(), StatusCode::OK);
+    assert_eq!(deletion.status(), StatusCode::OK);
+    state.telemetry_runtime.shutdown().await;
 }
 
 fn activate_telemetry(state: &AppState, tmp: &TempDir) {

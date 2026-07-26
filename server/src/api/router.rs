@@ -74,7 +74,9 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/usage/health", get(usage::health))
         .route(
             "/api/usage/settings",
-            get(usage::get_settings).patch(usage::update_settings),
+            get(usage::get_settings)
+                .post(usage::update_settings)
+                .patch(usage::update_settings),
         )
         .route("/api/usage", delete(usage::delete_all))
         // Git

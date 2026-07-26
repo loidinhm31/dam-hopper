@@ -116,6 +116,7 @@ fn make_test_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) 
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
+        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_test_state failed")
 }
