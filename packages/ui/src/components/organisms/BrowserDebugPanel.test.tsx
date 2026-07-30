@@ -133,6 +133,36 @@ describe("BrowserDebugPanel", () => {
     expect(markup).not.toContain("Browser Debug extension required");
   });
 
+  it("does not show Chromium extension instructions for a native host", () => {
+    const markup = renderPanel({
+      bridgeStatus: "unsupported",
+      extensionPresence: "missing",
+      hostEnvironment: {
+        kind: "native",
+        platform: "windows",
+      },
+      onReloadPage: vi.fn(),
+    });
+
+    expect(markup).toContain("Native Browser Debug is unavailable");
+    expect(markup).not.toContain("chrome://extensions");
+    expect(markup).not.toContain("Download extension ZIP");
+  });
+
+  it("describes unverified native runtimes without claiming support", () => {
+    const markup = renderPanel({
+      bridgeStatus: "unsupported",
+      hostEnvironment: {
+        kind: "native",
+        platform: "linux",
+        experimental: true,
+      },
+    });
+
+    expect(markup).toContain("experimental on this platform");
+    expect(markup).not.toContain("chrome://extensions");
+  });
+
   it("keeps optional local-only capture and manual-image actions collapsed", () => {
     const markup = renderPanel({
       selection,

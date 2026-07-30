@@ -12,6 +12,24 @@ import type { BrowserDebugHostViewport } from "./browser-debug-host.js";
 
 export type BrowserDebugViewportFrame = BrowserDebugHostViewport;
 
+export function clipBrowserDebugViewportFrame(
+  frame: BrowserDebugViewportFrame,
+  viewportWidth: number,
+  viewportHeight: number,
+): BrowserDebugViewportFrame | null {
+  const left = Math.max(0, frame.left);
+  const top = Math.max(0, frame.top);
+  const right = Math.min(viewportWidth, frame.left + frame.width);
+  const bottom = Math.min(viewportHeight, frame.top + frame.height);
+  if (right <= left || bottom <= top) return null;
+  return {
+    top,
+    left,
+    width: right - left,
+    height: bottom - top,
+  };
+}
+
 /**
  * Resolve an overlay frame without moving the iframe DOM node. Chromium can
  * reload an iframe document when it is physically reparented, so one stable
@@ -22,5 +40,9 @@ export function getBrowserDebugViewportFrame(
 ): BrowserDebugViewportFrame | null {
   if (!viewport) return null;
   const { top, left, width, height } = viewport.getBoundingClientRect();
-  return { top, left, width, height };
+  return clipBrowserDebugViewportFrame(
+    { top, left, width, height },
+    window.innerWidth,
+    window.innerHeight,
+  );
 }
