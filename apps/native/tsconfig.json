@@ -10,6 +10,9 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["../../packages/ui/src/*"],
+      "@dam-hopper/browser-bridge": [
+        "../../packages/browser-bridge/src/index.ts"
+      ],
       "@dam-hopper/shared": ["../../packages/shared/src/index.ts"],
       "@dam-hopper/shared/*": ["../../packages/shared/src/*"],
       "@dam-hopper/ui": ["../../packages/ui/src/embed/dam-hopper-app.tsx"],

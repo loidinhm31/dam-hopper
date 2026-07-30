@@ -49,6 +49,7 @@ import { useSearchUiStore } from "@/stores/search-ui.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalManager } from "@/hooks/use-terminal-manager.js";
 import { useBrowserDebug } from "@/hooks/use-browser-debug.js";
+import { useBrowserDebugHost } from "@/contexts/BrowserDebugHostContext.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
@@ -351,6 +352,7 @@ export default function WorkspacePage() {
     useState<TerminalWorkspacePanelRequest | null>(null);
   const [browserOpen, setBrowserOpen] = useState(false);
   const browserDebug = useBrowserDebug();
+  const browserDebugHost = useBrowserDebugHost();
   const navigateBrowserTo = browserDebug.navigateTo;
   const registeredTerminalIds = useSyncExternalStore(
     subscribeToRegistryChanges,
@@ -713,9 +715,7 @@ export default function WorkspacePage() {
   );
 
   const focusEmbeddedBrowserAddress = useCallback(() => {
-    queueMicrotask(() =>
-      document.getElementById("browser-debug-url")?.focus(),
-    );
+    queueMicrotask(() => document.getElementById("browser-debug-url")?.focus());
   }, []);
 
   const handleOpenTunnelInBrowser = useCallback(
@@ -1012,14 +1012,16 @@ export default function WorkspacePage() {
   useEffect(() => () => terminalNotificationActivationRef.current(), []);
 
   const renderBrowserContent = useCallback(
-    (
-      onClose?: () => void,
-      handoffMode: "active" | "select" = "select",
-    ) => (
+    (onClose?: () => void, handoffMode: "active" | "select" = "select") => (
       <BrowserDebugPanel
         url={browserDebug.inputUrl}
         bridgeStatus={browserDebug.bridgeStatus}
         extensionPresence={browserDebug.extensionPresence}
+        hostEnvironment={browserDebugHost.environment}
+        captureAvailable={
+          browserDebugHost.environment.kind === "web" ||
+          browserDebug.bridgeCapabilities.includes("capture")
+        }
         onReloadPage={() => window.location.reload()}
         viewportRef={browserViewportRef}
         onViewportReady={notifyBrowserViewportChanged}
@@ -1032,7 +1034,9 @@ export default function WorkspacePage() {
         onBack={() => browserKeepAliveRef.current?.goBack()}
         onForward={() => browserKeepAliveRef.current?.goForward()}
         onReload={() => browserKeepAliveRef.current?.reload()}
-        navigationAvailable={browserDebug.bridgeCapabilities.includes("navigation")}
+        navigationAvailable={browserDebug.bridgeCapabilities.includes(
+          "navigation",
+        )}
         consoleEntries={browserDebug.consoleEntries}
         consoleAvailable={browserDebug.bridgeCapabilities.includes("console")}
         onClearConsole={browserDebug.clearConsole}
@@ -1072,6 +1076,7 @@ export default function WorkspacePage() {
     [
       activeBrowserTerminalTarget,
       browserDebug,
+      browserDebugHost.environment,
       browserTerminalTargets,
       discardBrowserTerminalArtifact,
       insertBrowserTerminalReference,
