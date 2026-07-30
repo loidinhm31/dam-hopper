@@ -168,6 +168,16 @@ or exact parent origins compiled with
 `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS`; the presence marker is not an
 authorization signal.
 
+The native Tauri host uses the same Browser UI contract through a labeled child
+WebView rather than the browser extension flow. Rust owns its lifecycle and
+main-only commands, restricts targets to loopback or ready HTTPS tunnel origins,
+and rejects stale relays using the child label, committed origin, navigation
+generation, nonce, request ID, bounded schema, and message size. Native profile
+storage is isolated below application data using a hash of the opaque server
+profile ID; URLs, credentials, tokens, and workspace paths are not used as
+storage identifiers. The native path does not require `chrome://extensions`
+setup.
+
 Screen capture is optional and remains browser-local until handoff. It requires
 an explicit user gesture, accepts only a browser-tab surface, and stops tracks
 when Browser closes or selection changes. Permission denial, unsupported capture,

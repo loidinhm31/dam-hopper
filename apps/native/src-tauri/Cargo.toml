@@ -10,10 +10,18 @@ name = "dam_hopper_native_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri = { version = "2", features = [] }
+getrandom = "0.3.4"
+sha2 = "0.10"
+url = "2.5"
+tauri = { version = "=2.11.5", features = ["unstable"] }
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "=0.38.2"
+windows = { version = "0.61", features = ["Win32_Foundation"] }
 
 [workspace]
