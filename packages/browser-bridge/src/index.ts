@@ -1,6 +1,10 @@
 import { createPicker } from "./picker.js";
 import { observeConsole, observeNavigation } from "./browser-observers.js";
 import {
+  createPostMessageBrowserBridgeChannel,
+  type BrowserBridgeTargetChannel,
+} from "./bridge-channel.js";
+import {
   BROWSER_BRIDGE_VERSION,
   parseBrowserBridgeCommand,
   type BrowserBridgeErrorCode,
@@ -12,12 +16,17 @@ import {
 
 export * from "./protocol.js";
 export * from "./extension-presence.js";
+export * from "./bridge-channel.js";
 
 export interface BrowserBridgeOptions {
   /** Optional exact parent origin for consumers that know it in advance. */
   parentOrigin?: string;
   /** Exact deployed DamHopper parent origins in addition to loopback origins. */
   allowedParentOrigins?: readonly string[];
+  /** Optional host transport; defaults to the current parent-window channel. */
+  channel?: BrowserBridgeTargetChannel;
+  /** Capabilities reported by a host-provided channel. */
+  capabilities?: readonly BrowserBridgeCapability[];
 }
 
 export interface BrowserBridge {
@@ -50,16 +59,17 @@ export function isAllowedParentOrigin(
 export function installBrowserBridge(
   options: BrowserBridgeOptions = {},
 ): BrowserBridge {
+  const channel = options.channel ?? createPostMessageBrowserBridgeChannel();
   let activeNonce: string | null = null;
   let activeRequestId: string | null = null;
   let activeParentOrigin: string | null = null;
-  const capabilities: BrowserBridgeCapability[] =
-    options.parentOrigin || options.allowedParentOrigins?.length
+  const capabilities: BrowserBridgeCapability[] = options.capabilities
+    ? [...options.capabilities]
+    : options.parentOrigin || options.allowedParentOrigins?.length
       ? ["navigation", "console"]
       : [];
   const post = (event: BrowserBridgeEvent): void => {
-    if (activeParentOrigin)
-      window.parent.postMessage(event, activeParentOrigin);
+    if (activeParentOrigin) channel.send(event, activeParentOrigin);
   };
   const sendError = (
     code: BrowserBridgeErrorCode,
@@ -77,7 +87,11 @@ export function installBrowserBridge(
     });
   };
   const sendNavigation = () => {
-    if (!capabilities.includes("navigation") || !activeNonce || !activeRequestId)
+    if (
+      !capabilities.includes("navigation") ||
+      !activeNonce ||
+      !activeRequestId
+    )
       return;
     post({
       version: BROWSER_BRIDGE_VERSION,
@@ -124,16 +138,20 @@ export function installBrowserBridge(
     },
   });
 
-  const onMessage = (event: MessageEvent<unknown>): void => {
-    if (event.source !== window.parent) return;
-    if (activeParentOrigin && event.origin !== activeParentOrigin) return;
-    const command = parseBrowserBridgeCommand(event.data);
+  const onMessage = (message: {
+    data: unknown;
+    origin: string;
+    source: unknown;
+  }): void => {
+    if (message.source !== channel.source) return;
+    if (activeParentOrigin && message.origin !== activeParentOrigin) return;
+    const command = parseBrowserBridgeCommand(message.data);
     if (!command) return;
 
     if (command.type === "dam-hopper:connect") {
-      if (!isAllowedParentOrigin(event.origin, options)) return;
+      if (!isAllowedParentOrigin(message.origin, options)) return;
       picker.stop();
-      activeParentOrigin = event.origin;
+      activeParentOrigin = message.origin;
       activeNonce = command.nonce;
       activeRequestId = command.requestId;
       post({
@@ -188,13 +206,17 @@ export function installBrowserBridge(
     picker.stop();
   };
 
-  window.addEventListener("message", onMessage);
+  const unsubscribe = channel.subscribe(onMessage);
+  let destroyed = false;
   return {
     destroy: () => {
+      if (destroyed) return;
+      destroyed = true;
       picker.stop();
       stopNavigationObserver();
       stopConsoleObserver();
-      window.removeEventListener("message", onMessage);
+      unsubscribe();
+      channel.destroy();
       activeNonce = null;
       activeRequestId = null;
       activeParentOrigin = null;

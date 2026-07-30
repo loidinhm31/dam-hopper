@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type {
-  BrowserBridgeCapability,
-  BrowserSelectionV1,
-} from "@dam-hopper/browser-bridge";
+import type { BrowserSelectionV1 } from "@dam-hopper/browser-bridge";
 import {
   useBrowserCapture,
   type BrowserCaptureStatus,
@@ -19,16 +16,15 @@ import {
 } from "@/lib/browser-debug-address-history.js";
 import type { CaptureRect } from "@/lib/browser-capture.js";
 import {
+  type BrowserDebugBridgeStatus,
+  type BrowserDebugHostCapability,
+} from "@/lib/browser-debug-host.js";
+import {
   useBrowserExtensionPresence,
   type BrowserExtensionPresence,
 } from "@/hooks/use-browser-extension-presence.js";
 
-export type BrowserDebugBridgeStatus =
-  | "idle"
-  | "loading"
-  | "ready"
-  | "unsupported"
-  | "error";
+export type { BrowserDebugBridgeStatus } from "@/lib/browser-debug-host.js";
 
 export type { BrowserCaptureStatus } from "@/hooks/use-browser-capture.js";
 
@@ -48,7 +44,7 @@ export interface BrowserDebugController {
   addressHistory: string[];
   target: BrowserDebugTarget | null;
   bridgeStatus: BrowserDebugBridgeStatus;
-  bridgeCapabilities: BrowserBridgeCapability[];
+  bridgeCapabilities: BrowserDebugHostCapability[];
   selection: BrowserSelectionV1 | null;
   pickerActive: boolean;
   captureStatus: BrowserCaptureStatus;
@@ -65,7 +61,7 @@ export interface BrowserDebugController {
   setPickerActive: (active: boolean) => void;
   setError: (message: string | null) => void;
   syncCurrentUrl: (url: string) => void;
-  setBridgeCapabilities: (capabilities: BrowserBridgeCapability[]) => void;
+  setBridgeCapabilities: (capabilities: BrowserDebugHostCapability[]) => void;
   appendConsoleEntry: (entry: BrowserConsolePreview) => void;
   clearConsole: () => void;
   startCapture: (targetFrame: CaptureRect | null) => Promise<void>;
@@ -88,7 +84,7 @@ export function useBrowserDebug(): BrowserDebugController {
   const [bridgeStatus, setBridgeStatus] =
     useState<BrowserDebugBridgeStatus>("idle");
   const [bridgeCapabilities, setBridgeCapabilities] = useState<
-    BrowserBridgeCapability[]
+    BrowserDebugHostCapability[]
   >([]);
   const consoleEntryIdRef = useRef(0);
   const [selection, setSelection] = useState<BrowserSelectionV1 | null>(null);

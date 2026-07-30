@@ -3,15 +3,14 @@ export function createBrowserDebugId(): string | null {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   if (!globalThis.crypto?.getRandomValues) return null;
   const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
 }
 
-export interface BrowserDebugViewportFrame {
-  top: number;
-  left: number;
-  width: number;
-  height: number;
-}
+import type { BrowserDebugHostViewport } from "./browser-debug-host.js";
+
+export type BrowserDebugViewportFrame = BrowserDebugHostViewport;
 
 /**
  * Resolve an overlay frame without moving the iframe DOM node. Chromium can
