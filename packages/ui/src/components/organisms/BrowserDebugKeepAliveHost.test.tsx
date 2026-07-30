@@ -7,6 +7,11 @@ import {
   type BrowserDebugKeepAliveHandle,
 } from "./BrowserDebugKeepAliveHost.js";
 import type { BrowserDebugController } from "@/hooks/use-browser-debug.js";
+import { BrowserDebugHostProvider } from "@/contexts/BrowserDebugHostContext.js";
+import type {
+  BrowserDebugHost,
+  BrowserDebugHostEvent,
+} from "@/lib/browser-debug-host.js";
 
 const target = {
   url: "http://localhost:3000",
@@ -43,6 +48,26 @@ function controller(): BrowserDebugController {
     startCapture: vi.fn(),
     setManualImage: vi.fn(),
     stopCapture: vi.fn(),
+  };
+}
+
+function nativeHost() {
+  let listener: ((event: BrowserDebugHostEvent) => void) | null = null;
+  const host: BrowserDebugHost = {
+    setTarget: vi.fn(),
+    setViewport: vi.fn(),
+    command: vi.fn(),
+    subscribe: vi.fn((next) => {
+      listener = next;
+      return () => {
+        listener = null;
+      };
+    }),
+    destroy: vi.fn(),
+  };
+  return {
+    host,
+    emit: (event: BrowserDebugHostEvent) => listener?.(event),
   };
 }
 
@@ -201,5 +226,40 @@ describe("BrowserDebugKeepAliveHost", () => {
     expect(overlay?.getAttribute("aria-hidden")).toBe("true");
     expect(overlay?.style.visibility).toBe("hidden");
     expect(overlay?.style.pointerEvents).toBe("none");
+  });
+
+  it("accepts generation zero after the native host instance is replaced", async () => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    const viewportRef = { current: null as HTMLDivElement | null };
+    const browser = controller();
+    const first = nativeHost();
+    const second = nativeHost();
+    root = createRoot(container);
+
+    const render = (host: BrowserDebugHost) =>
+      root?.render(
+        <BrowserDebugHostProvider
+          host={host}
+          environment={{ kind: "native", platform: "windows" }}
+        >
+          <BrowserDebugKeepAliveHost
+            browser={browser}
+            viewportRef={viewportRef}
+            viewportVersion={0}
+            isViewportVisible
+          />
+        </BrowserDebugHostProvider>,
+      );
+
+    await act(async () => render(first.host));
+    first.emit({ type: "status", status: "loading", generation: 4 });
+    first.emit({ type: "ready", capabilities: ["picker"], generation: 4 });
+    expect(browser.setBridgeStatus).toHaveBeenCalledWith("ready");
+
+    await act(async () => render(second.host));
+    second.emit({ type: "status", status: "loading", generation: 0 });
+    second.emit({ type: "ready", capabilities: ["picker"], generation: 0 });
+    expect(browser.setBridgeStatus).toHaveBeenLastCalledWith("ready");
   });
 });

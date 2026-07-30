@@ -8,6 +8,9 @@ const tauriDevHost = process.env["TAURI_DEV_HOST"];
 const tauriPlatform = process.env["TAURI_ENV_PLATFORM"];
 const tauriDebug = process.env["TAURI_ENV_DEBUG"];
 const uiSrc = fileURLToPath(new URL("../../packages/ui/src", import.meta.url));
+const browserBridgeSrc = fileURLToPath(
+  new URL("../../packages/browser-bridge/src/index.ts", import.meta.url),
+);
 const uiStyles = fileURLToPath(
   new URL("../../packages/ui/src/index.css", import.meta.url),
 );
@@ -22,6 +25,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": uiSrc,
+      "@dam-hopper/browser-bridge": browserBridgeSrc,
       "@dam-hopper/ui/styles": uiStyles,
     },
     dedupe: ["@tanstack/react-query", "react", "react-dom"],

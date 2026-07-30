@@ -20,6 +20,7 @@
     "version": "node scripts/bump-version.js"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2",
     "@dam-hopper/shared": "workspace:*",
     "@dam-hopper/ui": "workspace:*",
     "@tanstack/react-query": "^5.67.0",

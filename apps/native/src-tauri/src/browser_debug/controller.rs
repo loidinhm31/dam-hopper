@@ -62,6 +62,7 @@ pub struct BrowserDebugNavigateInput {
 pub struct BrowserDebugState {
     pub label: String,
     pub profile_id: String,
+    pub session_id: String,
     pub committed_url: String,
     pub committed_origin: String,
     pub generation: u64,
@@ -73,6 +74,8 @@ pub struct BrowserDebugState {
 #[serde(rename_all = "camelCase")]
 struct AcceptedRelay {
     label: &'static str,
+    profile_id: String,
+    session_id: String,
     generation: u64,
     origin: String,
     data: Value,
@@ -82,11 +85,15 @@ struct AcceptedRelay {
 #[serde(rename_all = "camelCase")]
 struct RejectedRelay {
     label: &'static str,
+    profile_id: String,
+    session_id: String,
+    generation: u64,
     reason: &'static str,
 }
 
 struct ActiveBrowser {
     profile_id: String,
+    session_id: String,
     storage: ProfileStorage,
     policy: NavigationPolicy,
     committed_url: Url,
@@ -125,6 +132,7 @@ impl BrowserDebugController {
         let storage = ProfileStorage::resolve(&main.app_handle(), &input.profile_id)?;
         let active = ActiveBrowser {
             profile_id: input.profile_id.clone(),
+            session_id: random_id("browser-debug-session")?,
             storage,
             policy: policy.clone(),
             committed_url: target.clone(),
@@ -149,10 +157,20 @@ impl BrowserDebugController {
         let navigation_controller = self.clone();
         let page_controller = self.clone();
         let app = main.app_handle().clone();
+        let relay_session_id = self
+            .state
+            .lock()
+            .expect("browser debug state lock")
+            .active
+            .as_ref()
+            .map(|active| active.session_id.clone())
+            .ok_or("browser-debug state missing")?;
+        let relay_callback_session_id = relay_session_id.clone();
         let relay_callback: RelayCallback = Arc::new(move |source_url, raw| {
-            let result = controller.accept_relay(&app, &source_url, &raw);
+            let result =
+                controller.accept_relay(&app, &relay_callback_session_id, &source_url, &raw);
             if let Err(reason) = result {
-                controller.emit_relay_rejected(&app, reason);
+                controller.emit_relay_rejected(&app, &relay_callback_session_id, reason);
             }
         });
         let app_for_page = main.app_handle().clone();
@@ -290,6 +308,7 @@ impl BrowserDebugController {
     fn accept_relay(
         &self,
         app: &AppHandle,
+        session_id: &str,
         source_url: &str,
         raw: &str,
     ) -> Result<(), &'static str> {
@@ -297,6 +316,9 @@ impl BrowserDebugController {
         let data = {
             let state = self.state.lock().expect("browser debug state lock");
             let active = state.active.as_ref().ok_or("no_active_child")?;
+            if active.session_id != session_id {
+                return Err("stale_child_session");
+            }
             if message.label != CHILD_LABEL || message.generation != active.generation {
                 return Err("stale_child_generation");
             }
@@ -321,6 +343,8 @@ impl BrowserDebugController {
         };
         let event = AcceptedRelay {
             label: CHILD_LABEL,
+            profile_id: self.snapshot().profile_id,
+            session_id: session_id.to_string(),
             generation: self.snapshot().generation,
             origin: self.snapshot().committed_origin,
             data,
@@ -332,12 +356,22 @@ impl BrowserDebugController {
             .map_err(|_| "relay_emit_failed")
     }
 
-    fn emit_relay_rejected(&self, app: &AppHandle, reason: &'static str) {
+    fn emit_relay_rejected(&self, app: &AppHandle, session_id: &str, reason: &'static str) {
+        let active = self.state.lock().expect("browser debug state lock");
+        let Some(active) = active.active.as_ref() else {
+            return;
+        };
+        if active.session_id != session_id {
+            return;
+        }
         if let Some(main) = app.get_webview_window(MAIN_LABEL) {
             let _ = main.emit(
                 RELAY_REJECTED_EVENT,
                 RejectedRelay {
                     label: CHILD_LABEL,
+                    profile_id: active.profile_id.clone(),
+                    session_id: active.session_id.clone(),
+                    generation: active.generation,
                     reason,
                 },
             );
@@ -471,6 +505,7 @@ impl BrowserDebugController {
         BrowserDebugState {
             label: CHILD_LABEL.into(),
             profile_id: active.profile_id.clone(),
+            session_id: active.session_id.clone(),
             committed_url: active.committed_url.to_string(),
             committed_origin: active.committed_origin.clone(),
             generation: active.generation,

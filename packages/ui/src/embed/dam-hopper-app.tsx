@@ -33,6 +33,11 @@ import { useWorkspaceStore } from "@/stores/workspace.js";
 import { matchesNewTerminalShortcut } from "@/lib/shortcuts.js";
 import { normalizeRouterBasename } from "@/lib/router-basename.js";
 import { recordClientRoute } from "@/lib/diagnostics-client.js";
+export {
+  BrowserDebugHostProvider,
+  useBrowserDebugHost,
+  type BrowserDebugHostEnvironment,
+} from "@/contexts/BrowserDebugHostContext.js";
 
 function syncFontSizeCssVar(fontSize: number): void {
   document.documentElement.style.setProperty(
