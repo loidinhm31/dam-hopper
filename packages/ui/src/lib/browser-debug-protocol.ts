@@ -2,12 +2,16 @@ import {
   parseBrowserBridgeEvent,
   type BrowserBridgeEvent,
 } from "@dam-hopper/browser-bridge";
+import type { BrowserDebugHostMessage } from "./browser-debug-host.js";
 
 export interface BrowserBridgeTrust {
   /** Exact target origin for this iframe load. */
   origin: string;
-  /** The exact WindowProxy from iframe.contentWindow for this load. */
-  source: Window;
+  /**
+   * Exact, stable source evidence for this load. Web uses WindowProxy;
+   * native uses an opaque relay identity validated by its controller.
+   */
+  source: unknown;
   /** Replaced on every iframe navigation or parent reconnect. */
   nonce: string;
   /** Only requests issued for the current nonce may change UI state. */
@@ -19,7 +23,7 @@ export interface BrowserBridgeTrust {
  * iframe navigates, so stale messages cannot mutate the Browser tool state.
  */
 export function parseTrustedBrowserBridgeEvent(
-  event: MessageEvent<unknown>,
+  event: MessageEvent<unknown> | BrowserDebugHostMessage,
   trust: BrowserBridgeTrust,
 ): BrowserBridgeEvent | null {
   if (event.source !== trust.source) return null;
