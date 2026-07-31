@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { configureLogger, resolveLogLevel } from "@dam-hopper/shared/logger";
-import { DamHopperApp } from "@dam-hopper/ui";
+import { BrowserDebugHostProvider, DamHopperApp } from "@dam-hopper/ui";
 import "@dam-hopper/ui/styles";
 
 import { initTransport } from "@dam-hopper/ui/api/transport";
@@ -12,6 +12,11 @@ import {
 } from "@dam-hopper/ui/diagnostics-client";
 import { IdleTransport } from "./idle-transport";
 import { getNativeServerUrl } from "./native-server-url";
+import {
+  getNativeBrowserDebugEnvironment,
+  isNativeBrowserDebugEnabled,
+  NativeBrowserDebugHost,
+} from "./native-browser-debug-host";
 
 declare const __DAM_HOPPER_TAURI_PLATFORM__: string;
 
@@ -75,8 +80,31 @@ const queryClient = new QueryClient({
   },
 });
 
+const nativeBrowserDebugEnabled = isNativeBrowserDebugEnabled(
+  viteEnv?.VITE_DAM_HOPPER_NATIVE_BROWSER_DEBUG,
+);
+const nativeBrowserDebugHost = nativeBrowserDebugEnabled
+  ? new NativeBrowserDebugHost()
+  : null;
+const nativeBrowserDebugEnvironment = getNativeBrowserDebugEnvironment(
+  typeof __DAM_HOPPER_TAURI_PLATFORM__ === "string"
+    ? __DAM_HOPPER_TAURI_PLATFORM__
+    : "unknown",
+  nativeBrowserDebugEnabled,
+);
+window.addEventListener(
+  "beforeunload",
+  () => nativeBrowserDebugHost?.dispose(),
+  { once: true },
+);
+
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
-    <DamHopperApp />
+    <BrowserDebugHostProvider
+      host={nativeBrowserDebugHost}
+      environment={nativeBrowserDebugEnvironment}
+    >
+      <DamHopperApp />
+    </BrowserDebugHostProvider>
   </QueryClientProvider>,
 );

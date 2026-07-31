@@ -33,8 +33,8 @@ describe("browser debug keep-alive in Chromium", () => {
     expect(getBrowserDebugViewportFrame(viewport)).toEqual({
       top: 20,
       left: 10,
-      width: 640,
-      height: 480,
+      width: Math.min(640, window.innerWidth - 10),
+      height: Math.min(480, window.innerHeight - 20),
     });
     expect(parking.querySelector("iframe")).toBe(frame);
     expect(frame.contentDocument?.body.getAttribute("data-keep-alive-probe")).toBe(

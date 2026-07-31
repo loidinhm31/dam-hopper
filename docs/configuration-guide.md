@@ -209,6 +209,11 @@ cover `localhost` and `127.0.0.1` on ports 5173 and 4800.
 The extension uses the existing bounded bridge protocol and does not receive a
 DamHopper server token.
 
+Native desktop clients use the embedded Tauri child-WebView controller and do
+not require extension installation. The browser-extension ZIP instructions
+below apply only to the web/browser host. Linux native builds remain
+experimental and unverified at runtime; macOS support is deferred.
+
 Use HTTP loopback URLs or URLs on currently-ready tunnel origins in the
 Browser URL field; paths, query strings, and hashes are supported, but
 credentials are rejected. The extension does not bypass a browser-level frame policy;

@@ -1,4 +1,5 @@
 import {
+  createPostMessageBrowserBridgeChannel,
   installBrowserBridge,
   markBrowserExtensionPresence,
 } from "@dam-hopper/browser-bridge";
@@ -23,5 +24,6 @@ markPresenceWhenDocumentIsReady();
 if (window.parent !== window) {
   installBrowserBridge({
     allowedParentOrigins: __DAM_HOPPER_EXTENSION_PARENT_ORIGINS__,
+    channel: createPostMessageBrowserBridgeChannel(),
   });
 }

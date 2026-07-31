@@ -26,6 +26,7 @@ import type {
 } from "@/lib/browser-terminal-handoff.js";
 import type { BrowserExtensionPresence } from "@/hooks/use-browser-extension-presence.js";
 import type { BrowserConsoleEntry } from "@/hooks/use-browser-debug.js";
+import type { BrowserDebugHostEnvironment } from "@/contexts/BrowserDebugHostContext.js";
 
 export type BrowserBridgeStatus =
   | "idle"
@@ -55,6 +56,8 @@ interface BrowserDebugPanelProps {
   consoleAvailable?: boolean;
   onClearConsole?: () => void;
   extensionPresence?: BrowserExtensionPresence;
+  hostEnvironment?: BrowserDebugHostEnvironment;
+  captureAvailable?: boolean;
   onReloadPage?: () => void;
   onStartPicker?: () => void;
   onStopPicker?: () => void;
@@ -182,6 +185,8 @@ export function BrowserDebugPanel({
   consoleAvailable = false,
   onClearConsole,
   extensionPresence = "detected",
+  hostEnvironment = { kind: "web" },
+  captureAvailable = true,
   onReloadPage,
   onStartPicker,
   onStopPicker,
@@ -356,13 +361,24 @@ export function BrowserDebugPanel({
           {error}
         </p>
       )}
-      {bridgeStatus === "unsupported" && extensionPresence === "missing" && (
-        <BrowserDebugExtensionSetup onReloadPage={onReloadPage} />
-      )}
-      {bridgeStatus === "unsupported" && extensionPresence === "detected" && (
+      {bridgeStatus === "unsupported" &&
+        hostEnvironment.kind === "web" &&
+        extensionPresence === "missing" && (
+          <BrowserDebugExtensionSetup onReloadPage={onReloadPage} />
+        )}
+      {bridgeStatus === "unsupported" &&
+        hostEnvironment.kind === "web" &&
+        extensionPresence === "detected" && (
+          <p className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-[var(--color-text-muted)]">
+            Extension detected in this browser, but the target frame did not
+            respond. Check the target URL, reachability, and frame permissions.
+          </p>
+        )}
+      {bridgeStatus === "unsupported" && hostEnvironment.kind === "native" && (
         <p className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-[var(--color-text-muted)]">
-          Extension detected in this browser, but the target frame did not
-          respond. Check the target URL, reachability, and frame permissions.
+          {hostEnvironment.experimental
+            ? "Native Browser Debug is experimental on this platform. The child WebView compiled, but its relay engine is not verified yet."
+            : "Native Browser Debug is unavailable in this runtime. DOM selection and manual image attachment remain available when supported."}
         </p>
       )}
       <div
@@ -398,7 +414,7 @@ export function BrowserDebugPanel({
             captureStatus={captureStatus}
             captureMessage={captureMessage}
             manualImageName={manualImageName}
-            onStartCapture={onStartCapture}
+            onStartCapture={captureAvailable ? onStartCapture : undefined}
             onManualImage={onManualImage}
           />
         </details>
