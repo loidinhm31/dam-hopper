@@ -14,6 +14,9 @@ const harness = vi.hoisted(() => ({
   ] as FsArborNode[],
   download: vi.fn(),
   upload: vi.fn(),
+  createFile: vi.fn(),
+  createDir: vi.fn(),
+  rename: vi.fn(),
   checkout: vi.fn(),
   deleteBranch: vi.fn(),
 }));
@@ -22,7 +25,7 @@ vi.mock("@/hooks/use-fs-subscription.js", () => ({
   useFsSubscription: () => ({ data: { nodes: harness.nodes }, isLoading: false, isError: false, error: null, loadChildren: vi.fn(), refetch: vi.fn(), isFetching: false }),
 }));
 vi.mock("@/hooks/use-fs-ops.js", () => ({
-  useFsOps: () => ({ createFile: vi.fn(), createDir: vi.fn(), rename: vi.fn(), deleteEntry: vi.fn(), move: vi.fn(), download: harness.download }),
+  useFsOps: () => ({ createFile: harness.createFile, createDir: harness.createDir, rename: harness.rename, deleteEntry: vi.fn(), move: vi.fn(), download: harness.download }),
 }));
 vi.mock("@/hooks/use-fs-upload.js", () => ({
   useFsUpload: () => ({ progress: null, upload: harness.upload, clearProgress: vi.fn() }),
@@ -93,6 +96,9 @@ afterEach(() => {
   document.body.innerHTML = "";
   harness.download.mockReset();
   harness.upload.mockReset();
+  harness.createFile.mockReset();
+  harness.createDir.mockReset();
+  harness.rename.mockReset();
   harness.checkout.mockReset();
   harness.deleteBranch.mockReset();
 });
@@ -100,9 +106,16 @@ afterEach(() => {
 describe("consumer context menus in Chromium", () => {
   beforeEach(() => {
     harness.download.mockResolvedValue(undefined);
+    harness.createFile.mockResolvedValue({ ok: true });
+    harness.createDir.mockResolvedValue({ ok: true });
+    harness.rename.mockResolvedValue({ ok: true });
     harness.checkout.mockResolvedValue({ ok: true });
     harness.deleteBranch.mockResolvedValue({ ok: true });
-    globalThis.ResizeObserver ??= class { disconnect() {} observe() {} unobserve() {} } as typeof ResizeObserver;
+    globalThis.ResizeObserver ??= class {
+      disconnect() {}
+      observe() {}
+      unobserve() {}
+    } as typeof ResizeObserver;
   });
 
   it("keeps the production virtual rows mounted and targets the originating file", async () => {
@@ -119,9 +132,9 @@ describe("consumer context menus in Chromium", () => {
     await act(async () => file?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2, clientX: 120, clientY: 120 })));
     await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).not.toBeNull());
     expect(
-      document.querySelector('[role="menu"]')?.closest(
-        "[data-radix-popper-content-wrapper]",
-      )?.parentElement,
+      document
+        .querySelector('[role="menu"]')
+        ?.closest("[data-radix-popper-content-wrapper]")?.parentElement,
     ).toBe(document.body);
     expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1);
     expect(file?.className).not.toContain("bg-[var(--color-primary)]/15");
@@ -132,6 +145,78 @@ describe("consumer context menus in Chromium", () => {
     await act(async () => directory?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2, clientX: 160, clientY: 160 })));
     await vi.waitFor(() => expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1));
     expect(document.querySelector('[role="menu"]')?.textContent).toContain("Upload Here");
+  });
+
+  it("creates a file at the project root from the Explorer toolbar", async () => {
+    await mount(
+      <div style={{ height: 320, width: 360 }}>
+        <FileTree project="demo" />
+      </div>,
+    );
+    const newFile = document.querySelector<HTMLButtonElement>(
+      '[aria-label="New File in project root"]',
+    );
+    expect(newFile).not.toBeNull();
+    await act(async () => newFile?.click());
+
+    const input = document.querySelector<HTMLInputElement>("#name");
+    expect(input).not.toBeNull();
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(input, "root.ts");
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent === "Create File")
+        ?.click(),
+    );
+    expect(harness.createFile).toHaveBeenCalledWith("root.ts");
+  });
+
+  it("keeps rename usable after the context menu closes and submits once", async () => {
+    await mount(
+      <div style={{ height: 320, width: 360 }}>
+        <FileTree project="demo" />
+      </div>,
+    );
+    const file = row("main.ts");
+    await act(async () =>
+      file?.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          button: 2,
+          clientX: 120,
+          clientY: 120,
+        }),
+      ),
+    );
+    await vi.waitFor(() => expect(menuItem("Rename")).not.toBeNull());
+    await act(async () => menuItem("Rename")?.click());
+    let input: HTMLInputElement | null = null;
+    await vi.waitFor(() => {
+      input = document.querySelector<HTMLInputElement>("#rename-item-name");
+      expect(input).not.toBeNull();
+    });
+    await vi.waitFor(() => expect(document.activeElement).toBe(input));
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(input, "app.ts");
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent === "Rename")
+        ?.click(),
+    );
+    await vi.waitFor(() => expect(harness.rename).toHaveBeenCalledTimes(1));
+    expect(harness.rename).toHaveBeenCalledWith("src/main.ts", "src/app.ts");
   });
 
   it("hands real SelectItem right-clicks to one body-ported branch menu without checkout", async () => {
@@ -167,11 +252,7 @@ describe("consumer context menus in Chromium", () => {
     const option = await openBranchSelect();
     await act(async () => {
       option.focus();
-      option.dispatchEvent(new KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        key: "ContextMenu",
-      }));
+      option.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ContextMenu" }));
     });
     await vi.waitFor(() => expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1));
     expect(harness.checkout).not.toHaveBeenCalled();
