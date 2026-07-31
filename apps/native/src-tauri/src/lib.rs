@@ -30,6 +30,7 @@ pub fn run() {
             let main = app
                 .get_webview_window("main")
                 .ok_or_else(|| std::io::Error::other("main_window_missing"))?;
+            controller.register_main_window(main.clone());
             let app_handle = app.handle().clone();
             let controller = controller.clone();
             main.on_window_event(move |event| {

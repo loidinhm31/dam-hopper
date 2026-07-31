@@ -14,6 +14,7 @@ import { IdleTransport } from "./idle-transport";
 import { getNativeServerUrl } from "./native-server-url";
 import {
   getNativeBrowserDebugEnvironment,
+  isNativeBrowserDebugEnabled,
   NativeBrowserDebugHost,
 } from "./native-browser-debug-host";
 
@@ -79,15 +80,21 @@ const queryClient = new QueryClient({
   },
 });
 
-const nativeBrowserDebugHost = new NativeBrowserDebugHost();
+const nativeBrowserDebugEnabled = isNativeBrowserDebugEnabled(
+  viteEnv?.VITE_DAM_HOPPER_NATIVE_BROWSER_DEBUG,
+);
+const nativeBrowserDebugHost = nativeBrowserDebugEnabled
+  ? new NativeBrowserDebugHost()
+  : null;
 const nativeBrowserDebugEnvironment = getNativeBrowserDebugEnvironment(
   typeof __DAM_HOPPER_TAURI_PLATFORM__ === "string"
     ? __DAM_HOPPER_TAURI_PLATFORM__
     : "unknown",
+  nativeBrowserDebugEnabled,
 );
 window.addEventListener(
   "beforeunload",
-  () => nativeBrowserDebugHost.dispose(),
+  () => nativeBrowserDebugHost?.dispose(),
   { once: true },
 );
 

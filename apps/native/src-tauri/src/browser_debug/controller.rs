@@ -25,6 +25,13 @@ const COMMAND_EVENT: &str = "__DAM_HOPPER_BROWSER_DEBUG_COMMAND__";
 const CONFIG_GLOBAL: &str = "__DAM_HOPPER_BROWSER_DEBUG_CONFIG__";
 const BRIDGE_IIFE: &str = include_str!(concat!(env!("OUT_DIR"), "/browser-debug-bridge.iife.js"));
 
+// The child is an untrusted remote document. Wry forwards every WebView2 IPC
+// message through Tauri's invoke parser, which writes malformed messages back
+// with console.error. Mirroring console events over that same channel therefore
+// creates an unbounded feedback loop. Keep the safe navigation relay enabled
+// until console data has an isolated native transport.
+const NATIVE_BRIDGE_CAPABILITIES: &[&str] = &["navigation"];
+
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Deserialize)]
@@ -114,15 +121,33 @@ struct ControllerState {
 #[derive(Default)]
 pub struct BrowserDebugController {
     state: Mutex<ControllerState>,
+    main_window: Mutex<Option<WebviewWindow>>,
 }
 
 impl BrowserDebugController {
+    pub fn register_main_window(&self, window: WebviewWindow) {
+        *self
+            .main_window
+            .lock()
+            .expect("browser debug main window lock") = Some(window);
+    }
+
+    fn main_window(&self) -> Result<WebviewWindow, String> {
+        self.main_window
+            .lock()
+            .expect("browser debug main window lock")
+            .clone()
+            .ok_or_else(|| "browser-debug main window is unavailable".into())
+    }
+
     pub async fn create(
         self: &Arc<Self>,
         main: WebviewWindow,
         input: BrowserDebugCreateInput,
     ) -> Result<BrowserDebugState, String> {
-        ensure_main(&main)?;
+        if main.label() != MAIN_LABEL {
+            return Err("browser-debug commands are main-webview only".into());
+        }
         let target = parse_target_url(&input.url)?;
         let policy = NavigationPolicy::new(&input.allowed_tunnel_origins)?;
         if !policy.allows(&target) {
@@ -156,7 +181,6 @@ impl BrowserDebugController {
         let controller = self.clone();
         let navigation_controller = self.clone();
         let page_controller = self.clone();
-        let app = main.app_handle().clone();
         let relay_session_id = self
             .state
             .lock()
@@ -167,10 +191,9 @@ impl BrowserDebugController {
             .ok_or("browser-debug state missing")?;
         let relay_callback_session_id = relay_session_id.clone();
         let relay_callback: RelayCallback = Arc::new(move |source_url, raw| {
-            let result =
-                controller.accept_relay(&app, &relay_callback_session_id, &source_url, &raw);
+            let result = controller.accept_relay(&relay_callback_session_id, &source_url, &raw);
             if let Err(reason) = result {
-                controller.emit_relay_rejected(&app, &relay_callback_session_id, reason);
+                controller.emit_relay_rejected(&relay_callback_session_id, reason);
             }
         });
         let app_for_page = main.app_handle().clone();
@@ -307,7 +330,6 @@ impl BrowserDebugController {
 
     fn accept_relay(
         &self,
-        app: &AppHandle,
         session_id: &str,
         source_url: &str,
         raw: &str,
@@ -349,32 +371,30 @@ impl BrowserDebugController {
             origin: self.snapshot().committed_origin,
             data,
         };
-        let main = app
-            .get_webview_window(MAIN_LABEL)
-            .ok_or("main_window_missing")?;
+        let main = self.main_window().map_err(|_| "main_window_missing")?;
         main.emit(RELAY_EVENT, event)
             .map_err(|_| "relay_emit_failed")
     }
 
-    fn emit_relay_rejected(&self, app: &AppHandle, session_id: &str, reason: &'static str) {
-        let active = self.state.lock().expect("browser debug state lock");
-        let Some(active) = active.active.as_ref() else {
-            return;
+    fn emit_relay_rejected(&self, session_id: &str, reason: &'static str) {
+        let event = {
+            let state = self.state.lock().expect("browser debug state lock");
+            let Some(active) = state.active.as_ref() else {
+                return;
+            };
+            if active.session_id != session_id {
+                return;
+            }
+            RejectedRelay {
+                label: CHILD_LABEL,
+                profile_id: active.profile_id.clone(),
+                session_id: active.session_id.clone(),
+                generation: active.generation,
+                reason,
+            }
         };
-        if active.session_id != session_id {
-            return;
-        }
-        if let Some(main) = app.get_webview_window(MAIN_LABEL) {
-            let _ = main.emit(
-                RELAY_REJECTED_EVENT,
-                RejectedRelay {
-                    label: CHILD_LABEL,
-                    profile_id: active.profile_id.clone(),
-                    session_id: active.session_id.clone(),
-                    generation: active.generation,
-                    reason,
-                },
-            );
+        if let Ok(main) = self.main_window() {
+            let _ = main.emit(RELAY_REJECTED_EVENT, event);
         }
     }
 
@@ -566,8 +586,8 @@ fn validate_bounds(bounds: &BrowserDebugBounds) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_main(window: &WebviewWindow) -> Result<(), String> {
-    (window.label() == MAIN_LABEL)
+fn ensure_main(webview: &Webview) -> Result<(), String> {
+    (webview.label() == MAIN_LABEL)
         .then_some(())
         .ok_or_else(|| "browser-debug commands are main-webview only".into())
 }
@@ -577,6 +597,7 @@ fn default_true() -> bool {
 }
 
 fn bridge_bootstrap_script() -> String {
+    let capabilities = json!(NATIVE_BRIDGE_CAPABILITIES);
     format!(
         r#"
 {BRIDGE_IIFE}
@@ -617,43 +638,44 @@ fn bridge_bootstrap_script() -> String {
   window.DamHopperBrowserBridge?.installBrowserBridge?.({{
     parentOrigin: window.location.origin,
     channel,
-    capabilities: ['navigation', 'console']
+    capabilities: {capabilities}
   }});
 }})();
 "#,
         BRIDGE_IIFE = BRIDGE_IIFE,
         command_event = serde_json::to_string(COMMAND_EVENT).unwrap_or_else(|_| "\"\"".into()),
         config_global = CONFIG_GLOBAL,
+        capabilities = capabilities,
     )
 }
 
 #[command]
 pub async fn browser_debug_create(
-    window: WebviewWindow,
+    webview: Webview,
     state: State<'_, Arc<BrowserDebugController>>,
     input: BrowserDebugCreateInput,
 ) -> Result<BrowserDebugState, String> {
-    ensure_main(&window)?;
-    state.create(window, input).await
+    ensure_main(&webview)?;
+    state.create(state.main_window()?, input).await
 }
 
 #[command]
 pub fn browser_debug_navigate(
-    window: WebviewWindow,
+    webview: Webview,
     state: State<'_, Arc<BrowserDebugController>>,
     input: BrowserDebugNavigateInput,
 ) -> Result<(), String> {
-    ensure_main(&window)?;
-    state.navigate(&window.app_handle(), input)
+    ensure_main(&webview)?;
+    state.navigate(webview.app_handle(), input)
 }
 
 #[command]
 pub fn browser_debug_command(
-    window: WebviewWindow,
+    webview: Webview,
     state: State<'_, Arc<BrowserDebugController>>,
     command: String,
 ) -> Result<(), String> {
-    ensure_main(&window)?;
+    ensure_main(&webview)?;
     let command = match command.as_str() {
         "dam-hopper:start-picker"
         | "dam-hopper:stop-picker"
@@ -662,46 +684,46 @@ pub fn browser_debug_command(
         | "dam-hopper:reload" => command,
         _ => return Err("unsupported browser-debug command".into()),
     };
-    state.dispatch_command(&window.app_handle(), &command)
+    state.dispatch_command(webview.app_handle(), &command)
 }
 
 #[command]
 pub fn browser_debug_set_bounds(
-    window: WebviewWindow,
+    webview: Webview,
     state: State<'_, Arc<BrowserDebugController>>,
     bounds: BrowserDebugBounds,
 ) -> Result<(), String> {
-    ensure_main(&window)?;
-    state.set_bounds(&window.app_handle(), bounds)
+    ensure_main(&webview)?;
+    state.set_bounds(webview.app_handle(), bounds)
 }
 
 #[command]
 pub fn browser_debug_set_visible(
-    window: WebviewWindow,
+    webview: Webview,
     state: State<'_, Arc<BrowserDebugController>>,
     visible: bool,
 ) -> Result<(), String> {
-    ensure_main(&window)?;
-    state.set_visible(&window.app_handle(), visible)
+    ensure_main(&webview)?;
+    state.set_visible(webview.app_handle(), visible)
 }
 
 #[command]
 pub fn browser_debug_destroy(
-    window: WebviewWindow,
+    webview: Webview,
     state: State<'_, Arc<BrowserDebugController>>,
 ) -> Result<(), String> {
-    ensure_main(&window)?;
-    state.destroy(&window.app_handle())
+    ensure_main(&webview)?;
+    state.destroy(webview.app_handle())
 }
 
 #[command]
 pub fn browser_debug_clear_data(
-    window: WebviewWindow,
+    webview: Webview,
     state: State<'_, Arc<BrowserDebugController>>,
     profile_id: String,
 ) -> Result<(), String> {
-    ensure_main(&window)?;
-    state.clear_profile(&window.app_handle(), &profile_id)
+    ensure_main(&webview)?;
+    state.clear_profile(webview.app_handle(), &profile_id)
 }
 
 #[cfg(test)]
@@ -734,5 +756,36 @@ mod tests {
             ..Default::default()
         })
         .is_err());
+    }
+
+    #[test]
+    fn native_bridge_does_not_mirror_console_events_over_tauri_ipc() {
+        assert_eq!(NATIVE_BRIDGE_CAPABILITIES, ["navigation"]);
+    }
+
+    #[test]
+    fn navigation_events_cannot_escape_the_active_policy() {
+        let policy = NavigationPolicy::new(["https://demo.trycloudflare.com/"]).unwrap();
+        assert!(!data_is_navigation_to_unapproved_origin(
+            &json!({
+                "type": "dam-hopper:navigation",
+                "url": "https://demo.trycloudflare.com/"
+            }),
+            &policy,
+        ));
+        assert!(data_is_navigation_to_unapproved_origin(
+            &json!({
+                "type": "dam-hopper:navigation",
+                "url": "https://example.com/"
+            }),
+            &NavigationPolicy::new(["https://demo.trycloudflare.com/"]).unwrap(),
+        ));
+        assert!(data_is_navigation_to_unapproved_origin(
+            &json!({
+                "type": "dam-hopper:navigation",
+                "url": "not a url"
+            }),
+            &policy,
+        ));
     }
 }

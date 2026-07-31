@@ -100,3 +100,100 @@ jobs:
           path: apps/web/dist
           if-no-files-found: error
           retention-days: 7
+
+  native-linux:
+    name: Native Linux build and package gates (unverified runtime)
+    runs-on: ubuntu-22.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install WebKitGTK and Tauri packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            rpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build native client
+        run: pnpm --filter @dam-hopper/native build
+
+      - name: Run deterministic smoke checks
+        run: pnpm --filter @dam-hopper/native smoke:build
+
+      - name: Run native Rust tests
+        run: cargo test --manifest-path apps/native/src-tauri/Cargo.toml --quiet
+
+      - name: Package Linux deb and rpm artifacts
+        run: pnpm --filter @dam-hopper/native tauri:build --bundles deb,rpm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dam-hopper-native-linux-unverified
+          path: |
+            apps/native/src-tauri/target/release/bundle/deb/*.deb
+            apps/native/src-tauri/target/release/bundle/rpm/*.rpm
+          if-no-files-found: error
+          retention-days: 7
+
+  native-windows:
+    name: Native Windows build gate (runtime evidence required separately)
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build native client
+        run: pnpm --filter @dam-hopper/native build
+
+      - name: Run deterministic smoke checks
+        run: pnpm --filter @dam-hopper/native smoke:build
+
+      - name: Package Windows installer
+        run: pnpm --filter @dam-hopper/native tauri:build --bundles nsis
+
+      - name: Record WebView2 preflight
+        run: pnpm --filter @dam-hopper/native tauri:probe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dam-hopper-native-windows-preflight
+          path: apps/native/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 7

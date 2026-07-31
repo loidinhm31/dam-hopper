@@ -154,6 +154,18 @@ mod tests {
             policy.check(&Url::parse("https://example.com/").unwrap()),
             NavigationDecision::Reject(NavigationRejection::UnapprovedOrigin)
         );
+        assert_eq!(
+            policy.check(&Url::parse("http://example.com/").unwrap()),
+            NavigationDecision::Reject(NavigationRejection::UnapprovedOrigin)
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_tunnel_origins_and_non_origin_urls() {
+        assert!(NavigationPolicy::new(["https://demo.trycloudflare.com/path"]).is_err());
+        assert!(NavigationPolicy::new(["https://demo.trycloudflare.com/?token=secret"]).is_err());
+        assert!(NavigationPolicy::new(["https://user@demo.trycloudflare.com/"]).is_err());
+        assert!(parse_target_url("https://user:secret@example.com/").is_err());
     }
 
     #[test]

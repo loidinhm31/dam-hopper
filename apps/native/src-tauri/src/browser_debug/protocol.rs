@@ -283,4 +283,27 @@ mod tests {
         let oversized = "x".repeat(MAX_RELAY_BYTES + 1);
         assert_eq!(parse_relay(&oversized), Err("message_too_large"));
     }
+
+    #[test]
+    fn rejects_malformed_or_privileged_events() {
+        assert_eq!(parse_relay("null"), Err("invalid_envelope"));
+
+        let mut value: Value = serde_json::from_str(&valid_message()).unwrap();
+        value["kind"] = Value::String("tauri-command".into());
+        assert_eq!(parse_relay(&value.to_string()), Err("invalid_kind"));
+
+        let mut value: Value = serde_json::from_str(&valid_message()).unwrap();
+        value["payload"] = serde_json::json!({
+            "version": 1,
+            "type": "dam-hopper:execute-shell",
+            "nonce": "nonce-123",
+            "requestId": "request-123",
+            "command": "whoami"
+        });
+        assert_eq!(parse_relay(&value.to_string()), Err("invalid_event_type"));
+
+        let mut value: Value = serde_json::from_str(&valid_message()).unwrap();
+        value["payload"]["capabilities"] = serde_json::json!(["navigation", "shell"]);
+        assert_eq!(parse_relay(&value.to_string()), Err("invalid_capabilities"));
+    }
 }

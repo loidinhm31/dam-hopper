@@ -15,6 +15,7 @@ import type { BrowserDebugTarget } from "@/lib/browser-debug-origin";
 const RELAY_EVENT = "browser-debug:relay";
 const RELAY_REJECTED_EVENT = "browser-debug:relay-rejected";
 const CHILD_LABEL = "browser-debug";
+const MAX_PENDING_RELAYS = 8;
 
 const NATIVE_COMMANDS: Record<BrowserDebugHostCommand, string> = {
   "start-picker": "dam-hopper:start-picker",
@@ -126,6 +127,7 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
   private profileId: string | null = null;
   private viewport: BrowserDebugHostViewport | null = null;
   private state: NativeBrowserDebugState | null = null;
+  private pendingRelays: NativeRelayEvent[] = [];
   private generation = 0;
   private operation = 0;
   private queue: Promise<void> = Promise.resolve();
@@ -157,6 +159,7 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
     this.target = target;
     this.profileId = profileId;
     this.state = null;
+    this.pendingRelays = [];
     this.enqueue(async () => {
       if (!(await this.ensureListeners())) return;
       try {
@@ -210,6 +213,7 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
           return;
         }
         this.state = state;
+        this.flushPendingRelays();
         if (!state.relayInstalled) {
           await invoke<void>("browser_debug_destroy").catch(() => {});
           this.state = null;
@@ -292,6 +296,7 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
     this.target = null;
     this.profileId = null;
     this.state = null;
+    this.pendingRelays = [];
     this.enqueue(async () => {
       if (operation !== this.operation) return;
       await invoke<void>("browser_debug_destroy").catch(() => {});
@@ -382,9 +387,19 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
   private handleRelay(relay: NativeRelayEvent): void {
     const target = this.target;
     const state = this.state;
+    if (!target) return;
+    if (!state) {
+      if (
+        relay.label === CHILD_LABEL &&
+        relay.profileId === this.profileId &&
+        relay.origin === target.origin
+      ) {
+        if (this.pendingRelays.length < MAX_PENDING_RELAYS)
+          this.pendingRelays.push(relay);
+      }
+      return;
+    }
     if (
-      !target ||
-      !state ||
       relay.profileId !== state.profileId ||
       relay.sessionId !== state.sessionId ||
       relay.generation < state.generation
@@ -405,6 +420,12 @@ export class NativeBrowserDebugHost implements BrowserDebugHost {
       state.sessionId,
     );
     if (event) this.emit(event);
+  }
+
+  private flushPendingRelays(): void {
+    const relays = this.pendingRelays;
+    this.pendingRelays = [];
+    for (const relay of relays) this.handleRelay(relay);
   }
 
   private handleRelayRejected(relay: NativeRelayRejectedEvent): void {
@@ -435,10 +456,17 @@ export function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-export function getNativeBrowserDebugEnvironment(platform: string) {
+export function isNativeBrowserDebugEnabled(value: unknown): boolean {
+  return value !== "0" && value !== "false";
+}
+
+export function getNativeBrowserDebugEnvironment(
+  platform: string,
+  enabled = true,
+) {
   return {
-    kind: "native" as const,
+    kind: enabled ? ("native" as const) : ("web" as const),
     platform,
-    experimental: platform !== "windows",
+    experimental: enabled && platform !== "windows",
   };
 }
