@@ -32,6 +32,15 @@ const fileTreeHarness = vi.hoisted(() => ({
     children: null,
   },
   treeRenderCount: 0,
+  onMove: undefined as
+    | undefined
+    | ((args: {
+        dragIds: string[];
+        parentId: string | null;
+        parentNode: { data: { id: string; kind: "file" | "dir" } } | null;
+      }) => Promise<void>),
+  selectedNodes: [] as Array<{ id: string; data: typeof fileTreeHarness.node }>,
+  selected: false,
   dragHandle: vi.fn(),
   upload: vi.fn(),
   ops: {
@@ -48,18 +57,30 @@ vi.mock("react-arborist", async () => {
   const React = await import("react");
   return {
     Tree: React.forwardRef(function VirtualTree(
-      { children }: { children: (props: unknown) => React.ReactNode },
+      {
+        children,
+        onMove,
+      }: {
+        children: (props: unknown) => React.ReactNode;
+        onMove: typeof fileTreeHarness.onMove;
+      },
       ref,
     ) {
-      void ref;
+      React.useImperativeHandle(ref, () => ({
+        get selectedNodes() {
+          return fileTreeHarness.selectedNodes;
+        },
+        focus: vi.fn(),
+      }));
       fileTreeHarness.treeRenderCount += 1;
+      fileTreeHarness.onMove = onMove;
       return React.createElement(
         "div",
         { "data-testid": "virtual-tree" },
         children({
           node: {
             data: fileTreeHarness.node,
-            isSelected: false,
+            isSelected: fileTreeHarness.selected,
             isFocused: true,
             isOpen: false,
             isDragging: false,
@@ -185,6 +206,9 @@ beforeEach(() => {
     children: null,
   };
   fileTreeHarness.treeRenderCount = 0;
+  fileTreeHarness.onMove = undefined;
+  fileTreeHarness.selectedNodes = [];
+  fileTreeHarness.selected = false;
   fileTreeHarness.dragHandle.mockClear();
   fileTreeHarness.upload.mockClear();
   Object.values(fileTreeHarness.ops).forEach((operation) =>
@@ -311,6 +335,201 @@ describe("migrated context-menu consumers", () => {
     );
 
     expect(fileTreeHarness.upload).toHaveBeenCalledWith("src/components", file);
+  });
+
+  it("creates a file at project root from the Explorer toolbar", async () => {
+    await mount(<FileTree project="demo" />);
+    const action = document.querySelector<HTMLButtonElement>(
+      '[aria-label="New File in project root"]',
+    );
+    await act(async () => action?.click());
+
+    const input = document.querySelector<HTMLInputElement>("#name");
+    expect(input).not.toBeNull();
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(input, "root.ts");
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent === "Create File")
+        ?.click(),
+    );
+
+    expect(fileTreeHarness.ops.createFile).toHaveBeenCalledWith("root.ts");
+  });
+
+  it("renames once through the focus-safe dialog", async () => {
+    await mount(<FileTree project="demo" />);
+    const row = document.querySelector<HTMLElement>(
+      "[data-testid=virtual-tree-row]",
+    );
+    await openMenu(row!);
+    await act(async () =>
+      [...document.querySelectorAll<HTMLElement>("[role=menuitem]")]
+        .find((item) => item.textContent === "Rename")
+        ?.click(),
+    );
+
+    const input = document.querySelector<HTMLInputElement>("#rename-item-name");
+    expect(input).not.toBeNull();
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(input, "app.ts");
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent === "Rename")
+        ?.click(),
+    );
+
+    expect(fileTreeHarness.ops.rename).toHaveBeenCalledTimes(1);
+    expect(fileTreeHarness.ops.rename).toHaveBeenCalledWith(
+      "src/main.ts",
+      "src/app.ts",
+    );
+  });
+
+  it("closes the rename dialog and reports a rejected filesystem request", async () => {
+    fileTreeHarness.ops.rename.mockRejectedValueOnce(new Error("offline"));
+    await mount(<FileTree project="demo" />);
+    const row = document.querySelector<HTMLElement>(
+      "[data-testid=virtual-tree-row]",
+    );
+    await openMenu(row!);
+    await act(async () =>
+      [...document.querySelectorAll<HTMLElement>("[role=menuitem]")]
+        .find((item) => item.textContent === "Rename")
+        ?.click(),
+    );
+    const input = document.querySelector<HTMLInputElement>("#rename-item-name");
+    expect(input).not.toBeNull();
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(input, "offline.ts");
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent === "Rename")
+        ?.click(),
+    );
+    expect(fileTreeHarness.ops.rename).toHaveBeenCalledTimes(1);
+    expect(document.querySelector("#rename-item-name")).toBeNull();
+    expect(document.body.textContent).toContain("offline");
+  });
+
+  it("deletes the selected entries once and ignores selected descendants", async () => {
+    fileTreeHarness.node = {
+      id: "src",
+      name: "src",
+      kind: "dir",
+      size: 0,
+      mtime: 0,
+      isSymlink: false,
+      children: [],
+    };
+    fileTreeHarness.selected = true;
+    fileTreeHarness.selectedNodes = [
+      { id: "src", data: fileTreeHarness.node },
+      {
+        id: "src/main.ts",
+        data: {
+          ...fileTreeHarness.node,
+          id: "src/main.ts",
+          name: "main.ts",
+          kind: "file",
+          children: null,
+        },
+      },
+    ];
+    await mount(<FileTree project="demo" />);
+    const row = document.querySelector<HTMLElement>(
+      "[data-testid=virtual-tree-row]",
+    );
+    await openMenu(row!);
+    await act(async () =>
+      [...document.querySelectorAll<HTMLElement>("[role=menuitem]")]
+        .find((item) => item.textContent === "Delete")
+        ?.click(),
+    );
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent === "Delete")
+        ?.click(),
+    );
+
+    expect(fileTreeHarness.ops.deleteEntry).toHaveBeenCalledTimes(1);
+    expect(fileTreeHarness.ops.deleteEntry).toHaveBeenCalledWith("src");
+  });
+
+  it("does not delete when Enter is pressed on the cancel control", async () => {
+    await mount(<FileTree project="demo" />);
+    const row = document.querySelector<HTMLElement>(
+      "[data-testid=virtual-tree-row]",
+    );
+    await openMenu(row!);
+    await act(async () =>
+      [...document.querySelectorAll<HTMLElement>("[role=menuitem]")]
+        .find((item) => item.textContent === "Delete")
+        ?.click(),
+    );
+    const cancel = [
+      ...document.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Cancel");
+    expect(cancel).not.toBeNull();
+    cancel?.focus();
+    await act(async () =>
+      cancel?.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }),
+      ),
+    );
+    expect(fileTreeHarness.ops.deleteEntry).not.toHaveBeenCalled();
+  });
+
+  it("moves every selected top-level path in a deterministic order", async () => {
+    await mount(<FileTree project="demo" />);
+    await fileTreeHarness.onMove?.({
+      dragIds: ["src/main.ts", "src", "README.md"],
+      parentId: "dest",
+      parentNode: { data: { id: "dest", kind: "dir" } },
+    });
+
+    expect(fileTreeHarness.ops.move).toHaveBeenNthCalledWith(
+      1,
+      "README.md",
+      "dest/README.md",
+    );
+    expect(fileTreeHarness.ops.move).toHaveBeenNthCalledWith(
+      2,
+      "src",
+      "dest/src",
+    );
+    expect(fileTreeHarness.ops.move).toHaveBeenCalledTimes(2);
+  });
+
+  it("continues a bulk move after one rejected request", async () => {
+    fileTreeHarness.ops.move
+      .mockRejectedValueOnce(new Error("locked"))
+      .mockResolvedValueOnce({ ok: true });
+    await mount(<FileTree project="demo" />);
+    await fileTreeHarness.onMove?.({
+      dragIds: ["README.md", "src/main.ts"],
+      parentId: "dest",
+      parentNode: { data: { id: "dest", kind: "dir" } },
+    });
+    expect(fileTreeHarness.ops.move).toHaveBeenCalledTimes(2);
   });
 
   it("preserves editor-tab disabled state and callback identity", async () => {

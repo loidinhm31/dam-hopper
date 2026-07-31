@@ -17,6 +17,8 @@ import {
   Loader2,
   Upload,
   RefreshCw,
+  FilePlus,
+  FolderPlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { FileDecorationIcon } from "@/lib/file-decoration-icon.js";
@@ -28,6 +30,7 @@ import { TreeContextMenu } from "./TreeContextMenu.js";
 import { UploadDropzone } from "./UploadDropzone.js";
 import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog.js";
 import { NewItemDialog } from "./NewItemDialog.js";
+import { RenameItemDialog } from "./RenameItemDialog.js";
 import { LockToggle } from "@/components/atoms/LockToggle.js";
 import { EncryptedUploadDialog } from "@/components/organisms/EncryptedUploadDialog.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
@@ -265,8 +268,7 @@ interface RenameState {
 }
 
 interface DeleteState {
-  path: string;
-  isDir: boolean;
+  nodes: FsArborNode[];
   loading: boolean;
 }
 
@@ -298,6 +300,7 @@ export function FileTree({
   } | null>(null);
   const [rename, setRename] = useState<RenameState | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [renaming, setRenaming] = useState(false);
   const [deleteState, setDeleteState] = useState<DeleteState | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
   const [uploadDir, setUploadDir] = useState("");
@@ -416,46 +419,95 @@ export function FileTree({
     const promise =
       type === "file" ? ops.createFile(fullPath) : ops.createDir(fullPath);
 
-    void promise.then((r) => {
-      if (!r.ok) setOpError(r.error ?? "Create failed");
-      setNewItemDialog(null);
-    });
+    void promise
+      .then((r) => {
+        if (!r.ok) setOpError(r.error ?? "Create failed");
+      })
+      .catch((error) => {
+        setOpError(error instanceof Error ? error.message : "Create failed");
+      })
+      .finally(() => setNewItemDialog(null));
   }
 
   function handleRenameStart(node: FsArborNode) {
+    setRenaming(false);
     setRenameValue(node.name);
     setRename({ path: node.id, currentName: node.name });
   }
 
-  function handleRenameSubmit() {
+  function handleRenameCancel() {
+    if (renaming) return;
+    const renamePath = rename?.path;
+    setRename(null);
+    if (renamePath) treeRef.current?.focus(renamePath);
+  }
+
+  async function handleRenameSubmit() {
+    if (renaming) return;
     if (!rename || !renameValue.trim() || renameValue === rename.currentName) {
-      setRename(null);
+      handleRenameCancel();
       return;
     }
     const newPath = parentDir(rename.path)
       ? `${parentDir(rename.path)}/${renameValue.trim()}`
       : renameValue.trim();
-    void ops.rename(rename.path, newPath).then((r) => {
-      if (!r.ok) setOpError(r.error ?? "Rename failed");
-    });
-    setRename(null);
+    setRenaming(true);
+    try {
+      const result = await ops.rename(rename.path, newPath);
+      if (!result.ok) setOpError(result.error ?? "Rename failed");
+    } catch (error) {
+      setOpError(error instanceof Error ? error.message : "Rename failed");
+    } finally {
+      setRenaming(false);
+      setRename(null);
+    }
   }
 
-  function handleDeleteStart(node: FsArborNode) {
+  function getContextNodes(node: NodeApi<FsArborNode>): FsArborNode[] {
+    const selectedNodes = (
+      treeRef.current as
+        | (TreeApi<FsArborNode> & { selectedNodes?: NodeApi<FsArborNode>[] })
+        | undefined
+    )?.selectedNodes;
+    const nodes = selectedNodes?.some((selected) => selected.id === node.id)
+      ? selectedNodes.map((selected) => selected.data)
+      : [node.data];
+    return normalizeOperationNodes(nodes);
+  }
+
+  function handleDeleteStart(nodes: FsArborNode[]) {
     setDeleteState({
-      path: node.id,
-      isDir: node.kind === "dir",
+      nodes,
       loading: false,
     });
   }
 
   function handleDeleteConfirm() {
-    if (!deleteState) return;
+    if (!deleteState || deleteState.loading) return;
     setDeleteState((s) => (s ? { ...s, loading: true } : null));
-    void ops.deleteEntry(deleteState.path).then((r) => {
-      if (!r.ok) setOpError(r.error ?? "Delete failed");
-      setDeleteState(null);
-    });
+    void (async () => {
+      const failures: string[] = [];
+      try {
+        for (const node of deleteState.nodes) {
+          try {
+            const result = await ops.deleteEntry(node.id);
+            if (!result.ok)
+              failures.push(`${node.name}: ${result.error ?? "Delete failed"}`);
+          } catch (error) {
+            failures.push(
+              `${node.name}: ${error instanceof Error ? error.message : "Delete failed"}`,
+            );
+          }
+        }
+      } finally {
+        if (failures.length > 0) setOpError(failures.join("; "));
+        setDeleteState(null);
+      }
+    })();
+  }
+
+  function handleDeleteCancel() {
+    if (!deleteState?.loading) setDeleteState(null);
   }
 
   function handleDownload(node: FsArborNode) {
@@ -494,20 +546,29 @@ export function FileTree({
     parentId: string | null;
     parentNode: NodeApi<FsArborNode> | null;
   }) {
-    const srcPath = dragIds[0];
-    if (!srcPath) return;
-    const name = srcPath.split("/").pop()!;
-
     // Drop on file → use its parent dir as target
     let destDir = parentId ?? "";
     if (parentNode && parentNode.data.kind !== "dir") {
       destDir = parentDir(parentNode.data.id);
     }
 
-    const newPath = destDir ? `${destDir}/${name}` : name;
-    if (srcPath === newPath) return;
-    const result = await ops.move(srcPath, newPath);
-    if (!result.ok) setOpError(result.error ?? "Move failed");
+    const sourcePaths = normalizeOperationPaths(dragIds);
+    const failures: string[] = [];
+    for (const srcPath of sourcePaths) {
+      const name = srcPath.split("/").pop()!;
+      const newPath = destDir ? `${destDir}/${name}` : name;
+      if (srcPath === newPath) continue;
+      try {
+        const result = await ops.move(srcPath, newPath);
+        if (!result.ok)
+          failures.push(`${name}: ${result.error ?? "Move failed"}`);
+      } catch (error) {
+        failures.push(
+          `${name}: ${error instanceof Error ? error.message : "Move failed"}`,
+        );
+      }
+    }
+    if (failures.length > 0) setOpError(failures.join("; "));
   }
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -560,8 +621,32 @@ export function FileTree({
           </div>
           <div className="flex items-center gap-0.5 shrink-0">
             <button
+              type="button"
+              onClick={() =>
+                setNewItemDialog({ open: true, type: "file", parentPath: "" })
+              }
+              title="New File in project root"
+              aria-label="New File in project root"
+              className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]"
+            >
+              <FilePlus className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setNewItemDialog({ open: true, type: "folder", parentPath: "" })
+              }
+              title="New Folder in project root"
+              aria-label="New Folder in project root"
+              className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]"
+            >
+              <FolderPlus className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
               onClick={() => void refetch()}
               title="Refresh file tree"
+              aria-label="Refresh file tree"
               disabled={isFetching}
               className="shrink-0 p-1 rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
             >
@@ -570,6 +655,7 @@ export function FileTree({
               />
             </button>
             <button
+              type="button"
               onClick={() => saveDebounced({ explorerShowHidden: !showHidden })}
               title={showHidden ? "Hide dotfiles" : "Show dotfiles"}
               className={cn(
@@ -656,7 +742,9 @@ export function FileTree({
                   onNewFile={() => handleNewFile(props.node.data)}
                   onNewFolder={() => handleNewFolder(props.node.data)}
                   onRename={() => handleRenameStart(props.node.data)}
-                  onDelete={() => handleDeleteStart(props.node.data)}
+                  onDelete={() =>
+                    handleDeleteStart(getContextNodes(props.node))
+                  }
                   onDownload={() => handleDownload(props.node.data)}
                   onUpload={() => handleUploadHere(props.node.data)}
                 >
@@ -684,23 +772,6 @@ export function FileTree({
             </Tree>
           )}
         </div>
-
-        {/* Inline rename input */}
-        {rename && (
-          <div className="absolute inset-x-0 top-14 z-30 px-2">
-            <input
-              autoFocus
-              className="w-full text-xs px-2 py-1 rounded border border-[var(--color-primary)] bg-[var(--color-surface)] text-[var(--color-text)] outline-none"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleRenameSubmit();
-                if (e.key === "Escape") setRename(null);
-              }}
-              onBlur={handleRenameSubmit}
-            />
-          </div>
-        )}
 
         {/* Op error toast */}
         {opError && (
@@ -730,11 +801,13 @@ export function FileTree({
         {/* Delete confirm dialog */}
         <ConfirmDeleteDialog
           open={!!deleteState}
-          path={deleteState?.path ?? ""}
-          isDir={deleteState?.isDir ?? false}
+          paths={deleteState?.nodes.map((node) => node.id) ?? []}
+          hasDirectory={
+            deleteState?.nodes.some((node) => node.kind === "dir") ?? false
+          }
           loading={deleteState?.loading ?? false}
           onConfirm={handleDeleteConfirm}
-          onCancel={() => setDeleteState(null)}
+          onCancel={handleDeleteCancel}
         />
 
         {/* New file/folder dialog */}
@@ -743,6 +816,15 @@ export function FileTree({
           type={newItemDialog?.type ?? "file"}
           onConfirm={handleNewItemConfirm}
           onCancel={() => setNewItemDialog(null)}
+        />
+
+        <RenameItemDialog
+          open={!!rename}
+          value={renameValue}
+          onValueChange={setRenameValue}
+          onConfirm={handleRenameSubmit}
+          onCancel={handleRenameCancel}
+          pending={renaming}
         />
 
         {/* Progress done — clear after a moment */}
@@ -775,6 +857,28 @@ function parentDir(nodePath: string): string {
   const parts = nodePath.split("/");
   parts.pop();
   return parts.join("/");
+}
+
+/** Keep a bulk operation from acting on a selected child after its ancestor. */
+function normalizeOperationPaths(paths: string[]): string[] {
+  return [...new Set(paths)]
+    .sort((left, right) => left.localeCompare(right))
+    .filter(
+      (path, _index, all) =>
+        !all.some(
+          (candidate) => candidate !== path && path.startsWith(`${candidate}/`),
+        ),
+    );
+}
+
+function normalizeOperationNodes(nodes: FsArborNode[]): FsArborNode[] {
+  const byPath = new Map(nodes.map((node) => [node.id, node]));
+  return normalizeOperationPaths(nodes.map((node) => node.id)).flatMap(
+    (path) => {
+      const node = byPath.get(path);
+      return node ? [node] : [];
+    },
+  );
 }
 
 /** Walk the tree and collect IDs of dirs that were expanded but now have unloaded children. */
