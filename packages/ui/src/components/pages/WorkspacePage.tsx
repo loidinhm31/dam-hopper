@@ -69,6 +69,7 @@ import {
   saveTerminalUsageMode,
   type TerminalUsageMode,
 } from "@/lib/terminal-usage-mode.js";
+import { shouldRenderEmptyTerminalBrowserSurface } from "@/lib/terminal-browser-surface.js";
 import {
   loadTerminalFilePanelOpen,
   saveTerminalFilePanelOpen,
@@ -1368,6 +1369,15 @@ export default function WorkspacePage() {
                 onCloseBrowser={closeEmbeddedBrowser}
               />
             </Suspense>
+          ) : shouldRenderEmptyTerminalBrowserSurface({
+              terminalUsageMode,
+              mountedSessionCount: mountedSessions.length,
+              browserOpen,
+              isCompactWorkspace,
+            }) ? (
+            <div className="h-full min-h-0">
+              {renderBrowserContent(closeEmbeddedBrowser, "active")}
+            </div>
           ) : projects.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full gap-4 text-[var(--color-text-muted)]">
               <TerminalIcon className="h-12 w-12 opacity-20" />

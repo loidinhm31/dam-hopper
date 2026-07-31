@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DamHopper Browser Debug smoke fixture</title>
+  </head>
+  <body>
+    <main>
+      <h1 data-testid="fixture-heading">Browser Debug smoke fixture</h1>
+      <p data-testid="fixture-text">
+        This page contains deterministic controls for the native WebView gate.
+      </p>
+      <button id="console-button" type="button">Emit console event</button>
+      <button id="popup-button" type="button">Attempt popup</button>
+      <a
+        id="download-link"
+        download="browser-debug-fixture.txt"
+        href="data:text/plain,denied-download"
+        >Download</a
+      >
+      <a
+        id="redirect-link"
+        href="https://example.invalid/browser-debug-redirect"
+        >Redirect</a
+      >
+      <iframe
+        title="Same-origin smoke frame"
+        srcdoc="<!doctype html><button data-testid='frame-button'>Frame action</button>"
+      ></iframe>
+    </main>
+    <script>
+      document
+        .querySelector("#console-button")
+        .addEventListener("click", () => {
+          console.info("browser-debug fixture console event");
+        });
+      document.querySelector("#popup-button").addEventListener("click", () => {
+        window.open(
+          "https://example.invalid/browser-debug-popup",
+          "fixture-popup",
+        );
+      });
+    </script>
+  </body>
+</html>
