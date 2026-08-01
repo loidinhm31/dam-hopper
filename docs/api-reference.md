@@ -282,6 +282,11 @@ hour buckets or five years for day buckets. Detail queries cannot precede the co
 detail-retention boundary unless they are UTC-day aligned, unfiltered day queries; the
 response identifies the requested range and whether coverage is detail-only.
 
+The optional `model` filter accepts the bounded provider/model identifier used by telemetry:
+1–64 safe ASCII characters, starting and ending alphanumeric, with `.`, `_`, `-`, `/`, and `:`
+allowed (for example `gpt-5.6-sol` or `provider/model:v2`). URL-like forms and repeated
+separators are rejected.
+
 ### GET /api/usage/health
 
 Returns availability, paused state, writer error count, rejected event count, and the
@@ -305,6 +310,14 @@ transition; a PTY keeps the capture snapshot selected when it started. Collector
 restart the loopback listener without a DamHopper server restart. Managing Codex config does not
 restart the Codex process; restart it separately. If runtime application or the subsequent config
 write fails, the previous live state and managed Codex file are restored and the update is rejected.
+
+Terminal correlation is independently opt-in through `terminalCorrelationEnabled` (TOML:
+`terminal_correlation_enabled`) and activates only when telemetry and the collector are active. If
+the request or inherited server environment defines `OTEL_RESOURCE_ATTRIBUTES`, DamHopper preserves
+that value, skips correlation for the PTY, and increments the `correlationEnvConflicts` health
+counter. Markers are redacted from scrollback, diagnostics, and browser events. Automatic PTY
+restarts receive a fresh marker/run association; the old in-memory association remains valid for a
+bounded 24 hours after normal exit for delayed OTLP delivery and reconnect replay, then expires.
 
 ### GET/PATCH /api/usage/setup
 

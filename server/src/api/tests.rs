@@ -443,6 +443,7 @@ async fn diagnostics_export_includes_live_terminal_tail() {
             cwd: tmp.path().display().to_string(),
             env: std::collections::HashMap::new(),
             runtime_otlp_run_marker: None,
+            runtime_codex_correlation: None,
             cols: 80,
             rows: 24,
             project: Some("demo".to_string()),
@@ -530,6 +531,7 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
                 cwd: tmp.path().display().to_string(),
                 env: std::collections::HashMap::new(),
                 runtime_otlp_run_marker: None,
+                runtime_codex_correlation: None,
                 cols: 80,
                 rows: 24,
                 project: Some("demo".to_string()),
@@ -1673,6 +1675,35 @@ async fn usage_settings_apply_pause_atomically_and_delete_requires_confirmation(
 }
 
 #[tokio::test]
+async fn usage_settings_persist_terminal_correlation_opt_in() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let updated = patch_json(
+        state.clone(),
+        "/api/usage/settings",
+        serde_json::json!({"terminalCorrelationEnabled": true}),
+    )
+    .await;
+    assert_eq!(updated.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(updated.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["terminalCorrelationEnabled"], true);
+    assert!(state
+        .config
+        .read()
+        .await
+        .server
+        .telemetry
+        .terminal_correlation_enabled);
+    assert!(std::fs::read_to_string(tmp.path().join("dam-hopper.toml"))
+        .unwrap()
+        .contains("terminal_correlation_enabled = true"));
+}
+
+#[tokio::test]
 async fn usage_setup_status_is_opaque_to_the_browser() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
@@ -2187,6 +2218,51 @@ async fn terminal_create_returns_meta_and_appears_in_list() {
         .unwrap();
     let list: Vec<serde_json::Value> = serde_json::from_slice(&list_raw).unwrap();
     assert!(list.iter().any(|s| s["id"] == "test-echo-session"));
+}
+
+#[tokio::test]
+async fn terminal_create_preserves_otel_conflict_and_reports_health() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    activate_telemetry(&state, &tmp);
+    {
+        let mut config = state.config.write().await;
+        config.server.telemetry.terminal_correlation_enabled = true;
+        config.server.telemetry.collector.enabled = true;
+    }
+    let response = post_json(
+        state.clone(),
+        "/api/terminal",
+        serde_json::json!({
+            "id": "terminal:otel-conflict",
+            "command": "cat",
+            "cwd": tmp.path().to_str().unwrap(),
+            "env": {"OTEL_RESOURCE_ATTRIBUTES": "user.attribute=preserved"}
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let store = state.telemetry.read().unwrap().store.clone().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline
+        && crate::telemetry::queries::health_value(&store, "codex_correlation_env_conflicts")
+            .unwrap()
+            == 0
+    {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        crate::telemetry::queries::health_value(&store, "codex_correlation_env_conflicts")
+            .unwrap(),
+        1
+    );
+    let health = get(state.clone(), "/api/usage/health").await;
+    let body = axum::body::to_bytes(health.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["correlationEnvConflicts"], 1);
+    state.pty_manager.remove("terminal:otel-conflict").unwrap();
 }
 
 #[tokio::test]

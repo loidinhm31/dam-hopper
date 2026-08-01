@@ -365,6 +365,7 @@ enabling the collector does not change the loopback-only network boundary.
 ```toml
 [server.telemetry]
 enabled = false
+terminal_correlation_enabled = false
 db_path = "~/.config/dam-hopper/telemetry.db"
 detail_retention_days = 90
 # aggregate_retention_days = 365
@@ -379,6 +380,7 @@ port = 4811
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `enabled` | bool | `false` | Master switch for telemetry collection and persistence |
+| `terminal_correlation_enabled` | bool | `false` | Separately opts terminal shells into ephemeral Codex ownership correlation; requires telemetry and the collector |
 | `db_path` | string | `~/.config/dam-hopper/telemetry.db` | SQLite telemetry database path |
 | `detail_retention_days` | u16 | `90` | Detailed-event retention, from 1 to 3650 days |
 | `aggregate_retention_days` | u32 or omitted | omitted | Optional aggregate retention; when set, must be positive |
@@ -393,6 +395,18 @@ separate from session persistence. When enabled, startup creates/opens it and st
 worker; initialization failures disable analytics only. SQLite and WAL/SHM files are restricted
 to owner access on Unix. Telemetry stores bounded, privacy-filtered metadata rather than command
 text, prompts, responses, or tool output; see the [telemetry architecture notes](./system-architecture.md#terminal-usage-analytics).
+
+Terminal correlation injects a short-lived opaque resource marker into a clean shell environment,
+so aliases and wrapper processes inherit it without command inspection. If either the server or
+requested terminal environment already defines `OTEL_RESOURCE_ATTRIBUTES`, DamHopper preserves the
+user value unchanged, skips correlation for that PTY, and increments the
+`correlationEnvConflicts` health counter. Marker values are redacted before terminal output reaches
+scrollback persistence, diagnostics, or browser events. Every automatic PTY restart gets a new
+marker/run association. The in-memory association intentionally remains valid for its bounded
+24-hour TTL after normal terminal exit so delayed OTLP delivery and reconnect replay can still join;
+expired or unknown markers are unattributed. Malformed or overlong terminal control strings are
+bounded and preserved as opaque control payloads; marker matching fails closed without dropping
+ordinary output.
 
 Daily aggregates are retained indefinitely when `aggregate_retention_days` is omitted. Set it to
 a positive value to purge older UTC rollups. The Usage page can delete all data or a selected

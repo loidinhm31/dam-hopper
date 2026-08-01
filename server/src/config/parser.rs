@@ -337,6 +337,10 @@ fn server_to_toml(server: &super::schema::ServerConfig) -> toml::Value {
                 ),
             );
         }
+        table.insert(
+            "terminal_correlation_enabled".to_string(),
+            Value::Boolean(telemetry.terminal_correlation_enabled),
+        );
         let mut collector = toml::map::Map::new();
         collector.insert(
             "enabled".to_string(),

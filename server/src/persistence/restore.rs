@@ -72,6 +72,7 @@ pub async fn restore_sessions(
             cwd: session.meta.cwd.clone(),
             env: session.env,
             runtime_otlp_run_marker: None,
+            runtime_codex_correlation: None,
             cols: session.cols,
             rows: session.rows,
             project: session.meta.project.clone(),
