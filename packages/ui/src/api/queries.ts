@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "./client.js";
+import { api, isGitUnavailableError } from "./client.js";
 import { getTransport } from "./transport.js";
 import { useEditorStore } from "@/stores/editor.js";
 import type {
@@ -10,7 +10,7 @@ import type {
   DistributionMethod,
   CheckoutStrategy,
   DiffFileEntry,
-  DiffResponse,
+  GitDiffResult,
   FileDiffContent,
   ConflictFile,
   ResetMode,
@@ -342,9 +342,24 @@ export function useUpdateProject() {
 
 export function useGitDiff(project: string, root?: string) {
   const rootKey = gitRootKey(root);
-  return useQuery<DiffResponse>({
+  return useQuery<GitDiffResult>({
     queryKey: ["git-diff", project, rootKey],
-    queryFn: () => api.git.diff(project, root),
+    queryFn: async () => {
+      try {
+        return { ...(await api.git.diff(project, root)), gitAvailable: true };
+      } catch (error) {
+        if (isGitUnavailableError(error)) {
+          return {
+            gitAvailable: false,
+            code: "GIT_NOT_INITIALIZED",
+            entries: [],
+            untrackedTruncated: false,
+            untrackedTotal: 0,
+          };
+        }
+        throw error;
+      }
+    },
     enabled: !!project,
     staleTime: 0,
   });

@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::git;
 use crate::git::{
-    discover_vcs_roots, resolve_git_path_root, resolve_git_request_root, staged_vcs_root_ids,
+    discover_available_vcs_roots, resolve_git_path_root, resolve_git_request_root,
+    staged_vcs_root_ids,
 };
 use crate::state::AppState;
 
@@ -32,7 +33,8 @@ pub async fn list_diff(
         .map_err(ApiError::from_app)?;
     let resp = tokio::task::spawn_blocking(move || {
         if q.root.as_deref() == Some("*") {
-            aggregate_diff(&path)
+            let roots = discover_available_vcs_roots(&path)?;
+            aggregate_diff(&path, roots)
         } else {
             let root = resolve_git_request_root(&path, q.root.as_deref())?;
             let mut resp = git::get_diff_files(&root.root_path)?;
@@ -394,8 +396,8 @@ pub async fn get_commit_file_diff(
 
 fn aggregate_diff(
     project_path: &std::path::Path,
+    roots: Vec<git::VcsRoot>,
 ) -> Result<git::DiffResponse, crate::error::AppError> {
-    let roots = discover_vcs_roots(project_path)?;
     let mut aggregate = git::DiffResponse {
         entries: Vec::new(),
         untracked_truncated: false,

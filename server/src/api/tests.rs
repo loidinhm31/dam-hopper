@@ -2552,6 +2552,70 @@ async fn git_roots_returns_primary_root_for_valid_project() {
 }
 
 #[tokio::test]
+async fn git_roots_returns_typed_unavailable_for_plain_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let resp = get(state, "/api/git/test-project/roots").await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "GIT_NOT_INITIALIZED");
+    assert_eq!(json["error"], "Git is not initialized for this project");
+}
+
+#[tokio::test]
+async fn git_branches_returns_typed_unavailable_for_plain_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let resp = get(state, "/api/git/test-project/branches").await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "GIT_NOT_INITIALIZED");
+}
+
+#[tokio::test]
+async fn git_diff_returns_typed_unavailable_for_plain_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let resp = get(state, "/api/git/test-project/diff?root=*").await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "GIT_NOT_INITIALIZED");
+}
+
+#[tokio::test]
+async fn git_roots_accepts_nested_repository_in_plain_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    let nested = tmp.path().join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    init_git_repo(&nested);
+    let state = make_state_with_project(&tmp);
+
+    let resp = get(state.clone(), "/api/git/test-project/roots").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let roots: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(roots.as_array().unwrap().len(), 1);
+    assert_eq!(roots[0]["rootId"], "nested");
+
+    let branches = get(state, "/api/git/test-project/branches?root=nested").await;
+    assert_eq!(branches.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn git_branches_unknown_project_returns_404() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp); // no projects
