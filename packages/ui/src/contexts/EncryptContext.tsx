@@ -96,26 +96,22 @@ export function EncryptProvider({ children }: { children: ReactNode }) {
 
   const isEncryptEnabled = useCallback((project: string) => {
     return getState(project).enabled;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const getPassphrase = useCallback((project: string) => {
     return getState(project).passphrase;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const setPassphrase = useCallback((project: string, passphrase: string) => {
     const s = getState(project);
     s.passphrase = passphrase;
     forceUpdate((n) => n + 1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const clearPassphrase = useCallback((project: string) => {
     const s = getState(project);
     s.passphrase = null;
     forceUpdate((n) => n + 1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const setEncryptEnabled = useCallback((project: string, enabled: boolean) => {
@@ -126,7 +122,6 @@ export function EncryptProvider({ children }: { children: ReactNode }) {
       sessionRef.current.delete(project); // evict OPAQUE session atomically with passphrase
     }
     forceUpdate((n) => n + 1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const getSession = useCallback(

@@ -555,19 +555,23 @@ export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
   // Track whether draft has been modified from the current prop
   const isDirtyRef = useRef(false);
   const isDirty = JSON.stringify(draft) !== JSON.stringify(config);
+
+  useEffect(() => {
   isDirtyRef.current = isDirty;
+  }, [isDirty]);
 
   // C1: Detect external config changes while editor is open
   useEffect(() => {
+    queueMicrotask(() => {
     if (!isDirtyRef.current) {
-      // No unsaved changes — silently update draft to match new config
+        // No unsaved changes — silently update draft to match new config.
       setDraft(structuredClone(config));
       setExternalChange(false);
     } else {
-      // Has unsaved changes — warn user
+        // Has unsaved changes — warn user.
       setExternalChange(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    });
   }, [config]);
 
   function validate(): boolean {

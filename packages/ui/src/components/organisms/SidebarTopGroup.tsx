@@ -1,6 +1,5 @@
 import type { ToolWindowDef } from "@/types/ide.js";
 import { ToolPanel } from "./ToolPanel.js";
-import { cn } from "@/lib/utils.js";
 
 interface SidebarTopGroupProps {
   tool: ToolWindowDef;

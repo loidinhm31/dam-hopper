@@ -189,7 +189,21 @@ fn apply_migrations(connection: &Connection) -> Result<(), rusqlite::Error> {
         transaction.commit()?;
         version = 4;
     }
-    if version != 4 {
+    if version == 4 {
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(include_str!("migrations/005_agent_tree_frontier.sql"))?;
+        transaction.pragma_update(None, "user_version", 5_i64)?;
+        transaction.commit()?;
+        version = 5;
+    }
+    if version == 5 {
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(include_str!("migrations/006_agent_detail_aggregates.sql"))?;
+        transaction.pragma_update(None, "user_version", 6_i64)?;
+        transaction.commit()?;
+        version = 6;
+    }
+    if version != 6 {
         return Err(rusqlite::Error::InvalidQuery);
     }
     Ok(())
@@ -773,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn upgrades_v1_schema_once_and_reopens_at_v4() {
+    fn upgrades_v1_schema_once_and_reopens_at_v6() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("telemetry.db");
         let connection = Connection::open(&path).unwrap();
@@ -793,7 +807,7 @@ mod tests {
                 .unwrap()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            4
+            6
         );
         drop(store);
         let reopened = TelemetryStore::open(&path).unwrap();
@@ -806,6 +820,15 @@ mod tests {
             .is_ok());
         assert!(connection
             .prepare("SELECT terminal_fingerprint FROM terminal_runs")
+            .is_ok());
+        assert!(connection
+            .prepare("SELECT run_id FROM agent_runs INDEXED BY idx_agent_runs_root_parent_started")
+            .is_ok());
+        assert!(connection
+            .prepare("SELECT run_id FROM agent_runs INDEXED BY idx_agent_runs_root_aggregate")
+            .is_ok());
+        assert!(connection
+            .prepare("SELECT run_id FROM agent_run_terminals INDEXED BY idx_agent_run_terminals_run_bounds")
             .is_ok());
     }
 
@@ -1386,6 +1409,7 @@ mod tests {
             durations.push(started.elapsed());
         }
         durations.sort_unstable();
+        eprintln!("100k aggregate p95: {:?}", durations[4]);
         assert!(
             durations[4] < Duration::from_millis(200),
             "100k aggregate query p95 took {:?}; durations: {durations:?}",
@@ -1439,6 +1463,7 @@ mod tests {
             durations.push(started.elapsed());
         }
         durations.sort_unstable();
+        eprintln!("100k summary-list p95: {:?}", durations[4]);
         assert!(
             durations[4] < Duration::from_millis(200),
             "100k summary list p95 took {:?}; durations: {durations:?}",

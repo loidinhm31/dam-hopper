@@ -1857,7 +1857,7 @@ async fn usage_session_cursor_bounds_and_ids_are_strict() {
 }
 
 #[tokio::test]
-async fn usage_session_tree_caps_wide_frontier_work() {
+async fn usage_session_tree_detail_stays_under_200ms_for_100k_legacy_nodes() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
     activate_telemetry(&state, &tmp);
@@ -1875,15 +1875,18 @@ async fn usage_session_tree_caps_wide_frontier_work() {
     let transaction = connection.transaction().unwrap();
     transaction
         .execute(
-            "INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, ?1, NULL, 'codex', 'root', 'gpt-5.6-sol', '0.146.0', ?2, ?2, 'completed', 'exact', 'exact', 'exact', 'cumulative', ?2, 1, 1, 1, 1, ?2)",
+            "INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, ?1, NULL, 'codex', 'root', 'gpt-5.6-sol', '0.146.0', ?2, ?2, 'completed', 'exact', 'lineage_unavailable', 'exact', 'cumulative', ?2, 1, 1, 1, 1, ?2)",
             rusqlite::params![root_id, timestamp],
         )
         .unwrap();
     {
         let mut insert = transaction
-            .prepare("INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, ?2, ?2, 'codex', 'subagent', 'gpt-5.6-terra', '0.146.0', ?3, ?3, 'completed', 'exact', 'exact', 'exact', 'cumulative', ?3, 1, 1, 1, 1, ?3)")
+            .prepare("INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, ?2, ?2, 'codex', 'subagent', 'gpt-5.6-terra', '0.146.0', ?3, ?3, 'completed', 'exact', 'lineage_unavailable', 'exact', 'cumulative', ?3, 1, 1, 1, 1, ?3)")
             .unwrap();
-        for index in 1..=10_000_u64 {
+        // Production OTel summaries are flat. These deliberately legacy-shaped
+        // rows prove the disabled tree-detail endpoint stays bounded if older
+        // data or malformed SQLite rows contain a wide hierarchy.
+        for index in 1..=100_000_u64 {
             insert
                 .execute(rusqlite::params![
                     format!("d{index:063x}"),
@@ -1895,16 +1898,55 @@ async fn usage_session_tree_caps_wide_frontier_work() {
     }
     transaction.commit().unwrap();
 
-    let root_digest = root_id.try_into().unwrap();
-    let started = Instant::now();
-    let tree = crate::telemetry::queries::agent_run_tree(&store, &root_digest, 16, 256).unwrap();
+    let plan = connection
+        .prepare(
+            "EXPLAIN QUERY PLAN SELECT run_id FROM agent_runs WHERE root_run_id = ?1 AND parent_run_id = ?2 ORDER BY started_at_utc_ms, run_id LIMIT 257",
+        )
+        .unwrap()
+        .query_map(rusqlite::params![root_id, root_id], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .join(" ");
     assert!(
-        started.elapsed() < Duration::from_millis(200),
-        "wide tree traversal exceeded its work budget"
+        plan.contains("idx_agent_runs_root_parent_started"),
+        "query plan: {plan}"
     );
-    assert_eq!(tree.len(), 257, "one extra row probes truncation");
-    assert_eq!(tree[0].depth, 0);
-    assert!(tree[1..].iter().all(|node| node.depth == 1));
+
+    let root_digest: crate::telemetry::privacy::HmacDigest = root_id.try_into().unwrap();
+    let request = format!("/api/usage/sessions/{}", String::from(root_digest.clone()));
+    const SAMPLE_COUNT: usize = 20;
+    let mut durations = Vec::with_capacity(SAMPLE_COUNT);
+    let mut response_body = None;
+    for _ in 0..SAMPLE_COUNT {
+    let started = Instant::now();
+        let response = get(state.clone(), &request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        response_body = Some(
+            axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        );
+        durations.push(started.elapsed());
+    }
+    durations.sort_unstable();
+    // Twenty samples make the reported p95 a percentile rather than the
+    // single slowest request, which is vulnerable to unrelated suite load.
+    let p95_index = (SAMPLE_COUNT * 95).div_ceil(100) - 1;
+    eprintln!(
+        "100k legacy tree-detail API p95: {:?}",
+        durations[p95_index]
+    );
+    assert!(
+        durations[p95_index] < Duration::from_millis(200),
+        "100k legacy tree-detail API p95 exceeded its work budget: {durations:?}"
+    );
+    let response: serde_json::Value = serde_json::from_slice(&response_body.unwrap()).unwrap();
+    let nodes = response["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 256, "detail response applies its node cap");
+    assert_eq!(nodes[0]["depth"], 0);
+    assert!(nodes[1..].iter().all(|node| node["depth"] == 1));
+    assert_eq!(response["truncated"], true);
 }
 
 #[tokio::test]
@@ -2026,21 +2068,24 @@ async fn usage_session_api_lists_100k_roots_under_200ms() {
     }
     transaction.commit().unwrap();
 
-    let started = std::time::Instant::now();
-    let response = get(
-        state,
-        &format!(
+    let request = format!(
             "/api/usage/sessions?from={}&to={}&limit=100",
             timestamp - 1,
             timestamp + 1
-        ),
-    )
-    .await;
-    let elapsed = started.elapsed();
+    );
+    let mut durations = Vec::new();
+    for _ in 0..5 {
+        let started = std::time::Instant::now();
+        let response = get(state.clone(), &request).await;
     assert_eq!(response.status(), StatusCode::OK);
+        durations.push(started.elapsed());
+    }
+    durations.sort_unstable();
+    eprintln!("100k root-list API p95: {:?}", durations[4]);
     assert!(
-        elapsed < Duration::from_millis(200),
-        "100k-root API page took {elapsed:?}"
+        durations[4] < Duration::from_millis(200),
+        "100k root-list API p95 took {:?}; durations: {durations:?}",
+        durations[4]
     );
 }
 
