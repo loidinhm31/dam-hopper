@@ -227,7 +227,10 @@ impl CodexCorrelationRegistry {
             .lock()
             .expect("codex correlation lock poisoned");
         markers.retain(|_, entry| entry.expires_at_utc_ms > now_utc_ms);
-        markers.values().map(|entry| entry.terminal_run_id).collect()
+        markers
+            .values()
+            .map(|entry| entry.terminal_run_id)
+            .collect()
     }
 }
 
@@ -253,6 +256,30 @@ pub enum CommandOutcome {
 pub enum TokenCounterSemantic {
     Delta,
     Cumulative,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentLineageQuality {
+    Exact,
+    Partial,
+    LineageUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTokenQuality {
+    Exact,
+    Partial,
+    TokenDataUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRole {
+    Root,
+    Main,
+    Subagent,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -304,9 +331,9 @@ pub struct AgentUsageEvent {
     pub id: HmacDigest,
     pub occurred_at_utc_ms: i64,
     pub conversation_fingerprint: Option<HmacDigest>,
-    /// Resolved only from an active, process-local opaque marker. Phase 04
-    /// decides how compact session summaries persist this association.
-    pub terminal_run_id: Option<TerminalRunId>,
+    /// HMAC of the resolved process-local terminal identity. Neither the raw
+    /// marker nor the terminal run UUID may cross this normalized boundary.
+    pub terminal_fingerprint: Option<HmacDigest>,
     pub model: Option<CodexModel>,
     pub source_version: CodexVersion,
     pub correlation_quality: CorrelationQuality,
@@ -315,6 +342,30 @@ pub struct AgentUsageEvent {
     pub cached_input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRunSummary {
+    pub run_id: HmacDigest,
+    pub root_run_id: HmacDigest,
+    pub parent_run_id: Option<HmacDigest>,
+    pub provider: SafeIdentifier,
+    pub role: AgentRole,
+    pub model: Option<CodexModel>,
+    pub source_version: CodexVersion,
+    pub started_at_utc_ms: i64,
+    pub ended_at_utc_ms: Option<i64>,
+    pub status: SafeIdentifier,
+    pub correlation_quality: CorrelationQuality,
+    pub lineage_quality: AgentLineageQuality,
+    pub token_quality: AgentTokenQuality,
+    pub counter_semantic: TokenCounterSemantic,
+    pub input_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
+    pub terminal_association_count: u32,
+    pub updated_at_utc_ms: i64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

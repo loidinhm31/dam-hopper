@@ -327,14 +327,25 @@ status. `PATCH` accepts setup fields including `enabled`, `codexExporter`, and `
 It returns status only; bearer material is never returned. The Settings flow uses this route for
 live enable/disable, receiver retry, and explicit Codex exporter management.
 
+### Agent-run summaries (internal store contract)
+
+Accepted Codex OTel events maintain one permanent flat summary per HMAC run. Summaries contain safe
+provider/model/role/status, nullable token components, explicit `delta` or `cumulative` semantics,
+and `lineageQuality`/`tokenQuality`. Because the Phase 01 app-server gate failed, rows use
+`lineage_unavailable`; no hierarchy is inferred. Terminal associations are HMAC-only and may count
+multiple terminals without exposing raw identifiers. No public session-list route is exposed yet.
+
 ### DELETE /api/usage
 
 Destructive deletion requires the exact JSON confirmation string
 `"delete-usage-data"`. Omitting `from` and `to` deletes all detail, rollups, and health
 rows. To delete a range, provide both `from` and `to` as non-negative UTC milliseconds,
 strictly increasing and aligned to UTC-day boundaries; ranges are limited to five years.
-Capture is paused behind an ordered deletion barrier and resumes according to the saved
-pause setting. The UI must present an explicit confirmation before calling this route.
+Capture is paused behind an ordered deletion barrier. The service snapshots exact live admission and
+restores that state on success or any failure (including worker panic or key-rotation failure), not
+from persisted `paused` settings. Range deletion removes overlapping summaries and associations;
+all deletion also clears summaries, associations, detail, rollups, and health rows. The UI must
+present an explicit confirmation before calling this route.
 
 Full-delete HMAC-key rotation and its coordinated destructive workflow are part of the
 implementation. The key is rotated only after all usage rows are deleted; range deletion keeps

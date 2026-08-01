@@ -115,6 +115,7 @@ fn create_terminal(state: &AppState, root: &std::path::Path) {
             cwd: root.display().to_string(),
             env: Default::default(),
             runtime_otlp_run_marker: None,
+            runtime_codex_correlation: None,
             cols: 80,
             rows: 24,
             project: None,
