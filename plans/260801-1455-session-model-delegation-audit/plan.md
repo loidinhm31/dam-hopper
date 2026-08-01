@@ -32,7 +32,7 @@ Extend `/usage` with permanent, compact Codex session/node summaries. OTel owns 
 | 03 | [Metadata adapter and source join](./phase-03-metadata-adapter-and-source-join.md) | 01 pass, 02 | 16h | N/A (0.146.0 gate failed) |
 | 04 | [`agent_runs` summary persistence](./phase-04-agent-run-summary-persistence.md) | 02; 03 if enabled | 16h | **Completed (2026-08-01; flat OTel-only fallback)** |
 | 05 | [Protected session-audit API](./phase-05-protected-session-audit-api.md) | 04 | 10h | **Completed (2026-08-01; review cycle 3 approved)** |
-| 06 | [Shared Usage session-audit UI](./phase-06-shared-usage-session-audit-ui.md) | 05 | 14h | Pending |
+| 06 | [Shared Usage session-audit UI](./phase-06-shared-usage-session-audit-ui.md) | 05 | 14h | **Completed (2026-08-01; review approved 9.5/10)** |
 | 07 | [Release gates, tests, and docs](./phase-07-release-gates-tests-and-docs.md) | 01-06 | 14h | Pending |
 
 ## Hard gate and fallback

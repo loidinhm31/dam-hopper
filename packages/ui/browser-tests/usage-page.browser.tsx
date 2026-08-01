@@ -2,7 +2,11 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { UsageSettings, UsageSummary, UsageSummaryQuery } from "@/api/client.js";
+import type {
+  UsageSettings,
+  UsageSummary,
+  UsageSummaryQuery,
+} from "@/api/client.js";
 import { TopNavRouteMenu } from "@/components/organisms/TopNavRouteMenu.js";
 import { UsagePage } from "@/components/pages/UsagePage.js";
 import { UsageTrendChart } from "@/components/usage/UsageTrendChart.js";
@@ -24,6 +28,17 @@ vi.mock("@/api/queries.js", () => ({
     mutate: mocks.updateSettings,
   }),
   useUsageSettings: () => ({ data: settings }),
+  useUsageSession: () => ({ data: undefined, error: null, isLoading: false }),
+  useUsageSessions: () => ({
+    data: {
+      nextCursor: null,
+      paused: false,
+      range: { from: 0, to: 1 },
+      sessions: [],
+    },
+    error: null,
+    isLoading: false,
+  }),
   useUsageSummary: (query: UsageSummaryQuery) => {
     mocks.summaryCalls.push(query);
     return { data: summary, error: null, isLoading: false };
@@ -76,8 +91,16 @@ const emptyUsage = {
 const summary: UsageSummary = {
   categories: [{ name: "git", terminal: emptyUsage }],
   codex: null,
-  coverage: { captureQualityFilter: null, codexCorrelation: null, detailOnly: true },
-  detailMetrics: { durationP50Ms: 10, durationP95Ms: 20, repeatedCommandCount: 0 },
+  coverage: {
+    captureQualityFilter: null,
+    codexCorrelation: null,
+    detailOnly: true,
+  },
+  detailMetrics: {
+    durationP50Ms: 10,
+    durationP95Ms: 20,
+    repeatedCommandCount: 0,
+  },
   health: {
     available: true,
     collector: {
@@ -117,7 +140,9 @@ describe("usage page in Chromium", () => {
     mocks.deleteRange.mockReset();
     mocks.summaryCalls.length = 0;
     mocks.updateSettings.mockReset();
-    mocks.updateSettings.mockImplementation((_patch, callbacks) => callbacks?.onSuccess?.());
+    mocks.updateSettings.mockImplementation((_patch, callbacks) =>
+      callbacks?.onSuccess?.(),
+    );
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -141,20 +166,29 @@ describe("usage page in Chromium", () => {
   }
 
   function labeledControl(label: string) {
-    const labelElement = [...container.querySelectorAll("label")].find((element) =>
-      element.textContent?.includes(label),
+    const labelElement = [...container.querySelectorAll("label")].find(
+      (element) => element.textContent?.includes(label),
     );
     expect(labelElement).toBeTruthy();
-    const control = labelElement?.querySelector<HTMLInputElement | HTMLSelectElement>("input, select");
+    const control = labelElement?.querySelector<
+      HTMLInputElement | HTMLSelectElement
+    >("input, select");
     expect(control).toBeTruthy();
     return control!;
   }
 
   it("reloads the route with its URL filters intact", async () => {
-    const entry = "/usage?window=30d&bucket=day&project=api&shell=zsh&captureQuality=partial&category=git&agent=codex&model=gpt-5.6-sol";
+    const entry =
+      "/usage?window=30d&bucket=day&project=api&shell=zsh&captureQuality=partial&category=git&agent=codex&model=gpt-5.6-sol";
     await renderUsage(entry);
     expect(mocks.summaryCalls.at(-1)).toMatchObject({
-      agent: "codex", category: "git", captureQuality: "partial", model: "gpt-5.6-sol", project: "api", shell: "zsh", window: "30d",
+      agent: "codex",
+      category: "git",
+      captureQuality: "partial",
+      model: "gpt-5.6-sol",
+      project: "api",
+      shell: "zsh",
+      window: "30d",
     });
     expect(mocks.summaryCalls.at(-1)?.from).toBeUndefined();
     expect(mocks.summaryCalls.at(-1)?.to).toBeUndefined();
@@ -162,7 +196,11 @@ describe("usage page in Chromium", () => {
     await act(async () => root.unmount());
     root = createRoot(container);
     await renderUsage(entry);
-    expect(mocks.summaryCalls.at(-1)).toMatchObject({ project: "api", shell: "zsh", window: "30d" });
+    expect(mocks.summaryCalls.at(-1)).toMatchObject({
+      project: "api",
+      shell: "zsh",
+      window: "30d",
+    });
   });
 
   it("maps keyboard-accessible filter controls back to URL state", async () => {
@@ -174,7 +212,11 @@ describe("usage page in Chromium", () => {
       (windowSelect as HTMLSelectElement).value = "24h";
       windowSelect.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    await vi.waitFor(() => expect(container.querySelector("[data-testid='usage-location']")?.textContent).toContain("window=24h"));
+    await vi.waitFor(() =>
+      expect(
+        container.querySelector("[data-testid='usage-location']")?.textContent,
+      ).toContain("window=24h"),
+    );
 
     const shellSelect = labeledControl("Shell");
     shellSelect.focus();
@@ -183,7 +225,12 @@ describe("usage page in Chromium", () => {
       (shellSelect as HTMLSelectElement).value = "fish";
       shellSelect.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    await vi.waitFor(() => expect(mocks.summaryCalls.at(-1)).toMatchObject({ shell: "fish", window: "24h" }));
+    await vi.waitFor(() =>
+      expect(mocks.summaryCalls.at(-1)).toMatchObject({
+        shell: "fish",
+        window: "24h",
+      }),
+    );
   });
 
   it("clears custom bounds when a preset window is selected", async () => {
@@ -194,7 +241,9 @@ describe("usage page in Chromium", () => {
       windowSelect.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await vi.waitFor(() => {
-      const search = container.querySelector("[data-testid='usage-location']")?.textContent;
+      const search = container.querySelector(
+        "[data-testid='usage-location']",
+      )?.textContent;
       expect(search).toContain("window=24h");
       expect(search).not.toContain("from=");
       expect(search).not.toContain("to=");
@@ -208,12 +257,14 @@ describe("usage page in Chromium", () => {
       shellSelect.value = "fish";
       shellSelect.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    await vi.waitFor(() => expect(mocks.summaryCalls.at(-1)).toMatchObject({
-      from: 1_782_864_000_000,
-      shell: "fish",
-      to: 1_783_036_800_000,
-      window: undefined,
-    }));
+    await vi.waitFor(() =>
+      expect(mocks.summaryCalls.at(-1)).toMatchObject({
+        from: 1_782_864_000_000,
+        shell: "fish",
+        to: 1_783_036_800_000,
+        window: undefined,
+      }),
+    );
   });
 
   it("uses UTC date-only bounds after destructive-delete confirmation", async () => {
@@ -232,22 +283,40 @@ describe("usage page in Chromium", () => {
       setDateValue?.call(to, "2026-07-03");
       to.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    const apply = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Apply custom range"));
+    const apply = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent?.includes("Apply custom range"));
     await act(async () => apply?.click());
-    await vi.waitFor(() => expect(mocks.summaryCalls.at(-1)).toMatchObject({ from: Date.UTC(2026, 6, 1), to: Date.UTC(2026, 6, 3) }));
-    const deleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Delete selected range"));
+    await vi.waitFor(() =>
+      expect(mocks.summaryCalls.at(-1)).toMatchObject({
+        from: Date.UTC(2026, 6, 1),
+        to: Date.UTC(2026, 6, 3),
+      }),
+    );
+    const deleteButton = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent?.includes("Delete selected range"));
     await act(async () => deleteButton?.click());
-    expect(confirm).toHaveBeenCalledWith("Delete the selected UTC date range? This cannot be undone.");
-    expect(mocks.deleteRange).toHaveBeenCalledWith({ from: Date.UTC(2026, 6, 1), to: Date.UTC(2026, 6, 3) });
+    expect(confirm).toHaveBeenCalledWith(
+      "Delete the selected UTC date range? This cannot be undone.",
+    );
+    expect(mocks.deleteRange).toHaveBeenCalledWith({
+      from: Date.UTC(2026, 6, 1),
+      to: Date.UTC(2026, 6, 3),
+    });
   });
 
   it("keeps a Unix-epoch custom range destructive-range scoped", async () => {
     const confirm = vi.fn(() => true);
     vi.stubGlobal("confirm", confirm);
     await renderUsage("/usage?from=0&to=86400000&bucket=day");
-    const deleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Delete selected range"));
+    const deleteButton = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent?.includes("Delete selected range"));
     await act(async () => deleteButton?.click());
-    expect(confirm).toHaveBeenCalledWith("Delete the selected UTC date range? This cannot be undone.");
+    expect(confirm).toHaveBeenCalledWith(
+      "Delete the selected UTC date range? This cannot be undone.",
+    );
     expect(mocks.deleteRange).toHaveBeenCalledWith({ from: 0, to: 86_400_000 });
     expect(mocks.deleteAll).not.toHaveBeenCalled();
   });
@@ -261,13 +330,17 @@ describe("usage page in Chromium", () => {
       project.value = "api";
       project.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    const submit = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Exclude project"));
+    const submit = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent?.includes("Exclude project"));
     await act(async () => submit?.click());
     expect(mocks.updateSettings).toHaveBeenCalledWith(
       { excludedProjects: ["private", "api"] },
       expect.any(Object),
     );
-    const remove = container.querySelector<HTMLButtonElement>("button[aria-label='Remove private']");
+    const remove = container.querySelector<HTMLButtonElement>(
+      "button[aria-label='Remove private']",
+    );
     remove?.focus();
     expect(document.activeElement).toBe(remove);
   });
@@ -285,12 +358,16 @@ describe("usage page in Chromium", () => {
         </MemoryRouter>,
       );
     });
-    const navs = container.querySelectorAll<HTMLElement>("nav[aria-label='Primary']");
+    const navs = container.querySelectorAll<HTMLElement>(
+      "nav[aria-label='Primary']",
+    );
     expect(navs).toHaveLength(2);
     const compactNav = navs[1];
     expect(compactNav.className).toContain("grid-cols-2");
     expect(compactNav.className).toContain("sm:hidden");
-    const usage = [...compactNav.querySelectorAll<HTMLAnchorElement>("a")].find((link) => link.textContent?.includes("USAGE"));
+    const usage = [...compactNav.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (link) => link.textContent?.includes("USAGE"),
+    );
     usage?.focus();
     expect(document.activeElement).toBe(usage);
   });
@@ -301,15 +378,24 @@ describe("usage page in Chromium", () => {
         <UsageTrendChart
           bucket="day"
           metric="tokens"
-          series={[{
-            codex: { inputTokens: 10, cachedInputTokens: 100, outputTokens: 20, reasoningTokens: 30 },
-            startUtcMs: Date.UTC(2026, 6, 1),
-            terminal: emptyUsage,
-          }]}
+          series={[
+            {
+              codex: {
+                inputTokens: 10,
+                cachedInputTokens: 100,
+                outputTokens: 20,
+                reasoningTokens: 30,
+              },
+              startUtcMs: Date.UTC(2026, 6, 1),
+              terminal: emptyUsage,
+            },
+          ]}
           title="Codex tokens"
         />,
       );
     });
-    expect(container.querySelector("circle title")?.textContent).toContain("60 tokens");
+    expect(container.querySelector("circle title")?.textContent).toContain(
+      "60 tokens",
+    );
   });
 });

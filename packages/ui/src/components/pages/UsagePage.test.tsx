@@ -92,6 +92,17 @@ vi.mock("@/api/queries.js", () => ({
   useProjects: () => ({ data: [{ name: "api" }] }),
   useUpdateUsageSettings: () => ({ mutate: vi.fn(), isPending: false }),
   useUsageSettings: () => ({ data: mocks.settings }),
+  useUsageSession: () => ({ data: undefined, isLoading: false, error: null }),
+  useUsageSessions: () => ({
+    data: {
+      range: { from: 1_782_864_000_000, to: 1_783_468_800_000 },
+      sessions: [],
+      nextCursor: null,
+      paused: false,
+    },
+    isLoading: false,
+    error: null,
+  }),
   useUsageSummary: () => ({
     data: mocks.summary,
     isLoading: false,

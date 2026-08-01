@@ -1,20 +1,13 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Activity, Clock3, Pause, Play, RotateCcw, Trash2 } from "lucide-react";
+import { Pause, Play, RotateCcw, Trash2 } from "lucide-react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
-  UsageCoveragePanel,
   UsageFilters,
-  UsageMetricCard,
-  UsageTrendChart,
+  UsageOverview,
   ProjectExclusions,
-  formatDuration,
-  hasTokenTotal,
-  hasUsageValue,
-  formatPercent,
-  formatTokenTotal,
-  formatUsageNumber,
+  UsageSessionAudit,
 } from "@/components/usage/UsageComponents.js";
 import {
   useDeleteUsageData,
@@ -22,11 +15,27 @@ import {
   useProjects,
   useUpdateUsageSettings,
   useUsageSettings,
+  useUsageSession,
+  useUsageSessions,
   useUsageSummary,
 } from "@/api/queries.js";
-import type { UsageSummaryQuery, UsageWindow } from "@/api/client.js";
+import type {
+  UsageSessionQuery,
+  UsageSummaryQuery,
+  UsageWindow,
+} from "@/api/client.js";
+import type { UsageSessionViewState } from "@/components/usage/UsageComponents.js";
 
 const DEFAULT_QUERY: UsageSummaryQuery = { window: "7d", bucket: "day" };
+type UsageView = "overview" | "sessions";
+
+function viewFromSearch(params: URLSearchParams): UsageView {
+  return params.get("view") === "sessions" ? "sessions" : "overview";
+}
+
+function queryErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
 
 function isWindow(value: string | null): value is UsageWindow {
   return value === "24h" || value === "7d" || value === "30d";
@@ -85,6 +94,14 @@ function parseUtcDateInput(value: string): number | undefined {
 
 export function UsagePage() {
   const [params, setParams] = useSearchParams();
+  const tabRefs = useRef<Record<UsageView, HTMLButtonElement | null>>({
+    overview: null,
+    sessions: null,
+  });
+  const view = viewFromSearch(params);
+  const selectedSessionId = params.get("session");
+  const sessionCursor = params.get("cursor") || undefined;
+  const terminalFilter = params.get("terminal") || undefined;
   const [customFrom, setCustomFrom] = useState(() =>
     utcDateInput(queryFromSearch(params).from),
   );
@@ -100,22 +117,54 @@ export function UsagePage() {
   const { data: summary, isLoading, error } = useUsageSummary(query);
   const { data: settings } = useUsageSettings();
   const { data: projects = [] } = useProjects();
+  const sessionQuery = useMemo<UsageSessionQuery>(
+    () => ({
+      from: summary?.range.from,
+      to: summary?.range.to,
+      model: query.model,
+      terminal: terminalFilter,
+      limit: 25,
+      cursor: sessionCursor,
+    }),
+    [
+      query.model,
+      sessionCursor,
+      summary?.range.from,
+      summary?.range.to,
+      terminalFilter,
+    ],
+  );
+  const sessions = useUsageSessions(
+    sessionQuery,
+    view === "sessions" && settings?.enabled !== false,
+  );
+  const sessionDetail = useUsageSession(
+    selectedSessionId,
+    view === "sessions" && settings?.enabled !== false,
+  );
   const updateSettings = useUpdateUsageSettings();
   const deleteAll = useDeleteUsageData();
   const deleteRange = useDeleteUsageRange();
 
   const updateQuery = (next: UsageSummaryQuery) => {
+    const applyViewState = (nextParams: URLSearchParams) => {
+      if (view === "sessions") nextParams.set("view", "sessions");
+      if (terminalFilter) nextParams.set("terminal", terminalFilter);
+      setParams(nextParams);
+    };
     if (next.window) {
       const windowQuery = { ...next, from: undefined, to: undefined };
-      setParams(searchFromQuery(windowQuery));
+      applyViewState(searchFromQuery(windowQuery));
       return;
     }
-    setParams(searchFromQuery(next));
+    applyViewState(searchFromQuery(next));
   };
   const reset = () => {
     setCustomFrom("");
     setCustomTo("");
-    setParams(searchFromQuery(DEFAULT_QUERY));
+    const nextParams = searchFromQuery(DEFAULT_QUERY);
+    if (view === "sessions") nextParams.set("view", "sessions");
+    setParams(nextParams);
   };
   const applyCustomRange = () => {
     const from = parseUtcDateInput(customFrom);
@@ -135,15 +184,89 @@ export function UsagePage() {
     }
   };
 
+  const selectView = (nextView: UsageView) => {
+    const nextParams = new URLSearchParams(params);
+    if (nextView === "sessions") nextParams.set("view", "sessions");
+    else nextParams.delete("view");
+    nextParams.delete("session");
+    nextParams.delete("cursor");
+    setParams(nextParams);
+  };
+  const handleTabKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    currentView: UsageView,
+  ) => {
+    const views: UsageView[] = ["overview", "sessions"];
+    const currentIndex = views.indexOf(currentView);
+    const nextView =
+      event.key === "Home"
+        ? views[0]
+        : event.key === "End"
+          ? views[1]
+          : event.key === "ArrowRight"
+            ? views[(currentIndex + 1) % views.length]
+            : event.key === "ArrowLeft"
+              ? views[(currentIndex - 1 + views.length) % views.length]
+              : null;
+    if (!nextView) return;
+    event.preventDefault();
+    selectView(nextView);
+    tabRefs.current[nextView]?.focus();
+  };
+  const selectSession = (id: string) => {
+    const nextParams = new URLSearchParams(params);
+    nextParams.set("view", "sessions");
+    nextParams.set("session", id);
+    setParams(nextParams);
+  };
+  const loadNextSessionPage = () => {
+    const nextCursor = sessions.data?.nextCursor;
+    if (!nextCursor) return;
+    const nextParams = new URLSearchParams(params);
+    nextParams.set("view", "sessions");
+    nextParams.set("cursor", nextCursor);
+    nextParams.delete("session");
+    setParams(nextParams);
+  };
+  const loadFirstSessionPage = () => {
+    const nextParams = new URLSearchParams(params);
+    nextParams.delete("cursor");
+    nextParams.delete("session");
+    setParams(nextParams);
+  };
+
   const categories = summary?.categories.map((item) => item.name) ?? [];
-  const models = summary?.codex ? ["gpt-5.6-sol"] : [];
-  const detail = summary?.detailMetrics;
+  const models = Array.from(
+    new Set(
+      [
+        query.model,
+        ...(sessions.data?.sessions.map((session) => session.rootModel) ?? []),
+      ].filter((model): model is string => Boolean(model)),
+    ),
+  ).sort();
   const paused = settings?.paused ?? summary?.health.paused ?? false;
   const excludedProjects = settings?.excludedProjects ?? [];
-  const requestError =
-    error instanceof Error
-      ? error.message
-      : "Usage analytics could not be loaded.";
+  const requestError = queryErrorMessage(
+    error,
+    "Usage analytics could not be loaded.",
+  );
+  const sessionListState: UsageSessionViewState =
+    isLoading || sessions.isLoading
+      ? "loading"
+      : sessions.error
+        ? "error"
+        : sessions.data?.sessions.length
+          ? "ready"
+          : "empty";
+  const sessionTreeState: UsageSessionViewState = !selectedSessionId
+    ? "empty"
+    : sessionDetail.isLoading
+      ? "loading"
+      : sessionDetail.error
+        ? "error"
+        : sessionDetail.data?.nodes.length
+          ? "ready"
+          : "empty";
 
   const addProjectExclusion = (
     project: string,
@@ -240,6 +363,36 @@ export function UsagePage() {
           </aside>
         ) : null}
 
+        <div
+          role="tablist"
+          aria-label="Usage views"
+          className="inline-flex rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-1"
+        >
+          {(["overview", "sessions"] as const).map((item) => (
+            <button
+              key={item}
+              type="button"
+              role="tab"
+              aria-selected={view === item}
+              aria-controls={`usage-${item}-panel`}
+              id={`usage-${item}-tab`}
+              ref={(element) => {
+                tabRefs.current[item] = element;
+              }}
+              tabIndex={view === item ? 0 : -1}
+              onClick={() => selectView(item)}
+              onKeyDown={(event) => handleTabKeyDown(event, item)}
+              className={`min-h-9 rounded px-3 text-xs font-medium capitalize focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] ${
+                view === item
+                  ? "bg-[var(--color-primary)] text-[var(--color-background)]"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+              }`}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+
         <UsageFilters
           value={query}
           onChange={updateQuery}
@@ -248,7 +401,8 @@ export function UsagePage() {
             projects: projects.map((project) => project.name),
             categories,
             models,
-            showAdvanced: true,
+            showAdvanced: view === "overview",
+            sessionAudit: view === "sessions",
           }}
         />
         <fieldset className="flex flex-wrap items-end gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-2.5">
@@ -287,210 +441,34 @@ export function UsagePage() {
           onRemove={removeProjectExclusion}
         />
 
-        {isLoading ? (
-          <p className="rounded glass-card p-6 text-sm text-[var(--color-text-muted)]">
-            Loading aggregate usage…
-          </p>
-        ) : null}
-        {error ? (
-          <p
-            role="alert"
-            className="rounded border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 p-4 text-sm text-[var(--color-text)]"
-          >
-            {requestError}
-          </p>
-        ) : null}
-        {summary ? (
-          <>
-            <UsageCoveragePanel
-              coverage={summary.coverage}
-              health={summary.health}
-            />
-            <section
-              aria-label="Terminal aggregate metrics"
-              className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
-            >
-              <UsageMetricCard
-                label="Commands"
-                value={formatUsageNumber(summary.terminal.commandCount)}
-                icon={Activity}
-                tone="primary"
-                description={`${formatUsageNumber(summary.terminal.succeededCount)} succeeded · ${formatUsageNumber(summary.terminal.failedCount)} failed`}
-              />
-              <UsageMetricCard
-                label="Active execution"
-                value={formatDuration(summary.terminal.durationMsSum)}
-                icon={Clock3}
-                description="Total command execution time in this range."
-              />
-              <UsageMetricCard
-                label="P50 duration"
-                value={formatDuration(detail?.durationP50Ms)}
-                unavailable={!detail}
-                description={
-                  detail
-                    ? "Median completed command duration."
-                    : "Available only within detail retention."
-                }
-              />
-              <UsageMetricCard
-                label="P95 duration"
-                value={formatDuration(detail?.durationP95Ms)}
-                unavailable={!detail}
-                description={
-                  detail
-                    ? "Nearest-rank 95th percentile."
-                    : "Available only within detail retention."
-                }
-              />
-              <UsageMetricCard
-                label="Repeated commands"
-                value={formatUsageNumber(detail?.repeatedCommandCount)}
-                unavailable={!detail}
-                description={
-                  detail
-                    ? "Additional occurrences of a retained command fingerprint."
-                    : "Available only within detail retention."
-                }
-              />
-            </section>
-            <section className="grid gap-3 lg:grid-cols-2">
-              <UsageTrendChart
-                series={summary.timeSeries}
-                bucket={summary.range.bucket}
-                metric="commands"
-                title="Terminal commands over time"
-              />
-              <UsageTrendChart
-                series={summary.timeSeries}
-                bucket={summary.range.bucket}
-                metric="tokens"
-                title="Codex tokens over time"
-              />
-            </section>
-            <section
-              aria-label="Terminal breakdowns"
-              className="grid gap-3 lg:grid-cols-2"
-            >
-              <UsageBreakdown title="Categories" entries={summary.categories} />
-              <UsageBreakdown title="Projects" entries={summary.projects} />
-            </section>
-            <section
-              aria-label="Codex aggregate metrics"
-              className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3"
-            >
-              <div className="flex items-baseline justify-between gap-3">
-                <h2 className="text-xs font-semibold text-[var(--color-text)]">
-                  Codex usage
-                </h2>
-                <span className="text-[10px] text-[var(--color-text-muted)]">
-                  No cost estimates
-                </span>
-              </div>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <UsageMetricCard
-                  label="Total tokens"
-                  value={formatTokenTotal(summary.codex)}
-                  unavailable={!hasTokenTotal(summary.codex)}
-                  description="Input, output, and reasoning token components."
-                />
-                <UsageMetricCard
-                  label="Input tokens"
-                  value={formatUsageNumber(summary.codex?.inputTokens)}
-                  unavailable={!hasUsageValue(summary.codex?.inputTokens)}
-                />
-                <UsageMetricCard
-                  label="Cached input"
-                  value={formatUsageNumber(summary.codex?.cachedInputTokens)}
-                  unavailable={!hasUsageValue(summary.codex?.cachedInputTokens)}
-                />
-                <UsageMetricCard
-                  label="Output tokens"
-                  value={formatUsageNumber(summary.codex?.outputTokens)}
-                  unavailable={!hasUsageValue(summary.codex?.outputTokens)}
-                />
-                <UsageMetricCard
-                  label="Reasoning tokens"
-                  value={formatUsageNumber(summary.codex?.reasoningTokens)}
-                  unavailable={!hasUsageValue(summary.codex?.reasoningTokens)}
-                />
-                <UsageMetricCard
-                  label="Cache ratio"
-                  value={formatPercent(
-                    summary.codex?.cachedInputTokens,
-                    summary.codex?.inputTokens,
-                  )}
-                  unavailable={!summary.codex}
-                  description="Cached input ÷ reported input tokens."
-                />
-              </div>
-            </section>
-          </>
-        ) : null}
+        {view === "overview" ? (
+          <UsageOverview
+            summary={summary}
+            loading={isLoading}
+            errorMessage={error ? requestError : undefined}
+          />
+        ) : (
+          <UsageSessionAudit
+            page={sessions.data}
+            detail={sessionDetail.data}
+            selectedSessionId={selectedSessionId}
+            cursorActive={Boolean(sessionCursor)}
+            listState={sessionListState}
+            treeState={sessionTreeState}
+            listError={queryErrorMessage(
+              sessions.error,
+              "Session audit could not be loaded.",
+            )}
+            detailError={queryErrorMessage(
+              sessionDetail.error,
+              "Session detail could not be loaded.",
+            )}
+            onSelectSession={selectSession}
+            onNextPage={loadNextSessionPage}
+            onFirstPage={loadFirstSessionPage}
+          />
+        )}
       </div>
     </AppLayout>
-  );
-}
-
-function UsageBreakdown({
-  title,
-  entries,
-}: {
-  title: string;
-  entries: ReadonlyArray<{
-    name: string;
-    terminal: { commandCount: number; failedCount: number };
-  }>;
-}) {
-  return (
-    <section className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
-      <h2 className="text-xs font-semibold text-[var(--color-text)]">
-        {title}
-      </h2>
-      {entries.length === 0 ? (
-        <p className="mt-3 text-xs text-[var(--color-text-muted)]">
-          No aggregate data in this range.
-        </p>
-      ) : (
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
-              <tr>
-                <th scope="col" className="pb-2 font-medium">
-                  Name
-                </th>
-                <th scope="col" className="pb-2 text-right font-medium">
-                  Commands
-                </th>
-                <th scope="col" className="pb-2 text-right font-medium">
-                  Failed
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map((entry) => (
-                <tr
-                  key={entry.name}
-                  className="border-t border-[var(--color-border)]"
-                >
-                  <th
-                    scope="row"
-                    className="py-2 font-medium text-[var(--color-text)]"
-                  >
-                    {entry.name}
-                  </th>
-                  <td className="py-2 text-right tabular-nums">
-                    {formatUsageNumber(entry.terminal.commandCount)}
-                  </td>
-                  <td className="py-2 text-right tabular-nums">
-                    {formatUsageNumber(entry.terminal.failedCount)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
   );
 }

@@ -842,18 +842,29 @@ export function useUsageSummary(query: UsageSummaryQuery = {}) {
   });
 }
 
-export function useUsageSessions(query: UsageSessionQuery = {}) {
+export const usageSessionPollInterval = () =>
+  typeof document !== "undefined" && document.visibilityState === "visible"
+    ? 15_000
+    : false;
+
+export function useUsageSessions(
+  query: UsageSessionQuery = {},
+  enabled = true,
+) {
   return useQuery({
     queryKey: ["usage", "sessions", query],
     queryFn: () => api.usage.sessions(query),
+    enabled,
+    refetchInterval: usageSessionPollInterval,
   });
 }
 
-export function useUsageSession(id: string | null) {
+export function useUsageSession(id: string | null, enabled = true) {
   return useQuery({
     queryKey: ["usage", "session", id],
     queryFn: () => api.usage.session(id!),
-    enabled: id !== null,
+    enabled: enabled && id !== null,
+    refetchInterval: usageSessionPollInterval,
   });
 }
 
