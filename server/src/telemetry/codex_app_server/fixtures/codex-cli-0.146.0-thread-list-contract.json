@@ -1,0 +1,28 @@
+{
+  "cliVersion": "0.146.0",
+  "gate": "fail",
+  "request": {
+    "method": "thread/list",
+    "allowedParameters": [
+      "ancestorThreadId",
+      "archived",
+      "cursor",
+      "cwd",
+      "isPinned",
+      "limit",
+      "modelProviders",
+      "parentThreadId",
+      "searchTerm",
+      "sortDirection",
+      "sortKey",
+      "sourceKinds",
+      "useStateDbOnly"
+    ],
+    "contentProjectionParameter": null
+  },
+  "response": {
+    "requiredContentFields": ["cwd", "preview", "turns"],
+    "optionalContentFields": ["path"],
+    "safeIdentityFields": ["agentRole", "id", "parentThreadId", "status"]
+  }
+}
