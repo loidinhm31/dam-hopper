@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { GitBranchControl, GitBranchFeedback } from "./GitBranchControl.js";
+import { ApiRequestError } from "@/api/client.js";
 
 const checkoutBranch = vi.fn();
 const deleteBranch = vi.fn();
@@ -16,6 +17,7 @@ const queryState = vi.hoisted(() => ({
     isRemote: boolean;
   }>,
   projectStatus: undefined as { branch: string } | undefined,
+  branchesError: null as Error | null,
 }));
 
 const loadedBranches = [
@@ -24,7 +26,10 @@ const loadedBranches = [
 ];
 
 vi.mock("@/api/queries.js", () => ({
-  useBranches: () => ({ data: queryState.branches }),
+  useBranches: () => ({
+    data: queryState.branches,
+    error: queryState.branchesError,
+  }),
   useProjectStatus: () => ({ data: queryState.projectStatus }),
   useGitCheckoutBranch: () => ({
     isPending: false,
@@ -44,6 +49,7 @@ beforeEach(() => {
   Element.prototype.scrollIntoView ??= () => undefined;
   queryState.branches = loadedBranches;
   queryState.projectStatus = { branch: "main" };
+  queryState.branchesError = null;
 });
 
 async function mountBranchControl() {
@@ -271,5 +277,25 @@ describe("GitBranchFeedback", () => {
       document.querySelector("[role=dialog]")?.contains(document.activeElement),
     ).toBe(true);
     expect(deleteBranch).not.toHaveBeenCalled();
+  });
+});
+
+describe("GitBranchControl unavailable state", () => {
+  it("suppresses branch mutations when Git is unavailable", async () => {
+    queryState.branches = [];
+    queryState.projectStatus = undefined;
+    queryState.branchesError = new ApiRequestError(
+      "Git is not initialized for this project",
+      409,
+      "GIT_NOT_INITIALIZED",
+    );
+
+    await mountBranchControl();
+
+    expect(document.body.textContent).toContain(
+      "Git is not initialized for this project",
+    );
+    expect(document.body.textContent).not.toContain("New Branch");
+    expect(document.querySelector("[role=combobox]")).toBeNull();
   });
 });

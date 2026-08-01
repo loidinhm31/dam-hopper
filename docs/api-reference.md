@@ -413,12 +413,22 @@ See [Phase 05: Persist Worker](../phase-05-persist-worker/) for detailed archite
 Git routes are scoped to the configured project name and run inside the resolved
 project path.
 
+When a project is not a Git repository, Git routes that require repository
+state return HTTP `409` with the standard error body
+`{"error":"Git is not initialized for this project","code":"GIT_NOT_INITIALIZED"}`.
+The client preserves this as `ApiRequestError(status, code)` and uses the code
+to render an actionable unavailable state; callers should not treat it as an
+empty branch list.
+
 ### Branches
 
 **GET /api/git/{project}/branches**
 Returns local and remote branches.
 
 Optional query: `root=ID` to scope branch data to one VCS root.
+
+If Git is unavailable, this endpoint returns the `GIT_NOT_INITIALIZED` 409
+error described above.
 
 ```json
 [
@@ -436,6 +446,10 @@ Optional query: `root=ID` to scope branch data to one VCS root.
 
 **GET /api/git/{project}/roots**
 Discover VCS roots inside the project. Returns the primary repo root, nested repositories, and submodule gitlinks.
+
+An unavailable project returns the same `GIT_NOT_INITIALIZED` 409 response;
+usable nested roots are returned as concrete `rootId` values and can be passed
+to branch and diff requests.
 
 Response shape:
 
@@ -1085,6 +1099,23 @@ Response:
   ]
 }
 ```
+
+The typed client result is either a normal response with `gitAvailable: true`
+or an unavailable result:
+
+```json
+{
+  "gitAvailable": false,
+  "code": "GIT_NOT_INITIALIZED",
+  "entries": [],
+  "untrackedTruncated": false,
+  "untrackedTotal": 0
+}
+```
+
+This preserves a successful, typed empty state for the local-changes panel
+while branch/root requests continue to surface the 409 error for shared
+unavailable-state handling.
 
 `rootId`, `rootPath`, and `submodule` are omitted when the entry is not tied to
 an explicit VCS root or submodule gitlink.

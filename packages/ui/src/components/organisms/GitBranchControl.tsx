@@ -8,6 +8,7 @@ import {
   useProjectStatus,
 } from "@/api/queries.js";
 import { Button } from "@/components/atoms/Button.js";
+import { isGitUnavailableError } from "@/api/client.js";
 import {
   Select,
   SelectContent,
@@ -85,7 +86,10 @@ export function GitBranchControl({
   onSelectedBranchChange,
 }: GitBranchControlProps) {
   const compactTextClass = "text-[length:calc(var(--app-font-size)*0.75)]";
-  const { data: branches = [] } = useBranches(project, root);
+  const { data: branches = [], error: branchesError } = useBranches(
+    project,
+    root,
+  );
   const { data: projectStatus } = useProjectStatus(project);
   const checkoutBranch = useGitCheckoutBranch(project, root);
   const createBranch = useGitCreateBranch(project, root);
@@ -139,6 +143,20 @@ export function GitBranchControl({
     checkoutBranch.isPending ||
     createBranch.isPending ||
     deleteBranch.isPending;
+
+  if (isGitUnavailableError(branchesError)) {
+    return (
+      <div
+        role="status"
+        className={cn(
+          "rounded border border-amber-500/20 bg-amber-500/10 px-2 py-1.5 text-[10px] text-amber-300",
+          className,
+        )}
+      >
+        Git is not initialized for this project
+      </div>
+    );
+  }
 
   async function runCheckout(
     branch: string,

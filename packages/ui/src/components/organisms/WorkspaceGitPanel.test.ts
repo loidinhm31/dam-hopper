@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/api/client.js", () => ({
+  isGitUnavailableError: () => false,
   api: {
     git: {
       log: vi.fn(),

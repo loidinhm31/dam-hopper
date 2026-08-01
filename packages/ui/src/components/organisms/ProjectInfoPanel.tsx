@@ -28,7 +28,7 @@ import {
   useAddWorktree,
   useRemoveWorktree,
 } from "@/api/queries.js";
-import type { VcsRoot } from "@/api/client.js";
+import { isGitUnavailableError, type VcsRoot } from "@/api/client.js";
 import type { TreeCommand } from "@/hooks/use-terminal-tree.js";
 
 interface Props {
@@ -102,7 +102,7 @@ function StatusBadge({ isClean }: { isClean: boolean }) {
 }
 
 function GitSection({ projectName }: { projectName: string }) {
-  const { data: roots = [] } = useGitRoots(projectName);
+  const { data: roots = [], error: rootsError } = useGitRoots(projectName);
   const rootOptions = projectInfoRootOptions(roots);
   const [selectedRootId, setSelectedRootId] = useState(DEFAULT_GIT_ROOT_ID);
   const resolvedRootId = rootOptions.some(
@@ -110,7 +110,10 @@ function GitSection({ projectName }: { projectName: string }) {
   )
     ? selectedRootId
     : (rootOptions[0]?.rootId ?? DEFAULT_GIT_ROOT_ID);
-  const { data: branches = [] } = useBranches(projectName, resolvedRootId);
+  const { data: branches = [], error: branchesError } = useBranches(
+    projectName,
+    resolvedRootId,
+  );
   const gitFetch = useGitFetch();
   const gitPull = useGitPull();
   const gitPush = useGitPush();
@@ -122,6 +125,18 @@ function GitSection({ projectName }: { projectName: string }) {
   const selectedRootLabel = selectedRoot
     ? formatProjectInfoRootLabel(selectedRoot)
     : "Project root";
+
+  if (
+    isGitUnavailableError(rootsError) ||
+    isGitUnavailableError(branchesError)
+  ) {
+    return (
+      <div className="px-3 py-3 text-xs text-[var(--color-text-muted)]">
+        Git is not initialized for this project. Run{" "}
+        <code className="font-mono">git init</code> to enable Git actions.
+      </div>
+    );
+  }
 
   return (
     <div className="px-3 py-2 space-y-2">

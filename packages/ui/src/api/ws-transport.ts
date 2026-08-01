@@ -12,7 +12,11 @@
  */
 
 import type { Transport } from "./transport.js";
-import type { TerminalLifecycle, TerminalLifecycleEvent } from "./client.js";
+import {
+  ApiRequestError,
+  type TerminalLifecycle,
+  type TerminalLifecycleEvent,
+} from "./client.js";
 import { logger } from "@dam-hopper/shared/logger";
 import {
   buildAuthHeaders,
@@ -1771,8 +1775,15 @@ export class WsTransport implements Transport {
       if (!response.ok) {
         const err = (await response
           .json()
-          .catch(() => ({ error: response.statusText }))) as { error?: string };
-        throw new Error(err.error ?? `HTTP ${response.status}`);
+          .catch(() => ({ error: response.statusText }))) as {
+          error?: string;
+          code?: string;
+        };
+        throw new ApiRequestError(
+          err.error ?? `HTTP ${response.status}`,
+          response.status,
+          err.code,
+        );
       }
       const ct = response.headers.get("content-type") ?? "";
       if (ct.includes("application/json")) {

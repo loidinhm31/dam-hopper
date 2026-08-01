@@ -161,6 +161,9 @@ pub fn resolve_vcs_root(project_path: &Path, root_id: &str) -> Result<PathBuf, A
             "VCS root escapes project: {root_id}"
         )));
     }
+    if !has_git_marker(&candidate) && root_id == "." {
+        return Err(AppError::GitUnavailable);
+    }
     if !has_git_marker(&candidate) {
         return Err(AppError::InvalidInput(format!(
             "VCS root is not initialized: {root_id}"
@@ -194,6 +197,29 @@ pub fn resolve_git_request_root(
         root_path,
         root_path_display: root.path.clone(),
     })
+}
+
+pub fn discover_available_vcs_roots(project_path: &Path) -> Result<Vec<VcsRoot>, AppError> {
+    let roots = discover_vcs_roots(project_path)?;
+    let mut available = Vec::new();
+    for root in roots {
+        let root_path = if root.root_id == "." {
+            project_path.to_path_buf()
+        } else {
+            project_path.join(&root.root_id)
+        };
+        match fs::metadata(root_path.join(concat!(".", "git"))) {
+            Ok(metadata) if metadata.is_dir() || metadata.is_file() => available.push(root),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    if available.is_empty() {
+        Err(AppError::GitUnavailable)
+    } else {
+        Ok(available)
+    }
 }
 
 pub fn resolve_git_path_root(

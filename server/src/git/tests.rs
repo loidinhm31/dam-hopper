@@ -21,8 +21,9 @@ use crate::git::{
     get_commit_message, revert_commit, revert_commit_files,
 };
 use crate::git::{
-    discover_vcs_roots, resolve_git_path_root, resolve_git_request_root, resolve_vcs_root,
-    staged_vcs_root_ids, BulkGitService, WorktreeAddOptions,
+    discover_available_vcs_roots, discover_vcs_roots, resolve_git_path_root,
+    resolve_git_request_root, resolve_vcs_root, staged_vcs_root_ids, BulkGitService,
+    WorktreeAddOptions,
 };
 
 // ---------------------------------------------------------------------------
@@ -365,6 +366,41 @@ fn vcs_root_resolution_rejects_aggregate_unknown_and_escaping_roots() {
     assert!(resolve_git_request_root(path, Some("modules/missing")).is_err());
     assert!(resolve_git_request_root(path, Some("../escape")).is_err());
     assert!(resolve_git_request_root(path, Some("/tmp")).is_err());
+}
+
+#[test]
+fn plain_directory_root_resolution_is_typed_unavailable() {
+    let directory = tempfile::tempdir().unwrap();
+    let error = resolve_git_request_root(directory.path(), None).unwrap_err();
+    assert!(matches!(error, crate::error::AppError::GitUnavailable));
+}
+
+#[cfg(unix)]
+#[test]
+fn dangling_git_marker_is_typed_unavailable() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().unwrap();
+    symlink(
+        directory.path().join("missing-git-dir"),
+        directory.path().join(concat!(".", "git")),
+    )
+    .unwrap();
+    let error = resolve_git_request_root(directory.path(), None).unwrap_err();
+    assert!(matches!(error, crate::error::AppError::GitUnavailable));
+}
+
+#[cfg(unix)]
+#[test]
+fn git_marker_metadata_errors_remain_generic_io_failures() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().unwrap();
+    let marker = directory.path().join(concat!(".", "git"));
+    symlink(&marker, &marker).unwrap();
+
+    let error = discover_available_vcs_roots(directory.path()).unwrap_err();
+    assert!(matches!(error, crate::error::AppError::Io(_)));
 }
 
 // ---------------------------------------------------------------------------
