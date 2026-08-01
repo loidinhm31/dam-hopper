@@ -226,12 +226,12 @@ export function IdeShell({
       (entry) => entry.id === activateLeftTopToolRequest.toolId,
     );
     if (!requestedTool || requestedTool.position === "bottom") return;
-    // This request prop is an intentional imperative bridge from WorkspacePage.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // Request props bridge WorkspacePage events into local panel state after
+    // the committing render, avoiding a synchronous effect-state cascade.
+    queueMicrotask(() => {
     setActiveLeftTopId(activateLeftTopToolRequest.toolId);
-    // Revealing a file needs the normal (non-maximized) layout; drop maximize
-    // if active. Uses a functional update so the effect deps stay stable.
     setBottomMaximized((v) => (v ? false : v));
+    });
   }, [activateLeftTopToolRequest, leftTools]);
 
   useEffect(() => {
@@ -240,14 +240,14 @@ export function IdeShell({
       (entry) => entry.id === activateBottomToolRequest.toolId,
     );
     if (!requestedTool || requestedTool.position !== "bottom") return;
+    queueMicrotask(() => {
     if (leftTools.includes(requestedTool)) {
-      // This request prop is an intentional imperative bridge from WorkspacePage.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setActiveLeftBottomId(requestedTool.id);
     } else {
       setActiveRightBottomId(requestedTool.id);
     }
     setBottomMaximized((v) => (v ? false : v));
+    });
   }, [activateBottomToolRequest, leftTools, rightTools]);
 
   useEffect(() => {
@@ -272,16 +272,18 @@ export function IdeShell({
         activeRightTopId,
         bottomMaximized,
       });
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      queueMicrotask(() => {
       setActiveLeftBottomId(outcome.nextActiveLeftBottomId);
       setActiveRightTopId(outcome.nextActiveRightTopId);
       setBottomMaximized(outcome.nextBottomMaximized);
+      });
       return;
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    queueMicrotask(() => {
     setActiveRightTopId(activateRightTopToolRequest.toolId);
     setBottomMaximized((v) => (v ? false : v));
+    });
   }, [
     activateRightTopToolRequest,
     activeLeftBottomId,
@@ -310,10 +312,11 @@ export function IdeShell({
       activeRightTopId,
       bottomMaximized,
     });
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    queueMicrotask(() => {
     setActiveLeftBottomId(outcome.nextActiveLeftBottomId);
     setActiveRightTopId(outcome.nextActiveRightTopId);
     setBottomMaximized(outcome.nextBottomMaximized);
+    });
   }, [
     activateBottomToolRequest,
     activeLeftBottomId,
