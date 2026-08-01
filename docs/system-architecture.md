@@ -365,7 +365,8 @@ can exclude them. This fails the privacy boundary before any child-session or OT
 The supported fallback is flat OTel-only rows marked `lineage_unavailable`; no parent/child edges
 are inferred. Direct reads from Codex SQLite or rollout files remain forbidden in production.
 
-When terminal correlation is separately opted in, DamHopper injects one random opaque
+When telemetry and its collector are active and `terminal_correlation_enabled` is not set to
+`false`, terminal correlation injects one random opaque
 `dam_hopper.run_id` resource attribute into the terminal shell environment. Literal commands,
 aliases such as `CODEXNSB`, scripts, and shell functions can launch Codex normally and inherit the
 marker; DamHopper does not capture or rewrite their command text. The in-memory registry maps the
