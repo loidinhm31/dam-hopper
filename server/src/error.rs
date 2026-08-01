@@ -42,6 +42,9 @@ pub enum AppError {
     #[error("Git repository not found: {0}")]
     GitNotFound(String),
 
+    #[error("Git is not initialized for this project")]
+    GitUnavailable,
+
     #[error("FS error: {0}")]
     Fs(FsError),
 
@@ -73,12 +76,20 @@ impl AppError {
             | AppError::NotFound(_)
             | AppError::SessionNotFound(_)
             | AppError::GitNotFound(_) => 404,
+            AppError::GitUnavailable => 409,
             AppError::Config(_) | AppError::InvalidInput(_) => 400,
             AppError::Fs(e) => e.status_code(),
             AppError::Unavailable(_) => 503,
             AppError::Tunnel(e) => tunnel_error_status(e),
             AppError::BrowserDebug(e) => e.status_code(),
             _ => 500,
+        }
+    }
+
+    pub fn api_code(&self) -> Option<&'static str> {
+        match self {
+            AppError::GitUnavailable => Some("GIT_NOT_INITIALIZED"),
+            _ => None,
         }
     }
 }

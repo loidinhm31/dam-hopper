@@ -418,6 +418,9 @@ interface TerminalPanelProps {
 - Uses `invalidateGitProjectQueries()` as the cache invalidation source of truth after mutations.
 - Branch mutations refresh `branches`, `projects`, `project-status`, and `git-log`; checkout paths also refresh `git-diff`, `git-conflicts`, and `fs-tree`.
 - Accepts an optional `root` so the selector can target a specific VCS root instead of the project default.
+- Detects `ApiRequestError` with code `GIT_NOT_INITIALIZED` from root or branch
+  queries and renders an unavailable state with `git init` guidance instead of
+  showing empty branch controls.
 
 **Dialogs:** `GitBranchControlDialogs.tsx` contains the supporting create/checkout/update dialogs.
 
@@ -454,6 +457,9 @@ interface TerminalPanelProps {
 - Groups staged and unstaged entries by `rootId` when the diff payload includes multiple VCS roots.
 - Uses the root metadata from the server to keep submodule/gitlink rows distinct from normal files.
 - Blocks commit submission when staged entries span multiple roots, so mixed-root commits are rejected in the UI before the request is sent.
+- Handles the typed `GitDiffResult` unavailable variant (`gitAvailable: false`)
+  and shows `Git is not initialized for this project` with `git init` guidance;
+  no stage, discard, or commit controls are offered in that state.
 
 ### Workspace Git Panel
 
@@ -468,6 +474,9 @@ interface TerminalPanelProps {
 - Keeps branch and history queries scoped to the selected root id.
 - Refreshes root-aware query keys for branches, history, and commit-file details.
 - Treats the selected root as the active context for commit details and double-click diff opens.
+- If root or branch discovery reports `GIT_NOT_INITIALIZED`, replaces the panel
+  with the shared unavailable message and initialization guidance. Usable nested
+  roots remain selectable when discovery succeeds.
 - Converts root-relative commit file paths back to project-relative editor paths before opening diffs.
 - Exposes undo last commit and safe revert paths for local history recovery.
 - Prevents local commit drops for pushed commits and shows a shared revert recommendation instead.

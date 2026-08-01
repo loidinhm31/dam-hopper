@@ -10,6 +10,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Next Milestone:** Complete environment-dependent Zsh/Fish PTY, IME, screen-reader, and renderer checks
 - **Current Feature:** Settings commit summary Phase 01 and terminal scroll-control redesign Phase 02 completed 2026-07-26; terminal commit status Phase 03 planned
 
+### Production Git Changes Resilience
+
+- **Phase 01 Git-unavailable state — [COMPLETED 2026-08-01]**: typed non-Git API outcome, client/query mapping, and Changes UI unavailable state with mutation suppression.
+
 ### Terminal Usage Analytics
 
 **Live Usage Insights Settings: Phase 01 Runtime Lifecycle and API — [COMPLETED 2026-07-26]**

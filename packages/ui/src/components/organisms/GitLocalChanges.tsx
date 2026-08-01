@@ -51,6 +51,20 @@ export function GitLocalChanges({ project }: GitLocalChangesProps) {
       </div>
     );
 
+  if (diff?.gitAvailable === false) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-6 text-center text-sm text-[var(--color-text-muted)]">
+        <span className="font-medium text-[var(--color-text)]">
+          Git is not initialized for this project
+        </span>
+        <span className="text-xs">
+          Run <code className="font-mono">git init</code> to enable local
+          changes and commits.
+        </span>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md overflow-hidden">
       <div className="flex-1 overflow-y-auto p-2 space-y-4">

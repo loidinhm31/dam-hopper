@@ -69,6 +69,14 @@
 
 # Changelog
 
+- **Phase 01: Git-unavailable production state.** Complete ✓ 2026-08-01.
+  Git-uninitialized projects now return HTTP 409 with error code
+  `GIT_NOT_INITIALIZED`; the typed client exposes `ApiRequestError` and the
+  `GitDiffResult` unavailable variant. Root/branch/history surfaces and
+  `GitLocalChanges`/Changes panels render actionable `git init` guidance,
+  while discovered usable nested roots remain root-scoped for branch and diff
+  operations.
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),

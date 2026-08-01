@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiRequestError } from "./client.js";
 import { WsTransport } from "./ws-transport.js";
 
 class MockWebSocket {
@@ -201,6 +202,33 @@ describe("WsTransport commit message endpoints", () => {
         root: "modules/child",
       }),
     });
+    transport.destroy();
+  });
+});
+
+describe("WsTransport typed API errors", () => {
+  it("preserves status and code from a JSON error response", async () => {
+    installMockWebSocket();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: "Git is not initialized for this project",
+            code: "GIT_NOT_INITIALIZED",
+          }),
+          { status: 409, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const transport = new WsTransport("http://localhost:4800");
+
+    await expect(transport.invoke("git:roots", "demo")).rejects.toMatchObject({
+      name: "ApiRequestError",
+      message: "Git is not initialized for this project",
+      status: 409,
+      code: "GIT_NOT_INITIALIZED",
+    } satisfies Partial<ApiRequestError>);
     transport.destroy();
   });
 });

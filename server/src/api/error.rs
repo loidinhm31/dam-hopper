@@ -24,6 +24,8 @@ impl From<AppError> for ApiError {
 #[derive(Serialize)]
 struct ErrorBody {
     error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
 }
 
 impl IntoResponse for ApiError {
@@ -41,6 +43,7 @@ impl IntoResponse for ApiError {
             status,
             Json(ErrorBody {
                 error: self.0.to_string(),
+                code: self.0.api_code(),
             }),
         )
             .into_response()
