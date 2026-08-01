@@ -38,6 +38,7 @@ impl TelemetryStore {
         let connection = Connection::open(path)?;
         configure_writer(&connection)?;
         apply_migrations(&connection)?;
+        ensure_agent_run_compatibility_columns(&connection)?;
         ensure_token_rollup_availability_columns(&connection)?;
         restrict_storage_files(path)?;
         Ok(Self {
@@ -226,6 +227,21 @@ fn ensure_token_rollup_availability_columns(
                 "ALTER TABLE daily_usage_rollups ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
             ))?;
         }
+    }
+    Ok(())
+}
+
+/// Repair the one historical schema drift that can leave a database claiming
+/// the current migration version without the counter timestamp used by the
+/// retention backfill. The column is nullable by design, so adding it is safe
+/// for pre-existing rows and idempotent across restarts.
+fn ensure_agent_run_compatibility_columns(connection: &Connection) -> Result<(), rusqlite::Error> {
+    let exists = connection
+        .prepare("SELECT 1 FROM pragma_table_info('agent_runs') WHERE name = ?1")?
+        .exists(["counter_updated_at_utc_ms"])?;
+    if !exists {
+        connection
+            .execute_batch("ALTER TABLE agent_runs ADD COLUMN counter_updated_at_utc_ms INTEGER")?;
     }
     Ok(())
 }
@@ -830,6 +846,75 @@ mod tests {
         assert!(connection
             .prepare("SELECT run_id FROM agent_run_terminals INDEXED BY idx_agent_run_terminals_run_bounds")
             .is_ok());
+    }
+
+    #[test]
+    fn repairs_version_six_schema_missing_counter_update_timestamp() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("telemetry.db");
+        let connection = Connection::open(&path).unwrap();
+        configure_writer(&connection).unwrap();
+        connection
+            .execute_batch(include_str!("migrations/001_initial.sql"))
+            .unwrap();
+        let migration = include_str!("migrations/002_agent_run_summaries.sql").replace(
+            "ALTER TABLE agent_runs ADD COLUMN counter_updated_at_utc_ms INTEGER;\n",
+            "",
+        );
+        connection.execute_batch(&migration).unwrap();
+        connection
+            .execute_batch(include_str!("migrations/003_terminal_summary_lookup.sql"))
+            .unwrap();
+        connection
+            .execute_batch(include_str!("migrations/004_session_root_order.sql"))
+            .unwrap();
+        connection
+            .execute_batch(include_str!("migrations/005_agent_tree_frontier.sql"))
+            .unwrap();
+        connection
+            .execute_batch(include_str!("migrations/006_agent_detail_aggregates.sql"))
+            .unwrap();
+        let column_exists = connection
+            .prepare("SELECT 1 FROM pragma_table_info('agent_runs') WHERE name = ?1")
+            .unwrap()
+            .exists(["counter_updated_at_utc_ms"])
+            .unwrap();
+        assert!(
+            !column_exists,
+            "fixture must retain the historical schema drift"
+        );
+        let key = load_or_create_hmac_key(&temp.path().join("key")).unwrap();
+        let event = usage_event(
+            &key,
+            b"session",
+            b"pending-event",
+            1,
+            TokenCounterSemantic::Delta,
+            [Some(2), None, Some(5), None],
+            None,
+        );
+        let transaction = connection.unchecked_transaction().unwrap();
+        assert!(insert_agent_usage(&transaction, &event).unwrap());
+        transaction.commit().unwrap();
+        connection
+            .pragma_update(None, "user_version", 6_i64)
+            .unwrap();
+        drop(connection);
+
+        let store = TelemetryStore::open(&path).unwrap();
+        store
+            .write_batch(vec![TelemetryCmd::Purge {
+                now_utc_ms: 172_800_002,
+                detail_retention_days: 1,
+                aggregate_retention_days: None,
+            }])
+            .unwrap();
+        assert_eq!(
+            crate::telemetry::queries::list_agent_run_summaries(&store, 1).unwrap()[0].input_tokens,
+            Some(2)
+        );
+        drop(store);
+        TelemetryStore::open(&path).unwrap();
     }
 
     #[test]

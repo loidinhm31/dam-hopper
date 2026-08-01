@@ -91,6 +91,8 @@ Phase 01 failed its privacy boundary, so Phase 04 persists only flat OTel model/
 
 Migration SQL is runtime-managed by the telemetry store migration runner; do not apply `002_agent_run_summaries.sql` manually. A failed key rotation may leave a temporary `.next` keyring file until retry.
 
+Correction note (2026-08-02, Asia/Ho_Chi_Minh): deployment validation found a claimed-v6 telemetry database missing the nullable `agent_runs.counter_updated_at_utc_ms` column. Phase 04 now includes an idempotent startup compatibility repair in `TelemetryStore`, with regression coverage, so setup/summary activation self-heals this schema drift without manual database intervention.
+
 ## Next steps
 
 Phase 05 exposes bounded protected reads over these summaries. If Phase 01 failed, persist flat OTel model/token nodes with lineage unavailable only.
