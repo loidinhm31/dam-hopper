@@ -66,12 +66,13 @@ export function TerminalTabBar({
   onSavePromptCancel,
 }: Props) {
   const saveInputRef = useRef<HTMLInputElement>(null);
+  const savePromptSessionId = savePrompt?.sessionId;
 
   useEffect(() => {
-    if (savePrompt) {
+    if (savePromptSessionId) {
       saveInputRef.current?.focus();
     }
-  }, [savePrompt?.sessionId]);
+  }, [savePromptSessionId]);
 
   if (tabs.length === 0) {
     return null;

@@ -233,6 +233,7 @@ export function MergeConflictEditor({
   }
 
   useEffect(() => {
+    const models = modelsRef.current;
     return () => {
       for (const ref of [theirsEditorRef, resultEditorRef, oursEditorRef]) {
         (
@@ -240,7 +241,7 @@ export function MergeConflictEditor({
         )?._roCleanup?.();
       }
       // Defer model disposal so Monaco's own editor cleanup runs first.
-      const { theirs, result, ours } = modelsRef.current;
+      const { theirs, result, ours } = models;
       requestAnimationFrame(() => {
         if (theirs && !theirs.isDisposed()) theirs.dispose();
         if (result && !result.isDisposed()) result.dispose();

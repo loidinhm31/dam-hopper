@@ -49,6 +49,8 @@ export default defineConfig({
     target: tauriPlatform === "windows" ? "chrome105" : "safari13",
     minify: tauriDebug ? false : "esbuild",
     sourcemap: Boolean(tauriDebug),
+    // Monaco is lazy-loaded, but its editor worker bundle exceeds Vite's web default.
+    chunkSizeWarningLimit: 4000,
   },
   worker: {
     format: "es",

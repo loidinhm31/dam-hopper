@@ -1,7 +1,7 @@
 ---
 title: "Session Model Delegation Audit"
 description: "Add privacy-safe per-terminal Codex session and agent model/token auditing, gated by proven app-server compatibility."
-status: in_progress
+status: completed
 priority: P2
 effort: 96h
 branch: main
@@ -33,7 +33,7 @@ Extend `/usage` with permanent, compact Codex session/node summaries. OTel owns 
 | 04 | [`agent_runs` summary persistence](./phase-04-agent-run-summary-persistence.md) | 02; 03 if enabled | 16h | **Completed (2026-08-01; flat OTel-only fallback)** |
 | 05 | [Protected session-audit API](./phase-05-protected-session-audit-api.md) | 04 | 10h | **Completed (2026-08-01; review cycle 3 approved)** |
 | 06 | [Shared Usage session-audit UI](./phase-06-shared-usage-session-audit-ui.md) | 05 | 14h | **Completed (2026-08-01; review approved 9.5/10)** |
-| 07 | [Release gates, tests, and docs](./phase-07-release-gates-tests-and-docs.md) | 01-06 | 14h | Pending |
+| 07 | [Release gates, tests, and docs](./phase-07-release-gates-tests-and-docs.md) | 01-06 | 14h | **Completed (2026-08-01; review approved 9.3/10; flat OTel-only fallback)** |
 
 ## Hard gate and fallback
 
@@ -68,7 +68,7 @@ Backend + shared UI tests pass; representative 100k-node list/detail p95 stays b
 
 - [x] Phase 04 implementation models multiple terminal associations without duplicating root/node totals.
 - [x] Phase 05 implementation applies overlap deletion semantics; Phase 06 must apply visible-page polling semantics.
-- [ ] Phase 02/03 must preserve fail-closed behavior for pre-existing OTel attributes.
+- [x] Phase 02 preserves fail-closed behavior for pre-existing OTel attributes; Phase 03 is N/A after the compatibility gate failed.
 
 Phase 01 is complete with a failed Codex 0.146.0 compatibility gate. Phase 02 is complete (review approved 8.5/10) and limited to opt-in correlation/model types for the flat OTel fallback. Phase 03 is N/A; downstream work must retain `lineage_unavailable` and must not infer parent edges. Phase 04 is complete as flat OTel-only `agent_runs` persistence: no app-server adapter, exact parent edges, or inferred lineage are in scope.
 
@@ -78,3 +78,5 @@ Phase 04 acceptance evidence: ordered migration and idempotent upgrade coverage;
 
 - Range deletion default: architecture recommends session time overlap; confirm product wording before implementation.
 - One provider root seen under multiple terminal markers: Phase 01 must define retained/current association semantics.
+
+Phase 07 completion note (2026-08-02, Asia/Saigon): release gates and documentation reconciliation are approved 9.3/10. Repository formatting and lint checks are clean, and the supported native Debian/RPM package gate completes without Vite warnings. AppImage is intentionally not a project release target; its third-party `linuxdeploy` binary is incompatible with the Fedora 44 validation host. The shipped scope remains flat OTel-only with `lineage_unavailable`; no exact lineage or inferred parent edges are claimed.

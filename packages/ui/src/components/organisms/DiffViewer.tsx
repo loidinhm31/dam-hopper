@@ -146,13 +146,14 @@ export function DiffViewer({
   // Monaco's DiffEditorWidget may have already disposed, which causes the
   // "TextModel got disposed before DiffEditorWidget model got reset" crash.
   useEffect(() => {
+    const models = modelsRef.current;
     return () => {
       const editor = diffEditorRef.current;
       if (editor) {
         (editor as unknown as { _roCleanup?: () => void })._roCleanup?.();
       }
       // Defer model disposal so Monaco's own editor cleanup runs first.
-      const { original, modified } = modelsRef.current;
+      const { original, modified } = models;
       requestAnimationFrame(() => {
         if (original && !original.isDisposed()) original.dispose();
         if (modified && !modified.isDisposed()) modified.dispose();
@@ -235,7 +236,7 @@ export function DiffViewer({
     modEditor.focus();
   }
 
-  async function handleSave() {
+  const handleSave = useCallback(async () => {
     const editor = diffEditorRef.current;
     if (!editor || !isDirty || saveState === "saving") return;
     const content = editor.getModifiedEditor().getValue();
@@ -279,7 +280,7 @@ export function DiffViewer({
       setSaveState("error");
       setSaveError(e instanceof Error ? e.message : String(e));
     }
-  }
+  }, [filePath, isDirty, project, qc, saveState]);
 
   // Keyboard shortcuts: Alt+↑/↓ for hunk nav, Ctrl+S for save.
   // `handleSave` stays stable so the listener always sees current save eligibility.
