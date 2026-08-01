@@ -59,6 +59,12 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [x] SQLite read-only/concurrent/corrupt regression coverage and privacy-safe release documentation
 - [ ] External Zsh/Fish, IME, screen-reader, and renderer checks where host executables/devices are unavailable
 
+### Session Model Delegation Audit (2026-08-01)
+
+- **Phase 01 Codex 0.146.0 compatibility gate — [COMPLETED (FAIL); review approved 9/10, 2026-08-01]**: app-server responses cross the required content-free boundary; exact lineage work is cancelled.
+- **Phase 02 opt-in correlation/model types — [PENDING; next eligible]**: proceed only with flat OTel model/token rows and `lineage_unavailable` fallback.
+- **Phase 03 metadata adapter/source join — [N/A]**: disabled by failed Phase 01 hard gate; no parent edges may be inferred.
+
 ## Roadmap Phases
 
 ### Phase 01: IDE File Explorer

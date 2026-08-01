@@ -1,0 +1,9 @@
+source_binary=CODEX_BIN
+source_version=codex-cli 0.146.0
+generated_command=codex app-server generate-json-schema --experimental --out TEMP_DIR
+thread_list_params_sha256=ccc09fa6d5d89fa76afd474f6d7ef8cf14edbe0e037d8a52aebf5bd14f435c5b
+thread_list_response_sha256=0c12f87cf3ab2c5fed95152a1e36873e6e56dadae39f46096267371ad65d1321
+thread_read_params_sha256=db97080f82facc3259dbb9404e9f0df81e360619f4cd73983a9d99d25f5089ee
+observation=Separate stdio app-server listed the active standalone CLI thread.
+gate_failure=thread/list has no content projection and requires cwd, preview, and turns in every thread response.
+privacy=No provider identifier, terminal marker, session path, cwd, prompt, response, title, or tool content retained.
