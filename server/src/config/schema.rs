@@ -297,6 +297,10 @@ pub struct TelemetryConfig {
     pub aggregate_retention_days: Option<u32>,
     #[serde(default, alias = "excluded_projects")]
     pub excluded_projects: Vec<String>,
+    /// Separately opts terminal shells into ephemeral Codex/OTLP ownership
+    /// correlation. Disabled by default even when telemetry is enabled.
+    #[serde(default, alias = "terminal_correlation_enabled")]
+    pub terminal_correlation_enabled: bool,
     #[serde(default)]
     pub collector: TelemetryCollectorConfig,
 }
@@ -310,6 +314,7 @@ impl Default for TelemetryConfig {
             detail_retention_days: default_telemetry_detail_retention_days(),
             aggregate_retention_days: None,
             excluded_projects: Vec::new(),
+            terminal_correlation_enabled: false,
             collector: TelemetryCollectorConfig::default(),
         }
     }

@@ -85,6 +85,7 @@ struct Health {
     paused: bool,
     writer_errors: u64,
     rejected_events: u64,
+    correlation_env_conflicts: u64,
     sampled_at: i64,
     collector: crate::telemetry::codex_otlp::CollectorHealthSnapshot,
 }
@@ -97,6 +98,7 @@ struct SettingsResponse {
     detail_retention_days: u16,
     aggregate_retention_days: Option<u32>,
     excluded_projects: Vec<String>,
+    terminal_correlation_enabled: bool,
     collector_enabled: bool,
     collector_setup: CollectorSetup,
     runtime: crate::telemetry::TelemetryRuntimeStatus,
@@ -136,6 +138,7 @@ pub struct SettingsPatch {
     pub detail_retention_days: Option<u16>,
     pub aggregate_retention_days: Option<Option<u32>>,
     pub excluded_projects: Option<Vec<String>>,
+    pub terminal_correlation_enabled: Option<bool>,
     pub collector: Option<TelemetryCollectorConfig>,
     /// Explicit user opt-in/out for the local Codex exporter. This is never
     /// persisted; ownership is derived from the local config on every action.
@@ -255,6 +258,8 @@ pub async fn summary(
         paused: !telemetry.control.is_enabled(),
         writer_errors: health_value(&store, "writer_errors").map_err(store_error)?,
         rejected_events: telemetry.control.rejected_count(),
+        correlation_env_conflicts: health_value(&store, "codex_correlation_env_conflicts")
+            .map_err(store_error)?,
         sampled_at: now_ms(),
         collector,
     };
@@ -302,6 +307,13 @@ pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, 
         paused: !telemetry.control.is_enabled(),
         writer_errors,
         rejected_events: telemetry.control.rejected_count(),
+        correlation_env_conflicts: telemetry
+            .store
+            .as_ref()
+            .map(|store| health_value(store, "codex_correlation_env_conflicts"))
+            .transpose()
+            .map_err(store_error)?
+            .unwrap_or(0),
         sampled_at: now_ms(),
         collector,
     }))
@@ -356,6 +368,9 @@ pub async fn update_settings(
         }
         if let Some(projects) = patch.excluded_projects {
             telemetry.excluded_projects = projects;
+        }
+        if let Some(enabled) = patch.terminal_correlation_enabled {
+            telemetry.terminal_correlation_enabled = enabled;
         }
         if let Some(collector) = patch.collector {
             telemetry.collector = collector;
@@ -527,6 +542,7 @@ fn settings_response(
         detail_retention_days: telemetry.detail_retention_days,
         aggregate_retention_days: telemetry.aggregate_retention_days,
         excluded_projects: telemetry.excluded_projects,
+        terminal_correlation_enabled: telemetry.terminal_correlation_enabled,
         collector_enabled: telemetry.collector.enabled,
         runtime,
         collector_setup: CollectorSetup {

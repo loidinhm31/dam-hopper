@@ -51,19 +51,40 @@ pub async fn create_session(
 
     let (restart_policy, restart_max_retries, env) =
         resolve_terminal_env(&state, body.project.as_deref(), body.env).await?;
+    let _telemetry_transition = state.telemetry_coordinator.lock().await;
     let telemetry = state
         .telemetry
         .read()
         .expect("telemetry state lock poisoned")
         .clone();
-    let collector_enabled = state.config.read().await.server.telemetry.collector.enabled;
-    let codex_marker = (collector_enabled
-        && telemetry.control.is_enabled()
-        && is_direct_codex_command(&body.command)
-        && !env.contains_key("OTEL_RESOURCE_ATTRIBUTES")
+    let telemetry_config = state.config.read().await.server.telemetry.clone();
+    let has_otel_attribute_conflict = env.contains_key("OTEL_RESOURCE_ATTRIBUTES")
         // Do not overwrite an inherited collector configuration either.
-        && std::env::var_os("OTEL_RESOURCE_ATTRIBUTES").is_none())
-    .then(|| SafeIdentifier::new(Uuid::new_v4().to_string()).expect("UUID is a safe identifier"));
+        || std::env::var_os("OTEL_RESOURCE_ATTRIBUTES").is_some();
+    let correlation_requested = telemetry_config.terminal_correlation_enabled
+        && telemetry_config.collector.enabled
+        && telemetry.control.is_enabled();
+    let correlation_enabled = correlation_decision(
+        telemetry_config.terminal_correlation_enabled,
+        telemetry_config.collector.enabled,
+        telemetry.control.is_enabled(),
+        has_otel_attribute_conflict,
+    );
+    if correlation_requested && has_otel_attribute_conflict {
+        if let Some(store) = telemetry.store.as_ref() {
+            let store = store.clone();
+            tokio::task::spawn_blocking(move || {
+                let _ = store.increment_health(
+                    "codex_correlation_env_conflicts",
+                    1,
+                    chrono::Utc::now().timestamp_millis(),
+                );
+            });
+        }
+    }
+    let codex_marker = correlation_enabled.then(|| {
+        SafeIdentifier::new(Uuid::new_v4().to_string()).expect("UUID is a safe identifier")
+    });
 
     let meta = state
         .pty_manager
@@ -75,6 +96,8 @@ pub async fn create_session(
             runtime_otlp_run_marker: codex_marker
                 .as_ref()
                 .map(|marker| marker.as_str().to_string()),
+            runtime_codex_correlation: correlation_enabled
+                .then(|| telemetry.codex_correlation.clone()),
             cols: body.cols,
             rows: body.rows,
             project: body.project,
@@ -82,36 +105,29 @@ pub async fn create_session(
             restart_max_retries,
         })
         .map_err(ApiError::from_app)?;
-    if let Some(marker) = codex_marker {
-        telemetry
-            .codex_correlation
-            .register(marker, chrono::Utc::now().timestamp_millis());
-    }
     Ok(Json(meta))
 }
 
-fn is_direct_codex_command(command: &str) -> bool {
-    let mut words = command.split_ascii_whitespace();
-    matches!(words.next(), Some("codex"))
-        && !command.chars().any(|character| {
-            matches!(
-                character,
-                '|' | ';' | '&' | '>' | '<' | '`' | '$' | '\n' | '\r'
-            )
-        })
+fn correlation_decision(
+    configured: bool,
+    collector_enabled: bool,
+    runtime_enabled: bool,
+    has_otel_attribute_conflict: bool,
+) -> bool {
+    configured && collector_enabled && runtime_enabled && !has_otel_attribute_conflict
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_direct_codex_command;
+    use super::correlation_decision;
 
     #[test]
-    fn recognizes_only_an_uncomposed_codex_invocation() {
-        assert!(is_direct_codex_command("codex --json"));
-        assert!(!is_direct_codex_command("CODEx --json"));
-        assert!(!is_direct_codex_command("env codex --json"));
-        assert!(!is_direct_codex_command("codex --json && other-command"));
-        assert!(!is_direct_codex_command("codex; other-command"));
+    fn correlation_is_separately_opted_in_and_fails_closed() {
+        assert!(correlation_decision(true, true, true, false));
+        assert!(!correlation_decision(false, true, true, false));
+        assert!(!correlation_decision(true, false, true, false));
+        assert!(!correlation_decision(true, true, false, false));
+        assert!(!correlation_decision(true, true, true, true));
     }
 }
 
