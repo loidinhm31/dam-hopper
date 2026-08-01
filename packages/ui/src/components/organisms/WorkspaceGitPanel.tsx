@@ -5,7 +5,7 @@ import { GitLogTree } from "@/components/organisms/GitLogTree.js";
 import { CommitDetailsPanel } from "@/components/organisms/CommitDetailsPanel.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { cn } from "@/lib/utils.js";
-import { api } from "@/api/client.js";
+import { api, isGitUnavailableError } from "@/api/client.js";
 import {
   useBranches,
   useGitLog,
@@ -228,8 +228,11 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
   const { passphraseDialogProps, statusMessage, executeWithRetry } =
     useGitWithSshRetry();
   const offset = page * WORKSPACE_GIT_LOG_LIMIT;
-  const { data: roots = [] } = useGitRoots(project);
-  const { data: branches = [] } = useBranches(project, selectedRootId);
+  const { data: roots = [], error: rootsError } = useGitRoots(project);
+  const { data: branches = [], error: branchesError } = useBranches(
+    project,
+    selectedRootId,
+  );
   const rootOptions = workspaceGitRootOptions(roots);
   const selectedRoot =
     rootOptions.find((root) => root.rootId === selectedRootId) ??
@@ -350,6 +353,23 @@ export function WorkspaceGitPanel({ project }: WorkspaceGitPanelProps) {
       current?.hash === undoneHash ? null : current,
     );
   };
+
+  if (
+    isGitUnavailableError(rootsError) ||
+    isGitUnavailableError(branchesError)
+  ) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-xs text-[var(--color-text-muted)]">
+        <span className="font-medium text-[var(--color-text)]">
+          Git is not initialized for this project
+        </span>
+        <span>
+          Run <code className="font-mono">git init</code> to enable Git history
+          and actions.
+        </span>
+      </div>
+    );
+  }
 
   return (
     <>

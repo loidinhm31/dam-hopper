@@ -331,6 +331,7 @@ export function ChangedFilesList({
 
   // Guard against stale cache holding old DiffFileEntry[] shape before response format changed
   const isLegacyShape = Array.isArray(data);
+  const isGitUnavailable = !isLegacyShape && data?.gitAvailable === false;
   const entries = isLegacyShape
     ? (data as unknown as DiffFileEntry[])
     : (data?.entries ?? []);
@@ -525,6 +526,21 @@ export function ChangedFilesList({
         >
           Retry
         </button>
+      </div>
+    );
+  }
+
+  if (isGitUnavailable) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 p-4 text-center text-xs text-[var(--color-text-muted)]">
+        <AlertTriangle className="h-5 w-5 text-amber-400" />
+        <span className="font-medium text-[var(--color-text)]">
+          Git is not initialized for this project
+        </span>
+        <span className="text-[10px]">
+          Run <code className="font-mono">git init</code> in the terminal to
+          start tracking changes.
+        </span>
       </div>
     );
   }

@@ -3,6 +3,23 @@ import { getTransport } from "./transport.js";
 import type { FsListResponse, HealthResponse } from "./fs-types.js";
 import type { CommandHistoryEntry } from "@/lib/command-history.js";
 
+export class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly code?: string,
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
+export function isGitUnavailableError(error: unknown): boolean {
+  return (
+    error instanceof ApiRequestError && error.code === "GIT_NOT_INITIALIZED"
+  );
+}
+
 export interface SessionInfo {
   id: string;
   project?: string;
@@ -727,6 +744,18 @@ export interface DiffResponse {
   untrackedTruncated: boolean;
   untrackedTotal: number;
 }
+
+export interface GitUnavailableResult {
+  gitAvailable: false;
+  code: "GIT_NOT_INITIALIZED";
+  entries: [];
+  untrackedTruncated: false;
+  untrackedTotal: 0;
+}
+
+export type GitDiffResult =
+  | (DiffResponse & { gitAvailable: true })
+  | GitUnavailableResult;
 
 export interface HunkInfo {
   index: number;

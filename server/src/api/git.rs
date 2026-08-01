@@ -10,10 +10,11 @@ use crate::git::bulk::ProjectRef;
 use crate::git::progress::create_progress_channel;
 use crate::git::{
     add_worktree, checkout_branch, cherry_pick, cherry_pick_commit_files, create_branch,
-    delete_branch, discover_vcs_roots, drop_commit, drop_commit_files, edit_commit_message,
-    get_commit_message, get_log, list_branches, list_worktrees, remove_worktree, reset_to_commit,
-    resolve_git_request_root, revert_commit, revert_commit_files, undo_last_commit, update_branch,
-    BulkGitService, CheckoutStrategy, ResetMode, WorktreeAddOptions,
+    delete_branch, discover_available_vcs_roots, drop_commit, drop_commit_files,
+    edit_commit_message, get_commit_message, get_log, list_branches, list_worktrees,
+    remove_worktree, reset_to_commit, resolve_git_request_root, revert_commit,
+    revert_commit_files, undo_last_commit, update_branch, BulkGitService, CheckoutStrategy,
+    ResetMode, WorktreeAddOptions,
 };
 use crate::pty::EventSink as _;
 use crate::state::AppState;
@@ -144,7 +145,7 @@ pub async fn get_vcs_roots(
     Path(project): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_project_path(&state, &project).await?;
-    let roots = discover_vcs_roots(&path).map_err(ApiError::from_app)?;
+    let roots = discover_available_vcs_roots(&path).map_err(ApiError::from_app)?;
     Ok(Json(roots))
 }
 
