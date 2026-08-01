@@ -386,6 +386,8 @@ export type UsageBucket = "hour" | "day";
 export type UsageWindow = "24h" | "7d" | "30d";
 export type UsageShell = "bash" | "zsh" | "fish";
 export type UsageCaptureQuality = "rich" | "partial" | "unavailable";
+/** Bounded provider model identifier. Treat as display-only opaque text. */
+export type UsageModel = string;
 
 export interface UsageSummaryQuery {
   from?: number;
@@ -397,7 +399,7 @@ export interface UsageSummaryQuery {
   captureQuality?: UsageCaptureQuality;
   category?: string;
   agent?: "codex";
-  model?: string;
+  model?: UsageModel;
 }
 
 export interface UsageAggregate {
@@ -547,7 +549,7 @@ export type UsageSessionDelegationState =
 export interface UsageSessionQuery {
   from?: number;
   to?: number;
-  model?: string;
+  model?: UsageModel;
   terminal?: string;
   limit?: number;
   cursor?: string;
@@ -572,7 +574,7 @@ export interface UsageSessionSummary {
   id: string;
   startedAtUtcMs: number;
   endedAtUtcMs: number;
-  rootModel: string | null;
+  rootModel: UsageModel | null;
   childCount: number;
   tokens: UsageTokens;
   mainTokenShare: number | null;
@@ -593,7 +595,7 @@ export interface UsageSessionNode {
   parentId: string | null;
   role: "root" | "main" | "subagent";
   depth: number;
-  model: string | null;
+  model: UsageModel | null;
   startedAtUtcMs: number;
   endedAtUtcMs: number | null;
   tokens: UsageTokens;
