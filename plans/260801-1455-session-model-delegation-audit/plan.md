@@ -80,3 +80,5 @@ Phase 04 acceptance evidence: ordered migration and idempotent upgrade coverage;
 - One provider root seen under multiple terminal markers: Phase 01 must define retained/current association semantics.
 
 Phase 07 completion note (2026-08-02, Asia/Saigon): release gates and documentation reconciliation are approved 9.3/10. Repository formatting and lint checks are clean, and the supported native Debian/RPM package gate completes without Vite warnings. AppImage is intentionally not a project release target; its third-party `linuxdeploy` binary is incompatible with the Fedora 44 validation host. The shipped scope remains flat OTel-only with `lineage_unavailable`; no exact lineage or inferred parent edges are claimed.
+
+Finalization note (2026-08-02, Asia/Saigon): approved revision makes terminal correlation default-on whenever telemetry is configured, while preserving explicit `false` as the opt-out. Plan remains completed; flat OTel-only lineage and privacy boundaries are unchanged.

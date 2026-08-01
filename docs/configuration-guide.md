@@ -365,7 +365,7 @@ enabling the collector does not change the loopback-only network boundary.
 ```toml
 [server.telemetry]
 enabled = false
-terminal_correlation_enabled = false
+terminal_correlation_enabled = true
 db_path = "~/.config/dam-hopper/telemetry.db"
 detail_retention_days = 90
 # aggregate_retention_days = 365
@@ -380,7 +380,7 @@ port = 4811
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `enabled` | bool | `false` | Master switch for telemetry collection and persistence |
-| `terminal_correlation_enabled` | bool | `false` | Separately opts terminal shells into ephemeral Codex ownership correlation; requires telemetry and the collector |
+| `terminal_correlation_enabled` | bool | `true` | Correlates terminal shells with Codex usage when telemetry and the collector are active; set `false` to opt out |
 | `db_path` | string | `~/.config/dam-hopper/telemetry.db` | SQLite telemetry database path |
 | `detail_retention_days` | u16 | `90` | Detailed-event retention, from 1 to 3650 days |
 | `aggregate_retention_days` | u32 or omitted | omitted | Optional aggregate retention; when set, must be positive |
