@@ -175,7 +175,21 @@ fn apply_migrations(connection: &Connection) -> Result<(), rusqlite::Error> {
         transaction.commit()?;
         version = 2;
     }
-    if version != 2 {
+    if version == 2 {
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(include_str!("migrations/003_terminal_summary_lookup.sql"))?;
+        transaction.pragma_update(None, "user_version", 3_i64)?;
+        transaction.commit()?;
+        version = 3;
+    }
+    if version == 3 {
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(include_str!("migrations/004_session_root_order.sql"))?;
+        transaction.pragma_update(None, "user_version", 4_i64)?;
+        transaction.commit()?;
+        version = 4;
+    }
+    if version != 4 {
         return Err(rusqlite::Error::InvalidQuery);
     }
     Ok(())
@@ -265,10 +279,10 @@ fn upsert_terminal_run(
     event: &TerminalRunEvent,
 ) -> Result<(), rusqlite::Error> {
     transaction.execute(
-        "INSERT INTO terminal_runs(run_id, project, shell, started_at_utc_ms, ended_at_utc_ms, capture_quality)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT(run_id) DO UPDATE SET ended_at_utc_ms = excluded.ended_at_utc_ms, capture_quality = excluded.capture_quality",
-        params![event.run_id.0.to_string(), event.project.as_ref().map(|v| v.as_str()), shell(event.shell), event.started_at_utc_ms, event.ended_at_utc_ms, capture(event.capture_quality)],
+        "INSERT INTO terminal_runs(run_id, terminal_fingerprint, project, shell, started_at_utc_ms, ended_at_utc_ms, capture_quality)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(run_id) DO UPDATE SET terminal_fingerprint = coalesce(excluded.terminal_fingerprint, terminal_runs.terminal_fingerprint), ended_at_utc_ms = excluded.ended_at_utc_ms, capture_quality = excluded.capture_quality",
+        params![event.run_id.0.to_string(), event.terminal_fingerprint.as_ref().map(digest), event.project.as_ref().map(|v| v.as_str()), shell(event.shell), event.started_at_utc_ms, event.ended_at_utc_ms, capture(event.capture_quality)],
     )?;
     Ok(())
 }
@@ -759,7 +773,7 @@ mod tests {
     }
 
     #[test]
-    fn upgrades_v1_schema_once_and_reopens_at_v2() {
+    fn upgrades_v1_schema_once_and_reopens_at_v4() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("telemetry.db");
         let connection = Connection::open(&path).unwrap();
@@ -779,7 +793,7 @@ mod tests {
                 .unwrap()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            2
+            4
         );
         drop(store);
         let reopened = TelemetryStore::open(&path).unwrap();
@@ -789,6 +803,9 @@ mod tests {
             .is_ok());
         assert!(connection
             .prepare("SELECT terminal_fingerprint FROM agent_run_terminals")
+            .is_ok());
+        assert!(connection
+            .prepare("SELECT terminal_fingerprint FROM terminal_runs")
             .is_ok());
     }
 
@@ -1064,6 +1081,7 @@ mod tests {
         let started = TerminalRunEvent {
             schema_version: TELEMETRY_SCHEMA_VERSION,
             run_id,
+            terminal_fingerprint: None,
             project: Some(SafeIdentifier::new("project").unwrap()),
             shell: ShellKind::Bash,
             started_at_utc_ms: 1,
