@@ -12,6 +12,34 @@ interface State {
   error: Error | null;
 }
 
+const STALE_CHUNK_RELOAD_KEY = "dam-hopper:stale-chunk-reload-attempted";
+
+export function isStaleChunkError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+
+  return (
+    error.name === "ChunkLoadError" ||
+    /^Loading chunk \d+ failed(?:[.: (]|$)/i.test(error.message) ||
+    /^Failed to fetch dynamically imported module(?::|$)/i.test(
+      error.message,
+    ) ||
+    /^Importing a module script failed(?:\.|$)/i.test(error.message)
+  );
+}
+
+function reloadOnceForStaleChunk(error: Error): void {
+  if (!isStaleChunkError(error) || typeof window === "undefined") return;
+
+  try {
+    if (window.sessionStorage.getItem(STALE_CHUNK_RELOAD_KEY) !== null) return;
+
+    window.sessionStorage.setItem(STALE_CHUNK_RELOAD_KEY, "1");
+    window.location.reload();
+  } catch {
+    // Storage can be unavailable in privacy or sandboxed contexts. Fail closed.
+  }
+}
+
 export class ErrorBoundary extends Component<Props, State> {
   public state: State = {
     hasError: false,
@@ -28,6 +56,7 @@ export class ErrorBoundary extends Component<Props, State> {
       error,
       componentStack: errorInfo.componentStack,
     });
+    reloadOnceForStaleChunk(error);
   }
 
   public render() {

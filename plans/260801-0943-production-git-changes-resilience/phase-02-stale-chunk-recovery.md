@@ -11,7 +11,7 @@ Independent of Phase 01. Phase 03 waits for it.
 
 ## Overview
 
-Priority P1. Status pending. Recover an open GitHub Pages tab once when a removed, hashed Vite chunk fails to load.
+Priority P1. Status **DONE — 2026-08-01 14:42 +07:00**. Recover an open GitHub Pages tab once when a removed, hashed Vite chunk fails to load.
 
 ## Key insights
 
@@ -46,14 +46,21 @@ Phase 02 exclusively owns both files.
 
 ## Todo list
 
-- [ ] Classifier and reload guard
-- [ ] Error-boundary tests
+- [x] Classifier and reload guard
+- [x] Error-boundary tests
 
 ## Success criteria
 
 - A stale chunk triggers exactly one reload per tab session.
 - The next stale failure renders the existing recovery UI.
 - Normal error-boundary behavior is unchanged.
+
+## Validation
+
+- ErrorBoundary focused tests: 10/10 passed.
+- Browser regression suite: 64/64 passed.
+- UI production build passed.
+- Full UI baseline: 748/750 passed; the two failures are Phase 01 filename-convention checks.
 
 ## Conflict prevention
 
