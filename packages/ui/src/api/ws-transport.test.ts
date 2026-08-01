@@ -233,6 +233,38 @@ describe("WsTransport typed API errors", () => {
   });
 });
 
+describe("WsTransport usage session endpoints", () => {
+  it("maps list filters and encoded detail IDs to protected usage routes", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ sessions: [], nodes: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("usage:sessions", {
+      from: 10,
+      to: 20,
+      model: "gpt-5.6-sol",
+      limit: 50,
+    });
+    await transport.invoke("usage:session", { id: "session/id" });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/usage/sessions?from=10&to=20&model=gpt-5.6-sol&limit=50",
+    );
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "http://localhost:4800/api/usage/sessions/session%2Fid",
+    );
+    transport.destroy();
+  });
+});
+
 describe("WsTransport diagnostics export endpoint", () => {
   it("posts the diagnostics export request to the protected API route", async () => {
     installMockWebSocket();

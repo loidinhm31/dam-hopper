@@ -373,22 +373,30 @@ marker to a DamHopper terminal/run identity plus expiry, instead of retaining on
 Raw markers and provider thread IDs never enter SQLite or browser responses; keyed HMAC identifiers
 provide durable joins.
 
-`agent_runs` is the permanent flat summary layer. A runtime-owned migration adds HMAC run/root/parent
+`agent_runs` is the permanent flat summary layer. Runtime-owned migrations add HMAC run/root/parent
 identifiers, bounded role/model/status, nullable token totals, explicit lineage/token quality, and a
 separate HMAC-only `agent_run_terminals` association table. `TelemetryStore` applies migrations
-atomically and advances SQLite `user_version`; operators must not execute migration files manually.
+atomically and advances SQLite `user_version`; the session-audit indexes include terminal lookup and
+stable root ordering (`003_terminal_summary_lookup`, `004_session_root_order`). Operators must not
+execute migration files manually.
 Idempotent upserts preserve summaries before detail purge, while the compatibility fallback remains
 flat `lineage_unavailable` with no inferred parent/child edges. `delta` counters add; `cumulative`
 counters accept only newer non-regressing observations, rejecting stale, conflicting, or regressing
 updates as summary conflicts.
 
-The protected API keeps `GET /api/usage/summary` unchanged and adds cursor-bounded session list and
-single-tree detail reads. Responses contain derived route IDs, terminal label/identity, timestamps,
+The protected API keeps `GET /api/usage/summary` unchanged and adds `GET /api/usage/sessions` and
+`GET /api/usage/sessions/{id}` for cursor-bounded session list and single-tree detail reads. The
+list defaults to a 30-day UTC range, accepts optional model/terminal filters, and caps pages at 100
+rows (default 25) across a maximum five-year range. Cursors are authenticated and bound to the
+range and filters. Detail trees are capped at 256 nodes and depth 16; responses flag truncation.
+Responses contain derived route IDs, terminal label/identity, timestamps,
 safe provider/model/role/status, nullable token components, child count, main-token share,
 delegation observed/not observed, and coverage only. Exact app-server lineage plus OTel tokens is
 `exact`; OTel-only rows are `lineage_unavailable`; app-server-only nodes are
 `token_data_unavailable`; source disagreement is `partial`. Time, event order, model rank, titles,
 and text never create an edge. No child observed is a fact, never a violation or productivity score.
+Invalid ranges, limits, model identifiers, cursors, and non-derived terminal/session IDs fail closed.
+The routes return summaries only; raw telemetry rows and content-bearing fields remain private.
 
 Model identifiers are generalized rather than tied to a fixed model-name allowlist. They are
 bounded to 1–64 safe ASCII characters, must start and end alphanumeric, and may contain `.`, `_`,

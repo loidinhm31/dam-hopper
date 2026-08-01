@@ -660,7 +660,7 @@ fn quality_name(value: CaptureQuality) -> &'static str {
         CaptureQuality::Unavailable => "unavailable",
     }
 }
-fn now_ms() -> i64 {
+pub(super) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

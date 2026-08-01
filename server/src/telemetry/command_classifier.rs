@@ -8,6 +8,7 @@ use super::{
 };
 
 pub const COMMAND_HMAC_DOMAIN: &[u8] = b"cmd:v1";
+pub const TERMINAL_HMAC_DOMAIN: &[u8] = b"codex-terminal:v1";
 const MAX_COMMAND_BYTES: usize = 8 * 1024;
 const MAX_ARGUMENTS: usize = 64;
 const UNAVAILABLE_INPUT: &[u8] = b"<unavailable>";
@@ -33,6 +34,13 @@ impl CommandClassifier {
 
     pub fn normalize(&self, command: &str) -> NormalizedCommand {
         normalize_with_digest(command, |domain, fields| self.key.digest(domain, fields))
+    }
+
+    pub fn terminal_fingerprint(&self, run_id: super::types::TerminalRunId) -> HmacDigest {
+        self.key.digest(
+            TERMINAL_HMAC_DOMAIN,
+            &[run_id.0.as_hyphenated().to_string().as_bytes()],
+        )
     }
 }
 
