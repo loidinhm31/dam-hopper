@@ -833,6 +833,26 @@ function channelToEndpoint(
         url: `/api/usage/summary${query ? `?${query}` : ""}`,
       };
     }
+    case "usage:sessions": {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(
+        data as Record<string, unknown>,
+      )) {
+        if (value !== undefined) params.set(key, String(value));
+      }
+      const query = params.toString();
+      return {
+        method: "GET",
+        url: `/api/usage/sessions${query ? `?${query}` : ""}`,
+      };
+    }
+    case "usage:session": {
+      const d = data as { id: string };
+      return {
+        method: "GET",
+        url: `/api/usage/sessions/${encodeURIComponent(d.id)}`,
+      };
+    }
     case "usage:health":
       return { method: "GET", url: "/api/usage/health" };
     case "usage:settings":

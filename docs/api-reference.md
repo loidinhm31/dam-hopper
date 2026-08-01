@@ -327,13 +327,41 @@ status. `PATCH` accepts setup fields including `enabled`, `codexExporter`, and `
 It returns status only; bearer material is never returned. The Settings flow uses this route for
 live enable/disable, receiver retry, and explicit Codex exporter management.
 
+### GET /api/usage/sessions
+
+Lists protected, aggregate session summaries for the model/delegation audit. The route requires
+Bearer authentication and never returns raw event, prompt, response, tool, or command content.
+Query parameters are camelCase: `from`/`to` (non-negative UTC milliseconds; both required when
+using an explicit range), `model`, `terminal`, `limit`, and opaque `cursor`. Without a range the
+default is the most recent 30 days; ranges are capped at five years. `limit` defaults to 25 and is
+bounded to 1–100. `model` accepts the same 1–64 character safe provider/model identifier as the
+summary route. `terminal` must be a returned HMAC terminal digest. Cursors are authenticated,
+opaque, and scoped to the range and filters that created them.
+
+The response is `{ range: { from, to }, sessions, nextCursor, paused }`. Each session contains a
+derived HMAC `id`, UTC start/end timestamps, optional root model, child count, nullable token
+components (`inputTokens`, `cachedInputTokens`, `outputTokens`, `reasoningTokens`),
+`mainTokenShare`, `delegationState`, `coverage`, and HMAC terminal references. Invalid ranges,
+limits, cursors, model values, or digests are rejected; paused/unavailable collection is reported
+by state rather than fabricated zeros.
+
+### GET /api/usage/sessions/{id}
+
+Returns one session's bounded delegation tree. `{id}` must be a derived HMAC session identifier
+from the list response. The response is `{ session, nodes, truncated, maxNodes, maxDepth, paused }`;
+the caps are 256 nodes and depth 16. Nodes expose only derived IDs, parent IDs, role, bounded model,
+UTC timestamps, nullable token components, and coverage (`lineage`, `tokens`, `correlation`). A
+missing session returns not found. Trees exceeding a cap are truncated and flagged; no hierarchy is
+inferred from ordering, model names, titles, or text.
+
 ### Agent-run summaries (internal store contract)
 
 Accepted Codex OTel events maintain one permanent flat summary per HMAC run. Summaries contain safe
 provider/model/role/status, nullable token components, explicit `delta` or `cumulative` semantics,
 and `lineageQuality`/`tokenQuality`. Because the Phase 01 app-server gate failed, rows use
 `lineage_unavailable`; no hierarchy is inferred. Terminal associations are HMAC-only and may count
-multiple terminals without exposing raw identifiers. No public session-list route is exposed yet.
+multiple terminals without exposing raw identifiers. The session routes above project these
+summaries into bounded list/tree responses and never expose the underlying rows.
 
 ### DELETE /api/usage
 

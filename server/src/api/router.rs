@@ -21,7 +21,7 @@ use crate::state::AppState;
 use super::{
     agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
     fs as fs_api, git, git_diff, port_forward as port_forward_api, settings, ssh, system, terminal,
-    tunnel, usage, workspace, ws,
+    tunnel, usage, usage_sessions, workspace, ws,
 };
 
 /// Build the full Axum router with auth middleware, CORS, and all routes.
@@ -71,6 +71,8 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/config/projects/{name}", patch(config::update_project))
         // Usage analytics is aggregate-only and always protected by this router.
         .route("/api/usage/summary", get(usage::summary))
+        .route("/api/usage/sessions", get(usage_sessions::list_sessions))
+        .route("/api/usage/sessions/{id}", get(usage_sessions::get_session))
         .route("/api/usage/health", get(usage::health))
         .route(
             "/api/usage/settings",
