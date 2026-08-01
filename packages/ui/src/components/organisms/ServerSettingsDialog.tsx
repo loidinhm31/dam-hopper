@@ -15,7 +15,6 @@ import {
   buildAuthHeaders,
   createProfile,
   updateProfile,
-  getActiveProfile,
   setActiveProfile,
 } from "@/api/server-config.js";
 

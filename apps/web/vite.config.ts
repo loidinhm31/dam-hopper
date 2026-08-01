@@ -33,6 +33,8 @@ export default defineConfig(({ mode }) => {
       },
     },
     build: {
+      // Monaco is lazy-loaded, but its editor worker bundle exceeds Vite's web default.
+      chunkSizeWarningLimit: 4500,
       rollupOptions: {
         output: {
           manualChunks(id) {

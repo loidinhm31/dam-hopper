@@ -1,0 +1,14 @@
+# Dependency, build, and platform-generated artifacts.
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+target/
+**/target/
+apps/native/src-tauri/gen/
+coverage/
+playwright-report/
+test-results/
+
+# Planning records are immutable evidence, not application source.
+plans/

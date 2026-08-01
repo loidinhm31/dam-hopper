@@ -227,7 +227,8 @@ pub fn agent_root_aggregates(
             CASE WHEN count(cached_input_tokens) > 0 THEN sum(cached_input_tokens) END,
             CASE WHEN count(output_tokens) > 0 THEN sum(output_tokens) END,
             CASE WHEN count(reasoning_tokens) > 0 THEN sum(reasoning_tokens) END
-         FROM agent_runs WHERE root_run_id IN ({placeholders}) GROUP BY root_run_id"
+         FROM agent_runs INDEXED BY idx_agent_runs_root_aggregate
+         WHERE root_run_id IN ({placeholders}) GROUP BY root_run_id"
     );
     let values = root_ids
         .iter()
@@ -353,7 +354,7 @@ pub fn agent_terminal_associations(
         "SELECT n.root_run_id, t.terminal_fingerprint, tr.project,
                 coalesce(tr.started_at_utc_ms, min(t.first_seen_at_utc_ms)),
                 min(t.first_seen_at_utc_ms), max(t.last_seen_at_utc_ms)
-         FROM agent_run_terminals t
+         FROM agent_run_terminals t INDEXED BY idx_agent_run_terminals_run_bounds
          JOIN agent_runs n ON n.run_id = t.run_id
          LEFT JOIN terminal_runs tr ON tr.terminal_fingerprint = t.terminal_fingerprint
          WHERE n.root_run_id IN ({placeholders})
