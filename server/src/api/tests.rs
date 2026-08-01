@@ -18,8 +18,9 @@ use crate::{
     telemetry::{
         load_or_create_hmac_key, normalize_command,
         worker::{TelemetryControl, TelemetryHandle},
-        CaptureQuality, CommandEvent, CommandEventId, CommandOutcome, ShellKind, TelemetryCmd,
-        TelemetryKeyRing, TelemetryStore, TerminalRunEvent, TerminalRunId,
+        AgentUsageEvent, CaptureQuality, CodexModel, CodexVersion, CommandEvent, CommandEventId,
+        CommandOutcome, CorrelationQuality, ShellKind, TelemetryCmd, TelemetryKeyRing,
+        TelemetryStore, TerminalRunEvent, TerminalRunId, TokenCounterSemantic,
         TELEMETRY_SCHEMA_VERSION,
     },
     tunnel::{CloudflaredDriver, TunnelSessionManager},
@@ -58,7 +59,7 @@ fn make_state(tmp: &TempDir) -> AppState {
     let config_file = workspace_dir.join("dam-hopper.toml");
     std::fs::write(&config_file, "[workspace]\nname = \"test-workspace\"\n").ok();
 
-    let config = DamHopperConfig {
+    let mut config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
             root: ".".into(),
@@ -69,6 +70,9 @@ fn make_state(tmp: &TempDir) -> AppState {
         features: FeaturesConfig::default(),
         config_path: workspace_dir.join("dam-hopper.toml"),
     };
+    // Runtime-enable tests must not race through the user's default telemetry
+    // database when lib tests run concurrently.
+    config.server.telemetry.db_path = tmp.path().join("telemetry.db").display().to_string();
 
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
@@ -1675,6 +1679,114 @@ async fn usage_settings_apply_pause_atomically_and_delete_requires_confirmation(
 }
 
 #[tokio::test]
+async fn usage_delete_all_removes_summaries_before_rotating_hmac_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    activate_telemetry(&state, &tmp);
+    let telemetry = state.telemetry.read().unwrap().clone();
+    let keys = telemetry.hmac_keys.as_ref().unwrap();
+    let before = keys.digest(b"rotation-proof", &[b"stable"]);
+    let event = AgentUsageEvent {
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+        id: keys.digest(b"event", &[b"delete-all"]),
+        occurred_at_utc_ms: 10,
+        conversation_fingerprint: Some(keys.digest(b"conversation", &[b"delete-all"])),
+        terminal_fingerprint: Some(keys.digest(b"terminal", &[b"delete-all"])),
+        model: Some(CodexModel::new("gpt-5.6-sol").unwrap()),
+        source_version: CodexVersion::new("0.146.0").unwrap(),
+        correlation_quality: CorrelationQuality::Exact,
+        counter_semantic: TokenCounterSemantic::Delta,
+        input_tokens: Some(2),
+        cached_input_tokens: Some(3),
+        output_tokens: Some(5),
+        reasoning_tokens: Some(7),
+    };
+    let store = telemetry.store.as_ref().unwrap();
+    store
+        .write_batch(vec![TelemetryCmd::AgentUsage(event)])
+        .unwrap();
+    assert_eq!(
+        store
+            .open_read()
+            .unwrap()
+            .query_row("SELECT count(*) FROM agent_run_terminals", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+
+    let deleted = delete_json(
+        state,
+        "/api/usage",
+        serde_json::json!({"confirmation": "delete-usage-data"}),
+    )
+    .await;
+    assert_eq!(deleted.status(), StatusCode::OK);
+    let connection = store.open_read().unwrap();
+    for table in ["agent_usage_events", "agent_run_terminals", "agent_runs"] {
+        let count = connection
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "{table} must be empty before successful response");
+    }
+    assert_ne!(keys.digest(b"rotation-proof", &[b"stable"]), before);
+}
+
+#[tokio::test]
+async fn usage_delete_all_restores_capture_when_hmac_rotation_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    activate_telemetry(&state, &tmp);
+    let telemetry = state.telemetry.read().unwrap().clone();
+    let store = telemetry.store.as_ref().unwrap();
+    store.increment_health("delete-proof", 1, 10).unwrap();
+
+    let key_path = tmp.path().join("telemetry-key");
+    std::fs::remove_file(&key_path).unwrap();
+    std::fs::create_dir(&key_path).unwrap();
+    let response = delete_json(
+        state,
+        "/api/usage",
+        serde_json::json!({"confirmation": "delete-usage-data"}),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(telemetry.control.is_enabled());
+    assert_eq!(
+        store
+            .open_read()
+            .unwrap()
+            .query_row("SELECT count(*) FROM telemetry_health", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0,
+        "deletion must commit before the forced rotation failure"
+    );
+}
+
+#[tokio::test]
+async fn usage_delete_all_preserves_disabled_unpaused_admission_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    activate_telemetry(&state, &tmp);
+    let telemetry = state.telemetry.read().unwrap().clone();
+    telemetry.control.set_enabled(false);
+    assert!(!state.config.read().await.server.telemetry.paused);
+
+    let response = delete_json(
+        state,
+        "/api/usage",
+        serde_json::json!({"confirmation": "delete-usage-data"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!telemetry.control.is_enabled());
+}
+
+#[tokio::test]
 async fn usage_settings_persist_terminal_correlation_opt_in() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
@@ -1691,13 +1803,15 @@ async fn usage_settings_persist_terminal_correlation_opt_in() {
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(value["terminalCorrelationEnabled"], true);
-    assert!(state
-        .config
-        .read()
-        .await
-        .server
-        .telemetry
-        .terminal_correlation_enabled);
+    assert!(
+        state
+            .config
+            .read()
+            .await
+            .server
+            .telemetry
+            .terminal_correlation_enabled
+    );
     assert!(std::fs::read_to_string(tmp.path().join("dam-hopper.toml"))
         .unwrap()
         .contains("terminal_correlation_enabled = true"));
@@ -2252,8 +2366,7 @@ async fn terminal_create_preserves_otel_conflict_and_reports_health() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert_eq!(
-        crate::telemetry::queries::health_value(&store, "codex_correlation_env_conflicts")
-            .unwrap(),
+        crate::telemetry::queries::health_value(&store, "codex_correlation_env_conflicts").unwrap(),
         1
     );
     let health = get(state.clone(), "/api/usage/health").await;

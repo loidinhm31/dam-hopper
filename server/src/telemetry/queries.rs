@@ -5,8 +5,13 @@ use serde::Serialize;
 
 use super::{
     store::{TelemetryStore, TelemetryStoreError},
-    types::UsageQuery,
+    types::{
+        AgentLineageQuality, AgentRole, AgentRunSummary, AgentTokenQuality, CodexModel,
+        CorrelationQuality, SafeIdentifier, TokenCounterSemantic, UsageQuery,
+    },
 };
+
+const MAX_AGENT_RUN_PAGE: usize = 100;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,6 +70,110 @@ pub struct DetailUsageMetrics {
     pub duration_p50_ms: Option<u64>,
     pub duration_p95_ms: Option<u64>,
     pub repeated_command_count: u64,
+}
+
+pub fn list_agent_run_summaries(
+    store: &TelemetryStore,
+    limit: usize,
+) -> Result<Vec<AgentRunSummary>, TelemetryStoreError> {
+    let limit = limit.clamp(1, MAX_AGENT_RUN_PAGE) as i64;
+    let connection = store.open_read()?;
+    let mut statement = connection.prepare(
+        "SELECT r.run_id, r.root_run_id, r.parent_run_id, r.provider, r.role, r.model, r.source_version, r.started_at_utc_ms, r.ended_at_utc_ms, r.status, r.correlation_quality, r.lineage_quality, r.token_quality, r.counter_semantic, r.input_tokens, r.cached_input_tokens, r.output_tokens, r.reasoning_tokens, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = r.run_id), r.updated_at_utc_ms
+         FROM agent_runs r
+         WHERE r.root_run_id IS NOT NULL
+         ORDER BY r.ended_at_utc_ms DESC, r.run_id DESC LIMIT ?1",
+    )?;
+    let rows = statement.query_map([limit], agent_run_from_row)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(TelemetryStoreError::Sqlite)
+}
+
+pub fn agent_run_summary(
+    store: &TelemetryStore,
+    run_id: &super::privacy::HmacDigest,
+) -> Result<Option<AgentRunSummary>, TelemetryStoreError> {
+    use rusqlite::OptionalExtension;
+
+    let connection = store.open_read()?;
+    connection
+        .query_row(
+            "SELECT r.run_id, r.root_run_id, r.parent_run_id, r.provider, r.role, r.model, r.source_version, r.started_at_utc_ms, r.ended_at_utc_ms, r.status, r.correlation_quality, r.lineage_quality, r.token_quality, r.counter_semantic, r.input_tokens, r.cached_input_tokens, r.output_tokens, r.reasoning_tokens, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = r.run_id), r.updated_at_utc_ms
+             FROM agent_runs r WHERE r.run_id = ?1 AND r.root_run_id IS NOT NULL",
+            [String::from(run_id.clone())],
+            agent_run_from_row,
+        )
+        .optional()
+        .map_err(TelemetryStoreError::Sqlite)
+}
+
+fn agent_run_from_row(row: &rusqlite::Row<'_>) -> Result<AgentRunSummary, rusqlite::Error> {
+    let parse_digest = |index| -> Result<super::privacy::HmacDigest, rusqlite::Error> {
+        row.get::<_, String>(index)?
+            .try_into()
+            .map_err(|_| rusqlite::Error::InvalidQuery)
+    };
+    let parent = row
+        .get::<_, Option<String>>(2)?
+        .map(|value| value.try_into().map_err(|_| rusqlite::Error::InvalidQuery))
+        .transpose()?;
+    let model = row
+        .get::<_, Option<String>>(5)?
+        .map(|value| CodexModel::new(value).map_err(|_| rusqlite::Error::InvalidQuery))
+        .transpose()?;
+    Ok(AgentRunSummary {
+        run_id: parse_digest(0)?,
+        root_run_id: parse_digest(1)?,
+        parent_run_id: parent,
+        provider: SafeIdentifier::new(row.get::<_, String>(3)?)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        role: match row.get::<_, String>(4)?.as_str() {
+            "root" => AgentRole::Root,
+            "main" => AgentRole::Main,
+            "subagent" => AgentRole::Subagent,
+            _ => return Err(rusqlite::Error::InvalidQuery),
+        },
+        model,
+        source_version: match row.get::<_, String>(6)?.as_str() {
+            "unknown" => super::types::CodexVersion::unknown(),
+            value => {
+                super::types::CodexVersion::new(value).map_err(|_| rusqlite::Error::InvalidQuery)?
+            }
+        },
+        started_at_utc_ms: row.get(7)?,
+        ended_at_utc_ms: row.get(8)?,
+        status: SafeIdentifier::new(row.get::<_, String>(9)?)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        correlation_quality: match row.get::<_, String>(10)?.as_str() {
+            "exact" => CorrelationQuality::Exact,
+            "approximate" => CorrelationQuality::Approximate,
+            "unattributed" => CorrelationQuality::Unattributed,
+            _ => return Err(rusqlite::Error::InvalidQuery),
+        },
+        lineage_quality: match row.get::<_, String>(11)?.as_str() {
+            "exact" => AgentLineageQuality::Exact,
+            "partial" => AgentLineageQuality::Partial,
+            "lineage_unavailable" => AgentLineageQuality::LineageUnavailable,
+            _ => return Err(rusqlite::Error::InvalidQuery),
+        },
+        token_quality: match row.get::<_, String>(12)?.as_str() {
+            "exact" => AgentTokenQuality::Exact,
+            "partial" => AgentTokenQuality::Partial,
+            "token_data_unavailable" => AgentTokenQuality::TokenDataUnavailable,
+            _ => return Err(rusqlite::Error::InvalidQuery),
+        },
+        counter_semantic: match row.get::<_, String>(13)?.as_str() {
+            "delta" => TokenCounterSemantic::Delta,
+            "cumulative" => TokenCounterSemantic::Cumulative,
+            _ => return Err(rusqlite::Error::InvalidQuery),
+        },
+        input_tokens: row.get::<_, Option<i64>>(14)?.map(|value| value as u64),
+        cached_input_tokens: row.get::<_, Option<i64>>(15)?.map(|value| value as u64),
+        output_tokens: row.get::<_, Option<i64>>(16)?.map(|value| value as u64),
+        reasoning_tokens: row.get::<_, Option<i64>>(17)?.map(|value| value as u64),
+        terminal_association_count: row.get::<_, i64>(18)? as u32,
+        updated_at_utc_ms: row.get(19)?,
+    })
 }
 
 pub fn aggregate_token_correlation(

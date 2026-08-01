@@ -80,5 +80,3 @@ CREATE TABLE IF NOT EXISTS telemetry_health (
     value INTEGER NOT NULL,
     updated_at_utc_ms INTEGER NOT NULL
 );
-
-PRAGMA user_version = 1;

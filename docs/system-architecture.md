@@ -337,7 +337,11 @@ becomes more compact and uses responsive overflow rather than placing full analy
 operational dashboard.
 
 Full delete serializes both terminal and collector admission, purges the store, then rotates the
-shared HMAC key before capture is restored. Range deletion does not rotate the key.
+shared HMAC key before capture is restored. Range deletion does not rotate the key. The API snapshots
+the exact live admission state and restores it on every exit path (including worker panic, rotation
+failure, or deletion error), rather than reconstructing state from persisted pause settings. Range
+deletion removes overlapping summaries and cascaded HMAC terminal associations; all deletion clears
+detail, summaries, associations, rollups, and health rows.
 
 Release verification covers the Rust PTY, telemetry, API, and Codex fixture suites plus the shared
 UI unit and Chromium browser suites. Real Bash coverage is exercised in-process; Zsh and Fish
@@ -369,13 +373,14 @@ marker to a DamHopper terminal/run identity plus expiry, instead of retaining on
 Raw markers and provider thread IDs never enter SQLite or browser responses; keyed HMAC identifiers
 provide durable joins.
 
-`agent_runs` is the permanent compact summary layer because the initial schema already reserved it
-and current code does not write it. Migration adds HMAC root/parent identifiers, terminal
-correlation, bounded role/model/status, nullable token totals, and explicit lineage/token quality.
-Root rows are the session list; child rows form the tree. Retained `agent_usage_events` join to an
-agent node and keep current detail retention. Before detail purge, idempotent upserts preserve node
-totals permanently until authenticated range/all deletion. Add a separate session-summary table
-only if the bounded 100k-node benchmark proves indexed root/node queries insufficient.
+`agent_runs` is the permanent flat summary layer. A runtime-owned migration adds HMAC run/root/parent
+identifiers, bounded role/model/status, nullable token totals, explicit lineage/token quality, and a
+separate HMAC-only `agent_run_terminals` association table. `TelemetryStore` applies migrations
+atomically and advances SQLite `user_version`; operators must not execute migration files manually.
+Idempotent upserts preserve summaries before detail purge, while the compatibility fallback remains
+flat `lineage_unavailable` with no inferred parent/child edges. `delta` counters add; `cumulative`
+counters accept only newer non-regressing observations, rejecting stale, conflicting, or regressing
+updates as summary conflicts.
 
 The protected API keeps `GET /api/usage/summary` unchanged and adds cursor-bounded session list and
 single-tree detail reads. Responses contain derived route IDs, terminal label/identity, timestamps,
