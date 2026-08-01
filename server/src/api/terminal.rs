@@ -122,7 +122,7 @@ mod tests {
     use super::correlation_decision;
 
     #[test]
-    fn correlation_is_separately_opted_in_and_fails_closed() {
+    fn correlation_honors_explicit_configuration_and_fails_closed() {
         assert!(correlation_decision(true, true, true, false));
         assert!(!correlation_decision(false, true, true, false));
         assert!(!correlation_decision(true, false, true, false));

@@ -250,6 +250,9 @@ fn default_telemetry_db_path() -> String {
 fn default_telemetry_detail_retention_days() -> u16 {
     90
 }
+fn default_terminal_correlation_enabled() -> bool {
+    true
+}
 fn default_telemetry_collector_host() -> String {
     "127.0.0.1".to_string()
 }
@@ -297,9 +300,12 @@ pub struct TelemetryConfig {
     pub aggregate_retention_days: Option<u32>,
     #[serde(default, alias = "excluded_projects")]
     pub excluded_projects: Vec<String>,
-    /// Separately opts terminal shells into ephemeral Codex/OTLP ownership
-    /// correlation. Disabled by default even when telemetry is enabled.
-    #[serde(default, alias = "terminal_correlation_enabled")]
+    /// Enables ephemeral Codex/OTLP terminal ownership correlation whenever
+    /// usage tracking is configured. Users may explicitly opt out.
+    #[serde(
+        default = "default_terminal_correlation_enabled",
+        alias = "terminal_correlation_enabled"
+    )]
     pub terminal_correlation_enabled: bool,
     #[serde(default)]
     pub collector: TelemetryCollectorConfig,
@@ -314,7 +320,7 @@ impl Default for TelemetryConfig {
             detail_retention_days: default_telemetry_detail_retention_days(),
             aggregate_retention_days: None,
             excluded_projects: Vec::new(),
-            terminal_correlation_enabled: false,
+            terminal_correlation_enabled: default_terminal_correlation_enabled(),
             collector: TelemetryCollectorConfig::default(),
         }
     }
