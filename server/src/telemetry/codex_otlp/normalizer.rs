@@ -61,17 +61,20 @@ pub fn normalize(
             &reasoning,
         ],
     );
+    let terminal_run_id = decoded
+        .run_marker
+        .as_ref()
+        .and_then(|marker| correlation.resolve(marker, received_at_utc_ms));
     Some(AgentUsageEvent {
         schema_version: TELEMETRY_SCHEMA_VERSION,
         id,
         occurred_at_utc_ms,
         conversation_fingerprint,
+        terminal_run_id,
         model: decoded.model,
         source_version,
-        correlation_quality: decoded
-            .run_marker
-            .as_ref()
-            .is_some_and(|marker| correlation.contains(marker, received_at_utc_ms))
+        correlation_quality: terminal_run_id
+            .is_some()
             .then_some(CorrelationQuality::Exact)
             .unwrap_or(CorrelationQuality::Unattributed),
         counter_semantic: decoded.counter_semantic,
@@ -235,7 +238,11 @@ mod tests {
         let keys = Arc::new(TelemetryKeyRing::load_or_create(temp.path().join("key")).unwrap());
         let correlation = CodexCorrelationRegistry::default();
         let marker = SafeIdentifier::new("codex-run-fixture").unwrap();
-        correlation.register(marker.clone(), 1);
+        correlation.register(
+            marker.clone(),
+            crate::telemetry::TerminalRunId(uuid::Uuid::new_v4()),
+            1,
+        );
         let fixture = include_bytes!("fixtures/codex-cli-0.145.0-response-completed.bin");
         let mut request = ExportLogsServiceRequest::decode(fixture.as_slice()).unwrap();
         request.resource_logs[0]

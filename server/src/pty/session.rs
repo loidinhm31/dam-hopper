@@ -70,14 +70,17 @@ impl SessionType {
 
 /// Cloneable snapshot of the opts needed to re-launch a session after exit.
 /// Stored in `LiveSession`; consumed by the restart engine in Phase 4.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RespawnOpts {
     pub id: String,
     pub command: String,
     pub cwd: String,
     pub env: HashMap<String, String>,
-    /// Runtime-only OTel marker: retained for in-memory respawns only.
+    /// Runtime-only OTel marker for the current PTY incarnation.
     pub runtime_otlp_run_marker: Option<String>,
+    /// Runtime-only registry used to allocate a fresh marker for each respawn.
+    pub runtime_codex_correlation:
+        Option<std::sync::Arc<crate::telemetry::CodexCorrelationRegistry>>,
     pub cols: u16,
     pub rows: u16,
     pub project: Option<String>,

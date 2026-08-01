@@ -82,6 +82,7 @@ name = "telemetry"
 
 [server.telemetry]
 enabled = true
+terminal_correlation_enabled = true
 db_path = "/tmp/telemetry.db"
 detail_retention_days = 30
 aggregate_retention_days = 730
@@ -94,12 +95,14 @@ port = 4811
 "#).unwrap();
     let config = read_config(&config_path).unwrap();
     assert!(config.server.telemetry.enabled);
+    assert!(config.server.telemetry.terminal_correlation_enabled);
     assert_eq!(config.server.telemetry.db_path, "/tmp/telemetry.db");
     assert_eq!(config.server.telemetry.collector.port, 4811);
     assert_eq!(serde_json::to_value(&config.server.telemetry).unwrap()["dbPath"], "/tmp/telemetry.db");
     write_config(&config_path, &config).unwrap();
     let written = std::fs::read_to_string(&config_path).unwrap();
     assert!(written.contains("detail_retention_days = 30"));
+    assert!(written.contains("terminal_correlation_enabled = true"));
     assert!(!written.contains("detailRetentionDays"));
 }
 

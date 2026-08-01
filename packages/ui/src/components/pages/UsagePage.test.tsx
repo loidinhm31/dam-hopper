@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
       paused: false,
       writerErrors: 0,
       rejectedEvents: 0,
+      correlationEnvConflicts: 0,
       sampledAt: 1_783_468_800_000,
       collector: {
         running: false,

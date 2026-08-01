@@ -397,7 +397,7 @@ export interface UsageSummaryQuery {
   captureQuality?: UsageCaptureQuality;
   category?: string;
   agent?: "codex";
-  model?: "gpt-5.6-sol";
+  model?: string;
 }
 
 export interface UsageAggregate {
@@ -460,6 +460,7 @@ export interface UsageHealth {
   paused: boolean;
   writerErrors: number;
   rejectedEvents: number;
+  correlationEnvConflicts: number;
   sampledAt: number;
   collector: UsageCollectorHealth;
 }
@@ -511,6 +512,7 @@ export interface UsageSettings {
   detailRetentionDays: number;
   aggregateRetentionDays: number | null;
   excludedProjects: string[];
+  terminalCorrelationEnabled: boolean;
   collectorEnabled: boolean;
   runtime: UsageRuntimeStatus;
   collectorSetup: UsageCollectorSetup;
@@ -522,6 +524,7 @@ export interface UsageSettingsPatch {
   detailRetentionDays?: number;
   aggregateRetentionDays?: number | null;
   excludedProjects?: string[];
+  terminalCorrelationEnabled?: boolean;
   collector?: UsageCollectorSettings;
   codexExporter?: boolean;
   retryCollector?: boolean;

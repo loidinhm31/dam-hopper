@@ -87,6 +87,7 @@ mod pty_tests {
             cwd: "/tmp".to_string(),
             env,
             runtime_otlp_run_marker: None,
+            runtime_codex_correlation: None,
             cols: 80,
             rows: 24,
             project: None,
@@ -337,6 +338,10 @@ mod pty_tests {
             ("PATH".to_string(), OsString::from("/usr/bin:/bin")),
             ("HOME".to_string(), OsString::from("/tmp/test-home")),
             (
+                "OTEL_RESOURCE_ATTRIBUTES".to_string(),
+                OsString::from("user.attribute=preserved"),
+            ),
+            (
                 "DAM_HOPPER_SECRET_TEST".to_string(),
                 OsString::from("server-only-secret"),
             ),
@@ -353,6 +358,10 @@ mod pty_tests {
         assert_eq!(
             child_env.get("HOME"),
             Some(&OsString::from("/tmp/test-home"))
+        );
+        assert_eq!(
+            child_env.get("OTEL_RESOURCE_ATTRIBUTES"),
+            Some(&OsString::from("user.attribute=preserved"))
         );
         assert!(
             !child_env.contains_key("DAM_HOPPER_SECRET_TEST"),
@@ -1346,10 +1355,20 @@ mod pty_tests {
     #[test]
     fn runtime_otlp_marker_is_excluded_from_persisted_session_environment() {
         let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        let events = Arc::new(Mutex::new(Vec::new()));
         let mgr = test_rt().block_on(async {
-            PtySessionManager::with_persist(Arc::new(NoopEventSink), Some(tx), None)
+            PtySessionManager::with_persist(
+                Arc::new(RecordingSink {
+                    events: events.clone(),
+                }),
+                Some(tx),
+                None,
+            )
         });
-        let mut create = opts("shell:runtime-otel-marker", "sleep 1");
+        let mut create = opts(
+            "shell:runtime-otel-marker",
+            "bash -c 'value=\"$OTEL_RESOURCE_ATTRIBUTES\"; for ((i=0; i<${#value}; i++)); do printf \"%s\\033[0m\" \"${value:i:1}\"; done'; cat",
+        );
         create.runtime_otlp_run_marker = Some("run-marker-safe".to_string());
 
         mgr.create(create).unwrap();
@@ -1359,7 +1378,60 @@ mod pty_tests {
         };
         assert!(!env.contains_key("OTEL_RESOURCE_ATTRIBUTES"));
         assert!(!format!("{env:?}").contains("run-marker-safe"));
+        assert!(wait_for(Duration::from_secs(3), || {
+            mgr.get_buffer("shell:runtime-otel-marker")
+                .is_ok_and(|buffer| buffer.contains("[redacted-correlation-marker]"))
+        }));
+        let serialized_events = events.lock().unwrap().join("\n");
+        assert!(!serialized_events.contains("run-marker-safe"));
+        assert!(serialized_events.contains("[redacted-correlation-marker]"));
         mgr.remove("shell:runtime-otel-marker").unwrap();
+        let mut persisted_output = Vec::new();
+        while let Ok(message) = rx.recv_timeout(Duration::from_millis(250)) {
+            if let PersistCmd::BufferUpdate { data, .. } = message {
+                persisted_output.extend(data);
+            }
+        }
+        assert!(!persisted_output
+            .windows("run-marker-safe".len())
+            .any(|window| window == b"run-marker-safe"));
+    }
+
+    #[test]
+    fn runtime_otlp_marker_is_inherited_by_codexnsb_alias_descendants() {
+        let mgr = make_manager();
+        let mut create = opts(
+            "shell:runtime-otel-wrapper",
+            "bash -ic 'shopt -s expand_aliases; alias CODEXNSB=\"test -n \\\"$OTEL_RESOURCE_ATTRIBUTES\\\" && printf inherited\"\nCODEXNSB\ncat'",
+        );
+        create.runtime_otlp_run_marker = Some("run-marker-safe".to_string());
+
+        mgr.create(create).unwrap();
+        assert!(wait_for(Duration::from_secs(3), || {
+            mgr.get_buffer("shell:runtime-otel-wrapper")
+                .is_ok_and(|buffer| buffer.contains("inherited"))
+        }));
+        mgr.remove("shell:runtime-otel-wrapper").unwrap();
+    }
+
+    #[test]
+    fn respawn_allocates_a_fresh_runtime_marker_generation() {
+        let mgr = make_manager();
+        let registry = Arc::new(crate::telemetry::CodexCorrelationRegistry::default());
+        let mut create = opts("shell:runtime-otel-respawn", "printf done");
+        create.restart_policy = RestartPolicy::Always;
+        create.restart_max_retries = 1;
+        create.runtime_otlp_run_marker = Some("initial-marker-safe".to_string());
+        create.runtime_codex_correlation = Some(registry.clone());
+
+        mgr.create(create).unwrap();
+        assert!(wait_for(Duration::from_secs(5), || {
+            registry.active_len(chrono::Utc::now().timestamp_millis()) >= 2
+        }));
+        let run_ids = registry.active_run_ids(chrono::Utc::now().timestamp_millis());
+        assert!(run_ids.len() >= 2);
+        assert_ne!(run_ids[0], run_ids[1]);
+        mgr.remove("shell:runtime-otel-respawn").unwrap();
     }
 
     #[test]
@@ -1672,6 +1744,7 @@ mod pty_tests {
                 .chain([("SHELL".into(), shell_value)])
                 .collect(),
             runtime_otlp_run_marker: None,
+            runtime_codex_correlation: None,
             cols,
             rows,
             project,

@@ -18,14 +18,16 @@ use crate::{
     port_forward::PortForwardManager,
     pty::{
         event_sink::EventSink,
+        output_redactor::ExactValueRedactor,
         session::{DeadSession, LiveSession, RespawnOpts, SessionMeta, SessionType},
         shell_integration::{interactive_shell_executable, ShellIntegration},
         shell_lifecycle::{LifecycleEvent, LifecycleState, ShellLifecycle},
     },
     telemetry::{
-        worker::TelemetryControl, CaptureQuality, CommandClassifier, CommandEvent, CommandEventId,
-        CommandOutcome, NoopTelemetrySink, NormalizedCommand, ShellKind, TelemetryRuntime,
-        TelemetrySink, TerminalRunEnd, TerminalRunEvent, TerminalRunId, TELEMETRY_SCHEMA_VERSION,
+        worker::TelemetryControl, CaptureQuality, CodexCorrelationRegistry, CommandClassifier,
+        CommandEvent, CommandEventId, CommandOutcome, NoopTelemetrySink, NormalizedCommand,
+        SafeIdentifier, ShellKind, TelemetryRuntime, TelemetrySink, TerminalRunEnd,
+        TerminalRunEvent, TerminalRunId, TELEMETRY_SCHEMA_VERSION,
     },
 };
 
@@ -36,6 +38,9 @@ const SESSION_ID_MAX_LEN: usize = 128;
 const MAX_RESTART_DELAY_MS: u64 = 30_000;
 const SAFE_BASELINE_ENV_VARS: &[&str] = &[
     "PATH",
+    // User-owned OTel attributes must survive unchanged. Correlation fails
+    // closed when this exists and never merges a DamHopper marker into it.
+    "OTEL_RESOURCE_ATTRIBUTES",
     "HOME",
     "USER",
     "LOGNAME",
@@ -74,7 +79,7 @@ pub struct TerminalAttachSnapshot {
 // ---------------------------------------------------------------------------
 
 /// Command sent from reader_thread to the supervisor task to request a respawn.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct RespawnCmd {
     id: String,
     _prev_exit_code: i32,
@@ -95,6 +100,8 @@ pub struct PtyCreateOpts {
     pub env: HashMap<String, String>,
     /// Safe process-local marker, intentionally excluded from persisted env.
     pub runtime_otlp_run_marker: Option<String>,
+    /// Process-local owner registry, intentionally excluded from persistence.
+    pub runtime_codex_correlation: Option<Arc<CodexCorrelationRegistry>>,
     pub cols: u16,
     pub rows: u16,
     pub project: Option<String>,
@@ -112,6 +119,7 @@ impl PtyCreateOpts {
             cwd: self.cwd.clone(),
             env: self.env.clone(),
             runtime_otlp_run_marker: self.runtime_otlp_run_marker.clone(),
+            runtime_codex_correlation: self.runtime_codex_correlation.clone(),
             cols: self.cols,
             rows: self.rows,
             project: self.project.clone(),
@@ -379,7 +387,20 @@ impl PtySessionManager {
         // Log env keys only — values may contain secrets (API keys, tokens).
         debug!(id = %opts.id, env_keys = ?opts.env.keys().collect::<Vec<_>>(), "Spawning PTY");
         let session_id_for_diag = opts.id.clone();
-        let child = pair.slave.spawn_command(cmd).map_err(|e| {
+        let run_id = TerminalRunId(Uuid::new_v4());
+        let registered_marker = opts
+            .runtime_otlp_run_marker
+            .as_deref()
+            .zip(opts.runtime_codex_correlation.as_ref())
+            .map(|(marker, registry)| {
+                let marker = SafeIdentifier::new(marker).expect("runtime marker must remain safe");
+                registry.register(marker.clone(), run_id, utc_now_ms());
+                (marker, Arc::clone(registry))
+            });
+        let mut child = pair.slave.spawn_command(cmd).map_err(|e| {
+            if let Some((marker, registry)) = &registered_marker {
+                registry.unregister(marker, run_id);
+            }
             let error = format!("spawn failed: {e}");
             let mut fields = BTreeMap::new();
             fields.insert("sessionId".into(), session_id_for_diag.clone());
@@ -392,15 +413,23 @@ impl PtySessionManager {
         })?;
 
         // portable-pty requires clone_reader before take_writer
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| AppError::PtyError(format!("clone_reader failed: {e}")))?;
+        let reader = match pair.master.try_clone_reader() {
+            Ok(reader) => reader,
+            Err(error) => {
+                let _ = child.kill();
+                unregister_marker(&registered_marker, run_id);
+                return Err(AppError::PtyError(format!("clone_reader failed: {error}")));
+            }
+        };
 
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| AppError::PtyError(format!("take_writer failed: {e}")))?;
+        let writer = match pair.master.take_writer() {
+            Ok(writer) => writer,
+            Err(error) => {
+                let _ = child.kill();
+                unregister_marker(&registered_marker, run_id);
+                return Err(AppError::PtyError(format!("take_writer failed: {error}")));
+            }
+        };
 
         let child_killer = child.clone_killer();
         let respawn_opts = opts.clone_for_respawn();
@@ -420,7 +449,6 @@ impl PtySessionManager {
         let telemetry_shell = integration
             .as_ref()
             .and_then(|integration| shell_kind(integration.capabilities().name));
-        let run_id = TerminalRunId(Uuid::new_v4());
         let session = LiveSession::new(
             meta.clone(),
             pair.master,
@@ -517,6 +545,7 @@ impl PtySessionManager {
             .map(|capture| capture.control.clone())
             .unwrap_or_else(|| self.telemetry_control.clone());
 
+        let thread_registration = registered_marker.clone();
         std::thread::Builder::new()
             .name(format!("pty-reader:{session_id}"))
             .spawn(move || {
@@ -541,9 +570,14 @@ impl PtySessionManager {
                     command_classifier,
                     telemetry_control,
                     telemetry_shell,
+                    opts.runtime_otlp_run_marker.clone(),
                 );
             })
-            .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
+            .map_err(|e| {
+                self.kill_internal_for_replace(&opts.id);
+                unregister_marker(&thread_registration, run_id);
+                AppError::PtyError(format!("thread spawn failed: {e}"))
+            })?;
 
         self.sink.send_terminal_changed();
         info!(id = %opts.id, "PTY session created");
@@ -1154,6 +1188,7 @@ fn reader_thread(
     command_classifier: Option<Arc<CommandClassifier>>,
     telemetry_control: Option<Arc<TelemetryControl>>,
     telemetry_shell: Option<ShellKind>,
+    runtime_otlp_run_marker: Option<String>,
 ) {
     // Local helper to record a terminal lifecycle event from the reader thread.
     let record_diag = |message: &str, mut fields: BTreeMap<String, String>| {
@@ -1167,6 +1202,7 @@ fn reader_thread(
     };
 
     let mut chunk = vec![0u8; 4096];
+    let mut output_redactor = ExactValueRedactor::new(runtime_otlp_run_marker);
     // Throttle buffer snapshots: only send to persist worker every 16KB to reduce memory churn.
     // Performance: reduces snapshot frequency from ~100/sec to ~6/sec on fast terminals (16x improvement).
     // Trade-off: Sessions with < 16KB output won't persist to SQLite (acceptable: WS reconnect still works,
@@ -1200,6 +1236,69 @@ fn reader_thread(
         }
     }
 
+    let mut process_redacted_chunk = |data: &[u8]| {
+        let visible_data = if let Some(lifecycle) = &lifecycle {
+            let (visible_data, generation, events) = {
+                let mut lifecycle = lifecycle.lock().unwrap();
+                let generation = lifecycle.generation();
+                let alternate_buffer_event = lifecycle.observe_alternate_buffer(data);
+                let (visible_data, mut events) = lifecycle.feed_visible(data);
+                if let Some(event) = alternate_buffer_event {
+                    events.insert(0, event);
+                }
+                (visible_data, generation, events)
+            };
+            if events
+                .iter()
+                .any(|event| event.state != LifecycleState::Editing)
+            {
+                published_editing.store(false, Ordering::Release);
+            }
+            for event in events {
+                telemetry.observe(&event);
+                pending_lifecycle_events.push((generation, event));
+            }
+            visible_data
+        } else {
+            data.to_vec()
+        };
+        {
+            let mut buf = buffer.lock().unwrap();
+            buf.push(&visible_data);
+            bytes_since_snapshot += visible_data.len();
+            if bytes_since_snapshot >= SNAPSHOT_THRESHOLD {
+                if let Some(tx) = &persist_tx {
+                    let (snapshot_data, total_written) = buf.snapshot();
+                    let _ = tx.try_send(crate::persistence::PersistCmd::BufferUpdate {
+                        session_id: session_id.clone(),
+                        data: snapshot_data,
+                        total_written,
+                    });
+                    bytes_since_snapshot = 0;
+                }
+            }
+        }
+        let data_str = String::from_utf8_lossy(&visible_data).into_owned();
+        if let (Some(pfm), Some(handle)) = (&port_forward_manager, &rt_handle) {
+            crate::port_forward::scan_chunk(
+                &visible_data,
+                &session_id,
+                project.as_deref(),
+                pfm,
+                handle,
+            );
+        }
+        if send_visible_output_then_lifecycle(
+            sink.as_ref(),
+            &session_id,
+            &data_str,
+            &mut pending_lifecycle_events,
+            &mut visible_output_since_boundary,
+        ) {
+            published_editing.store(true, Ordering::Release);
+        }
+    };
+
     loop {
         if shutdown.load(Ordering::Relaxed) {
             break;
@@ -1213,76 +1312,8 @@ fn reader_thread(
                 break;
             }
             Ok(n) => {
-                let data = &chunk[..n];
-                let visible_data = if let Some(lifecycle) = &lifecycle {
-                    let (visible_data, generation, events) = {
-                        let mut lifecycle = lifecycle.lock().unwrap();
-                        let generation = lifecycle.generation();
-                        let alternate_buffer_event = lifecycle.observe_alternate_buffer(data);
-                        let (visible_data, mut events) = lifecycle.feed_visible(data);
-                        if let Some(event) = alternate_buffer_event {
-                            events.insert(0, event);
-                        }
-                        (visible_data, generation, events)
-                    };
-                    if events
-                        .iter()
-                        .any(|event| event.state != LifecycleState::Editing)
-                    {
-                        published_editing.store(false, Ordering::Release);
-                    }
-                    for event in events {
-                        telemetry.observe(&event);
-                        pending_lifecycle_events.push((generation, event));
-                    }
-                    visible_data
-                } else {
-                    data.to_vec()
-                };
-                {
-                    let mut buf = buffer.lock().unwrap();
-                    buf.push(&visible_data);
-                    bytes_since_snapshot += visible_data.len();
-
-                    // Send buffer update to persist worker (if enabled)
-                    // Throttle: only snapshot every 16KB to reduce memory churn from 1MB copies
-                    if bytes_since_snapshot >= SNAPSHOT_THRESHOLD {
-                        if let Some(tx) = &persist_tx {
-                            let (snapshot_data, total_written) = buf.snapshot();
-                            if let Err(_) =
-                                tx.try_send(crate::persistence::PersistCmd::BufferUpdate {
-                                    session_id: session_id.clone(),
-                                    data: snapshot_data,
-                                    total_written,
-                                })
-                            {
-                                // Queue full - this is expected under load. Worker will flush latest on timer.
-                                // Dropping is safe: batching means worker only persists latest anyway.
-                            }
-                            bytes_since_snapshot = 0;
-                        }
-                    }
-                }
-                let data_str = String::from_utf8_lossy(&visible_data).into_owned();
-                // Port forward: scan chunk for service startup messages (sync, ~µs).
-                if let (Some(pfm), Some(handle)) = (&port_forward_manager, &rt_handle) {
-                    crate::port_forward::scan_chunk(
-                        &visible_data,
-                        &session_id,
-                        project.as_deref(),
-                        pfm,
-                        handle,
-                    );
-                }
-                if send_visible_output_then_lifecycle(
-                    sink.as_ref(),
-                    &session_id,
-                    &data_str,
-                    &mut pending_lifecycle_events,
-                    &mut visible_output_since_boundary,
-                ) {
-                    published_editing.store(true, Ordering::Release);
-                }
+                let redacted = output_redactor.redact(&chunk[..n]);
+                process_redacted_chunk(&redacted);
             }
             Err(e) if is_eof_error(&e) => {
                 debug!(id = %session_id, "PTY reader: connection closed");
@@ -1302,6 +1333,15 @@ fn reader_thread(
             }
         }
     }
+
+    // Preserve ordinary output that happened to end with a marker prefix.
+    // A complete marker has already been replaced, including ANSI-interleaved
+    // forms, before any terminal-facing or durable sink sees it.
+    let redaction_tail = output_redactor.finish();
+    if !redaction_tail.is_empty() {
+        process_redacted_chunk(&redaction_tail);
+    }
+    drop(process_redacted_chunk);
 
     telemetry.finish_interrupted();
     if telemetry_enabled {
@@ -1419,6 +1459,7 @@ fn reader_thread(
                     cwd: String::new(),
                     env: HashMap::new(),
                     runtime_otlp_run_marker: None,
+                    runtime_codex_correlation: None,
                     cols: 80,
                     rows: 24,
                     project: None,
@@ -1451,6 +1492,7 @@ fn reader_thread(
                     cwd: String::new(),
                     env: HashMap::new(),
                     runtime_otlp_run_marker: None,
+                    runtime_codex_correlation: None,
                     cols: 80,
                     rows: 24,
                     project: None,
@@ -1666,29 +1708,51 @@ async fn respawn_internal(
     };
 
     build_cmd.cwd(&opts.cwd);
-    apply_child_env(
-        &mut build_cmd,
-        &opts.env,
-        opts.runtime_otlp_run_marker.as_deref(),
-    );
+    let runtime_marker = opts
+        .runtime_codex_correlation
+        .as_ref()
+        .map(|_| Uuid::new_v4().to_string());
+    apply_child_env(&mut build_cmd, &opts.env, runtime_marker.as_deref());
     if let Some(integration) = &integration {
         integration.apply(&mut build_cmd);
     }
 
-    let child = pair
+    let run_id = TerminalRunId(Uuid::new_v4());
+    let registered_marker = runtime_marker
+        .as_deref()
+        .zip(opts.runtime_codex_correlation.as_ref())
+        .map(|(marker, registry)| {
+            let marker = SafeIdentifier::new(marker).expect("runtime marker must remain safe");
+            registry.register(marker.clone(), run_id, utc_now_ms());
+            (marker, Arc::clone(registry))
+        });
+    let mut child = pair
         .slave
         .spawn_command(build_cmd)
-        .map_err(|e| AppError::PtyError(format!("spawn failed: {e}")))?;
+        .map_err(|e| {
+            if let Some((marker, registry)) = &registered_marker {
+                registry.unregister(marker, run_id);
+            }
+            AppError::PtyError(format!("spawn failed: {e}"))
+        })?;
 
-    let reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|e| AppError::PtyError(format!("clone_reader failed: {e}")))?;
+    let reader = match pair.master.try_clone_reader() {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = child.kill();
+            unregister_marker(&registered_marker, run_id);
+            return Err(AppError::PtyError(format!("clone_reader failed: {error}")));
+        }
+    };
 
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|e| AppError::PtyError(format!("take_writer failed: {e}")))?;
+    let writer = match pair.master.take_writer() {
+        Ok(writer) => writer,
+        Err(error) => {
+            let _ = child.kill();
+            unregister_marker(&registered_marker, run_id);
+            return Err(AppError::PtyError(format!("take_writer failed: {error}")));
+        }
+    };
 
     // Increment restart_count.
     let mut meta = SessionMeta::new(
@@ -1706,7 +1770,6 @@ async fn respawn_internal(
     let telemetry_shell = integration
         .as_ref()
         .and_then(|integration| shell_kind(integration.capabilities().name));
-    let run_id = TerminalRunId(Uuid::new_v4());
     let session = LiveSession::new(
         meta.clone(),
         pair.master,
@@ -1773,6 +1836,7 @@ async fn respawn_internal(
         .map(|capture| capture.control.clone())
         .unwrap_or(telemetry_control);
 
+    let thread_registration = registered_marker.clone();
     std::thread::Builder::new()
         .name(format!("pty-reader:{id_clone}"))
         .spawn(move || {
@@ -1797,13 +1861,31 @@ async fn respawn_internal(
                 command_classifier,
                 telemetry_control,
                 telemetry_shell,
+                runtime_marker,
             );
         })
-        .map_err(|e| AppError::PtyError(format!("thread spawn failed: {e}")))?;
+        .map_err(|e| {
+            let session = inner.lock().unwrap().live.remove(session_id);
+            if let Some(session) = session {
+                session.terminate();
+            }
+            unregister_marker(&thread_registration, run_id);
+            AppError::PtyError(format!("thread spawn failed: {e}"))
+        })?;
 
     info!(id = %session_id, restart_count = meta.restart_count, "Session restarted");
     Ok(())
 }
+
+fn unregister_marker(
+    registration: &Option<(SafeIdentifier, Arc<CodexCorrelationRegistry>)>,
+    run_id: TerminalRunId,
+) {
+    if let Some((marker, registry)) = registration {
+        registry.unregister(marker, run_id);
+    }
+}
+
 fn is_eof_error(e: &std::io::Error) -> bool {
     matches!(
         e.kind(),

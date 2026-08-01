@@ -38,8 +38,22 @@ pub struct CodexModel(String);
 impl CodexModel {
     pub fn new(value: impl Into<String>) -> Result<Self, String> {
         let value = value.into();
-        if !matches!(value.as_str(), "gpt-5.6-sol") {
-            return Err("model must be a bounded Codex model identifier".to_string());
+        let bounded_chars = value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/' | b':')
+        });
+        let bounded_shape = value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+            && value
+                .bytes()
+                .last()
+                .is_some_and(|byte| byte.is_ascii_alphanumeric())
+            && !value.contains("://")
+            && !value.contains("//")
+            && !value.contains("..");
+        if value.len() > 64 || !bounded_chars || !bounded_shape {
+            return Err("model must be 1-64 safe ASCII identifier characters".to_string());
         }
         Ok(Self(value))
     }
@@ -127,43 +141,93 @@ pub enum CorrelationQuality {
     Unattributed,
 }
 
-/// Ephemeral proof that DamHopper launched a direct Codex process with a
-/// matching OTLP resource marker. The marker is safe ASCII, never persisted,
-/// and expires so stale/replayed events degrade to unattributed.
+/// Ephemeral proof that a Codex descendant inherited a DamHopper-owned OTLP
+/// marker from its terminal shell. The marker is never persisted and expires
+/// so stale/replayed events degrade to unattributed.
 #[derive(Default)]
 pub struct CodexCorrelationRegistry {
-    markers: Mutex<HashMap<SafeIdentifier, i64>>,
+    markers: Mutex<HashMap<SafeIdentifier, CodexCorrelationEntry>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CodexCorrelationEntry {
+    terminal_run_id: TerminalRunId,
+    expires_at_utc_ms: i64,
 }
 
 const CODEX_MARKER_TTL_MS: i64 = 24 * 60 * 60 * 1_000;
 const MAX_CODEX_MARKERS: usize = 512;
 
 impl CodexCorrelationRegistry {
-    pub fn register(&self, marker: SafeIdentifier, now_utc_ms: i64) {
+    pub fn register(
+        &self,
+        marker: SafeIdentifier,
+        terminal_run_id: TerminalRunId,
+        now_utc_ms: i64,
+    ) {
         let mut markers = self
             .markers
             .lock()
             .expect("codex correlation lock poisoned");
-        markers.retain(|_, expires_at| *expires_at > now_utc_ms);
+        markers.retain(|_, entry| entry.expires_at_utc_ms > now_utc_ms);
         if markers.len() >= MAX_CODEX_MARKERS && !markers.contains_key(&marker) {
             if let Some(oldest) = markers
                 .iter()
-                .min_by_key(|(_, expires_at)| *expires_at)
+                .min_by_key(|(_, entry)| entry.expires_at_utc_ms)
                 .map(|(marker, _)| marker.clone())
             {
                 markers.remove(&oldest);
             }
         }
-        markers.insert(marker, now_utc_ms.saturating_add(CODEX_MARKER_TTL_MS));
+        markers.insert(
+            marker,
+            CodexCorrelationEntry {
+                terminal_run_id,
+                expires_at_utc_ms: now_utc_ms.saturating_add(CODEX_MARKER_TTL_MS),
+            },
+        );
     }
 
-    pub fn contains(&self, marker: &SafeIdentifier, now_utc_ms: i64) -> bool {
+    pub fn resolve(&self, marker: &SafeIdentifier, now_utc_ms: i64) -> Option<TerminalRunId> {
         let mut markers = self
             .markers
             .lock()
             .expect("codex correlation lock poisoned");
-        markers.retain(|_, expires_at| *expires_at > now_utc_ms);
-        markers.contains_key(marker)
+        markers.retain(|_, entry| entry.expires_at_utc_ms > now_utc_ms);
+        markers.get(marker).map(|entry| entry.terminal_run_id)
+    }
+
+    pub fn unregister(&self, marker: &SafeIdentifier, terminal_run_id: TerminalRunId) {
+        let mut markers = self
+            .markers
+            .lock()
+            .expect("codex correlation lock poisoned");
+        if markers
+            .get(marker)
+            .is_some_and(|entry| entry.terminal_run_id == terminal_run_id)
+        {
+            markers.remove(marker);
+        }
+    }
+
+    #[cfg(test)]
+    pub fn active_len(&self, now_utc_ms: i64) -> usize {
+        let mut markers = self
+            .markers
+            .lock()
+            .expect("codex correlation lock poisoned");
+        markers.retain(|_, entry| entry.expires_at_utc_ms > now_utc_ms);
+        markers.len()
+    }
+
+    #[cfg(test)]
+    pub fn active_run_ids(&self, now_utc_ms: i64) -> Vec<TerminalRunId> {
+        let mut markers = self
+            .markers
+            .lock()
+            .expect("codex correlation lock poisoned");
+        markers.retain(|_, entry| entry.expires_at_utc_ms > now_utc_ms);
+        markers.values().map(|entry| entry.terminal_run_id).collect()
     }
 }
 
@@ -240,6 +304,9 @@ pub struct AgentUsageEvent {
     pub id: HmacDigest,
     pub occurred_at_utc_ms: i64,
     pub conversation_fingerprint: Option<HmacDigest>,
+    /// Resolved only from an active, process-local opaque marker. Phase 04
+    /// decides how compact session summaries persist this association.
+    pub terminal_run_id: Option<TerminalRunId>,
     pub model: Option<CodexModel>,
     pub source_version: CodexVersion,
     pub correlation_quality: CorrelationQuality,
@@ -278,9 +345,35 @@ mod tests {
 
     #[test]
     fn model_and_version_reject_content_like_values() {
-        assert!(super::CodexModel::new("gpt-5.6-sol").is_ok());
-        assert!(super::CodexModel::new("fixture-secret").is_err());
+        for model in [
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.5",
+            "gpt-5.4",
+            "provider/model:v2",
+        ] {
+            assert!(super::CodexModel::new(model).is_ok(), "model: {model}");
+        }
+        assert!(super::CodexModel::new("").is_err());
+        assert!(super::CodexModel::new("contains secret").is_err());
+        assert!(super::CodexModel::new("https://intranet").is_err());
+        assert!(super::CodexModel::new("/etc/passwd").is_err());
+        assert!(super::CodexModel::new("x".repeat(65)).is_err());
         assert!(super::CodexVersion::new("0.145.0").is_ok());
         assert!(super::CodexVersion::new("https://intranet").is_err());
+    }
+
+    #[test]
+    fn correlation_registry_resolves_owner_and_expires_marker() {
+        let registry = super::CodexCorrelationRegistry::default();
+        let marker = SafeIdentifier::new("marker-safe").unwrap();
+        let run_id = super::TerminalRunId(uuid::Uuid::new_v4());
+        registry.register(marker.clone(), run_id, 1);
+
+        assert_eq!(registry.resolve(&marker, 1), Some(run_id));
+        assert_eq!(
+            registry.resolve(&marker, 1 + super::CODEX_MARKER_TTL_MS),
+            None
+        );
     }
 }

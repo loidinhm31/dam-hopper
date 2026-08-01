@@ -237,11 +237,13 @@ and host-wide process auditing stay outside this boundary.
 flowchart LR
   Shell[Nonce-validated shell lifecycle] --> Normalize[In-memory metadata normalizer]
   Codex[Codex OTel response events] --> Receiver[Authenticated loopback OTLP receiver]
+  AppServer[Codex app-server thread metadata planned] --> Lineage[Bounded lineage adapter planned]
   Normalize --> Worker[Bounded telemetry worker]
   Receiver --> Worker
+  Lineage --> Worker
   Worker --> DB[(telemetry.db)]
-  DB --> API[Authenticated aggregate usage API]
-  API --> Page[Compact Usage page]
+  DB --> API[Authenticated aggregate and session-summary usage API]
+  API --> Page[Compact Usage page and session audit]
 ```
 
 Phase 02 implements the capture boundary. Bash, Zsh, and Fish adapters emit a versioned
@@ -286,8 +288,8 @@ and privacy semantics. The implemented logical tables are:
 | --------------------- | -------------------------------------------------------------------------- |
 | `terminal_runs`       | PTY run/project/shell/generation/start/end/status/coverage                 |
 | `command_events`      | Stable sequence/category/executable/HMAC/time/duration/status/source       |
-| `agent_runs`          | Provider conversation/run correlation, model, time, status, source quality |
-| `agent_usage_events`  | Deduped input/cached/output/reasoning token counters and source version    |
+| `agent_runs`          | Durable HMAC agent nodes: root/parent, terminal correlation, role/model/status, token totals, source quality |
+| `agent_usage_events`  | Retained-detail input/cached/output/reasoning counters, HMAC agent correlation, and source version |
 | `daily_usage_rollups` | UTC daily counts/outcomes/token sums retained after detail purge           |
 | `telemetry_health`    | Dropped, rejected, invalid, purge, and checkpoint counters                 |
 
@@ -349,6 +351,52 @@ inserts 100,000 detail rows, checks `EXPLAIN QUERY PLAN` uses
 200 ms. Run it with `cd server && cargo test telemetry::store --lib` on representative release
 hardware; the threshold is a regression signal, not a universal latency guarantee.
 
+#### Session model delegation audit (compatibility-gated)
+
+The session audit extends Usage with factual model/delegation metadata. OTel remains authoritative
+for input, cached-input, output, and reasoning token components. The exact app-server lineage
+adapter is **disabled for Codex CLI 0.146.0**: its generated `thread/list` contract requires
+content-bearing `preview`, `cwd`, and `turns` fields (and exposes `path`), with no projection that
+can exclude them. This fails the privacy boundary before any child-session or OTel identity probe.
+The supported fallback is flat OTel-only rows marked `lineage_unavailable`; no parent/child edges
+are inferred. Direct reads from Codex SQLite or rollout files remain forbidden in production.
+
+When terminal correlation is separately opted in, DamHopper injects one random opaque
+`dam_hopper.run_id` resource attribute into the terminal shell environment. Literal commands,
+aliases such as `CODEXNSB`, scripts, and shell functions can launch Codex normally and inherit the
+marker; DamHopper does not capture or rewrite their command text. The in-memory registry maps the
+marker to a DamHopper terminal/run identity plus expiry, instead of retaining only a presence bit.
+Raw markers and provider thread IDs never enter SQLite or browser responses; keyed HMAC identifiers
+provide durable joins.
+
+`agent_runs` is the permanent compact summary layer because the initial schema already reserved it
+and current code does not write it. Migration adds HMAC root/parent identifiers, terminal
+correlation, bounded role/model/status, nullable token totals, and explicit lineage/token quality.
+Root rows are the session list; child rows form the tree. Retained `agent_usage_events` join to an
+agent node and keep current detail retention. Before detail purge, idempotent upserts preserve node
+totals permanently until authenticated range/all deletion. Add a separate session-summary table
+only if the bounded 100k-node benchmark proves indexed root/node queries insufficient.
+
+The protected API keeps `GET /api/usage/summary` unchanged and adds cursor-bounded session list and
+single-tree detail reads. Responses contain derived route IDs, terminal label/identity, timestamps,
+safe provider/model/role/status, nullable token components, child count, main-token share,
+delegation observed/not observed, and coverage only. Exact app-server lineage plus OTel tokens is
+`exact`; OTel-only rows are `lineage_unavailable`; app-server-only nodes are
+`token_data_unavailable`; source disagreement is `partial`. Time, event order, model rank, titles,
+and text never create an edge. No child observed is a fact, never a violation or productivity score.
+
+Model identifiers are generalized rather than tied to a fixed model-name allowlist. They are
+bounded to 1–64 safe ASCII characters, must start and end alphanumeric, and may contain `.`, `_`,
+`-`, `/`, or `:`; URL-like values, repeated separators, and content-bearing forms are rejected
+before storage or filtering.
+
+Codex app-server multi-agent filters and some notifications are experimental. The Phase 01
+compatibility gate for 0.146.0 failed at the prompt-free list boundary, so lineage enrichment is
+disabled while terminal operation and OTel aggregate usage continue. Re-open exact lineage only
+after a new pinned contract proves a metadata-only projection excluding preview, cwd, path, turns,
+and items; until then, downstream phases must preserve flat `lineage_unavailable` rows and must not
+infer edges.
+
 Key invariants:
 
 - Shell lifecycle validation remains the only command boundary.
@@ -357,6 +405,9 @@ Key invariants:
 - Coverage/confidence is queryable and visible in UI.
 - Codex telemetry adds no MCP call or model-token consumption.
 - Metrics stay descriptive; no productivity or employee scoring.
+- Agent edges come only from explicit provider parent/ancestor identity; never infer lineage.
+- App-server ingestion is metadata-only, version-gated, and failure-isolated from PTY and OTel paths.
+- Permanent session detail is one compact row per agent node; no permanent turn/event transcript.
 
 Notification selection also stays frontend-only. Native notification clicks
 publish a typed browser event keyed by the stable PTY `sessionId`;

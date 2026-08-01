@@ -275,7 +275,7 @@ mod tests {
             });
         let decoded = decode_response_completed(&request.encode_to_vec()).unwrap();
         assert_eq!(decoded.len(), 1);
-        assert!(crate::telemetry::types::CodexModel::new("fixture-secret").is_err());
+        assert!(crate::telemetry::types::CodexModel::new("fixture secret").is_err());
     }
 
     #[test]
