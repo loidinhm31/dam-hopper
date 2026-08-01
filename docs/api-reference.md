@@ -311,8 +311,9 @@ restart the loopback listener without a DamHopper server restart. Managing Codex
 restart the Codex process; restart it separately. If runtime application or the subsequent config
 write fails, the previous live state and managed Codex file are restored and the update is rejected.
 
-Terminal correlation is independently opt-in through `terminalCorrelationEnabled` (TOML:
-`terminal_correlation_enabled`) and activates only when telemetry and the collector are active. If
+Terminal correlation defaults on through `terminalCorrelationEnabled` (TOML:
+`terminal_correlation_enabled`) when telemetry and the collector are active; set it to `false` to
+opt out. If
 the request or inherited server environment defines `OTEL_RESOURCE_ATTRIBUTES`, DamHopper preserves
 that value, skips correlation for the PTY, and increments the `correlationEnvConflicts` health
 counter. Markers are redacted from scrollback, diagnostics, and browser events. Automatic PTY

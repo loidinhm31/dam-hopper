@@ -69,7 +69,60 @@ type = "cargo"
     assert_eq!(cfg.projects[0].project_type, ProjectType::Cargo);
     assert!(cfg.projects[0].path.starts_with('/'));
     assert!(!cfg.server.telemetry.enabled);
+    assert!(cfg.server.telemetry.terminal_correlation_enabled);
     assert_eq!(cfg.server.telemetry.detail_retention_days, 90);
+}
+
+#[test]
+fn telemetry_config_allows_explicit_correlation_opt_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[workspace]
+name = "telemetry"
+
+[server.telemetry]
+enabled = true
+terminal_correlation_enabled = false
+"#,
+    )
+    .unwrap();
+
+    let config = read_config(&config_path).unwrap();
+    assert!(config.server.telemetry.enabled);
+    assert!(!config.server.telemetry.terminal_correlation_enabled);
+    write_config(&config_path, &config).unwrap();
+    assert!(std::fs::read_to_string(&config_path)
+        .unwrap()
+        .contains("terminal_correlation_enabled = false"));
+    assert!(!read_config(&config_path)
+        .unwrap()
+        .server
+        .telemetry
+        .terminal_correlation_enabled);
+}
+
+#[test]
+fn telemetry_config_defaults_correlation_on_when_usage_tracking_is_enabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[workspace]
+name = "telemetry"
+
+[server.telemetry]
+enabled = true
+"#,
+    )
+    .unwrap();
+
+    let config = read_config(&config_path).unwrap();
+    assert!(config.server.telemetry.enabled);
+    assert!(config.server.telemetry.terminal_correlation_enabled);
 }
 
 #[test]
