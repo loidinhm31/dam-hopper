@@ -444,6 +444,14 @@ Rollback/runbook: pause collection, optionally delete a UTC range or all usage d
 the feature disabled. Existing telemetry is not removed by disabling the flag. Re-enable only
 after confirming database permissions, collector loopback binding, and the Usage health counters.
 
+The Usage page's Sessions tab is a read-only audit view over aggregate summaries. It exposes
+factual lineage/delegation status, keeps cached input separate from the primary token total, and
+accepts dynamic provider/model identifiers. Session and terminal labels are derived HMAC values;
+raw commands, prompts, responses, tool content, and storage paths are not displayed or stored in
+the UI. Pausing keeps existing summaries available while marking the view paused; deletion requires
+explicit confirmation. List/detail refresh runs every 15 seconds only in a visible document (hidden
+browser tabs stop polling), with identical behavior in browser and native hosts.
+
 ### Diagnostics Storage
 
 Diagnostics export does not currently add user-configurable knobs to `dam-hopper.toml`.
