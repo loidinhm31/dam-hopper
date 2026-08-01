@@ -1215,6 +1215,13 @@ fn reader_thread(
     let telemetry_enabled = telemetry_control
         .as_ref()
         .is_some_and(|control| control.allows_project(project.as_deref()));
+    let terminal_fingerprint = telemetry_enabled
+        .then(|| {
+            command_classifier
+                .as_ref()
+                .map(|classifier| classifier.terminal_fingerprint(run_id))
+        })
+        .flatten();
     let mut telemetry = TelemetryContext::new(
         run_id,
         Arc::clone(&telemetry_sink),
@@ -1225,6 +1232,7 @@ fn reader_thread(
             telemetry_sink.try_record_run(TerminalRunEvent {
                 schema_version: TELEMETRY_SCHEMA_VERSION,
                 run_id,
+                terminal_fingerprint,
                 project: project
                     .as_deref()
                     .and_then(|project| crate::telemetry::SafeIdentifier::new(project).ok()),

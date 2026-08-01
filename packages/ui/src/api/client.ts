@@ -530,6 +530,85 @@ export interface UsageSettingsPatch {
   retryCollector?: boolean;
 }
 
+export type UsageSessionLineageCoverage =
+  | "exact"
+  | "partial"
+  | "lineage_unavailable";
+export type UsageSessionTokenCoverage =
+  | "exact"
+  | "partial"
+  | "token_data_unavailable";
+export type UsageSessionDelegationState =
+  | "delegated"
+  | "not_delegated"
+  | "partial"
+  | "lineage_unavailable";
+
+export interface UsageSessionQuery {
+  from?: number;
+  to?: number;
+  model?: string;
+  terminal?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface UsageSessionCoverage {
+  lineage: UsageSessionLineageCoverage;
+  tokens: UsageSessionTokenCoverage;
+  correlation: "exact" | "approximate" | "unattributed";
+}
+
+export interface UsageSessionTerminal {
+  id: string;
+  label: string;
+  project: string | null;
+  startedAtUtcMs: number;
+  firstSeenAtUtcMs: number;
+  lastSeenAtUtcMs: number;
+}
+
+export interface UsageSessionSummary {
+  id: string;
+  startedAtUtcMs: number;
+  endedAtUtcMs: number;
+  rootModel: string | null;
+  childCount: number;
+  tokens: UsageTokens;
+  mainTokenShare: number | null;
+  delegationState: UsageSessionDelegationState;
+  coverage: UsageSessionCoverage;
+  terminals: UsageSessionTerminal[];
+}
+
+export interface UsageSessionPage {
+  range: { from: number; to: number };
+  sessions: UsageSessionSummary[];
+  nextCursor: string | null;
+  paused: boolean;
+}
+
+export interface UsageSessionNode {
+  id: string;
+  parentId: string | null;
+  role: "root" | "main" | "subagent";
+  depth: number;
+  model: string | null;
+  startedAtUtcMs: number;
+  endedAtUtcMs: number | null;
+  tokens: UsageTokens;
+  coverage: UsageSessionCoverage;
+}
+
+export interface UsageSessionDetail {
+  session: UsageSessionSummary;
+  nodes: UsageSessionNode[];
+  truncated: boolean;
+  maxNodes: number;
+  maxDepth: number;
+  paused: boolean;
+}
+
 export interface ProjectWithStatus extends ProjectConfig {
   status: GitStatus | null;
 }
@@ -1304,6 +1383,10 @@ export const api = {
   usage: {
     summary: (query: UsageSummaryQuery = {}) =>
       getTransport().invoke<UsageSummary>("usage:summary", query),
+    sessions: (query: UsageSessionQuery = {}) =>
+      getTransport().invoke<UsageSessionPage>("usage:sessions", query),
+    session: (id: string) =>
+      getTransport().invoke<UsageSessionDetail>("usage:session", { id }),
     health: () => getTransport().invoke<UsageHealth>("usage:health"),
     settings: () => getTransport().invoke<UsageSettings>("usage:settings"),
     setupStatus: () =>

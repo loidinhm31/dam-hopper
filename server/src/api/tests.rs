@@ -19,8 +19,8 @@ use crate::{
         load_or_create_hmac_key, normalize_command,
         worker::{TelemetryControl, TelemetryHandle},
         AgentUsageEvent, CaptureQuality, CodexModel, CodexVersion, CommandEvent, CommandEventId,
-        CommandOutcome, CorrelationQuality, ShellKind, TelemetryCmd, TelemetryKeyRing,
-        TelemetryStore, TerminalRunEvent, TerminalRunId, TokenCounterSemantic,
+        CommandOutcome, CorrelationQuality, SafeIdentifier, ShellKind, TelemetryCmd,
+        TelemetryKeyRing, TelemetryStore, TerminalRunEvent, TerminalRunId, TokenCounterSemantic,
         TELEMETRY_SCHEMA_VERSION,
     },
     tunnel::{CloudflaredDriver, TunnelSessionManager},
@@ -1641,6 +1641,410 @@ async fn usage_summary_returns_filled_aggregate_series_and_detail_metrics() {
 }
 
 #[tokio::test]
+async fn usage_sessions_are_protected_reconcile_and_exclude_private_fields() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    activate_telemetry(&state, &tmp);
+    let timestamp = i64::try_from(now_ms()).unwrap().saturating_sub(1_000);
+    let (session_id, terminal_id) = write_usage_session(
+        &state,
+        b"raw-provider-session",
+        Some("test-project"),
+        timestamp,
+        [Some(11), Some(13), Some(17), Some(19)],
+    );
+
+    let unauthorized = get_without_auth(state.clone(), "/api/usage/sessions").await;
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    state.telemetry.read().unwrap().control.set_enabled(false);
+    let list = get(
+        state.clone(),
+        &format!(
+            "/api/usage/sessions?from={}&to={}&terminal={terminal_id}",
+            timestamp - 1,
+            timestamp + 1
+        ),
+    )
+    .await;
+    assert_eq!(list.status(), StatusCode::OK);
+    let list_body = axum::body::to_bytes(list.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let list_value: serde_json::Value = serde_json::from_slice(&list_body).unwrap();
+    assert_eq!(list_value["paused"], true);
+    assert_eq!(list_value["sessions"][0]["id"], session_id);
+    assert_eq!(list_value["sessions"][0]["rootModel"], "gpt-5.6-sol");
+    assert_eq!(list_value["sessions"][0]["childCount"], 0);
+    assert_eq!(list_value["sessions"][0]["mainTokenShare"], 1.0);
+    assert_eq!(
+        list_value["sessions"][0]["delegationState"],
+        "lineage_unavailable"
+    );
+    assert_eq!(
+        list_value["sessions"][0]["terminals"][0]["project"],
+        "test-project"
+    );
+    let serialized = String::from_utf8(list_body.to_vec()).unwrap();
+    for forbidden in [
+        "raw-provider-session",
+        "provider",
+        "sourceVersion",
+        "fingerprint",
+        "counterSemantic",
+        "status",
+        "command",
+        "prompt",
+        "response",
+    ] {
+        assert!(
+            !serialized.contains(forbidden),
+            "response leaked {forbidden}"
+        );
+    }
+
+    let detail = get(state.clone(), &format!("/api/usage/sessions/{session_id}")).await;
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail_body = axum::body::to_bytes(detail.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let detail_value: serde_json::Value = serde_json::from_slice(&detail_body).unwrap();
+    assert_eq!(detail_value["nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        detail_value["nodes"][0]["parentId"],
+        serde_json::Value::Null
+    );
+    assert_eq!(detail_value["maxNodes"], 256);
+    assert_eq!(detail_value["maxDepth"], 16);
+    let detail_serialized = String::from_utf8(detail_body.to_vec()).unwrap();
+    for forbidden in [
+        "provider",
+        "sourceVersion",
+        "fingerprint",
+        "command",
+        "prompt",
+    ] {
+        assert!(
+            !detail_serialized.contains(forbidden),
+            "detail response leaked {forbidden}"
+        );
+    }
+
+    let summary = get(state, "/api/usage/summary?window=24h").await;
+    assert_eq!(summary.status(), StatusCode::OK);
+    let summary_body = axum::body::to_bytes(summary.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let summary_value: serde_json::Value = serde_json::from_slice(&summary_body).unwrap();
+    assert_eq!(list_value["sessions"][0]["tokens"], summary_value["codex"]);
+}
+
+#[tokio::test]
+async fn usage_session_cursor_bounds_and_ids_are_strict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    activate_telemetry(&state, &tmp);
+    let timestamp = i64::try_from(now_ms()).unwrap().saturating_sub(10_000);
+    for (offset, conversation) in [b"session-a", b"session-b", b"session-c"]
+        .into_iter()
+        .enumerate()
+    {
+        write_usage_session(
+            &state,
+            conversation,
+            None,
+            timestamp + offset as i64,
+            [Some(1), Some(2), Some(3), Some(4)],
+        );
+    }
+
+    let first = get(
+        state.clone(),
+        &format!(
+            "/api/usage/sessions?from={}&to={}&limit=2",
+            timestamp - 1,
+            timestamp + 10
+        ),
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_body = axum::body::to_bytes(first.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let first_value: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
+    let first_ids = first_value["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|session| session["id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    let cursor = first_value["nextCursor"].as_str().unwrap();
+    let second = get(
+        state.clone(),
+        &format!(
+            "/api/usage/sessions?from={}&to={}&limit=2&cursor={cursor}",
+            timestamp - 1,
+            timestamp + 10
+        ),
+    )
+    .await;
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_body = axum::body::to_bytes(second.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let second_value: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
+    assert_eq!(second_value["sessions"].as_array().unwrap().len(), 1);
+    assert!(!first_ids.contains(
+        &second_value["sessions"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    ));
+    let changed_scope = get(
+        state.clone(),
+        &format!(
+            "/api/usage/sessions?from={}&to={}&limit=2&cursor={cursor}",
+            timestamp,
+            timestamp + 10
+        ),
+    )
+    .await;
+    assert_eq!(changed_scope.status(), StatusCode::BAD_REQUEST);
+
+    let default_first = get(state.clone(), "/api/usage/sessions?limit=2").await;
+    assert_eq!(default_first.status(), StatusCode::OK);
+    let default_first_body = axum::body::to_bytes(default_first.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let default_first_value: serde_json::Value =
+        serde_json::from_slice(&default_first_body).unwrap();
+    let default_cursor = default_first_value["nextCursor"].as_str().unwrap();
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    let default_second = get(
+        state.clone(),
+        &format!("/api/usage/sessions?limit=2&cursor={default_cursor}"),
+    )
+    .await;
+    assert_eq!(default_second.status(), StatusCode::OK);
+    let default_second_body = axum::body::to_bytes(default_second.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let default_second_value: serde_json::Value =
+        serde_json::from_slice(&default_second_body).unwrap();
+    assert_eq!(default_second_value["range"], default_first_value["range"]);
+
+    for path in [
+        "/api/usage/sessions?limit=0",
+        "/api/usage/sessions?limit=101",
+        "/api/usage/sessions?cursor=not-base64!",
+        "/api/usage/sessions?model=https%3A%2F%2Fsecret",
+        "/api/usage/sessions?terminal=short",
+        "/api/usage/sessions?from=20&to=10",
+        "/api/usage/sessions/not-a-derived-id",
+    ] {
+        assert_eq!(
+            get(state.clone(), path).await.status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let missing_id = "0".repeat(64);
+    assert_eq!(
+        get(state, &format!("/api/usage/sessions/{missing_id}"))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn usage_session_tree_caps_wide_frontier_work() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    activate_telemetry(&state, &tmp);
+    let store = state
+        .telemetry
+        .read()
+        .unwrap()
+        .store
+        .as_ref()
+        .unwrap()
+        .clone();
+    let timestamp = i64::try_from(now_ms()).unwrap().saturating_sub(1_000);
+    let root_id = "c".repeat(64);
+    let mut connection = rusqlite::Connection::open(store.path_for_tests()).unwrap();
+    let transaction = connection.transaction().unwrap();
+    transaction
+        .execute(
+            "INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, ?1, NULL, 'codex', 'root', 'gpt-5.6-sol', '0.146.0', ?2, ?2, 'completed', 'exact', 'exact', 'exact', 'cumulative', ?2, 1, 1, 1, 1, ?2)",
+            rusqlite::params![root_id, timestamp],
+        )
+        .unwrap();
+    {
+        let mut insert = transaction
+            .prepare("INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, ?2, ?2, 'codex', 'subagent', 'gpt-5.6-terra', '0.146.0', ?3, ?3, 'completed', 'exact', 'exact', 'exact', 'cumulative', ?3, 1, 1, 1, 1, ?3)")
+            .unwrap();
+        for index in 1..=10_000_u64 {
+            insert
+                .execute(rusqlite::params![
+                    format!("d{index:063x}"),
+                    root_id,
+                    timestamp + index as i64
+                ])
+                .unwrap();
+        }
+    }
+    transaction.commit().unwrap();
+
+    let root_digest = root_id.try_into().unwrap();
+    let started = Instant::now();
+    let tree = crate::telemetry::queries::agent_run_tree(&store, &root_digest, 16, 256).unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(200),
+        "wide tree traversal exceeded its work budget"
+    );
+    assert_eq!(tree.len(), 257, "one extra row probes truncation");
+    assert_eq!(tree[0].depth, 0);
+    assert!(tree[1..].iter().all(|node| node.depth == 1));
+}
+
+#[tokio::test]
+async fn usage_session_detail_enforces_node_and_depth_caps() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    activate_telemetry(&state, &tmp);
+    let store = state
+        .telemetry
+        .read()
+        .unwrap()
+        .store
+        .as_ref()
+        .unwrap()
+        .clone();
+    let timestamp = i64::try_from(now_ms()).unwrap().saturating_sub(1_000);
+    let root_id = "a".repeat(64);
+    let mut connection = rusqlite::Connection::open(store.path_for_tests()).unwrap();
+    let transaction = connection.transaction().unwrap();
+    transaction
+        .execute(
+            "INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, ?1, NULL, 'codex', 'root', 'gpt-5.6-sol', '0.146.0', ?2, ?2, 'completed', 'exact', 'exact', 'exact', 'cumulative', ?2, 1, 1, 1, 1, ?2)",
+            rusqlite::params![root_id, timestamp],
+        )
+        .unwrap();
+    let mut parent_id = root_id.clone();
+    {
+        let mut insert = transaction
+            .prepare("INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, ?2, ?3, 'codex', 'subagent', 'gpt-5.6-terra', '0.146.0', ?4, ?4, 'completed', 'exact', 'exact', 'exact', 'cumulative', ?4, 1, 1, 1, 1, ?4)")
+            .unwrap();
+        for index in 1..=300_u64 {
+            let child_id = format!("{index:064x}");
+            insert
+                .execute(rusqlite::params![
+                    child_id,
+                    root_id,
+                    parent_id,
+                    timestamp + index as i64
+                ])
+                .unwrap();
+            parent_id = child_id;
+        }
+    }
+    let terminal_id = "b".repeat(64);
+    transaction
+        .execute(
+            "INSERT INTO terminal_runs(run_id, terminal_fingerprint, project, shell, started_at_utc_ms, ended_at_utc_ms, capture_quality) VALUES ('00000000-0000-0000-0000-000000000001', ?1, 'test-project', 'bash', ?2, ?2, 'rich')",
+            rusqlite::params![terminal_id, timestamp],
+        )
+        .unwrap();
+    transaction
+        .execute(
+            "INSERT INTO agent_run_terminals(run_id, terminal_fingerprint, first_seen_at_utc_ms, last_seen_at_utc_ms) VALUES (?1, ?2, ?3, ?3)",
+            rusqlite::params![format!("{:064x}", 1_u64), terminal_id, timestamp],
+        )
+        .unwrap();
+    transaction.commit().unwrap();
+
+    let response = get(state.clone(), &format!("/api/usage/sessions/{root_id}")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let nodes = value["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 17, "root plus depths 1 through 16");
+    assert_eq!(nodes.last().unwrap()["depth"], 16);
+    assert_eq!(value["truncated"], true);
+    assert_eq!(value["maxNodes"], 256);
+    assert_eq!(value["maxDepth"], 16);
+    assert_eq!(value["session"]["childCount"], 300);
+    assert_eq!(value["session"]["tokens"]["inputTokens"], 301);
+    let filtered = get(
+        state,
+        &format!(
+            "/api/usage/sessions?from={}&to={}&terminal={terminal_id}",
+            timestamp - 1,
+            timestamp + 400
+        ),
+    )
+    .await;
+    assert_eq!(filtered.status(), StatusCode::OK);
+    let filtered_body = axum::body::to_bytes(filtered.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let filtered_value: serde_json::Value = serde_json::from_slice(&filtered_body).unwrap();
+    assert_eq!(filtered_value["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        filtered_value["sessions"][0]["terminals"][0]["project"],
+        "test-project"
+    );
+}
+
+#[tokio::test]
+async fn usage_session_api_lists_100k_roots_under_200ms() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    activate_telemetry(&state, &tmp);
+    let store = state
+        .telemetry
+        .read()
+        .unwrap()
+        .store
+        .as_ref()
+        .unwrap()
+        .clone();
+    let timestamp = i64::try_from(now_ms()).unwrap().saturating_sub(1_000);
+    let mut connection = rusqlite::Connection::open(store.path_for_tests()).unwrap();
+    let transaction = connection.transaction().unwrap();
+    {
+        let mut insert = transaction
+            .prepare("INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, ?1, NULL, 'codex', 'root', 'gpt-5.6-sol', '0.146.0', ?2, ?2, 'observed', 'unattributed', 'lineage_unavailable', 'exact', 'delta', ?2, 1, 2, 3, 4, ?2)")
+            .unwrap();
+        for index in 0..100_000_u64 {
+            insert
+                .execute(rusqlite::params![format!("{index:064x}"), timestamp])
+                .unwrap();
+        }
+    }
+    transaction.commit().unwrap();
+
+    let started = std::time::Instant::now();
+    let response = get(
+        state,
+        &format!(
+            "/api/usage/sessions?from={}&to={}&limit=100",
+            timestamp - 1,
+            timestamp + 1
+        ),
+    )
+    .await;
+    let elapsed = started.elapsed();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        elapsed < Duration::from_millis(200),
+        "100k-root API page took {elapsed:?}"
+    );
+}
+
+#[tokio::test]
 async fn usage_settings_apply_pause_atomically_and_delete_requires_confirmation() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
@@ -1980,6 +2384,56 @@ fn activate_telemetry(state: &AppState, tmp: &TempDir) {
     state.set_telemetry(TelemetryHandle::active(control, store, None).with_hmac_keys(keys));
 }
 
+fn write_usage_session(
+    state: &AppState,
+    conversation: &[u8],
+    project: Option<&str>,
+    timestamp: i64,
+    tokens: [Option<u64>; 4],
+) -> (String, String) {
+    let telemetry = state.telemetry.read().unwrap().clone();
+    let keys = telemetry.hmac_keys.as_ref().unwrap();
+    let run_id = TerminalRunId(Uuid::new_v4());
+    let terminal_fingerprint = keys.digest(
+        crate::telemetry::TERMINAL_HMAC_DOMAIN,
+        &[run_id.0.as_hyphenated().to_string().as_bytes()],
+    );
+    let session_id = keys.digest(b"conversation", &[conversation]);
+    telemetry
+        .store
+        .as_ref()
+        .unwrap()
+        .write_batch(vec![
+            TelemetryCmd::TerminalRun(TerminalRunEvent {
+                schema_version: TELEMETRY_SCHEMA_VERSION,
+                run_id,
+                terminal_fingerprint: Some(terminal_fingerprint.clone()),
+                project: project.map(|value| SafeIdentifier::new(value).unwrap()),
+                shell: ShellKind::Bash,
+                started_at_utc_ms: timestamp.saturating_sub(100),
+                ended_at_utc_ms: Some(timestamp),
+                capture_quality: CaptureQuality::Rich,
+            }),
+            TelemetryCmd::AgentUsage(AgentUsageEvent {
+                schema_version: TELEMETRY_SCHEMA_VERSION,
+                id: keys.digest(b"event", &[conversation]),
+                occurred_at_utc_ms: timestamp,
+                conversation_fingerprint: Some(session_id.clone()),
+                terminal_fingerprint: Some(terminal_fingerprint.clone()),
+                model: Some(CodexModel::new("gpt-5.6-sol").unwrap()),
+                source_version: CodexVersion::new("0.146.0").unwrap(),
+                correlation_quality: CorrelationQuality::Exact,
+                counter_semantic: TokenCounterSemantic::Delta,
+                input_tokens: tokens[0],
+                cached_input_tokens: tokens[1],
+                output_tokens: tokens[2],
+                reasoning_tokens: tokens[3],
+            }),
+        ])
+        .unwrap();
+    (String::from(session_id), String::from(terminal_fingerprint))
+}
+
 fn write_usage_command(
     state: &AppState,
     tmp: &TempDir,
@@ -2004,6 +2458,7 @@ fn write_usage_command(
             TelemetryCmd::TerminalRun(TerminalRunEvent {
                 schema_version: TELEMETRY_SCHEMA_VERSION,
                 run_id,
+                terminal_fingerprint: None,
                 project: None,
                 shell: ShellKind::Bash,
                 started_at_utc_ms: timestamp,

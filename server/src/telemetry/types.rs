@@ -296,6 +296,8 @@ pub struct CommandEventId {
 pub struct TerminalRunEvent {
     pub schema_version: u16,
     pub run_id: TerminalRunId,
+    /// HMAC of `run_id`, used only for indexed joins to agent summaries.
+    pub terminal_fingerprint: Option<HmacDigest>,
     pub project: Option<SafeIdentifier>,
     pub shell: ShellKind,
     pub started_at_utc_ms: i64,

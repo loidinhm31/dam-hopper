@@ -13,6 +13,50 @@ use super::{
 
 const MAX_AGENT_RUN_PAGE: usize = 100;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentRunCursor {
+    pub ended_at_utc_ms: i64,
+    pub run_id: super::privacy::HmacDigest,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AgentRunListQuery {
+    pub from_utc_ms: i64,
+    pub to_utc_ms: i64,
+    pub model: Option<CodexModel>,
+    pub terminal: Option<super::privacy::HmacDigest>,
+    pub cursor: Option<AgentRunCursor>,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentTerminalAssociation {
+    pub root_run_id: super::privacy::HmacDigest,
+    pub terminal_id: super::privacy::HmacDigest,
+    pub project: Option<SafeIdentifier>,
+    pub started_at_utc_ms: i64,
+    pub first_seen_at_utc_ms: i64,
+    pub last_seen_at_utc_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentRunTreeNode {
+    pub summary: AgentRunSummary,
+    pub depth: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentRootAggregate {
+    pub root_run_id: super::privacy::HmacDigest,
+    pub child_count: u32,
+    pub lineage_quality: AgentLineageQuality,
+    pub token_quality: AgentTokenQuality,
+    pub input_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageAggregate {
@@ -80,11 +124,271 @@ pub fn list_agent_run_summaries(
     let connection = store.open_read()?;
     let mut statement = connection.prepare(
         "SELECT r.run_id, r.root_run_id, r.parent_run_id, r.provider, r.role, r.model, r.source_version, r.started_at_utc_ms, r.ended_at_utc_ms, r.status, r.correlation_quality, r.lineage_quality, r.token_quality, r.counter_semantic, r.input_tokens, r.cached_input_tokens, r.output_tokens, r.reasoning_tokens, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = r.run_id), r.updated_at_utc_ms
-         FROM agent_runs r
+         FROM agent_runs r INDEXED BY idx_agent_runs_ended_run
          WHERE r.root_run_id IS NOT NULL
          ORDER BY r.ended_at_utc_ms DESC, r.run_id DESC LIMIT ?1",
     )?;
     let rows = statement.query_map([limit], agent_run_from_row)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(TelemetryStoreError::Sqlite)
+}
+
+/// Return completed root summaries in stable cursor order. The caller requests
+/// one extra row to determine whether another page exists.
+pub fn list_agent_run_roots(
+    store: &TelemetryStore,
+    query: &AgentRunListQuery,
+) -> Result<Vec<AgentRunSummary>, TelemetryStoreError> {
+    let limit = query
+        .limit
+        .saturating_add(1)
+        .clamp(1, MAX_AGENT_RUN_PAGE + 1) as i64;
+    let connection = store.open_read()?;
+    let mut sql = String::from(
+        "SELECT r.run_id, r.root_run_id, r.parent_run_id, r.provider, r.role, r.model, r.source_version, r.started_at_utc_ms, r.ended_at_utc_ms, r.status, r.correlation_quality, r.lineage_quality, r.token_quality, r.counter_semantic, r.input_tokens, r.cached_input_tokens, r.output_tokens, r.reasoning_tokens, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = r.run_id), r.updated_at_utc_ms
+         FROM agent_runs r INDEXED BY idx_agent_runs_parent_ended
+         WHERE r.run_id = r.root_run_id AND r.parent_run_id IS NULL
+           AND r.ended_at_utc_ms IS NOT NULL
+           AND r.started_at_utc_ms < ? AND r.ended_at_utc_ms >= ?",
+    );
+    let mut values: Vec<Value> = vec![query.to_utc_ms.into(), query.from_utc_ms.into()];
+    if let Some(model) = &query.model {
+        sql.push_str(" AND r.model = ?");
+        values.push(String::from(model.clone()).into());
+    }
+    if let Some(terminal) = &query.terminal {
+        sql.push_str(" AND EXISTS (SELECT 1 FROM agent_runs n JOIN agent_run_terminals t ON t.run_id = n.run_id WHERE n.root_run_id = r.run_id AND t.terminal_fingerprint = ?)");
+        values.push(String::from(terminal.clone()).into());
+    }
+    if let Some(cursor) = &query.cursor {
+        sql.push_str(" AND (r.ended_at_utc_ms < ? OR (r.ended_at_utc_ms = ? AND r.run_id < ?))");
+        values.push(cursor.ended_at_utc_ms.into());
+        values.push(cursor.ended_at_utc_ms.into());
+        values.push(String::from(cursor.run_id.clone()).into());
+    }
+    sql.push_str(" ORDER BY r.ended_at_utc_ms DESC, r.run_id DESC LIMIT ?");
+    values.push(limit.into());
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.iter()), agent_run_from_row)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(TelemetryStoreError::Sqlite)
+}
+
+/// Load every node for the selected roots with one bounded query.
+pub fn agent_run_nodes_for_roots(
+    store: &TelemetryStore,
+    root_ids: &[super::privacy::HmacDigest],
+    max_nodes: usize,
+) -> Result<Vec<AgentRunSummary>, TelemetryStoreError> {
+    if root_ids.is_empty() || max_nodes == 0 {
+        return Ok(Vec::new());
+    }
+    let connection = store.open_read()?;
+    let placeholders = std::iter::repeat_n("?", root_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT r.run_id, r.root_run_id, r.parent_run_id, r.provider, r.role, r.model, r.source_version, r.started_at_utc_ms, r.ended_at_utc_ms, r.status, r.correlation_quality, r.lineage_quality, r.token_quality, r.counter_semantic, r.input_tokens, r.cached_input_tokens, r.output_tokens, r.reasoning_tokens, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = r.run_id), r.updated_at_utc_ms
+         FROM agent_runs r WHERE r.root_run_id IN ({placeholders})
+         ORDER BY r.root_run_id, r.started_at_utc_ms, r.run_id LIMIT ?"
+    );
+    let mut values = root_ids
+        .iter()
+        .cloned()
+        .map(String::from)
+        .map(Value::from)
+        .collect::<Vec<_>>();
+    values.push((max_nodes.min(i64::MAX as usize) as i64).into());
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.iter()), agent_run_from_row)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(TelemetryStoreError::Sqlite)
+}
+
+/// Aggregate descendants for a page of roots with one grouped query.
+pub fn agent_root_aggregates(
+    store: &TelemetryStore,
+    root_ids: &[super::privacy::HmacDigest],
+) -> Result<Vec<AgentRootAggregate>, TelemetryStoreError> {
+    if root_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let connection = store.open_read()?;
+    let placeholders = std::iter::repeat_n("?", root_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT root_run_id, max(count(*) - 1, 0),
+            CASE WHEN sum(lineage_quality = 'lineage_unavailable') > 0 THEN 'lineage_unavailable'
+                 WHEN sum(lineage_quality = 'partial') > 0 THEN 'partial' ELSE 'exact' END,
+            CASE WHEN sum(token_quality = 'token_data_unavailable') > 0 THEN 'token_data_unavailable'
+                 WHEN sum(token_quality = 'partial') > 0 THEN 'partial' ELSE 'exact' END,
+            CASE WHEN count(input_tokens) > 0 THEN sum(input_tokens) END,
+            CASE WHEN count(cached_input_tokens) > 0 THEN sum(cached_input_tokens) END,
+            CASE WHEN count(output_tokens) > 0 THEN sum(output_tokens) END,
+            CASE WHEN count(reasoning_tokens) > 0 THEN sum(reasoning_tokens) END
+         FROM agent_runs WHERE root_run_id IN ({placeholders}) GROUP BY root_run_id"
+    );
+    let values = root_ids
+        .iter()
+        .cloned()
+        .map(String::from)
+        .map(Value::from)
+        .collect::<Vec<_>>();
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.iter()), |row| {
+        let lineage_quality = match row.get::<_, String>(2)?.as_str() {
+            "exact" => AgentLineageQuality::Exact,
+            "partial" => AgentLineageQuality::Partial,
+            "lineage_unavailable" => AgentLineageQuality::LineageUnavailable,
+            _ => return Err(rusqlite::Error::InvalidQuery),
+        };
+        let token_quality = match row.get::<_, String>(3)?.as_str() {
+            "exact" => AgentTokenQuality::Exact,
+            "partial" => AgentTokenQuality::Partial,
+            "token_data_unavailable" => AgentTokenQuality::TokenDataUnavailable,
+            _ => return Err(rusqlite::Error::InvalidQuery),
+        };
+        Ok(AgentRootAggregate {
+            root_run_id: row
+                .get::<_, String>(0)?
+                .try_into()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            child_count: row.get::<_, i64>(1)? as u32,
+            lineage_quality,
+            token_quality,
+            input_tokens: row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
+            cached_input_tokens: row.get::<_, Option<i64>>(5)?.map(|value| value as u64),
+            output_tokens: row.get::<_, Option<i64>>(6)?.map(|value| value as u64),
+            reasoning_tokens: row.get::<_, Option<i64>>(7)?.map(|value| value as u64),
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(TelemetryStoreError::Sqlite)
+}
+
+pub fn agent_run_tree(
+    store: &TelemetryStore,
+    root_id: &super::privacy::HmacDigest,
+    max_depth: u16,
+    max_nodes: usize,
+) -> Result<Vec<AgentRunTreeNode>, TelemetryStoreError> {
+    use rusqlite::OptionalExtension;
+
+    if max_nodes == 0 {
+        return Ok(Vec::new());
+    }
+    let connection = store.open_read()?;
+    let root = connection
+        .query_row(
+            "SELECT r.run_id, r.root_run_id, r.parent_run_id, r.provider, r.role, r.model, r.source_version, r.started_at_utc_ms, r.ended_at_utc_ms, r.status, r.correlation_quality, r.lineage_quality, r.token_quality, r.counter_semantic, r.input_tokens, r.cached_input_tokens, r.output_tokens, r.reasoning_tokens, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = r.run_id), r.updated_at_utc_ms
+             FROM agent_runs r
+             WHERE r.run_id = ?1 AND r.root_run_id = ?1 AND r.parent_run_id IS NULL",
+            [String::from(root_id.clone())],
+            agent_run_from_row,
+        )
+        .optional()?;
+    let Some(root) = root else {
+        return Ok(Vec::new());
+    };
+
+    // Breadth-first frontier queries keep both returned rows and database work
+    // bounded. The extra node/depth are probes used to report truncation.
+    let probe_limit = max_nodes.saturating_add(1);
+    let mut frontier = vec![String::from(root.run_id.clone())];
+    let mut nodes = vec![AgentRunTreeNode {
+        summary: root,
+        depth: 0,
+    }];
+    for depth in 1..=max_depth.saturating_add(1) {
+        let remaining = probe_limit.saturating_sub(nodes.len());
+        if remaining == 0 || frontier.is_empty() {
+            break;
+        }
+        let placeholders = std::iter::repeat_n("?", frontier.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT c.run_id, c.root_run_id, c.parent_run_id, c.provider, c.role, c.model, c.source_version, c.started_at_utc_ms, c.ended_at_utc_ms, c.status, c.correlation_quality, c.lineage_quality, c.token_quality, c.counter_semantic, c.input_tokens, c.cached_input_tokens, c.output_tokens, c.reasoning_tokens, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = c.run_id), c.updated_at_utc_ms
+             FROM agent_runs c
+             WHERE c.root_run_id = ? AND c.parent_run_id IN ({placeholders})
+             ORDER BY c.started_at_utc_ms, c.run_id LIMIT ?"
+        );
+        let mut values = Vec::with_capacity(frontier.len() + 2);
+        values.push(Value::from(String::from(root_id.clone())));
+        values.extend(frontier.into_iter().map(Value::from));
+        values.push(Value::from(remaining.min(i64::MAX as usize) as i64));
+        let mut statement = connection.prepare(&sql)?;
+        let summaries = statement
+            .query_map(params_from_iter(values.iter()), agent_run_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        frontier = summaries
+            .iter()
+            .map(|summary| String::from(summary.run_id.clone()))
+            .collect();
+        nodes.extend(
+            summaries
+                .into_iter()
+                .map(|summary| AgentRunTreeNode { summary, depth }),
+        );
+    }
+    Ok(nodes)
+}
+
+/// Resolve safe terminal labels without exposing the raw terminal UUID. This
+/// uses two bounded reads and HMAC matching in memory; it never reverses or
+/// serializes the persisted association fingerprint.
+pub fn agent_terminal_associations(
+    store: &TelemetryStore,
+    root_ids: &[super::privacy::HmacDigest],
+) -> Result<Vec<AgentTerminalAssociation>, TelemetryStoreError> {
+    if root_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let connection = store.open_read()?;
+    let placeholders = std::iter::repeat_n("?", root_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT n.root_run_id, t.terminal_fingerprint, tr.project,
+                coalesce(tr.started_at_utc_ms, min(t.first_seen_at_utc_ms)),
+                min(t.first_seen_at_utc_ms), max(t.last_seen_at_utc_ms)
+         FROM agent_run_terminals t
+         JOIN agent_runs n ON n.run_id = t.run_id
+         LEFT JOIN terminal_runs tr ON tr.terminal_fingerprint = t.terminal_fingerprint
+         WHERE n.root_run_id IN ({placeholders})
+         GROUP BY n.root_run_id, t.terminal_fingerprint, tr.project, tr.started_at_utc_ms
+         ORDER BY n.root_run_id, min(t.first_seen_at_utc_ms), t.terminal_fingerprint"
+    );
+    let values = root_ids
+        .iter()
+        .cloned()
+        .map(String::from)
+        .map(Value::from)
+        .collect::<Vec<_>>();
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.iter()), |row| {
+        let root_run_id = row
+            .get::<_, String>(0)?
+            .try_into()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let terminal_id = row
+            .get::<_, String>(1)?
+            .try_into()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        Ok(AgentTerminalAssociation {
+            root_run_id,
+            terminal_id,
+            project: row
+                .get::<_, Option<String>>(2)?
+                .map(SafeIdentifier::new)
+                .transpose()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            started_at_utc_ms: row.get(3)?,
+            first_seen_at_utc_ms: row.get(4)?,
+            last_seen_at_utc_ms: row.get(5)?,
+        })
+    })?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(TelemetryStoreError::Sqlite)
 }

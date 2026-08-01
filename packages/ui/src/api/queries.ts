@@ -18,6 +18,7 @@ import type {
   UsageSettingsPatch,
   UsageSetupStatus,
   UsageSummaryQuery,
+  UsageSessionQuery,
   HostMetrics,
   SshCredentialStatus,
   SshForgetCredentialResult,
@@ -838,6 +839,21 @@ export function useUsageSummary(query: UsageSummaryQuery = {}) {
   return useQuery({
     queryKey: ["usage", "summary", query],
     queryFn: () => api.usage.summary(query),
+  });
+}
+
+export function useUsageSessions(query: UsageSessionQuery = {}) {
+  return useQuery({
+    queryKey: ["usage", "sessions", query],
+    queryFn: () => api.usage.sessions(query),
+  });
+}
+
+export function useUsageSession(id: string | null) {
+  return useQuery({
+    queryKey: ["usage", "session", id],
+    queryFn: () => api.usage.session(id!),
+    enabled: id !== null,
   });
 }
 
