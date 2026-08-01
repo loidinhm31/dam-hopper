@@ -21,6 +21,25 @@ Shared runtime libraries:
 - **Tailwind CSS v4** for styling
 - **xterm.js** for terminal rendering
 
+## Error Boundary and stale lazy-chunk recovery
+
+**Location:** `packages/ui/src/components/ui/ErrorBoundary.tsx`
+
+`ErrorBoundary` keeps the existing custom fallback and client diagnostics for
+normal render failures. For a conservative set of browser module-load errors—
+`ChunkLoadError`, `Loading chunk <n> failed`, `Failed to fetch dynamically
+imported module`, or `Importing a module script failed`—it attempts one full
+page reload per tab session. The boundary first stores
+`dam-hopper:stale-chunk-reload-attempted` in `window.sessionStorage`; an existing
+value suppresses another reload. If session storage is unavailable or throws on
+read/write, recovery fails closed and the normal fallback remains visible.
+
+The classifier intentionally rejects approximate or unrelated application
+errors, so a second stale failure and ordinary render failures follow the same
+fallback/diagnostic path. Focused tests in
+`packages/ui/src/components/ui/ErrorBoundary.test.tsx` cover these boundaries,
+guard ordering, and storage failures.
+
 ## Usage Insights Settings
 
 **Locations:** `packages/ui/src/components/pages/SettingsPage.tsx`,

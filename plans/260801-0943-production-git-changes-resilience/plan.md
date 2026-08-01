@@ -28,7 +28,7 @@ Phases 01 and 02 may run in parallel. Phase 03 waits for both.
 | Phase | Status | Group | Effort | Plan |
 |---|---|---:|---:|---|
 | Git-unavailable state | **DONE — 2026-08-01 13:11 +07:00** | A | 2h | [01](./phase-01-git-unavailable-state.md) |
-| Stale-chunk recovery | pending | A | 1h | [02](./phase-02-stale-chunk-recovery.md) |
+| Stale-chunk recovery | **DONE — 2026-08-01 14:42 +07:00** | A | 1h | [02](./phase-02-stale-chunk-recovery.md) |
 | Tests and release validation | pending | B | 2h | [03](./phase-03-validation.md) |
 
 ## Ownership matrix

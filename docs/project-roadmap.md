@@ -13,6 +13,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 ### Production Git Changes Resilience
 
 - **Phase 01 Git-unavailable state — [COMPLETED 2026-08-01]**: typed non-Git API outcome, client/query mapping, and Changes UI unavailable state with mutation suppression.
+- **Phase 02 Stale-chunk recovery — [COMPLETED 2026-08-01]**: one guarded reload for recognizable stale Vite module failures, with fallback preservation for repeat or unrelated errors.
+  - ✅ ErrorBoundary focused tests: 10/10; browser regression: 64/64; UI production build passed.
+  - ⚠️ Full UI baseline: 748/750; two failures are Phase 01 filename-convention checks.
+- **Phase 03 Validation and release checks — [PENDING]**: production deployment, stale-tab smoke test, and authenticated real-Git verification remain.
 
 ### Terminal Usage Analytics
 

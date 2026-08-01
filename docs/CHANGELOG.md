@@ -2,6 +2,18 @@
 
 - **Native embedded browser controller (Phase 03).** Added the Tauri desktop child-WebView controller, build-time bridge injection, loopback/HTTPS tunnel navigation policy, bounded native relay validation, profile-isolated browser storage, lifecycle/geometry commands, and fail-closed popup, download, redirect, external-scheme, and permission handling. Windows WebView2 is the verified implementation target; Linux remains build-only and macOS is deferred. [See plan](../plans/260728-1313-tauri-native-embedded-browser/plan.md).
 
+## 2026-08-01
+
+- **Phase 02: Stale lazy-chunk recovery.** The shared `ErrorBoundary` now
+  recognizes only known browser module-load signatures (`ChunkLoadError`, failed
+  Vite chunk loads, and dynamic-import/module-script fetch failures). It writes
+  the namespaced `dam-hopper:stale-chunk-reload-attempted` key to
+  `sessionStorage` before one reload per tab session. Storage read/write errors
+  fail closed and retain the existing fallback; second stale failures and
+  unrelated render errors also retain the existing fallback and diagnostics.
+  Focused `ErrorBoundary` tests cover classifier boundaries, first/second
+  failures, unrelated errors, and unavailable storage.
+
 ## 2026-07-25
 
 - **Controlled browser debug preview and terminal handoff.** Added an
