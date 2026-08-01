@@ -30,7 +30,7 @@ Extend `/usage` with permanent, compact Codex session/node summaries. OTel owns 
 | 01 | [Codex 0.146.0 compatibility gate](./phase-01-codex-app-server-compatibility-gate.md) | None | 16h | Completed (FAIL) |
 | 02 | [Opt-in terminal correlation and model types](./phase-02-opt-in-terminal-correlation-and-model-types.md) | 01 decision | 10h | Completed (2026-08-01; review approved 8.5/10) |
 | 03 | [Metadata adapter and source join](./phase-03-metadata-adapter-and-source-join.md) | 01 pass, 02 | 16h | N/A (0.146.0 gate failed) |
-| 04 | [`agent_runs` summary persistence](./phase-04-agent-run-summary-persistence.md) | 02; 03 if enabled | 16h | Pending |
+| 04 | [`agent_runs` summary persistence](./phase-04-agent-run-summary-persistence.md) | 02; 03 if enabled | 16h | **Completed (2026-08-01; flat OTel-only fallback)** |
 | 05 | [Protected session-audit API](./phase-05-protected-session-audit-api.md) | 04 | 10h | Pending |
 | 06 | [Shared Usage session-audit UI](./phase-06-shared-usage-session-audit-ui.md) | 05 | 14h | Pending |
 | 07 | [Release gates, tests, and docs](./phase-07-release-gates-tests-and-docs.md) | 01-06 | 14h | Pending |
@@ -66,11 +66,13 @@ Backend + shared UI tests pass; representative 100k-node list/detail p95 stays b
 
 ### Action Items
 
-- [ ] Phase 04 implementation must model multiple terminal associations without duplicating root/node totals.
+- [x] Phase 04 implementation models multiple terminal associations without duplicating root/node totals.
 - [ ] Phase 05/06 implementation must apply overlap deletion and visible-page polling semantics.
 - [ ] Phase 02/03 must preserve fail-closed behavior for pre-existing OTel attributes.
 
-Phase 01 is complete with a failed Codex 0.146.0 compatibility gate. Phase 02 is complete (review approved 8.5/10) and limited to opt-in correlation/model types for the flat OTel fallback. Phase 03 is N/A; downstream work must retain `lineage_unavailable` and must not infer parent edges.
+Phase 01 is complete with a failed Codex 0.146.0 compatibility gate. Phase 02 is complete (review approved 8.5/10) and limited to opt-in correlation/model types for the flat OTel fallback. Phase 03 is N/A; downstream work must retain `lineage_unavailable` and must not infer parent edges. Phase 04 is complete as flat OTel-only `agent_runs` persistence: no app-server adapter, exact parent edges, or inferred lineage are in scope.
+
+Phase 04 acceptance evidence: ordered migration and idempotent upgrade coverage; replay-safe flat summary upserts with multi-terminal association coverage; stale/cumulative and model/semantic conflict handling; retention finalization before raw purge; overlap range/all deletion with associations; key-rotation path coverage; and indexed 100k-node list benchmark under the 200 ms p95 target. Migration SQL remains runtime-managed by the telemetry store migration runner. A failed key rotation may leave a temporary `.next` keyring file until a retry completes.
 
 ## Unresolved questions
 

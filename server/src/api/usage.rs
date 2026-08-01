@@ -494,6 +494,7 @@ pub async fn delete_all(
         .read()
         .expect("telemetry state lock poisoned")
         .clone();
+    let was_enabled = telemetry.control.is_enabled();
     let store = match telemetry.store.as_ref() {
         Some(store) => store.clone(),
         None => {
@@ -504,10 +505,9 @@ pub async fn delete_all(
     // Pause first, then wait for a worker-ordered deletion barrier. The queued
     // commands before this request are flushed before deletion; new capture is
     // rejected until the final persisted pause state is read below.
-    let paused = state.config.read().await.server.telemetry.paused;
     let deletion_telemetry = telemetry.clone();
     let deletion_store = store.clone();
-    tokio::task::spawn_blocking(move || {
+    let deletion_result = tokio::task::spawn_blocking(move || {
         deletion_telemetry.control.with_exclusive_admission(|| {
             deletion_telemetry.control.set_enabled(false);
             execute_delete(&deletion_telemetry, &deletion_store, range).and_then(|_| {
@@ -524,10 +524,14 @@ pub async fn delete_all(
             })
         })
     })
-    .await
-    .map_err(|_| unavailable())?
-    .map_err(store_error)?;
-    telemetry.control.set_enabled(!paused);
+    .await;
+    // Restore capture on every exit path, including worker failure, rotation
+    // failure, and a blocking-task panic. Restore the exact admission state
+    // observed before the operation, independent of persisted pause settings.
+    telemetry.control.set_enabled(was_enabled);
+    deletion_result
+        .map_err(|_| unavailable())?
+        .map_err(store_error)?;
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 

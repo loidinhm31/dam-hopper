@@ -9,6 +9,7 @@ use super::decoder::DecodedCodexUsage;
 
 const AGENT_DEDUPE_DOMAIN: &[u8] = b"codex-usage:v1";
 const CONVERSATION_DOMAIN: &[u8] = b"codex-conversation:v1";
+const TERMINAL_DOMAIN: &[u8] = b"codex-terminal:v1";
 
 /// Converts a decoder result directly into a persistence-safe event. No raw
 /// OTLP values escape this boundary; conversation IDs are immediately HMACed.
@@ -65,12 +66,18 @@ pub fn normalize(
         .run_marker
         .as_ref()
         .and_then(|marker| correlation.resolve(marker, received_at_utc_ms));
+    let terminal_fingerprint = terminal_run_id.map(|run_id| {
+        keys.digest(
+            TERMINAL_DOMAIN,
+            &[run_id.0.as_hyphenated().to_string().as_bytes()],
+        )
+    });
     Some(AgentUsageEvent {
         schema_version: TELEMETRY_SCHEMA_VERSION,
         id,
         occurred_at_utc_ms,
         conversation_fingerprint,
-        terminal_run_id,
+        terminal_fingerprint,
         model: decoded.model,
         source_version,
         correlation_quality: terminal_run_id

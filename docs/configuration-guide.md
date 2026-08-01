@@ -413,6 +413,13 @@ a positive value to purge older UTC rollups. The Usage page can delete all data 
 UTC-day-aligned `[from,to)` range; deletion requires explicit confirmation. Full deletion also
 rotates the shared telemetry HMAC key, while range deletion does not.
 
+Agent-run summaries are permanent and flat; raw OTel events are applied before detail retention purges
+them. `delta` counters accumulate, while `cumulative` counters accept only newer non-regressing
+values. If app-server metadata cannot pass the content-free compatibility gate, summaries use
+`lineage_unavailable` and no hierarchy is inferred. Terminal associations are HMAC digests only.
+Telemetry schema migrations are runtime-managed by `TelemetryStore` and SQLite `user_version`; do not
+run migration SQL files manually.
+
 The Usage settings API can explicitly manage the local Codex exporter with `codexExporter: true`.
 It writes only the exact DamHopper-owned shape in `~/.codex/config.toml` (loopback `/v1/logs`,
 binary OTLP, one bearer header, and `log_user_prompt = false`). The generated secret is stored
