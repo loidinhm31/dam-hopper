@@ -55,6 +55,24 @@ Managing export does not restart Codex, so the UI indicates that a new/restarted
 is required. When capture is disabled, the Usage page links back to Settings and explains that a
 new terminal is required for complete run boundaries.
 
+## Usage Session Audit
+
+**Locations:** `packages/ui/src/components/pages/UsagePage.tsx`,
+`packages/ui/src/components/usage/UsageSessionAudit.tsx`, `UsageSessionList.tsx`,
+`UsageSessionTree.tsx`, and `UsageSessionTokens.tsx`.
+
+The Usage page has Overview and Sessions tabs. Sessions shows bounded aggregate model/delegation
+summaries and a selected session's bounded node tree with lineage, token, and terminal-correlation
+status. Opaque URL parameters (`view=sessions`, `session`, and authenticated `cursor`) preserve
+selection and pagination deep links. Model values are dynamic provider-qualified display strings.
+
+Primary tokens are input + output + reasoning; cached input is displayed separately and excluded.
+Partial or unavailable lineage is surfaced, never inferred. Session and terminal identities are
+derived HMAC references; raw commands, prompts, responses, tool content, and storage paths are not
+rendered or persisted by the UI. List/detail queries poll every 15 seconds only in a visible
+document; hidden tabs stop polling. Browser and native hosts share this behavior. Paused collection
+keeps stored summaries readable and marks the view paused; deletion remains explicit and destructive.
+
 ## Latest Commit in Terminal
 
 **Locations:** `packages/ui/src/components/organisms/SettingsAppearanceSection.tsx`,

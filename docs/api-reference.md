@@ -341,7 +341,9 @@ opaque, and scoped to the range and filters that created them.
 The response is `{ range: { from, to }, sessions, nextCursor, paused }`. Each session contains a
 derived HMAC `id`, UTC start/end timestamps, optional root model, child count, nullable token
 components (`inputTokens`, `cachedInputTokens`, `outputTokens`, `reasoningTokens`),
-`mainTokenShare`, `delegationState`, `coverage`, and HMAC terminal references. Invalid ranges,
+`mainTokenShare`, `delegationState`, `coverage`, and HMAC terminal references. The UI's primary-token
+total is input + output + reasoning; `cachedInputTokens` is reported separately and excluded. Model
+values remain bounded provider-qualified display data rather than a fixed allowlist. Invalid ranges,
 limits, cursors, model values, or digests are rejected; paused/unavailable collection is reported
 by state rather than fabricated zeros.
 
@@ -353,6 +355,13 @@ the caps are 256 nodes and depth 16. Nodes expose only derived IDs, parent IDs, 
 UTC timestamps, nullable token components, and coverage (`lineage`, `tokens`, `correlation`). A
 missing session returns not found. Trees exceeding a cap are truncated and flagged; no hierarchy is
 inferred from ordering, model names, titles, or text.
+
+The shared browser/native Usage page presents these routes as a Sessions tab with list/detail
+navigation. It uses `view=sessions`, `session`, and opaque authenticated `cursor` parameters for
+deep links. List and detail queries refetch every 15 seconds only while the document is visible;
+hidden documents stop polling. No route or UI response contains raw commands, prompts, responses,
+tool content, or storage identifiers. Paused collection leaves stored summaries readable and marks
+responses as paused; deletion remains an explicit destructive operation.
 
 ### Agent-run summaries (internal store contract)
 

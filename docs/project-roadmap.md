@@ -4,10 +4,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ## Status Overview
 
-- **Current Phase:** Terminal Usage Analytics Phase 07: Security, Fault, Performance, Documentation (validated; review approved 2026-07-26; platform checks pending)
-- **Last Milestone:** Completed aggregate analytics, privacy/fault validation, loopback Codex adapter, Usage UI, benchmark regression, and release documentation
-- **Total Phases Completed:** 30 phases (prior roadmap phases plus Terminal Usage Analytics 03–07)
-- **Next Milestone:** Complete environment-dependent Zsh/Fish PTY, IME, screen-reader, and renderer checks
+- **Current Phase:** Session Model Delegation Audit Phase 07: Release gates, tests, and docs (pending)
+- **Last Milestone:** Completed shared Usage session-audit UI (Phase 06; review approved 9.5/10 on 2026-08-01)
+- **Total Phases Completed:** 35 phases (prior roadmap phases plus Terminal Usage Analytics 03–07 and completed Session Model Delegation Audit 01, 02, 04–06)
+- **Next Milestone:** Complete Session Model Delegation Audit Phase 07 release gates, tests, and documentation
 - **Current Feature:** Settings commit summary Phase 01 and terminal scroll-control redesign Phase 02 completed 2026-07-26; terminal commit status Phase 03 planned
 
 ### Production Git Changes Resilience
@@ -65,6 +65,9 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 02 opt-in correlation/model types — [COMPLETED 2026-08-01; review approved 8.5/10]**: flat OTel model/token fallback delivered; preserve fail-closed OTel conflict behavior and `lineage_unavailable`.
 - **Phase 03 metadata adapter/source join — [N/A]**: disabled by failed Phase 01 hard gate; no parent edges may be inferred.
 - **Phase 04 `agent_runs` summary persistence — [COMPLETED 2026-08-01]**: flat OTel-only model/token summaries persisted with `lineage_unavailable`; replay/conflict handling, retention finalization, overlap deletion, key rotation, and 100k-node indexed performance coverage completed. Migration SQL remains runtime-managed; failed rotation may leave a temporary `.next` keyring file until retry.
+- **Phase 05 protected session-audit API — [COMPLETED 2026-08-01]**: protected list/detail contracts and deletion/retention semantics delivered; review approved after cycle 3.
+- **Phase 06 shared Usage session-audit UI — [COMPLETED 2026-08-01; review approved 9.5/10 after cycle 1]**: shared browser/native session list/tree, token states, accessibility/deep-link behavior, and degraded/error states delivered. Evidence: UI 752/752; browser 70/70; focused session audit 6/6; UI/web/native builds pass.
+- **Phase 07 release gates, tests, and docs — [PENDING]**: final privacy, fault, performance, accessibility, and release validation.
 
 ## Roadmap Phases
 
