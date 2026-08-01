@@ -4,13 +4,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use thiserror::Error;
 
 use super::{
     types::{
-        AgentUsageEvent, CaptureQuality, CommandEvent, CommandOutcome, CorrelationQuality,
-        ShellKind, TerminalRunEnd, TerminalRunEvent, TokenCounterSemantic,
+        AgentLineageQuality, AgentRole, AgentTokenQuality, AgentUsageEvent, CaptureQuality,
+        CodexModel, CodexVersion, CommandEvent, CommandOutcome, CorrelationQuality, ShellKind,
+        TerminalRunEnd, TerminalRunEvent, TokenCounterSemantic,
     },
     TelemetryCmd,
 };
@@ -36,7 +37,7 @@ impl TelemetryStore {
         ensure_parent(path)?;
         let connection = Connection::open(path)?;
         configure_writer(&connection)?;
-        connection.execute_batch(include_str!("migrations/001_initial.sql"))?;
+        apply_migrations(&connection)?;
         ensure_token_rollup_availability_columns(&connection)?;
         restrict_storage_files(path)?;
         Ok(Self {
@@ -57,7 +58,9 @@ impl TelemetryStore {
                 TelemetryCmd::TerminalRunEnded(event) => finish_terminal_run(&transaction, &event)?,
                 TelemetryCmd::Command(event) => insert_command(&transaction, &event)?,
                 TelemetryCmd::AgentUsage(event) => {
-                    if !insert_agent_usage(&transaction, &event)? {
+                    if insert_agent_usage(&transaction, &event)? {
+                        apply_agent_usage_summary(&transaction, &event)?;
+                    } else {
                         transaction.execute(
                             "INSERT INTO telemetry_health(name, value, updated_at_utc_ms) VALUES ('collector_duplicates', 1, ?1) ON CONFLICT(name) DO UPDATE SET value = value + 1, updated_at_utc_ms = excluded.updated_at_utc_ms",
                             params![event.occurred_at_utc_ms],
@@ -131,12 +134,13 @@ impl TelemetryStore {
         let transaction = connection.transaction()?;
         match (from_utc_ms, to_utc_ms) {
             (Some(from), Some(to)) => {
+                transaction.execute("DELETE FROM agent_runs WHERE started_at_utc_ms < ?2 AND coalesce(ended_at_utc_ms, started_at_utc_ms) >= ?1", params![from, to])?;
                 transaction.execute("DELETE FROM agent_usage_events WHERE occurred_at_utc_ms >= ?1 AND occurred_at_utc_ms < ?2", params![from, to])?;
                 transaction.execute("DELETE FROM command_events WHERE occurred_at_utc_ms >= ?1 AND occurred_at_utc_ms < ?2", params![from, to])?;
                 transaction.execute("DELETE FROM daily_usage_rollups WHERE utc_day >= strftime('%Y-%m-%d', ?1 / 1000, 'unixepoch') AND utc_day < strftime('%Y-%m-%d', ?2 / 1000, 'unixepoch')", params![from, to])?;
                 transaction.execute("DELETE FROM terminal_runs WHERE ended_at_utc_ms IS NOT NULL AND ended_at_utc_ms >= ?1 AND ended_at_utc_ms < ?2 AND NOT EXISTS (SELECT 1 FROM command_events c WHERE c.run_id = terminal_runs.run_id)", params![from, to])?;
             }
-            (None, None) => transaction.execute_batch("DELETE FROM agent_usage_events; DELETE FROM agent_runs; DELETE FROM command_events; DELETE FROM terminal_runs; DELETE FROM daily_usage_rollups; DELETE FROM telemetry_health;")?,
+            (None, None) => transaction.execute_batch("DELETE FROM agent_usage_events; DELETE FROM agent_run_terminals; DELETE FROM agent_runs; DELETE FROM command_events; DELETE FROM terminal_runs; DELETE FROM daily_usage_rollups; DELETE FROM telemetry_health;")?,
             _ => unreachable!("usage range must be fully bounded"),
         }
         transaction.commit()?;
@@ -153,6 +157,28 @@ impl TelemetryStore {
     pub fn path_for_tests(&self) -> &Path {
         self.path.as_ref()
     }
+}
+
+fn apply_migrations(connection: &Connection) -> Result<(), rusqlite::Error> {
+    let mut version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version == 0 {
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(include_str!("migrations/001_initial.sql"))?;
+        transaction.pragma_update(None, "user_version", 1_i64)?;
+        transaction.commit()?;
+        version = 1;
+    }
+    if version == 1 {
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(include_str!("migrations/002_agent_run_summaries.sql"))?;
+        transaction.pragma_update(None, "user_version", 2_i64)?;
+        transaction.commit()?;
+        version = 2;
+    }
+    if version != 2 {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    Ok(())
 }
 
 fn ensure_token_rollup_availability_columns(
@@ -280,10 +306,214 @@ fn insert_agent_usage(
     event: &AgentUsageEvent,
 ) -> Result<bool, rusqlite::Error> {
     Ok(transaction.execute(
-        "INSERT INTO agent_usage_events(dedupe_id, occurred_at_utc_ms, conversation_fingerprint, model, source_version, correlation_quality, counter_semantic, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT(dedupe_id) DO NOTHING",
-        params![digest(&event.id), event.occurred_at_utc_ms, event.conversation_fingerprint.as_ref().map(digest), event.model.as_ref().map(|model| String::from(model.clone())), String::from(event.source_version.clone()), correlation(event.correlation_quality), counter_semantic(event.counter_semantic), event.input_tokens.map(|value| value as i64), event.cached_input_tokens.map(|value| value as i64), event.output_tokens.map(|value| value as i64), event.reasoning_tokens.map(|value| value as i64)],
+        "INSERT INTO agent_usage_events(dedupe_id, occurred_at_utc_ms, conversation_fingerprint, terminal_fingerprint, model, source_version, correlation_quality, counter_semantic, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) ON CONFLICT(dedupe_id) DO NOTHING",
+        params![digest(&event.id), event.occurred_at_utc_ms, event.conversation_fingerprint.as_ref().map(digest), event.terminal_fingerprint.as_ref().map(digest), event.model.as_ref().map(|model| String::from(model.clone())), String::from(event.source_version.clone()), correlation(event.correlation_quality), counter_semantic(event.counter_semantic), event.input_tokens.map(token_i64), event.cached_input_tokens.map(token_i64), event.output_tokens.map(token_i64), event.reasoning_tokens.map(token_i64)],
     )? == 1)
+}
+
+#[derive(Debug)]
+struct StoredAgentRun {
+    model: Option<String>,
+    source_version: Option<String>,
+    ended_at_utc_ms: Option<i64>,
+    correlation_quality: String,
+    counter_semantic: Option<String>,
+    counter_updated_at_utc_ms: Option<i64>,
+    tokens: [Option<i64>; 4],
+    token_quality: Option<String>,
+}
+
+fn apply_agent_usage_summary(
+    transaction: &Transaction<'_>,
+    event: &AgentUsageEvent,
+) -> Result<(), rusqlite::Error> {
+    let Some(run_id) = event.conversation_fingerprint.as_ref().map(digest) else {
+        mark_summary_applied(transaction, event)?;
+        return Ok(());
+    };
+    let model = event
+        .model
+        .as_ref()
+        .map(|value| String::from(value.clone()));
+    let semantic = counter_semantic(event.counter_semantic);
+    let incoming = [
+        event.input_tokens.map(token_i64),
+        event.cached_input_tokens.map(token_i64),
+        event.output_tokens.map(token_i64),
+        event.reasoning_tokens.map(token_i64),
+    ];
+    let existing = transaction
+        .query_row(
+            "SELECT model, source_version, ended_at_utc_ms, correlation_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, token_quality FROM agent_runs WHERE run_id = ?1",
+            [&run_id],
+            |row| {
+                Ok(StoredAgentRun {
+                    model: row.get(0)?,
+                    source_version: row.get(1)?,
+                    ended_at_utc_ms: row.get(2)?,
+                    correlation_quality: row.get(3)?,
+                    counter_semantic: row.get(4)?,
+                    counter_updated_at_utc_ms: row.get(5)?,
+                    tokens: [row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?],
+                    token_quality: row.get(10)?,
+                })
+            },
+        )
+        .optional()?;
+
+    if let Some(existing) = existing {
+        let model_conflict = existing
+            .model
+            .as_ref()
+            .zip(model.as_ref())
+            .is_some_and(|(old, new)| old != new);
+        let semantic_conflict = existing
+            .counter_semantic
+            .as_deref()
+            .is_some_and(|old| old != semantic);
+        let stale = event.counter_semantic == TokenCounterSemantic::Cumulative
+            && existing
+                .counter_updated_at_utc_ms
+                .is_some_and(|updated| event.occurred_at_utc_ms < updated);
+        let same_time_conflict = event.counter_semantic == TokenCounterSemantic::Cumulative
+            && existing.counter_updated_at_utc_ms == Some(event.occurred_at_utc_ms)
+            && incoming
+                .iter()
+                .zip(existing.tokens.iter())
+                .any(|(new, old)| new.is_some() && new != old);
+        let cumulative_regression = event.counter_semantic == TokenCounterSemantic::Cumulative
+            && existing
+                .counter_updated_at_utc_ms
+                .is_none_or(|updated| event.occurred_at_utc_ms >= updated)
+            && incoming
+                .iter()
+                .zip(existing.tokens.iter())
+                .any(|(new, old)| matches!((new, old), (Some(new), Some(old)) if new < old));
+        let conflict =
+            model_conflict || semantic_conflict || same_time_conflict || cumulative_regression;
+        let accepted = !conflict && !stale;
+        let tokens = if !accepted {
+            existing.tokens
+        } else {
+            match event.counter_semantic {
+                TokenCounterSemantic::Delta => merge_delta_tokens(existing.tokens, incoming),
+                TokenCounterSemantic::Cumulative => {
+                    merge_cumulative_tokens(existing.tokens, incoming)
+                }
+            }
+        };
+        let token_quality = if conflict
+            || existing.token_quality.as_deref() == Some("partial")
+            || tokens.iter().any(Option::is_none)
+        {
+            "partial"
+        } else {
+            "exact"
+        };
+        let resolved_model = existing.model.or(model);
+        let source_version =
+            if event.occurred_at_utc_ms >= existing.ended_at_utc_ms.unwrap_or(i64::MIN) {
+                String::from(event.source_version.clone())
+            } else {
+                existing
+                    .source_version
+                    .unwrap_or_else(|| String::from(event.source_version.clone()))
+            };
+        let resolved_correlation = stronger_correlation(
+            &existing.correlation_quality,
+            correlation(event.correlation_quality),
+        );
+        let counter_updated_at_utc_ms = if accepted {
+            Some(
+                existing
+                    .counter_updated_at_utc_ms
+                    .map_or(event.occurred_at_utc_ms, |updated| {
+                        updated.max(event.occurred_at_utc_ms)
+                    }),
+            )
+        } else {
+            existing.counter_updated_at_utc_ms
+        };
+        transaction.execute(
+            "UPDATE agent_runs SET model = ?2, source_version = ?3, started_at_utc_ms = min(started_at_utc_ms, ?4), ended_at_utc_ms = max(coalesce(ended_at_utc_ms, ?4), ?4), correlation_quality = ?5, token_quality = ?6, counter_updated_at_utc_ms = ?7, input_tokens = ?8, cached_input_tokens = ?9, output_tokens = ?10, reasoning_tokens = ?11, updated_at_utc_ms = max(coalesce(updated_at_utc_ms, ?4), ?4) WHERE run_id = ?1",
+            params![run_id, resolved_model, source_version, event.occurred_at_utc_ms, resolved_correlation, token_quality, counter_updated_at_utc_ms, tokens[0], tokens[1], tokens[2], tokens[3]],
+        )?;
+        if conflict || stale {
+            increment_health_tx(
+                transaction,
+                "agent_summary_conflicts",
+                event.occurred_at_utc_ms,
+            )?;
+        }
+    } else {
+        let token_quality = if incoming.iter().all(Option::is_some) {
+            AgentTokenQuality::Exact
+        } else {
+            AgentTokenQuality::Partial
+        };
+        transaction.execute(
+            "INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms)
+             VALUES (?1, ?1, NULL, 'codex', ?2, ?3, ?4, ?5, ?5, 'observed', ?6, ?7, ?8, ?9, ?5, ?10, ?11, ?12, ?13, ?5)",
+            params![run_id, agent_role(AgentRole::Root), model, String::from(event.source_version.clone()), event.occurred_at_utc_ms, correlation(event.correlation_quality), lineage_quality(AgentLineageQuality::LineageUnavailable), token_quality_name(token_quality), semantic, incoming[0], incoming[1], incoming[2], incoming[3]],
+        )?;
+    }
+
+    if let Some(terminal) = event.terminal_fingerprint.as_ref().map(digest) {
+        transaction.execute(
+            "INSERT INTO agent_run_terminals(run_id, terminal_fingerprint, first_seen_at_utc_ms, last_seen_at_utc_ms) VALUES (?1, ?2, ?3, ?3)
+             ON CONFLICT(run_id, terminal_fingerprint) DO UPDATE SET first_seen_at_utc_ms = min(first_seen_at_utc_ms, excluded.first_seen_at_utc_ms), last_seen_at_utc_ms = max(last_seen_at_utc_ms, excluded.last_seen_at_utc_ms)",
+            params![run_id, terminal, event.occurred_at_utc_ms],
+        )?;
+    }
+    mark_summary_applied(transaction, event)
+}
+
+fn mark_summary_applied(
+    transaction: &Transaction<'_>,
+    event: &AgentUsageEvent,
+) -> Result<(), rusqlite::Error> {
+    transaction.execute(
+        "UPDATE agent_usage_events SET summary_applied = 1 WHERE dedupe_id = ?1",
+        [digest(&event.id)],
+    )?;
+    Ok(())
+}
+
+fn merge_delta_tokens(existing: [Option<i64>; 4], incoming: [Option<i64>; 4]) -> [Option<i64>; 4] {
+    std::array::from_fn(|index| match (existing[index], incoming[index]) {
+        (Some(old), Some(new)) => Some(old.saturating_add(new)),
+        (value @ Some(_), None) | (None, value @ Some(_)) => value,
+        (None, None) => None,
+    })
+}
+
+fn merge_cumulative_tokens(
+    existing: [Option<i64>; 4],
+    incoming: [Option<i64>; 4],
+) -> [Option<i64>; 4] {
+    std::array::from_fn(|index| incoming[index].or(existing[index]))
+}
+
+fn stronger_correlation<'a>(left: &'a str, right: &'a str) -> &'a str {
+    for value in ["exact", "approximate", "unattributed"] {
+        if left == value || right == value {
+            return value;
+        }
+    }
+    "unattributed"
+}
+
+fn increment_health_tx(
+    transaction: &Transaction<'_>,
+    name: &str,
+    now_utc_ms: i64,
+) -> Result<(), rusqlite::Error> {
+    transaction.execute(
+        "INSERT INTO telemetry_health(name, value, updated_at_utc_ms) VALUES (?1, 1, ?2) ON CONFLICT(name) DO UPDATE SET value = value + 1, updated_at_utc_ms = excluded.updated_at_utc_ms",
+        params![name, now_utc_ms],
+    )?;
+    Ok(())
 }
 
 fn rollup_and_purge(
@@ -292,6 +522,7 @@ fn rollup_and_purge(
     retention_days: u16,
     aggregate_retention_days: Option<u32>,
 ) -> Result<(), rusqlite::Error> {
+    finalize_pending_agent_summaries(transaction)?;
     // Retain the whole UTC boundary day in detail. This avoids making a daily
     // rollup that contains only part of a day, which would otherwise make a
     // detail/rollup aggregate query either double-count or leave a gap.
@@ -347,6 +578,49 @@ fn rollup_and_purge(
     Ok(())
 }
 
+fn finalize_pending_agent_summaries(transaction: &Transaction<'_>) -> Result<(), rusqlite::Error> {
+    let pending = {
+        let mut statement = transaction.prepare(
+            "SELECT dedupe_id, occurred_at_utc_ms, conversation_fingerprint, terminal_fingerprint, model, source_version, correlation_quality, counter_semantic, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens FROM agent_usage_events WHERE summary_applied = 0 ORDER BY occurred_at_utc_ms, dedupe_id",
+        )?;
+        let rows = statement.query_map([], agent_usage_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    for event in pending {
+        apply_agent_usage_summary(transaction, &event)?;
+    }
+    Ok(())
+}
+
+fn agent_usage_from_row(row: &rusqlite::Row<'_>) -> Result<AgentUsageEvent, rusqlite::Error> {
+    let digest_value = |index| -> Result<Option<super::privacy::HmacDigest>, rusqlite::Error> {
+        row.get::<_, Option<String>>(index)?
+            .map(|value| value.try_into().map_err(|_| rusqlite::Error::InvalidQuery))
+            .transpose()
+    };
+    let model = row
+        .get::<_, Option<String>>(4)?
+        .map(|value| CodexModel::new(value).map_err(|_| rusqlite::Error::InvalidQuery))
+        .transpose()?;
+    let source_version =
+        CodexVersion::new(row.get::<_, String>(5)?).unwrap_or_else(|_| CodexVersion::unknown());
+    Ok(AgentUsageEvent {
+        schema_version: super::types::TELEMETRY_SCHEMA_VERSION,
+        id: digest_value(0)?.ok_or(rusqlite::Error::InvalidQuery)?,
+        occurred_at_utc_ms: row.get(1)?,
+        conversation_fingerprint: digest_value(2)?,
+        terminal_fingerprint: digest_value(3)?,
+        model,
+        source_version,
+        correlation_quality: parse_correlation(&row.get::<_, String>(6)?)?,
+        counter_semantic: parse_counter_semantic(&row.get::<_, String>(7)?)?,
+        input_tokens: row.get::<_, Option<i64>>(8)?.map(|value| value as u64),
+        cached_input_tokens: row.get::<_, Option<i64>>(9)?.map(|value| value as u64),
+        output_tokens: row.get::<_, Option<i64>>(10)?.map(|value| value as u64),
+        reasoning_tokens: row.get::<_, Option<i64>>(11)?.map(|value| value as u64),
+    })
+}
+
 fn shell(value: ShellKind) -> &'static str {
     match value {
         ShellKind::Bash => "bash",
@@ -382,6 +656,45 @@ fn counter_semantic(value: TokenCounterSemantic) -> &'static str {
         TokenCounterSemantic::Cumulative => "cumulative",
     }
 }
+fn parse_counter_semantic(value: &str) -> Result<TokenCounterSemantic, rusqlite::Error> {
+    match value {
+        "delta" => Ok(TokenCounterSemantic::Delta),
+        "cumulative" => Ok(TokenCounterSemantic::Cumulative),
+        _ => Err(rusqlite::Error::InvalidQuery),
+    }
+}
+fn parse_correlation(value: &str) -> Result<CorrelationQuality, rusqlite::Error> {
+    match value {
+        "exact" => Ok(CorrelationQuality::Exact),
+        "approximate" => Ok(CorrelationQuality::Approximate),
+        "unattributed" => Ok(CorrelationQuality::Unattributed),
+        _ => Err(rusqlite::Error::InvalidQuery),
+    }
+}
+fn lineage_quality(value: AgentLineageQuality) -> &'static str {
+    match value {
+        AgentLineageQuality::Exact => "exact",
+        AgentLineageQuality::Partial => "partial",
+        AgentLineageQuality::LineageUnavailable => "lineage_unavailable",
+    }
+}
+fn token_quality_name(value: AgentTokenQuality) -> &'static str {
+    match value {
+        AgentTokenQuality::Exact => "exact",
+        AgentTokenQuality::Partial => "partial",
+        AgentTokenQuality::TokenDataUnavailable => "token_data_unavailable",
+    }
+}
+fn agent_role(value: AgentRole) -> &'static str {
+    match value {
+        AgentRole::Root => "root",
+        AgentRole::Main => "main",
+        AgentRole::Subagent => "subagent",
+    }
+}
+fn token_i64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
 fn digest(value: &super::privacy::HmacDigest) -> String {
     String::from(value.clone())
 }
@@ -413,6 +726,334 @@ mod tests {
             fingerprint: command.fingerprint,
             capture_quality: CaptureQuality::Rich,
         }
+    }
+
+    fn usage_event(
+        key: &crate::telemetry::TelemetryHmacKey,
+        conversation: &[u8],
+        event_id: &[u8],
+        occurred_at_utc_ms: i64,
+        semantic: TokenCounterSemantic,
+        tokens: [Option<u64>; 4],
+        terminal: Option<&[u8]>,
+    ) -> AgentUsageEvent {
+        AgentUsageEvent {
+            schema_version: TELEMETRY_SCHEMA_VERSION,
+            id: key.digest(b"event", &[event_id]),
+            occurred_at_utc_ms,
+            conversation_fingerprint: Some(key.digest(b"conversation", &[conversation])),
+            terminal_fingerprint: terminal.map(|value| key.digest(b"terminal", &[value])),
+            model: Some(CodexModel::new("gpt-5.6-sol").unwrap()),
+            source_version: CodexVersion::new("0.146.0").unwrap(),
+            correlation_quality: if terminal.is_some() {
+                CorrelationQuality::Exact
+            } else {
+                CorrelationQuality::Unattributed
+            },
+            counter_semantic: semantic,
+            input_tokens: tokens[0],
+            cached_input_tokens: tokens[1],
+            output_tokens: tokens[2],
+            reasoning_tokens: tokens[3],
+        }
+    }
+
+    #[test]
+    fn upgrades_v1_schema_once_and_reopens_at_v2() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("telemetry.db");
+        let connection = Connection::open(&path).unwrap();
+        configure_writer(&connection).unwrap();
+        connection
+            .execute_batch(include_str!("migrations/001_initial.sql"))
+            .unwrap();
+        connection
+            .pragma_update(None, "user_version", 1_i64)
+            .unwrap();
+        drop(connection);
+
+        let store = TelemetryStore::open(&path).unwrap();
+        assert_eq!(
+            store
+                .open_read()
+                .unwrap()
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        drop(store);
+        let reopened = TelemetryStore::open(&path).unwrap();
+        let connection = reopened.open_read().unwrap();
+        assert!(connection
+            .prepare("SELECT root_run_id, token_quality FROM agent_runs")
+            .is_ok());
+        assert!(connection
+            .prepare("SELECT terminal_fingerprint FROM agent_run_terminals")
+            .is_ok());
+    }
+
+    #[test]
+    fn failed_v2_migration_rolls_back_all_prior_schema_changes() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("telemetry.db");
+        let connection = Connection::open(&path).unwrap();
+        configure_writer(&connection).unwrap();
+        connection
+            .execute_batch(include_str!("migrations/001_initial.sql"))
+            .unwrap();
+        connection
+            .execute("ALTER TABLE agent_runs ADD COLUMN token_quality TEXT", [])
+            .unwrap();
+        connection
+            .pragma_update(None, "user_version", 1_i64)
+            .unwrap();
+        drop(connection);
+
+        assert!(TelemetryStore::open(&path).is_err());
+        let connection = Connection::open(&path).unwrap();
+        let has_root_run_id = connection
+            .prepare("SELECT 1 FROM pragma_table_info('agent_runs') WHERE name = 'root_run_id'")
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(
+            !has_root_run_id,
+            "failed migration must roll back earlier DDL"
+        );
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn flat_agent_summary_is_replay_safe_and_keeps_multiple_terminals() {
+        let temp = TempDir::new().unwrap();
+        let store = TelemetryStore::open(&temp.path().join("telemetry.db")).unwrap();
+        let key = load_or_create_hmac_key(&temp.path().join("key")).unwrap();
+        let first = usage_event(
+            &key,
+            b"session",
+            b"first",
+            10,
+            TokenCounterSemantic::Delta,
+            [Some(2), Some(3), Some(5), Some(7)],
+            Some(b"terminal-a"),
+        );
+        let second = usage_event(
+            &key,
+            b"session",
+            b"second",
+            20,
+            TokenCounterSemantic::Delta,
+            [Some(11), Some(13), Some(17), Some(19)],
+            Some(b"terminal-b"),
+        );
+        store
+            .write_batch(vec![
+                TelemetryCmd::AgentUsage(first.clone()),
+                TelemetryCmd::AgentUsage(first),
+                TelemetryCmd::AgentUsage(second),
+            ])
+            .unwrap();
+
+        let summary = crate::telemetry::queries::list_agent_run_summaries(&store, 10)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(summary.input_tokens, Some(13));
+        assert_eq!(summary.cached_input_tokens, Some(16));
+        assert_eq!(summary.output_tokens, Some(22));
+        assert_eq!(summary.reasoning_tokens, Some(26));
+        assert_eq!(summary.terminal_association_count, 2);
+        assert_eq!(
+            summary.lineage_quality,
+            AgentLineageQuality::LineageUnavailable
+        );
+        assert_eq!(summary.parent_run_id, None);
+        assert_eq!(
+            crate::telemetry::queries::health_value(&store, "collector_duplicates").unwrap(),
+            1
+        );
+        store.checkpoint().unwrap();
+        let database = fs::read(store.path_for_tests()).unwrap();
+        for forbidden in [b"terminal-a".as_slice(), b"terminal-b".as_slice()] {
+            assert!(
+                !database
+                    .windows(forbidden.len())
+                    .any(|window| window == forbidden),
+                "raw terminal identity persisted"
+            );
+        }
+    }
+
+    #[test]
+    fn cumulative_summary_rejects_stale_and_conflicting_updates() {
+        let temp = TempDir::new().unwrap();
+        let store = TelemetryStore::open(&temp.path().join("telemetry.db")).unwrap();
+        let key = load_or_create_hmac_key(&temp.path().join("key")).unwrap();
+        let first = usage_event(
+            &key,
+            b"session",
+            b"first",
+            10,
+            TokenCounterSemantic::Cumulative,
+            [Some(10), Some(2), Some(4), Some(1)],
+            None,
+        );
+        let latest = usage_event(
+            &key,
+            b"session",
+            b"latest",
+            30,
+            TokenCounterSemantic::Cumulative,
+            [Some(30), Some(6), Some(12), Some(3)],
+            None,
+        );
+        let stale = usage_event(
+            &key,
+            b"session",
+            b"stale",
+            20,
+            TokenCounterSemantic::Cumulative,
+            [Some(20), Some(4), Some(8), Some(2)],
+            None,
+        );
+        let regressed = usage_event(
+            &key,
+            b"session",
+            b"regressed",
+            40,
+            TokenCounterSemantic::Cumulative,
+            [Some(5), Some(1), Some(2), Some(0)],
+            None,
+        );
+        store
+            .write_batch(vec![
+                TelemetryCmd::AgentUsage(first),
+                TelemetryCmd::AgentUsage(regressed),
+                TelemetryCmd::AgentUsage(latest),
+                TelemetryCmd::AgentUsage(stale),
+            ])
+            .unwrap();
+
+        let summary = crate::telemetry::queries::list_agent_run_summaries(&store, 1)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(summary.input_tokens, Some(30));
+        assert_eq!(summary.output_tokens, Some(12));
+        assert_eq!(summary.ended_at_utc_ms, Some(40));
+        assert_eq!(
+            crate::telemetry::queries::health_value(&store, "agent_summary_conflicts").unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn retention_finalizes_pending_summary_before_raw_purge() {
+        let temp = TempDir::new().unwrap();
+        let store = TelemetryStore::open(&temp.path().join("telemetry.db")).unwrap();
+        let key = load_or_create_hmac_key(&temp.path().join("key")).unwrap();
+        let event = usage_event(
+            &key,
+            b"session",
+            b"event",
+            1,
+            TokenCounterSemantic::Delta,
+            [Some(2), None, Some(5), None],
+            None,
+        );
+        store
+            .write_batch(vec![TelemetryCmd::AgentUsage(event)])
+            .unwrap();
+        {
+            let connection = store.writer.lock().unwrap();
+            connection.execute("DELETE FROM agent_runs", []).unwrap();
+            connection
+                .execute("UPDATE agent_usage_events SET summary_applied = 0", [])
+                .unwrap();
+        }
+        store
+            .write_batch(vec![TelemetryCmd::Purge {
+                now_utc_ms: 172_800_002,
+                detail_retention_days: 1,
+                aggregate_retention_days: None,
+            }])
+            .unwrap();
+        let connection = store.open_read().unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM agent_usage_events", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            crate::telemetry::queries::list_agent_run_summaries(&store, 1).unwrap()[0].input_tokens,
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn range_delete_removes_overlapping_summary_and_all_clears_associations() {
+        let temp = TempDir::new().unwrap();
+        let store = TelemetryStore::open(&temp.path().join("telemetry.db")).unwrap();
+        let key = load_or_create_hmac_key(&temp.path().join("key")).unwrap();
+        let first = usage_event(
+            &key,
+            b"spanning",
+            b"first",
+            10,
+            TokenCounterSemantic::Delta,
+            [Some(1), None, None, None],
+            Some(b"terminal"),
+        );
+        let second = usage_event(
+            &key,
+            b"spanning",
+            b"second",
+            30,
+            TokenCounterSemantic::Delta,
+            [Some(1), None, None, None],
+            Some(b"terminal"),
+        );
+        store
+            .write_batch(vec![
+                TelemetryCmd::AgentUsage(first),
+                TelemetryCmd::AgentUsage(second),
+            ])
+            .unwrap();
+        store.delete_range(Some(20), Some(25)).unwrap();
+        assert!(
+            crate::telemetry::queries::list_agent_run_summaries(&store, 1)
+                .unwrap()
+                .is_empty()
+        );
+
+        let other = usage_event(
+            &key,
+            b"other",
+            b"other",
+            40,
+            TokenCounterSemantic::Delta,
+            [Some(1), None, None, None],
+            Some(b"terminal"),
+        );
+        store
+            .write_batch(vec![TelemetryCmd::AgentUsage(other)])
+            .unwrap();
+        store.delete_all().unwrap();
+        let connection = store.open_read().unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM agent_run_terminals", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
     }
 
     #[test]
@@ -592,7 +1233,7 @@ mod tests {
             id: key.digest(b"usage", &[b"fixture-secret-token"]),
             occurred_at_utc_ms: 1,
             conversation_fingerprint: None,
-            terminal_run_id: None,
+            terminal_fingerprint: None,
             model: Some(CodexModel::new("gpt-5.6-sol").unwrap()),
             source_version: CodexVersion::new("0.145.0").unwrap(),
             correlation_quality: CorrelationQuality::Unattributed,
@@ -635,7 +1276,7 @@ mod tests {
             id: key.digest(b"usage", &[b"partial-components"]),
             occurred_at_utc_ms: 1,
             conversation_fingerprint: None,
-            terminal_run_id: None,
+            terminal_fingerprint: None,
             model: Some(CodexModel::new("gpt-5.6-sol").unwrap()),
             source_version: CodexVersion::unknown(),
             correlation_quality: CorrelationQuality::Unattributed,
@@ -730,6 +1371,59 @@ mod tests {
         assert!(
             durations[4] < Duration::from_millis(200),
             "100k aggregate query p95 took {:?}; durations: {durations:?}",
+            durations[4]
+        );
+    }
+
+    #[test]
+    fn agent_summary_list_stays_under_200ms_for_100k_nodes() {
+        use std::time::{Duration, Instant};
+
+        let temp = TempDir::new().unwrap();
+        let store = TelemetryStore::open(&temp.path().join("telemetry.db")).unwrap();
+        let connection = store.writer.lock().unwrap();
+        let transaction = connection.unchecked_transaction().unwrap();
+        {
+            let mut statement = transaction
+                .prepare(
+                    "INSERT INTO agent_runs(run_id, root_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, input_tokens, updated_at_utc_ms) VALUES (?1, ?1, 'codex', 'root', 'gpt-5.6-sol', '0.146.0', ?2, ?2, 'observed', 'unattributed', 'lineage_unavailable', 'partial', 'delta', 1, ?2)",
+                )
+                .unwrap();
+            for index in 0..100_000_i64 {
+                statement
+                    .execute(params![format!("{index:064x}"), index])
+                    .unwrap();
+            }
+        }
+        transaction.commit().unwrap();
+        drop(connection);
+
+        let plan = store
+            .open_read()
+            .unwrap()
+            .prepare("EXPLAIN QUERY PLAN SELECT run_id FROM agent_runs WHERE root_run_id IS NOT NULL ORDER BY ended_at_utc_ms DESC, run_id DESC LIMIT 100")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join(" ");
+        assert!(
+            plan.contains("idx_agent_runs_ended_run"),
+            "query plan: {plan}"
+        );
+
+        let mut durations = Vec::new();
+        for _ in 0..5 {
+            let started = Instant::now();
+            let rows = crate::telemetry::queries::list_agent_run_summaries(&store, 100).unwrap();
+            assert_eq!(rows.len(), 100);
+            durations.push(started.elapsed());
+        }
+        durations.sort_unstable();
+        assert!(
+            durations[4] < Duration::from_millis(200),
+            "100k summary list p95 took {:?}; durations: {durations:?}",
             durations[4]
         );
     }
