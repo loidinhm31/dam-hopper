@@ -357,7 +357,11 @@ async fn admits_newer_core_shape_and_reports_only_bounded_compatibility_health()
     let marker = SafeIdentifier::new("run-marker-safe").unwrap();
     telemetry
         .codex_correlation
-        .register(marker.clone(), chrono::Utc::now().timestamp_millis());
+        .register(
+            marker.clone(),
+            crate::telemetry::TerminalRunId(uuid::Uuid::new_v4()),
+            chrono::Utc::now().timestamp_millis(),
+        );
     request.resource_logs[0]
         .resource
         .as_mut()

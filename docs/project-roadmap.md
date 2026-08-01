@@ -62,7 +62,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 ### Session Model Delegation Audit (2026-08-01)
 
 - **Phase 01 Codex 0.146.0 compatibility gate — [COMPLETED (FAIL); review approved 9/10, 2026-08-01]**: app-server responses cross the required content-free boundary; exact lineage work is cancelled.
-- **Phase 02 opt-in correlation/model types — [PENDING; next eligible]**: proceed only with flat OTel model/token rows and `lineage_unavailable` fallback.
+- **Phase 02 opt-in correlation/model types — [COMPLETED 2026-08-01; review approved 8.5/10]**: flat OTel model/token fallback delivered; preserve fail-closed OTel conflict behavior and `lineage_unavailable`.
 - **Phase 03 metadata adapter/source join — [N/A]**: disabled by failed Phase 01 hard gate; no parent edges may be inferred.
 
 ## Roadmap Phases
