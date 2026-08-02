@@ -84,6 +84,7 @@ pub fn normalize(
             .then_some(CorrelationQuality::Exact)
             .unwrap_or(CorrelationQuality::Unattributed),
         counter_semantic: decoded.counter_semantic,
+        duration_ms: decoded.duration_ms,
         input_tokens: decoded.input_tokens,
         cached_input_tokens: decoded.cached_input_tokens,
         output_tokens: decoded.output_tokens,

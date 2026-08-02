@@ -416,6 +416,8 @@ export interface UsageTokens {
   cachedInputTokens: number | null;
   outputTokens: number | null;
   reasoningTokens: number | null;
+  responseCount?: number;
+  durationMs?: number | null;
 }
 
 /** Privacy-safe aggregate bucket; no command, event, or conversation data. */
@@ -570,6 +572,12 @@ export interface UsageSessionTerminal {
   lastSeenAtUtcMs: number;
 }
 
+export interface UsageSessionExecutorModel {
+  model: UsageModel | null;
+  responseCount: number;
+  tokens: UsageTokens;
+}
+
 export interface UsageSessionSummary {
   id: string;
   startedAtUtcMs: number;
@@ -581,6 +589,7 @@ export interface UsageSessionSummary {
   delegationState: UsageSessionDelegationState;
   coverage: UsageSessionCoverage;
   terminals: UsageSessionTerminal[];
+  executorModels?: UsageSessionExecutorModel[];
 }
 
 export interface UsageSessionPage {
