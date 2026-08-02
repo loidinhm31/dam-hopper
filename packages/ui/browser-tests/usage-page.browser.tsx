@@ -395,7 +395,7 @@ describe("usage page in Chromium", () => {
       );
     });
     expect(container.querySelector("circle title")?.textContent).toContain(
-      "60 tokens",
+      "50 tokens",
     );
   });
 });

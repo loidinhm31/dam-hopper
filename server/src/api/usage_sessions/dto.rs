@@ -44,6 +44,15 @@ pub(super) struct SessionSummaryDto {
     pub(super) delegation_state: DelegationState,
     pub(super) coverage: SessionCoverage,
     pub(super) terminals: Vec<TerminalReference>,
+    pub(super) executor_models: Vec<ExecutorModelDto>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ExecutorModelDto {
+    pub(super) model: Option<CodexModel>,
+    pub(super) response_count: u64,
+    pub(super) tokens: SessionTokens,
 }
 
 #[derive(Serialize)]
@@ -84,6 +93,8 @@ pub(super) struct SessionTokens {
     pub(super) cached_input_tokens: Option<u64>,
     pub(super) output_tokens: Option<u64>,
     pub(super) reasoning_tokens: Option<u64>,
+    pub(super) response_count: u64,
+    pub(super) duration_ms: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]

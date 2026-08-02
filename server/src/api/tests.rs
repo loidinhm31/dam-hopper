@@ -1676,6 +1676,15 @@ async fn usage_sessions_are_protected_reconcile_and_exclude_private_fields() {
     assert_eq!(list_value["sessions"][0]["id"], session_id);
     assert_eq!(list_value["sessions"][0]["rootModel"], "gpt-5.6-sol");
     assert_eq!(list_value["sessions"][0]["childCount"], 0);
+    assert_eq!(list_value["sessions"][0]["tokens"]["responseCount"], 1);
+    assert_eq!(
+        list_value["sessions"][0]["executorModels"][0]["model"],
+        "gpt-5.6-sol"
+    );
+    assert_eq!(
+        list_value["sessions"][0]["executorModels"][0]["responseCount"],
+        1
+    );
     assert_eq!(list_value["sessions"][0]["mainTokenShare"], 1.0);
     assert_eq!(
         list_value["sessions"][0]["delegationState"],
@@ -1695,7 +1704,6 @@ async fn usage_sessions_are_protected_reconcile_and_exclude_private_fields() {
         "status",
         "command",
         "prompt",
-        "response",
     ] {
         assert!(
             !serialized.contains(forbidden),
@@ -2145,6 +2153,7 @@ async fn usage_delete_all_removes_summaries_before_rotating_hmac_key() {
         source_version: CodexVersion::new("0.146.0").unwrap(),
         correlation_quality: CorrelationQuality::Exact,
         counter_semantic: TokenCounterSemantic::Delta,
+        duration_ms: None,
         input_tokens: Some(2),
         cached_input_tokens: Some(3),
         output_tokens: Some(5),
@@ -2469,6 +2478,7 @@ fn write_usage_session(
                 source_version: CodexVersion::new("0.146.0").unwrap(),
                 correlation_quality: CorrelationQuality::Exact,
                 counter_semantic: TokenCounterSemantic::Delta,
+                duration_ms: None,
                 input_tokens: tokens[0],
                 cached_input_tokens: tokens[1],
                 output_tokens: tokens[2],

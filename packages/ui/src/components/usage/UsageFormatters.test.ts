@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { formatDuration, formatPercent, formatTokenTotal, formatUsageNumber, hasTokenTotal } from "./UsageFormatters.js";
+import {
+  formatDuration,
+  formatPercent,
+  formatTokenTotal,
+  formatUsageNumber,
+  hasTokenTotal,
+} from "./UsageFormatters.js";
 
 describe("usage formatters", () => {
   it("formats aggregate numbers and unavailable values", () => {
@@ -20,13 +26,52 @@ describe("usage formatters", () => {
   });
 
   it("sums only available token aggregates", () => {
-    expect(formatTokenTotal({ inputTokens: 1_000, cachedInputTokens: null, outputTokens: 500, reasoningTokens: 100 })).toMatch(/1\.6K|1,600/);
+    expect(
+      formatTokenTotal({
+        inputTokens: 1_000,
+        cachedInputTokens: null,
+        outputTokens: 500,
+        reasoningTokens: 100,
+      }),
+    ).toMatch(/1\.6K|1,600/);
     expect(formatTokenTotal(null)).toBe("—");
   });
 
+  it("subtracts cached input from the primary token total", () => {
+    expect(
+      formatTokenTotal({
+        inputTokens: 1_000,
+        cachedInputTokens: 400,
+        outputTokens: 500,
+        reasoningTokens: 100,
+      }),
+    ).toMatch(/1\.2K|1,200/);
+  });
+
   it("keeps zero token components visible and all-unavailable totals blank", () => {
-    expect(formatTokenTotal({ inputTokens: 0, cachedInputTokens: 10, outputTokens: 0, reasoningTokens: 0 })).toBe("0");
-    expect(formatTokenTotal({ inputTokens: null, cachedInputTokens: null, outputTokens: null, reasoningTokens: null })).toBe("—");
-    expect(hasTokenTotal({ inputTokens: 0, cachedInputTokens: null, outputTokens: null, reasoningTokens: null })).toBe(true);
+    expect(
+      formatTokenTotal({
+        inputTokens: 0,
+        cachedInputTokens: 10,
+        outputTokens: 0,
+        reasoningTokens: 0,
+      }),
+    ).toBe("0");
+    expect(
+      formatTokenTotal({
+        inputTokens: null,
+        cachedInputTokens: null,
+        outputTokens: null,
+        reasoningTokens: null,
+      }),
+    ).toBe("—");
+    expect(
+      hasTokenTotal({
+        inputTokens: 0,
+        cachedInputTokens: null,
+        outputTokens: null,
+        reasoningTokens: null,
+      }),
+    ).toBe(true);
   });
 });

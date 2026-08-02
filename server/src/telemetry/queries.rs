@@ -55,6 +55,19 @@ pub struct AgentRootAggregate {
     pub cached_input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
+    pub response_count: u64,
+    pub duration_ms_sum: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentExecutorAggregate {
+    pub model: Option<CodexModel>,
+    pub response_count: u64,
+    pub input_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
+    pub duration_ms_sum: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -75,6 +88,8 @@ pub struct TokenAggregate {
     pub cached_input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
+    pub response_count: u64,
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -123,7 +138,7 @@ pub fn list_agent_run_summaries(
     let limit = limit.clamp(1, MAX_AGENT_RUN_PAGE) as i64;
     let connection = store.open_read()?;
     let mut statement = connection.prepare(
-        "SELECT r.run_id, r.root_run_id, r.parent_run_id, r.provider, r.role, r.model, r.source_version, r.started_at_utc_ms, r.ended_at_utc_ms, r.status, r.correlation_quality, r.lineage_quality, r.token_quality, r.counter_semantic, r.input_tokens, r.cached_input_tokens, r.output_tokens, r.reasoning_tokens, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = r.run_id), r.updated_at_utc_ms
+        "SELECT r.run_id, r.root_run_id, r.parent_run_id, r.provider, r.role, r.model, r.source_version, r.started_at_utc_ms, r.ended_at_utc_ms, r.status, r.correlation_quality, r.lineage_quality, r.token_quality, r.counter_semantic, r.input_tokens, r.cached_input_tokens, r.output_tokens, r.reasoning_tokens, r.response_count, r.duration_ms_sum, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = r.run_id), r.updated_at_utc_ms
          FROM agent_runs r INDEXED BY idx_agent_runs_ended_run
          WHERE r.root_run_id IS NOT NULL
          ORDER BY r.ended_at_utc_ms DESC, r.run_id DESC LIMIT ?1",
@@ -145,7 +160,7 @@ pub fn list_agent_run_roots(
         .clamp(1, MAX_AGENT_RUN_PAGE + 1) as i64;
     let connection = store.open_read()?;
     let mut sql = String::from(
-        "SELECT r.run_id, r.root_run_id, r.parent_run_id, r.provider, r.role, r.model, r.source_version, r.started_at_utc_ms, r.ended_at_utc_ms, r.status, r.correlation_quality, r.lineage_quality, r.token_quality, r.counter_semantic, r.input_tokens, r.cached_input_tokens, r.output_tokens, r.reasoning_tokens, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = r.run_id), r.updated_at_utc_ms
+        "SELECT r.run_id, r.root_run_id, r.parent_run_id, r.provider, r.role, r.model, r.source_version, r.started_at_utc_ms, r.ended_at_utc_ms, r.status, r.correlation_quality, r.lineage_quality, r.token_quality, r.counter_semantic, r.input_tokens, r.cached_input_tokens, r.output_tokens, r.reasoning_tokens, r.response_count, r.duration_ms_sum, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = r.run_id), r.updated_at_utc_ms
          FROM agent_runs r INDEXED BY idx_agent_runs_parent_ended
          WHERE r.run_id = r.root_run_id AND r.parent_run_id IS NULL
            AND r.ended_at_utc_ms IS NOT NULL
@@ -153,8 +168,10 @@ pub fn list_agent_run_roots(
     );
     let mut values: Vec<Value> = vec![query.to_utc_ms.into(), query.from_utc_ms.into()];
     if let Some(model) = &query.model {
-        sql.push_str(" AND r.model = ?");
-        values.push(String::from(model.clone()).into());
+        sql.push_str(" AND (r.model = ? OR EXISTS (SELECT 1 FROM agent_usage_events e WHERE e.conversation_fingerprint = r.run_id AND e.model = ?))");
+        let model = String::from(model.clone());
+        values.push(model.clone().into());
+        values.push(model.into());
     }
     if let Some(terminal) = &query.terminal {
         sql.push_str(" AND EXISTS (SELECT 1 FROM agent_runs n JOIN agent_run_terminals t ON t.run_id = n.run_id WHERE n.root_run_id = r.run_id AND t.terminal_fingerprint = ?)");
@@ -188,7 +205,7 @@ pub fn agent_run_nodes_for_roots(
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
-        "SELECT r.run_id, r.root_run_id, r.parent_run_id, r.provider, r.role, r.model, r.source_version, r.started_at_utc_ms, r.ended_at_utc_ms, r.status, r.correlation_quality, r.lineage_quality, r.token_quality, r.counter_semantic, r.input_tokens, r.cached_input_tokens, r.output_tokens, r.reasoning_tokens, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = r.run_id), r.updated_at_utc_ms
+        "SELECT r.run_id, r.root_run_id, r.parent_run_id, r.provider, r.role, r.model, r.source_version, r.started_at_utc_ms, r.ended_at_utc_ms, r.status, r.correlation_quality, r.lineage_quality, r.token_quality, r.counter_semantic, r.input_tokens, r.cached_input_tokens, r.output_tokens, r.reasoning_tokens, r.response_count, r.duration_ms_sum, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = r.run_id), r.updated_at_utc_ms
          FROM agent_runs r WHERE r.root_run_id IN ({placeholders})
          ORDER BY r.root_run_id, r.started_at_utc_ms, r.run_id LIMIT ?"
     );
@@ -226,7 +243,9 @@ pub fn agent_root_aggregates(
             CASE WHEN count(input_tokens) > 0 THEN sum(input_tokens) END,
             CASE WHEN count(cached_input_tokens) > 0 THEN sum(cached_input_tokens) END,
             CASE WHEN count(output_tokens) > 0 THEN sum(output_tokens) END,
-            CASE WHEN count(reasoning_tokens) > 0 THEN sum(reasoning_tokens) END
+            CASE WHEN count(reasoning_tokens) > 0 THEN sum(reasoning_tokens) END,
+            coalesce(sum(response_count), 0),
+            CASE WHEN count(duration_ms_sum) > 0 THEN sum(duration_ms_sum) END
          FROM agent_runs INDEXED BY idx_agent_runs_root_aggregate
          WHERE root_run_id IN ({placeholders}) GROUP BY root_run_id"
     );
@@ -262,7 +281,89 @@ pub fn agent_root_aggregates(
             cached_input_tokens: row.get::<_, Option<i64>>(5)?.map(|value| value as u64),
             output_tokens: row.get::<_, Option<i64>>(6)?.map(|value| value as u64),
             reasoning_tokens: row.get::<_, Option<i64>>(7)?.map(|value| value as u64),
+            response_count: row.get::<_, i64>(8)? as u64,
+            duration_ms_sum: row.get::<_, Option<i64>>(9)?.map(|value| value as u64),
         })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(TelemetryStoreError::Sqlite)
+}
+
+pub fn agent_executor_aggregates(
+    store: &TelemetryStore,
+    root_id: &super::privacy::HmacDigest,
+) -> Result<Vec<AgentExecutorAggregate>, TelemetryStoreError> {
+    let connection = store.open_read()?;
+    let mut statement = connection.prepare(
+        "SELECT model, count(*), sum(input_tokens), sum(cached_input_tokens), sum(output_tokens), sum(reasoning_tokens), sum(duration_ms)
+         FROM agent_usage_events WHERE conversation_fingerprint = ?1 GROUP BY model ORDER BY model",
+    )?;
+    let rows = statement.query_map([String::from(root_id.clone())], |row| {
+        let model = row
+            .get::<_, Option<String>>(0)?
+            .map(|value| CodexModel::new(value).map_err(|_| rusqlite::Error::InvalidQuery))
+            .transpose()?;
+        Ok(AgentExecutorAggregate {
+            model,
+            response_count: row.get::<_, i64>(1)? as u64,
+            input_tokens: row.get::<_, Option<i64>>(2)?.map(|value| value as u64),
+            cached_input_tokens: row.get::<_, Option<i64>>(3)?.map(|value| value as u64),
+            output_tokens: row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
+            reasoning_tokens: row.get::<_, Option<i64>>(5)?.map(|value| value as u64),
+            duration_ms_sum: row.get::<_, Option<i64>>(6)?.map(|value| value as u64),
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(TelemetryStoreError::Sqlite)
+}
+
+/// Load the observed model breakdown for a bounded page of conversation roots
+/// in one query. Raw usage events are the source of truth here because a root
+/// summary deliberately has no single model after a model switch.
+pub fn agent_executor_aggregates_for_roots(
+    store: &TelemetryStore,
+    root_ids: &[super::privacy::HmacDigest],
+) -> Result<Vec<(super::privacy::HmacDigest, AgentExecutorAggregate)>, TelemetryStoreError> {
+    if root_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let connection = store.open_read()?;
+    let placeholders = std::iter::repeat_n("?", root_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT conversation_fingerprint, model, count(*), sum(input_tokens), sum(cached_input_tokens), sum(output_tokens), sum(reasoning_tokens), sum(duration_ms)
+         FROM agent_usage_events WHERE conversation_fingerprint IN ({placeholders})
+         GROUP BY conversation_fingerprint, model ORDER BY conversation_fingerprint, model"
+    );
+    let values = root_ids
+        .iter()
+        .cloned()
+        .map(String::from)
+        .map(Value::from)
+        .collect::<Vec<_>>();
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.iter()), |row| {
+        let root_id = row
+            .get::<_, String>(0)?
+            .try_into()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let model = row
+            .get::<_, Option<String>>(1)?
+            .map(|value| CodexModel::new(value).map_err(|_| rusqlite::Error::InvalidQuery))
+            .transpose()?;
+        Ok((
+            root_id,
+            AgentExecutorAggregate {
+                model,
+                response_count: row.get::<_, i64>(2)? as u64,
+                input_tokens: row.get::<_, Option<i64>>(3)?.map(|value| value as u64),
+                cached_input_tokens: row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
+                output_tokens: row.get::<_, Option<i64>>(5)?.map(|value| value as u64),
+                reasoning_tokens: row.get::<_, Option<i64>>(6)?.map(|value| value as u64),
+                duration_ms_sum: row.get::<_, Option<i64>>(7)?.map(|value| value as u64),
+            },
+        ))
     })?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(TelemetryStoreError::Sqlite)
@@ -282,7 +383,7 @@ pub fn agent_run_tree(
     let connection = store.open_read()?;
     let root = connection
         .query_row(
-            "SELECT r.run_id, r.root_run_id, r.parent_run_id, r.provider, r.role, r.model, r.source_version, r.started_at_utc_ms, r.ended_at_utc_ms, r.status, r.correlation_quality, r.lineage_quality, r.token_quality, r.counter_semantic, r.input_tokens, r.cached_input_tokens, r.output_tokens, r.reasoning_tokens, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = r.run_id), r.updated_at_utc_ms
+            "SELECT r.run_id, r.root_run_id, r.parent_run_id, r.provider, r.role, r.model, r.source_version, r.started_at_utc_ms, r.ended_at_utc_ms, r.status, r.correlation_quality, r.lineage_quality, r.token_quality, r.counter_semantic, r.input_tokens, r.cached_input_tokens, r.output_tokens, r.reasoning_tokens, r.response_count, r.duration_ms_sum, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = r.run_id), r.updated_at_utc_ms
              FROM agent_runs r
              WHERE r.run_id = ?1 AND r.root_run_id = ?1 AND r.parent_run_id IS NULL",
             [String::from(root_id.clone())],
@@ -310,7 +411,7 @@ pub fn agent_run_tree(
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT c.run_id, c.root_run_id, c.parent_run_id, c.provider, c.role, c.model, c.source_version, c.started_at_utc_ms, c.ended_at_utc_ms, c.status, c.correlation_quality, c.lineage_quality, c.token_quality, c.counter_semantic, c.input_tokens, c.cached_input_tokens, c.output_tokens, c.reasoning_tokens, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = c.run_id), c.updated_at_utc_ms
+            "SELECT c.run_id, c.root_run_id, c.parent_run_id, c.provider, c.role, c.model, c.source_version, c.started_at_utc_ms, c.ended_at_utc_ms, c.status, c.correlation_quality, c.lineage_quality, c.token_quality, c.counter_semantic, c.input_tokens, c.cached_input_tokens, c.output_tokens, c.reasoning_tokens, c.response_count, c.duration_ms_sum, (SELECT count(*) FROM agent_run_terminals t WHERE t.run_id = c.run_id), c.updated_at_utc_ms
              FROM agent_runs c
              WHERE c.root_run_id = ? AND c.parent_run_id IN ({placeholders})
              ORDER BY c.started_at_utc_ms, c.run_id LIMIT ?"
@@ -476,8 +577,10 @@ fn agent_run_from_row(row: &rusqlite::Row<'_>) -> Result<AgentRunSummary, rusqli
         cached_input_tokens: row.get::<_, Option<i64>>(15)?.map(|value| value as u64),
         output_tokens: row.get::<_, Option<i64>>(16)?.map(|value| value as u64),
         reasoning_tokens: row.get::<_, Option<i64>>(17)?.map(|value| value as u64),
-        terminal_association_count: row.get::<_, i64>(18)? as u32,
-        updated_at_utc_ms: row.get(19)?,
+        response_count: row.get::<_, i64>(18)? as u64,
+        duration_ms_sum: row.get::<_, Option<i64>>(19)?.map(|value| value as u64),
+        terminal_association_count: row.get::<_, i64>(20)? as u32,
+        updated_at_utc_ms: row.get(21)?,
     })
 }
 
@@ -576,7 +679,7 @@ pub fn aggregate_tokens(
     query: &UsageQuery,
 ) -> Result<Option<TokenAggregate>, TelemetryStoreError> {
     let connection = store.open_read()?;
-    let mut sql = String::from("SELECT count(*), sum(input_tokens), sum(cached_input_tokens), sum(output_tokens), sum(reasoning_tokens) FROM agent_usage_events WHERE 1 = 1");
+    let mut sql = String::from("SELECT count(*), sum(input_tokens), sum(cached_input_tokens), sum(output_tokens), sum(reasoning_tokens), sum(duration_ms) FROM agent_usage_events WHERE 1 = 1");
     let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     if let Some(from) = query.from_utc_ms {
         sql.push_str(" AND occurred_at_utc_ms >= ?");
@@ -601,6 +704,8 @@ pub fn aggregate_tokens(
                     cached_input_tokens: row.get::<_, Option<i64>>(2)?.map(|value| value as u64),
                     output_tokens: row.get::<_, Option<i64>>(3)?.map(|value| value as u64),
                     reasoning_tokens: row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
+                    response_count: row.get::<_, i64>(0)? as u64,
+                    duration_ms: row.get::<_, Option<i64>>(5)?.map(|value| value as u64),
                 },
             ))
         },
@@ -654,7 +759,7 @@ pub fn aggregate_token_rollups(
     boundary_utc_ms: i64,
 ) -> Result<Option<TokenAggregate>, TelemetryStoreError> {
     let connection = store.open_read()?;
-    let mut sql = String::from("SELECT CASE WHEN sum(input_tokens_count) > 0 THEN sum(input_tokens_sum) END, CASE WHEN sum(cached_input_tokens_count) > 0 THEN sum(cached_input_tokens_sum) END, CASE WHEN sum(output_tokens_count) > 0 THEN sum(output_tokens_sum) END, CASE WHEN sum(reasoning_tokens_count) > 0 THEN sum(reasoning_tokens_sum) END, coalesce(sum(input_tokens_count + cached_input_tokens_count + output_tokens_count + reasoning_tokens_count), 0) FROM daily_usage_rollups WHERE utc_day < strftime('%Y-%m-%d', ?1 / 1000, 'unixepoch')");
+    let mut sql = String::from("SELECT CASE WHEN sum(input_tokens_count) > 0 THEN sum(input_tokens_sum) END, CASE WHEN sum(cached_input_tokens_count) > 0 THEN sum(cached_input_tokens_sum) END, CASE WHEN sum(output_tokens_count) > 0 THEN sum(output_tokens_sum) END, CASE WHEN sum(reasoning_tokens_count) > 0 THEN sum(reasoning_tokens_sum) END, coalesce(sum(agent_response_count), 0), CASE WHEN sum(agent_duration_ms_sum) > 0 THEN sum(agent_duration_ms_sum) END FROM daily_usage_rollups WHERE utc_day < strftime('%Y-%m-%d', ?1 / 1000, 'unixepoch')");
     let mut values: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(boundary_utc_ms)];
     if let Some(from) = query.from_utc_ms {
         sql.push_str(" AND utc_day >= strftime('%Y-%m-%d', ? / 1000, 'unixepoch')");
@@ -679,6 +784,8 @@ pub fn aggregate_token_rollups(
                     cached_input_tokens: row.get::<_, Option<i64>>(1)?.map(|value| value as u64),
                     output_tokens: row.get::<_, Option<i64>>(2)?.map(|value| value as u64),
                     reasoning_tokens: row.get::<_, Option<i64>>(3)?.map(|value| value as u64),
+                    response_count: total as u64,
+                    duration_ms: row.get::<_, Option<i64>>(5)?.map(|value| value as u64),
                 }))
             },
         )
@@ -708,6 +815,8 @@ pub fn add_tokens(
             cached_input_tokens: add_optional(left.cached_input_tokens, right.cached_input_tokens),
             output_tokens: add_optional(left.output_tokens, right.output_tokens),
             reasoning_tokens: add_optional(left.reasoning_tokens, right.reasoning_tokens),
+            response_count: left.response_count.saturating_add(right.response_count),
+            duration_ms: add_optional(left.duration_ms, right.duration_ms),
         }),
     }
 }
@@ -870,7 +979,7 @@ fn token_series(
     values.insert(0, Value::Integer(bucket_ms));
     values.insert(1, Value::Integer(bucket_ms));
     let sql = format!(
-        "SELECT (a.occurred_at_utc_ms / ?1) * ?2, count(*), sum(a.input_tokens), sum(a.cached_input_tokens), sum(a.output_tokens), sum(a.reasoning_tokens) FROM agent_usage_events a {where_clause} GROUP BY 1 ORDER BY 1"
+        "SELECT (a.occurred_at_utc_ms / ?1) * ?2, count(*), sum(a.input_tokens), sum(a.cached_input_tokens), sum(a.output_tokens), sum(a.reasoning_tokens), sum(a.duration_ms) FROM agent_usage_events a {where_clause} GROUP BY 1 ORDER BY 1"
     );
     let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map(params_from_iter(values.iter()), |row| {
@@ -888,7 +997,7 @@ fn token_rollup_series(
     let connection = store.open_read()?;
     let (where_clause, values) = token_rollup_where(query, boundary_utc_ms);
     let sql = format!(
-        "SELECT strftime('%s', utc_day) * 1000, coalesce(sum(input_tokens_count + cached_input_tokens_count + output_tokens_count + reasoning_tokens_count), 0), CASE WHEN sum(input_tokens_count) > 0 THEN sum(input_tokens_sum) END, CASE WHEN sum(cached_input_tokens_count) > 0 THEN sum(cached_input_tokens_sum) END, CASE WHEN sum(output_tokens_count) > 0 THEN sum(output_tokens_sum) END, CASE WHEN sum(reasoning_tokens_count) > 0 THEN sum(reasoning_tokens_sum) END FROM daily_usage_rollups {where_clause} GROUP BY utc_day ORDER BY utc_day"
+        "SELECT strftime('%s', utc_day) * 1000, coalesce(sum(agent_response_count), 0), CASE WHEN sum(input_tokens_count) > 0 THEN sum(input_tokens_sum) END, CASE WHEN sum(cached_input_tokens_count) > 0 THEN sum(cached_input_tokens_sum) END, CASE WHEN sum(output_tokens_count) > 0 THEN sum(output_tokens_sum) END, CASE WHEN sum(reasoning_tokens_count) > 0 THEN sum(reasoning_tokens_sum) END, CASE WHEN sum(agent_duration_ms_sum) > 0 THEN sum(agent_duration_ms_sum) END FROM daily_usage_rollups {where_clause} GROUP BY utc_day ORDER BY utc_day"
     );
     let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map(params_from_iter(values.iter()), |row| {
@@ -1074,6 +1183,10 @@ fn tokens_from_row(
             .map(|value| value as u64),
         reasoning_tokens: row
             .get::<_, Option<i64>>(offset + 4)?
+            .map(|value| value as u64),
+        response_count: count as u64,
+        duration_ms: row
+            .get::<_, Option<i64>>(offset + 5)?
             .map(|value| value as u64),
     }))
 }

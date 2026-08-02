@@ -39,7 +39,9 @@ impl TelemetryStore {
         configure_writer(&connection)?;
         apply_migrations(&connection)?;
         ensure_agent_run_compatibility_columns(&connection)?;
+        ensure_agent_usage_compatibility_columns(&connection)?;
         ensure_token_rollup_availability_columns(&connection)?;
+        repair_agent_usage_summaries(&connection)?;
         restrict_storage_files(path)?;
         Ok(Self {
             path: Arc::new(path.to_path_buf()),
@@ -218,6 +220,8 @@ fn ensure_token_rollup_availability_columns(
         "cached_input_tokens_count",
         "output_tokens_count",
         "reasoning_tokens_count",
+        "agent_response_count",
+        "agent_duration_ms_sum",
     ] {
         let exists = connection
             .prepare("SELECT 1 FROM pragma_table_info('daily_usage_rollups') WHERE name = ?1")?
@@ -228,6 +232,58 @@ fn ensure_token_rollup_availability_columns(
             ))?;
         }
     }
+    Ok(())
+}
+
+fn ensure_agent_usage_compatibility_columns(
+    connection: &Connection,
+) -> Result<(), rusqlite::Error> {
+    let event_duration = connection
+        .prepare("SELECT 1 FROM pragma_table_info('agent_usage_events') WHERE name = ?1")?
+        .exists(["duration_ms"])?;
+    if !event_duration {
+        connection
+            .execute_batch("ALTER TABLE agent_usage_events ADD COLUMN duration_ms INTEGER")?;
+    }
+    for column in ["response_count"] {
+        let exists = connection
+            .prepare("SELECT 1 FROM pragma_table_info('agent_runs') WHERE name = ?1")?
+            .exists([column])?;
+        if !exists {
+            connection.execute_batch(&format!(
+                "ALTER TABLE agent_runs ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
+            ))?;
+        }
+    }
+    let duration_exists = connection
+        .prepare("SELECT 1 FROM pragma_table_info('agent_runs') WHERE name = ?1")?
+        .exists(["duration_ms_sum"])?;
+    if !duration_exists {
+        connection.execute_batch("ALTER TABLE agent_runs ADD COLUMN duration_ms_sum INTEGER")?;
+    }
+    Ok(())
+}
+
+/// Repair the derived conversation summaries from raw events. This preserves
+/// raw audit rows and any independently captured lineage/terminal joins.
+fn repair_agent_usage_summaries(connection: &Connection) -> Result<(), rusqlite::Error> {
+    connection.execute(
+        "UPDATE agent_runs
+         SET model = (SELECT CASE WHEN count(DISTINCT e.model) = 1 THEN max(e.model) END FROM agent_usage_events e WHERE e.conversation_fingerprint = agent_runs.run_id),
+             started_at_utc_ms = (SELECT min(e.occurred_at_utc_ms) FROM agent_usage_events e WHERE e.conversation_fingerprint = agent_runs.run_id),
+             ended_at_utc_ms = (SELECT max(e.occurred_at_utc_ms) FROM agent_usage_events e WHERE e.conversation_fingerprint = agent_runs.run_id),
+             input_tokens = (SELECT sum(e.input_tokens) FROM agent_usage_events e WHERE e.conversation_fingerprint = agent_runs.run_id),
+             cached_input_tokens = (SELECT sum(e.cached_input_tokens) FROM agent_usage_events e WHERE e.conversation_fingerprint = agent_runs.run_id),
+             output_tokens = (SELECT sum(e.output_tokens) FROM agent_usage_events e WHERE e.conversation_fingerprint = agent_runs.run_id),
+             reasoning_tokens = (SELECT sum(e.reasoning_tokens) FROM agent_usage_events e WHERE e.conversation_fingerprint = agent_runs.run_id),
+             response_count = (SELECT count(*) FROM agent_usage_events e WHERE e.conversation_fingerprint = agent_runs.run_id),
+             duration_ms_sum = (SELECT sum(e.duration_ms) FROM agent_usage_events e WHERE e.conversation_fingerprint = agent_runs.run_id),
+             token_quality = CASE WHEN EXISTS (SELECT 1 FROM agent_usage_events e WHERE e.conversation_fingerprint = agent_runs.run_id AND (e.input_tokens IS NULL OR e.cached_input_tokens IS NULL OR e.output_tokens IS NULL OR e.reasoning_tokens IS NULL)) THEN 'partial' ELSE 'exact' END,
+             counter_semantic = 'delta',
+             counter_updated_at_utc_ms = (SELECT max(e.occurred_at_utc_ms) FROM agent_usage_events e WHERE e.conversation_fingerprint = agent_runs.run_id)
+         WHERE EXISTS (SELECT 1 FROM agent_usage_events e WHERE e.conversation_fingerprint = agent_runs.run_id)",
+        [],
+    )?;
     Ok(())
 }
 
@@ -350,9 +406,9 @@ fn insert_agent_usage(
     event: &AgentUsageEvent,
 ) -> Result<bool, rusqlite::Error> {
     Ok(transaction.execute(
-        "INSERT INTO agent_usage_events(dedupe_id, occurred_at_utc_ms, conversation_fingerprint, terminal_fingerprint, model, source_version, correlation_quality, counter_semantic, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) ON CONFLICT(dedupe_id) DO NOTHING",
-        params![digest(&event.id), event.occurred_at_utc_ms, event.conversation_fingerprint.as_ref().map(digest), event.terminal_fingerprint.as_ref().map(digest), event.model.as_ref().map(|model| String::from(model.clone())), String::from(event.source_version.clone()), correlation(event.correlation_quality), counter_semantic(event.counter_semantic), event.input_tokens.map(token_i64), event.cached_input_tokens.map(token_i64), event.output_tokens.map(token_i64), event.reasoning_tokens.map(token_i64)],
+        "INSERT INTO agent_usage_events(dedupe_id, occurred_at_utc_ms, conversation_fingerprint, terminal_fingerprint, model, source_version, correlation_quality, counter_semantic, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, duration_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) ON CONFLICT(dedupe_id) DO NOTHING",
+        params![digest(&event.id), event.occurred_at_utc_ms, event.conversation_fingerprint.as_ref().map(digest), event.terminal_fingerprint.as_ref().map(digest), event.model.as_ref().map(|model| String::from(model.clone())), String::from(event.source_version.clone()), correlation(event.correlation_quality), counter_semantic(event.counter_semantic), event.input_tokens.map(token_i64), event.cached_input_tokens.map(token_i64), event.output_tokens.map(token_i64), event.reasoning_tokens.map(token_i64), event.duration_ms.map(token_i64)],
     )? == 1)
 }
 
@@ -366,6 +422,8 @@ struct StoredAgentRun {
     counter_updated_at_utc_ms: Option<i64>,
     tokens: [Option<i64>; 4],
     token_quality: Option<String>,
+    response_count: u64,
+    duration_ms_sum: Option<u64>,
 }
 
 fn apply_agent_usage_summary(
@@ -389,7 +447,7 @@ fn apply_agent_usage_summary(
     ];
     let existing = transaction
         .query_row(
-            "SELECT model, source_version, ended_at_utc_ms, correlation_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, token_quality FROM agent_runs WHERE run_id = ?1",
+            "SELECT model, source_version, ended_at_utc_ms, correlation_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, token_quality, response_count, duration_ms_sum FROM agent_runs WHERE run_id = ?1",
             [&run_id],
             |row| {
                 Ok(StoredAgentRun {
@@ -401,6 +459,8 @@ fn apply_agent_usage_summary(
                     counter_updated_at_utc_ms: row.get(5)?,
                     tokens: [row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?],
                     token_quality: row.get(10)?,
+                    response_count: row.get::<_, i64>(11)? as u64,
+                    duration_ms_sum: row.get::<_, Option<i64>>(12)?.map(|value| value as u64),
                 })
             },
         )
@@ -436,7 +496,10 @@ fn apply_agent_usage_summary(
                 .any(|(new, old)| matches!((new, old), (Some(new), Some(old)) if new < old));
         let conflict =
             model_conflict || semantic_conflict || same_time_conflict || cumulative_regression;
-        let accepted = !conflict && !stale;
+        // A model switch is a valid executor pattern within one conversation.
+        // Only counter-order conflicts can make a delta unsafe to merge.
+        let counter_conflict = semantic_conflict || same_time_conflict || cumulative_regression;
+        let accepted = !stale && !counter_conflict;
         let tokens = if !accepted {
             existing.tokens
         } else {
@@ -455,7 +518,13 @@ fn apply_agent_usage_summary(
         } else {
             "exact"
         };
-        let resolved_model = existing.model.or(model);
+        let resolved_model = if model_conflict {
+            None
+        } else {
+            existing.model.or(model)
+        };
+        let response_count = existing.response_count.saturating_add(accepted as u64);
+        let duration_ms_sum = merge_duration(existing.duration_ms_sum, event.duration_ms);
         let source_version =
             if event.occurred_at_utc_ms >= existing.ended_at_utc_ms.unwrap_or(i64::MIN) {
                 String::from(event.source_version.clone())
@@ -480,8 +549,8 @@ fn apply_agent_usage_summary(
             existing.counter_updated_at_utc_ms
         };
         transaction.execute(
-            "UPDATE agent_runs SET model = ?2, source_version = ?3, started_at_utc_ms = min(started_at_utc_ms, ?4), ended_at_utc_ms = max(coalesce(ended_at_utc_ms, ?4), ?4), correlation_quality = ?5, token_quality = ?6, counter_updated_at_utc_ms = ?7, input_tokens = ?8, cached_input_tokens = ?9, output_tokens = ?10, reasoning_tokens = ?11, updated_at_utc_ms = max(coalesce(updated_at_utc_ms, ?4), ?4) WHERE run_id = ?1",
-            params![run_id, resolved_model, source_version, event.occurred_at_utc_ms, resolved_correlation, token_quality, counter_updated_at_utc_ms, tokens[0], tokens[1], tokens[2], tokens[3]],
+            "UPDATE agent_runs SET model = ?2, source_version = ?3, started_at_utc_ms = min(started_at_utc_ms, ?4), ended_at_utc_ms = max(coalesce(ended_at_utc_ms, ?4), ?4), correlation_quality = ?5, token_quality = ?6, counter_updated_at_utc_ms = ?7, input_tokens = ?8, cached_input_tokens = ?9, output_tokens = ?10, reasoning_tokens = ?11, response_count = ?12, duration_ms_sum = ?13, updated_at_utc_ms = max(coalesce(updated_at_utc_ms, ?4), ?4) WHERE run_id = ?1",
+            params![run_id, resolved_model, source_version, event.occurred_at_utc_ms, resolved_correlation, token_quality, counter_updated_at_utc_ms, tokens[0], tokens[1], tokens[2], tokens[3], response_count as i64, duration_ms_sum.map(token_i64)],
         )?;
         if conflict || stale {
             increment_health_tx(
@@ -497,9 +566,9 @@ fn apply_agent_usage_summary(
             AgentTokenQuality::Partial
         };
         transaction.execute(
-            "INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms)
-             VALUES (?1, ?1, NULL, 'codex', ?2, ?3, ?4, ?5, ?5, 'observed', ?6, ?7, ?8, ?9, ?5, ?10, ?11, ?12, ?13, ?5)",
-            params![run_id, agent_role(AgentRole::Root), model, String::from(event.source_version.clone()), event.occurred_at_utc_ms, correlation(event.correlation_quality), lineage_quality(AgentLineageQuality::LineageUnavailable), token_quality_name(token_quality), semantic, incoming[0], incoming[1], incoming[2], incoming[3]],
+            "INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, response_count, duration_ms_sum, updated_at_utc_ms)
+             VALUES (?1, ?1, NULL, 'codex', ?2, ?3, ?4, ?5, ?5, 'observed', ?6, ?7, ?8, ?9, ?5, ?10, ?11, ?12, ?13, 1, ?14, ?5)",
+            params![run_id, agent_role(AgentRole::Root), model, String::from(event.source_version.clone()), event.occurred_at_utc_ms, correlation(event.correlation_quality), lineage_quality(AgentLineageQuality::LineageUnavailable), token_quality_name(token_quality), semantic, incoming[0], incoming[1], incoming[2], incoming[3], event.duration_ms.map(token_i64)],
         )?;
     }
 
@@ -530,6 +599,14 @@ fn merge_delta_tokens(existing: [Option<i64>; 4], incoming: [Option<i64>; 4]) ->
         (value @ Some(_), None) | (None, value @ Some(_)) => value,
         (None, None) => None,
     })
+}
+
+fn merge_duration(existing: Option<u64>, incoming: Option<u64>) -> Option<u64> {
+    match (existing, incoming) {
+        (Some(old), Some(new)) => Some(old.saturating_add(new)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
 }
 
 fn merge_cumulative_tokens(
@@ -585,10 +662,10 @@ fn rollup_and_purge(
         params![cutoff],
     )?;
     transaction.execute(
-        "INSERT INTO daily_usage_rollups(utc_day, project, shell, category, model, input_tokens_sum, cached_input_tokens_sum, output_tokens_sum, reasoning_tokens_sum, input_tokens_count, cached_input_tokens_count, output_tokens_count, reasoning_tokens_count)
+        "INSERT INTO daily_usage_rollups(utc_day, project, shell, category, model, input_tokens_sum, cached_input_tokens_sum, output_tokens_sum, reasoning_tokens_sum, input_tokens_count, cached_input_tokens_count, output_tokens_count, reasoning_tokens_count, agent_response_count, agent_duration_ms_sum)
          SELECT strftime('%Y-%m-%d', occurred_at_utc_ms / 1000, 'unixepoch'), '', '', '', coalesce(model, ''),
                 coalesce(sum(input_tokens), 0), coalesce(sum(cached_input_tokens), 0), coalesce(sum(output_tokens), 0), coalesce(sum(reasoning_tokens), 0),
-                sum(input_tokens IS NOT NULL), sum(cached_input_tokens IS NOT NULL), sum(output_tokens IS NOT NULL), sum(reasoning_tokens IS NOT NULL)
+                sum(input_tokens IS NOT NULL), sum(cached_input_tokens IS NOT NULL), sum(output_tokens IS NOT NULL), sum(reasoning_tokens IS NOT NULL), count(*), coalesce(sum(duration_ms), 0)
          FROM agent_usage_events WHERE occurred_at_utc_ms < ?1 GROUP BY 1, 5
          ON CONFLICT(utc_day, project, shell, category, model) DO UPDATE SET
            input_tokens_sum = input_tokens_sum + excluded.input_tokens_sum,
@@ -598,7 +675,9 @@ fn rollup_and_purge(
            input_tokens_count = input_tokens_count + excluded.input_tokens_count,
            cached_input_tokens_count = cached_input_tokens_count + excluded.cached_input_tokens_count,
            output_tokens_count = output_tokens_count + excluded.output_tokens_count,
-           reasoning_tokens_count = reasoning_tokens_count + excluded.reasoning_tokens_count",
+           reasoning_tokens_count = reasoning_tokens_count + excluded.reasoning_tokens_count,
+           agent_response_count = agent_response_count + excluded.agent_response_count,
+           agent_duration_ms_sum = agent_duration_ms_sum + excluded.agent_duration_ms_sum",
         params![cutoff],
     )?;
     if let Some(days) = aggregate_retention_days {
@@ -625,7 +704,7 @@ fn rollup_and_purge(
 fn finalize_pending_agent_summaries(transaction: &Transaction<'_>) -> Result<(), rusqlite::Error> {
     let pending = {
         let mut statement = transaction.prepare(
-            "SELECT dedupe_id, occurred_at_utc_ms, conversation_fingerprint, terminal_fingerprint, model, source_version, correlation_quality, counter_semantic, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens FROM agent_usage_events WHERE summary_applied = 0 ORDER BY occurred_at_utc_ms, dedupe_id",
+            "SELECT dedupe_id, occurred_at_utc_ms, conversation_fingerprint, terminal_fingerprint, model, source_version, correlation_quality, counter_semantic, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, duration_ms FROM agent_usage_events WHERE summary_applied = 0 ORDER BY occurred_at_utc_ms, dedupe_id",
         )?;
         let rows = statement.query_map([], agent_usage_from_row)?;
         rows.collect::<Result<Vec<_>, _>>()?
@@ -662,6 +741,7 @@ fn agent_usage_from_row(row: &rusqlite::Row<'_>) -> Result<AgentUsageEvent, rusq
         cached_input_tokens: row.get::<_, Option<i64>>(9)?.map(|value| value as u64),
         output_tokens: row.get::<_, Option<i64>>(10)?.map(|value| value as u64),
         reasoning_tokens: row.get::<_, Option<i64>>(11)?.map(|value| value as u64),
+        duration_ms: row.get::<_, Option<i64>>(12)?.map(|value| value as u64),
     })
 }
 
@@ -795,6 +875,7 @@ mod tests {
                 CorrelationQuality::Unattributed
             },
             counter_semantic: semantic,
+            duration_ms: None,
             input_tokens: tokens[0],
             cached_input_tokens: tokens[1],
             output_tokens: tokens[2],
@@ -873,6 +954,9 @@ mod tests {
             .unwrap();
         connection
             .execute_batch(include_str!("migrations/006_agent_detail_aggregates.sql"))
+            .unwrap();
+        connection
+            .execute_batch("ALTER TABLE agent_usage_events ADD COLUMN duration_ms INTEGER")
             .unwrap();
         let column_exists = connection
             .prepare("SELECT 1 FROM pragma_table_info('agent_runs') WHERE name = ?1")
@@ -976,6 +1060,14 @@ mod tests {
             [Some(11), Some(13), Some(17), Some(19)],
             Some(b"terminal-b"),
         );
+        let first = AgentUsageEvent {
+            duration_ms: Some(400),
+            ..first
+        };
+        let second = AgentUsageEvent {
+            duration_ms: Some(600),
+            ..second
+        };
         store
             .write_batch(vec![
                 TelemetryCmd::AgentUsage(first.clone()),
@@ -992,6 +1084,8 @@ mod tests {
         assert_eq!(summary.cached_input_tokens, Some(16));
         assert_eq!(summary.output_tokens, Some(22));
         assert_eq!(summary.reasoning_tokens, Some(26));
+        assert_eq!(summary.response_count, 2);
+        assert_eq!(summary.duration_ms_sum, Some(1_000));
         assert_eq!(summary.terminal_association_count, 2);
         assert_eq!(
             summary.lineage_quality,
@@ -1073,6 +1167,82 @@ mod tests {
         assert_eq!(summary.ended_at_utc_ms, Some(40));
         assert_eq!(
             crate::telemetry::queries::health_value(&store, "agent_summary_conflicts").unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn flat_summary_keeps_delta_accounting_across_model_switches() {
+        let temp = TempDir::new().unwrap();
+        let store = TelemetryStore::open(&temp.path().join("telemetry.db")).unwrap();
+        let key = load_or_create_hmac_key(&temp.path().join("key")).unwrap();
+        let first = usage_event(
+            &key,
+            b"session",
+            b"first",
+            10,
+            TokenCounterSemantic::Delta,
+            [Some(2), Some(1), Some(5), Some(7)],
+            None,
+        );
+        let second = AgentUsageEvent {
+            id: key.digest(b"event", &[b"second"]),
+            occurred_at_utc_ms: 20,
+            model: Some(CodexModel::new("gpt-5.6-terra").unwrap()),
+            duration_ms: Some(250),
+            input_tokens: Some(11),
+            cached_input_tokens: Some(3),
+            output_tokens: Some(17),
+            reasoning_tokens: Some(19),
+            ..first.clone()
+        };
+        let first = AgentUsageEvent {
+            duration_ms: Some(100),
+            ..first
+        };
+        store
+            .write_batch(vec![
+                TelemetryCmd::AgentUsage(first),
+                TelemetryCmd::AgentUsage(second),
+            ])
+            .unwrap();
+
+        let summary = crate::telemetry::queries::list_agent_run_summaries(&store, 1)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(summary.model, None);
+        assert_eq!(summary.input_tokens, Some(13));
+        assert_eq!(summary.cached_input_tokens, Some(4));
+        assert_eq!(summary.output_tokens, Some(22));
+        assert_eq!(summary.reasoning_tokens, Some(26));
+        assert_eq!(summary.response_count, 2);
+        assert_eq!(summary.duration_ms_sum, Some(350));
+
+        let executors =
+            crate::telemetry::queries::agent_executor_aggregates(&store, &summary.run_id).unwrap();
+        assert_eq!(executors.len(), 2);
+        assert_eq!(
+            executors
+                .iter()
+                .map(|executor| executor.response_count)
+                .sum::<u64>(),
+            2
+        );
+        assert_eq!(
+            executors
+                .iter()
+                .filter_map(|executor| executor.duration_ms_sum)
+                .sum::<u64>(),
+            350
+        );
+        assert_eq!(
+            crate::telemetry::queries::agent_executor_aggregates_for_roots(
+                &store,
+                std::slice::from_ref(&summary.run_id),
+            )
+            .unwrap()
+            .len(),
             2
         );
     }
@@ -1364,6 +1534,7 @@ mod tests {
             source_version: CodexVersion::new("0.145.0").unwrap(),
             correlation_quality: CorrelationQuality::Unattributed,
             counter_semantic: TokenCounterSemantic::Delta,
+            duration_ms: None,
             input_tokens: Some(2),
             cached_input_tokens: Some(3),
             output_tokens: Some(5),
@@ -1407,6 +1578,7 @@ mod tests {
             source_version: CodexVersion::unknown(),
             correlation_quality: CorrelationQuality::Unattributed,
             counter_semantic: TokenCounterSemantic::Delta,
+            duration_ms: None,
             input_tokens: Some(0),
             cached_input_tokens: None,
             output_tokens: Some(5),
