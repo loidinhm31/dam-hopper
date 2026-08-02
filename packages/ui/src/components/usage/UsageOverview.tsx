@@ -137,7 +137,7 @@ export function UsageOverview({
                 label="Total tokens"
                 value={formatTokenTotal(summary.codex)}
                 unavailable={!hasTokenTotal(summary.codex)}
-                description="Input, output, and reasoning token components."
+                description="Uncached input, output, and reasoning tokens; cached input is excluded."
               />
               <UsageMetricCard
                 label="Input tokens"
@@ -158,6 +158,12 @@ export function UsageOverview({
                 label="Reasoning tokens"
                 value={formatUsageNumber(summary.codex?.reasoningTokens)}
                 unavailable={!hasUsageValue(summary.codex?.reasoningTokens)}
+              />
+              <UsageMetricCard
+                label="Response time"
+                value={formatDuration(summary.codex?.durationMs)}
+                unavailable={summary.codex?.durationMs == null}
+                description="Sum of durations reported by Codex response completions."
               />
               <UsageMetricCard
                 label="Cache ratio"

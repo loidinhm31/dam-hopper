@@ -14,14 +14,15 @@ use crate::{
     error::AppError,
     state::AppState,
     telemetry::queries::{
-        agent_root_aggregates, agent_run_tree, agent_terminal_associations, list_agent_run_roots,
+        agent_executor_aggregates, agent_executor_aggregates_for_roots, agent_root_aggregates,
+        agent_run_tree, agent_terminal_associations, list_agent_run_roots,
     },
 };
 
 use self::{
     cursor::{decode_cursor, encode_cursor, parse_list_query, SessionListParams},
     dto::{SessionDetailResponse, SessionListResponse, SessionRange},
-    mapping::{group_terminals, node_dtos, summary_dto},
+    mapping::{executor_model_dtos, group_terminals, node_dtos, summary_dto},
 };
 use super::error::ApiError;
 
@@ -63,6 +64,22 @@ pub(crate) async fn list_sessions(
         .collect::<HashMap<_, _>>();
     let terminals_by_run =
         group_terminals(agent_terminal_associations(store, &root_ids).map_err(store_error)?);
+    let executor_models_by_root = agent_executor_aggregates_for_roots(store, &root_ids)
+        .map_err(store_error)?
+        .into_iter()
+        .fold(
+            HashMap::<String, Vec<_>>::new(),
+            |mut grouped, (root_id, aggregate)| {
+                grouped
+                    .entry(String::from(root_id))
+                    .or_default()
+                    .push(aggregate);
+                grouped
+            },
+        )
+        .into_iter()
+        .map(|(root_id, aggregates)| (root_id, executor_model_dtos(aggregates)))
+        .collect::<HashMap<_, _>>();
     let sessions = roots
         .iter()
         .filter_map(|root| {
@@ -72,6 +89,10 @@ pub(crate) async fn list_sessions(
                     root,
                     aggregate,
                     terminals_by_run.get(&key).cloned().unwrap_or_default(),
+                    executor_models_by_root
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or_default(),
                 )
             })
         })
@@ -127,9 +148,11 @@ pub(crate) async fn get_session(
     )
     .remove(&String::from(id.clone()))
     .unwrap_or_default();
+    let executor_models =
+        executor_model_dtos(agent_executor_aggregates(store, &id).map_err(store_error)?);
 
     Ok(Json(SessionDetailResponse {
-        session: summary_dto(&root, &aggregate, terminals),
+        session: summary_dto(&root, &aggregate, terminals, executor_models),
         nodes: node_dtos(&nodes),
         truncated,
         max_nodes: MAX_TREE_NODES,
