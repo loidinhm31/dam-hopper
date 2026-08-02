@@ -22,6 +22,9 @@ enum EscapeKind {
         osc: bool,
     },
     Utf8C1,
+    Utf8Sequence {
+        remaining: u8,
+    },
     Utf8StringTerminator {
         osc: bool,
     },
@@ -55,10 +58,24 @@ impl EscapeParser {
             EscapeKind::Utf8C1 if (0x80..=0x9f).contains(&byte) => {
                 return self.start_c1(c1_kind(byte).unwrap_or(C1Kind::Control))
             }
+            EscapeKind::Utf8C1 if (0xa0..=0xbf).contains(&byte) => return self.take_visible(),
             EscapeKind::Utf8C1 => {
-                let first = self.bytes.remove(0);
-                self.kind = EscapeKind::None;
-                let mut tokens = vec![Token::Visible(first)];
+                let byte = self.bytes.pop().expect("current byte was buffered");
+                let mut tokens = self.take_visible();
+                tokens.extend(self.feed(byte));
+                return tokens;
+            }
+            EscapeKind::Utf8Sequence { remaining } if (0x80..=0xbf).contains(&byte) => {
+                if remaining == 1 {
+                    return self.take_visible();
+                }
+                EscapeKind::Utf8Sequence {
+                    remaining: remaining - 1,
+                }
+            }
+            EscapeKind::Utf8Sequence { .. } => {
+                let byte = self.bytes.pop().expect("current byte was buffered");
+                let mut tokens = self.take_visible();
                 tokens.extend(self.feed(byte));
                 return tokens;
             }
@@ -94,6 +111,11 @@ impl EscapeParser {
             self.kind = EscapeKind::Utf8C1;
             return Vec::new();
         }
+        if let Some(remaining) = utf8_continuations_after(byte) {
+            self.bytes.push(byte);
+            self.kind = EscapeKind::Utf8Sequence { remaining };
+            return Vec::new();
+        }
         if let Some(kind) = c1_kind(byte) {
             self.bytes.push(byte);
             return self.start_c1(kind);
@@ -109,6 +131,14 @@ impl EscapeParser {
         vec![Token::Control(std::mem::take(&mut self.bytes))]
     }
 
+    fn take_visible(&mut self) -> Vec<Token> {
+        self.kind = EscapeKind::None;
+        std::mem::take(&mut self.bytes)
+            .into_iter()
+            .map(Token::Visible)
+            .collect()
+    }
+
     fn start_c1(&mut self, kind: C1Kind) -> Vec<Token> {
         match kind {
             C1Kind::Csi => self.kind = EscapeKind::Csi,
@@ -117,6 +147,57 @@ impl EscapeParser {
             C1Kind::Control => return self.take_control(),
         }
         Vec::new()
+    }
+}
+
+fn utf8_continuations_after(byte: u8) -> Option<u8> {
+    match byte {
+        0xc3..=0xdf => Some(1),
+        0xe0..=0xef => Some(2),
+        0xf0..=0xf4 => Some(3),
+        _ => None,
+    }
+}
+
+#[derive(Default)]
+pub(super) struct Utf8StreamDecoder {
+    pending: Vec<u8>,
+}
+
+impl Utf8StreamDecoder {
+    pub(super) fn decode(&mut self, input: &[u8]) -> String {
+        if input.is_empty() && self.pending.is_empty() {
+            return String::new();
+        }
+
+        let mut bytes = std::mem::take(&mut self.pending);
+        bytes.extend_from_slice(input);
+        let mut output = String::new();
+        let mut remaining = bytes.as_slice();
+
+        loop {
+            match std::str::from_utf8(remaining) {
+                Ok(text) => {
+                    output.push_str(text);
+                    return output;
+                }
+                Err(error) => {
+                    let valid_up_to = error.valid_up_to();
+                    let (valid, invalid) = remaining.split_at(valid_up_to);
+                    output.push_str(std::str::from_utf8(valid).expect("UTF-8 prefix is valid"));
+                    let Some(error_len) = error.error_len() else {
+                        self.pending.extend_from_slice(invalid);
+                        return output;
+                    };
+                    output.push_str(&String::from_utf8_lossy(&invalid[..error_len]));
+                    remaining = &invalid[error_len..];
+                }
+            }
+        }
+    }
+
+    pub(super) fn finish(&mut self) -> String {
+        String::from_utf8_lossy(&std::mem::take(&mut self.pending)).into_owned()
     }
 }
 
