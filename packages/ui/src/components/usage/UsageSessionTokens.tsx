@@ -2,6 +2,7 @@ import type { UsageSessionCoverage, UsageTokens } from "@/api/client.js";
 import { cn } from "@/lib/utils.js";
 import {
   formatCompactUsageNumber,
+  formatDuration,
   formatUsageNumber,
   formatTokenTotal,
 } from "./UsageFormatters.js";
@@ -66,6 +67,24 @@ export function UsageSessionTokens({
           </dd>
         </div>
         <div>
+          <dt className="sr-only">Responses</dt>
+          <dd>
+            Responses:{" "}
+            <span className="tabular-nums text-[var(--color-text)]">
+              {tokens.responseCount ?? "—"}
+            </span>
+          </dd>
+        </div>
+        <div>
+          <dt className="sr-only">Response duration</dt>
+          <dd>
+            Response time:{" "}
+            <span className="tabular-nums text-[var(--color-text)]">
+              {formatDuration(tokens.durationMs)}
+            </span>
+          </dd>
+        </div>
+        <div>
           <dt className="sr-only">Cached input</dt>
           <dd>
             Cached input:{" "}
@@ -100,6 +119,18 @@ export function UsageSessionTokens({
         <dt className="text-[var(--color-text-muted)]">Primary tokens</dt>
         <dd className="font-medium tabular-nums text-[var(--color-text)]">
           {primaryTotal}
+        </dd>
+      </div>
+      <div>
+        <dt className="text-[var(--color-text-muted)]">Responses</dt>
+        <dd className="tabular-nums text-[var(--color-text)]">
+          {tokens.responseCount ?? "—"}
+        </dd>
+      </div>
+      <div>
+        <dt className="text-[var(--color-text-muted)]">Response time</dt>
+        <dd className="tabular-nums text-[var(--color-text)]">
+          {formatDuration(tokens.durationMs)}
         </dd>
       </div>
       <div>

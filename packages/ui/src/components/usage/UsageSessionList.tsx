@@ -48,6 +48,16 @@ function delegationCopy(session: UsageSessionSummary): string {
   }
 }
 
+function executorCopy(session: UsageSessionSummary): string {
+  const executors = session.executorModels ?? [];
+  if (executors.length === 0) return "Unavailable";
+  return executors
+    .map(
+      (executor) => `${executor.model || "Unknown"} ×${executor.responseCount}`,
+    )
+    .join(", ");
+}
+
 export function UsageSessionList({
   sessions,
   selectedSessionId,
@@ -133,6 +143,9 @@ export function UsageSessionList({
                 <span className="mt-1 block text-[10px] text-[var(--color-text-muted)]">
                   Model: {session.rootModel || "Unavailable"} · Children:{" "}
                   {session.childCount} · {delegationCopy(session)}
+                </span>
+                <span className="mt-1 block truncate text-[10px] text-[var(--color-text-muted)]">
+                  Executors: {executorCopy(session)}
                 </span>
                 <UsageSessionTokens
                   tokens={session.tokens}

@@ -340,6 +340,9 @@ pub struct AgentUsageEvent {
     pub source_version: CodexVersion,
     pub correlation_quality: CorrelationQuality,
     pub counter_semantic: TokenCounterSemantic,
+    /// Duration reported by the Codex `response.completed` event, when the
+    /// exporter provides it. Missing duration is not inferred as zero.
+    pub duration_ms: Option<u64>,
     pub input_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
@@ -362,6 +365,8 @@ pub struct AgentRunSummary {
     pub lineage_quality: AgentLineageQuality,
     pub token_quality: AgentTokenQuality,
     pub counter_semantic: TokenCounterSemantic,
+    pub response_count: u64,
+    pub duration_ms_sum: Option<u64>,
     pub input_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,

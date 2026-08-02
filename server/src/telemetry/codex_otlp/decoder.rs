@@ -43,6 +43,7 @@ pub struct DecodedCodexUsage {
     pub cached_input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
+    pub duration_ms: Option<u64>,
     /// The baseline fixture proves delta semantics. Newer versions retain the
     /// same semantic only while their allowlisted fields keep this shape.
     pub counter_semantic: TokenCounterSemantic,
@@ -131,6 +132,7 @@ fn decode_record(
     let cached_input_tokens = numeric_attribute(&record.attributes, "cached_token_count");
     let output_tokens = numeric_attribute(&record.attributes, "output_token_count");
     let reasoning_tokens = numeric_attribute(&record.attributes, "reasoning_token_count");
+    let duration_ms = numeric_attribute(&record.attributes, "duration_ms");
     Some(DecodedCodexUsage {
         occurred_at_utc_ms: milliseconds,
         conversation_id: string_attribute(&record.attributes, "conversation.id")
@@ -142,6 +144,7 @@ fn decode_record(
         cached_input_tokens,
         output_tokens,
         reasoning_tokens,
+        duration_ms,
         counter_semantic: TokenCounterSemantic::Delta,
         unverified_version,
         token_coverage: token_coverage(
@@ -250,6 +253,25 @@ mod tests {
             decoded[0].counter_semantic,
             crate::telemetry::TokenCounterSemantic::Delta
         );
+    }
+
+    #[test]
+    fn reads_optional_response_duration_without_affecting_token_coverage() {
+        let fixture = include_bytes!("fixtures/codex-cli-0.145.0-response-completed.bin");
+        let mut request = ExportLogsServiceRequest::decode(fixture.as_slice()).unwrap();
+        request.resource_logs[0].scope_logs[0].log_records[0]
+            .attributes
+            .push(KeyValue {
+                key: "duration_ms".to_string(),
+                value: Some(AnyValue {
+                    value: Some(Value::IntValue(1_250)),
+                }),
+                key_strindex: 0,
+            });
+
+        let decoded = decode_response_completed(&request.encode_to_vec()).unwrap();
+        assert_eq!(decoded[0].duration_ms, Some(1_250));
+        assert_eq!(decoded[0].token_coverage, super::TokenCoverage::Full);
     }
 
     #[test]

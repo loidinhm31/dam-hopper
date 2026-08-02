@@ -1,19 +1,22 @@
 use std::collections::HashMap;
 
 use crate::telemetry::{
-    queries::{AgentRootAggregate, AgentRunTreeNode, AgentTerminalAssociation},
+    queries::{
+        AgentExecutorAggregate, AgentRootAggregate, AgentRunTreeNode, AgentTerminalAssociation,
+    },
     AgentLineageQuality, AgentRunSummary,
 };
 
 use super::dto::{
-    DelegationState, SessionCoverage, SessionNodeDto, SessionSummaryDto, SessionTokens,
-    TerminalReference,
+    DelegationState, ExecutorModelDto, SessionCoverage, SessionNodeDto, SessionSummaryDto,
+    SessionTokens, TerminalReference,
 };
 
 pub(super) fn summary_dto(
     root: &AgentRunSummary,
     aggregate: &AgentRootAggregate,
     terminals: Vec<TerminalReference>,
+    executor_models: Vec<ExecutorModelDto>,
 ) -> SessionSummaryDto {
     let main_total = token_total(&tokens_from_node(root));
     let tokens = tokens_from_aggregate(aggregate);
@@ -36,7 +39,28 @@ pub(super) fn summary_dto(
             correlation: root.correlation_quality,
         },
         terminals,
+        executor_models,
     }
+}
+
+pub(super) fn executor_model_dtos(
+    aggregates: Vec<AgentExecutorAggregate>,
+) -> Vec<ExecutorModelDto> {
+    aggregates
+        .into_iter()
+        .map(|aggregate| ExecutorModelDto {
+            model: aggregate.model,
+            response_count: aggregate.response_count,
+            tokens: SessionTokens {
+                input_tokens: aggregate.input_tokens,
+                cached_input_tokens: aggregate.cached_input_tokens,
+                output_tokens: aggregate.output_tokens,
+                reasoning_tokens: aggregate.reasoning_tokens,
+                response_count: aggregate.response_count,
+                duration_ms: aggregate.duration_ms_sum,
+            },
+        })
+        .collect()
 }
 
 pub(super) fn group_terminals(
@@ -86,6 +110,8 @@ fn tokens_from_node(node: &AgentRunSummary) -> SessionTokens {
         cached_input_tokens: node.cached_input_tokens,
         output_tokens: node.output_tokens,
         reasoning_tokens: node.reasoning_tokens,
+        response_count: node.response_count,
+        duration_ms: node.duration_ms_sum,
     }
 }
 
@@ -95,6 +121,8 @@ fn tokens_from_aggregate(aggregate: &AgentRootAggregate) -> SessionTokens {
         cached_input_tokens: aggregate.cached_input_tokens,
         output_tokens: aggregate.output_tokens,
         reasoning_tokens: aggregate.reasoning_tokens,
+        response_count: aggregate.response_count,
+        duration_ms: aggregate.duration_ms_sum,
     }
 }
 

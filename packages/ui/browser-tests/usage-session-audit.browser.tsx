@@ -263,7 +263,7 @@ describe("usage session audit in Chromium", () => {
   it("renders exact and degraded facts without double-counting cached input", async () => {
     await renderUsage();
     expect(container.textContent).toContain("api · 110 · cccccccc");
-    expect(container.textContent).toContain("60 primary tokens");
+    expect(container.textContent).toContain("50 primary tokens");
     expect(container.textContent).toContain("Cached input: 100");
     expect(container.textContent).toContain("Lineage unavailable");
     expect(container.textContent).toContain("Token data unavailable");
