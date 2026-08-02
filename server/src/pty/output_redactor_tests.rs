@@ -1,4 +1,4 @@
-use super::output_redactor::ExactValueRedactor;
+use super::{output_control_parser::Utf8StreamDecoder, output_redactor::ExactValueRedactor};
 
 #[test]
 fn redacts_split_and_ansi_interleaved_values() {
@@ -83,4 +83,38 @@ fn overflow_bounds_controls_without_releasing_visible_prefix() {
     assert!(!output
         .windows(b"marker-secret".len())
         .any(|window| window == b"marker-secret"));
+}
+
+#[test]
+fn preserves_multibyte_glyphs_with_c1_range_continuations() {
+    let mut redactor = ExactValueRedactor::new(Some("marker-secret".to_string()));
+    let mut output = redactor.redact("model · ✦/workspace · ↳Ready · ⛸Context · 😀".as_bytes());
+    output.extend(redactor.finish());
+
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        "model · ✦/workspace · ↳Ready · ⛸Context · 😀"
+    );
+}
+
+#[test]
+fn preserves_multibyte_glyphs_split_across_stream_chunks() {
+    let mut redactor = ExactValueRedactor::new(Some("marker-secret".to_string()));
+    let glyph = "✦".as_bytes();
+    let mut output = redactor.redact(&glyph[..2]);
+    output.extend(redactor.redact(&glyph[2..]));
+    output.extend(redactor.finish());
+
+    assert_eq!(String::from_utf8(output).unwrap(), "✦");
+}
+
+#[test]
+fn utf8_stream_decoder_preserves_split_glyphs() {
+    let mut decoder = Utf8StreamDecoder::default();
+    let glyph = "😀".as_bytes();
+    let mut output = decoder.decode(&glyph[..2]);
+    output.push_str(&decoder.decode(&glyph[2..]));
+    output.push_str(&decoder.finish());
+
+    assert_eq!(output, "😀");
 }

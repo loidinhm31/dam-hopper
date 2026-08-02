@@ -692,6 +692,37 @@ mod pty_tests {
     }
 
     #[test]
+    fn correlated_terminal_preserves_utf8_split_across_pty_reads() {
+        let sink = Arc::new(RecordingSink::default());
+        let events = Arc::clone(&sink.events);
+        let mgr = test_rt().block_on(async { PtySessionManager::new(sink) });
+        let id = "shell:utf8-split";
+        let mut create = opts(
+            id,
+            r#"bash -c "printf '\342\234'; sleep 0.05; printf '\246'; sleep 2""#,
+        );
+        create.runtime_otlp_run_marker = Some("run-marker-safe".to_string());
+
+        mgr.create(create).unwrap();
+        assert!(
+            wait_for(Duration::from_secs(2), || events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| event == &format!("data:{id}:✦"))),
+            "expected exact UTF-8 terminal output, events: {:?}",
+            events.lock().unwrap()
+        );
+
+        assert_eq!(mgr.get_buffer(id).unwrap(), "✦");
+        assert!(
+            !events.lock().unwrap().join("\n").contains('�'),
+            "terminal output must not contain replacement characters"
+        );
+        mgr.remove(id).unwrap();
+    }
+
+    #[test]
     fn explicit_bash_session_emits_validated_lifecycle() {
         let sink = Arc::new(RecordingSink::default());
         let events = Arc::clone(&sink.events);

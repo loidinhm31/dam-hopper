@@ -18,6 +18,7 @@ use crate::{
     port_forward::PortForwardManager,
     pty::{
         event_sink::EventSink,
+        output_control_parser::Utf8StreamDecoder,
         output_redactor::ExactValueRedactor,
         session::{DeadSession, LiveSession, RespawnOpts, SessionMeta, SessionType},
         shell_integration::{interactive_shell_executable, ShellIntegration},
@@ -1203,6 +1204,7 @@ fn reader_thread(
 
     let mut chunk = vec![0u8; 4096];
     let mut output_redactor = ExactValueRedactor::new(runtime_otlp_run_marker);
+    let mut output_decoder = Utf8StreamDecoder::default();
     // Throttle buffer snapshots: only send to persist worker every 16KB to reduce memory churn.
     // Performance: reduces snapshot frequency from ~100/sec to ~6/sec on fast terminals (16x improvement).
     // Trade-off: Sessions with < 16KB output won't persist to SQLite (acceptable: WS reconnect still works,
@@ -1286,7 +1288,7 @@ fn reader_thread(
                 }
             }
         }
-        let data_str = String::from_utf8_lossy(&visible_data).into_owned();
+        let data_str = output_decoder.decode(&visible_data);
         if let (Some(pfm), Some(handle)) = (&port_forward_manager, &rt_handle) {
             crate::port_forward::scan_chunk(
                 &visible_data,
@@ -1295,6 +1297,12 @@ fn reader_thread(
                 pfm,
                 handle,
             );
+        }
+        // A partial UTF-8 scalar has visible bytes but no terminal text yet.
+        // Do not let that empty string flush an editing lifecycle boundary ahead
+        // of the completed scalar in a later PTY read.
+        if data_str.is_empty() && !visible_data.is_empty() {
+            return;
         }
         if send_visible_output_then_lifecycle(
             sink.as_ref(),
@@ -1350,6 +1358,18 @@ fn reader_thread(
         process_redacted_chunk(&redaction_tail);
     }
     drop(process_redacted_chunk);
+    let decoded_tail = output_decoder.finish();
+    if !decoded_tail.is_empty()
+        && send_visible_output_then_lifecycle(
+            sink.as_ref(),
+            &session_id,
+            &decoded_tail,
+            &mut pending_lifecycle_events,
+            &mut visible_output_since_boundary,
+        )
+    {
+        published_editing.store(true, Ordering::Release);
+    }
 
     telemetry.finish_interrupted();
     if telemetry_enabled {
