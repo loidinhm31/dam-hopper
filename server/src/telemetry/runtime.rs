@@ -11,13 +11,12 @@ use super::{
         CollectorHealthSnapshot,
     },
     hmac_key_path,
-    sink::{ChannelTelemetrySink, NoopTelemetrySink, TelemetryCmd, TelemetrySink},
+    sink::{ChannelTelemetrySink, TelemetryCmd},
     worker::{TelemetryControl, TelemetryHandle, TelemetryWorker},
-    CommandClassifier, TelemetryKeyRing, TelemetryStore,
+    TelemetryKeyRing, TelemetryStore,
 };
 
-/// A stable, live telemetry owner. PTYs take a `TelemetryCapture` snapshot only
-/// as they start, so enabling never begins capturing a half-complete terminal.
+/// A stable, live owner for Codex OTLP usage collection.
 #[derive(Clone)]
 pub struct TelemetryRuntime {
     inner: Arc<RuntimeInner>,
@@ -32,13 +31,6 @@ struct RuntimeInner {
     collector_error: RwLock<Option<String>>,
     key_path: Option<std::path::PathBuf>,
     collector_secret_path: Option<std::path::PathBuf>,
-}
-
-#[derive(Clone)]
-pub struct TelemetryCapture {
-    pub sink: Arc<dyn TelemetrySink>,
-    pub classifier: Option<Arc<CommandClassifier>>,
-    pub control: Option<Arc<TelemetryControl>>,
 }
 
 #[derive(serde::Serialize)]
@@ -90,25 +82,6 @@ impl TelemetryRuntime {
             .read()
             .expect("telemetry runtime lock poisoned")
             .clone()
-    }
-
-    pub fn capture(&self) -> TelemetryCapture {
-        let handle = self.handle();
-        let (Some(sender), Some(keys)) = (handle.command_tx, handle.hmac_keys) else {
-            return TelemetryCapture {
-                sink: Arc::new(NoopTelemetrySink::new()),
-                classifier: None,
-                control: None,
-            };
-        };
-        TelemetryCapture {
-            sink: Arc::new(ChannelTelemetrySink::from_sender_with_control(
-                sender,
-                handle.control.clone(),
-            )),
-            classifier: Some(Arc::new(CommandClassifier::new(keys))),
-            control: Some(handle.control),
-        }
     }
 
     pub fn status(&self) -> TelemetryRuntimeStatus {
@@ -238,7 +211,7 @@ impl TelemetryRuntime {
                 .start_collector_locked(&config.collector, &handle)
                 .await
             {
-                // Terminal telemetry remains usable if optional Codex ingestion is unavailable.
+                // The server remains usable if optional Codex ingestion is unavailable.
                 self.set_collector_error(Some(error));
             }
         }
@@ -418,7 +391,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn activation_and_disable_keep_terminal_run_boundaries_immutable() {
+    async fn activation_and_disable_keep_codex_runtime_state_consistent() {
         let temp = tempfile::tempdir().unwrap();
         let runtime = TelemetryRuntime::with_paths(
             temp.path().join("usage.key"),
@@ -428,19 +401,15 @@ mod tests {
         let active = config(&temp, true);
 
         runtime.apply_config(&disabled, &active).await.unwrap();
-        let active_capture = runtime.capture();
         assert!(runtime.status().active);
-        assert!(active_capture.classifier.is_some());
-        assert!(active_capture.control.as_ref().unwrap().is_enabled());
+        assert!(runtime.handle().control.is_enabled());
 
         runtime.apply_config(&active, &disabled).await.unwrap();
         assert!(!runtime.status().active);
-        assert!(!active_capture.control.as_ref().unwrap().is_enabled());
+        assert!(!runtime.handle().control.is_enabled());
 
         runtime.apply_config(&disabled, &active).await.unwrap();
-        let new_capture = runtime.capture();
-        assert!(!active_capture.control.as_ref().unwrap().is_enabled());
-        assert!(new_capture.control.as_ref().unwrap().is_enabled());
+        assert!(runtime.handle().control.is_enabled());
         runtime.shutdown().await;
     }
 

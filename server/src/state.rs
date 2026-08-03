@@ -81,7 +81,7 @@ pub struct AppState {
     /// telemetry initialization failed or the user has not opted in.
     pub telemetry: Arc<std::sync::RwLock<TelemetryHandle>>,
     /// Live owner of telemetry workers and the optional loopback collector.
-    /// PTY creation keeps this stable and snapshots it only at a run boundary.
+    /// PTY creation does not depend on this runtime.
     pub telemetry_runtime: TelemetryRuntime,
     /// Owns the narrowly-scoped, secret-safe Codex OTLP configuration mutation.
     pub codex_exporter: CodexExporterManager,

@@ -446,8 +446,6 @@ async fn diagnostics_export_includes_live_terminal_tail() {
             command: "printf 'token=secret123\\n'; sleep 5".to_string(),
             cwd: tmp.path().display().to_string(),
             env: std::collections::HashMap::new(),
-            runtime_otlp_run_marker: None,
-            runtime_codex_correlation: None,
             cols: 80,
             rows: 24,
             project: Some("demo".to_string()),
@@ -534,8 +532,6 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
                 command: "sleep 5".to_string(),
                 cwd: tmp.path().display().to_string(),
                 env: std::collections::HashMap::new(),
-                runtime_otlp_run_marker: None,
-                runtime_codex_correlation: None,
                 cols: 80,
                 rows: 24,
                 project: Some("demo".to_string()),
@@ -2845,46 +2841,32 @@ async fn terminal_create_returns_meta_and_appears_in_list() {
 }
 
 #[tokio::test]
-async fn terminal_create_preserves_otel_conflict_and_reports_health() {
+async fn terminal_create_preserves_explicit_otel_attributes_without_usage_work() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
-    activate_telemetry(&state, &tmp);
-    {
-        let mut config = state.config.write().await;
-        config.server.telemetry.terminal_correlation_enabled = true;
-        config.server.telemetry.collector.enabled = true;
-    }
     let response = post_json(
         state.clone(),
         "/api/terminal",
         serde_json::json!({
             "id": "terminal:otel-conflict",
-            "command": "cat",
+            "command": "printf '%s\\n' \"$OTEL_RESOURCE_ATTRIBUTES\"; sleep 2",
             "cwd": tmp.path().to_str().unwrap(),
             "env": {"OTEL_RESOURCE_ATTRIBUTES": "user.attribute=preserved"}
         }),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
-    let store = state.telemetry.read().unwrap().store.clone().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline
-        && crate::telemetry::queries::health_value(&store, "codex_correlation_env_conflicts")
-            .unwrap()
-            == 0
-    {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert_eq!(
-        crate::telemetry::queries::health_value(&store, "codex_correlation_env_conflicts").unwrap(),
-        1
-    );
-    let health = get(state.clone(), "/api/usage/health").await;
-    let body = axum::body::to_bytes(health.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(value["correlationEnvConflicts"], 1);
+    assert!(wait_for(Duration::from_secs(3), || {
+        state
+            .pty_manager
+            .get_buffer("terminal:otel-conflict")
+            .is_ok_and(|buffer| buffer.contains("user.attribute=preserved"))
+    }));
+    assert!(!state
+        .pty_manager
+        .get_buffer("terminal:otel-conflict")
+        .unwrap()
+        .contains("dam_hopper.run_id="));
     state.pty_manager.remove("terminal:otel-conflict").unwrap();
 }
 

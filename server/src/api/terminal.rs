@@ -12,8 +12,6 @@ use crate::config::schema::{RestartPolicy, DEFAULT_RESTART_MAX_RETRIES};
 use crate::error::AppError;
 use crate::pty::manager::PtyCreateOpts;
 use crate::state::AppState;
-use crate::telemetry::SafeIdentifier;
-use uuid::Uuid;
 
 use super::error::ApiError;
 
@@ -51,40 +49,6 @@ pub async fn create_session(
 
     let (restart_policy, restart_max_retries, env) =
         resolve_terminal_env(&state, body.project.as_deref(), body.env).await?;
-    let _telemetry_transition = state.telemetry_coordinator.lock().await;
-    let telemetry = state
-        .telemetry
-        .read()
-        .expect("telemetry state lock poisoned")
-        .clone();
-    let telemetry_config = state.config.read().await.server.telemetry.clone();
-    let has_otel_attribute_conflict = env.contains_key("OTEL_RESOURCE_ATTRIBUTES")
-        // Do not overwrite an inherited collector configuration either.
-        || std::env::var_os("OTEL_RESOURCE_ATTRIBUTES").is_some();
-    let correlation_requested = telemetry_config.terminal_correlation_enabled
-        && telemetry_config.collector.enabled
-        && telemetry.control.is_enabled();
-    let correlation_enabled = correlation_decision(
-        telemetry_config.terminal_correlation_enabled,
-        telemetry_config.collector.enabled,
-        telemetry.control.is_enabled(),
-        has_otel_attribute_conflict,
-    );
-    if correlation_requested && has_otel_attribute_conflict {
-        if let Some(store) = telemetry.store.as_ref() {
-            let store = store.clone();
-            tokio::task::spawn_blocking(move || {
-                let _ = store.increment_health(
-                    "codex_correlation_env_conflicts",
-                    1,
-                    chrono::Utc::now().timestamp_millis(),
-                );
-            });
-        }
-    }
-    let codex_marker = correlation_enabled.then(|| {
-        SafeIdentifier::new(Uuid::new_v4().to_string()).expect("UUID is a safe identifier")
-    });
 
     let meta = state
         .pty_manager
@@ -93,11 +57,6 @@ pub async fn create_session(
             command: body.command,
             cwd,
             env,
-            runtime_otlp_run_marker: codex_marker
-                .as_ref()
-                .map(|marker| marker.as_str().to_string()),
-            runtime_codex_correlation: correlation_enabled
-                .then(|| telemetry.codex_correlation.clone()),
             cols: body.cols,
             rows: body.rows,
             project: body.project,
@@ -106,29 +65,6 @@ pub async fn create_session(
         })
         .map_err(ApiError::from_app)?;
     Ok(Json(meta))
-}
-
-fn correlation_decision(
-    configured: bool,
-    collector_enabled: bool,
-    runtime_enabled: bool,
-    has_otel_attribute_conflict: bool,
-) -> bool {
-    configured && collector_enabled && runtime_enabled && !has_otel_attribute_conflict
-}
-
-#[cfg(test)]
-mod tests {
-    use super::correlation_decision;
-
-    #[test]
-    fn correlation_honors_explicit_configuration_and_fails_closed() {
-        assert!(correlation_decision(true, true, true, false));
-        assert!(!correlation_decision(false, true, true, false));
-        assert!(!correlation_decision(true, false, true, false));
-        assert!(!correlation_decision(true, true, false, false));
-        assert!(!correlation_decision(true, true, true, true));
-    }
 }
 
 async fn resolve_terminal_cwd(

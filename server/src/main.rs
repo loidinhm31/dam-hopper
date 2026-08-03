@@ -169,8 +169,9 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // The runtime stays stable for the life of the server. A disabled runtime
-    // is cheap; Settings can activate it later without replacing PTY plumbing.
+    // The Codex usage runtime stays independent from the PTY manager for the
+    // life of the server. A disabled runtime is cheap and can be activated by
+    // Settings without changing terminal behavior.
     let telemetry_runtime = TelemetryRuntime::new();
     if config.server.telemetry.enabled {
         let disabled = dam_hopper_server::config::TelemetryConfig::default();
@@ -182,11 +183,10 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let pty_manager = PtySessionManager::with_persist_and_telemetry_runtime(
+    let pty_manager = PtySessionManager::with_persist(
         std::sync::Arc::new(event_sink.clone()),
         persist_tx.clone(), // Clone to keep sender alive until end of main() for graceful shutdown
         session_store.clone(),
-        telemetry_runtime.clone(),
     );
     pty_manager.spawn_cleanup_task();
 
