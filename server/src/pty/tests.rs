@@ -15,7 +15,7 @@ mod pty_tests {
 
     use std::sync::OnceLock;
 
-    use crate::config::schema::{RestartPolicy, DEFAULT_RESTART_MAX_RETRIES};
+    use crate::config::schema::{RestartPolicy, TelemetryConfig, DEFAULT_RESTART_MAX_RETRIES};
     use crate::diagnostics::DiagnosticStore;
     use crate::persistence::{PersistCmd, PersistWorker, SessionStore};
     use crate::pty::{
@@ -26,10 +26,6 @@ mod pty_tests {
         },
         shell_lifecycle::{LifecycleEvent, LifecycleState},
     };
-    use crate::telemetry::{
-        ChannelTelemetrySink, CommandClassifier, CommandOutcome, TelemetryKeyRing,
-    };
-
     // Shared multi-thread Tokio runtime for tests. PtySessionManager::new
     // calls tokio::spawn (supervisor loop) which requires an active runtime.
     // The runtime lives for the process lifetime so spawned tasks keep running
@@ -86,14 +82,100 @@ mod pty_tests {
             command: command.to_string(),
             cwd: "/tmp".to_string(),
             env,
-            runtime_otlp_run_marker: None,
-            runtime_codex_correlation: None,
             cols: 80,
             rows: 24,
             project: None,
             restart_policy: RestartPolicy::Never,
             restart_max_retries: DEFAULT_RESTART_MAX_RETRIES,
         }
+    }
+
+    #[derive(Debug)]
+    struct PtyBenchmarkSummary {
+        p95_latency_us: u128,
+        throughput_bytes_per_sec: u128,
+    }
+
+    fn benchmark_pty_configuration(usage_enabled: bool) -> PtyBenchmarkSummary {
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = crate::telemetry::TelemetryRuntime::with_paths(
+            temp.path().join("telemetry.key"),
+            temp.path().join("collector.token"),
+        );
+        let mut telemetry_config = TelemetryConfig::default();
+        telemetry_config.enabled = usage_enabled;
+        telemetry_config.db_path = temp.path().join("telemetry.db").display().to_string();
+        test_rt().block_on(async {
+            runtime
+                .apply_config(&TelemetryConfig::default(), &telemetry_config)
+                .await
+                .unwrap();
+        });
+
+        // The manager is deliberately constructed without the runtime in both
+        // cases. This is the benchmark's regression guard: enabling Codex
+        // Usage must not alter the PTY construction or reader path.
+        let manager = make_manager();
+        let id = if usage_enabled {
+            "benchmark:usage-enabled"
+        } else {
+            "benchmark:usage-disabled"
+        };
+        manager.create(opts(id, "bash")).unwrap();
+        manager.write(id, b"printf 'warmup\\n'\n").unwrap();
+        assert!(wait_for(Duration::from_secs(2), || {
+            manager
+                .get_buffer(id)
+                .is_ok_and(|buffer| buffer.contains("warmup"))
+        }));
+
+        let samples = 24;
+        let payload_bytes = 1024;
+        let mut latencies = Vec::with_capacity(samples);
+        let started = Instant::now();
+        for index in 0..samples {
+            let marker = format!("pty-benchmark-{index:02}");
+            let mut payload = marker.clone();
+            payload.push_str(&"x".repeat(payload_bytes - marker.len()));
+            let command = format!("printf '%s\\n' '{payload}'\n");
+            let sample_started = Instant::now();
+            manager.write(id, command.as_bytes()).unwrap();
+            assert!(wait_for(Duration::from_secs(2), || {
+                manager
+                    .get_buffer(id)
+                    .is_ok_and(|buffer| buffer.contains(&marker))
+            }));
+            latencies.push(sample_started.elapsed().as_micros());
+        }
+        let elapsed_us = started.elapsed().as_micros().max(1);
+        manager.remove(id).unwrap();
+        test_rt().block_on(async { runtime.shutdown().await });
+
+        latencies.sort_unstable();
+        let p95_index = ((latencies.len() * 95).div_ceil(100)).saturating_sub(1);
+        PtyBenchmarkSummary {
+            p95_latency_us: latencies[p95_index],
+            throughput_bytes_per_sec: (samples as u128 * payload_bytes as u128 * 1_000_000)
+                / elapsed_us,
+        }
+    }
+
+    #[test]
+    #[ignore = "manual PTY performance gate"]
+    fn codex_usage_enabled_and_disabled_pty_performance_is_equivalent() {
+        let disabled = benchmark_pty_configuration(false);
+        let enabled = benchmark_pty_configuration(true);
+        println!("PTY benchmark disabled: {disabled:?}");
+        println!("PTY benchmark enabled: {enabled:?}");
+
+        assert!(
+            enabled.p95_latency_us <= disabled.p95_latency_us.saturating_mul(3),
+            "enabled p95 latency regressed: disabled={disabled:?}, enabled={enabled:?}"
+        );
+        assert!(
+            enabled.throughput_bytes_per_sec.saturating_mul(4) >= disabled.throughput_bytes_per_sec,
+            "enabled throughput regressed: disabled={disabled:?}, enabled={enabled:?}"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -697,12 +779,10 @@ mod pty_tests {
         let events = Arc::clone(&sink.events);
         let mgr = test_rt().block_on(async { PtySessionManager::new(sink) });
         let id = "shell:utf8-split";
-        let mut create = opts(
+        let create = opts(
             id,
             r#"bash -c "printf '\342\234'; sleep 0.05; printf '\246'; sleep 2""#,
         );
-        create.runtime_otlp_run_marker = Some("run-marker-safe".to_string());
-
         mgr.create(create).unwrap();
         assert!(
             wait_for(Duration::from_secs(2), || events
@@ -768,48 +848,6 @@ mod pty_tests {
             events.lock().unwrap()
         );
         mgr.remove("terminal:explicit-bash").unwrap();
-    }
-
-    #[test]
-    fn real_pty_emits_normalized_command_to_bounded_telemetry_sink() {
-        let directory = tempfile::tempdir().unwrap();
-        let classifier = Arc::new(CommandClassifier::new(Arc::new(
-            TelemetryKeyRing::load_or_create(directory.path().join("telemetry-key")).unwrap(),
-        )));
-        let (telemetry_sink, receiver) = ChannelTelemetrySink::channel(8);
-        let mgr = test_rt().block_on(async {
-            PtySessionManager::with_persist_and_telemetry(
-                Arc::new(NoopEventSink),
-                None,
-                None,
-                Arc::new(telemetry_sink),
-                Some(classifier),
-            )
-        });
-        let home = tempfile::tempdir().unwrap();
-        let options = PtyCreateOpts {
-            env: HashMap::from([
-                ("TERM".into(), "xterm-256color".into()),
-                ("HOME".into(), home.path().to_string_lossy().into_owned()),
-            ]),
-            ..opts("terminal:telemetry-e2e", "bash")
-        };
-        mgr.create(options).unwrap();
-        mgr.write("terminal:telemetry-e2e", b"false\n").unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        let event = loop {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            let event = receiver
-                .recv_timeout(remaining)
-                .expect("validated command telemetry");
-            if let crate::telemetry::TelemetryCmd::Command(event) = event {
-                break event;
-            }
-        };
-        assert_eq!(event.outcome, CommandOutcome::Failed);
-        assert_eq!(event.exit_code, Some(1));
-        assert!(event.duration_ms.is_some());
-        mgr.remove("terminal:telemetry-e2e").unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1384,7 +1422,7 @@ mod pty_tests {
     }
 
     #[test]
-    fn runtime_otlp_marker_is_excluded_from_persisted_session_environment() {
+    fn explicit_otel_environment_is_preserved_without_terminal_marker_work() {
         let (tx, rx) = std::sync::mpsc::sync_channel(8);
         let events = Arc::new(Mutex::new(Vec::new()));
         let mgr = test_rt().block_on(async {
@@ -1397,72 +1435,58 @@ mod pty_tests {
             )
         });
         let mut create = opts(
-            "shell:runtime-otel-marker",
-            "bash -c 'value=\"$OTEL_RESOURCE_ATTRIBUTES\"; for ((i=0; i<${#value}; i++)); do printf \"%s\\033[0m\" \"${value:i:1}\"; done'; cat",
+            "shell:otel-environment",
+            "printf '%s\\n' \"$OTEL_RESOURCE_ATTRIBUTES\"; sleep 2",
         );
-        create.runtime_otlp_run_marker = Some("run-marker-safe".to_string());
+        create.env.insert(
+            "OTEL_RESOURCE_ATTRIBUTES".to_string(),
+            "user.attribute=preserved".to_string(),
+        );
 
         mgr.create(create).unwrap();
         let persisted = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         let PersistCmd::SessionCreated { env, .. } = persisted else {
             panic!("expected SessionCreated before reader output");
         };
-        assert!(!env.contains_key("OTEL_RESOURCE_ATTRIBUTES"));
-        assert!(!format!("{env:?}").contains("run-marker-safe"));
+        assert_eq!(
+            env.get("OTEL_RESOURCE_ATTRIBUTES"),
+            Some(&"user.attribute=preserved".to_string())
+        );
         assert!(wait_for(Duration::from_secs(3), || {
-            mgr.get_buffer("shell:runtime-otel-marker")
-                .is_ok_and(|buffer| buffer.contains("[redacted-correlation-marker]"))
+            mgr.get_buffer("shell:otel-environment")
+                .is_ok_and(|buffer| buffer.contains("user.attribute=preserved"))
         }));
         let serialized_events = events.lock().unwrap().join("\n");
-        assert!(!serialized_events.contains("run-marker-safe"));
-        assert!(serialized_events.contains("[redacted-correlation-marker]"));
-        mgr.remove("shell:runtime-otel-marker").unwrap();
+        assert!(!serialized_events.contains("dam_hopper.run_id="));
+        assert!(!serialized_events.contains("redacted-correlation-marker"));
+        mgr.remove("shell:otel-environment").unwrap();
         let mut persisted_output = Vec::new();
         while let Ok(message) = rx.recv_timeout(Duration::from_millis(250)) {
             if let PersistCmd::BufferUpdate { data, .. } = message {
                 persisted_output.extend(data);
             }
         }
-        assert!(!persisted_output
-            .windows("run-marker-safe".len())
-            .any(|window| window == b"run-marker-safe"));
+        assert!(String::from_utf8_lossy(&persisted_output).contains("user.attribute=preserved"));
     }
 
     #[test]
-    fn runtime_otlp_marker_is_inherited_by_codexnsb_alias_descendants() {
+    fn terminal_output_is_not_redacted_for_usage_marker_like_text() {
         let mgr = make_manager();
-        let mut create = opts(
-            "shell:runtime-otel-wrapper",
-            "bash -ic 'shopt -s expand_aliases; alias CODEXNSB=\"test -n \\\"$OTEL_RESOURCE_ATTRIBUTES\\\" && printf inherited\"\nCODEXNSB\ncat'",
+        let create = opts(
+            "shell:marker-like-output",
+            "printf 'dam_hopper.run_id=marker-safe\\n'; sleep 2",
         );
-        create.runtime_otlp_run_marker = Some("run-marker-safe".to_string());
 
         mgr.create(create).unwrap();
         assert!(wait_for(Duration::from_secs(3), || {
-            mgr.get_buffer("shell:runtime-otel-wrapper")
-                .is_ok_and(|buffer| buffer.contains("inherited"))
+            mgr.get_buffer("shell:marker-like-output")
+                .is_ok_and(|buffer| buffer.contains("dam_hopper.run_id=marker-safe"))
         }));
-        mgr.remove("shell:runtime-otel-wrapper").unwrap();
-    }
-
-    #[test]
-    fn respawn_allocates_a_fresh_runtime_marker_generation() {
-        let mgr = make_manager();
-        let registry = Arc::new(crate::telemetry::CodexCorrelationRegistry::default());
-        let mut create = opts("shell:runtime-otel-respawn", "printf done");
-        create.restart_policy = RestartPolicy::Always;
-        create.restart_max_retries = 1;
-        create.runtime_otlp_run_marker = Some("initial-marker-safe".to_string());
-        create.runtime_codex_correlation = Some(registry.clone());
-
-        mgr.create(create).unwrap();
-        assert!(wait_for(Duration::from_secs(5), || {
-            registry.active_len(chrono::Utc::now().timestamp_millis()) >= 2
-        }));
-        let run_ids = registry.active_run_ids(chrono::Utc::now().timestamp_millis());
-        assert!(run_ids.len() >= 2);
-        assert_ne!(run_ids[0], run_ids[1]);
-        mgr.remove("shell:runtime-otel-respawn").unwrap();
+        assert!(!mgr
+            .get_buffer("shell:marker-like-output")
+            .unwrap()
+            .contains("redacted-correlation-marker"));
+        mgr.remove("shell:marker-like-output").unwrap();
     }
 
     #[test]
@@ -1774,8 +1798,6 @@ mod pty_tests {
                 .into_iter()
                 .chain([("SHELL".into(), shell_value)])
                 .collect(),
-            runtime_otlp_run_marker: None,
-            runtime_codex_correlation: None,
             cols,
             rows,
             project,

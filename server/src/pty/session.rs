@@ -76,11 +76,6 @@ pub struct RespawnOpts {
     pub command: String,
     pub cwd: String,
     pub env: HashMap<String, String>,
-    /// Runtime-only OTel marker for the current PTY incarnation.
-    pub runtime_otlp_run_marker: Option<String>,
-    /// Runtime-only registry used to allocate a fresh marker for each respawn.
-    pub runtime_codex_correlation:
-        Option<std::sync::Arc<crate::telemetry::CodexCorrelationRegistry>>,
     pub cols: u16,
     pub rows: u16,
     pub project: Option<String>,
