@@ -14,7 +14,7 @@ pub use command_classifier::{
     TERMINAL_HMAC_DOMAIN,
 };
 pub use privacy::{hmac_key_path, load_or_create_hmac_key, TelemetryHmacKey, TelemetryKeyRing};
-pub use runtime::{TelemetryCapture, TelemetryRuntime, TelemetryRuntimeStatus};
+pub use runtime::{TelemetryRuntime, TelemetryRuntimeStatus};
 pub use sink::{ChannelTelemetrySink, NoopTelemetrySink, TelemetryCmd, TelemetrySink};
 pub use store::TelemetryStore;
 pub use types::*;
