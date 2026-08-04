@@ -8,7 +8,7 @@
 
 ## Overview
 
-**Date:** 2026-08-02 · **Priority:** P1 · **Status:** Complete with release follow-ups · **Completed:** 2026-08-04 · **Review:** Complete
+**Date:** 2026-08-02 · **Priority:** P1 · **Status:** DONE / complete with release follow-ups · **Completed:** 2026-08-05 01:11 +07:00 · **Review:** Approved 8/10; no critical issues
 
 Close the refactor with fresh-reset fixtures, privacy/performance scans, documentation cleanup, and
 an explicit clean-reset runbook. Update architecture after implementation to remove legacy wording.
@@ -88,6 +88,12 @@ Treat manual DB deletion as an operator action while the server is stopped.
   stopping at unavailable `TAURI_SIGNING_PRIVATE_KEY`.
 - Automated reset/reopen/privacy/terminal-dependency tests pass.
 - Manual PTY benchmark and pinned Codex compatibility tests require target environment access.
+
+## Finalization (2026-08-05 01:11 +07:00)
+
+Phase 05 DONE / complete. Review approved 8/10 with no critical issues. Release follow-ups remain:
+provide `TAURI_SIGNING_PRIVATE_KEY` for signed packaging, run the manual PTY enabled-vs-disabled
+benchmark, and run pinned Codex compatibility tests in the target environment.
 
 ## Next steps
 

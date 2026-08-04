@@ -867,9 +867,11 @@ Routes registered conditionally at router construction time.
 
 ## Telemetry Privacy and Fault Boundaries
 
-- Keep terminal analytics behind the opt-in control; `NoopTelemetrySink` is the safe fallback.
-- Emit only validated shell lifecycle metadata and allowlisted Codex token counters. Never persist
-  commands, argv, cwd, environment, PTY output, prompts, responses, tool content, or raw OTLP.
+- Keep Codex usage telemetry behind the opt-in control; the loopback OTLP receiver is the sole
+  usage write source and PTY code has no usage sink or fallback hook.
+- Keep shell lifecycle handling separate from usage telemetry. The Codex loopback OTLP receiver
+  accepts only allowlisted token counters and bounded metadata. Never persist commands, argv, cwd,
+  environment, PTY output, prompts, responses, tool content, or raw OTLP.
 - Keep telemetry persistence off the PTY hot path: bounded `try_send`, a dedicated worker, one
   SQLite writer, and read-only aggregate connections.
 - SQLite fault paths (locked, full, readonly, corrupt, or unavailable) must degrade analytics
@@ -879,3 +881,8 @@ Routes registered conditionally at router construction time.
   approximate/unattributed coverage rather than manufacturing zeros or exact attribution.
 - Destructive usage operations require explicit confirmation, UTC-aligned range validation, and an
   ordered admission barrier. Full deletion rotates the HMAC key only after the store is empty.
+- Session summaries are retention-bounded detail records, not permanent history; aggregate retention
+  is configured separately.
+- A clean telemetry reset removes only `telemetry.db` and its `-wal`/`-shm` sidecars after shutdown.
+  The separate `sessions.db` is protected and must remain intact; the two paths must not resolve to
+  the same file.
