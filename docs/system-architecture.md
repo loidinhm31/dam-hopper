@@ -37,7 +37,7 @@
 │  │  ├─ /api/fs/* → [conditional] List/read/stat (per-proj)│
 │  │  ├─ /api/agent-store/* → Distribution/import           │
 │  │  ├─ /api/workspace/* → Config switching                │
-│  │  ├─ /api/usage/* → Aggregate terminal usage (opt-in)   │
+│  │  ├─ /api/usage/* → Codex OTel usage (opt-in)           │
 │  │  ├─ /api/browser-debug/* → Ephemeral artifacts         │
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
@@ -226,134 +226,74 @@ local-only, and provides clear/disable controls. Desktop is the first support bo
 mobile direct-write paths remain explicitly unsupported until all input routes share the
 same controller.
 
-### terminal usage analytics
+### Codex OTel usage analytics
 
-Terminal analytics extends the validated shell lifecycle; it does not infer commands from
-xterm input, PTY output, silence, or browser history. Scope is DamHopper-launched,
-integration-enabled interactive shells only. External terminals, nested shells, SSH internals,
-and host-wide process auditing stay outside this boundary.
+Usage is a Codex-only observability feature. Codex `response.completed` log records exported over
+OTLP are the sole write source. PTY creation, input, output, shell integration, command lifecycle,
+and restart paths perform no usage work and carry no usage correlation identifiers.
 
 ```mermaid
 flowchart LR
-  Shell[Nonce-validated shell lifecycle] --> Normalize[In-memory metadata normalizer]
   Codex[Codex OTel response events] --> Receiver[Authenticated loopback OTLP receiver]
-  AppServer[Codex app-server thread metadata planned] --> Lineage[Bounded lineage adapter planned]
-  Normalize --> Worker[Bounded telemetry worker]
-  Receiver --> Worker
-  Lineage --> Worker
+  Receiver --> Normalize[Bounded allowlist normalizer]
+  Normalize --> Queue[Codex-only bounded queue]
+  Queue --> Worker[Dedicated SQLite writer]
   Worker --> DB[(telemetry.db)]
-  DB --> API[Authenticated aggregate and session-summary usage API]
-  API --> Page[Compact Usage page and session audit]
+  DB --> API[Authenticated Codex usage API]
+  API --> Usage[Codex Usage overview and sessions]
+  API --> Settings[Codex usage settings and health]
+  PTY[PTY and shell lifecycle] -. no telemetry dependency .-> Codex
 ```
 
-Phase 02 implements the capture boundary. Bash, Zsh, and Fish adapters emit a versioned
-completion marker with the observed exit status; the bounded `ShellLifecycle` parser validates
-the status, preserves legacy status-less markers, and exposes adapter capabilities. The PTY
-manager assigns a terminal run UUID and monotonic command sequence, timestamps validated
-submission/completion events, classifies only simple commands, and sends privacy-safe
-`CommandEvent` values to a non-blocking `TelemetrySink`. Reconnect, replay, and fan-out lag
-cannot create duplicate events in one run. Unsupported or ambiguous activity is labeled
-`partial` or `unavailable`; missing commands are never fabricated.
+The receiver binds to loopback only, requires the generated bearer secret, decodes only bounded
+allowlisted fields, and queues normalized `CodexUsageEvent` values directly. The Codex usage
+runtime owns queue admission, batching, retention, deletion, and shutdown. There is no generic
+`TelemetrySink`, PTY capture snapshot, command classifier, terminal correlation registry, marker
+injection, or output redactor in this dataflow. Collector or storage failure cannot affect terminal
+latency or behavior.
 
-Telemetry is opt-in. When enabled, the server opens the separate `telemetry.db`, loads a 32-byte
-HMAC key from the config directory, starts a dedicated worker, and injects the bounded
-`ChannelTelemetrySink` into PTY sessions. Each PTY takes a capture snapshot when it starts, so a
-live enable/disable transition applies to new terminal runs and does not change an existing run
-mid-stream. Disabled, unavailable, corrupt, or failed telemetry initialization falls back to a
-no-op sink while PTY operation continues. Shutdown sends the worker a drain command and performs
-a passive WAL checkpoint.
+Development invariant: remove the Usage middle layer from every PTY production path, including
+constructor parameters, session options, restart/restore handoff, reader-loop state, environment
+mutation, admission locks, and no-op abstractions. Do not retain a disabled Usage hook “for later.”
+Codex usage may depend on the independent OTLP runtime; PTY production modules must not import or
+call it. A negative production dependency scan and an enabled-versus-disabled PTY
+latency/throughput comparison gate this refactor so future Usage work cannot silently reintroduce
+terminal overhead.
 
-`PATCH /api/usage/settings` serializes runtime transitions. Collector changes stop and restart the
-loopback listener in place; retention changes run before publication. If collector startup or
-retention fails, the prior collector/runtime state is restored and the new configuration is not
-published. The API also restores the live state if the subsequent registry-file write fails.
-The settings API can explicitly manage the local Codex exporter. It writes only the exact
-DamHopper-owned OTLP shape in `~/.codex/config.toml`; malformed or foreign configuration is a
-`Conflict` and is never overwritten. The generated secret is a regular `0600` file at
-`~/.config/dam-hopper/codex-otlp-token` and is never returned by the API. Config writes are
-atomic and preserve unrelated TOML. Managing the file does not restart Codex (restart that
-process separately); collector changes restart only the loopback listener, never the server.
+The target store contains `codex_sessions`, `codex_usage_events`, `codex_daily_rollups`, and
+`telemetry_health`. It retains keyed dedupe/session identifiers, bounded model/source/status fields,
+response count and duration, nullable token components, and explicit quality only. The database is a
+fresh v1 Codex-only store; it has no legacy-data migration or import. During development, startup
+checks `user_version` and the complete allowlisted object definitions. If the configured telemetry
+file is legacy, malformed, or otherwise not this target schema, the store performs a bounded,
+transactional reset of that telemetry file's user tables/views/triggers/indexes and recreates the
+fresh schema. A current schema is reopened without resetting its data.
 
-Raw command text is transient classifier input only. The Phase 02 event contract limits command
-facts to an
-allowlisted executable/category, argument count, project identity, timestamps, duration, exit
-status, capture quality/version, and a keyed HMAC fingerprint for repeat counting. Telemetry
-never stores command text, argv, cwd strings, environment values, PTY output, AI prompts,
-responses, tool arguments, or tool output.
+The protected API exposes Codex totals, time/model buckets, bounded session summaries, receiver and
+storage health, retention, and deletion controls. Shell, terminal, command, project, category,
+agent, capture-quality, terminal-correlation, and inferred-lineage filters or fields do not exist in
+the target contracts. The Usage page shows Codex token/response/session/duration trends and model
+breakdowns. Settings contains one “Codex usage telemetry” setup surface. Neither UI surface mentions
+terminal analytics; cost stays omitted until authoritative versioned pricing exists.
 
-`telemetry.db` is separate from session persistence because `sessions.db` has different restore
-and privacy semantics. The implemented logical tables are:
+For an intentional clean reset, stop DamHopper and remove the effective
+`server.telemetry.db_path` file plus its `-wal` and `-shm` sidecars. The default is
+`~/.config/dam-hopper/telemetry.db`. The separate `sessions.db` must not be removed.
+Runtime initialization also rejects configurations that resolve telemetry and session persistence to
+the same database file.
 
-| Table                 | Contract                                                                   |
-| --------------------- | -------------------------------------------------------------------------- |
-| `terminal_runs`       | PTY run/project/shell/generation/start/end/status/coverage                 |
-| `command_events`      | Stable sequence/category/executable/HMAC/time/duration/status/source       |
-| `agent_runs`          | Durable HMAC agent nodes: root/parent, terminal correlation, role/model/status, token totals, source quality |
-| `agent_usage_events`  | Retained-detail input/cached/output/reasoning counters, HMAC agent correlation, and source version |
-| `daily_usage_rollups` | UTC daily counts/outcomes/token sums retained after detail purge           |
-| `telemetry_health`    | Dropped, rejected, invalid, purge, and checkpoint counters                 |
+#### Development reset boundary
 
-The store uses mode `0600` for the database and WAL/SHM sidecars, WAL, `synchronous=NORMAL`,
-foreign keys, a 5-second busy timeout, one bounded non-blocking writer, and a separate read-only
-connection. Database lock/full/error paths never block PTY reads or writes; worker failures do not
-log event payloads. The worker batches up to
-100 commands or 250 ms. Duplicate commands (`run_id`, `sequence`) and agent events (`dedupe_id`)
-are ignored. Detail retention defaults to 90 days; expired command/token detail is rolled into
-UTC daily buckets before deletion. Optional aggregate retention removes old buckets.
-Project exclusions and the runtime enabled gate are checked before queueing.
+Legacy combined telemetry data is intentionally unsupported during development. On startup,
+`TelemetryStore` checks SQLite `user_version` and the object list/schema definitions; any non-v1 or
+non-Codex database is cleared and recreated from the fresh schema, with no migration or data import.
+The reset is scoped to the configured telemetry database and uses a single transaction; current
+Codex v1 data survives a normal reopen. For a manual reset, stop DamHopper and remove
+`telemetry.db` plus its `-wal` and `-shm` sidecars; `sessions.db` is unrelated and must remain intact.
 
-The HMAC key is owner-readable only (`0600`), rejects symlinks/permissive existing files on Unix,
-and is never stored in SQLite. Delete-all clears detail, rollups, and health rows; key rotation
-must be coupled to that authenticated destructive operation.
+Phase 3 API/configuration cleanup and Phase 5 release validation remain follow-ups; this runtime
+boundary does not mean those phases are complete.
 
-Codex integration is optional and disabled by default. It uses a separate OTLP/HTTP listener
-bound to `127.0.0.1` with a generated bearer secret, not MCP or a model-visible tool. Only
-allowlisted metadata and token fields are accepted; prompt/output fields are rejected even if an
-upstream client enables them. Missing telemetry is `unavailable`, not zero. Correlation is exact
-only with an explicit provider/run mapping; project/time fallback is labeled approximate.
-
-Codex-version compatibility is availability-first: an unrecognized but syntactically safe source
-version may emit the established allowlisted `response.completed` token fields. It is accepted as
-**unverified** and increments a health/status signal so the UI can request a fixture update; it is
-never rejected solely for being newer. A changed or missing core event shape produces no usage row
-and remains unavailable/partial rather than zero. New sanitized fixtures raise confidence and may
-add fields, but are not a runtime availability gate. Raw attributes, payloads, and unrecognized
-strings remain excluded in every compatibility path.
-
-The protected usage API returns aggregates only. It does not expose raw event rows.
-`GET /api/usage/summary` supports bounded hour/day windows and filters; detail reads cannot
-cross the configured detail-retention boundary except for UTC-day-aligned, unfiltered day
-queries backed by rollups. `GET /api/usage/health` reports availability and writer/rejection
-counters. `GET/PATCH /api/usage/settings` controls pause, retention, exclusions, and collector
-configuration; retention changes roll up/purge synchronously before publication. The dedicated
-`GET/PATCH /api/usage/setup` route supplies the compact Settings > Usage insights status and
-applies setup actions (`enabled`, `codexExporter`, and `retryCollector`) without exposing bearer
-material. The shared UI polls setup status, offers receiver retry, and reports Codex ownership
-conflicts without overwriting foreign configuration. `DELETE
-/api/usage` requires the exact `delete-usage-data` confirmation string and optionally accepts
-UTC-day-aligned `[from,to)` ranges (maximum five years), pausing capture behind an ordered
-deletion barrier. The shared UI adds a `/usage` route plus a dashboard teaser. Navigation
-becomes more compact and uses responsive overflow rather than placing full analytics on the
-operational dashboard.
-
-Full delete serializes both terminal and collector admission, purges the store, then rotates the
-shared HMAC key before capture is restored. Range deletion does not rotate the key. The API snapshots
-the exact live admission state and restores it on every exit path (including worker panic, rotation
-failure, or deletion error), rather than reconstructing state from persisted pause settings. Range
-deletion removes overlapping summaries and cascaded HMAC terminal associations; all deletion clears
-detail, summaries, associations, rollups, and health rows.
-
-Release verification covers the Rust PTY, telemetry, API, and Codex fixture suites plus the shared
-UI unit and Chromium browser suites. Real Bash coverage is exercised in-process; Zsh and Fish
-remain external host checks when those executables are installed. A missing shell executable is
-reported as an environment limitation, never treated as passing coverage.
-
-The aggregate performance regression is tracked in
-`server/src/telemetry/store.rs::aggregate_query_stays_under_200ms_for_100k_detail_rows`. It
-inserts 100,000 detail rows, checks `EXPLAIN QUERY PLAN` uses
-`idx_command_events_occurred`, then runs the aggregate query five times and gates p95 below
-200 ms. Run it with `cd server && cargo test telemetry::store --lib` on representative release
-hardware; the threshold is a regression signal, not a universal latency guarantee.
 
 #### Session model delegation audit (compatibility-gated)
 
@@ -374,12 +314,9 @@ marker to a DamHopper terminal/run identity plus expiry, instead of retaining on
 Raw markers and provider thread IDs never enter SQLite or browser responses; keyed HMAC identifiers
 provide durable joins.
 
-`agent_runs` is the permanent flat summary layer. Runtime-owned migrations add HMAC run/root/parent
-identifiers, bounded role/model/status, nullable token totals, explicit lineage/token quality, and a
-separate HMAC-only `agent_run_terminals` association table. `TelemetryStore` applies migrations
-atomically and advances SQLite `user_version`; the session-audit indexes include terminal lookup and
-stable root ordering (`003_terminal_summary_lookup`, `004_session_root_order`). Operators must not
-execute migration files manually.
+`agent_runs` is the permanent flat summary layer in the broader audit model. The Codex-only runtime
+does not import that legacy model or run migration files; its fresh schema keeps only the Codex
+session/event/rollup tables described above.
 Idempotent upserts preserve summaries before detail purge, while the compatibility fallback remains
 flat `lineage_unavailable` with no inferred parent/child edges. `delta` counters add; `cumulative`
 counters accept only newer non-regressing observations, rejecting stale, conflicting, or regressing

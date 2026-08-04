@@ -1,4 +1,7 @@
-use crate::telemetry::types::{CodexModel, CodexVersion, SafeIdentifier, TokenCounterSemantic};
+use crate::telemetry::types::{
+    CodexModel, CodexVersion, SafeIdentifier, TokenCounterSemantic, MAX_DURATION_MS,
+    MAX_TIMESTAMP_UTC_MS, MAX_TOKEN_COMPONENT,
+};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::common::v1::{any_value::Value, KeyValue};
 use opentelemetry_proto::tonic::logs::v1::LogRecord;
@@ -32,11 +35,21 @@ pub enum TokenCoverage {
     Unavailable,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimestampStatus {
+    Missing,
+    Valid,
+    Invalid,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct DecodedCodexUsage {
     pub occurred_at_utc_ms: Option<i64>,
+    pub timestamp_status: TimestampStatus,
+    /// A bounded OTLP trace/span identity used only as HMAC input for admitted
+    /// events. It is never persisted or returned to callers.
+    pub source_identity: Option<Vec<u8>>,
     pub conversation_id: Option<SafeIdentifier>,
-    pub run_marker: Option<SafeIdentifier>,
     pub model: Option<CodexModel>,
     pub source_version: Option<CodexVersion>,
     pub input_tokens: Option<u64>,
@@ -78,11 +91,6 @@ pub fn decode_response_completed(bytes: &[u8]) -> Result<Vec<DecodedCodexUsage>,
             .as_ref()
             .and_then(|resource| string_attribute(&resource.attributes, "service.version"))
             .and_then(safe_version);
-        let resource_marker = resource_logs
-            .resource
-            .as_ref()
-            .and_then(|resource| string_attribute(&resource.attributes, "dam_hopper.run_id"))
-            .and_then(safe_identifier);
         for scope_logs in resource_logs.scope_logs {
             for record in scope_logs.log_records {
                 records += 1;
@@ -101,12 +109,9 @@ pub fn decode_response_completed(bytes: &[u8]) -> Result<Vec<DecodedCodexUsage>,
                         || record_version.as_ref().is_none_or(|version| {
                             String::from(version.clone()) != BASELINE_CODEX_VERSION
                         });
-                    if let Some(decoded) = decode_record(
-                        &record,
-                        record_version,
-                        resource_marker.clone(),
-                        unverified_version,
-                    ) {
+                    if let Some(decoded) =
+                        decode_record(&record, record_version, unverified_version)
+                    {
                         usage.push(decoded);
                     }
                 }
@@ -124,20 +129,21 @@ fn is_response_completed(record: &LogRecord) -> bool {
 fn decode_record(
     record: &LogRecord,
     source_version: Option<CodexVersion>,
-    resource_marker: Option<SafeIdentifier>,
     unverified_version: bool,
 ) -> Option<DecodedCodexUsage> {
-    let milliseconds = timestamp_millis(record);
+    let (milliseconds, timestamp_status) = timestamp_millis(record);
     let input_tokens = numeric_attribute(&record.attributes, "input_token_count");
     let cached_input_tokens = numeric_attribute(&record.attributes, "cached_token_count");
     let output_tokens = numeric_attribute(&record.attributes, "output_token_count");
     let reasoning_tokens = numeric_attribute(&record.attributes, "reasoning_token_count");
-    let duration_ms = numeric_attribute(&record.attributes, "duration_ms");
+    let duration_ms = numeric_attribute(&record.attributes, "duration_ms")
+        .filter(|value| *value <= MAX_DURATION_MS);
     Some(DecodedCodexUsage {
         occurred_at_utc_ms: milliseconds,
+        timestamp_status,
+        source_identity: source_identity(record),
         conversation_id: string_attribute(&record.attributes, "conversation.id")
             .and_then(safe_identifier),
-        run_marker: resource_marker,
         model: string_attribute(&record.attributes, "model").and_then(safe_model),
         source_version,
         input_tokens,
@@ -176,14 +182,68 @@ fn token_coverage(
     }
 }
 
-fn timestamp_millis(record: &LogRecord) -> Option<i64> {
-    let milliseconds = record.time_unix_nano / 1_000_000;
-    if milliseconds > 0 && milliseconds <= i64::MAX as u64 {
-        return Some(milliseconds as i64);
+fn timestamp_millis(record: &LogRecord) -> (Option<i64>, TimestampStatus) {
+    let nanos = if record.time_unix_nano > 0 {
+        Some(record.time_unix_nano)
+    } else if record.observed_time_unix_nano > 0 {
+        Some(record.observed_time_unix_nano)
+    } else {
+        None
+    };
+    if let Some(nanos) = nanos {
+        return match bounded_nanos_to_millis(nanos) {
+            Some(milliseconds) => (Some(milliseconds), TimestampStatus::Valid),
+            None => (None, TimestampStatus::Invalid),
+        };
     }
-    chrono::DateTime::parse_from_rfc3339(string_attribute(&record.attributes, "event.timestamp")?)
+
+    let Some(attribute) = record
+        .attributes
+        .iter()
+        .find(|attribute| attribute.key == "event.timestamp")
+    else {
+        return (None, TimestampStatus::Missing);
+    };
+    let Some(Value::StringValue(value)) = attribute
+        .value
+        .as_ref()
+        .and_then(|value| value.value.as_ref())
+    else {
+        return (None, TimestampStatus::Invalid);
+    };
+    if value.len() > MAX_ATTRIBUTE_STRING_BYTES {
+        return (None, TimestampStatus::Invalid);
+    }
+    match chrono::DateTime::parse_from_rfc3339(value)
         .ok()
-        .map(|timestamp| timestamp.timestamp_millis())
+        .and_then(|timestamp| bounded_timestamp(timestamp.timestamp_millis()))
+    {
+        Some(milliseconds) => (Some(milliseconds), TimestampStatus::Valid),
+        None => (None, TimestampStatus::Invalid),
+    }
+}
+
+fn bounded_nanos_to_millis(nanos: u64) -> Option<i64> {
+    bounded_timestamp((nanos / 1_000_000).try_into().ok()?)
+}
+
+fn bounded_timestamp(milliseconds: i64) -> Option<i64> {
+    (milliseconds > 0 && milliseconds <= MAX_TIMESTAMP_UTC_MS).then_some(milliseconds)
+}
+
+fn source_identity(record: &LogRecord) -> Option<Vec<u8>> {
+    let valid_trace = record.trace_id.len() == 16 && record.trace_id.iter().any(|byte| *byte != 0);
+    let valid_span = record.span_id.len() == 8 && record.span_id.iter().any(|byte| *byte != 0);
+    if !valid_trace || !valid_span {
+        return None;
+    }
+
+    let mut identity = Vec::with_capacity(26);
+    identity.push(b't');
+    identity.extend_from_slice(&record.trace_id);
+    identity.push(b's');
+    identity.extend_from_slice(&record.span_id);
+    Some(identity)
 }
 
 fn safe_identifier(value: &str) -> Option<SafeIdentifier> {
@@ -221,12 +281,15 @@ fn numeric_attribute(attributes: &[KeyValue], wanted: &str) -> Option<u64> {
             value: Some(value),
             ..
         } if key == wanted => match value.value.as_ref() {
-            Some(Value::IntValue(value)) if *value >= 0 => Some(*value as u64),
+            Some(Value::IntValue(value)) if *value >= 0 => {
+                (*value as u64 <= MAX_TOKEN_COMPONENT).then_some(*value as u64)
+            }
             Some(Value::StringValue(value)) if value.len() <= MAX_ATTRIBUTE_STRING_BYTES => value
                 .parse::<i64>()
                 .ok()
                 .filter(|value| *value >= 0)
-                .map(|value| value as u64),
+                .map(|value| value as u64)
+                .filter(|value| *value <= MAX_TOKEN_COMPONENT),
             _ => None,
         },
         _ => None,
@@ -272,6 +335,24 @@ mod tests {
         let decoded = decode_response_completed(&request.encode_to_vec()).unwrap();
         assert_eq!(decoded[0].duration_ms, Some(1_250));
         assert_eq!(decoded[0].token_coverage, super::TokenCoverage::Full);
+    }
+
+    #[test]
+    fn ignores_unreasonably_large_response_durations() {
+        let fixture = include_bytes!("fixtures/codex-cli-0.145.0-response-completed.bin");
+        let mut request = ExportLogsServiceRequest::decode(fixture.as_slice()).unwrap();
+        request.resource_logs[0].scope_logs[0].log_records[0]
+            .attributes
+            .push(KeyValue {
+                key: "duration_ms".to_string(),
+                value: Some(AnyValue {
+                    value: Some(Value::IntValue(i64::MAX)),
+                }),
+                key_strindex: 0,
+            });
+
+        let decoded = decode_response_completed(&request.encode_to_vec()).unwrap();
+        assert_eq!(decoded[0].duration_ms, None);
     }
 
     #[test]

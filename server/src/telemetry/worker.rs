@@ -1,88 +1,109 @@
 use std::{
-    collections::HashSet,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{Receiver, RecvTimeoutError},
-        Arc, RwLock,
+        Arc, Mutex,
     },
     thread::JoinHandle,
     time::{Duration, Instant},
 };
 
 use super::{
-    privacy::TelemetryKeyRing,
-    store::TelemetryStore,
-    types::{AgentUsageEvent, CodexCorrelationRegistry},
-    TelemetryCmd,
+    privacy::TelemetryKeyRing, sink::TelemetryCmd, store::TelemetryStore, types::CodexUsageEvent,
 };
 
 const BATCH_LIMIT: usize = 100;
 const FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Runtime controls shared by the PTY gate and future authenticated controls.
+/// Runtime pause state for Codex ingestion. This control has no PTY
+/// admission lock, project filter, or terminal ownership state.
 #[derive(Default)]
 pub struct TelemetryControl {
     enabled: AtomicBool,
-    excluded_projects: RwLock<HashSet<String>>,
-    admission: RwLock<()>,
     rejected: AtomicU64,
+    closing: AtomicBool,
+    in_flight: AtomicU64,
+    exclusive: Mutex<()>,
 }
 
 impl TelemetryControl {
-    pub fn new(enabled: bool, excluded_projects: impl IntoIterator<Item = String>) -> Self {
+    pub fn new(enabled: bool, _legacy_excluded_projects: impl IntoIterator<Item = String>) -> Self {
         Self {
             enabled: AtomicBool::new(enabled),
-            excluded_projects: RwLock::new(excluded_projects.into_iter().collect()),
-            admission: RwLock::new(()),
             rejected: AtomicU64::new(0),
+            closing: AtomicBool::new(false),
+            in_flight: AtomicU64::new(0),
+            exclusive: Mutex::new(()),
         }
     }
 
-    pub fn allows_project(&self, project: Option<&str>) -> bool {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return false;
-        }
-        let excluded = self
-            .excluded_projects
-            .read()
-            .expect("telemetry exclusions lock poisoned");
-        let allowed = project.is_none_or(|project| !excluded.contains(project));
-        if !allowed {
-            self.rejected.fetch_add(1, Ordering::Relaxed);
-        }
-        allowed
+    pub fn allows_project(&self, _project: Option<&str>) -> bool {
+        self.is_enabled()
     }
 
     pub fn set_enabled(&self, enabled: bool) {
-        self.enabled.store(enabled, Ordering::Relaxed);
+        self.enabled.store(enabled, Ordering::SeqCst);
     }
 
     pub fn is_enabled(&self) -> bool {
-        self.enabled.load(Ordering::Relaxed)
+        self.enabled.load(Ordering::SeqCst)
     }
 
-    pub fn set_excluded_projects(&self, excluded_projects: impl IntoIterator<Item = String>) {
-        *self
-            .excluded_projects
-            .write()
-            .expect("telemetry exclusions lock poisoned") = excluded_projects.into_iter().collect();
-    }
+    pub fn set_excluded_projects(&self, _excluded_projects: impl IntoIterator<Item = String>) {}
 
+    /// Serialize destructive operations and close the admission window while
+    /// they wait for already-admitted sends. The receiver path uses atomics
+    /// only, so it never blocks behind this delete-only mutex.
     pub fn with_exclusive_admission<T>(&self, operation: impl FnOnce() -> T) -> T {
-        let _guard = self
-            .admission
-            .write()
-            .expect("telemetry admission lock poisoned");
+        let _serial = self
+            .exclusive
+            .lock()
+            .expect("telemetry admission mutex poisoned");
+        self.closing.store(true, Ordering::SeqCst);
+        while self.in_flight.load(Ordering::SeqCst) != 0 {
+            std::thread::yield_now();
+        }
+        let _closing = ClosingGuard { control: self };
         operation()
     }
 
-    pub(crate) fn admission_guard(&self) -> std::sync::RwLockReadGuard<'_, ()> {
-        self.admission
-            .read()
-            .expect("telemetry admission lock poisoned")
+    fn try_admit(&self) -> Option<AdmissionGuard<'_>> {
+        if self.closing.load(Ordering::SeqCst) {
+            self.rejected.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        self.in_flight.fetch_add(1, Ordering::SeqCst);
+        if self.closing.load(Ordering::SeqCst) {
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            self.rejected.fetch_add(1, Ordering::Relaxed);
+            None
+        } else {
+            Some(AdmissionGuard { control: self })
+        }
     }
+
     pub fn rejected_count(&self) -> u64 {
         self.rejected.load(Ordering::Relaxed)
+    }
+}
+
+struct AdmissionGuard<'a> {
+    control: &'a TelemetryControl,
+}
+
+impl Drop for AdmissionGuard<'_> {
+    fn drop(&mut self) {
+        self.control.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+struct ClosingGuard<'a> {
+    control: &'a TelemetryControl,
+}
+
+impl Drop for ClosingGuard<'_> {
+    fn drop(&mut self) {
+        self.control.closing.store(false, Ordering::SeqCst);
     }
 }
 
@@ -92,7 +113,6 @@ pub struct TelemetryHandle {
     pub store: Option<Arc<TelemetryStore>>,
     pub command_tx: Option<std::sync::mpsc::SyncSender<TelemetryCmd>>,
     pub hmac_keys: Option<Arc<TelemetryKeyRing>>,
-    pub codex_correlation: Arc<CodexCorrelationRegistry>,
 }
 
 impl TelemetryHandle {
@@ -102,9 +122,9 @@ impl TelemetryHandle {
             store: None,
             command_tx: None,
             hmac_keys: None,
-            codex_correlation: Arc::new(CodexCorrelationRegistry::default()),
         }
     }
+
     pub fn active(
         control: Arc<TelemetryControl>,
         store: Arc<TelemetryStore>,
@@ -115,7 +135,6 @@ impl TelemetryHandle {
             store: Some(store),
             command_tx,
             hmac_keys: None,
-            codex_correlation: Arc::new(CodexCorrelationRegistry::default()),
         }
     }
 
@@ -124,17 +143,17 @@ impl TelemetryHandle {
         self
     }
 
-    /// Queue collector usage through the exact same admission gate used by PTY
-    /// telemetry. This preserves delete-barrier ordering and pause semantics.
-    pub fn try_record_agent_usage(&self, event: AgentUsageEvent) -> TelemetryEnqueue {
-        let _admission = self.control.admission_guard();
+    pub fn try_record_codex_usage(&self, event: CodexUsageEvent) -> TelemetryEnqueue {
+        let Some(_admission) = self.control.try_admit() else {
+            return TelemetryEnqueue::Paused;
+        };
         if !self.control.is_enabled() {
             return TelemetryEnqueue::Paused;
         }
         let Some(sender) = &self.command_tx else {
             return TelemetryEnqueue::Unavailable;
         };
-        match sender.try_send(TelemetryCmd::AgentUsage(event)) {
+        match sender.try_send(TelemetryCmd::CodexUsage(event)) {
             Ok(()) => TelemetryEnqueue::Queued,
             Err(std::sync::mpsc::TrySendError::Full(_)) => TelemetryEnqueue::Dropped,
             Err(std::sync::mpsc::TrySendError::Disconnected(_)) => TelemetryEnqueue::Unavailable,
@@ -142,6 +161,7 @@ impl TelemetryHandle {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TelemetryEnqueue {
     Queued,
     Paused,
@@ -161,7 +181,7 @@ impl TelemetryWorker {
 
     pub fn spawn(self) -> std::io::Result<JoinHandle<()>> {
         std::thread::Builder::new()
-            .name("telemetry-worker".to_string())
+            .name("codex-usage-worker".to_string())
             .spawn(move || self.run())
     }
 
@@ -233,9 +253,11 @@ impl TelemetryWorker {
         }
         let commands = std::mem::take(batch);
         if self.store.write_batch(commands).is_err() {
-            // The payload is intentionally never logged. Failure is visible only as a count.
-            let now = crate::diagnostics::now_ms() as i64;
-            let _ = self.store.increment_health("writer_errors", 1, now);
+            let _ = self.store.increment_health(
+                "writer_errors",
+                1,
+                crate::diagnostics::now_ms() as i64,
+            );
         }
     }
 }
@@ -247,13 +269,11 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn control_pauses_and_excludes_without_payload_inspection() {
+    fn control_pause_has_no_project_or_admission_state() {
         let control = TelemetryControl::new(true, ["private".to_string()]);
         assert!(control.allows_project(Some("public")));
-        assert!(!control.allows_project(Some("private")));
         control.set_enabled(false);
         assert!(!control.allows_project(Some("public")));
-        assert_eq!(control.rejected_count(), 1);
     }
 
     #[test]

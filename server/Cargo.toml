@@ -84,7 +84,7 @@ notify-debouncer-full = "0.4"
 git2 = "0.19"
 
 # SQLite for session persistence
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.31", features = ["bundled", "functions"] }
 
 # Date/time formatting for git commit timestamps
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
