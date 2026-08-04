@@ -397,8 +397,9 @@ a positive value to purge older UTC rollups. The Usage page can delete all data 
 UTC-day-aligned `[from,to)` range; deletion requires explicit confirmation. Full deletion also
 rotates the shared telemetry HMAC key, while range deletion does not.
 
-Agent-run summaries are permanent and flat; raw OTel events are applied before detail retention purges
-them. `delta` counters accumulate, while `cumulative` counters accept only newer non-regressing
+Codex session summaries are flat and retention-bounded, not permanent. Raw `response.completed`
+events are applied before the configured detail-retention purge removes expired summaries and
+events. `delta` counters accumulate, while `cumulative` counters accept only newer non-regressing
 values.
 Telemetry uses a fresh v1 Codex-only schema containing only Codex sessions, usage events, daily
 rollups, and health state. There is no legacy-data migration or import. During development, startup

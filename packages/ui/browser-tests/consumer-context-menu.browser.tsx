@@ -67,17 +67,34 @@ async function settle() {
   await act(async () => await new Promise((resolve) => setTimeout(resolve, 0)));
 }
 
+async function waitForTreeMeasurement() {
+  const tree = document.querySelector<HTMLElement>('[role="tree"]');
+  const container = tree?.parentElement;
+  if (!container) throw new Error("FileTree measurement container not found");
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      const observer = new ResizeObserver(() => {
+        observer.disconnect();
+        resolve();
+      });
+      observer.observe(container!);
+    });
+  });
+}
+
 function row(name: string) {
   const item = [...document.querySelectorAll<HTMLElement>('[role="treeitem"]')].find(
     (candidate) => candidate.textContent?.trim() === name,
   );
   const trigger = item?.firstElementChild;
-  return trigger instanceof HTMLElement ? trigger : item;
+  return trigger instanceof HTMLElement ? trigger : item ?? null;
 }
 
 function menuItem(label: string) {
-  return [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
-    (item) => item.textContent === label,
+  return (
+    [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (item) => item.textContent === label,
+    ) ?? null
   );
 }
 
@@ -124,6 +141,7 @@ describe("consumer context menus in Chromium", () => {
         <FileTree project="demo" />
       </div>,
     );
+    await waitForTreeMeasurement();
     const file = row("main.ts");
     const directory = row("components");
     expect(file).not.toBeNull();
@@ -145,6 +163,12 @@ describe("consumer context menus in Chromium", () => {
     await act(async () => directory?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2, clientX: 160, clientY: 160 })));
     await vi.waitFor(() => expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1));
     expect(document.querySelector('[role="menu"]')?.textContent).toContain("Upload Here");
+    await act(async () =>
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+      ),
+    );
+    await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
   });
 
   it("creates a file at the project root from the Explorer toolbar", async () => {
@@ -153,6 +177,7 @@ describe("consumer context menus in Chromium", () => {
         <FileTree project="demo" />
       </div>,
     );
+    await waitForTreeMeasurement();
     const newFile = document.querySelector<HTMLButtonElement>(
       '[aria-label="New File in project root"]',
     );
@@ -175,6 +200,7 @@ describe("consumer context menus in Chromium", () => {
         ?.click(),
     );
     expect(harness.createFile).toHaveBeenCalledWith("root.ts");
+    await vi.waitFor(() => expect(document.querySelector("#name")).toBeNull());
   });
 
   it("keeps rename usable after the context menu closes and submits once", async () => {
@@ -183,7 +209,9 @@ describe("consumer context menus in Chromium", () => {
         <FileTree project="demo" />
       </div>,
     );
+    await waitForTreeMeasurement();
     const file = row("main.ts");
+    expect(file).not.toBeNull();
     await act(async () =>
       file?.dispatchEvent(
         new MouseEvent("contextmenu", {
@@ -193,6 +221,9 @@ describe("consumer context menus in Chromium", () => {
           clientY: 120,
         }),
       ),
+    );
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="menu"]')).not.toBeNull(),
     );
     await vi.waitFor(() => expect(menuItem("Rename")).not.toBeNull());
     await act(async () => menuItem("Rename")?.click());
