@@ -15,19 +15,16 @@ use crate::{
     state::AppState,
     telemetry::queries::{
         agent_executor_aggregates, agent_executor_aggregates_for_roots, agent_root_aggregates,
-        agent_run_tree, agent_terminal_associations, list_agent_run_roots,
+        agent_run_summary, list_agent_run_roots,
     },
 };
 
 use self::{
     cursor::{decode_cursor, encode_cursor, parse_list_query, SessionListParams},
     dto::{SessionDetailResponse, SessionListResponse, SessionRange},
-    mapping::{executor_model_dtos, group_terminals, node_dtos, summary_dto},
+    mapping::{executor_model_dtos, summary_dto},
 };
 use super::error::ApiError;
-
-const MAX_TREE_NODES: usize = 256;
-const MAX_TREE_DEPTH: u16 = 16;
 
 pub(crate) async fn list_sessions(
     State(state): State<AppState>,
@@ -62,8 +59,6 @@ pub(crate) async fn list_sessions(
         .into_iter()
         .map(|aggregate| (String::from(aggregate.root_run_id.clone()), aggregate))
         .collect::<HashMap<_, _>>();
-    let terminals_by_run =
-        group_terminals(agent_terminal_associations(store, &root_ids).map_err(store_error)?);
     let executor_models_by_root = agent_executor_aggregates_for_roots(store, &root_ids)
         .map_err(store_error)?
         .into_iter()
@@ -88,7 +83,6 @@ pub(crate) async fn list_sessions(
                 summary_dto(
                     root,
                     aggregate,
-                    terminals_by_run.get(&key).cloned().unwrap_or_default(),
                     executor_models_by_root
                         .get(&key)
                         .cloned()
@@ -126,37 +120,19 @@ pub(crate) async fn get_session(
         .expect("telemetry state lock poisoned")
         .clone();
     let store = telemetry.store.as_ref().ok_or_else(unavailable)?;
-    let tree = agent_run_tree(store, &id, MAX_TREE_DEPTH, MAX_TREE_NODES).map_err(store_error)?;
-    if tree.is_empty() {
-        return Err(not_found());
-    }
-    let truncated =
-        tree.len() > MAX_TREE_NODES || tree.iter().any(|node| node.depth > MAX_TREE_DEPTH);
-    let nodes = tree
-        .into_iter()
-        .filter(|node| node.depth <= MAX_TREE_DEPTH)
-        .take(MAX_TREE_NODES)
-        .collect::<Vec<_>>();
-    let root = nodes.first().ok_or_else(not_found)?.summary.clone();
+    let root = agent_run_summary(store, &id)
+        .map_err(store_error)?
+        .ok_or_else(not_found)?;
     let aggregate = agent_root_aggregates(store, std::slice::from_ref(&id))
         .map_err(store_error)?
         .into_iter()
         .next()
         .ok_or_else(not_found)?;
-    let terminals = group_terminals(
-        agent_terminal_associations(store, std::slice::from_ref(&id)).map_err(store_error)?,
-    )
-    .remove(&String::from(id.clone()))
-    .unwrap_or_default();
     let executor_models =
         executor_model_dtos(agent_executor_aggregates(store, &id).map_err(store_error)?);
 
     Ok(Json(SessionDetailResponse {
-        session: summary_dto(&root, &aggregate, terminals, executor_models),
-        nodes: node_dtos(&nodes),
-        truncated,
-        max_nodes: MAX_TREE_NODES,
-        max_depth: MAX_TREE_DEPTH,
+        session: summary_dto(&root, &aggregate, executor_models),
         paused: !telemetry.control.is_enabled(),
     }))
 }

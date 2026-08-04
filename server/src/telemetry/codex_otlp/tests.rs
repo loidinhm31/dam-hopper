@@ -78,6 +78,23 @@ fn exporter_manager_preserves_unrelated_config_and_manages_none_or_absent_export
 }
 
 #[test]
+fn exporter_manager_brackets_ipv6_loopback_endpoint() {
+    let temp = tempfile::tempdir().unwrap();
+    let (manager, mut collector) = exporter_manager(&temp);
+    collector.host = "::1".to_string();
+    let path = temp.path().join(".codex/config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "[otel]\nexporter = \"none\"\n").unwrap();
+
+    assert_eq!(
+        manager.configure(&collector).unwrap(),
+        CodexExporterStatus::Managed
+    );
+    let written = std::fs::read_to_string(path).unwrap();
+    assert!(written.contains("http://[::1]:4811/v1/logs"));
+}
+
+#[test]
 fn exporter_manager_never_overwrites_foreign_or_malformed_config() {
     let temp = tempfile::tempdir().unwrap();
     let (manager, collector) = exporter_manager(&temp);
@@ -218,7 +235,7 @@ async fn accepts_pinned_binary_once_and_rejects_invalid_requests() {
     let worker = TelemetryWorker::new(receiver, store.clone())
         .spawn()
         .unwrap();
-    let control = Arc::new(TelemetryControl::new(true, Vec::<String>::new()));
+    let control = Arc::new(TelemetryControl::new(true));
     let telemetry = TelemetryHandle::active(control.clone(), store.clone(), Some(sender.clone()))
         .with_hmac_keys(keys);
     let config = TelemetryCollectorConfig {
@@ -377,7 +394,7 @@ async fn admits_newer_core_shape_and_reports_only_bounded_compatibility_health()
     let worker = TelemetryWorker::new(receiver, store.clone())
         .spawn()
         .unwrap();
-    let control = Arc::new(TelemetryControl::new(true, Vec::<String>::new()));
+    let control = Arc::new(TelemetryControl::new(true));
     let telemetry =
         TelemetryHandle::active(control, store.clone(), Some(sender.clone())).with_hmac_keys(keys);
     let config = TelemetryCollectorConfig {
@@ -454,7 +471,7 @@ async fn returns_retryable_status_when_the_usage_queue_is_full() {
     let store = Arc::new(TelemetryStore::open(&temp.path().join("telemetry.db")).unwrap());
     let keys = Arc::new(TelemetryKeyRing::load_or_create(temp.path().join("hmac")).unwrap());
     let (sender, _receiver) = std::sync::mpsc::sync_channel(1);
-    let control = Arc::new(TelemetryControl::new(true, Vec::<String>::new()));
+    let control = Arc::new(TelemetryControl::new(true));
     let telemetry = TelemetryHandle::active(control, store, Some(sender)).with_hmac_keys(keys);
     let config = TelemetryCollectorConfig {
         enabled: true,

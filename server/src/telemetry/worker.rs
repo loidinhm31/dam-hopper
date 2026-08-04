@@ -27,7 +27,7 @@ pub struct TelemetryControl {
 }
 
 impl TelemetryControl {
-    pub fn new(enabled: bool, _legacy_excluded_projects: impl IntoIterator<Item = String>) -> Self {
+    pub fn new(enabled: bool) -> Self {
         Self {
             enabled: AtomicBool::new(enabled),
             rejected: AtomicU64::new(0),
@@ -37,10 +37,6 @@ impl TelemetryControl {
         }
     }
 
-    pub fn allows_project(&self, _project: Option<&str>) -> bool {
-        self.is_enabled()
-    }
-
     pub fn set_enabled(&self, enabled: bool) {
         self.enabled.store(enabled, Ordering::SeqCst);
     }
@@ -48,8 +44,6 @@ impl TelemetryControl {
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::SeqCst)
     }
-
-    pub fn set_excluded_projects(&self, _excluded_projects: impl IntoIterator<Item = String>) {}
 
     /// Serialize destructive operations and close the admission window while
     /// they wait for already-admitted sends. The receiver path uses atomics
@@ -270,10 +264,10 @@ mod tests {
 
     #[test]
     fn control_pause_has_no_project_or_admission_state() {
-        let control = TelemetryControl::new(true, ["private".to_string()]);
-        assert!(control.allows_project(Some("public")));
+        let control = TelemetryControl::new(true);
+        assert!(control.is_enabled());
         control.set_enabled(false);
-        assert!(!control.allows_project(Some("public")));
+        assert!(!control.is_enabled());
     }
 
     #[test]

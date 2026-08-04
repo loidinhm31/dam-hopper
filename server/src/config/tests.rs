@@ -69,12 +69,11 @@ type = "cargo"
     assert_eq!(cfg.projects[0].project_type, ProjectType::Cargo);
     assert!(cfg.projects[0].path.starts_with('/'));
     assert!(!cfg.server.telemetry.enabled);
-    assert!(cfg.server.telemetry.terminal_correlation_enabled);
     assert_eq!(cfg.server.telemetry.detail_retention_days, 90);
 }
 
 #[test]
-fn telemetry_config_allows_explicit_correlation_opt_out() {
+fn telemetry_config_rejects_removed_usage_keys() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("dam-hopper.toml");
     std::fs::write(
@@ -86,26 +85,16 @@ name = "telemetry"
 [server.telemetry]
 enabled = true
 terminal_correlation_enabled = false
+excluded_projects = ["private"]
 "#,
     )
     .unwrap();
 
-    let config = read_config(&config_path).unwrap();
-    assert!(config.server.telemetry.enabled);
-    assert!(!config.server.telemetry.terminal_correlation_enabled);
-    write_config(&config_path, &config).unwrap();
-    assert!(std::fs::read_to_string(&config_path)
-        .unwrap()
-        .contains("terminal_correlation_enabled = false"));
-    assert!(!read_config(&config_path)
-        .unwrap()
-        .server
-        .telemetry
-        .terminal_correlation_enabled);
+    assert!(read_config(&config_path).is_err());
 }
 
 #[test]
-fn telemetry_config_defaults_correlation_on_when_usage_tracking_is_enabled() {
+fn telemetry_config_uses_snake_case_toml_and_camel_case_api() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("dam-hopper.toml");
     std::fs::write(
@@ -116,46 +105,29 @@ name = "telemetry"
 
 [server.telemetry]
 enabled = true
-"#,
-    )
-    .unwrap();
-
-    let config = read_config(&config_path).unwrap();
-    assert!(config.server.telemetry.enabled);
-    assert!(config.server.telemetry.terminal_correlation_enabled);
-}
-
-#[test]
-fn telemetry_config_uses_snake_case_toml_and_camel_case_api() {
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("dam-hopper.toml");
-    std::fs::write(&config_path, r#"
-[workspace]
-name = "telemetry"
-
-[server.telemetry]
-enabled = true
-terminal_correlation_enabled = true
 db_path = "/tmp/telemetry.db"
 detail_retention_days = 30
 aggregate_retention_days = 730
-excluded_projects = ["private"]
 
 [server.telemetry.collector]
 enabled = true
 host = "127.0.0.1"
 port = 4811
-"#).unwrap();
+    "#,
+    )
+    .unwrap();
     let config = read_config(&config_path).unwrap();
     assert!(config.server.telemetry.enabled);
-    assert!(config.server.telemetry.terminal_correlation_enabled);
     assert_eq!(config.server.telemetry.db_path, "/tmp/telemetry.db");
     assert_eq!(config.server.telemetry.collector.port, 4811);
-    assert_eq!(serde_json::to_value(&config.server.telemetry).unwrap()["dbPath"], "/tmp/telemetry.db");
+    assert_eq!(
+        serde_json::to_value(&config.server.telemetry).unwrap()["dbPath"],
+        "/tmp/telemetry.db"
+    );
     write_config(&config_path, &config).unwrap();
     let written = std::fs::read_to_string(&config_path).unwrap();
     assert!(written.contains("detail_retention_days = 30"));
-    assert!(written.contains("terminal_correlation_enabled = true"));
+    assert!(!written.contains("terminal_correlation_enabled"));
     assert!(!written.contains("detailRetentionDays"));
 }
 
@@ -163,13 +135,17 @@ port = 4811
 fn telemetry_config_rejects_non_loopback_collector() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("dam-hopper.toml");
-    std::fs::write(&config_path, r#"
+    std::fs::write(
+        &config_path,
+        r#"
 [workspace]
 name = "telemetry"
 
 [server.telemetry.collector]
 host = "0.0.0.0"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
     assert!(read_config(&config_path).is_err());
 }
 
@@ -177,13 +153,17 @@ host = "0.0.0.0"
 fn telemetry_config_rejects_invalid_retention() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("dam-hopper.toml");
-    std::fs::write(&config_path, r#"
+    std::fs::write(
+        &config_path,
+        r#"
 [workspace]
 name = "telemetry"
 
 [server.telemetry]
 detail_retention_days = 0
-"#).unwrap();
+"#,
+    )
+    .unwrap();
     assert!(read_config(&config_path).is_err());
 }
 
@@ -499,7 +479,10 @@ fn accept_windows_absolute_project_path_with_mixed_separators() {
     .unwrap();
 
     let cfg = read_config(&config_path).unwrap();
-    assert_eq!(std::path::PathBuf::from(&cfg.projects[0].path), project_path);
+    assert_eq!(
+        std::path::PathBuf::from(&cfg.projects[0].path),
+        project_path
+    );
 }
 
 #[test]
@@ -968,7 +951,10 @@ fn resolve_explicit_config_path_uses_exact_file() {
 
     assert_eq!(resolution.source, ConfigSource::ExplicitConfig);
     assert_eq!(resolution.config.workspace.name, "explicit");
-    assert_eq!(resolution.config.config_path, registry.canonicalize().unwrap());
+    assert_eq!(
+        resolution.config.config_path,
+        registry.canonicalize().unwrap()
+    );
     assert_eq!(resolution.workspace_dir, registry.parent().unwrap());
 }
 
@@ -1329,7 +1315,9 @@ fn ui_config_serde_roundtrip() {
         json["terminalCodexNotificationSoundPattern"],
         serde_json::json!("two-tone")
     );
-    assert!(json.get("terminal_codex_notification_sound_pattern").is_none());
+    assert!(json
+        .get("terminal_codex_notification_sound_pattern")
+        .is_none());
     assert_eq!(json["terminalCommitStatusEnabled"], true);
 
     write_global_config_at(&cfg_path, &cfg).unwrap();
@@ -1477,7 +1465,10 @@ terminal_agent_notifications_enabled = true
 
 #[test]
 fn ui_config_serde_aliases_terminal_commit_status() {
-    for key in ["terminal_commit_status_enabled", "terminalCommitStatusEnabled"] {
+    for key in [
+        "terminal_commit_status_enabled",
+        "terminalCommitStatusEnabled",
+    ] {
         let toml = format!("[ui]\n{key} = true\n");
         let loaded: GlobalConfig = toml::from_str(&toml).unwrap();
         assert!(loaded.ui.unwrap().terminal_commit_status_enabled);
@@ -1563,5 +1554,7 @@ fn validate_terminal_notification_sound_volume_checks_bounds() {
         terminal_codex_notification_sound_volume: 101,
         ..UiConfig::default()
     };
-    assert!(invalid.validate_terminal_notification_sound_volume().is_err());
+    assert!(invalid
+        .validate_terminal_notification_sound_volume()
+        .is_err());
 }

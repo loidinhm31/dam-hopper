@@ -122,7 +122,7 @@ describe("Settings usage insights in Chromium", () => {
     return result as HTMLButtonElement;
   }
 
-  it("enables terminal capture and confirms Codex management without exposing secrets", async () => {
+  it("enables Codex Usage and confirms Codex management without exposing secrets", async () => {
     mocks.settings = makeSettings({
       collectorSetup: {
         codexExporter: "notConfigured",
@@ -143,12 +143,15 @@ describe("Settings usage insights in Chromium", () => {
     expect(mocks.configure).not.toHaveBeenCalled();
     await act(async () => manage.click());
     await act(async () => dialogButton("Manage Codex export").click());
-    expect(mocks.configure).toHaveBeenCalledWith({ codexExporter: true });
+    expect(mocks.configure).toHaveBeenCalledWith({
+      enabled: true,
+      codexExporter: true,
+    });
     expect(container.textContent).not.toContain("Bearer");
     expect(container.textContent).not.toContain("127.0.0.1");
   });
 
-  it("disables active terminal capture through the live setup action", async () => {
+  it("disables active Codex Usage through the live setup action", async () => {
     await render();
     await act(async () => button("Disable").click());
     expect(mocks.configure).toHaveBeenCalledWith({ enabled: false });
@@ -161,11 +164,11 @@ describe("Settings usage insights in Chromium", () => {
     });
     await render();
 
-    expect(container.textContent).toContain("Enable locally");
+    expect(container.textContent).toContain("Enable Codex Usage");
     expect(button("Manage Codex")).toBeDisabled();
   });
 
-  it("keeps terminal capture active while offering receiver retry", async () => {
+  it("keeps Codex Usage active while offering receiver retry", async () => {
     mocks.settings = makeSettings({
       runtime: {
         ...makeSettings().runtime,
@@ -176,7 +179,7 @@ describe("Settings usage insights in Chromium", () => {
     await render();
 
     expect(container.textContent).toContain(
-      "DamHopper ready; open a new terminal",
+      "Codex Usage is receiving response completions",
     );
     expect(container.textContent).toContain("Receiver unavailable");
     await act(async () => button("Retry receiver").click());

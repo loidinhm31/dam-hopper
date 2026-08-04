@@ -324,23 +324,6 @@ fn server_to_toml(server: &super::schema::ServerConfig) -> toml::Value {
                 Value::Integer(days.into()),
             );
         }
-        if !telemetry.excluded_projects.is_empty() {
-            table.insert(
-                "excluded_projects".to_string(),
-                Value::Array(
-                    telemetry
-                        .excluded_projects
-                        .iter()
-                        .cloned()
-                        .map(Value::String)
-                        .collect(),
-                ),
-            );
-        }
-        table.insert(
-            "terminal_correlation_enabled".to_string(),
-            Value::Boolean(telemetry.terminal_correlation_enabled),
-        );
         let mut collector = toml::map::Map::new();
         collector.insert(
             "enabled".to_string(),

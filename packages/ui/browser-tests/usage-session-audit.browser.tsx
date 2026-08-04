@@ -26,7 +26,6 @@ let detailError: Error | null;
 vi.mock("@/api/queries.js", () => ({
   useDeleteUsageData: () => ({ isPending: false, mutate: vi.fn() }),
   useDeleteUsageRange: () => ({ isPending: false, mutate: vi.fn() }),
-  useProjects: () => ({ data: [{ name: "api" }] }),
   useUpdateUsageSettings: () => ({ isPending: false, mutate: vi.fn() }),
   useUsageSettings: () => ({ data: settings }),
   useUsageSession: (id: string | null) => {
@@ -59,17 +58,6 @@ const tokens = {
   outputTokens: 20,
   reasoningTokens: 30,
 };
-const exactCoverage = {
-  lineage: "exact",
-  tokens: "exact",
-  correlation: "exact",
-} as const;
-const degradedCoverage = {
-  lineage: "lineage_unavailable",
-  tokens: "token_data_unavailable",
-  correlation: "unattributed",
-} as const;
-
 const settings: UsageSettings = {
   aggregateRetentionDays: null,
   collectorEnabled: false,
@@ -80,9 +68,7 @@ const settings: UsageSettings = {
   },
   detailRetentionDays: 90,
   enabled: true,
-  excludedProjects: [],
   paused: false,
-  terminalCorrelationEnabled: true,
   runtime: {
     active: true,
     collector: {
@@ -101,35 +87,17 @@ const settings: UsageSettings = {
   },
 };
 
-const emptyAggregate = {
-  commandCount: 0,
-  durationMsSum: 0,
-  failedCount: 0,
-  interruptedCount: 0,
-  succeededCount: 0,
-  unknownCount: 0,
-};
 const summary: UsageSummary = {
-  categories: [],
   codex: null,
-  coverage: {
-    captureQualityFilter: null,
-    codexCorrelation: null,
-    detailOnly: true,
-  },
-  detailMetrics: null,
   health: {
     available: true,
     collector: settings.runtime.collector,
-    correlationEnvConflicts: 0,
     paused: false,
     rejectedEvents: 0,
     sampledAt: 0,
     writerErrors: 0,
   },
-  projects: [],
   range: { bucket: "day", from: 100, to: 200 },
-  terminal: emptyAggregate,
   timeSeries: [],
 };
 
@@ -143,81 +111,37 @@ function makePage(): UsageSessionPage {
         id: "a".repeat(64),
         startedAtUtcMs: 110,
         endedAtUtcMs: 190,
-        rootModel: "provider/model-a",
-        childCount: 1,
+        model: "provider/model-a",
         tokens,
-        mainTokenShare: 0.4,
-        delegationState: "delegated",
-        coverage: exactCoverage,
-        terminals: [
+        models: [
           {
-            id: "c".repeat(64),
-            label: "api · 110 · cccccccc",
-            project: "api",
-            startedAtUtcMs: 110,
-            firstSeenAtUtcMs: 110,
-            lastSeenAtUtcMs: 190,
+            model: "provider/model-a",
+            responseCount: 1,
+            tokens,
           },
         ],
       },
       {
         id: "b".repeat(64),
         startedAtUtcMs: 120,
-        endedAtUtcMs: 180,
-        rootModel: "provider/model-b",
-        childCount: 0,
+        endedAtUtcMs: null,
+        model: "provider/model-b",
         tokens: {
           inputTokens: null,
           cachedInputTokens: null,
           outputTokens: null,
           reasoningTokens: null,
         },
-        mainTokenShare: null,
-        delegationState: "lineage_unavailable",
-        coverage: degradedCoverage,
-        terminals: [],
+        models: [],
       },
     ],
   };
 }
 
 function makeDetail(): UsageSessionDetail {
-  const rootId = "a".repeat(64);
   return {
     session: makePage().sessions[0],
-    maxDepth: 16,
-    maxNodes: 256,
     paused: false,
-    truncated: false,
-    nodes: [
-      {
-        id: rootId,
-        parentId: null,
-        role: "root",
-        depth: 0,
-        model: "provider/model-a",
-        startedAtUtcMs: 110,
-        endedAtUtcMs: 190,
-        tokens,
-        coverage: exactCoverage,
-      },
-      {
-        id: "d".repeat(64),
-        parentId: rootId,
-        role: "subagent",
-        depth: 1,
-        model: "provider/model-b",
-        startedAtUtcMs: 120,
-        endedAtUtcMs: null,
-        tokens: {
-          inputTokens: null,
-          cachedInputTokens: null,
-          outputTokens: 5,
-          reasoningTokens: null,
-        },
-        coverage: degradedCoverage,
-      },
-    ],
   };
 }
 
@@ -262,31 +186,19 @@ describe("usage session audit in Chromium", () => {
 
   it("renders exact and degraded facts without double-counting cached input", async () => {
     await renderUsage();
-    expect(container.textContent).toContain("api · 110 · cccccccc");
-    expect(container.textContent).toContain("50 primary tokens");
-    expect(container.textContent).toContain("Cached input: 100");
-    expect(container.textContent).toContain("Lineage unavailable");
-    expect(container.textContent).toContain("Token data unavailable");
-    expect(container.textContent).toContain(
-      "Subagent · provider/model-b · Active",
-    );
+    expect(container.textContent).toContain("provider/model-a");
+    expect(container.textContent).toContain("50 tokens");
+    expect(container.textContent).toContain("Cached input100");
+    expect(container.textContent).toContain("Models: Unavailable");
     expect(container.textContent).not.toContain("raw-provider-session");
     expect(container.textContent).not.toContain("git status");
   });
 
-  it("keeps expansion reachable by keyboard focus and exposes its state", async () => {
+  it("renders flat detail without exposing a tree control", async () => {
     await renderUsage();
-    const toggle = container.querySelector<HTMLButtonElement>(
-      "button[aria-label='Collapse Root node']",
-    );
-    toggle?.focus();
-    expect(document.activeElement).toBe(toggle);
-    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
-    await act(async () => toggle?.click());
-    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
-    expect(container.textContent).not.toContain(
-      "Subagent · provider/model-b · Active",
-    );
+    expect(container.querySelector("button[aria-label*='node']")).toBeNull();
+    expect(container.textContent).not.toContain("Lineage");
+    expect(container.textContent).not.toContain("Coverage");
   });
 
   it("keeps cursor and selection in URL state and resets them on filter changes", async () => {

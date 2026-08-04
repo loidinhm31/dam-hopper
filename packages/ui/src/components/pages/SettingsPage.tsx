@@ -143,7 +143,7 @@ export function SettingsPage() {
 
         <SettingsSectionAccordion
           title="Usage insights"
-          description="Opt in to privacy-safe local terminal aggregates and optional Codex token telemetry."
+          description="Opt in to privacy-safe local Codex response telemetry and token summaries."
           defaultOpen
         >
           <SettingsUsageInsightsSection />

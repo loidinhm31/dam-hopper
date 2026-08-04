@@ -6,13 +6,11 @@ import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
   UsageFilters,
   UsageOverview,
-  ProjectExclusions,
   UsageSessionAudit,
 } from "@/components/usage/UsageComponents.js";
 import {
   useDeleteUsageData,
   useDeleteUsageRange,
-  useProjects,
   useUpdateUsageSettings,
   useUsageSettings,
   useUsageSession,
@@ -51,13 +49,6 @@ export function queryFromSearch(params: URLSearchParams): UsageSummaryQuery {
   return {
     window: isWindow(window) ? window : undefined,
     bucket: bucket === "hour" || bucket === "day" ? bucket : "day",
-    project: params.get("project") || undefined,
-    shell: (params.get("shell") as UsageSummaryQuery["shell"]) || undefined,
-    captureQuality:
-      (params.get("captureQuality") as UsageSummaryQuery["captureQuality"]) ||
-      undefined,
-    category: params.get("category") || undefined,
-    agent: (params.get("agent") as "codex" | null) || undefined,
     model: (params.get("model") as UsageSummaryQuery["model"]) || undefined,
     from:
       from !== undefined && Number.isSafeInteger(from) && from >= 0
@@ -101,7 +92,6 @@ export function UsagePage() {
   const view = viewFromSearch(params);
   const selectedSessionId = params.get("session");
   const sessionCursor = params.get("cursor") || undefined;
-  const terminalFilter = params.get("terminal") || undefined;
   const [customFrom, setCustomFrom] = useState(() =>
     utcDateInput(queryFromSearch(params).from),
   );
@@ -116,13 +106,11 @@ export function UsagePage() {
   }, [params]);
   const { data: summary, isLoading, error } = useUsageSummary(query);
   const { data: settings } = useUsageSettings();
-  const { data: projects = [] } = useProjects();
   const sessionQuery = useMemo<UsageSessionQuery>(
     () => ({
       from: summary?.range.from,
       to: summary?.range.to,
       model: query.model,
-      terminal: terminalFilter,
       limit: 25,
       cursor: sessionCursor,
     }),
@@ -131,7 +119,6 @@ export function UsagePage() {
       sessionCursor,
       summary?.range.from,
       summary?.range.to,
-      terminalFilter,
     ],
   );
   const sessions = useUsageSessions(
@@ -149,7 +136,6 @@ export function UsagePage() {
   const updateQuery = (next: UsageSummaryQuery) => {
     const applyViewState = (nextParams: URLSearchParams) => {
       if (view === "sessions") nextParams.set("view", "sessions");
-      if (terminalFilter) nextParams.set("terminal", terminalFilter);
       setParams(nextParams);
     };
     if (next.window) {
@@ -175,7 +161,7 @@ export function UsagePage() {
   const confirmDelete = (rangeOnly: boolean) => {
     const message = rangeOnly
       ? "Delete the selected UTC date range? This cannot be undone."
-      : "Delete all terminal and Codex usage aggregates? This cannot be undone.";
+      : "Delete all Codex usage aggregates? This cannot be undone.";
     if (!window.confirm(message)) return;
     if (rangeOnly && query.from !== undefined && query.to !== undefined) {
       deleteRange.mutate({ from: query.from, to: query.to });
@@ -235,17 +221,15 @@ export function UsagePage() {
     setParams(nextParams);
   };
 
-  const categories = summary?.categories.map((item) => item.name) ?? [];
   const models = Array.from(
     new Set(
       [
         query.model,
-        ...(sessions.data?.sessions.map((session) => session.rootModel) ?? []),
+        ...(sessions.data?.sessions.map((session) => session.model) ?? []),
       ].filter((model): model is string => Boolean(model)),
     ),
   ).sort();
   const paused = settings?.paused ?? summary?.health.paused ?? false;
-  const excludedProjects = settings?.excludedProjects ?? [];
   const requestError = queryErrorMessage(
     error,
     "Usage analytics could not be loaded.",
@@ -264,36 +248,9 @@ export function UsagePage() {
       ? "loading"
       : sessionDetail.error
         ? "error"
-        : sessionDetail.data?.nodes.length
+        : sessionDetail.data
           ? "ready"
           : "empty";
-
-  const addProjectExclusion = (
-    project: string,
-    onSuccess: () => void,
-    onError: () => void,
-  ) => {
-    if (excludedProjects.includes(project)) return;
-    updateSettings.mutate(
-      { excludedProjects: [...excludedProjects, project] },
-      { onSuccess, onError },
-    );
-  };
-
-  const removeProjectExclusion = (
-    projectName: string,
-    onSuccess: () => void,
-    onError: () => void,
-  ) => {
-    updateSettings.mutate(
-      {
-        excludedProjects: excludedProjects.filter(
-          (name) => name !== projectName,
-        ),
-      },
-      { onSuccess, onError },
-    );
-  };
 
   return (
     <AppLayout title="Usage">
@@ -301,8 +258,8 @@ export function UsagePage() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs text-[var(--color-text-muted)]">
-              Privacy-safe aggregates from DamHopper-managed terminals. No
-              commands or agent content are shown.
+              Privacy-safe Codex response aggregates. No prompts, responses, or
+              raw telemetry payloads are shown.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -357,8 +314,8 @@ export function UsagePage() {
               Usage insights are disabled.
             </p>
             <p className="mt-1 text-[var(--color-text-muted)]">
-              Enable local capture in Settings, then open a new terminal for
-              complete run boundaries.
+              Enable Codex telemetry in Settings, then return here after a
+              response completion has been received.
             </p>
           </aside>
         ) : null}
@@ -398,10 +355,7 @@ export function UsagePage() {
           onChange={updateQuery}
           disabled={isLoading}
           options={{
-            projects: projects.map((project) => project.name),
-            categories,
             models,
-            showAdvanced: view === "overview",
             sessionAudit: view === "sessions",
           }}
         />
@@ -431,15 +385,6 @@ export function UsagePage() {
             Apply custom range
           </Button>
         </fieldset>
-
-        <ProjectExclusions
-          excludedProjects={excludedProjects}
-          isPending={updateSettings.isPending}
-          projects={projects}
-          settingsLoaded={Boolean(settings)}
-          onAdd={addProjectExclusion}
-          onRemove={removeProjectExclusion}
-        />
 
         {view === "overview" ? (
           <UsageOverview

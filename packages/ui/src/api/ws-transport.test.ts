@@ -231,6 +231,22 @@ describe("WsTransport typed API errors", () => {
     } satisfies Partial<ApiRequestError>);
     transport.destroy();
   });
+
+  it("does not send removed terminal-shaped setup fields", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await expect(
+      transport.invoke("usage:configure", {
+        enabled: true,
+        terminalCorrelationEnabled: true,
+      }),
+    ).rejects.toThrow("Unsupported usage setup field: terminalCorrelationEnabled");
+    expect(fetchMock).not.toHaveBeenCalled();
+    transport.destroy();
+  });
 });
 
 describe("WsTransport usage session endpoints", () => {
@@ -261,6 +277,41 @@ describe("WsTransport usage session endpoints", () => {
     expect(fetchMock.mock.calls[1][0]).toBe(
       "http://localhost:4800/api/usage/sessions/session%2Fid",
     );
+    transport.destroy();
+  });
+
+  it("rejects removed session filters before making a request", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await expect(
+      transport.invoke("usage:sessions", { terminal: "legacy" }),
+    ).rejects.toThrow("Unsupported usage session field: terminal");
+    expect(fetchMock).not.toHaveBeenCalled();
+    transport.destroy();
+  });
+
+  it("rejects stale detail and deletion fields before making a request", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await expect(
+      transport.invoke("usage:session", {
+        id: "session-id",
+        terminal: "legacy",
+      } as never),
+    ).rejects.toThrow("Unsupported usage session detail field: terminal");
+    await expect(
+      transport.invoke("usage:deleteAll", {
+        confirmation: "delete-usage-data",
+        project: "legacy",
+      } as never),
+    ).rejects.toThrow("Unsupported usage deletion field: project");
+    expect(fetchMock).not.toHaveBeenCalled();
     transport.destroy();
   });
 });
