@@ -46,8 +46,8 @@ export function UsageSessionAudit({
             Session model audit
           </h2>
           <p className="mt-1 text-[10px] leading-4 text-[var(--color-text-muted)]">
-            Factual model and token summaries only. Coverage explains which
-            source data was available.
+            Factual Codex model and token summaries only. Raw event content is
+            never displayed.
           </p>
         </div>
         {cursorActive ? (
@@ -73,15 +73,13 @@ export function UsageSessionAudit({
         />
         {selectedSessionId ? (
           <UsageSessionTree
-            nodes={detail?.nodes ?? []}
+            detail={detail}
             state={treeState}
             errorMessage={detailError}
-            truncated={detail?.truncated}
-            maxNodes={detail?.maxNodes}
           />
         ) : (
           <div className="rounded border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-4 text-sm text-[var(--color-text-muted)]">
-            Select a session to inspect its nodes and coverage.
+            Select a session to inspect its token and model summaries.
           </div>
         )}
       </div>

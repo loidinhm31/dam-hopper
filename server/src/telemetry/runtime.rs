@@ -199,9 +199,6 @@ impl TelemetryRuntime {
                 return Err(error);
             }
         }
-        handle
-            .control
-            .set_excluded_projects(next.excluded_projects.clone());
         handle.control.set_enabled(!next.paused);
         Ok(())
     }
@@ -353,10 +350,7 @@ fn build_active_handle(
         TelemetryKeyRing::load_or_create(key_path)
             .map_err(|_| "Unable to initialize usage privacy key".to_string())?,
     );
-    let control = Arc::new(TelemetryControl::new(
-        !config.paused,
-        config.excluded_projects.clone(),
-    ));
+    let control = Arc::new(TelemetryControl::new(!config.paused));
     let (queue, receiver) = CodexUsageQueue::channel(512);
     let sender = queue.sender();
     let worker = TelemetryWorker::new(receiver, store.clone())
@@ -536,9 +530,18 @@ mod tests {
         let disabled = config(&temp, false);
         let mut active = config(&temp, true);
         active.collector.enabled = true;
-        active.collector.port = available_port();
+        active.collector.port = 0;
         runtime.apply_config(&disabled, &active).await.unwrap();
         assert!(runtime.status().collector.running);
+        active.collector.port = runtime
+            .inner
+            .collector
+            .lock()
+            .await
+            .as_ref()
+            .expect("collector should be running")
+            .address()
+            .port();
 
         let blocker = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
@@ -603,10 +606,5 @@ mod tests {
         std::fs::hard_link(&telemetry, &session).unwrap();
 
         assert!(ensure_distinct_database_paths(&session, &telemetry).is_err());
-    }
-
-    fn available_port() -> u16 {
-        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-        listener.local_addr().unwrap().port()
     }
 }

@@ -262,63 +262,48 @@ Notes:
 - when `terminalIds` is provided, backend events with `sessionId` are scoped to those ids while global events remain included
 - **Phase 04:** `system` field contains host metrics sampled from the config directory (`~/.config/dam-hopper/` by default) for host-context only, not project sandboxes
 
-## Terminal Usage Analytics
+## Codex Usage Analytics
 
-Protected aggregate-only analytics for the local telemetry store. All routes require
-the same Bearer token as other `/api/*` routes; raw command, prompt, output, and event
-rows are never returned. The UI calls these through `WsTransport` methods
-`usage:summary`, `usage:health`, `usage:settings`, `usage:setupStatus`,
-`usage:updateSettings`, `usage:configure`, and `usage:deleteAll`, which map to the
+Protected, aggregate-only analytics for the local Codex telemetry store. All routes require
+the same Bearer token as other `/api/*` routes; raw prompts, responses, commands, tool content,
+event rows, bearer tokens, and storage identifiers are never returned. The UI calls these through
+`WsTransport` methods
+`usage:summary`, `usage:sessions`, `usage:session`, `usage:health`, `usage:settings`,
+`usage:setupStatus`, `usage:updateSettings`, `usage:configure`, and `usage:deleteAll`, which map to the
 REST routes below.
 
 ### GET /api/usage/summary
 
-Returns terminal aggregates, optional Codex token aggregates, coverage, and writer
-health. Query parameters use camelCase: `from`/`to` (UTC milliseconds) or `window`
-(`24h`, `7d`, `30d`), `bucket` (`hour` or `day`), plus optional `project`, `shell`
-(`bash`, `zsh`, `fish`), `captureQuality`, `category`, `agent` (`codex`), and `model`.
-Ranges must be positive, contain at most 1,000 buckets, and are capped at 90 days for
-hour buckets or five years for day buckets. Detail queries cannot precede the configured
-detail-retention boundary unless they are UTC-day aligned, unfiltered day queries; the
-response identifies the requested range and whether coverage is detail-only.
+Returns Codex token totals and bounded UTC time buckets. Query parameters use camelCase:
+`from`/`to` (UTC milliseconds) or `window` (`24h`, `7d`, `30d`), `bucket` (`hour` or `day`), and
+optional `model`. Explicit ranges must be positive and contain at most 1,000 buckets; hour ranges
+are capped at 90 days and day ranges at five years. Removed terminal, project, shell,
+capture-quality, category, and agent filters are rejected, including unknown query keys.
 
-The optional `model` filter accepts the bounded provider/model identifier used by telemetry:
-1–64 safe ASCII characters, starting and ending alphanumeric, with `.`, `_`, `-`, `/`, and `:`
-allowed (for example `gpt-5.6-sol` or `provider/model:v2`). URL-like forms and repeated
-separators are rejected.
+The optional `model` filter accepts 1–64 safe ASCII characters, starts and ends with an
+alphanumeric character, and may contain `.`, `_`, `-`, `/`, or `:`.
+
+The response contains `range`, nullable `codex` totals, nullable `timeSeries` buckets, and
+`health`. Unavailable or paused telemetry is represented by state and nullable projections rather
+than fabricated zero-valued usage.
 
 ### GET /api/usage/health
 
-Returns availability, paused state, writer error count, rejected event count, and the
-sampling timestamp. Collector health includes bounded malformed, rejected, queued, dropped,
-duplicate, compatibility-drift, and last-accepted counters. Unavailable telemetry is reported as
-unavailable rather than as zero-valued usage.
+Returns telemetry availability, paused state, writer errors, rejected events, the sampling
+timestamp, and bounded Codex collector counters. Collector status is reported separately from
+usage totals so an unavailable receiver cannot be mistaken for no activity.
 
 ### GET/PATCH /api/usage/settings
 
-Reads or updates `paused`, `detailRetentionDays`, `aggregateRetentionDays` (nullable),
-`excludedProjects`, and collector settings. `codexExporter: true|false` explicitly manages the
-local Codex exporter. `collectorSetup.codexExporter` is status-only (`notConfigured`, `managed`,
-or `conflict`); bearer material is never returned. Ownership must match exactly before a file is
-changed or disabled; foreign/malformed config is left untouched. Writes are atomic and the
-secret file is owner-only (`0600`). Retention changes synchronously roll up and purge before the
-new configuration is published.
+Reads or updates `enabled`, `paused`, `detailRetentionDays`, `aggregateRetentionDays`, `collector`,
+`codexExporter`, and `retryCollector`. Exporter status is one of `notConfigured`, `managed`, or
+`conflict`; bearer material is never returned. Managed files are changed only when their exact
+ownership shape matches, and writes are atomic with owner-only (`0600`) secrets.
 
-Updates are live: the server applies the validated runtime transition before writing its
-configuration file. Telemetry enable/disable affects only terminal runs created after the
-transition; a PTY keeps the capture snapshot selected when it started. Collector changes
-restart the loopback listener without a DamHopper server restart. Managing Codex config does not
-restart the Codex process; restart it separately. If runtime application or the subsequent config
-write fails, the previous live state and managed Codex file are restored and the update is rejected.
-
-Terminal correlation defaults on through `terminalCorrelationEnabled` (TOML:
-`terminal_correlation_enabled`) when telemetry and the collector are active; set it to `false` to
-opt out. If
-the request or inherited server environment defines `OTEL_RESOURCE_ATTRIBUTES`, DamHopper preserves
-that value, skips correlation for the PTY, and increments the `correlationEnvConflicts` health
-counter. Markers are redacted from scrollback, diagnostics, and browser events. Automatic PTY
-restarts receive a fresh marker/run association; the old in-memory association remains valid for a
-bounded 24 hours after normal exit for delayed OTLP delivery and reconnect replay, then expires.
+Runtime transitions and configuration writes are transactional: a failed restart, retention
+operation, or registry write restores the prior live state and rejects the update. Collector
+changes restart only the loopback listener; managing Codex configuration does not restart Codex.
+Removed terminal-correlation and project-exclusion settings are not accepted or serialized.
 
 ### GET/PATCH /api/usage/setup
 
@@ -330,48 +315,34 @@ live enable/disable, receiver retry, and explicit Codex exporter management.
 
 ### GET /api/usage/sessions
 
-Lists protected, aggregate session summaries for the model/delegation audit. The route requires
-Bearer authentication and never returns raw event, prompt, response, tool, or command content.
-Query parameters are camelCase: `from`/`to` (non-negative UTC milliseconds; both required when
-using an explicit range), `model`, `terminal`, `limit`, and opaque `cursor`. Without a range the
-default is the most recent 30 days; ranges are capped at five years. `limit` defaults to 25 and is
-bounded to 1–100. `model` accepts the same 1–64 character safe provider/model identifier as the
-summary route. `terminal` must be a returned HMAC terminal digest. Cursors are authenticated,
-opaque, and scoped to the range and filters that created them.
+Lists flat, aggregate Codex session summaries. Query parameters are `from`, `to`, `model`, `limit`,
+and opaque `cursor`. The default range is the most recent 30 days; explicit ranges are capped at
+five years. `limit` defaults to 25 and is bounded to 1–100. Cursors are authenticated, opaque,
+and scoped to the range and model filter that created them. Removed terminal and lineage filters
+are rejected.
 
 The response is `{ range: { from, to }, sessions, nextCursor, paused }`. Each session contains a
-derived HMAC `id`, UTC start/end timestamps, optional root model, child count, nullable token
-components (`inputTokens`, `cachedInputTokens`, `outputTokens`, `reasoningTokens`),
-`mainTokenShare`, `delegationState`, `coverage`, and HMAC terminal references. The UI's primary-token
-total is input + output + reasoning; `cachedInputTokens` is reported separately and excluded. Model
-values remain bounded provider-qualified display data rather than a fixed allowlist. Invalid ranges,
-limits, cursors, model values, or digests are rejected; paused/unavailable collection is reported
-by state rather than fabricated zeros.
+derived HMAC `id`, UTC start/end timestamps, an optional model, token components, and bounded model
+summaries. No hierarchy, terminal reference, command, or raw event content is exposed.
 
 ### GET /api/usage/sessions/{id}
 
-Returns one session's bounded delegation tree. `{id}` must be a derived HMAC session identifier
-from the list response. The response is `{ session, nodes, truncated, maxNodes, maxDepth, paused }`;
-the caps are 256 nodes and depth 16. Nodes expose only derived IDs, parent IDs, role, bounded model,
-UTC timestamps, nullable token components, and coverage (`lineage`, `tokens`, `correlation`). A
-missing session returns not found. Trees exceeding a cap are truncated and flagged; no hierarchy is
-inferred from ordering, model names, titles, or text.
+Returns one bounded flat session summary identified by the derived HMAC `id` from the list response.
+The response contains `{ session, paused }`; a missing session returns not found. Detail responses
+contain only the same Codex token/model projections as the list route.
 
 The shared browser/native Usage page presents these routes as a Sessions tab with list/detail
 navigation. It uses `view=sessions`, `session`, and opaque authenticated `cursor` parameters for
 deep links. List and detail queries refetch every 15 seconds only while the document is visible;
-hidden documents stop polling. No route or UI response contains raw commands, prompts, responses,
-tool content, or storage identifiers. Paused collection leaves stored summaries readable and marks
+hidden documents stop polling. Paused collection leaves stored summaries readable and marks
 responses as paused; deletion remains an explicit destructive operation.
 
 ### Agent-run summaries (internal store contract)
 
 Accepted Codex OTel events maintain one permanent flat summary per HMAC run. Summaries contain safe
-provider/model/role/status, nullable token components, explicit `delta` or `cumulative` semantics,
-and `lineageQuality`/`tokenQuality`. Because the Phase 01 app-server gate failed, rows use
-`lineage_unavailable`; no hierarchy is inferred. Terminal associations are HMAC-only and may count
-multiple terminals without exposing raw identifiers. The session routes above project these
-summaries into bounded list/tree responses and never expose the underlying rows.
+provider/model/role/status, nullable token components, and explicit `delta` or `cumulative`
+semantics. The session routes above project these summaries into bounded list/detail responses and
+never expose the underlying rows.
 
 ### DELETE /api/usage
 
@@ -379,15 +350,10 @@ Destructive deletion requires the exact JSON confirmation string
 `"delete-usage-data"`. Omitting `from` and `to` deletes all detail, rollups, and health
 rows. To delete a range, provide both `from` and `to` as non-negative UTC milliseconds,
 strictly increasing and aligned to UTC-day boundaries; ranges are limited to five years.
-Capture is paused behind an ordered deletion barrier. The service snapshots exact live admission and
-restores that state on success or any failure (including worker panic or key-rotation failure), not
-from persisted `paused` settings. Range deletion removes overlapping summaries and associations;
-all deletion also clears summaries, associations, detail, rollups, and health rows. The UI must
-present an explicit confirmation before calling this route.
-
-Full-delete HMAC-key rotation and its coordinated destructive workflow are part of the
-implementation. The key is rotated only after all usage rows are deleted; range deletion keeps
-the key so retained fingerprints remain comparable.
+Capture is paused behind an ordered deletion barrier and the exact live admission state is restored
+on success or failure. Full deletion rotates the shared telemetry HMAC key after the rows are
+deleted; range deletion keeps it so retained fingerprints remain comparable. The UI must present
+an explicit confirmation before calling this route.
 
 ## Session Persistence API (Phase 05)
 

@@ -384,8 +384,6 @@ export interface LastCommit {
 
 export type UsageBucket = "hour" | "day";
 export type UsageWindow = "24h" | "7d" | "30d";
-export type UsageShell = "bash" | "zsh" | "fish";
-export type UsageCaptureQuality = "rich" | "partial" | "unavailable";
 /** Bounded provider model identifier. Treat as display-only opaque text. */
 export type UsageModel = string;
 
@@ -394,21 +392,7 @@ export interface UsageSummaryQuery {
   to?: number;
   window?: UsageWindow;
   bucket?: UsageBucket;
-  project?: string;
-  shell?: UsageShell;
-  captureQuality?: UsageCaptureQuality;
-  category?: string;
-  agent?: "codex";
   model?: UsageModel;
-}
-
-export interface UsageAggregate {
-  commandCount: number;
-  succeededCount: number;
-  failedCount: number;
-  interruptedCount: number;
-  unknownCount: number;
-  durationMsSum: number;
 }
 
 export interface UsageTokens {
@@ -423,39 +407,13 @@ export interface UsageTokens {
 /** Privacy-safe aggregate bucket; no command, event, or conversation data. */
 export interface UsageTimeBucket {
   startUtcMs: number;
-  terminal: UsageAggregate;
   codex: UsageTokens | null;
-}
-
-export interface UsageDimensionAggregate {
-  name: string;
-  terminal: UsageAggregate;
-}
-
-/** Available only while the selected window is entirely in detail retention. */
-export interface UsageDetailMetrics {
-  durationP50Ms: number | null;
-  durationP95Ms: number | null;
-  repeatedCommandCount: number;
 }
 
 export interface UsageSummary {
   range: { from: number; to: number; bucket: UsageBucket };
-  terminal: UsageAggregate;
   codex: UsageTokens | null;
   timeSeries: UsageTimeBucket[];
-  categories: UsageDimensionAggregate[];
-  projects: UsageDimensionAggregate[];
-  detailMetrics: UsageDetailMetrics | null;
-  coverage: {
-    detailOnly: boolean;
-    captureQualityFilter: UsageCaptureQuality | null;
-    codexCorrelation: {
-      exact: number;
-      approximate: number;
-      unattributed: number;
-    } | null;
-  };
   health: UsageHealth;
 }
 
@@ -464,7 +422,6 @@ export interface UsageHealth {
   paused: boolean;
   writerErrors: number;
   rejectedEvents: number;
-  correlationEnvConflicts: number;
   sampledAt: number;
   collector: UsageCollectorHealth;
 }
@@ -515,8 +472,6 @@ export interface UsageSettings {
   paused: boolean;
   detailRetentionDays: number;
   aggregateRetentionDays: number | null;
-  excludedProjects: string[];
-  terminalCorrelationEnabled: boolean;
   collectorEnabled: boolean;
   runtime: UsageRuntimeStatus;
   collectorSetup: UsageCollectorSetup;
@@ -527,49 +482,17 @@ export interface UsageSettingsPatch {
   paused?: boolean;
   detailRetentionDays?: number;
   aggregateRetentionDays?: number | null;
-  excludedProjects?: string[];
-  terminalCorrelationEnabled?: boolean;
   collector?: UsageCollectorSettings;
   codexExporter?: boolean;
   retryCollector?: boolean;
 }
 
-export type UsageSessionLineageCoverage =
-  | "exact"
-  | "partial"
-  | "lineage_unavailable";
-export type UsageSessionTokenCoverage =
-  | "exact"
-  | "partial"
-  | "token_data_unavailable";
-export type UsageSessionDelegationState =
-  | "delegated"
-  | "not_delegated"
-  | "partial"
-  | "lineage_unavailable";
-
 export interface UsageSessionQuery {
   from?: number;
   to?: number;
   model?: UsageModel;
-  terminal?: string;
   limit?: number;
   cursor?: string;
-}
-
-export interface UsageSessionCoverage {
-  lineage: UsageSessionLineageCoverage;
-  tokens: UsageSessionTokenCoverage;
-  correlation: "exact" | "approximate" | "unattributed";
-}
-
-export interface UsageSessionTerminal {
-  id: string;
-  label: string;
-  project: string | null;
-  startedAtUtcMs: number;
-  firstSeenAtUtcMs: number;
-  lastSeenAtUtcMs: number;
 }
 
 export interface UsageSessionExecutorModel {
@@ -581,15 +504,10 @@ export interface UsageSessionExecutorModel {
 export interface UsageSessionSummary {
   id: string;
   startedAtUtcMs: number;
-  endedAtUtcMs: number;
-  rootModel: UsageModel | null;
-  childCount: number;
+  endedAtUtcMs: number | null;
+  model: UsageModel | null;
   tokens: UsageTokens;
-  mainTokenShare: number | null;
-  delegationState: UsageSessionDelegationState;
-  coverage: UsageSessionCoverage;
-  terminals: UsageSessionTerminal[];
-  executorModels?: UsageSessionExecutorModel[];
+  models: UsageSessionExecutorModel[];
 }
 
 export interface UsageSessionPage {
@@ -599,24 +517,8 @@ export interface UsageSessionPage {
   paused: boolean;
 }
 
-export interface UsageSessionNode {
-  id: string;
-  parentId: string | null;
-  role: "root" | "main" | "subagent";
-  depth: number;
-  model: UsageModel | null;
-  startedAtUtcMs: number;
-  endedAtUtcMs: number | null;
-  tokens: UsageTokens;
-  coverage: UsageSessionCoverage;
-}
-
 export interface UsageSessionDetail {
   session: UsageSessionSummary;
-  nodes: UsageSessionNode[];
-  truncated: boolean;
-  maxNodes: number;
-  maxDepth: number;
   paused: boolean;
 }
 

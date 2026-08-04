@@ -106,7 +106,11 @@ impl CodexExporterManager {
 }
 
 fn endpoint(collector: &TelemetryCollectorConfig) -> String {
-    format!("http://{}:{}/v1/logs", collector.host, collector.port)
+    let host = match collector.host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V6(_)) => format!("[{}]", collector.host),
+        _ => collector.host.clone(),
+    };
+    format!("http://{host}:{}/v1/logs", collector.port)
 }
 
 fn ownership(doc: &DocumentMut, endpoint: &str, secret: &str) -> CodexExporterStatus {

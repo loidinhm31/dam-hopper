@@ -101,14 +101,15 @@ fn normalize_server_json_for_toml(value: &mut Value) {
 }
 
 fn normalize_telemetry_json_for_toml(value: &mut Value) {
-    let Some(telemetry) = value.as_object_mut() else { return; };
+    let Some(telemetry) = value.as_object_mut() else {
+        return;
+    };
     let entries = std::mem::take(telemetry);
     for (key, value) in entries {
         let toml_key = match key.as_str() {
             "dbPath" => "db_path",
             "detailRetentionDays" => "detail_retention_days",
             "aggregateRetentionDays" => "aggregate_retention_days",
-            "excludedProjects" => "excluded_projects",
             other => other,
         };
         telemetry.insert(toml_key.to_string(), value);
@@ -138,7 +139,9 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
             "terminalCodexNotificationsEnabled" => "terminal_codex_notifications_enabled",
             "terminalAgentNotificationsEnabled" => "terminal_codex_notifications_enabled",
             "terminalCodexNotificationToastEnabled" => "terminal_codex_notification_toast_enabled",
-            "terminalCodexBrowserNotificationsEnabled" => "terminal_codex_browser_notifications_enabled",
+            "terminalCodexBrowserNotificationsEnabled" => {
+                "terminal_codex_browser_notifications_enabled"
+            }
             "terminalCodexNotificationSoundEnabled" => "terminal_codex_notification_sound_enabled",
             "terminalCodexNotificationSoundVolume" => "terminal_codex_notification_sound_volume",
             "terminalCodexNotificationSoundPattern" => "terminal_codex_notification_sound_pattern",

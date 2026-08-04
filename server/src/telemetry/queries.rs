@@ -7,13 +7,13 @@ use super::{
     privacy::HmacDigest,
     store::{TelemetryStore, TelemetryStoreError},
     types::{
-        AgentLineageQuality, AgentRole, AgentRunSummary, AgentTokenQuality, CodexModel,
-        CodexVersion, CorrelationQuality, SafeIdentifier, TokenCounterSemantic, UsageQuery,
-        MAX_DURATION_MS, MAX_TOKEN_TOTAL,
+        AgentRole, AgentRunSummary, AgentTokenQuality, CodexModel, CodexVersion, SafeIdentifier,
+        TokenCounterSemantic, UsageQuery, MAX_TOKEN_TOTAL,
     },
 };
 
 const MAX_AGENT_RUN_PAGE: usize = 100;
+pub const MAX_SESSION_MODELS: usize = 32;
 const DAY_MS: i64 = 86_400_000;
 const MAX_TOKEN_TOTAL_I64: i64 = MAX_TOKEN_TOTAL as i64;
 const MAX_DURATION_SUM_I64: i64 = i64::MAX;
@@ -29,32 +29,14 @@ pub struct AgentRunListQuery {
     pub from_utc_ms: i64,
     pub to_utc_ms: i64,
     pub model: Option<CodexModel>,
-    pub terminal: Option<HmacDigest>,
     pub cursor: Option<AgentRunCursor>,
     pub limit: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentTerminalAssociation {
-    pub root_run_id: HmacDigest,
-    pub terminal_id: HmacDigest,
-    pub project: Option<SafeIdentifier>,
-    pub started_at_utc_ms: i64,
-    pub first_seen_at_utc_ms: i64,
-    pub last_seen_at_utc_ms: i64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentRunTreeNode {
-    pub summary: AgentRunSummary,
-    pub depth: u16,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentRootAggregate {
     pub root_run_id: HmacDigest,
     pub child_count: u32,
-    pub lineage_quality: AgentLineageQuality,
     pub token_quality: AgentTokenQuality,
     pub input_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
@@ -77,17 +59,6 @@ pub struct AgentExecutorAggregate {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UsageAggregate {
-    pub command_count: u64,
-    pub succeeded_count: u64,
-    pub failed_count: u64,
-    pub interrupted_count: u64,
-    pub unknown_count: u64,
-    pub duration_ms_sum: u64,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TokenAggregate {
     pub input_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
@@ -99,56 +70,15 @@ pub struct TokenAggregate {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CorrelationCoverage {
-    pub exact: u64,
-    pub approximate: u64,
-    pub unattributed: u64,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct UsageTimeBucket {
     pub start_utc_ms: i64,
-    pub terminal: UsageAggregate,
     pub codex: Option<TokenAggregate>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UsageDimensionAggregate {
-    pub name: String,
-    pub terminal: UsageAggregate,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DetailUsageMetrics {
-    pub duration_p50_ms: Option<u64>,
-    pub duration_p95_ms: Option<u64>,
-    pub repeated_command_count: u64,
 }
 
 const SESSION_COLUMNS: &str = "session_fingerprint, model, source_version, source_quality,
     started_at_utc_ms, ended_at_utc_ms, status, counter_semantic, token_quality,
     response_count, duration_ms_sum, input_tokens, cached_input_tokens, output_tokens,
     reasoning_tokens, updated_at_utc_ms";
-
-pub fn list_agent_run_summaries(
-    store: &TelemetryStore,
-    limit: usize,
-) -> Result<Vec<AgentRunSummary>, TelemetryStoreError> {
-    let connection = store.open_read()?;
-    let mut statement = connection.prepare(&format!(
-        "SELECT {SESSION_COLUMNS} FROM codex_sessions
-         ORDER BY coalesce(ended_at_utc_ms, started_at_utc_ms) DESC, session_fingerprint DESC LIMIT ?1"
-    ))?;
-    let rows = statement.query_map(
-        [limit.clamp(1, MAX_AGENT_RUN_PAGE) as i64],
-        session_from_row,
-    )?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(TelemetryStoreError::Sqlite)
-}
 
 pub fn list_agent_run_roots(
     store: &TelemetryStore,
@@ -186,34 +116,6 @@ pub fn list_agent_run_roots(
         .map_err(TelemetryStoreError::Sqlite)
 }
 
-pub fn agent_run_nodes_for_roots(
-    store: &TelemetryStore,
-    root_ids: &[HmacDigest],
-    max_nodes: usize,
-) -> Result<Vec<AgentRunSummary>, TelemetryStoreError> {
-    if root_ids.is_empty() || max_nodes == 0 {
-        return Ok(Vec::new());
-    }
-    let connection = store.open_read()?;
-    let placeholders = question_marks(root_ids.len());
-    let sql = format!(
-        "SELECT {SESSION_COLUMNS} FROM codex_sessions
-         WHERE session_fingerprint IN ({placeholders})
-         ORDER BY started_at_utc_ms, session_fingerprint LIMIT ?"
-    );
-    let mut values = root_ids
-        .iter()
-        .cloned()
-        .map(String::from)
-        .map(Value::Text)
-        .collect::<Vec<_>>();
-    values.push(Value::Integer(max_nodes.min(i64::MAX as usize) as i64));
-    let mut statement = connection.prepare(&sql)?;
-    let rows = statement.query_map(params_from_iter(values.iter()), session_from_row)?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(TelemetryStoreError::Sqlite)
-}
-
 pub fn agent_root_aggregates(
     store: &TelemetryStore,
     root_ids: &[HmacDigest],
@@ -226,7 +128,6 @@ pub fn agent_root_aggregates(
         result.push(AgentRootAggregate {
             root_run_id: root_id.clone(),
             child_count: 0,
-            lineage_quality: AgentLineageQuality::LineageUnavailable,
             token_quality: summary.token_quality,
             input_tokens: summary.input_tokens,
             cached_input_tokens: summary.cached_input_tokens,
@@ -252,7 +153,8 @@ pub fn agent_executor_aggregates(
     let sql = format!(
         "SELECT model, count(*), {input_sum}, {cached_sum},
                 {output_sum}, {reasoning_sum}, {duration_sum}
-         FROM codex_usage_events WHERE session_fingerprint = ?1 GROUP BY model ORDER BY model"
+         FROM codex_usage_events WHERE session_fingerprint = ?1 GROUP BY model
+         ORDER BY model LIMIT {MAX_SESSION_MODELS}"
     );
     let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map([String::from(root_id.clone())], executor_from_row)?;
@@ -275,11 +177,24 @@ pub fn agent_executor_aggregates_for_roots(
     let reasoning_sum = bounded_sum_sql("reasoning_tokens", MAX_TOKEN_TOTAL_I64);
     let duration_sum = bounded_sum_sql("duration_ms", MAX_DURATION_SUM_I64);
     let sql = format!(
-        "SELECT session_fingerprint, model, count(*), {input_sum},
-                {cached_sum}, {output_sum}, {reasoning_sum}, {duration_sum}
-         FROM codex_usage_events
-         WHERE session_fingerprint IN ({placeholders})
-         GROUP BY session_fingerprint, model ORDER BY session_fingerprint, model"
+        "SELECT session_fingerprint, model, response_count, input_tokens_sum,
+                cached_input_tokens_sum, output_tokens_sum, reasoning_tokens_sum, duration_ms_sum
+         FROM (
+             SELECT session_fingerprint, model, count(*) AS response_count,
+                    {input_sum} AS input_tokens_sum,
+                    {cached_sum} AS cached_input_tokens_sum,
+                    {output_sum} AS output_tokens_sum,
+                    {reasoning_sum} AS reasoning_tokens_sum,
+                    {duration_sum} AS duration_ms_sum,
+                    row_number() OVER (
+                        PARTITION BY session_fingerprint ORDER BY model
+                    ) AS model_rank
+             FROM codex_usage_events
+             WHERE session_fingerprint IN ({placeholders})
+             GROUP BY session_fingerprint, model
+         )
+         WHERE model_rank <= {MAX_SESSION_MODELS}
+         ORDER BY session_fingerprint, model"
     );
     let values = root_ids
         .iter()
@@ -296,31 +211,6 @@ pub fn agent_executor_aggregates_for_roots(
         .map_err(TelemetryStoreError::Sqlite)
 }
 
-pub fn agent_run_tree(
-    store: &TelemetryStore,
-    root_id: &HmacDigest,
-    _max_depth: u16,
-    max_nodes: usize,
-) -> Result<Vec<AgentRunTreeNode>, TelemetryStoreError> {
-    if max_nodes == 0 {
-        return Ok(Vec::new());
-    }
-    Ok(agent_run_summary(store, root_id)?
-        .into_iter()
-        .map(|summary| AgentRunTreeNode { summary, depth: 0 })
-        .collect())
-}
-
-/// Terminal associations intentionally have no source in the Codex-only
-/// schema. The compatibility API receives an empty list until Phase 3 removes
-/// this field from the transport contract.
-pub fn agent_terminal_associations(
-    _store: &TelemetryStore,
-    _root_ids: &[HmacDigest],
-) -> Result<Vec<AgentTerminalAssociation>, TelemetryStoreError> {
-    Ok(Vec::new())
-}
-
 pub fn agent_run_summary(
     store: &TelemetryStore,
     run_id: &HmacDigest,
@@ -334,25 +224,6 @@ pub fn agent_run_summary(
         )
         .optional()
         .map_err(TelemetryStoreError::Sqlite)
-}
-
-pub fn aggregate_token_correlation(
-    store: &TelemetryStore,
-    query: &UsageQuery,
-) -> Result<Option<CorrelationCoverage>, TelemetryStoreError> {
-    let count = event_count(store, query)?;
-    Ok((count > 0).then_some(CorrelationCoverage {
-        exact: 0,
-        approximate: 0,
-        unattributed: count,
-    }))
-}
-
-pub fn aggregate_commands(
-    _store: &TelemetryStore,
-    _query: &UsageQuery,
-) -> Result<UsageAggregate, TelemetryStoreError> {
-    Ok(UsageAggregate::default())
 }
 
 pub fn aggregate_tokens(
@@ -383,14 +254,6 @@ pub fn aggregate_tokens(
         })
     })?;
     Ok((row.response_count > 0).then_some(row))
-}
-
-pub fn aggregate_command_rollups(
-    _store: &TelemetryStore,
-    _query: &UsageQuery,
-    _boundary_utc_ms: i64,
-) -> Result<UsageAggregate, TelemetryStoreError> {
-    Ok(UsageAggregate::default())
 }
 
 pub fn aggregate_token_rollups(
@@ -438,19 +301,6 @@ pub fn aggregate_token_rollups(
         })
     })?;
     Ok((aggregate.response_count > 0).then_some(aggregate))
-}
-
-pub fn add_usage(left: UsageAggregate, right: UsageAggregate) -> UsageAggregate {
-    UsageAggregate {
-        command_count: left.command_count.saturating_add(right.command_count),
-        succeeded_count: left.succeeded_count.saturating_add(right.succeeded_count),
-        failed_count: left.failed_count.saturating_add(right.failed_count),
-        interrupted_count: left
-            .interrupted_count
-            .saturating_add(right.interrupted_count),
-        unknown_count: left.unknown_count.saturating_add(right.unknown_count),
-        duration_ms_sum: left.duration_ms_sum.saturating_add(right.duration_ms_sum),
-    }
 }
 
 pub fn add_tokens(
@@ -510,61 +360,6 @@ pub fn aggregate_usage_series(
             bucket
         })
         .collect())
-}
-
-pub fn aggregate_command_dimensions(
-    _store: &TelemetryStore,
-    _detail_query: &UsageQuery,
-    _rollup_query: &UsageQuery,
-    _boundary_utc_ms: i64,
-    _dimension: UsageDimension,
-) -> Result<Vec<UsageDimensionAggregate>, TelemetryStoreError> {
-    Ok(Vec::new())
-}
-
-#[derive(Clone, Copy)]
-pub enum UsageDimension {
-    Category,
-    Project,
-}
-
-pub fn aggregate_detail_metrics(
-    store: &TelemetryStore,
-    query: &UsageQuery,
-) -> Result<DetailUsageMetrics, TelemetryStoreError> {
-    let connection = store.open_read()?;
-    let (where_clause, values) = event_where(query, "e");
-    // Calculate the order statistics inside SQLite so a large valid date
-    // range never becomes an unbounded Rust Vec on the API thread.
-    let sql = format!(
-        "WITH ordered AS (
-             SELECT duration_ms,
-                    row_number() OVER (ORDER BY duration_ms) AS row_number,
-                    count(*) OVER () AS total
-             FROM codex_usage_events e {where_clause}
-               AND duration_ms IS NOT NULL
-         )
-         SELECT
-             max(CASE WHEN row_number =
-                 ((total / 100) * 50 + (((total % 100) * 50 + 99) / 100))
-                 THEN duration_ms END),
-             max(CASE WHEN row_number =
-                 ((total / 100) * 95 + (((total % 100) * 95 + 99) / 100))
-                 THEN duration_ms END)
-         FROM ordered"
-    );
-    let (duration_p50_ms, duration_p95_ms) =
-        connection.query_row(&sql, params_from_iter(values.iter()), |row| {
-            Ok((
-                bounded_value_from_row(row, 0, MAX_DURATION_MS as i64)?,
-                bounded_value_from_row(row, 1, MAX_DURATION_MS as i64)?,
-            ))
-        })?;
-    Ok(DetailUsageMetrics {
-        duration_p50_ms,
-        duration_p95_ms,
-        repeated_command_count: 0,
-    })
 }
 
 fn token_series(
@@ -635,17 +430,6 @@ fn token_rollup_series(
         .map_err(TelemetryStoreError::Sqlite)
 }
 
-fn event_count(store: &TelemetryStore, query: &UsageQuery) -> Result<u64, TelemetryStoreError> {
-    let connection = store.open_read()?;
-    let (where_clause, values) = event_where(query, "e");
-    let count = connection.query_row(
-        &format!("SELECT count(*) FROM codex_usage_events e {where_clause}"),
-        params_from_iter(values.iter()),
-        |row| row.get::<_, i64>(0),
-    )?;
-    Ok(count.max(0) as u64)
-}
-
 fn event_where(query: &UsageQuery, alias: &str) -> (String, Vec<Value>) {
     let mut sql = String::from("WHERE 1 = 1");
     let mut values = Vec::new();
@@ -702,8 +486,6 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> Result<AgentRunSummary, rusqlite
         ended_at_utc_ms: row.get(5)?,
         status: SafeIdentifier::new(row.get::<_, String>(6)?)
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
-        correlation_quality: CorrelationQuality::Unattributed,
-        lineage_quality: AgentLineageQuality::LineageUnavailable,
         token_quality: match row.get::<_, String>(8)?.as_str() {
             "exact" => AgentTokenQuality::Exact,
             "partial" => AgentTokenQuality::Partial,
@@ -721,7 +503,6 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> Result<AgentRunSummary, rusqlite
         cached_input_tokens: bounded_value_from_row(row, 12, MAX_TOKEN_TOTAL_I64)?,
         output_tokens: bounded_value_from_row(row, 13, MAX_TOKEN_TOTAL_I64)?,
         reasoning_tokens: bounded_value_from_row(row, 14, MAX_TOKEN_TOTAL_I64)?,
-        terminal_association_count: 0,
         updated_at_utc_ms: row.get(15)?,
     })
 }

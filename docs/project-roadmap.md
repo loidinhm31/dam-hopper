@@ -18,7 +18,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
   - ⚠️ Full UI baseline: 748/750; two failures are Phase 01 filename-convention checks.
 - **Phase 03 Validation and release checks — [PENDING]**: production deployment, stale-tab smoke test, and authenticated real-Git verification remain.
 
-### Terminal Usage Analytics
+### Terminal Usage Analytics (historical; superseded by the Codex-only OTel contract)
 
 **Live Usage Insights Settings: Phase 01 Runtime Lifecycle and API — [COMPLETED 2026-07-26]**
 
@@ -31,7 +31,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 - [x] Separate privacy-preserving telemetry SQLite store and migrations
 - [x] Bounded non-blocking writer with WAL and graceful shutdown
-- [x] UTC rollup/purge, project exclusion, delete-all, and retention controls
+- [x] UTC rollup/purge, project exclusion, delete-all, and retention controls *(historical terminal analytics; superseded by the Codex-only contract, which has no project exclusion)*
 - [x] DB/API privacy scan and read-only/corrupt store fault coverage
 
 **Phase 04: Aggregate API and Controls — [COMPLETED 2026-07-26; APPROVED WITH WARNINGS]**
@@ -50,7 +50,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 **Phase 06: Usage UI and Compact Navigation — [COMPLETED 2026-07-26; APPROVED]**
 
-- [x] Responsive aggregate dashboard, UTC filters, coverage state, pause/exclusion controls
+- [x] Responsive aggregate dashboard, UTC filters, coverage state, pause/exclusion controls *(historical terminal analytics; superseded by the Codex-only contract and its Codex telemetry pause control)*
 - [x] Explicit all/range deletion confirmation and no-cost/no-productivity interpretation copy
 
 **Phase 07: Security, Fault, Performance, Documentation — [VALIDATED; REVIEW APPROVED 2026-07-26; PLATFORM CHECKS PENDING]**
@@ -61,13 +61,13 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Session Model Delegation Audit (2026-08-01)
 
-- **Phase 01 Codex 0.146.0 compatibility gate — [COMPLETED (FAIL); review approved 9/10, 2026-08-01]**: app-server responses cross the required content-free boundary; exact lineage work is cancelled.
-- **Phase 02 opt-in correlation/model types — [COMPLETED 2026-08-01; review approved 8.5/10]**: flat OTel model/token fallback delivered; preserve fail-closed OTel conflict behavior and `lineage_unavailable`.
+- **Phase 01 Codex 0.146.0 compatibility gate — [HISTORICAL; COMPLETED (FAIL); review approved 9/10, 2026-08-01]**: app-server responses failed the required content-free boundary; exact lineage work cancelled and superseded by the Codex-only OTel contract.
+- **Phase 02 opt-in correlation/model types — [HISTORICAL; COMPLETED 2026-08-01; review approved 8.5/10]**: flat OTel model/token fallback delivered; terminal correlation and `lineage_unavailable` behavior are superseded by the Codex-only contract.
 - **Phase 03 metadata adapter/source join — [N/A]**: disabled by failed Phase 01 hard gate; no parent edges may be inferred.
-- **Phase 04 `agent_runs` summary persistence — [COMPLETED 2026-08-01]**: flat OTel-only model/token summaries persisted with `lineage_unavailable`; replay/conflict handling, retention finalization, overlap deletion, key rotation, and 100k-node indexed performance coverage completed. Migration SQL remains runtime-managed; failed rotation may leave a temporary `.next` keyring file until retry.
+- **Phase 04 `agent_runs` summary persistence — [HISTORICAL; COMPLETED 2026-08-01]**: flat OTel-only model/token summaries persisted with `lineage_unavailable`; replay/conflict handling, retention finalization, overlap deletion, key rotation, and 100k-node indexed performance coverage completed. The historical `agent_runs`/lineage wording is superseded by the current flat Codex session contract. Migration SQL remains runtime-managed; failed rotation may leave a temporary `.next` keyring file until retry.
 - **Phase 05 protected session-audit API — [COMPLETED 2026-08-01]**: protected list/detail contracts and deletion/retention semantics delivered; review approved after cycle 3.
-- **Phase 06 shared Usage session-audit UI — [COMPLETED 2026-08-01; review approved 9.5/10 after cycle 1]**: shared browser/native session list/tree, token states, accessibility/deep-link behavior, and degraded/error states delivered. Evidence: UI 752/752; browser 70/70; focused session audit 6/6; UI/web/native builds pass.
-- **Phase 07 release gates, tests, and docs — [COMPLETED 2026-08-02; review approved 9.3/10]**: Rust/UI/browser/privacy/host-smoke evidence and 100k aggregate/list/tree-detail p95 gates pass for the flat fallback. Repository formatting and lint checks are clean; supported native Debian/RPM packaging passes without Vite warnings. Scope remains OTel-only flat with `lineage_unavailable`; no exact lineage or inferred edges.
+- **Phase 06 shared Usage session-audit UI — [COMPLETED 2026-08-01; superseded by Codex-only contract]**: shared browser/native session list/detail, token states, accessibility/deep-link behavior, and degraded/error states are delivered. The current contract is flat Codex summaries with no terminal, tree, lineage, or correlation fields.
+- **Phase 07 release gates, tests, and docs — [COMPLETED 2026-08-02; superseded by Codex-only contract]**: Rust/UI/browser/privacy/host-smoke evidence and 100k aggregate/list p95 gates pass for the Codex-only API. Current validation also covers bounded model summaries, strict removed-key rejection, active-session cursors, and flat session detail.
 
 ## Roadmap Phases
 
@@ -331,7 +331,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 - **2026-07-26:** Completed Terminal Usage Analytics Phase 03: SQLite store, retention, and privacy.
   - ✅ Added isolated telemetry storage with privacy-safe schema, migrations, and connection pragmas.
-  - ✅ Added bounded non-blocking persistence, UTC rollup/purge, project exclusion, and deletion controls.
+  - ✅ Added bounded non-blocking persistence, UTC rollup/purge, project exclusion, and deletion controls. This historical project-exclusion behavior is superseded by the Codex-only contract.
   - ✅ Validated backpressure behavior, database/API privacy, and the 100k-row aggregate benchmark (p95 <200 ms on the validation run; hardware-dependent).
 
 - **2026-07-16:** Completed Safe Inline Terminal Suggestions Phase 01: Security containment and history privacy.

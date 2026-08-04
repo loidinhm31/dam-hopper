@@ -22,13 +22,13 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 - **Rendering Wrapper**: `packages/ui/src/lib/file-decoration-icon.tsx` is a thin icon component over the registry.
 - **Shared Surfaces**: explorer tree, editor tabs, search headers, and path labels all read from the same lookup so file identity stays aligned across the UI.
 - **Terminal Find**: `TerminalPanel` and `PaneContainer` route Ctrl/Cmd+F only to the active pane's session-local xterm find controller, suppress the browser default, and keep the key out of PTY input. `PaneContainer` restores the TerminalPanel base key handler after temporary pane routing; inactive, detached, and reparented terminals close find state so queries and decorations do not leak across hosts.
-- **Terminal Usage Analytics**: `server/src/telemetry/` provides an opt-in private SQLite store, WAL/SHM permission hardening, idempotent event writes, a bounded 100-item/250ms worker, UTC rollup-before-purge retention, HMAC fingerprints, project exclusions, loopback Codex OTLP ingestion, and aggregate-only query APIs. Terminal correlation defaults on with telemetry, still requires the collector, fails closed when `OTEL_RESOURCE_ATTRIBUTES` already exists (health counter `correlationEnvConflicts`), redacts opaque markers from PTY output with ANSI/C1-aware bounded scanning, and retains in-memory ownership for a bounded 24-hour late-delivery TTL. Codex CLI 0.146.0 app-server lineage remains disabled; OTel-only rows use `lineage_unavailable`. Model identifiers accept bounded provider-qualified forms rather than a fixed allowlist. Startup/shutdown and SQLite faults remain isolated from PTY operation; `NoopTelemetrySink` is the disabled fallback. `packages/ui/src/components/pages/UsagePage.tsx` exposes coverage, pause, exclusion, retention, and explicit deletion controls.
+- **Codex Usage Analytics**: `server/src/telemetry/` provides an opt-in private SQLite store, WAL/SHM permission hardening, idempotent Codex OTel event writes, bounded rollup-before-purge retention, derived HMAC session IDs, loopback receiver health, and aggregate-only query APIs. Model identifiers and time ranges are bounded; unavailable token components remain null. Startup/shutdown and SQLite faults remain isolated from PTY operation. `packages/ui/src/components/pages/UsagePage.tsx` exposes Codex totals, model/time buckets, flat session summaries, pause, retention, receiver health, and explicit deletion controls.
 - **Safe Inline Terminal Suggestions**: supported local interactive zsh/fish/Bash sessions expose only a server-validated lifecycle to a fail-closed, per-terminal controller. Bash preserves prompt hooks, records normalized simple-command text from `BASH_COMMAND`, and abandons compound, multiline, substitution, and redirection syntax. Ghost acceptance writes a suffix only; unsupported shells, replay, alternate buffers, and coarse-pointer / native-keyboard-suppressed surfaces show no automatic UI. Command history stays browser-local with clear and disable controls.
 - **Shared Context Menus**: `packages/ui/src/components/ui/ContextMenu.tsx` wraps Radix Context Menu with body-only portal protection, one-open coordination, and capture-level scroll close. Phase 03 keeps the verification boundary in JSDOM wrapper and consumer tests, while Chromium browser coverage owns the real portal geometry and Arrow/Home/End focus behavior.
 - **Workspace Terminal Layout**: `WorkspacePage` switches between IDE and terminal modes, `TerminalWorkspaceShell` renders the full-height terminal workspace with a persisted Fleet Terminal rail, and `MultiTerminalDisplay` reuses the existing terminal manager state across layout changes.
 - **Git VCS Roots**: `WorkspaceGitPanel` now loads server-reported VCS roots, scopes branch/history queries by selected root, groups local changes by `rootId`, and blocks mixed-root commits in the UI.
 - **Browser Debug**: `BrowserDebugKeepAliveHost` preserves one iframe across workspace surfaces; the extension bridge accepts only exact origin/source/nonce/request matches and returns bounded DOM/ARIA metadata. Optional user-mediated browser capture or manual PNG/JPEG input remains local until explicit attach; the authenticated server artifact API stores capped JSON/PNG outside project roots for 10 minutes, exposes no read/list route, and inserts only generated paths into a live PTY without auto-submit.
-- **Usage Session Audit (Phase 06)**: `UsagePage` adds a Sessions tab backed by aggregate list/detail transport calls. It uses derived HMAC session/terminal identities, dynamic provider-qualified models, factual lineage/delegation status, cursor and URL deep links, and 15-second polling only for visible documents. Primary token totals exclude cached input; raw commands/content/storage data are not exposed. Paused summaries remain readable and deletion is explicit. Browser and native hosts share the behavior.
+- **Usage Session Audit**: `UsagePage` adds a Sessions tab backed by aggregate list/detail transport calls. It uses derived HMAC session identities, dynamic provider-qualified models, flat token summaries, cursor and URL deep links, and 15-second polling only for visible documents. Primary token totals exclude cached input; raw commands/content/storage data are not exposed. Paused summaries remain readable and deletion is explicit. Browser and native hosts share the behavior.
 
 ## Key Features
 
@@ -234,8 +234,7 @@ Infrastructure
 - Terminal env loading reads project `env_file` per session, with request overrides and clear missing/malformed file handling
 - Signal handling (SIGTERM, SIGHUP)
 - Binary and UTF-8 support
-- Validated shell lifecycle capture for Bash, Zsh, and Fish with optional exit status
-- Privacy-safe command classification, non-blocking telemetry sink, and durable aggregate telemetry worker
+- Shell lifecycle integration for Bash, Zsh, and Fish with optional exit status
 
 ### Agent Store (`server/src/agent_store/`)
 
@@ -426,7 +425,7 @@ dam-hopper/
 
 ---
 
-**Last Updated**: July 26, 2026
-**Phase Status**: Terminal Usage Analytics validation complete; review pending, with external Zsh/Fish checks environment-dependent
+**Last Updated**: August 4, 2026
+**Phase Status**: Codex OTel-only Usage refactor validated; native signing remains environment-dependent without `TAURI_SIGNING_PRIVATE_KEY`
 **Generated by**: Automated codebase compaction (repomix) + manual documentation  
 _For latest phase documentation, see [phase-01-server-auth-bypass/index.md](./phase-01-server-auth-bypass/index.md)_

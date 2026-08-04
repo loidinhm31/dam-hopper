@@ -202,43 +202,6 @@ pub struct CodexSessionSummary {
     pub updated_at_utc_ms: i64,
 }
 
-/// Compatibility-only enums retained until the API contract phase removes the
-/// terminal-shaped response fields. They are not accepted by the production
-/// queue or written to the Codex-only schema.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CaptureQuality {
-    Rich,
-    Partial,
-    Unavailable,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CorrelationQuality {
-    Exact,
-    Approximate,
-    Unattributed,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ShellKind {
-    Bash,
-    Zsh,
-    Fish,
-}
-
-// Compatibility DTO used by the current session API. Phase 3 removes the
-// lineage/correlation/terminal fields from the transport layer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentLineageQuality {
-    Exact,
-    Partial,
-    LineageUnavailable,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentTokenQuality {
@@ -267,8 +230,6 @@ pub struct AgentRunSummary {
     pub started_at_utc_ms: i64,
     pub ended_at_utc_ms: Option<i64>,
     pub status: SafeIdentifier,
-    pub correlation_quality: CorrelationQuality,
-    pub lineage_quality: AgentLineageQuality,
     pub token_quality: AgentTokenQuality,
     pub counter_semantic: TokenCounterSemantic,
     pub response_count: u64,
@@ -277,7 +238,6 @@ pub struct AgentRunSummary {
     pub cached_input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
-    pub terminal_association_count: u32,
     pub updated_at_utc_ms: i64,
 }
 
@@ -286,11 +246,6 @@ pub struct UsageQuery {
     pub schema_version: u16,
     pub from_utc_ms: Option<i64>,
     pub to_utc_ms: Option<i64>,
-    pub project: Option<SafeIdentifier>,
-    pub shell: Option<ShellKind>,
-    pub capture_quality: Option<CaptureQuality>,
-    pub category: Option<SafeIdentifier>,
-    pub agent: Option<SafeIdentifier>,
     pub model: Option<CodexModel>,
 }
 

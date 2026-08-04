@@ -1,4 +1,4 @@
-import type { UsageAggregate, UsageTokens } from "@/api/client.js";
+import type { UsageTokens } from "@/api/client.js";
 
 const numberFormatter = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 0,
@@ -77,10 +77,6 @@ export function formatTokenTotal(
   return formatCompactUsageNumber(
     uncachedInput + (tokens.outputTokens ?? 0) + (tokens.reasoningTokens ?? 0),
   );
-}
-
-export function formatAggregateOutcome(aggregate: UsageAggregate): string {
-  return `${formatUsageNumber(aggregate.succeededCount)} succeeded · ${formatUsageNumber(aggregate.failedCount)} failed`;
 }
 
 export function formatUsageBucketLabel(

@@ -31,7 +31,6 @@ pub(crate) struct SessionListParams {
     from: Option<i64>,
     to: Option<i64>,
     model: Option<String>,
-    terminal: Option<String>,
     limit: Option<usize>,
     cursor: Option<String>,
 }
@@ -49,7 +48,6 @@ struct CursorPayload {
 #[serde(rename_all = "camelCase")]
 struct CursorScope {
     model: Option<String>,
-    terminal: Option<String>,
 }
 
 pub(super) fn parse_list_query(
@@ -73,13 +71,11 @@ pub(super) fn parse_list_query(
         .map(CodexModel::new)
         .transpose()
         .map_err(|_| invalid())?;
-    let terminal = params.terminal.map(parse_digest).transpose()?;
     Ok((
         AgentRunListQuery {
             from_utc_ms: from,
             to_utc_ms: to,
             model,
-            terminal,
             cursor: None,
             limit,
         },
@@ -136,7 +132,7 @@ pub(super) fn encode_cursor(
     secret: &str,
 ) -> Result<String, ApiError> {
     let payload = CursorPayload {
-        ended_at_utc_ms: root.ended_at_utc_ms.ok_or_else(invalid)?,
+        ended_at_utc_ms: root.ended_at_utc_ms.unwrap_or(root.started_at_utc_ms),
         id: root.run_id.clone(),
         from: query.from_utc_ms,
         to: query.to_utc_ms,
@@ -165,7 +161,6 @@ pub(super) fn parse_digest(value: String) -> Result<HmacDigest, ApiError> {
 fn cursor_scope(query: &AgentRunListQuery) -> Vec<u8> {
     serde_json::to_vec(&CursorScope {
         model: query.model.clone().map(String::from),
-        terminal: query.terminal.clone().map(String::from),
     })
     .expect("cursor scope is serializable")
 }

@@ -1566,8 +1566,8 @@ async fn usage_summary_requires_auth_and_never_exposes_event_fields() {
         .await
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(value["terminal"]["commandCount"].is_number());
     assert!(value["codex"].is_null());
+    assert!(!value.as_object().unwrap().contains_key("terminal"));
     let text = String::from_utf8(body.to_vec()).unwrap();
     for forbidden in [
         "fingerprint",
@@ -1582,7 +1582,7 @@ async fn usage_summary_requires_auth_and_never_exposes_event_fields() {
 }
 
 #[tokio::test]
-async fn usage_summary_rejects_unknown_projects_and_injection_like_filters() {
+async fn usage_summary_rejects_removed_filters_and_injection_like_keys() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
     activate_telemetry(&state, &tmp);
@@ -1594,7 +1594,17 @@ async fn usage_summary_rejects_unknown_projects_and_injection_like_filters() {
 }
 
 #[tokio::test]
-async fn usage_summary_returns_filled_aggregate_series_and_detail_metrics() {
+async fn usage_summary_rejects_ranges_that_fill_over_1000_buckets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    activate_telemetry(&state, &tmp);
+
+    let response = get(state, "/api/usage/summary?from=0&to=86400000001&bucket=day").await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn usage_summary_returns_filled_codex_series_without_event_fields() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
     activate_telemetry(&state, &tmp);
@@ -1623,11 +1633,8 @@ async fn usage_summary_returns_filled_aggregate_series_and_detail_metrics() {
             .sum::<u64>(),
         2
     );
-    assert!(value["categories"].as_array().unwrap().is_empty());
-    assert!(value["projects"].as_array().unwrap().is_empty());
-    assert_eq!(value["detailMetrics"]["durationP50Ms"], 100);
-    assert_eq!(value["detailMetrics"]["durationP95Ms"], 300);
-    assert_eq!(value["detailMetrics"]["repeatedCommandCount"], 0);
+    assert!(!value.as_object().unwrap().contains_key("terminal"));
+    assert!(!value.as_object().unwrap().contains_key("detailMetrics"));
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(!text.contains("fingerprint"));
     assert!(!text.contains("git status"));
@@ -1667,26 +1674,21 @@ async fn usage_sessions_are_protected_reconcile_and_exclude_private_fields() {
     let list_value: serde_json::Value = serde_json::from_slice(&list_body).unwrap();
     assert_eq!(list_value["paused"], true);
     assert_eq!(list_value["sessions"][0]["id"], session_id);
-    assert_eq!(list_value["sessions"][0]["rootModel"], "gpt-5.6-sol");
-    assert_eq!(list_value["sessions"][0]["childCount"], 0);
+    assert_eq!(list_value["sessions"][0]["model"], "gpt-5.6-sol");
     assert_eq!(list_value["sessions"][0]["tokens"]["responseCount"], 1);
     assert_eq!(
-        list_value["sessions"][0]["executorModels"][0]["model"],
+        list_value["sessions"][0]["models"][0]["model"],
         "gpt-5.6-sol"
     );
-    assert_eq!(
-        list_value["sessions"][0]["executorModels"][0]["responseCount"],
-        1
-    );
-    assert_eq!(list_value["sessions"][0]["mainTokenShare"], 1.0);
-    assert_eq!(
-        list_value["sessions"][0]["delegationState"],
-        "lineage_unavailable"
-    );
-    assert!(list_value["sessions"][0]["terminals"]
-        .as_array()
+    assert_eq!(list_value["sessions"][0]["models"][0]["responseCount"], 1);
+    assert!(!list_value["sessions"][0]
+        .as_object()
         .unwrap()
-        .is_empty());
+        .contains_key("terminals"));
+    assert!(!list_value["sessions"][0]
+        .as_object()
+        .unwrap()
+        .contains_key("lineage"));
     let serialized = String::from_utf8(list_body.to_vec()).unwrap();
     for forbidden in [
         "raw-provider-session",
@@ -1710,13 +1712,9 @@ async fn usage_sessions_are_protected_reconcile_and_exclude_private_fields() {
         .await
         .unwrap();
     let detail_value: serde_json::Value = serde_json::from_slice(&detail_body).unwrap();
-    assert_eq!(detail_value["nodes"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        detail_value["nodes"][0]["parentId"],
-        serde_json::Value::Null
-    );
-    assert_eq!(detail_value["maxNodes"], 256);
-    assert_eq!(detail_value["maxDepth"], 16);
+    assert_eq!(detail_value["session"]["id"], session_id);
+    assert_eq!(detail_value["session"]["model"], "gpt-5.6-sol");
+    assert!(!detail_value.as_object().unwrap().contains_key("nodes"));
     let detail_serialized = String::from_utf8(detail_body.to_vec()).unwrap();
     for forbidden in [
         "provider",
@@ -1738,6 +1736,79 @@ async fn usage_sessions_are_protected_reconcile_and_exclude_private_fields() {
         .unwrap();
     let summary_value: serde_json::Value = serde_json::from_slice(&summary_body).unwrap();
     assert_eq!(list_value["sessions"][0]["tokens"], summary_value["codex"]);
+}
+
+#[tokio::test]
+async fn usage_session_cursor_preserves_active_null_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    activate_telemetry(&state, &tmp);
+    let store = state
+        .telemetry
+        .read()
+        .unwrap()
+        .store
+        .as_ref()
+        .unwrap()
+        .clone();
+    let timestamp = i64::try_from(now_ms()).unwrap().saturating_sub(1_000);
+    let mut connection = rusqlite::Connection::open(store.path_for_tests()).unwrap();
+    let transaction = connection.transaction().unwrap();
+    for (id, started_at, ended_at) in [
+        ("c".repeat(64), timestamp + 2, Some(timestamp + 2)),
+        ("b".repeat(64), timestamp + 1, None),
+        ("a".repeat(64), timestamp, Some(timestamp)),
+    ] {
+        transaction
+            .execute(
+                "INSERT INTO codex_sessions(session_fingerprint, model, source_version, source_quality, started_at_utc_ms, ended_at_utc_ms, status, counter_semantic, token_quality, response_count, duration_ms_sum, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, 'gpt-5.6-sol', '0.146.0', 'verified', ?2, ?3, 'completed', 'delta', 'exact', 0, NULL, NULL, NULL, NULL, NULL, ?2)",
+                rusqlite::params![id, started_at, ended_at],
+            )
+            .unwrap();
+    }
+    transaction.commit().unwrap();
+
+    let first = get(
+        state.clone(),
+        &format!(
+            "/api/usage/sessions?from={}&to={}&limit=2",
+            timestamp - 1,
+            timestamp + 3
+        ),
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_body = axum::body::to_bytes(first.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let first_value: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
+    let first_sessions = first_value["sessions"].as_array().unwrap();
+    assert_eq!(first_sessions.len(), 2);
+    assert_eq!(first_sessions[1]["id"], "b".repeat(64));
+    assert!(first_sessions[1]
+        .as_object()
+        .unwrap()
+        .contains_key("endedAtUtcMs"));
+    assert!(first_sessions[1]["endedAtUtcMs"].is_null());
+    let cursor = first_value["nextCursor"].as_str().unwrap();
+
+    let second = get(
+        state,
+        &format!(
+            "/api/usage/sessions?from={}&to={}&limit=2&cursor={cursor}",
+            timestamp - 1,
+            timestamp + 3
+        ),
+    )
+    .await;
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_body = axum::body::to_bytes(second.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let second_value: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
+    assert_eq!(second_value["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(second_value["sessions"][0]["id"], "a".repeat(64));
+    assert!(second_value["nextCursor"].is_null());
 }
 
 #[tokio::test]
@@ -1858,7 +1929,7 @@ async fn usage_session_cursor_bounds_and_ids_are_strict() {
 }
 
 #[tokio::test]
-async fn usage_session_tree_detail_stays_bounded_for_large_codex_store() {
+async fn usage_session_detail_stays_bounded_for_large_codex_store() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
     activate_telemetry(&state, &tmp);
@@ -1912,7 +1983,7 @@ async fn usage_session_tree_detail_stays_bounded_for_large_codex_store() {
         "query plan: {plan}"
     );
 
-    let root_digest: crate::telemetry::privacy::HmacDigest = root_id.try_into().unwrap();
+    let root_digest: crate::telemetry::privacy::HmacDigest = root_id.clone().try_into().unwrap();
     let request = format!("/api/usage/sessions/{}", String::from(root_digest));
     const SAMPLE_COUNT: usize = 5;
     let mut durations = Vec::with_capacity(SAMPLE_COUNT);
@@ -1938,14 +2009,14 @@ async fn usage_session_tree_detail_stays_bounded_for_large_codex_store() {
         "large Codex-store detail API exceeded its work budget: {durations:?}"
     );
     let response: serde_json::Value = serde_json::from_slice(&response_body.unwrap()).unwrap();
-    let nodes = response["nodes"].as_array().unwrap();
-    assert_eq!(nodes.len(), 1, "Codex session details are flat");
-    assert_eq!(nodes[0]["depth"], 0);
-    assert_eq!(response["truncated"], false);
+    assert_eq!(response["session"]["id"], root_id);
+    assert_eq!(response["session"]["model"], "gpt-5.6-sol");
+    assert!(!response.as_object().unwrap().contains_key("nodes"));
+    assert!(!response.as_object().unwrap().contains_key("truncated"));
 }
 
 #[tokio::test]
-async fn usage_session_detail_enforces_node_and_depth_caps() {
+async fn usage_session_detail_is_flat_and_caps_model_summaries() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
     activate_telemetry(&state, &tmp);
@@ -1970,7 +2041,7 @@ async fn usage_session_detail_enforces_node_and_depth_caps() {
             id: keys.digest(b"codex-detail-event", &[&index_bytes]),
             occurred_at_utc_ms: timestamp + index as i64,
             session_fingerprint: Some(session_id.clone()),
-            model: Some(CodexModel::new("gpt-5.6-sol").unwrap()),
+            model: Some(CodexModel::new(format!("model-{index}")).unwrap()),
             source_version: CodexVersion::new("0.146.0").unwrap(),
             source_quality: SourceQuality::Verified,
             status: SafeIdentifier::new("completed").unwrap(),
@@ -1991,16 +2062,14 @@ async fn usage_session_detail_enforces_node_and_depth_caps() {
         .await
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let nodes = value["nodes"].as_array().unwrap();
-    assert_eq!(nodes.len(), 1, "Codex sessions do not expose a hierarchy");
-    assert_eq!(nodes[0]["depth"], 0);
-    assert_eq!(value["truncated"], false);
-    assert_eq!(value["maxNodes"], 256);
-    assert_eq!(value["maxDepth"], 16);
-    assert_eq!(value["session"]["childCount"], 0);
+    assert!(!value.as_object().unwrap().contains_key("nodes"));
+    assert!(!value.as_object().unwrap().contains_key("truncated"));
     assert_eq!(value["session"]["tokens"]["inputTokens"], 301);
     assert_eq!(value["session"]["tokens"]["responseCount"], 301);
-    assert!(value["session"]["terminals"].as_array().unwrap().is_empty());
+    let models = value["session"]["models"].as_array().unwrap();
+    assert_eq!(models.len(), 32);
+    assert_eq!(models[0]["model"], "model-0");
+    assert_eq!(models[31]["model"], "model-126");
     let filtered = get(
         state,
         &format!(
@@ -2016,10 +2085,10 @@ async fn usage_session_detail_enforces_node_and_depth_caps() {
         .unwrap();
     let filtered_value: serde_json::Value = serde_json::from_slice(&filtered_body).unwrap();
     assert_eq!(filtered_value["sessions"].as_array().unwrap().len(), 1);
-    assert!(filtered_value["sessions"][0]["terminals"]
-        .as_array()
+    assert!(!filtered_value["sessions"][0]
+        .as_object()
         .unwrap()
-        .is_empty());
+        .contains_key("terminals"));
 }
 
 #[tokio::test]
@@ -2081,8 +2150,7 @@ async fn usage_settings_apply_pause_atomically_and_delete_requires_confirmation(
         state.clone(),
         "/api/usage/settings",
         serde_json::json!({
-            "paused": true,
-            "excludedProjects": ["private"]
+            "paused": true
         }),
     )
     .await;
@@ -2225,34 +2293,41 @@ async fn usage_delete_all_preserves_disabled_unpaused_admission_state() {
 }
 
 #[tokio::test]
-async fn usage_settings_persist_terminal_correlation_opt_in() {
+async fn usage_delete_rejects_unknown_fields() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let response = delete_json(
+        state,
+        "/api/usage",
+        serde_json::json!({
+            "confirmation": "delete-usage-data",
+            "terminal": "legacy"
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn usage_settings_reject_removed_fields() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
 
-    let updated = patch_json(
+    let correlation = patch_json(
         state.clone(),
         "/api/usage/settings",
         serde_json::json!({"terminalCorrelationEnabled": true}),
     )
     .await;
-    assert_eq!(updated.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(updated.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(value["terminalCorrelationEnabled"], true);
-    assert!(
-        state
-            .config
-            .read()
-            .await
-            .server
-            .telemetry
-            .terminal_correlation_enabled
-    );
-    assert!(std::fs::read_to_string(tmp.path().join("dam-hopper.toml"))
-        .unwrap()
-        .contains("terminal_correlation_enabled = true"));
+    assert_eq!(correlation.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let projects = patch_json(
+        state,
+        "/api/usage/settings",
+        serde_json::json!({"excludedProjects": ["private"]}),
+    )
+    .await;
+    assert_eq!(projects.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]
@@ -2382,6 +2457,59 @@ async fn usage_settings_restores_codex_config_when_dam_hopper_config_persist_fai
 }
 
 #[tokio::test]
+async fn usage_settings_retry_collector_failure_restores_previous_runtime_and_config_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let enabled = patch_json(
+        state.clone(),
+        "/api/usage/settings",
+        serde_json::json!({
+            "enabled": true,
+            "collector": {"enabled": true, "host": "127.0.0.1", "port": port}
+        }),
+    )
+    .await;
+    assert_eq!(enabled.status(), StatusCode::OK);
+
+    let previous_config = state.config.read().await.server.telemetry.clone();
+    let previous_file = std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap();
+    let previous_runtime = state.telemetry_runtime.status();
+    assert!(previous_runtime.active);
+    assert!(!previous_runtime.collector.running);
+    assert!(state.telemetry.read().unwrap().control.is_enabled());
+
+    let retry = patch_json(
+        state.clone(),
+        "/api/usage/settings",
+        serde_json::json!({"paused": true, "retryCollector": true}),
+    )
+    .await;
+    assert_eq!(retry.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        state.config.read().await.server.telemetry,
+        previous_config
+    );
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap(),
+        previous_file
+    );
+    let restored_runtime = state.telemetry_runtime.status();
+    assert!(restored_runtime.active);
+    assert!(!restored_runtime.collector.running);
+    assert_eq!(
+        restored_runtime.collector_error,
+        previous_runtime.collector_error
+    );
+    assert!(state.telemetry.read().unwrap().control.is_enabled());
+
+    drop(listener);
+    state.telemetry_runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn usage_retention_update_and_delete_are_serialized_while_runtime_is_live() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
@@ -2412,7 +2540,7 @@ async fn usage_retention_update_and_delete_are_serialized_while_runtime_is_live(
 
 fn activate_telemetry(state: &AppState, tmp: &TempDir) {
     let store = Arc::new(TelemetryStore::open(&tmp.path().join("telemetry.db")).unwrap());
-    let control = Arc::new(TelemetryControl::new(true, Vec::<String>::new()));
+    let control = Arc::new(TelemetryControl::new(true));
     let keys =
         Arc::new(TelemetryKeyRing::load_or_create(tmp.path().join("telemetry-key")).unwrap());
     state.set_telemetry(TelemetryHandle::active(control, store, None).with_hmac_keys(keys));

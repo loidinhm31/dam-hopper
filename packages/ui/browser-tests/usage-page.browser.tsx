@@ -22,7 +22,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/api/queries.js", () => ({
   useDeleteUsageData: () => ({ isPending: false, mutate: mocks.deleteAll }),
   useDeleteUsageRange: () => ({ isPending: false, mutate: mocks.deleteRange }),
-  useProjects: () => ({ data: [{ name: "api" }, { name: "web" }] }),
   useUpdateUsageSettings: () => ({
     isPending: false,
     mutate: mocks.updateSettings,
@@ -59,7 +58,6 @@ const settings: UsageSettings = {
   },
   detailRetentionDays: 90,
   enabled: true,
-  excludedProjects: ["private"],
   paused: false,
   runtime: {
     active: true,
@@ -79,28 +77,8 @@ const settings: UsageSettings = {
   },
 };
 
-const emptyUsage = {
-  commandCount: 0,
-  durationMsSum: 0,
-  failedCount: 0,
-  interruptedCount: 0,
-  succeededCount: 0,
-  unknownCount: 0,
-};
-
 const summary: UsageSummary = {
-  categories: [{ name: "git", terminal: emptyUsage }],
   codex: null,
-  coverage: {
-    captureQualityFilter: null,
-    codexCorrelation: null,
-    detailOnly: true,
-  },
-  detailMetrics: {
-    durationP50Ms: 10,
-    durationP95Ms: 20,
-    repeatedCommandCount: 0,
-  },
   health: {
     available: true,
     collector: {
@@ -120,9 +98,7 @@ const summary: UsageSummary = {
     sampledAt: 0,
     writerErrors: 0,
   },
-  projects: [{ name: "api", terminal: emptyUsage }],
   range: { bucket: "day", from: 0, to: 1 },
-  terminal: emptyUsage,
   timeSeries: [],
 };
 
@@ -181,26 +157,20 @@ describe("usage page in Chromium", () => {
     const entry =
       "/usage?window=30d&bucket=day&project=api&shell=zsh&captureQuality=partial&category=git&agent=codex&model=gpt-5.6-sol";
     await renderUsage(entry);
-    expect(mocks.summaryCalls.at(-1)).toMatchObject({
-      agent: "codex",
-      category: "git",
-      captureQuality: "partial",
-      model: "gpt-5.6-sol",
-      project: "api",
-      shell: "zsh",
-      window: "30d",
-    });
-    expect(mocks.summaryCalls.at(-1)?.from).toBeUndefined();
-    expect(mocks.summaryCalls.at(-1)?.to).toBeUndefined();
+    const query = mocks.summaryCalls.at(-1);
+    expect(query).toMatchObject({ model: "gpt-5.6-sol", window: "30d" });
+    expect(query).not.toHaveProperty("agent");
+    expect(query).not.toHaveProperty("category");
+    expect(query).not.toHaveProperty("captureQuality");
+    expect(query).not.toHaveProperty("project");
+    expect(query).not.toHaveProperty("shell");
+    expect(query?.from).toBeUndefined();
+    expect(query?.to).toBeUndefined();
 
     await act(async () => root.unmount());
     root = createRoot(container);
     await renderUsage(entry);
-    expect(mocks.summaryCalls.at(-1)).toMatchObject({
-      project: "api",
-      shell: "zsh",
-      window: "30d",
-    });
+    expect(mocks.summaryCalls.at(-1)).toMatchObject({ window: "30d" });
   });
 
   it("maps keyboard-accessible filter controls back to URL state", async () => {
@@ -218,16 +188,16 @@ describe("usage page in Chromium", () => {
       ).toContain("window=24h"),
     );
 
-    const shellSelect = labeledControl("Shell");
-    shellSelect.focus();
-    expect(document.activeElement).toBe(shellSelect);
+    const bucketSelect = labeledControl("Group by");
+    bucketSelect.focus();
+    expect(document.activeElement).toBe(bucketSelect);
     await act(async () => {
-      (shellSelect as HTMLSelectElement).value = "fish";
-      shellSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      (bucketSelect as HTMLSelectElement).value = "hour";
+      bucketSelect.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await vi.waitFor(() =>
       expect(mocks.summaryCalls.at(-1)).toMatchObject({
-        shell: "fish",
+        bucket: "hour",
         window: "24h",
       }),
     );
@@ -252,15 +222,15 @@ describe("usage page in Chromium", () => {
 
   it("retains custom bounds when a non-window filter changes", async () => {
     await renderUsage("/usage?from=1782864000000&to=1783036800000&bucket=day");
-    const shellSelect = labeledControl("Shell") as HTMLSelectElement;
+    const bucketSelect = labeledControl("Group by") as HTMLSelectElement;
     await act(async () => {
-      shellSelect.value = "fish";
-      shellSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      bucketSelect.value = "hour";
+      bucketSelect.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await vi.waitFor(() =>
       expect(mocks.summaryCalls.at(-1)).toMatchObject({
+        bucket: "hour",
         from: 1_782_864_000_000,
-        shell: "fish",
         to: 1_783_036_800_000,
         window: undefined,
       }),
@@ -321,30 +291,6 @@ describe("usage page in Chromium", () => {
     expect(mocks.deleteAll).not.toHaveBeenCalled();
   });
 
-  it("preserves existing exclusions through an accessible protected-settings action", async () => {
-    await renderUsage();
-    const project = labeledControl("Project to exclude") as HTMLSelectElement;
-    project.focus();
-    expect(document.activeElement).toBe(project);
-    await act(async () => {
-      project.value = "api";
-      project.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    const submit = [
-      ...container.querySelectorAll<HTMLButtonElement>("button"),
-    ].find((button) => button.textContent?.includes("Exclude project"));
-    await act(async () => submit?.click());
-    expect(mocks.updateSettings).toHaveBeenCalledWith(
-      { excludedProjects: ["private", "api"] },
-      expect.any(Object),
-    );
-    const remove = container.querySelector<HTMLButtonElement>(
-      "button[aria-label='Remove private']",
-    );
-    remove?.focus();
-    expect(document.activeElement).toBe(remove);
-  });
-
   it("keeps all navigation targets reachable in narrow compact navigation", async () => {
     await act(async () => {
       root.render(
@@ -387,7 +333,6 @@ describe("usage page in Chromium", () => {
                 reasoningTokens: 30,
               },
               startUtcMs: Date.UTC(2026, 6, 1),
-              terminal: emptyUsage,
             },
           ]}
           title="Codex tokens"

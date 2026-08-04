@@ -365,11 +365,9 @@ enabling the collector does not change the loopback-only network boundary.
 ```toml
 [server.telemetry]
 enabled = false
-terminal_correlation_enabled = true
 db_path = "~/.config/dam-hopper/telemetry.db"
 detail_retention_days = 90
 # aggregate_retention_days = 365
-# excluded_projects = ["local-secret-project"]
 
 [server.telemetry.collector]
 enabled = false
@@ -380,11 +378,9 @@ port = 4811
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `enabled` | bool | `false` | Master switch for telemetry collection and persistence |
-| `terminal_correlation_enabled` | bool | `true` | Correlates terminal shells with Codex usage when telemetry and the collector are active; set `false` to opt out |
 | `db_path` | string | `~/.config/dam-hopper/telemetry.db` | SQLite telemetry database path |
 | `detail_retention_days` | u16 | `90` | Detailed-event retention, from 1 to 3650 days |
 | `aggregate_retention_days` | u32 or omitted | omitted | Optional aggregate retention; when set, must be positive |
-| `excluded_projects` | array of strings | `[]` | Project names excluded from collection; entries must be unique and non-empty |
 | `collector.enabled` | bool | `false` | Enables the authenticated Codex OTLP/HTTP receiver |
 | `collector.host` | IP address | `127.0.0.1` | Must be a loopback address |
 | `collector.port` | u16 | `4811` | Must be non-zero |
@@ -396,18 +392,6 @@ worker; initialization failures disable analytics only. SQLite and WAL/SHM files
 to owner access on Unix. Telemetry stores bounded, privacy-filtered metadata rather than command
 text, prompts, responses, or tool output; see the [telemetry architecture notes](./system-architecture.md#codex-otel-usage-analytics).
 
-Terminal correlation injects a short-lived opaque resource marker into a clean shell environment,
-so aliases and wrapper processes inherit it without command inspection. If either the server or
-requested terminal environment already defines `OTEL_RESOURCE_ATTRIBUTES`, DamHopper preserves the
-user value unchanged, skips correlation for that PTY, and increments the
-`correlationEnvConflicts` health counter. Marker values are redacted before terminal output reaches
-scrollback persistence, diagnostics, or browser events. Every automatic PTY restart gets a new
-marker/run association. The in-memory association intentionally remains valid for its bounded
-24-hour TTL after normal terminal exit so delayed OTLP delivery and reconnect replay can still join;
-expired or unknown markers are unattributed. Malformed or overlong terminal control strings are
-bounded and preserved as opaque control payloads; marker matching fails closed without dropping
-ordinary output.
-
 Daily aggregates are retained indefinitely when `aggregate_retention_days` is omitted. Set it to
 a positive value to purge older UTC rollups. The Usage page can delete all data or a selected
 UTC-day-aligned `[from,to)` range; deletion requires explicit confirmation. Full deletion also
@@ -415,8 +399,7 @@ rotates the shared telemetry HMAC key, while range deletion does not.
 
 Agent-run summaries are permanent and flat; raw OTel events are applied before detail retention purges
 them. `delta` counters accumulate, while `cumulative` counters accept only newer non-regressing
-values. If app-server metadata cannot pass the content-free compatibility gate, summaries use
-`lineage_unavailable` and no hierarchy is inferred. Terminal associations are HMAC digests only.
+values.
 Telemetry uses a fresh v1 Codex-only schema containing only Codex sessions, usage events, daily
 rollups, and health state. There is no legacy-data migration or import. During development, startup
 checks the SQLite version and complete schema object set; a legacy, malformed, or otherwise
@@ -425,9 +408,6 @@ indexes and recreating the v1 schema. A valid current database is reopened witho
 reset is bounded to the configured telemetry file, and telemetry/session database paths must resolve
 to different files. Stop DamHopper and remove the telemetry database plus its `-wal`/`-shm` sidecars
 for an explicit clean reset; never remove the separate `sessions.db`.
-
-The Phase 3 API/configuration cleanup and Phase 5 release gates are still follow-ups and are not
-implied complete by this runtime reset behavior.
 
 The Usage settings API can explicitly manage the local Codex exporter with `codexExporter: true`.
 It writes only the exact DamHopper-owned shape in `~/.codex/config.toml` (loopback `/v1/logs`,
@@ -442,24 +422,23 @@ it to reconnect. Collector changes restart only the loopback listener, not the D
 Failed runtime or registry writes roll back both runtime state and the managed Codex file.
 
 `PATCH /api/usage/settings` applies validated telemetry changes to the running server before
-persisting the registry file. Enabling or disabling telemetry changes the capture snapshot used
-by newly created terminal runs; existing PTY runs keep the snapshot they started with. Collector
-host/port or enabled-state changes stop and start the loopback listener while the server remains
-up. If a collector restart or retention operation fails, the previous live collector/configuration
-is restored and the failed update is not published. If collection is paused or the collector
-fails, PTY creation and I/O continue with telemetry disabled or unavailable.
+persisting the registry file. Enabling or disabling telemetry changes which newly accepted Codex
+events are persisted; existing summaries remain readable. Collector host/port or enabled-state
+changes stop and start the loopback listener while the server remains up. If a collector restart
+or retention operation fails, the previous live collector/configuration is restored and the failed
+update is not published.
 
 Rollback/runbook: pause collection, optionally delete a UTC range or all usage data, then leave
 the feature disabled. Existing telemetry is not removed by disabling the flag. Re-enable only
 after confirming database permissions, collector loopback binding, and the Usage health counters.
 
-The Usage page's Sessions tab is a read-only audit view over aggregate summaries. It exposes
-factual lineage/delegation status, keeps cached input separate from the primary token total, and
-accepts dynamic provider/model identifiers. Session and terminal labels are derived HMAC values;
-raw commands, prompts, responses, tool content, and storage paths are not displayed or stored in
-the UI. Pausing keeps existing summaries available while marking the view paused; deletion requires
-explicit confirmation. List/detail refresh runs every 15 seconds only in a visible document (hidden
-browser tabs stop polling), with identical behavior in browser and native hosts.
+The Usage page's Sessions tab is a read-only audit view over flat aggregate summaries. It keeps
+cached input separate from the primary token total and accepts dynamic provider/model identifiers.
+Session IDs are derived HMAC values; raw commands, prompts, responses, tool content, and storage
+paths are not displayed or stored in the UI. Pausing keeps existing summaries available while
+marking the view paused; deletion requires explicit confirmation. List/detail refresh runs every
+15 seconds only in a visible document (hidden browser tabs stop polling), with identical behavior
+in browser and native hosts.
 
 ### Diagnostics Storage
 
