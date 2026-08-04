@@ -328,7 +328,8 @@ Key invariants:
 - Availability and paused state are reported explicitly; missing token components remain null.
 - Codex telemetry adds no MCP call or model-token consumption.
 - Metrics stay descriptive; no productivity or employee scoring.
-- Session detail remains one compact Codex summary row; no permanent turn/event transcript.
+- Session detail remains one compact Codex summary row bounded by detail retention; no permanent
+  turn/event transcript.
 
 Notification selection also stays frontend-only. Native notification clicks
 publish a typed browser event keyed by the stable PTY `sessionId`;
