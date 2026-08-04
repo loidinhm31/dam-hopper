@@ -20,6 +20,7 @@ use crate::{
             DetailUsageMetrics, TokenAggregate, UsageAggregate, UsageDimension,
             UsageDimensionAggregate, UsageTimeBucket,
         },
+        runtime::{ensure_distinct_database_paths, telemetry_path},
         CaptureQuality, CodexModel, SafeIdentifier, ShellKind, TelemetryCmd, TelemetryStore,
         UsageQuery, TELEMETRY_SCHEMA_VERSION,
     },
@@ -498,7 +499,10 @@ pub async fn delete_all(
     let store = match telemetry.store.as_ref() {
         Some(store) => store.clone(),
         None => {
-            let path = telemetry_path(&state.config.read().await.server.telemetry.db_path);
+            let config = state.config.read().await.clone();
+            let path = telemetry_path(&config.server.telemetry.db_path);
+            let session_path = telemetry_path(&config.server.session_db_path);
+            ensure_distinct_database_paths(&session_path, &path).map_err(|_| invalid())?;
             std::sync::Arc::new(TelemetryStore::open(&path).map_err(store_error)?)
         }
     };
@@ -507,17 +511,15 @@ pub async fn delete_all(
     // rejected until the final persisted pause state is read below.
     let deletion_telemetry = telemetry.clone();
     let deletion_store = store.clone();
+    let deletion_runtime = state.telemetry_runtime.clone();
     let deletion_result = tokio::task::spawn_blocking(move || {
         deletion_telemetry.control.with_exclusive_admission(|| {
             deletion_telemetry.control.set_enabled(false);
             execute_delete(&deletion_telemetry, &deletion_store, range).and_then(|_| {
                 if range.is_none() {
-                    deletion_telemetry
-                        .hmac_keys
-                        .as_ref()
-                        .map_or(Ok(()), |keys| {
-                            keys.rotate_after_delete().map_err(Into::into)
-                        })
+                    deletion_runtime
+                        .rotate_hmac_key_after_delete()
+                        .map_err(Into::into)
                 } else {
                     Ok(())
                 }
@@ -747,16 +749,6 @@ fn execute_delete(
     store
         .delete_range(from, to)
         .and_then(|_| store.checkpoint())
-}
-fn telemetry_path(value: &str) -> std::path::PathBuf {
-    value
-        .strip_prefix("~/")
-        .map(|suffix| {
-            dirs::home_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join(suffix)
-        })
-        .unwrap_or_else(|| std::path::PathBuf::from(value))
 }
 fn invalid() -> ApiError {
     ApiError::from_app(AppError::InvalidInput("Invalid usage request".to_string()))
