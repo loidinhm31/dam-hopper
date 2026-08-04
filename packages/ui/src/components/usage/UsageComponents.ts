@@ -1,4 +1,3 @@
-export { ProjectExclusions } from "./ProjectExclusions.js";
 export { UsageCoveragePanel } from "./UsageCoveragePanel.js";
 export type { UsageCoveragePanelProps } from "./UsageCoveragePanel.js";
 export { UsageFilters } from "./UsageFilters.js";
@@ -16,14 +15,8 @@ export type {
 } from "./UsageSessionList.js";
 export { UsageSessionTree } from "./UsageSessionTree.js";
 export type { UsageSessionTreeProps } from "./UsageSessionTree.js";
-export {
-  UsageSessionCoverage,
-  UsageSessionTokens,
-} from "./UsageSessionTokens.js";
-export type {
-  UsageSessionCoverageProps,
-  UsageSessionTokensProps,
-} from "./UsageSessionTokens.js";
+export { UsageSessionTokens } from "./UsageSessionTokens.js";
+export type { UsageSessionTokensProps } from "./UsageSessionTokens.js";
 export { UsageTrendChart } from "./UsageTrendChart.js";
 export type {
   UsageTrendChartProps,

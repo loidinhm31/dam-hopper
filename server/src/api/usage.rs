@@ -14,15 +14,11 @@ use crate::{
     telemetry::{
         codex_otlp::CodexExporterStatus,
         queries::{
-            add_tokens, add_usage, aggregate_command_dimensions, aggregate_command_rollups,
-            aggregate_commands, aggregate_detail_metrics, aggregate_token_correlation,
-            aggregate_token_rollups, aggregate_tokens, aggregate_usage_series, health_value,
-            DetailUsageMetrics, TokenAggregate, UsageAggregate, UsageDimension,
-            UsageDimensionAggregate, UsageTimeBucket,
+            add_tokens, aggregate_token_rollups, aggregate_tokens, aggregate_usage_series,
+            health_value, TokenAggregate, UsageTimeBucket,
         },
         runtime::{ensure_distinct_database_paths, telemetry_path},
-        CaptureQuality, CodexModel, SafeIdentifier, ShellKind, TelemetryCmd, TelemetryStore,
-        UsageQuery, TELEMETRY_SCHEMA_VERSION,
+        CodexModel, TelemetryCmd, TelemetryStore, UsageQuery, TELEMETRY_SCHEMA_VERSION,
     },
 };
 
@@ -35,17 +31,12 @@ const MAX_DAILY_RANGE_MS: i64 = 5 * 365 * DAY_MS;
 const DELETE_CONFIRMATION: &str = "delete-usage-data";
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SummaryParams {
     pub from: Option<i64>,
     pub to: Option<i64>,
     pub window: Option<String>,
     pub bucket: Option<String>,
-    pub project: Option<String>,
-    pub shell: Option<String>,
-    pub capture_quality: Option<String>,
-    pub category: Option<String>,
-    pub agent: Option<String>,
     pub model: Option<String>,
 }
 
@@ -53,13 +44,8 @@ pub struct SummaryParams {
 #[serde(rename_all = "camelCase")]
 struct SummaryResponse {
     range: UsageRange,
-    terminal: UsageAggregate,
     codex: Option<TokenAggregate>,
     time_series: Vec<UsageTimeBucket>,
-    categories: Vec<UsageDimensionAggregate>,
-    projects: Vec<UsageDimensionAggregate>,
-    detail_metrics: Option<DetailUsageMetrics>,
-    coverage: Coverage,
     health: Health,
 }
 
@@ -73,20 +59,11 @@ struct UsageRange {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Coverage {
-    detail_only: bool,
-    capture_quality_filter: Option<String>,
-    codex_correlation: Option<crate::telemetry::queries::CorrelationCoverage>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct Health {
     available: bool,
     paused: bool,
     writer_errors: u64,
     rejected_events: u64,
-    correlation_env_conflicts: u64,
     sampled_at: i64,
     collector: crate::telemetry::codex_otlp::CollectorHealthSnapshot,
 }
@@ -98,8 +75,6 @@ struct SettingsResponse {
     paused: bool,
     detail_retention_days: u16,
     aggregate_retention_days: Option<u32>,
-    excluded_projects: Vec<String>,
-    terminal_correlation_enabled: bool,
     collector_enabled: bool,
     collector_setup: CollectorSetup,
     runtime: crate::telemetry::TelemetryRuntimeStatus,
@@ -132,14 +107,12 @@ struct SetupCollectorStatus {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SettingsPatch {
     pub enabled: Option<bool>,
     pub paused: Option<bool>,
     pub detail_retention_days: Option<u16>,
     pub aggregate_retention_days: Option<Option<u32>>,
-    pub excluded_projects: Option<Vec<String>>,
-    pub terminal_correlation_enabled: Option<bool>,
     pub collector: Option<TelemetryCollectorConfig>,
     /// Explicit user opt-in/out for the local Codex exporter. This is never
     /// persisted; ownership is derived from the local config on every action.
@@ -148,6 +121,7 @@ pub struct SettingsPatch {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeleteRequest {
     confirmation: String,
     from: Option<i64>,
@@ -159,7 +133,7 @@ pub async fn summary(
     Query(params): Query<SummaryParams>,
 ) -> Result<impl IntoResponse, ApiError> {
     let _coordination = state.telemetry_coordinator.lock().await;
-    let (query, range) = parse_query(&state, params).await?;
+    let (query, range) = parse_query(params)?;
     let telemetry = state
         .telemetry
         .read()
@@ -176,32 +150,15 @@ pub async fn summary(
         .telemetry
         .detail_retention_days;
     let boundary = detail_boundary(now_ms(), detail_retention_days);
-    if range.from < boundary
-        && (range.bucket != "day"
-            || range.from.rem_euclid(DAY_MS) != 0
-            || query.capture_quality.is_some())
-    {
+    if range.from < boundary && (range.bucket != "day" || range.from.rem_euclid(DAY_MS) != 0) {
         return Err(invalid());
     }
     let mut detail_query = query.clone();
     detail_query.from_utc_ms = Some(detail_query.from_utc_ms.unwrap_or(boundary).max(boundary));
-    let terminal = add_usage(
-        aggregate_commands(&store, &detail_query).map_err(store_error)?,
-        aggregate_command_rollups(&store, &query, boundary).map_err(store_error)?,
+    let codex = add_tokens(
+        aggregate_tokens(&store, &detail_query).map_err(store_error)?,
+        aggregate_token_rollups(&store, &query, boundary).map_err(store_error)?,
     );
-    let codex_available = query.project.is_none()
-        && query.shell.is_none()
-        && query.capture_quality.is_none()
-        && query.category.is_none();
-    let codex = if !codex_available {
-        None
-    } else {
-        add_tokens(
-            aggregate_tokens(&store, &detail_query).map_err(store_error)?,
-            aggregate_token_rollups(&store, &query, boundary).map_err(store_error)?,
-        )
-    };
-    let detail_only = range.from >= boundary;
     let bucket_ms = if range.bucket == "hour" {
         HOUR_MS
     } else {
@@ -214,44 +171,6 @@ pub async fn summary(
         range.to,
         bucket_ms,
     );
-    let time_series = if codex_available {
-        time_series
-    } else {
-        time_series
-            .into_iter()
-            .map(|mut point| {
-                point.codex = None;
-                point
-            })
-            .collect()
-    };
-    let categories = aggregate_command_dimensions(
-        &store,
-        &detail_query,
-        &query,
-        boundary,
-        UsageDimension::Category,
-    )
-    .map_err(store_error)?;
-    let projects = aggregate_command_dimensions(
-        &store,
-        &detail_query,
-        &query,
-        boundary,
-        UsageDimension::Project,
-    )
-    .map_err(store_error)?;
-    let detail_metrics = detail_only
-        .then(|| aggregate_detail_metrics(&store, &detail_query))
-        .transpose()
-        .map_err(store_error)?;
-    // Daily rollups intentionally omit correlation detail. Null is more honest
-    // than suggesting historical usage was exclusively unattributed.
-    let codex_correlation = if detail_only && codex.is_some() {
-        aggregate_token_correlation(&store, &detail_query).map_err(store_error)?
-    } else {
-        None
-    };
     let mut collector = state.telemetry_runtime.status().collector;
     collector.duplicate = health_value(&store, "collector_duplicates").map_err(store_error)?;
     let health = Health {
@@ -259,24 +178,13 @@ pub async fn summary(
         paused: !telemetry.control.is_enabled(),
         writer_errors: health_value(&store, "writer_errors").map_err(store_error)?,
         rejected_events: telemetry.control.rejected_count(),
-        correlation_env_conflicts: health_value(&store, "codex_correlation_env_conflicts")
-            .map_err(store_error)?,
         sampled_at: now_ms(),
         collector,
     };
     Ok(Json(SummaryResponse {
         range,
-        terminal,
         codex,
         time_series,
-        categories,
-        projects,
-        detail_metrics,
-        coverage: Coverage {
-            detail_only,
-            capture_quality_filter: query.capture_quality.map(quality_name).map(str::to_string),
-            codex_correlation,
-        },
         health,
     }))
 }
@@ -308,13 +216,6 @@ pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, 
         paused: !telemetry.control.is_enabled(),
         writer_errors,
         rejected_events: telemetry.control.rejected_count(),
-        correlation_env_conflicts: telemetry
-            .store
-            .as_ref()
-            .map(|store| health_value(store, "codex_correlation_env_conflicts"))
-            .transpose()
-            .map_err(store_error)?
-            .unwrap_or(0),
         sampled_at: now_ms(),
         collector,
     }))
@@ -367,12 +268,6 @@ pub async fn update_settings(
         if let Some(days) = patch.aggregate_retention_days {
             telemetry.aggregate_retention_days = days;
         }
-        if let Some(projects) = patch.excluded_projects {
-            telemetry.excluded_projects = projects;
-        }
-        if let Some(enabled) = patch.terminal_correlation_enabled {
-            telemetry.terminal_correlation_enabled = enabled;
-        }
         if let Some(collector) = patch.collector {
             telemetry.collector = collector;
         }
@@ -408,7 +303,7 @@ pub async fn update_settings(
         {
             state
                 .telemetry_runtime
-                .restore_config(&config.server.telemetry, &config.server.telemetry)
+                .restore_config(&previous.server.telemetry, &config.server.telemetry)
                 .await;
             return Err(runtime_error(error));
         }
@@ -547,8 +442,6 @@ fn settings_response(
         paused: telemetry.paused,
         detail_retention_days: telemetry.detail_retention_days,
         aggregate_retention_days: telemetry.aggregate_retention_days,
-        excluded_projects: telemetry.excluded_projects,
-        terminal_correlation_enabled: telemetry.terminal_correlation_enabled,
         collector_enabled: telemetry.collector.enabled,
         runtime,
         collector_setup: CollectorSetup {
@@ -559,10 +452,7 @@ fn settings_response(
     }
 }
 
-async fn parse_query(
-    state: &AppState,
-    params: SummaryParams,
-) -> Result<(UsageQuery, UsageRange), ApiError> {
+fn parse_query(params: SummaryParams) -> Result<(UsageQuery, UsageRange), ApiError> {
     let now = now_ms();
     let (from, to) = match (params.from, params.to, params.window.as_deref()) {
         (Some(from), Some(to), _) => (from, to),
@@ -583,85 +473,31 @@ async fn parse_query(
         "day" => MAX_DAILY_RANGE_MS,
         _ => return Err(invalid()),
     };
-    if from < 0
-        || to <= from
-        || to - from > max_range
-        || (to - from) / if bucket == "hour" { HOUR_MS } else { DAY_MS } > 1_000
-    {
+    if from < 0 || to <= from {
         return Err(invalid());
     }
-    let project = bounded(params.project)?;
-    if let Some(project) = &project {
-        let exists = state
-            .config
-            .read()
-            .await
-            .projects
-            .iter()
-            .any(|item| item.name == project.as_str());
-        if !exists {
-            return Err(invalid());
-        }
+    let bucket_ms = if bucket == "hour" { HOUR_MS } else { DAY_MS };
+    let first_bucket = from - from.rem_euclid(bucket_ms);
+    let bucket_count = (to.saturating_sub(1) - first_bucket) / bucket_ms + 1;
+    if to - from > max_range || bucket_count > 1_000 {
+        return Err(invalid());
     }
-    let shell = parse_enum(params.shell, |value| match value {
-        "bash" => Some(ShellKind::Bash),
-        "zsh" => Some(ShellKind::Zsh),
-        "fish" => Some(ShellKind::Fish),
-        _ => None,
-    })?;
-    let capture_quality = parse_enum(params.capture_quality, |value| match value {
-        "rich" => Some(CaptureQuality::Rich),
-        "partial" => Some(CaptureQuality::Partial),
-        "unavailable" => Some(CaptureQuality::Unavailable),
-        _ => None,
-    })?;
     let model = match params.model {
         Some(value) => Some(CodexModel::new(value).map_err(|_| invalid())?),
         None => None,
     };
-    let agent = bounded(params.agent)?;
-    if agent
-        .as_ref()
-        .is_some_and(|value| value.as_str() != "codex")
-    {
-        return Err(invalid());
-    }
     Ok((
         UsageQuery {
             schema_version: TELEMETRY_SCHEMA_VERSION,
             from_utc_ms: Some(from),
             to_utc_ms: Some(to),
-            project,
-            shell,
-            capture_quality,
-            category: bounded(params.category)?,
-            agent,
             model,
+            ..UsageQuery::default()
         },
         UsageRange { from, to, bucket },
     ))
 }
 
-fn bounded(value: Option<String>) -> Result<Option<SafeIdentifier>, ApiError> {
-    value
-        .map(|value| SafeIdentifier::new(value).map_err(|_| invalid()))
-        .transpose()
-}
-fn parse_enum<T>(
-    value: Option<String>,
-    parser: impl FnOnce(&str) -> Option<T>,
-) -> Result<Option<T>, ApiError> {
-    value
-        .map(|value| parser(&value).ok_or_else(invalid))
-        .transpose()
-}
-fn quality_name(value: CaptureQuality) -> &'static str {
-    match value {
-        CaptureQuality::Rich => "rich",
-        CaptureQuality::Partial => "partial",
-        CaptureQuality::Unavailable => "unavailable",
-    }
-}
 pub(super) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

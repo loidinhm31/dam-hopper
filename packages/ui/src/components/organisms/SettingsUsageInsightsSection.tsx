@@ -29,7 +29,7 @@ export function SettingsUsageInsightsSection() {
 
   const pending = configure.isPending;
   const collectorError = settings?.runtime.collectorError;
-  const terminalState = !settings?.enabled
+  const usageState = !settings?.enabled
     ? "disabled"
     : settings.paused
       ? "paused"
@@ -68,26 +68,28 @@ export function SettingsUsageInsightsSection() {
 
   function configureCodex(enabled: boolean) {
     void update(
-      { codexExporter: enabled },
+      enabled
+        ? { enabled: true, codexExporter: true }
+        : { codexExporter: false },
       enabled
         ? "Codex export is managed by DamHopper."
         : "Codex export management disabled.",
     );
   }
 
-  const terminalCopy = {
+  const usageCopy = {
     disabled:
-      "Capture is off on this machine. Enable it to collect local terminal activity.",
-    paused: "Capture is paused. Existing usage data remains available.",
-    active: "DamHopper ready; open a new terminal.",
+      "Codex Usage is off on this machine. Enable it to collect local response telemetry.",
+    paused: "Codex Usage is paused. Existing usage data remains available.",
+    active: "Codex Usage is active; new response completions will be collected.",
     unavailable:
-      "The local receiver is unavailable. It will retry while DamHopper is running.",
-  }[terminalState];
+      "The local Codex receiver is unavailable. Retry while DamHopper is running.",
+  }[usageState];
 
   if (isLoading)
     return (
       <p className="text-xs text-[var(--color-text-muted)]" aria-live="polite">
-        Checking local usage capture…
+        Checking Codex Usage telemetry…
       </p>
     );
 
@@ -101,18 +103,18 @@ export function SettingsUsageInsightsSection() {
   return (
     <div className="divide-y divide-[var(--color-border)]" aria-busy={pending}>
       <SettingsActionRow
-        title="Terminal capture"
-        description={terminalCopy}
+        title="Codex Usage telemetry"
+        description={usageCopy}
         status={
           <div className="space-y-1" aria-live="polite">
             {pending && (
               <p className="text-[var(--color-primary)]">
-                Updating local capture…
+                Updating Codex Usage…
               </p>
             )}
-            {!pending && terminalState === "active" && (
+            {!pending && usageState === "active" && (
               <p className="text-[var(--color-success)]">
-                DamHopper ready; open a new terminal.
+                Codex Usage is receiving response completions.
               </p>
             )}
             {message && (
@@ -129,39 +131,39 @@ export function SettingsUsageInsightsSection() {
           <Button
             type="button"
             size="sm"
-            variant={terminalState === "active" ? "secondary" : "primary"}
+            variant={usageState === "active" ? "secondary" : "primary"}
             className={focusClass}
             loading={pending}
             disabled={pending}
             onClick={() =>
               void update(
-                terminalState === "active"
+                usageState === "active"
                   ? { enabled: false }
-                  : terminalState === "paused"
+                  : usageState === "paused"
                     ? { paused: false }
-                    : terminalState === "unavailable"
+                    : usageState === "unavailable"
                       ? { enabled: true, retryCollector: true }
                       : { enabled: true },
-                terminalState === "active"
-                  ? "Terminal capture disabled."
-                  : terminalState === "paused"
-                    ? "Terminal capture resumed. DamHopper ready; open a new terminal."
-                    : "Terminal capture enabled. DamHopper ready; open a new terminal.",
+                usageState === "active"
+                  ? "Codex Usage disabled."
+                  : usageState === "paused"
+                    ? "Codex Usage resumed."
+                    : "Codex Usage enabled.",
               )
             }
           >
-            {terminalState === "active" ? (
+            {usageState === "active" ? (
               <Power className="h-3.5 w-3.5" aria-hidden="true" />
             ) : (
               <Play className="h-3.5 w-3.5" aria-hidden="true" />
             )}
             {pending
               ? "Updating…"
-              : terminalState === "active"
+              : usageState === "active"
                 ? "Disable"
-                : terminalState === "paused"
+                : usageState === "paused"
                   ? "Resume"
-                  : "Enable locally"}
+                  : "Enable Codex Usage"}
           </Button>
         }
       />
@@ -182,7 +184,7 @@ export function SettingsUsageInsightsSection() {
       />
 
       <div className="pt-4 text-xs leading-5 text-[var(--color-text-muted)]">
-        Manage retention, project exclusions, or delete collected data in{" "}
+        Manage retention or delete collected Codex data in{" "}
         <Link
           to="/usage"
           className={`font-medium text-[var(--color-primary)] underline underline-offset-2 ${focusClass}`}

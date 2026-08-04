@@ -1,113 +1,22 @@
-import { useState } from "react";
-import type { UsageSessionNode } from "@/api/client.js";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import type { UsageSessionDetail } from "@/api/client.js";
 import { cn } from "@/lib/utils.js";
 import type { UsageSessionViewState } from "./UsageSessionList.js";
-import {
-  UsageSessionCoverage,
-  UsageSessionTokens,
-} from "./UsageSessionTokens.js";
+import { UsageSessionTokens } from "./UsageSessionTokens.js";
 
 export interface UsageSessionTreeProps {
-  nodes: UsageSessionNode[];
+  detail?: UsageSessionDetail;
   state?: UsageSessionViewState;
   errorMessage?: string;
-  truncated?: boolean;
-  maxNodes?: number;
   className?: string;
 }
 
-type NodeMap = Map<string | null, UsageSessionNode[]>;
-
-function buildChildren(nodes: UsageSessionNode[]): NodeMap {
-  return nodes.reduce<NodeMap>((children, node) => {
-    const siblings = children.get(node.parentId) || [];
-    siblings.push(node);
-    children.set(node.parentId, siblings);
-    return children;
-  }, new Map());
-}
-
-function roleLabel(role: UsageSessionNode["role"]): string {
-  return role === "subagent" ? "Subagent" : role === "main" ? "Main" : "Root";
-}
-
-function TreeNode({
-  node,
-  children,
-  parentRole,
-}: {
-  node: UsageSessionNode;
-  children: NodeMap;
-  parentRole?: string;
-}) {
-  const descendants = children.get(node.id) || [];
-  const [expanded, setExpanded] = useState(true);
-  const hasChildren = descendants.length > 0;
-  const status = node.endedAtUtcMs === null ? "Active" : "Ended";
-
-  return (
-    <li className="min-w-0">
-      <div
-        className="flex gap-1.5 py-2"
-        style={{ paddingInlineStart: `${Math.min(node.depth, 6) * 12}px` }}
-      >
-        {hasChildren ? (
-          <button
-            type="button"
-            aria-expanded={expanded}
-            aria-label={`${expanded ? "Collapse" : "Expand"} ${roleLabel(node.role)} node`}
-            onClick={() => setExpanded((value) => !value)}
-            className="-my-2 flex h-11 w-11 shrink-0 items-center justify-center rounded text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]"
-          >
-            {expanded ? (
-              <ChevronDown aria-hidden="true" className="h-3.5 w-3.5" />
-            ) : (
-              <ChevronRight aria-hidden="true" className="h-3.5 w-3.5" />
-            )}
-          </button>
-        ) : (
-          <span aria-hidden="true" className="w-11 shrink-0" />
-        )}
-        <div className="min-w-0 flex-1">
-          <p className="text-xs font-medium text-[var(--color-text)]">
-            {roleLabel(node.role)}{" "}
-            <span className="font-normal text-[var(--color-text-muted)]">
-              · {node.model || "Model unavailable"} · {status}
-            </span>
-          </p>
-          <p className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">
-            {parentRole ? `Parent: ${parentRole}` : "No parent"}
-          </p>
-          <UsageSessionTokens tokens={node.tokens} className="mt-1" />
-          <UsageSessionCoverage coverage={node.coverage} className="mt-1.5" />
-        </div>
-      </div>
-      {hasChildren && expanded ? (
-        <ul>
-          {descendants.map((child) => (
-            <TreeNode
-              key={child.id}
-              node={child}
-              children={children}
-              parentRole={roleLabel(node.role)}
-            />
-          ))}
-        </ul>
-      ) : null}
-    </li>
-  );
-}
-
 export function UsageSessionTree({
-  nodes,
+  detail,
   state = "ready",
   errorMessage,
-  truncated = false,
-  maxNodes,
   className,
 }: UsageSessionTreeProps) {
-  if (state === "loading")
+  if (state === "loading") {
     return (
       <section
         aria-busy="true"
@@ -119,7 +28,8 @@ export function UsageSessionTree({
         Loading session detail…
       </section>
     );
-  if (state === "error")
+  }
+  if (state === "error") {
     return (
       <section
         role="alert"
@@ -131,7 +41,8 @@ export function UsageSessionTree({
         {errorMessage || "Session detail could not be loaded."}
       </section>
     );
-  if (state === "empty" || nodes.length === 0)
+  }
+  if (state === "empty" || !detail) {
     return (
       <section
         className={cn(
@@ -139,19 +50,15 @@ export function UsageSessionTree({
           className,
         )}
       >
-        No session nodes are available.
+        No session summary is available.
       </section>
     );
+  }
 
-  const children = buildChildren(nodes);
-  const roots =
-    children.get(null) ||
-    nodes.filter(
-      (node) => !nodes.some((candidate) => candidate.id === node.parentId),
-    );
+  const { session } = detail;
   return (
     <section
-      aria-labelledby="usage-session-tree-heading"
+      aria-labelledby="usage-session-detail-heading"
       className={cn(
         "rounded border border-[var(--color-border)] bg-[var(--color-surface)]",
         className,
@@ -159,26 +66,39 @@ export function UsageSessionTree({
     >
       <div className="border-b border-[var(--color-border)] px-3 py-2">
         <h3
-          id="usage-session-tree-heading"
+          id="usage-session-detail-heading"
           className="text-xs font-semibold text-[var(--color-text)]"
         >
-          Session tree
+          Session summary
         </h3>
       </div>
-      {truncated ? (
-        <p
-          role="status"
-          className="border-b border-[var(--color-border)] px-3 py-2 text-[10px] leading-4 text-[var(--color-text-muted)]"
-        >
-          Tree truncated after {maxNodes ?? "the configured"} nodes; additional
-          lineage is not shown.
+      <div className="space-y-3 p-3">
+        <p className="text-xs text-[var(--color-text-muted)]">
+          {session.model || "Model unavailable"} ·{" "}
+          {new Date(session.startedAtUtcMs).toLocaleString()}
         </p>
-      ) : null}
-      <ul className="px-3 py-1">
-        {roots.map((node) => (
-          <TreeNode key={node.id} node={node} children={children} />
-        ))}
-      </ul>
+        <UsageSessionTokens tokens={session.tokens} />
+        {session.models.length > 0 ? (
+          <div>
+            <h4 className="text-[10px] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+              Models
+            </h4>
+            <ul className="mt-2 space-y-2">
+              {session.models.map((model) => (
+                <li
+                  key={model.model || "unknown"}
+                  className="rounded border border-[var(--color-border)] p-2 text-xs"
+                >
+                  <p className="font-medium text-[var(--color-text)]">
+                    {model.model || "Model unavailable"}
+                  </p>
+                  <UsageSessionTokens tokens={model.tokens} compact className="mt-1" />
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }

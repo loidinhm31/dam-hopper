@@ -291,74 +291,44 @@ The reset is scoped to the configured telemetry database and uses a single trans
 Codex v1 data survives a normal reopen. For a manual reset, stop DamHopper and remove
 `telemetry.db` plus its `-wal` and `-shm` sidecars; `sessions.db` is unrelated and must remain intact.
 
-Phase 3 API/configuration cleanup and Phase 5 release validation remain follow-ups; this runtime
-boundary does not mean those phases are complete.
+#### Flat Codex session summaries
 
+OTel remains authoritative for input, cached-input, output, and reasoning token components. The
+runtime stores one privacy-safe flat summary per Codex session and never infers parent/child edges
+from event order, model names, titles, or text. Direct reads from Codex SQLite or rollout files are
+forbidden in production.
 
-#### Session model delegation audit (compatibility-gated)
-
-The session audit extends Usage with factual model/delegation metadata. OTel remains authoritative
-for input, cached-input, output, and reasoning token components. The exact app-server lineage
-adapter is **disabled for Codex CLI 0.146.0**: its generated `thread/list` contract requires
-content-bearing `preview`, `cwd`, and `turns` fields (and exposes `path`), with no projection that
-can exclude them. This fails the privacy boundary before any child-session or OTel identity probe.
-The supported fallback is flat OTel-only rows marked `lineage_unavailable`; no parent/child edges
-are inferred. Direct reads from Codex SQLite or rollout files remain forbidden in production.
-
-When telemetry and its collector are active and `terminal_correlation_enabled` is not set to
-`false`, terminal correlation injects one random opaque
-`dam_hopper.run_id` resource attribute into the terminal shell environment. Literal commands,
-aliases such as `CODEXNSB`, scripts, and shell functions can launch Codex normally and inherit the
-marker; DamHopper does not capture or rewrite their command text. The in-memory registry maps the
-marker to a DamHopper terminal/run identity plus expiry, instead of retaining only a presence bit.
-Raw markers and provider thread IDs never enter SQLite or browser responses; keyed HMAC identifiers
-provide durable joins.
-
-`agent_runs` is the permanent flat summary layer in the broader audit model. The Codex-only runtime
-does not import that legacy model or run migration files; its fresh schema keeps only the Codex
-session/event/rollup tables described above.
-Idempotent upserts preserve summaries before detail purge, while the compatibility fallback remains
-flat `lineage_unavailable` with no inferred parent/child edges. `delta` counters add; `cumulative`
+Idempotent upserts preserve summaries before detail purge. `delta` counters add; `cumulative`
 counters accept only newer non-regressing observations, rejecting stale, conflicting, or regressing
 updates as summary conflicts.
 
-The protected API keeps `GET /api/usage/summary` unchanged and adds `GET /api/usage/sessions` and
-`GET /api/usage/sessions/{id}` for cursor-bounded session list and single-tree detail reads. The
-list defaults to a 30-day UTC range, accepts optional model/terminal filters, and caps pages at 100
-rows (default 25) across a maximum five-year range. Cursors are authenticated and bound to the
-range and filters. Detail trees are capped at 256 nodes and depth 16; responses flag truncation.
-Responses contain derived route IDs, terminal label/identity, timestamps,
-safe provider/model/role/status, nullable token components, child count, main-token share,
-delegation observed/not observed, and coverage only. Exact app-server lineage plus OTel tokens is
-`exact`; OTel-only rows are `lineage_unavailable`; app-server-only nodes are
-`token_data_unavailable`; source disagreement is `partial`. Time, event order, model rank, titles,
-and text never create an edge. No child observed is a fact, never a violation or productivity score.
-Invalid ranges, limits, model identifiers, cursors, and non-derived terminal/session IDs fail closed.
-The routes return summaries only; raw telemetry rows and content-bearing fields remain private.
+The protected API exposes cursor-bounded `GET /api/usage/sessions` and
+`GET /api/usage/sessions/{id}` routes. List pages are capped at 100 rows (default 25) across a
+maximum five-year range; cursors are authenticated and bound to the range and model filter. Each
+session contains only a derived ID, timestamps, optional model data, bounded token components, and
+bounded model summaries. Detail returns the same flat projection. Active sessions preserve a null
+end timestamp while cursor ordering uses their start timestamp as the effective sort key. Terminal,
+project, shell, capture-quality, category, agent, correlation, lineage, and raw-content fields are
+not part of the contract.
 
 Model identifiers are generalized rather than tied to a fixed model-name allowlist. They are
 bounded to 1–64 safe ASCII characters, must start and end alphanumeric, and may contain `.`, `_`,
 `-`, `/`, or `:`; URL-like values, repeated separators, and content-bearing forms are rejected
 before storage or filtering.
 
-Codex app-server multi-agent filters and some notifications are experimental. The Phase 01
-compatibility gate for 0.146.0 failed at the prompt-free list boundary, so lineage enrichment is
-disabled while terminal operation and OTel aggregate usage continue. Re-open exact lineage only
-after a new pinned contract proves a metadata-only projection excluding preview, cwd, path, turns,
-and items; until then, downstream phases must preserve flat `lineage_unavailable` rows and must not
-infer edges.
+Codex app-server metadata is intentionally outside this usage contract. OTel aggregate usage remains
+the sole source for persisted Codex session summaries until a future, privacy-safe metadata
+projection is separately specified.
 
 Key invariants:
 
 - Shell lifecycle validation remains the only command boundary.
 - Telemetry persistence stays off the PTY hot path.
 - Raw commands and AI content never cross the persistence boundary.
-- Coverage/confidence is queryable and visible in UI.
+- Availability and paused state are reported explicitly; missing token components remain null.
 - Codex telemetry adds no MCP call or model-token consumption.
 - Metrics stay descriptive; no productivity or employee scoring.
-- Agent edges come only from explicit provider parent/ancestor identity; never infer lineage.
-- App-server ingestion is metadata-only, version-gated, and failure-isolated from PTY and OTel paths.
-- Permanent session detail is one compact row per agent node; no permanent turn/event transcript.
+- Session detail remains one compact Codex summary row; no permanent turn/event transcript.
 
 Notification selection also stays frontend-only. Native notification clicks
 publish a typed browser event keyed by the stable PTY `sessionId`;

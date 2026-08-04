@@ -1,6 +1,5 @@
-import { Activity, Clock3 } from "lucide-react";
+import { Clock3, MessageSquare, Sigma } from "lucide-react";
 import type { UsageSummary } from "@/api/client.js";
-import { UsageBreakdown } from "./UsageBreakdown.js";
 import { UsageCoveragePanel } from "./UsageCoveragePanel.js";
 import {
   formatDuration,
@@ -24,7 +23,6 @@ export function UsageOverview({
   loading,
   errorMessage,
 }: UsageOverviewProps) {
-  const detail = summary?.detailMetrics;
   return (
     <section
       id="usage-overview-panel"
@@ -34,7 +32,7 @@ export function UsageOverview({
     >
       {loading ? (
         <p className="rounded glass-card p-6 text-sm text-[var(--color-text-muted)]">
-          Loading aggregate usage…
+          Loading Codex usage…
         </p>
       ) : null}
       {errorMessage ? (
@@ -47,135 +45,69 @@ export function UsageOverview({
       ) : null}
       {summary ? (
         <>
-          <UsageCoveragePanel
-            coverage={summary.coverage}
-            health={summary.health}
-          />
+          <UsageCoveragePanel health={summary.health} />
           <section
-            aria-label="Terminal aggregate metrics"
+            aria-label="Codex aggregate metrics"
             className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
           >
             <UsageMetricCard
-              label="Commands"
-              value={formatUsageNumber(summary.terminal.commandCount)}
-              icon={Activity}
+              label="Total tokens"
+              value={formatTokenTotal(summary.codex)}
+              icon={Sigma}
               tone="primary"
-              description={`${formatUsageNumber(summary.terminal.succeededCount)} succeeded · ${formatUsageNumber(summary.terminal.failedCount)} failed`}
+              unavailable={!hasTokenTotal(summary.codex)}
+              description="Uncached input, output, and reasoning tokens."
             />
             <UsageMetricCard
-              label="Active execution"
-              value={formatDuration(summary.terminal.durationMsSum)}
+              label="Responses"
+              value={formatUsageNumber(summary.codex?.responseCount)}
+              icon={MessageSquare}
+              unavailable={summary.codex?.responseCount == null}
+              description="Codex response completions in this range."
+            />
+            <UsageMetricCard
+              label="Response time"
+              value={formatDuration(summary.codex?.durationMs)}
               icon={Clock3}
-              description="Total command execution time in this range."
+              unavailable={summary.codex?.durationMs == null}
+              description="Sum of durations reported by Codex completions."
             />
             <UsageMetricCard
-              label="P50 duration"
-              value={formatDuration(detail?.durationP50Ms)}
-              unavailable={!detail}
-              description={
-                detail
-                  ? "Median completed command duration."
-                  : "Available only within detail retention."
-              }
+              label="Cache ratio"
+              value={formatPercent(
+                summary.codex?.cachedInputTokens,
+                summary.codex?.inputTokens,
+              )}
+              unavailable={!summary.codex}
+              description="Cached input divided by reported input tokens."
             />
             <UsageMetricCard
-              label="P95 duration"
-              value={formatDuration(detail?.durationP95Ms)}
-              unavailable={!detail}
-              description={
-                detail
-                  ? "Nearest-rank 95th percentile."
-                  : "Available only within detail retention."
-              }
+              label="Input tokens"
+              value={formatUsageNumber(summary.codex?.inputTokens)}
+              unavailable={!hasUsageValue(summary.codex?.inputTokens)}
             />
             <UsageMetricCard
-              label="Repeated commands"
-              value={formatUsageNumber(detail?.repeatedCommandCount)}
-              unavailable={!detail}
-              description={
-                detail
-                  ? "Additional occurrences of a retained command fingerprint."
-                  : "Available only within detail retention."
-              }
+              label="Cached input"
+              value={formatUsageNumber(summary.codex?.cachedInputTokens)}
+              unavailable={!hasUsageValue(summary.codex?.cachedInputTokens)}
+            />
+            <UsageMetricCard
+              label="Output tokens"
+              value={formatUsageNumber(summary.codex?.outputTokens)}
+              unavailable={!hasUsageValue(summary.codex?.outputTokens)}
+            />
+            <UsageMetricCard
+              label="Reasoning tokens"
+              value={formatUsageNumber(summary.codex?.reasoningTokens)}
+              unavailable={!hasUsageValue(summary.codex?.reasoningTokens)}
             />
           </section>
-          <section className="grid gap-3 lg:grid-cols-2">
-            <UsageTrendChart
-              series={summary.timeSeries}
-              bucket={summary.range.bucket}
-              metric="commands"
-              title="Terminal commands over time"
-            />
-            <UsageTrendChart
-              series={summary.timeSeries}
-              bucket={summary.range.bucket}
-              metric="tokens"
-              title="Codex tokens over time"
-            />
-          </section>
-          <section
-            aria-label="Terminal breakdowns"
-            className="grid gap-3 lg:grid-cols-2"
-          >
-            <UsageBreakdown title="Categories" entries={summary.categories} />
-            <UsageBreakdown title="Projects" entries={summary.projects} />
-          </section>
-          <section
-            aria-label="Codex aggregate metrics"
-            className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3"
-          >
-            <div className="flex items-baseline justify-between gap-3">
-              <h2 className="text-xs font-semibold text-[var(--color-text)]">
-                Codex usage
-              </h2>
-              <span className="text-[10px] text-[var(--color-text-muted)]">
-                No cost estimates
-              </span>
-            </div>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <UsageMetricCard
-                label="Total tokens"
-                value={formatTokenTotal(summary.codex)}
-                unavailable={!hasTokenTotal(summary.codex)}
-                description="Uncached input, output, and reasoning tokens; cached input is excluded."
-              />
-              <UsageMetricCard
-                label="Input tokens"
-                value={formatUsageNumber(summary.codex?.inputTokens)}
-                unavailable={!hasUsageValue(summary.codex?.inputTokens)}
-              />
-              <UsageMetricCard
-                label="Cached input"
-                value={formatUsageNumber(summary.codex?.cachedInputTokens)}
-                unavailable={!hasUsageValue(summary.codex?.cachedInputTokens)}
-              />
-              <UsageMetricCard
-                label="Output tokens"
-                value={formatUsageNumber(summary.codex?.outputTokens)}
-                unavailable={!hasUsageValue(summary.codex?.outputTokens)}
-              />
-              <UsageMetricCard
-                label="Reasoning tokens"
-                value={formatUsageNumber(summary.codex?.reasoningTokens)}
-                unavailable={!hasUsageValue(summary.codex?.reasoningTokens)}
-              />
-              <UsageMetricCard
-                label="Response time"
-                value={formatDuration(summary.codex?.durationMs)}
-                unavailable={summary.codex?.durationMs == null}
-                description="Sum of durations reported by Codex response completions."
-              />
-              <UsageMetricCard
-                label="Cache ratio"
-                value={formatPercent(
-                  summary.codex?.cachedInputTokens,
-                  summary.codex?.inputTokens,
-                )}
-                unavailable={!summary.codex}
-                description="Cached input ÷ reported input tokens."
-              />
-            </div>
-          </section>
+          <UsageTrendChart
+            series={summary.timeSeries}
+            bucket={summary.range.bucket}
+            metric="tokens"
+            title="Codex tokens over time"
+          />
         </>
       ) : null}
     </section>

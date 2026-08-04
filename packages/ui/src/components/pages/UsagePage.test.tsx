@@ -7,14 +7,6 @@ const mocks = vi.hoisted(() => ({
   setParams: vi.fn(),
   summary: {
     range: { from: 1_782_864_000_000, to: 1_783_468_800_000, bucket: "day" },
-    terminal: {
-      commandCount: 12,
-      succeededCount: 10,
-      failedCount: 1,
-      interruptedCount: 1,
-      unknownCount: 0,
-      durationMsSum: 3_600,
-    },
     codex: {
       inputTokens: 100,
       cachedInputTokens: null,
@@ -22,20 +14,11 @@ const mocks = vi.hoisted(() => ({
       reasoningTokens: null,
     },
     timeSeries: [],
-    categories: [],
-    projects: [],
-    detailMetrics: null,
-    coverage: {
-      detailOnly: false,
-      captureQualityFilter: null,
-      codexCorrelation: { exact: 1, approximate: 0, unattributed: 0 },
-    },
     health: {
       available: true,
       paused: false,
       writerErrors: 0,
       rejectedEvents: 0,
-      correlationEnvConflicts: 0,
       sampledAt: 1_783_468_800_000,
       collector: {
         running: false,
@@ -56,7 +39,6 @@ const mocks = vi.hoisted(() => ({
     paused: false,
     detailRetentionDays: 90,
     aggregateRetentionDays: null,
-    excludedProjects: [],
     collectorEnabled: false,
     collectorSetup: {
       codexExporter: "notConfigured",
@@ -89,7 +71,6 @@ vi.mock("react-router-dom", () => ({
 vi.mock("@/api/queries.js", () => ({
   useDeleteUsageData: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteUsageRange: () => ({ mutate: vi.fn(), isPending: false }),
-  useProjects: () => ({ data: [{ name: "api" }] }),
   useUpdateUsageSettings: () => ({ mutate: vi.fn(), isPending: false }),
   useUsageSettings: () => ({ data: mocks.settings }),
   useUsageSession: () => ({ data: undefined, isLoading: false, error: null }),
@@ -129,13 +110,13 @@ describe("UsagePage", () => {
     const markup = renderToStaticMarkup(<UsagePage />);
 
     expect(markup).toContain(
-      "Privacy-safe aggregates from DamHopper-managed terminals",
+      "Privacy-safe Codex response aggregates",
     );
-    expect(markup).toContain("No commands or agent content are shown.");
-    expect(markup).toContain("Coverage &amp; collection");
+    expect(markup).toContain("No prompts, responses, or raw telemetry payloads are shown.");
+    expect(markup).toContain("Codex receiver health");
     expect(markup).toContain("Pause collection");
     expect(markup).toContain("Delete all usage");
-    expect(markup).toContain("No cost estimates");
+    expect(markup).not.toContain("terminal");
   });
 
   it("uses a custom UTC range as the destructive-action scope", () => {
@@ -157,7 +138,6 @@ describe("UsagePage", () => {
     expect(query).toMatchObject({
       window: "30d",
       bucket: "day",
-      project: "api",
     });
 
     const range = queryFromSearch(
