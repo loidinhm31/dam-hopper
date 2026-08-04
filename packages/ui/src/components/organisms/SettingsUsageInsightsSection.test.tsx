@@ -71,10 +71,10 @@ describe("SettingsUsageInsightsSection", () => {
     expect(output).not.toContain("config.toml");
   });
 
-  it("renders an enable action when terminal capture is disabled", () => {
+  it("renders a Codex Usage enable action when telemetry is disabled", () => {
     mocks.settings = settings({ enabled: false });
     const output = markup();
-    expect(output).toContain("Enable locally");
+    expect(output).toContain("Enable Codex Usage");
   });
 
   it("shows Codex restart guidance only for managed setup", () => {

@@ -1,9 +1,6 @@
 import type { UsageSessionSummary } from "@/api/client.js";
 import { cn } from "@/lib/utils.js";
-import {
-  UsageSessionCoverage,
-  UsageSessionTokens,
-} from "./UsageSessionTokens.js";
+import { UsageSessionTokens } from "./UsageSessionTokens.js";
 
 export type UsageSessionViewState = "ready" | "loading" | "empty" | "error";
 
@@ -23,37 +20,19 @@ const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
   timeStyle: "short",
 });
 
-function sessionTerminalLabel(session: UsageSessionSummary): string {
-  const terminal = session.terminals[0];
-  return (
-    terminal?.label ||
-    `Unknown project · ${dateTimeFormatter.format(new Date(session.startedAtUtcMs))}`
-  );
-}
-
 function sessionTimeRange(session: UsageSessionSummary): string {
-  return `${dateTimeFormatter.format(new Date(session.startedAtUtcMs))} – ${dateTimeFormatter.format(new Date(session.endedAtUtcMs))}`;
+  const started = dateTimeFormatter.format(new Date(session.startedAtUtcMs));
+  const ended = session.endedAtUtcMs !== null
+    ? dateTimeFormatter.format(new Date(session.endedAtUtcMs))
+    : "Active";
+  return `${started} – ${ended}`;
 }
 
-function delegationCopy(session: UsageSessionSummary): string {
-  switch (session.delegationState) {
-    case "delegated":
-      return `${session.childCount} child${session.childCount === 1 ? "" : "ren"} observed`;
-    case "not_delegated":
-      return "No subagent observed";
-    case "partial":
-      return "Delegation data is partial";
-    case "lineage_unavailable":
-      return "Lineage unavailable";
-  }
-}
-
-function executorCopy(session: UsageSessionSummary): string {
-  const executors = session.executorModels ?? [];
-  if (executors.length === 0) return "Unavailable";
-  return executors
+function modelSummaryCopy(session: UsageSessionSummary): string {
+  if (session.models.length === 0) return "Unavailable";
+  return session.models
     .map(
-      (executor) => `${executor.model || "Unknown"} ×${executor.responseCount}`,
+      (model) => `${model.model || "Unknown"} ×${model.responseCount}`,
     )
     .join(", ");
 }
@@ -135,27 +114,21 @@ export function UsageSessionList({
                 )}
               >
                 <span className="block min-w-0 truncate text-xs font-medium text-[var(--color-text)]">
-                  {sessionTerminalLabel(session)}
+                  {session.model || "Model unavailable"}
                 </span>
                 <span className="mt-1 block text-[10px] text-[var(--color-text-muted)]">
                   {sessionTimeRange(session)}
                 </span>
                 <span className="mt-1 block text-[10px] text-[var(--color-text-muted)]">
-                  Model: {session.rootModel || "Unavailable"} · Children:{" "}
-                  {session.childCount} · {delegationCopy(session)}
+                  Model: {session.model || "Unavailable"}
                 </span>
                 <span className="mt-1 block truncate text-[10px] text-[var(--color-text-muted)]">
-                  Executors: {executorCopy(session)}
+                  Models: {modelSummaryCopy(session)}
                 </span>
                 <UsageSessionTokens
                   tokens={session.tokens}
-                  mainTokenShare={session.mainTokenShare}
                   compact
                   className="mt-1.5"
-                />
-                <UsageSessionCoverage
-                  coverage={session.coverage}
-                  className="mt-2"
                 />
               </button>
             </li>

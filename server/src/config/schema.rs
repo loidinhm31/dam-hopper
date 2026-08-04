@@ -250,9 +250,6 @@ fn default_telemetry_db_path() -> String {
 fn default_telemetry_detail_retention_days() -> u16 {
     90
 }
-fn default_terminal_correlation_enabled() -> bool {
-    true
-}
 fn default_telemetry_collector_host() -> String {
     "127.0.0.1".to_string()
 }
@@ -261,7 +258,7 @@ fn default_telemetry_collector_port() -> u16 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TelemetryCollectorConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -282,7 +279,7 @@ impl Default for TelemetryCollectorConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TelemetryConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -298,15 +295,6 @@ pub struct TelemetryConfig {
     pub detail_retention_days: u16,
     #[serde(default, alias = "aggregate_retention_days")]
     pub aggregate_retention_days: Option<u32>,
-    #[serde(default, alias = "excluded_projects")]
-    pub excluded_projects: Vec<String>,
-    /// Enables ephemeral Codex/OTLP terminal ownership correlation whenever
-    /// usage tracking is configured. Users may explicitly opt out.
-    #[serde(
-        default = "default_terminal_correlation_enabled",
-        alias = "terminal_correlation_enabled"
-    )]
-    pub terminal_correlation_enabled: bool,
     #[serde(default)]
     pub collector: TelemetryCollectorConfig,
 }
@@ -319,8 +307,6 @@ impl Default for TelemetryConfig {
             db_path: default_telemetry_db_path(),
             detail_retention_days: default_telemetry_detail_retention_days(),
             aggregate_retention_days: None,
-            excluded_projects: Vec::new(),
-            terminal_correlation_enabled: default_terminal_correlation_enabled(),
             collector: TelemetryCollectorConfig::default(),
         }
     }
@@ -350,21 +336,6 @@ impl TelemetryConfig {
         if !host.is_loopback() {
             return Err(
                 "server.telemetry.collector.host must be a loopback IP address".to_string(),
-            );
-        }
-        if self
-            .excluded_projects
-            .iter()
-            .any(|project| project.trim().is_empty())
-        {
-            return Err(
-                "server.telemetry.excluded_projects must not contain empty names".to_string(),
-            );
-        }
-        let unique: std::collections::HashSet<_> = self.excluded_projects.iter().collect();
-        if unique.len() != self.excluded_projects.len() {
-            return Err(
-                "server.telemetry.excluded_projects must not contain duplicates".to_string(),
             );
         }
         Ok(())

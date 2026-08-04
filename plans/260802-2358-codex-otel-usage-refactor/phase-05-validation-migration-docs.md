@@ -8,7 +8,7 @@
 
 ## Overview
 
-**Date:** 2026-08-02 · **Priority:** P1 · **Status:** Pending · **Review:** Pending
+**Date:** 2026-08-02 · **Priority:** P1 · **Status:** Complete with release follow-ups · **Completed:** 2026-08-04 · **Review:** Complete
 
 Close the refactor with fresh-reset fixtures, privacy/performance scans, documentation cleanup, and
 an explicit clean-reset runbook. Update architecture after implementation to remove legacy wording.
@@ -57,15 +57,19 @@ fresh-reset schema ships.
 
 ## Todo list
 
-- [ ] All release gates recorded with commands/results.
-- [ ] Privacy and terminal-dependency scans are clean.
-- [ ] Clean reset runbook verified (Phase 5 follow-up).
-- [ ] Legacy architecture wording removed after implementation.
+- [x] Automated release gates recorded with results.
+- [x] Privacy and terminal-dependency scans are clean; focused rollback/IPv6/Settings tests pass.
+- [x] Automated reset/reopen/delete/retention coverage passes.
+- [x] Legacy architecture wording removed after implementation.
+- [ ] Manual PTY enabled-vs-disabled benchmark (environment-gated).
+- [ ] Pinned Codex compatibility tests (environment-gated).
+- [ ] Signed packaging completion; `pnpm check` stopped when `TAURI_SIGNING_PRIVATE_KEY` was unavailable.
 
 ## Success Criteria
 
-Release candidate has no terminal Usage behavior, no PTY performance regression, safe development
-reset behavior, passing tests, and documentation that matches the live Codex-only architecture.
+Refactor has no terminal Usage behavior, safe automated reset behavior, passing Rust/UI/browser
+validation, and documentation matching the live Codex-only architecture. PTY performance regression
+and pinned Codex compatibility remain unverified; signed packaging is blocked by missing key.
 
 ## Risk Assessment
 
@@ -77,7 +81,15 @@ together and document the compatibility boundary. Never delete a DB automaticall
 Review file permissions, bearer/key handling, delete authorization, range bounds, and log redaction.
 Treat manual DB deletion as an operator action while the server is stopped.
 
+## Validation handoff (2026-08-04)
+
+- Rust 601 passed/0 failed/2 ignored; UI 756/756; browser 69/69.
+- UI/web builds and lint pass. `pnpm check` produced web/native builds and DEB/RPM bundles before
+  stopping at unavailable `TAURI_SIGNING_PRIVATE_KEY`.
+- Automated reset/reopen/privacy/terminal-dependency tests pass.
+- Manual PTY benchmark and pinned Codex compatibility tests require target environment access.
+
 ## Next steps
 
-Phase 5 release gates and the clean-reset runbook remain pending; this document does not claim them
-complete.
+Supply signing key, run manual PTY benchmark, run pinned compatibility tests, then close release
+follow-ups.

@@ -6,7 +6,7 @@ import {
   formatUsageNumber,
 } from "./UsageFormatters.js";
 
-export type UsageTrendMetric = "commands" | "duration" | "tokens";
+export type UsageTrendMetric = "tokens";
 
 export interface UsageTrendChartProps {
   series: readonly UsageTimeBucket[];
@@ -17,31 +17,23 @@ export interface UsageTrendChartProps {
 }
 
 function valueFor(bucket: UsageTimeBucket, metric: UsageTrendMetric): number {
-  if (metric === "duration") return bucket.terminal.durationMsSum;
-  if (metric === "tokens") {
-    const tokens = bucket.codex;
-    return tokens
-      ? Math.max(
-          0,
-          (tokens.inputTokens ?? 0) - (tokens.cachedInputTokens ?? 0),
-        ) +
-          (tokens.outputTokens ?? 0) +
-          (tokens.reasoningTokens ?? 0)
-      : 0;
-  }
-  return bucket.terminal.commandCount;
+  if (metric !== "tokens") return 0;
+  const tokens = bucket.codex;
+  return tokens
+    ? Math.max(0, (tokens.inputTokens ?? 0) - (tokens.cachedInputTokens ?? 0)) +
+        (tokens.outputTokens ?? 0) +
+        (tokens.reasoningTokens ?? 0)
+    : 0;
 }
 
-function metricLabel(metric: UsageTrendMetric) {
-  if (metric === "duration") return "duration";
-  if (metric === "tokens") return "tokens";
-  return "commands";
+function metricLabel() {
+  return "tokens";
 }
 
 export function UsageTrendChart({
   series,
   bucket,
-  metric = "commands",
+  metric = "tokens",
   title = "Usage over time",
   className,
 }: UsageTrendChartProps) {
@@ -89,7 +81,7 @@ export function UsageTrendChart({
           {title}
         </h3>
         <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
-          {metricLabel(metric)}
+          {metricLabel()}
         </span>
       </div>
       {ordered.length === 0 ? (
@@ -100,7 +92,7 @@ export function UsageTrendChart({
         <>
           <p id={describedBy} className="sr-only">
             {title}. {ordered.length} {bucket} buckets. Peak{" "}
-            {formatUsageNumber(max)} {metricLabel(metric)}.
+            {formatUsageNumber(max)} {metricLabel()}.
           </p>
           <svg
             viewBox={`0 0 ${width} ${height}`}
@@ -146,7 +138,7 @@ export function UsageTrendChart({
                   strokeWidth="2"
                   vectorEffect="non-scaling-stroke"
                 >
-                  <title>{`${formatUsageBucketLabel(entry.startUtcMs, bucket)}: ${formatUsageNumber(valueFor(entry, metric))} ${metricLabel(metric)}`}</title>
+                  <title>{`${formatUsageBucketLabel(entry.startUtcMs, bucket)}: ${formatUsageNumber(valueFor(entry, metric))} ${metricLabel()}`}</title>
                 </circle>
               );
             })}
@@ -177,8 +169,7 @@ export function UsageTrendChart({
               <thead>
                 <tr>
                   <th scope="col">Bucket</th>
-                  <th scope="col">{metricLabel(metric)}</th>
-                  <th scope="col">Commands</th>
+                  <th scope="col">{metricLabel()}</th>
                 </tr>
               </thead>
               <tbody>
@@ -188,7 +179,6 @@ export function UsageTrendChart({
                       {formatUsageBucketLabel(entry.startUtcMs, bucket)}
                     </th>
                     <td>{formatCompactUsageNumber(valueFor(entry, metric))}</td>
-                    <td>{formatUsageNumber(entry.terminal.commandCount)}</td>
                   </tr>
                 ))}
               </tbody>
