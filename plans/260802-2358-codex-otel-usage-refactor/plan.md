@@ -25,7 +25,7 @@ compatible `/api/usage/*` routes, and redesign Usage/Settings without terminal c
 | 2 | Codex-only runtime and SQLite schema | Complete | 2d | [phase-02](./phase-02-codex-runtime-schema.md) |
 | 3 | Codex-only API and configuration contracts | Complete | 1.5d | [phase-03](./phase-03-codex-api-config.md) |
 | 4 | Usage and Settings redesign | Complete | 2d | [phase-04](./phase-04-codex-usage-settings-ui.md) |
-| 5 | Migration, tests, docs, and release/reset gates | Complete* | 1d | [phase-05](./phase-05-validation-migration-docs.md) |
+| 5 | Migration, tests, docs, and release/reset gates | Complete | 1d | [phase-05](./phase-05-validation-migration-docs.md) |
 
 ## Decisions
 
@@ -43,7 +43,7 @@ Phase 1 must land before removing runtime types; Phase 2 defines the DTOs consum
 Phase 5 is the release gate: negative PTY dependency scan, Rust/UI/browser tests, migration/reset
 verification, privacy scan, and enabled-vs-disabled PTY performance comparison.
 
-## Completion evidence (2026-08-04)
+## Completion evidence (2026-08-05 01:11 +07:00)
 
 - Rust: 601 passed, 0 failed, 2 ignored.
 - UI: 756/756; browser: 69/69.
@@ -53,8 +53,8 @@ verification, privacy scan, and enabled-vs-disabled PTY performance comparison.
 - Manual PTY enabled-vs-disabled benchmark and pinned Codex compatibility tests remain
   environment-gated; no release claim is made for those gates.
 
-*Complete for implemented refactor and automated validation; packaging/signing and manual
-environment-gated gates remain release follow-ups.
+Complete for implemented refactor and automated validation; code review approved 8/10 with no
+critical issues. Packaging/signing and manual environment-gated gates remain release follow-ups.
 
 ## Evidence
 

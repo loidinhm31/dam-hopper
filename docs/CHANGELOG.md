@@ -1,3 +1,13 @@
+## 2026-08-05
+
+- **Codex OTel-only Usage refactor.** Removed terminal Usage work from PTY production paths and
+  made bounded Codex `response.completed` OTLP events the sole usage write source. The fresh
+  Codex-only `telemetry.db` schema, aggregate/session API, Usage page, and Settings exporter flow
+  now document retention-bounded (not permanent) session summaries, WAL/SHM reset boundaries, and
+  privacy-safe data contracts. `sessions.db` remains protected from telemetry resets. Automated Rust, UI, web,
+  and browser gates pass; manual PTY benchmarking, signing, and target-environment release checks
+  remain follow-ups.
+
 ## 2026-07-30
 
 - **Native embedded browser controller (Phase 03).** Added the Tauri desktop child-WebView controller, build-time bridge injection, loopback/HTTPS tunnel navigation policy, bounded native relay validation, profile-isolated browser storage, lifecycle/geometry commands, and fail-closed popup, download, redirect, external-scheme, and permission handling. Windows WebView2 is the verified implementation target; Linux remains build-only and macOS is deferred. [See plan](../plans/260728-1313-tauri-native-embedded-browser/plan.md).

@@ -337,12 +337,13 @@ deep links. List and detail queries refetch every 15 seconds only while the docu
 hidden documents stop polling. Paused collection leaves stored summaries readable and marks
 responses as paused; deletion remains an explicit destructive operation.
 
-### Agent-run summaries (internal store contract)
+### Flat Codex session summaries (internal store contract)
 
-Accepted Codex OTel events maintain one permanent flat summary per HMAC run. Summaries contain safe
-provider/model/role/status, nullable token components, and explicit `delta` or `cumulative`
-semantics. The session routes above project these summaries into bounded list/detail responses and
-never expose the underlying rows.
+Accepted Codex `response.completed` events maintain one flat summary per HMAC session while it is
+inside the configured detail-retention window. Summaries are purged with expired detail data; they
+are not permanent. Summaries contain safe provider/model/status, nullable token components, and
+explicit `delta` or `cumulative` semantics. The session routes above project these summaries into
+bounded list/detail responses and never expose the underlying rows.
 
 ### DELETE /api/usage
 

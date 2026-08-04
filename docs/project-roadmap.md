@@ -68,6 +68,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 05 protected session-audit API — [COMPLETED 2026-08-01]**: protected list/detail contracts and deletion/retention semantics delivered; review approved after cycle 3.
 - **Phase 06 shared Usage session-audit UI — [COMPLETED 2026-08-01; superseded by Codex-only contract]**: shared browser/native session list/detail, token states, accessibility/deep-link behavior, and degraded/error states are delivered. The current contract is flat Codex summaries with no terminal, tree, lineage, or correlation fields.
 - **Phase 07 release gates, tests, and docs — [COMPLETED 2026-08-02; superseded by Codex-only contract]**: Rust/UI/browser/privacy/host-smoke evidence and 100k aggregate/list p95 gates pass for the Codex-only API. Current validation also covers bounded model summaries, strict removed-key rejection, active-session cursors, and flat session detail.
+- **Codex OTel-only Usage refactor Phase 05 — [COMPLETED 2026-08-05; review approved 8/10]**: Automated validation, reset/reopen/privacy/terminal-dependency gates, and documentation finalization complete. Release follow-ups: signing key, manual PTY benchmark, and pinned Codex compatibility tests.
 
 ## Roadmap Phases
 
