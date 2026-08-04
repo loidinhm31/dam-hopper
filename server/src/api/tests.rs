@@ -16,11 +16,9 @@ use crate::{
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
     telemetry::{
-        load_or_create_hmac_key, normalize_command,
         worker::{TelemetryControl, TelemetryHandle},
-        AgentUsageEvent, CaptureQuality, CodexModel, CodexVersion, CommandEvent, CommandEventId,
-        CommandOutcome, CorrelationQuality, SafeIdentifier, ShellKind, TelemetryCmd,
-        TelemetryKeyRing, TelemetryStore, TerminalRunEvent, TerminalRunId, TokenCounterSemantic,
+        CodexModel, CodexUsageEvent, CodexVersion, SafeIdentifier, SourceQuality, TelemetryCmd,
+        TelemetryKeyRing, TelemetryStore, TokenCounterSemantic, TokenQuality,
         TELEMETRY_SCHEMA_VERSION,
     },
     tunnel::{CloudflaredDriver, TunnelSessionManager},
@@ -43,7 +41,6 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
-use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -1622,15 +1619,15 @@ async fn usage_summary_returns_filled_aggregate_series_and_detail_metrics() {
     assert_eq!(
         series
             .iter()
-            .map(|bucket| bucket["terminal"]["commandCount"].as_u64().unwrap())
+            .filter_map(|bucket| bucket["codex"]["responseCount"].as_u64())
             .sum::<u64>(),
         2
     );
-    assert_eq!(value["categories"][0]["name"], "git");
-    assert_eq!(value["projects"][0]["name"], "unassigned");
+    assert!(value["categories"].as_array().unwrap().is_empty());
+    assert!(value["projects"].as_array().unwrap().is_empty());
     assert_eq!(value["detailMetrics"]["durationP50Ms"], 100);
     assert_eq!(value["detailMetrics"]["durationP95Ms"], 300);
-    assert_eq!(value["detailMetrics"]["repeatedCommandCount"], 1);
+    assert_eq!(value["detailMetrics"]["repeatedCommandCount"], 0);
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(!text.contains("fingerprint"));
     assert!(!text.contains("git status"));
@@ -1642,7 +1639,7 @@ async fn usage_sessions_are_protected_reconcile_and_exclude_private_fields() {
     let state = make_state(&tmp);
     activate_telemetry(&state, &tmp);
     let timestamp = i64::try_from(now_ms()).unwrap().saturating_sub(1_000);
-    let (session_id, terminal_id) = write_usage_session(
+    let session_id = write_usage_session(
         &state,
         b"raw-provider-session",
         Some("test-project"),
@@ -1657,7 +1654,7 @@ async fn usage_sessions_are_protected_reconcile_and_exclude_private_fields() {
     let list = get(
         state.clone(),
         &format!(
-            "/api/usage/sessions?from={}&to={}&terminal={terminal_id}",
+            "/api/usage/sessions?from={}&to={}",
             timestamp - 1,
             timestamp + 1
         ),
@@ -1686,10 +1683,10 @@ async fn usage_sessions_are_protected_reconcile_and_exclude_private_fields() {
         list_value["sessions"][0]["delegationState"],
         "lineage_unavailable"
     );
-    assert_eq!(
-        list_value["sessions"][0]["terminals"][0]["project"],
-        "test-project"
-    );
+    assert!(list_value["sessions"][0]["terminals"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     let serialized = String::from_utf8(list_body.to_vec()).unwrap();
     for forbidden in [
         "raw-provider-session",
@@ -1861,7 +1858,7 @@ async fn usage_session_cursor_bounds_and_ids_are_strict() {
 }
 
 #[tokio::test]
-async fn usage_session_tree_detail_stays_under_200ms_for_100k_legacy_nodes() {
+async fn usage_session_tree_detail_stays_bounded_for_large_codex_store() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
     activate_telemetry(&state, &tmp);
@@ -1879,22 +1876,20 @@ async fn usage_session_tree_detail_stays_under_200ms_for_100k_legacy_nodes() {
     let transaction = connection.transaction().unwrap();
     transaction
         .execute(
-            "INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, ?1, NULL, 'codex', 'root', 'gpt-5.6-sol', '0.146.0', ?2, ?2, 'completed', 'exact', 'lineage_unavailable', 'exact', 'cumulative', ?2, 1, 1, 1, 1, ?2)",
+            "INSERT INTO codex_sessions(session_fingerprint, model, source_version, source_quality, started_at_utc_ms, ended_at_utc_ms, status, counter_semantic, token_quality, response_count, duration_ms_sum, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, 'gpt-5.6-sol', '0.146.0', 'verified', ?2, ?2, 'completed', 'delta', 'exact', 1, 1, 1, 1, 1, 1, ?2)",
             rusqlite::params![root_id, timestamp],
         )
         .unwrap();
     {
         let mut insert = transaction
-            .prepare("INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, ?2, ?2, 'codex', 'subagent', 'gpt-5.6-terra', '0.146.0', ?3, ?3, 'completed', 'exact', 'lineage_unavailable', 'exact', 'cumulative', ?3, 1, 1, 1, 1, ?3)")
+            .prepare("INSERT INTO codex_sessions(session_fingerprint, model, source_version, source_quality, started_at_utc_ms, ended_at_utc_ms, status, counter_semantic, token_quality, response_count, duration_ms_sum, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, 'gpt-5.6-terra', '0.146.0', 'verified', ?2, ?2, 'completed', 'delta', 'exact', 1, 1, 1, 1, 1, 1, ?2)")
             .unwrap();
-        // Production OTel summaries are flat. These deliberately legacy-shaped
-        // rows prove the disabled tree-detail endpoint stays bounded if older
-        // data or malformed SQLite rows contain a wide hierarchy.
+        // Codex sessions are flat. A large unrelated store proves detail lookup
+        // remains bounded without reconstructing a terminal or agent tree.
         for index in 1..=100_000_u64 {
             insert
                 .execute(rusqlite::params![
                     format!("d{index:063x}"),
-                    root_id,
                     timestamp + index as i64
                 ])
                 .unwrap();
@@ -1904,26 +1899,26 @@ async fn usage_session_tree_detail_stays_under_200ms_for_100k_legacy_nodes() {
 
     let plan = connection
         .prepare(
-            "EXPLAIN QUERY PLAN SELECT run_id FROM agent_runs WHERE root_run_id = ?1 AND parent_run_id = ?2 ORDER BY started_at_utc_ms, run_id LIMIT 257",
+            "EXPLAIN QUERY PLAN SELECT session_fingerprint FROM codex_sessions WHERE session_fingerprint = ?1",
         )
         .unwrap()
-        .query_map(rusqlite::params![root_id, root_id], |row| row.get::<_, String>(3))
+        .query_map(rusqlite::params![root_id], |row| row.get::<_, String>(3))
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap()
         .join(" ");
     assert!(
-        plan.contains("idx_agent_runs_root_parent_started"),
+        plan.contains("codex_sessions") && plan.contains("INDEX"),
         "query plan: {plan}"
     );
 
     let root_digest: crate::telemetry::privacy::HmacDigest = root_id.try_into().unwrap();
-    let request = format!("/api/usage/sessions/{}", String::from(root_digest.clone()));
-    const SAMPLE_COUNT: usize = 20;
+    let request = format!("/api/usage/sessions/{}", String::from(root_digest));
+    const SAMPLE_COUNT: usize = 5;
     let mut durations = Vec::with_capacity(SAMPLE_COUNT);
     let mut response_body = None;
     for _ in 0..SAMPLE_COUNT {
-    let started = Instant::now();
+        let started = Instant::now();
         let response = get(state.clone(), &request).await;
         assert_eq!(response.status(), StatusCode::OK);
         response_body = Some(
@@ -1934,23 +1929,19 @@ async fn usage_session_tree_detail_stays_under_200ms_for_100k_legacy_nodes() {
         durations.push(started.elapsed());
     }
     durations.sort_unstable();
-    // Twenty samples make the reported p95 a percentile rather than the
-    // single slowest request, which is vulnerable to unrelated suite load.
-    let p95_index = (SAMPLE_COUNT * 95).div_ceil(100) - 1;
     eprintln!(
-        "100k legacy tree-detail API p95: {:?}",
-        durations[p95_index]
+        "large Codex-store detail API max: {:?}",
+        durations[SAMPLE_COUNT - 1]
     );
     assert!(
-        durations[p95_index] < Duration::from_millis(200),
-        "100k legacy tree-detail API p95 exceeded its work budget: {durations:?}"
+        durations[SAMPLE_COUNT - 1] < Duration::from_millis(200),
+        "large Codex-store detail API exceeded its work budget: {durations:?}"
     );
     let response: serde_json::Value = serde_json::from_slice(&response_body.unwrap()).unwrap();
     let nodes = response["nodes"].as_array().unwrap();
-    assert_eq!(nodes.len(), 256, "detail response applies its node cap");
+    assert_eq!(nodes.len(), 1, "Codex session details are flat");
     assert_eq!(nodes[0]["depth"], 0);
-    assert!(nodes[1..].iter().all(|node| node["depth"] == 1));
-    assert_eq!(response["truncated"], true);
+    assert_eq!(response["truncated"], false);
 }
 
 #[tokio::test]
@@ -1968,46 +1959,31 @@ async fn usage_session_detail_enforces_node_and_depth_caps() {
         .clone();
     let timestamp = i64::try_from(now_ms()).unwrap().saturating_sub(1_000);
     let root_id = "a".repeat(64);
-    let mut connection = rusqlite::Connection::open(store.path_for_tests()).unwrap();
-    let transaction = connection.transaction().unwrap();
-    transaction
-        .execute(
-            "INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, ?1, NULL, 'codex', 'root', 'gpt-5.6-sol', '0.146.0', ?2, ?2, 'completed', 'exact', 'exact', 'exact', 'cumulative', ?2, 1, 1, 1, 1, ?2)",
-            rusqlite::params![root_id, timestamp],
-        )
-        .unwrap();
-    let mut parent_id = root_id.clone();
-    {
-        let mut insert = transaction
-            .prepare("INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, ?2, ?3, 'codex', 'subagent', 'gpt-5.6-terra', '0.146.0', ?4, ?4, 'completed', 'exact', 'exact', 'exact', 'cumulative', ?4, 1, 1, 1, 1, ?4)")
-            .unwrap();
-        for index in 1..=300_u64 {
-            let child_id = format!("{index:064x}");
-            insert
-                .execute(rusqlite::params![
-                    child_id,
-                    root_id,
-                    parent_id,
-                    timestamp + index as i64
-                ])
-                .unwrap();
-            parent_id = child_id;
-        }
+    let telemetry = state.telemetry.read().unwrap().clone();
+    let keys = telemetry.hmac_keys.as_ref().unwrap();
+    let session_id: crate::telemetry::privacy::HmacDigest = root_id.clone().try_into().unwrap();
+    let mut events = Vec::with_capacity(301);
+    for index in 0..301_u64 {
+        let index_bytes = index.to_be_bytes();
+        events.push(TelemetryCmd::CodexUsage(CodexUsageEvent {
+            schema_version: TELEMETRY_SCHEMA_VERSION,
+            id: keys.digest(b"codex-detail-event", &[&index_bytes]),
+            occurred_at_utc_ms: timestamp + index as i64,
+            session_fingerprint: Some(session_id.clone()),
+            model: Some(CodexModel::new("gpt-5.6-sol").unwrap()),
+            source_version: CodexVersion::new("0.146.0").unwrap(),
+            source_quality: SourceQuality::Verified,
+            status: SafeIdentifier::new("completed").unwrap(),
+            counter_semantic: TokenCounterSemantic::Delta,
+            duration_ms: Some(1),
+            token_quality: TokenQuality::Exact,
+            input_tokens: Some(1),
+            cached_input_tokens: Some(1),
+            output_tokens: Some(1),
+            reasoning_tokens: Some(1),
+        }));
     }
-    let terminal_id = "b".repeat(64);
-    transaction
-        .execute(
-            "INSERT INTO terminal_runs(run_id, terminal_fingerprint, project, shell, started_at_utc_ms, ended_at_utc_ms, capture_quality) VALUES ('00000000-0000-0000-0000-000000000001', ?1, 'test-project', 'bash', ?2, ?2, 'rich')",
-            rusqlite::params![terminal_id, timestamp],
-        )
-        .unwrap();
-    transaction
-        .execute(
-            "INSERT INTO agent_run_terminals(run_id, terminal_fingerprint, first_seen_at_utc_ms, last_seen_at_utc_ms) VALUES (?1, ?2, ?3, ?3)",
-            rusqlite::params![format!("{:064x}", 1_u64), terminal_id, timestamp],
-        )
-        .unwrap();
-    transaction.commit().unwrap();
+    store.write_batch(events).unwrap();
 
     let response = get(state.clone(), &format!("/api/usage/sessions/{root_id}")).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -2016,17 +1992,19 @@ async fn usage_session_detail_enforces_node_and_depth_caps() {
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let nodes = value["nodes"].as_array().unwrap();
-    assert_eq!(nodes.len(), 17, "root plus depths 1 through 16");
-    assert_eq!(nodes.last().unwrap()["depth"], 16);
-    assert_eq!(value["truncated"], true);
+    assert_eq!(nodes.len(), 1, "Codex sessions do not expose a hierarchy");
+    assert_eq!(nodes[0]["depth"], 0);
+    assert_eq!(value["truncated"], false);
     assert_eq!(value["maxNodes"], 256);
     assert_eq!(value["maxDepth"], 16);
-    assert_eq!(value["session"]["childCount"], 300);
+    assert_eq!(value["session"]["childCount"], 0);
     assert_eq!(value["session"]["tokens"]["inputTokens"], 301);
+    assert_eq!(value["session"]["tokens"]["responseCount"], 301);
+    assert!(value["session"]["terminals"].as_array().unwrap().is_empty());
     let filtered = get(
         state,
         &format!(
-            "/api/usage/sessions?from={}&to={}&terminal={terminal_id}",
+            "/api/usage/sessions?from={}&to={}",
             timestamp - 1,
             timestamp + 400
         ),
@@ -2038,14 +2016,14 @@ async fn usage_session_detail_enforces_node_and_depth_caps() {
         .unwrap();
     let filtered_value: serde_json::Value = serde_json::from_slice(&filtered_body).unwrap();
     assert_eq!(filtered_value["sessions"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        filtered_value["sessions"][0]["terminals"][0]["project"],
-        "test-project"
-    );
+    assert!(filtered_value["sessions"][0]["terminals"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]
-async fn usage_session_api_lists_100k_roots_under_200ms() {
+async fn usage_session_api_lists_100k_codex_sessions_under_200ms() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
     activate_telemetry(&state, &tmp);
@@ -2062,7 +2040,7 @@ async fn usage_session_api_lists_100k_roots_under_200ms() {
     let transaction = connection.transaction().unwrap();
     {
         let mut insert = transaction
-            .prepare("INSERT INTO agent_runs(run_id, root_run_id, parent_run_id, provider, role, model, source_version, started_at_utc_ms, ended_at_utc_ms, status, correlation_quality, lineage_quality, token_quality, counter_semantic, counter_updated_at_utc_ms, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, ?1, NULL, 'codex', 'root', 'gpt-5.6-sol', '0.146.0', ?2, ?2, 'observed', 'unattributed', 'lineage_unavailable', 'exact', 'delta', ?2, 1, 2, 3, 4, ?2)")
+            .prepare("INSERT INTO codex_sessions(session_fingerprint, model, source_version, source_quality, started_at_utc_ms, ended_at_utc_ms, status, counter_semantic, token_quality, response_count, duration_ms_sum, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, 'gpt-5.6-sol', '0.146.0', 'verified', ?2, ?2, 'completed', 'delta', 'exact', 1, 4, 1, 2, 3, 4, ?2)")
             .unwrap();
         for index in 0..100_000_u64 {
             insert
@@ -2073,15 +2051,15 @@ async fn usage_session_api_lists_100k_roots_under_200ms() {
     transaction.commit().unwrap();
 
     let request = format!(
-            "/api/usage/sessions?from={}&to={}&limit=100",
-            timestamp - 1,
-            timestamp + 1
+        "/api/usage/sessions?from={}&to={}&limit=100",
+        timestamp - 1,
+        timestamp + 1
     );
     let mut durations = Vec::new();
     for _ in 0..5 {
         let started = std::time::Instant::now();
         let response = get(state.clone(), &request).await;
-    assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
         durations.push(started.elapsed());
     }
     durations.sort_unstable();
@@ -2139,17 +2117,18 @@ async fn usage_delete_all_removes_summaries_before_rotating_hmac_key() {
     let telemetry = state.telemetry.read().unwrap().clone();
     let keys = telemetry.hmac_keys.as_ref().unwrap();
     let before = keys.digest(b"rotation-proof", &[b"stable"]);
-    let event = AgentUsageEvent {
+    let event = CodexUsageEvent {
         schema_version: TELEMETRY_SCHEMA_VERSION,
         id: keys.digest(b"event", &[b"delete-all"]),
         occurred_at_utc_ms: 10,
-        conversation_fingerprint: Some(keys.digest(b"conversation", &[b"delete-all"])),
-        terminal_fingerprint: Some(keys.digest(b"terminal", &[b"delete-all"])),
+        session_fingerprint: Some(keys.digest(b"codex-conversation:v1", &[b"delete-all"])),
         model: Some(CodexModel::new("gpt-5.6-sol").unwrap()),
         source_version: CodexVersion::new("0.146.0").unwrap(),
-        correlation_quality: CorrelationQuality::Exact,
+        source_quality: SourceQuality::Verified,
+        status: SafeIdentifier::new("completed").unwrap(),
         counter_semantic: TokenCounterSemantic::Delta,
         duration_ms: None,
+        token_quality: TokenQuality::Exact,
         input_tokens: Some(2),
         cached_input_tokens: Some(3),
         output_tokens: Some(5),
@@ -2157,13 +2136,13 @@ async fn usage_delete_all_removes_summaries_before_rotating_hmac_key() {
     };
     let store = telemetry.store.as_ref().unwrap();
     store
-        .write_batch(vec![TelemetryCmd::AgentUsage(event)])
+        .write_batch(vec![TelemetryCmd::CodexUsage(event)])
         .unwrap();
     assert_eq!(
         store
             .open_read()
             .unwrap()
-            .query_row("SELECT count(*) FROM agent_run_terminals", [], |row| row
+            .query_row("SELECT count(*) FROM codex_usage_events", [], |row| row
                 .get::<_, i64>(0))
             .unwrap(),
         1
@@ -2177,7 +2156,12 @@ async fn usage_delete_all_removes_summaries_before_rotating_hmac_key() {
     .await;
     assert_eq!(deleted.status(), StatusCode::OK);
     let connection = store.open_read().unwrap();
-    for table in ["agent_usage_events", "agent_run_terminals", "agent_runs"] {
+    for table in [
+        "codex_usage_events",
+        "codex_sessions",
+        "codex_daily_rollups",
+        "telemetry_health",
+    ] {
         let count = connection
             .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
                 row.get::<_, i64>(0)
@@ -2437,99 +2421,78 @@ fn activate_telemetry(state: &AppState, tmp: &TempDir) {
 fn write_usage_session(
     state: &AppState,
     conversation: &[u8],
-    project: Option<&str>,
+    _project: Option<&str>,
     timestamp: i64,
     tokens: [Option<u64>; 4],
-) -> (String, String) {
+) -> String {
     let telemetry = state.telemetry.read().unwrap().clone();
     let keys = telemetry.hmac_keys.as_ref().unwrap();
-    let run_id = TerminalRunId(Uuid::new_v4());
-    let terminal_fingerprint = keys.digest(
-        crate::telemetry::TERMINAL_HMAC_DOMAIN,
-        &[run_id.0.as_hyphenated().to_string().as_bytes()],
-    );
-    let session_id = keys.digest(b"conversation", &[conversation]);
+    let session_id = keys.digest(b"codex-conversation:v1", &[conversation]);
+    let timestamp_bytes = timestamp.to_be_bytes();
+    let event_id = keys.digest(b"codex-usage:v1", &[conversation, &timestamp_bytes]);
+    let token_quality = match tokens.iter().filter(|value| value.is_some()).count() {
+        0 => TokenQuality::Unavailable,
+        4 => TokenQuality::Exact,
+        _ => TokenQuality::Partial,
+    };
     telemetry
         .store
         .as_ref()
         .unwrap()
-        .write_batch(vec![
-            TelemetryCmd::TerminalRun(TerminalRunEvent {
-                schema_version: TELEMETRY_SCHEMA_VERSION,
-                run_id,
-                terminal_fingerprint: Some(terminal_fingerprint.clone()),
-                project: project.map(|value| SafeIdentifier::new(value).unwrap()),
-                shell: ShellKind::Bash,
-                started_at_utc_ms: timestamp.saturating_sub(100),
-                ended_at_utc_ms: Some(timestamp),
-                capture_quality: CaptureQuality::Rich,
-            }),
-            TelemetryCmd::AgentUsage(AgentUsageEvent {
-                schema_version: TELEMETRY_SCHEMA_VERSION,
-                id: keys.digest(b"event", &[conversation]),
-                occurred_at_utc_ms: timestamp,
-                conversation_fingerprint: Some(session_id.clone()),
-                terminal_fingerprint: Some(terminal_fingerprint.clone()),
-                model: Some(CodexModel::new("gpt-5.6-sol").unwrap()),
-                source_version: CodexVersion::new("0.146.0").unwrap(),
-                correlation_quality: CorrelationQuality::Exact,
-                counter_semantic: TokenCounterSemantic::Delta,
-                duration_ms: None,
-                input_tokens: tokens[0],
-                cached_input_tokens: tokens[1],
-                output_tokens: tokens[2],
-                reasoning_tokens: tokens[3],
-            }),
-        ])
+        .write_batch(vec![TelemetryCmd::CodexUsage(CodexUsageEvent {
+            schema_version: TELEMETRY_SCHEMA_VERSION,
+            id: event_id,
+            occurred_at_utc_ms: timestamp,
+            session_fingerprint: Some(session_id.clone()),
+            model: Some(CodexModel::new("gpt-5.6-sol").unwrap()),
+            source_version: CodexVersion::new("0.146.0").unwrap(),
+            source_quality: SourceQuality::Verified,
+            status: SafeIdentifier::new("completed").unwrap(),
+            counter_semantic: TokenCounterSemantic::Delta,
+            duration_ms: None,
+            token_quality,
+            input_tokens: tokens[0],
+            cached_input_tokens: tokens[1],
+            output_tokens: tokens[2],
+            reasoning_tokens: tokens[3],
+        })])
         .unwrap();
-    (String::from(session_id), String::from(terminal_fingerprint))
+    String::from(session_id)
 }
 
 fn write_usage_command(
     state: &AppState,
-    tmp: &TempDir,
+    _tmp: &TempDir,
     timestamp: i64,
     sequence: u64,
-    command: &str,
+    _command: &str,
     duration_ms: u64,
 ) {
-    let key = load_or_create_hmac_key(&tmp.path().join("usage-test-key")).unwrap();
-    let normalized = normalize_command(command, &key);
-    let run_id = TerminalRunId(Uuid::new_v4());
-    let store = state
-        .telemetry
-        .read()
-        .unwrap()
+    let telemetry = state.telemetry.read().unwrap().clone();
+    let keys = telemetry.hmac_keys.as_ref().unwrap();
+    let timestamp_bytes = timestamp.to_be_bytes();
+    let sequence_bytes = sequence.to_be_bytes();
+    telemetry
         .store
         .as_ref()
         .unwrap()
-        .clone();
-    store
-        .write_batch(vec![
-            TelemetryCmd::TerminalRun(TerminalRunEvent {
-                schema_version: TELEMETRY_SCHEMA_VERSION,
-                run_id,
-                terminal_fingerprint: None,
-                project: None,
-                shell: ShellKind::Bash,
-                started_at_utc_ms: timestamp,
-                ended_at_utc_ms: None,
-                capture_quality: CaptureQuality::Rich,
-            }),
-            TelemetryCmd::Command(CommandEvent {
-                schema_version: TELEMETRY_SCHEMA_VERSION,
-                id: CommandEventId { run_id, sequence },
-                occurred_at_utc_ms: timestamp,
-                duration_ms: Some(duration_ms),
-                exit_code: Some(0),
-                outcome: CommandOutcome::Succeeded,
-                category: normalized.category,
-                executable: normalized.executable,
-                argument_count: normalized.argument_count,
-                fingerprint: normalized.fingerprint,
-                capture_quality: CaptureQuality::Rich,
-            }),
-        ])
+        .write_batch(vec![TelemetryCmd::CodexUsage(CodexUsageEvent {
+            schema_version: TELEMETRY_SCHEMA_VERSION,
+            id: keys.digest(b"codex-usage:v1", &[&timestamp_bytes, &sequence_bytes]),
+            occurred_at_utc_ms: timestamp,
+            session_fingerprint: None,
+            model: Some(CodexModel::new("gpt-5.6-sol").unwrap()),
+            source_version: CodexVersion::new("0.146.0").unwrap(),
+            source_quality: SourceQuality::Verified,
+            status: SafeIdentifier::new("completed").unwrap(),
+            counter_semantic: TokenCounterSemantic::Delta,
+            duration_ms: Some(duration_ms),
+            token_quality: TokenQuality::Exact,
+            input_tokens: Some(1),
+            cached_input_tokens: Some(1),
+            output_tokens: Some(1),
+            reasoning_tokens: Some(1),
+        })])
         .unwrap();
 }
 

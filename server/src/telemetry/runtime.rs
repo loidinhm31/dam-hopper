@@ -11,7 +11,7 @@ use super::{
         CollectorHealthSnapshot,
     },
     hmac_key_path,
-    sink::{ChannelTelemetrySink, TelemetryCmd},
+    sink::{CodexUsageQueue, TelemetryCmd},
     worker::{TelemetryControl, TelemetryHandle, TelemetryWorker},
     TelemetryKeyRing, TelemetryStore,
 };
@@ -31,6 +31,7 @@ struct RuntimeInner {
     collector_error: RwLock<Option<String>>,
     key_path: Option<std::path::PathBuf>,
     collector_secret_path: Option<std::path::PathBuf>,
+    session_db_path: Option<std::path::PathBuf>,
 }
 
 #[derive(serde::Serialize)]
@@ -43,12 +44,17 @@ pub struct TelemetryRuntimeStatus {
 
 impl TelemetryRuntime {
     pub fn new() -> Self {
-        Self::with_optional_paths(None, None)
+        Self::with_optional_paths(None, None, None)
+    }
+
+    pub fn with_session_db_path(session_db_path: std::path::PathBuf) -> Self {
+        Self::with_optional_paths(None, None, Some(session_db_path))
     }
 
     fn with_optional_paths(
         key_path: Option<std::path::PathBuf>,
         collector_secret_path: Option<std::path::PathBuf>,
+        session_db_path: Option<std::path::PathBuf>,
     ) -> Self {
         Self {
             inner: Arc::new(RuntimeInner {
@@ -60,6 +66,7 @@ impl TelemetryRuntime {
                 collector_error: RwLock::new(None),
                 key_path,
                 collector_secret_path,
+                session_db_path,
             }),
         }
     }
@@ -69,7 +76,7 @@ impl TelemetryRuntime {
         key_path: std::path::PathBuf,
         collector_secret_path: std::path::PathBuf,
     ) -> Self {
-        Self::with_optional_paths(Some(key_path), Some(collector_secret_path))
+        Self::with_optional_paths(Some(key_path), Some(collector_secret_path), None)
     }
 
     pub fn handle_cell(&self) -> Arc<RwLock<TelemetryHandle>> {
@@ -95,6 +102,20 @@ impl TelemetryRuntime {
                 .expect("collector error lock poisoned")
                 .clone(),
         }
+    }
+
+    /// Rotate the privacy key after a successful delete-all, even when the
+    /// runtime is currently disabled and therefore has no live handle/key ring.
+    pub fn rotate_hmac_key_after_delete(&self) -> std::io::Result<()> {
+        if let Some(keys) = self.handle().hmac_keys {
+            return keys.rotate_after_delete();
+        }
+        let path = match self.inner.key_path.clone() {
+            Some(path) => path,
+            None => hmac_key_path()?,
+        };
+        let keys = TelemetryKeyRing::load_or_create(path)?;
+        keys.rotate_after_delete()
     }
 
     pub async fn transition_lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
@@ -189,7 +210,8 @@ impl TelemetryRuntime {
         let activation = tokio::task::spawn_blocking({
             let config = config.clone();
             let key_path = self.inner.key_path.clone();
-            move || build_active_handle(&config, key_path)
+            let session_db_path = self.inner.session_db_path.clone();
+            move || build_active_handle(&config, key_path, session_db_path)
         })
         .await
         .map_err(|error| format!("telemetry activation task failed: {error}"))??;
@@ -314,9 +336,14 @@ impl TelemetryRuntime {
 fn build_active_handle(
     config: &TelemetryConfig,
     key_path: Option<std::path::PathBuf>,
+    session_db_path: Option<std::path::PathBuf>,
 ) -> Result<(TelemetryHandle, JoinHandle<()>), String> {
+    let telemetry_db_path = telemetry_path(&config.db_path);
+    if let Some(session_db_path) = session_db_path {
+        ensure_distinct_database_paths(&session_db_path, &telemetry_db_path)?;
+    }
     let store = Arc::new(
-        TelemetryStore::open(&telemetry_path(&config.db_path))
+        TelemetryStore::open(&telemetry_db_path)
             .map_err(|_| "Unable to open usage storage".to_string())?,
     );
     let key_path = key_path.map(Ok).unwrap_or_else(|| {
@@ -330,8 +357,8 @@ fn build_active_handle(
         !config.paused,
         config.excluded_projects.clone(),
     ));
-    let (sink, receiver) = ChannelTelemetrySink::channel_with_control(512, control.clone());
-    let sender = sink.sender();
+    let (queue, receiver) = CodexUsageQueue::channel(512);
+    let sender = queue.sender();
     let worker = TelemetryWorker::new(receiver, store.clone())
         .spawn()
         .map_err(|_| "Unable to start usage worker".to_string())?;
@@ -367,7 +394,10 @@ fn apply_retention(handle: &TelemetryHandle, config: &TelemetryConfig) -> Result
         .map_err(|_| "Usage retention operation failed".to_string())
 }
 
-fn telemetry_path(value: &str) -> std::path::PathBuf {
+pub(crate) fn telemetry_path(value: &str) -> std::path::PathBuf {
+    if value == "~" {
+        return dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    }
     value
         .strip_prefix("~/")
         .map(|suffix| {
@@ -376,6 +406,74 @@ fn telemetry_path(value: &str) -> std::path::PathBuf {
                 .join(suffix)
         })
         .unwrap_or_else(|| std::path::PathBuf::from(value))
+}
+
+pub(crate) fn ensure_distinct_database_paths(
+    session_db_path: &std::path::Path,
+    telemetry_db_path: &std::path::Path,
+) -> Result<(), String> {
+    let normalized_session = normalized_database_path(session_db_path)?;
+    let normalized_telemetry = normalized_database_path(telemetry_db_path)?;
+    if normalized_session == normalized_telemetry
+        || same_file_identity(&normalized_session, &normalized_telemetry)?
+    {
+        return Err("telemetry and session databases must use different files".to_string());
+    }
+    Ok(())
+}
+
+fn normalized_database_path(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|_| "unable to resolve database path".to_string())?
+            .join(path)
+    };
+    if let Ok(canonical) = std::fs::canonicalize(&absolute) {
+        return Ok(canonical);
+    }
+    let parent = absolute
+        .parent()
+        .ok_or_else(|| "unable to resolve database path".to_string())?;
+    let file_name = absolute
+        .file_name()
+        .ok_or_else(|| "unable to resolve database path".to_string())?;
+    let canonical_parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+    Ok(canonical_parent.join(file_name))
+}
+
+fn same_file_identity(left: &std::path::Path, right: &std::path::Path) -> Result<bool, String> {
+    let left_metadata = match std::fs::metadata(left) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err("unable to inspect database path".to_string()),
+    };
+    let right_metadata = match std::fs::metadata(right) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err("unable to inspect database path".to_string()),
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        return Ok(left_metadata.dev() == right_metadata.dev()
+            && left_metadata.ino() == right_metadata.ino());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        return Ok(
+            left_metadata.volume_serial_number() == right_metadata.volume_serial_number()
+                && left_metadata.file_index() == right_metadata.file_index(),
+        );
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (left_metadata, right_metadata);
+        Ok(false)
+    }
 }
 
 #[cfg(test)]
@@ -413,6 +511,21 @@ mod tests {
         runtime.shutdown().await;
     }
 
+    #[test]
+    fn disabled_runtime_can_rotate_the_persisted_privacy_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let key_path = temp.path().join("usage.key");
+        let before = TelemetryKeyRing::load_or_create(key_path.clone()).unwrap();
+        let old_digest = before.digest(b"delete-all-test", &[b"old"]);
+        drop(before);
+
+        let runtime =
+            TelemetryRuntime::with_paths(key_path.clone(), temp.path().join("collector-token"));
+        runtime.rotate_hmac_key_after_delete().unwrap();
+        let after = TelemetryKeyRing::load_or_create(key_path).unwrap();
+        assert_ne!(old_digest, after.digest(b"delete-all-test", &[b"old"]));
+    }
+
     #[tokio::test]
     async fn collector_reconfigure_failure_restores_the_previous_listener() {
         let temp = tempfile::tempdir().unwrap();
@@ -435,6 +548,61 @@ mod tests {
         assert!(runtime.apply_config(&active, &conflicting).await.is_err());
         assert!(runtime.status().collector.running);
         runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn activation_rejects_a_shared_session_and_telemetry_database() {
+        let temp = tempfile::tempdir().unwrap();
+        let shared_path = temp.path().join("shared.db");
+        let runtime = TelemetryRuntime::with_session_db_path(shared_path.clone());
+        let disabled = config(&temp, false);
+        let mut active = config(&temp, true);
+        active.db_path = shared_path.display().to_string();
+
+        let error = runtime.apply_config(&disabled, &active).await.unwrap_err();
+        assert!(error.contains("different files"));
+        assert!(!runtime.status().active);
+    }
+
+    #[test]
+    fn database_path_guard_accepts_distinct_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(ensure_distinct_database_paths(
+            &temp.path().join("sessions.db"),
+            &temp.path().join("telemetry.db"),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn database_path_guard_rejects_the_same_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("shared.db");
+        assert!(ensure_distinct_database_paths(&path, &path).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn database_path_guard_rejects_symlinked_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let telemetry = temp.path().join("telemetry.db");
+        let session = temp.path().join("sessions.db");
+        std::fs::write(&telemetry, []).unwrap();
+        std::os::unix::fs::symlink(&telemetry, &session).unwrap();
+
+        assert!(ensure_distinct_database_paths(&session, &telemetry).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn database_path_guard_rejects_hard_linked_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let telemetry = temp.path().join("telemetry.db");
+        let session = temp.path().join("sessions.db");
+        std::fs::write(&telemetry, []).unwrap();
+        std::fs::hard_link(&telemetry, &session).unwrap();
+
+        assert!(ensure_distinct_database_paths(&session, &telemetry).is_err());
     }
 
     fn available_port() -> u16 {

@@ -394,7 +394,7 @@ TOML uses snake_case keys; the corresponding API representation uses camelCase (
 separate from session persistence. When enabled, startup creates/opens it and starts a bounded
 worker; initialization failures disable analytics only. SQLite and WAL/SHM files are restricted
 to owner access on Unix. Telemetry stores bounded, privacy-filtered metadata rather than command
-text, prompts, responses, or tool output; see the [telemetry architecture notes](./system-architecture.md#terminal-usage-analytics).
+text, prompts, responses, or tool output; see the [telemetry architecture notes](./system-architecture.md#codex-otel-usage-analytics).
 
 Terminal correlation injects a short-lived opaque resource marker into a clean shell environment,
 so aliases and wrapper processes inherit it without command inspection. If either the server or
@@ -417,8 +417,17 @@ Agent-run summaries are permanent and flat; raw OTel events are applied before d
 them. `delta` counters accumulate, while `cumulative` counters accept only newer non-regressing
 values. If app-server metadata cannot pass the content-free compatibility gate, summaries use
 `lineage_unavailable` and no hierarchy is inferred. Terminal associations are HMAC digests only.
-Telemetry schema migrations are runtime-managed by `TelemetryStore` and SQLite `user_version`; do not
-run migration SQL files manually.
+Telemetry uses a fresh v1 Codex-only schema containing only Codex sessions, usage events, daily
+rollups, and health state. There is no legacy-data migration or import. During development, startup
+checks the SQLite version and complete schema object set; a legacy, malformed, or otherwise
+incompatible telemetry database is reset transactionally by removing its user tables/views/triggers/
+indexes and recreating the v1 schema. A valid current database is reopened without data loss. The
+reset is bounded to the configured telemetry file, and telemetry/session database paths must resolve
+to different files. Stop DamHopper and remove the telemetry database plus its `-wal`/`-shm` sidecars
+for an explicit clean reset; never remove the separate `sessions.db`.
+
+The Phase 3 API/configuration cleanup and Phase 5 release gates are still follow-ups and are not
+implied complete by this runtime reset behavior.
 
 The Usage settings API can explicitly manage the local Codex exporter with `codexExporter: true`.
 It writes only the exact DamHopper-owned shape in `~/.codex/config.toml` (loopback `/v1/logs`,
