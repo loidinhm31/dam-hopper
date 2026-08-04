@@ -4,7 +4,7 @@ use crate::{
     config::TelemetryCollectorConfig,
     telemetry::{
         worker::{TelemetryControl, TelemetryHandle, TelemetryWorker},
-        SafeIdentifier, TelemetryCmd, TelemetryKeyRing, TelemetryStore,
+        TelemetryCmd, TelemetryKeyRing, TelemetryStore,
     },
 };
 use opentelemetry_proto::tonic::{
@@ -31,6 +31,17 @@ fn exporter_manager(temp: &tempfile::TempDir) -> (CodexExporterManager, Telemetr
             port: 4811,
         },
     )
+}
+
+fn fixture_with_source_identity(trace: u8, span: u8) -> Vec<u8> {
+    let mut request = ExportLogsServiceRequest::decode(
+        include_bytes!("fixtures/codex-cli-0.145.0-response-completed.bin").as_slice(),
+    )
+    .unwrap();
+    let record = &mut request.resource_logs[0].scope_logs[0].log_records[0];
+    record.trace_id = vec![trace; 16];
+    record.span_id = vec![span; 8];
+    request.encode_to_vec()
 }
 
 #[test]
@@ -223,7 +234,7 @@ async fn accepts_pinned_binary_once_and_rejects_invalid_requests() {
     let endpoint = format!("http://{}/v1/logs", collector.address());
     let token = std::fs::read_to_string(secret_path).unwrap();
     let client = reqwest::Client::new();
-    let fixture = include_bytes!("fixtures/codex-cli-0.145.0-response-completed.bin");
+    let fixture = fixture_with_source_identity(21, 22);
 
     assert_eq!(
         client
@@ -261,7 +272,7 @@ async fn accepts_pinned_binary_once_and_rejects_invalid_requests() {
     let connection = store.open_read().unwrap();
     assert_eq!(
         connection
-            .query_row("SELECT count(*) FROM agent_usage_events", [], |row| row
+            .query_row("SELECT count(*) FROM codex_usage_events", [], |row| row
                 .get::<_, i64>(0))
             .unwrap(),
         1
@@ -274,6 +285,35 @@ async fn accepts_pinned_binary_once_and_rejects_invalid_requests() {
         .unwrap()
         .windows(b"fixture-conversation".len())
         .any(|window| window == b"fixture-conversation"));
+
+    let last_accepted_before_drop = health.snapshot().last_accepted_at_utc_ms;
+    let mut invalid_timestamp = ExportLogsServiceRequest::decode(fixture.as_slice()).unwrap();
+    let record = &mut invalid_timestamp.resource_logs[0].scope_logs[0].log_records[0];
+    record.time_unix_nano = 0;
+    record.observed_time_unix_nano = 0;
+    record.trace_id = vec![11; 16];
+    record.span_id = vec![12; 8];
+    record.attributes.push(KeyValue {
+        key: "event.timestamp".to_string(),
+        value: Some(AnyValue {
+            value: Some(Value::StringValue("invalid-timestamp".to_string())),
+        }),
+        key_strindex: 0,
+    });
+    let response = client
+        .post(&endpoint)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/x-protobuf")
+        .body(invalid_timestamp.encode_to_vec())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+    assert_eq!(health.snapshot().dropped, 1);
+    assert_eq!(
+        health.snapshot().last_accepted_at_utc_ms,
+        last_accepted_before_drop
+    );
 
     let mut canary_request = ExportLogsServiceRequest::decode(fixture.as_slice()).unwrap();
     canary_request.resource_logs[0].scope_logs[0].log_records[0]
@@ -317,7 +357,7 @@ async fn accepts_pinned_binary_once_and_rejects_invalid_requests() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(
         connection
-            .query_row("SELECT count(*) FROM agent_usage_events", [], |row| row
+            .query_row("SELECT count(*) FROM codex_usage_events", [], |row| row
                 .get::<_, i64>(0))
             .unwrap(),
         1
@@ -354,14 +394,9 @@ async fn admits_newer_core_shape_and_reports_only_bounded_compatibility_health()
     let token = std::fs::read_to_string(secret_path).unwrap();
     let fixture = include_bytes!("fixtures/codex-cli-0.145.0-response-completed.bin");
     let mut request = ExportLogsServiceRequest::decode(fixture.as_slice()).unwrap();
-    let marker = SafeIdentifier::new("run-marker-safe").unwrap();
-    telemetry
-        .codex_correlation
-        .register(
-            marker.clone(),
-            crate::telemetry::TerminalRunId(uuid::Uuid::new_v4()),
-            chrono::Utc::now().timestamp_millis(),
-        );
+    let record = &mut request.resource_logs[0].scope_logs[0].log_records[0];
+    record.trace_id = vec![23; 16];
+    record.span_id = vec![24; 8];
     request.resource_logs[0]
         .resource
         .as_mut()
@@ -370,12 +405,6 @@ async fn admits_newer_core_shape_and_reports_only_bounded_compatibility_health()
         .value = Some(AnyValue {
         value: Some(Value::StringValue("999.0.0".to_string())),
     });
-    request.resource_logs[0]
-        .resource
-        .as_mut()
-        .unwrap()
-        .attributes
-        .push(content_attribute("dam_hopper.run_id", marker.as_str()));
     let output = request.resource_logs[0].scope_logs[0].log_records[0]
         .attributes
         .iter_mut()
@@ -396,23 +425,16 @@ async fn admits_newer_core_shape_and_reports_only_bounded_compatibility_health()
     assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
     tokio::time::sleep(Duration::from_millis(300)).await;
     let connection = store.open_read().unwrap();
-    let (input, output, correlation): (Option<i64>, Option<i64>, String) = connection
+    let (input, output, source_quality): (Option<i64>, Option<i64>, String) = connection
         .query_row(
-            "SELECT input_tokens, output_tokens, correlation_quality FROM agent_usage_events",
+            "SELECT input_tokens, output_tokens, source_quality FROM codex_usage_events",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
     assert_eq!(input, Some(24_387));
     assert_eq!(output, None);
-    assert_eq!(correlation, "exact");
-    assert!(
-        !std::fs::read(store.path_for_tests())
-            .unwrap()
-            .windows(marker.as_str().len())
-            .any(|window| window == marker.as_str().as_bytes()),
-        "correlation marker must not be persisted"
-    );
+    assert_eq!(source_quality, "unverified");
     let snapshot = health.snapshot();
     assert_eq!(snapshot.unverified_version, 1);
     assert_eq!(snapshot.core_schema_drift, 1);
@@ -431,7 +453,7 @@ async fn returns_retryable_status_when_the_usage_queue_is_full() {
     let temp = tempfile::tempdir().unwrap();
     let store = Arc::new(TelemetryStore::open(&temp.path().join("telemetry.db")).unwrap());
     let keys = Arc::new(TelemetryKeyRing::load_or_create(temp.path().join("hmac")).unwrap());
-    let (sender, _receiver) = std::sync::mpsc::sync_channel(0);
+    let (sender, _receiver) = std::sync::mpsc::sync_channel(1);
     let control = Arc::new(TelemetryControl::new(true, Vec::<String>::new()));
     let telemetry = TelemetryHandle::active(control, store, Some(sender)).with_hmac_keys(keys);
     let config = TelemetryCollectorConfig {
@@ -447,17 +469,27 @@ async fn returns_retryable_status_when_the_usage_queue_is_full() {
     let endpoint = format!("http://{}/v1/logs", collector.address());
     let token = std::fs::read_to_string(secret_path).unwrap();
 
+    let mut request =
+        ExportLogsServiceRequest::decode(fixture_with_source_identity(25, 26).as_slice()).unwrap();
+    let mut second_record = request.resource_logs[0].scope_logs[0].log_records[0].clone();
+    second_record.trace_id = vec![27; 16];
+    second_record.span_id = vec![28; 8];
+    request.resource_logs[0].scope_logs[0]
+        .log_records
+        .push(second_record);
+
     let response = reqwest::Client::new()
         .post(&endpoint)
         .header("Authorization", format!("Bearer {token}"))
         .header("Content-Type", "application/x-protobuf")
-        .body(include_bytes!("fixtures/codex-cli-0.145.0-response-completed.bin").to_vec())
+        .body(request.encode_to_vec())
         .send()
         .await
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(health.snapshot().dropped, 1);
-    assert_eq!(health.snapshot().queued, 0);
+    assert_eq!(health.snapshot().queued, 1);
+    assert!(health.snapshot().last_accepted_at_utc_ms.is_some());
 
     collector.stop().await;
 }

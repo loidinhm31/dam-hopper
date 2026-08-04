@@ -172,7 +172,7 @@ async fn main() -> anyhow::Result<()> {
     // The Codex usage runtime stays independent from the PTY manager for the
     // life of the server. A disabled runtime is cheap and can be activated by
     // Settings without changing terminal behavior.
-    let telemetry_runtime = TelemetryRuntime::new();
+    let telemetry_runtime = TelemetryRuntime::with_session_db_path(db_path.clone());
     if config.server.telemetry.enabled {
         let disabled = dam_hopper_server::config::TelemetryConfig::default();
         if let Err(error) = telemetry_runtime

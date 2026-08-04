@@ -147,21 +147,21 @@ async fn receive(
         }
     };
     let now = chrono::Utc::now().timestamp_millis();
+    let mut queued_any = false;
     for decoded in decoded {
         record_compatibility_health(&state.health, &decoded);
-        let Some(event) = normalize(
-            decoded,
-            &state.keys,
-            &state.telemetry.codex_correlation,
-            now,
-        ) else {
+        let Some(event) = normalize(decoded, &state.keys, now) else {
+            state.health.dropped();
             continue;
         };
-        match state.telemetry.try_record_agent_usage(event) {
+        match state.telemetry.try_record_codex_usage(event) {
             // A 202 means the record crossed the bounded receiver-to-worker
             // handoff. SQLite dedupe makes an exporter retry safe if a later
             // record in this request cannot enter that queue.
-            TelemetryEnqueue::Queued => state.health.queued(),
+            TelemetryEnqueue::Queued => {
+                state.health.queued();
+                queued_any = true;
+            }
             // Pausing is an explicit local control, so acknowledge the
             // intentionally discarded record without prompting retries.
             TelemetryEnqueue::Paused => state.health.dropped(),
@@ -169,11 +169,16 @@ async fn receive(
             // a retryable status rather than silently turning it into loss.
             TelemetryEnqueue::Dropped | TelemetryEnqueue::Unavailable => {
                 state.health.dropped();
+                if queued_any {
+                    state.health.accepted(now);
+                }
                 return StatusCode::SERVICE_UNAVAILABLE;
             }
         }
     }
-    state.health.accepted(now);
+    if queued_any {
+        state.health.accepted(now);
+    }
     StatusCode::ACCEPTED
 }
 

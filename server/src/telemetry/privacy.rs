@@ -91,9 +91,9 @@ pub fn load_or_create_hmac_key(path: &Path) -> io::Result<TelemetryHmacKey> {
     }
 }
 
-/// Shared, replaceable HMAC material for terminal and Codex telemetry. Replacing
-/// it is only safe while telemetry admission is paused and all persisted rows
-/// have been deleted.
+/// Shared, replaceable HMAC material for Codex telemetry. Replacing it is only
+/// safe while telemetry admission is paused and all persisted rows have been
+/// deleted.
 pub struct TelemetryKeyRing {
     path: PathBuf,
     key: std::sync::RwLock<TelemetryHmacKey>,
