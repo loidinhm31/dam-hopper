@@ -237,7 +237,7 @@ describe("WorkspacePage", () => {
 
     const markup = renderToStaticMarkup(<WorkspacePage />);
 
-    expect(markup).toContain("IDE companion");
+    expect(markup).not.toContain("IDE companion");
     expect(markup).toContain("Explorer");
     expect(markup).toContain("Search");
     expect(markup).toContain("Editor");
@@ -251,7 +251,7 @@ describe("WorkspacePage", () => {
 
     const markup = renderToStaticMarkup(<WorkspacePage />);
 
-    expect(markup).toContain("Terminal companion");
+    expect(markup).not.toContain("Terminal companion");
     expect(markup).toContain("Terminal");
     expect(markup).toContain("Browser");
     expect(markup).toContain("Fleet");
@@ -267,6 +267,7 @@ describe("WorkspacePage", () => {
     const markup = renderToStaticMarkup(<WorkspacePage />);
 
     expect(markup).toContain('data-shell="ide-shell"');
+    expect(markup).not.toContain("Panels");
     expect(markup).not.toContain("IDE companion");
   });
 
@@ -278,6 +279,7 @@ describe("WorkspacePage", () => {
     const terminalMarkup = renderToStaticMarkup(
       <>{lastTerminalWorkspaceShellProps?.terminalContent as ReactNode}</>,
     );
+    expect(markup).not.toContain("Panels");
 
     expect(markup).toContain('data-shell="terminal-shell"');
     expect(
