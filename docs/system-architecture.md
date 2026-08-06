@@ -252,11 +252,20 @@ runtime owns queue admission, batching, retention, deletion, and shutdown. There
 injection, or output redactor in this dataflow. Collector or storage failure cannot affect terminal
 latency or behavior.
 
+Collector health preserves the aggregate `dropped` count and adds five fixed-cardinality,
+in-memory reason counters: missing source identity, invalid timestamp, paused admission, full
+queue, and unavailable worker. Normalization and enqueue outcomes increment exactly one reason
+counter alongside the aggregate; the counters never include source versions, models, identifiers,
+paths, errors, or payload content, and reset on process restart. Queue-full and worker-unavailable
+outcomes retain retryable `503` responses, while normalization and paused records retain their
+existing `202` behavior.
+
 Codex CLI 0.146.1 emits token fields in `response.completed`, but its OTLP records provide no safe
 per-event identity (no usable trace/span identity or provider event ID). Usage therefore remains
 fail-closed for those records until such an identity is available; receipt time, conversation ID,
 and fabricated IDs are not fallback keys. This is an ingestion-admission decision only: it makes no
-REST/API or SQLite schema change.
+Codex event or SQLite schema change; the bounded reason counters above are the sole additive health
+diagnostic surface.
 
 Development invariant: remove the Usage middle layer from every PTY production path, including
 constructor parameters, session options, restart/restore handoff, reader-loop state, environment

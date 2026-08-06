@@ -403,7 +403,9 @@ events. `delta` counters accumulate, while `cumulative` counters accept only new
 values.
 Codex CLI 0.146.1 may emit token fields without a safe per-event identity, so those records remain
 fail-closed until a provider identity is available; no receipt-time, conversation-ID, or fabricated
-ID fallback is used. This does not change telemetry configuration or the API/SQLite schema.
+ID fallback is used. This does not change telemetry configuration, event fields, or the SQLite
+schema. The existing Usage health response additionally exposes fixed-cardinality in-memory drop counters;
+they reset on process restart and contain no source or payload values.
 Telemetry uses a fresh v1 Codex-only schema containing only Codex sessions, usage events, daily
 rollups, and health state. There is no legacy-data migration or import. During development, startup
 checks the SQLite version and complete schema object set; a legacy, malformed, or otherwise

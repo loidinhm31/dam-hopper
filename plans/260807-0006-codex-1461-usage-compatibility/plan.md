@@ -40,7 +40,7 @@ evidence; do not use receipt time, conversation ID, or random IDs.
 | # | Phase | Status | Effort | Link |
 |---|---|---|---:|---|
 | 1 | Capture and sanitize 0.146.1 evidence | Completed | 2h | [phase 01](./phase-01-capture-and-sanitize-otlp-evidence.md) |
-| 2 | Add bounded drop-reason health | Pending | 2h | [phase 02](./phase-02-add-drop-reason-health.md) |
+| 2 | Add bounded drop-reason health | Completed | 2h | [phase 02](./phase-02-add-drop-reason-health.md) |
 | 3 | Implement evidence-selected compatibility | Blocked | 2h | [phase 03](./phase-03-implement-evidence-selected-compatibility.md) |
 | 4 | Validate, deploy, smoke, rollback | Pending | 2h | [phase 04](./phase-04-validate-deploy-and-smoke.md) |
 
@@ -57,10 +57,9 @@ evidence; do not use receipt time, conversation ID, or random IDs.
 
 ## Dependencies
 
-Phase 1 gates Phase 3 and is complete. Phase 2 remains pending and can proceed independently.
-Phase 3 is blocked until Codex provides a safe stable per-event identity. Phase 4 requires the
-remaining implementation/validation phases and must not reset `telemetry.db`. Existing unrelated
-worktree changes remain untouched.
+Phases 1 and 2 are complete. Phase 1 gates Phase 3, which remains blocked until Codex provides a
+safe stable per-event identity. Phase 4 requires the remaining validation/deployment work and must
+not reset `telemetry.db`. Existing unrelated worktree changes remain untouched.
 
 ## Unresolved questions
 
