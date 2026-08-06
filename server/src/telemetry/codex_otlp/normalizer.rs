@@ -10,21 +10,32 @@ use super::decoder::{DecodedCodexUsage, TimestampStatus};
 const CODEX_DEDUPE_DOMAIN: &[u8] = b"codex-usage:v1";
 const CODEX_SESSION_DOMAIN: &[u8] = b"codex-conversation:v1";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NormalizationDropReason {
+    MissingSourceIdentity,
+    InvalidTimestamp,
+}
+
 /// Converts a decoder result into a persistence-safe event. Raw OTLP values
 /// never cross this boundary; the conversation identifier is HMACed and
 /// missing token components remain explicit `None` values.
-pub fn normalize(
+pub(crate) fn normalize(
     decoded: DecodedCodexUsage,
     keys: &Arc<TelemetryKeyRing>,
     received_at_utc_ms: i64,
-) -> Option<CodexUsageEvent> {
+) -> Result<CodexUsageEvent, NormalizationDropReason> {
     let source_version = decoded
         .source_version
         .clone()
         .unwrap_or_else(CodexVersion::unknown);
-    let source_identity = decoded.source_identity.as_deref()?;
+    let source_identity = decoded
+        .source_identity
+        .as_deref()
+        .ok_or(NormalizationDropReason::MissingSourceIdentity)?;
     let source_timestamp = match (decoded.timestamp_status, decoded.occurred_at_utc_ms) {
-        (TimestampStatus::Invalid, _) | (TimestampStatus::Valid, None) => return None,
+        (TimestampStatus::Invalid, _) | (TimestampStatus::Valid, None) => {
+            return Err(NormalizationDropReason::InvalidTimestamp);
+        }
         (_, timestamp) => timestamp,
     };
     // Millisecond timestamps are not unique event identities. Without a
@@ -32,7 +43,7 @@ pub fn normalize(
     // cannot be separated safely, so the record is not a durable fact.
     let occurred_at_utc_ms = source_timestamp.unwrap_or(received_at_utc_ms);
     if occurred_at_utc_ms <= 0 || occurred_at_utc_ms > MAX_TIMESTAMP_UTC_MS {
-        return None;
+        return Err(NormalizationDropReason::InvalidTimestamp);
     }
 
     let input_tokens = bounded_token(decoded.input_tokens);
@@ -83,7 +94,7 @@ pub fn normalize(
             &duration,
         ],
     );
-    Some(CodexUsageEvent {
+    Ok(CodexUsageEvent {
         schema_version: TELEMETRY_SCHEMA_VERSION,
         id,
         occurred_at_utc_ms,
@@ -141,7 +152,7 @@ mod tests {
     };
     use prost::Message;
 
-    use super::normalize;
+    use super::{normalize, NormalizationDropReason};
 
     fn with_source_identity(
         mut decoded: DecodedCodexUsage,
@@ -294,7 +305,66 @@ mod tests {
             .unwrap()
             .pop()
             .unwrap();
-        assert!(normalize(ambiguous, &keys, 10).is_none());
+        assert!(matches!(
+            normalize(ambiguous, &keys, 10),
+            Err(NormalizationDropReason::MissingSourceIdentity)
+        ));
+    }
+
+    #[test]
+    fn rejects_zero_or_malformed_source_identity_shapes() {
+        let temp = tempfile::tempdir().unwrap();
+        let keys = Arc::new(TelemetryKeyRing::load_or_create(temp.path().join("key")).unwrap());
+        let fixture = include_bytes!("fixtures/codex-cli-0.145.0-response-completed.bin");
+
+        for (trace_id, span_id) in [
+            (vec![0; 16], vec![2; 8]),
+            (vec![1; 16], vec![0; 8]),
+            (vec![1; 15], vec![2; 8]),
+            (vec![1; 16], vec![2; 7]),
+        ] {
+            let mut request = ExportLogsServiceRequest::decode(fixture.as_slice()).unwrap();
+            let record = &mut request.resource_logs[0].scope_logs[0].log_records[0];
+            record.trace_id = trace_id;
+            record.span_id = span_id;
+            let decoded = decode_response_completed(&request.encode_to_vec())
+                .unwrap()
+                .pop()
+                .unwrap();
+            assert!(matches!(
+                normalize(decoded, &keys, 10),
+                Err(NormalizationDropReason::MissingSourceIdentity)
+            ));
+        }
+    }
+
+    #[test]
+    fn missing_identity_reason_precedes_invalid_timestamp_reason() {
+        let temp = tempfile::tempdir().unwrap();
+        let keys = Arc::new(TelemetryKeyRing::load_or_create(temp.path().join("key")).unwrap());
+        let fixture = include_bytes!("fixtures/codex-cli-0.145.0-response-completed.bin");
+        let mut request = ExportLogsServiceRequest::decode(fixture.as_slice()).unwrap();
+        let record = &mut request.resource_logs[0].scope_logs[0].log_records[0];
+        record.time_unix_nano = 0;
+        record.observed_time_unix_nano = 0;
+        record.trace_id.clear();
+        record.span_id.clear();
+        record.attributes.push(KeyValue {
+            key: "event.timestamp".to_string(),
+            value: Some(AnyValue {
+                value: Some(Value::StringValue("invalid-timestamp".to_string())),
+            }),
+            key_strindex: 0,
+        });
+
+        let decoded = decode_response_completed(&request.encode_to_vec())
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert!(matches!(
+            normalize(decoded, &keys, 10),
+            Err(NormalizationDropReason::MissingSourceIdentity)
+        ));
     }
 
     #[test]
@@ -340,7 +410,10 @@ mod tests {
         .unwrap()
         .pop()
         .unwrap();
-        assert!(normalize(decoded, &keys, 1).is_none());
+        assert!(matches!(
+            normalize(decoded, &keys, 1),
+            Err(NormalizationDropReason::MissingSourceIdentity)
+        ));
     }
 
     #[test]
@@ -501,7 +574,10 @@ mod tests {
             .unwrap()
             .pop()
             .unwrap();
-        assert!(normalize(decoded, &keys, 1_234_567).is_none());
+        assert!(matches!(
+            normalize(decoded, &keys, 1_234_567),
+            Err(NormalizationDropReason::InvalidTimestamp)
+        ));
     }
 
     #[test]
@@ -540,6 +616,9 @@ mod tests {
             2,
         );
         decoded.occurred_at_utc_ms = Some(MAX_TIMESTAMP_UTC_MS + 1);
-        assert!(normalize(decoded, &keys, 1).is_none());
+        assert!(matches!(
+            normalize(decoded, &keys, 1),
+            Err(NormalizationDropReason::InvalidTimestamp)
+        ));
     }
 }
