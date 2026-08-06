@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { LayoutGrid } from "lucide-react";
 import { TopNav } from "@/components/organisms/TopNav.js";
@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/Select.js";
 import { cn } from "@/lib/utils.js";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse.js";
+import { useMobilePanelTriggerDrag } from "@/hooks/use-mobile-panel-trigger-drag.js";
 import type { WorkspaceMode } from "@/lib/workspace-mode.js";
 
 export interface MobileWorkspaceSurface {
@@ -41,6 +42,19 @@ export function MobileWorkspaceShell({
 }: MobileWorkspaceShellProps) {
   const { collapsed, toggle } = useSidebarCollapse();
   const hasSurfaces = surfaces.length > 0;
+  const [isPanelMenuOpen, setIsPanelMenuOpen] = useState(false);
+  const {
+    triggerRef,
+    triggerPosition,
+    isDragging: isTriggerDragging,
+    handlePointerDown: handleTriggerPointerDown,
+    handlePointerMove: handleTriggerPointerMove,
+    handlePointerEnd: finishTriggerPointer,
+    handleClick: handleTriggerClick,
+  } = useMobilePanelTriggerDrag({
+    onDragStart: () => setIsPanelMenuOpen(false),
+    avoidTerminalAccessory: workspaceMode === "terminal",
+  });
 
   if (!hasSurfaces) {
     return (
@@ -114,22 +128,46 @@ export function MobileWorkspaceShell({
         })}
       </main>
 
-      <Select value={resolvedActiveSurfaceId} onValueChange={onSurfaceChange}>
+      <Select
+        value={resolvedActiveSurfaceId}
+        onValueChange={onSurfaceChange}
+        open={isPanelMenuOpen}
+        onOpenChange={setIsPanelMenuOpen}
+      >
         <SelectTrigger
+          ref={triggerRef}
           aria-label={`Switch workspace surface, currently ${activeSurface.label}`}
+          data-testid="mobile-workspace-panel-trigger"
+          data-dragging={isTriggerDragging ? "true" : undefined}
+          onPointerDown={handleTriggerPointerDown}
+          onPointerMove={handleTriggerPointerMove}
+          onPointerUp={finishTriggerPointer}
+          onPointerCancel={finishTriggerPointer}
+          onClick={handleTriggerClick}
+          style={{
+            position: "fixed",
+            ...(triggerPosition
+              ? {
+                  left: `${triggerPosition.left}px`,
+                  top: `${triggerPosition.top}px`,
+                  bottom: "auto",
+                }
+              : {}),
+          }}
           className={cn(
-            "fixed left-[calc(var(--safe-area-left)+0.75rem)] z-[40] h-11 w-auto min-w-24 max-w-[calc(100vw-2rem)] border-[var(--color-primary)]/40 bg-[var(--color-surface)]/95 px-3 text-xs shadow-xl backdrop-blur-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] motion-reduce:transition-none",
+            "fixed left-[calc(var(--safe-area-left)+0.75rem)] z-[40] h-11 w-auto min-w-20 max-w-[calc(100vw-2rem)] cursor-grab touch-none select-none gap-1 border-[var(--color-primary)]/40 bg-[var(--color-surface)]/95 px-1.5 text-[10px] shadow-lg backdrop-blur-md active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] motion-reduce:transition-none",
+            isTriggerDragging && "cursor-grabbing",
             triggerBottomClass,
           )}
         >
           <SelectValue>
             <span className="flex min-w-0 items-center gap-1.5">
               <LayoutGrid
-                className="h-4 w-4 shrink-0 text-[var(--color-primary)]"
+                className="h-3.5 w-3.5 shrink-0 text-[var(--color-primary)]"
                 aria-hidden="true"
               />
               <span className="shrink-0 font-semibold">Panels</span>
-              <span className="max-w-20 truncate text-[10px] text-[var(--color-text-muted)]">
+              <span className="max-w-16 truncate text-[9px] text-[var(--color-text-muted)]">
                 {activeSurface.label}
               </span>
             </span>
