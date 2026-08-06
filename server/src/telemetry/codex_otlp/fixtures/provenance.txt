@@ -4,3 +4,13 @@ The checked-in protobuf retains only response.completed plus these attributes:
 event.name, event.kind, input/output/cached/reasoning token counts, conversation.id,
 model, and service.version. Conversation and model values were replaced with fixtures.
 Each future supported Codex CLI version requires a separately captured and sanitized fixture.
+
+Captured from codex-cli 0.146.1 on 2026-08-07 on Linux using an ephemeral OTLP/HTTP binary
+exporter on a disposable loopback port with log_user_prompt=false. The live capture
+contained two response.completed records. Both had event.timestamp and
+observed_time_unix_nano (OTLP field 11, fixed64); time_unix_nano (field 1) was absent.
+Both had no trace_id or span_id bytes and no per-event ID attribute. Token wire types
+were string input/output counts and integer cached/reasoning counts. The checked-in
+fixture is one minimized 344-byte response.completed record with deterministic synthetic values;
+conversation/model values and timestamps were replaced, and no trace/span bytes were
+added. SHA-256: 942cad2ec61178402f2201a288e3522cc61f5c864b2a5a6081992aee63b93aa4.

@@ -401,6 +401,9 @@ Codex session summaries are flat and retention-bounded, not permanent. Raw `resp
 events are applied before the configured detail-retention purge removes expired summaries and
 events. `delta` counters accumulate, while `cumulative` counters accept only newer non-regressing
 values.
+Codex CLI 0.146.1 may emit token fields without a safe per-event identity, so those records remain
+fail-closed until a provider identity is available; no receipt-time, conversation-ID, or fabricated
+ID fallback is used. This does not change telemetry configuration or the API/SQLite schema.
 Telemetry uses a fresh v1 Codex-only schema containing only Codex sessions, usage events, daily
 rollups, and health state. There is no legacy-data migration or import. During development, startup
 checks the SQLite version and complete schema object set; a legacy, malformed, or otherwise
