@@ -23,10 +23,6 @@ import { MobileTerminalCustomKeyboard } from "@/components/organisms/MobileTermi
 import { MobileTerminalNativeKeyboardInput } from "@/components/organisms/MobileTerminalNativeKeyboardInput.js";
 import { MobileTerminalSpecialKeys } from "@/components/organisms/MobileTerminalSpecialKeys.js";
 
-function preventDefault(event: { preventDefault: () => void }) {
-  event.preventDefault();
-}
-
 export function MobileTerminalAccessoryBar({
   sessionId,
   className,
@@ -142,41 +138,37 @@ export function MobileTerminalAccessoryBar({
         className,
       )}
     >
-      <div className="flex flex-wrap items-center gap-1 py-2">
+      <div className="flex items-center gap-1 px-1 py-1">
         <button
           type="button"
           aria-pressed={isExpanded}
-          onPointerDown={(event) => {
-            preventDefault(event);
-            setIsExpanded((current) => !current);
-          }}
-          className="flex h-10 items-center justify-center gap-1 rounded-md border border-[var(--color-primary)]/35 bg-[var(--color-primary)]/14 px-3 text-[11px] font-semibold text-[var(--color-primary)] transition-colors active:bg-[var(--color-primary)]/20"
+          aria-label={isExpanded ? "Hide terminal keys" : "Show terminal keys"}
+          title={isExpanded ? "Hide terminal keys" : "Show terminal keys"}
+          onClick={() => setIsExpanded((current) => !current)}
+          className="inline-flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded border border-[var(--color-primary)]/35 bg-[var(--color-primary)]/14 p-0 text-[11px] font-semibold text-[var(--color-primary)] transition-colors active:bg-[var(--color-primary)]/20"
         >
           {isExpanded ? (
-            <ChevronDown className="h-4 w-4 shrink-0" />
+            <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           ) : (
-            <ChevronUp className="h-4 w-4 shrink-0" />
+            <ChevronUp className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           )}
-          <span className="whitespace-nowrap">Keys</span>
+          <span className="sr-only">Keys</span>
         </button>
         <button
           type="button"
           aria-pressed={isKeyboardOpen}
-          onPointerDown={(event) => {
-            preventDefault(event);
-            toggleKeyboard();
-          }}
+          onClick={toggleKeyboard}
           title={keyboardButtonLabel}
           aria-label={keyboardButtonLabel}
           className={cn(
-            "flex h-10 items-center justify-center gap-1 rounded-md border px-3 text-[11px] font-semibold transition-colors",
+            "inline-flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded border p-0 text-[11px] font-semibold transition-colors",
             isKeyboardOpen
               ? "border-[var(--color-primary)]/35 bg-[var(--color-primary)]/14 text-[var(--color-primary)]"
               : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)] active:bg-[var(--color-border)]",
           )}
         >
-          <Keyboard className="h-4 w-4 shrink-0" />
-          <span className="whitespace-nowrap">
+          <Keyboard className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span className="sr-only">
             {shouldUseCustomKeyboard ? "Type" : "Kbd"}
           </span>
         </button>

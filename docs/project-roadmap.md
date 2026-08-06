@@ -10,6 +10,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Next Milestone:** Product follow-ups: terminal commit status Phase 03 validation and release checks
 - **Current Feature:** Settings commit summary Phase 01 and terminal scroll-control redesign Phase 02 completed 2026-07-26; terminal commit status Phase 03 planned
 
+### Mobile Floating Panel Controls (2026-08-06)
+
+- **Phase 01 — Implement and verify mobile controls: [COMPLETED 2026-08-06]**: draggable, viewport-clamped mobile panel trigger and compact terminal accessory controls delivered; focused validation completed and review approved 9/10.
+
 ### Production Git Changes Resilience
 
 - **Phase 01 Git-unavailable state — [COMPLETED 2026-08-01]**: typed non-Git API outcome, client/query mapping, and Changes UI unavailable state with mutation suppression.
