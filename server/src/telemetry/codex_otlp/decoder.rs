@@ -298,7 +298,7 @@ fn numeric_attribute(attributes: &[KeyValue], wanted: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_response_completed;
+    use super::{decode_response_completed, TimestampStatus};
     use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
     use opentelemetry_proto::tonic::common::v1::{any_value::Value, AnyValue, KeyValue};
     use prost::Message;
@@ -316,6 +316,27 @@ mod tests {
             decoded[0].counter_semantic,
             crate::telemetry::TokenCounterSemantic::Delta
         );
+    }
+
+    #[test]
+    fn decodes_codex_0146_1_fixture_without_promoting_or_inventing_identity() {
+        let fixture = include_bytes!("fixtures/codex-cli-0.146.1-response-completed.bin");
+        let decoded = decode_response_completed(fixture).unwrap();
+        assert_eq!(decoded.len(), 1);
+        let event = &decoded[0];
+        assert_eq!(
+            event.source_version.clone().map(String::from),
+            Some("0.146.1".to_string())
+        );
+        assert!(event.unverified_version);
+        assert_eq!(event.timestamp_status, TimestampStatus::Valid);
+        assert_eq!(event.occurred_at_utc_ms, Some(1_786_060_800_000));
+        assert!(event.source_identity.is_none());
+        assert_eq!(event.input_tokens, Some(24));
+        assert_eq!(event.cached_input_tokens, Some(0));
+        assert_eq!(event.output_tokens, Some(7));
+        assert_eq!(event.reasoning_tokens, Some(0));
+        assert_eq!(event.token_coverage, super::TokenCoverage::Full);
     }
 
     #[test]
