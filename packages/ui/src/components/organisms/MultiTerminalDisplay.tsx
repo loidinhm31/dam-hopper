@@ -12,6 +12,7 @@ import {
 } from "@/hooks/use-terminal-layout.js";
 import { fitAllTerminals } from "@/lib/terminal-fit-scheduler.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 
@@ -56,6 +57,8 @@ export function MultiTerminalDisplay({
   onCloseBrowser,
 }: Props) {
   const layout = useTerminalLayout();
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
   const isCompactWorkspace = useCompactWorkspace();
   const isCoarsePointer = useCoarsePointer();
   const mobileCustomKeyboardEnabled = useSettingsStore(
@@ -63,9 +66,12 @@ export function MultiTerminalDisplay({
   );
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
   const showMobileAccessoryBar =
-    isCompactWorkspace && isCoarsePointer && !!activeSessionId;
-  const suppressTerminalFocus =
-    showMobileAccessoryBar && mobileCustomKeyboardEnabled;
+    !!activeSessionId &&
+    (isAndroidChromeNativeInputSuppressed ||
+      (isCompactWorkspace && isCoarsePointer));
+  const suppressTerminalNativeInput =
+    isAndroidChromeNativeInputSuppressed ||
+    (showMobileAccessoryBar && mobileCustomKeyboardEnabled);
   const visibleSessionIds = useMemo(
     () =>
       new Set(
@@ -145,7 +151,8 @@ export function MultiTerminalDisplay({
           onSessionExit={onSessionExit}
           onNewTerminal={onNewTerminal}
           onTerminalReady={handleTerminalReady}
-          suppressAutoFocus={suppressTerminalFocus}
+          suppressAutoFocus={suppressTerminalNativeInput}
+          suppressNativeKeyboard={suppressTerminalNativeInput}
           webglEnabledSessionIds={visibleSessionIds}
         />
       )}
@@ -162,7 +169,7 @@ export function MultiTerminalDisplay({
           onSelectTab={onSelectTab ?? (() => {})}
           onCloseTab={onCloseTab ?? (() => {})}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
-          suppressTerminalFocus={suppressTerminalFocus}
+          suppressTerminalFocus={suppressTerminalNativeInput}
           browserOpen={browserOpen}
           renderBrowserContent={renderBrowserContent}
           onCloseBrowser={onCloseBrowser}

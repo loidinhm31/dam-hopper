@@ -1,6 +1,7 @@
 import { useRef, useEffect } from "react";
 import { X, Save } from "lucide-react";
 import { cn } from "@/lib/utils.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import type { SessionInfo } from "@/api/client.js";
 
 export interface TabEntry {
@@ -66,13 +67,15 @@ export function TerminalTabBar({
   onSavePromptCancel,
 }: Props) {
   const saveInputRef = useRef<HTMLInputElement>(null);
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
   const savePromptSessionId = savePrompt?.sessionId;
 
   useEffect(() => {
-    if (savePromptSessionId) {
+    if (savePromptSessionId && !isAndroidChromeNativeInputSuppressed) {
       saveInputRef.current?.focus();
     }
-  }, [savePromptSessionId]);
+  }, [isAndroidChromeNativeInputSuppressed, savePromptSessionId]);
 
   if (tabs.length === 0) {
     return null;
@@ -130,8 +133,15 @@ export function TerminalTabBar({
         {showSaveButton && !savePrompt && (
           <button
             type="button"
-            onClick={() => onSaveTab!(activeTab!)}
-            title="Save as profile"
+            onClick={() => {
+              if (!isAndroidChromeNativeInputSuppressed) onSaveTab!(activeTab!);
+            }}
+            disabled={isAndroidChromeNativeInputSuppressed}
+            title={
+              isAndroidChromeNativeInputSuppressed
+                ? "Saving profiles is unavailable in Android Chrome"
+                : "Save as profile"
+            }
             className={cn(
               "flex items-center gap-1 px-2 py-1.5 text-xs shrink-0 ml-auto",
               "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
@@ -155,9 +165,11 @@ export function TerminalTabBar({
               type="text"
               placeholder="Profile name (no colons)"
               value={savePrompt.name}
+              disabled={isAndroidChromeNativeInputSuppressed}
               onChange={(e) => onSavePromptChange?.(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") onSavePromptSubmit?.();
+                if (e.key === "Enter" && !isAndroidChromeNativeInputSuppressed)
+                  onSavePromptSubmit?.();
                 if (e.key === "Escape") onSavePromptCancel?.();
               }}
               className={cn(
@@ -175,7 +187,15 @@ export function TerminalTabBar({
           </div>
           <button
             type="button"
-            onClick={onSavePromptSubmit}
+            onClick={() => {
+              if (!isAndroidChromeNativeInputSuppressed) onSavePromptSubmit?.();
+            }}
+            disabled={isAndroidChromeNativeInputSuppressed}
+            title={
+              isAndroidChromeNativeInputSuppressed
+                ? "Saving profiles is unavailable in Android Chrome"
+                : "Save profile"
+            }
             className="text-xs px-2 py-0.5 rounded bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity shrink-0"
           >
             Save

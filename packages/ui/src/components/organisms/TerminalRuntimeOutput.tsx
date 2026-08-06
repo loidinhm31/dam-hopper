@@ -8,12 +8,17 @@ import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { cn } from "@/lib/utils.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { attachTerminalsToHost } from "@/lib/terminal-host-attachment.js";
-import { scheduleTerminalFit } from "@/lib/terminal-fit-scheduler.js";
+import {
+  cancelScheduledTerminalFit,
+  scheduleTerminalFit,
+} from "@/lib/terminal-fit-scheduler.js";
 import {
   subscribeToRegistry,
   terminalRegistry,
 } from "@/lib/terminal-registry.js";
+import { syncNativeKeyboardSuppression } from "@/lib/terminal-native-input-policy.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface TerminalRuntimeOutputProps {
   activeSessionId: string | null;
@@ -35,26 +40,42 @@ export function TerminalRuntimeOutput({
   onSelectActive,
 }: TerminalRuntimeOutputProps) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
   const isCompactWorkspace = useCompactWorkspace();
   const isCoarsePointer = useCoarsePointer();
   const { mobileCustomKeyboardEnabled, terminalScrollButtonsEnabled } =
     useSettingsStore();
   const showMobileAccessoryBar =
-    isCompactWorkspace && isCoarsePointer && !!activeSessionId;
-  const suppressTerminalFocus =
-    showMobileAccessoryBar && mobileCustomKeyboardEnabled;
+    !!activeSessionId &&
+    (isAndroidChromeNativeInputSuppressed ||
+      (isCompactWorkspace && isCoarsePointer));
+  const suppressTerminalNativeInput =
+    isAndroidChromeNativeInputSuppressed ||
+    (showMobileAccessoryBar && mobileCustomKeyboardEnabled);
 
   const reparentActiveTerminal = useCallback(() => {
     const host = hostRef.current;
     if (!host) return;
 
+    if (suppressTerminalNativeInput) {
+      for (const session of mountedSessions) {
+        cancelScheduledTerminalFit(terminalRegistry.get(session.sessionId));
+      }
+    }
     attachTerminalsToHost({
       host,
       sessionIds: mountedSessions.map((session) => session.sessionId),
       activeSessionId,
-      suppressTerminalFocus,
+      suppressTerminalFocus: suppressTerminalNativeInput,
     });
-  }, [activeSessionId, mountedSessions, suppressTerminalFocus]);
+    for (const session of mountedSessions) {
+      syncNativeKeyboardSuppression(
+        terminalRegistry.get(session.sessionId)?.terminal ?? null,
+        suppressTerminalNativeInput,
+      );
+    }
+  }, [activeSessionId, mountedSessions, suppressTerminalNativeInput]);
 
   useEffect(() => {
     reparentActiveTerminal();
@@ -71,9 +92,9 @@ export function TerminalRuntimeOutput({
   useEffect(() => {
     if (!activeSessionId) return;
     scheduleTerminalFit(terminalRegistry.get(activeSessionId), {
-      focus: !suppressTerminalFocus,
+      focus: !suppressTerminalNativeInput,
     });
-  }, [activeSessionId, layoutRevision, suppressTerminalFocus]);
+  }, [activeSessionId, layoutRevision, suppressTerminalNativeInput]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -98,17 +119,19 @@ export function TerminalRuntimeOutput({
           onSessionExit={onSessionExit}
           onNewTerminal={onNewTerminal}
           onTerminalReady={handleTerminalReady}
-          suppressAutoFocus={suppressTerminalFocus}
+          suppressAutoFocus={suppressTerminalNativeInput}
+          suppressNativeKeyboard={suppressTerminalNativeInput}
         />
       )}
 
       <div
         ref={hostRef}
+        data-testid="terminal-runtime-output-host"
         className="relative min-h-0 flex-1 overflow-hidden bg-[#0f172a]"
         onClick={() => {
           if (!activeSessionId) return;
           onSelectActive?.(activeSessionId);
-          if (!suppressTerminalFocus) {
+          if (!suppressTerminalNativeInput) {
             terminalRegistry.get(activeSessionId)?.terminal.focus();
           }
         }}

@@ -4,7 +4,10 @@ import { Group, Panel, Separator } from "react-resizable-panels";
 import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { attachTerminalsToHost } from "@/lib/terminal-host-attachment.js";
-import { scheduleTerminalFit } from "@/lib/terminal-fit-scheduler.js";
+import {
+  cancelScheduledTerminalFit,
+  scheduleTerminalFit,
+} from "@/lib/terminal-fit-scheduler.js";
 import {
   terminalRegistry,
   subscribeToRegistry,
@@ -17,6 +20,8 @@ import { TabBar } from "@/components/organisms/TabBar.js";
 import { TerminalDockPreview } from "@/components/organisms/TerminalDockPreview.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import { useSettingsStore } from "@/stores/settings.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
+import { syncNativeKeyboardSuppression } from "@/lib/terminal-native-input-policy.js";
 
 interface PaneContainerProps {
   node: PaneNode;
@@ -49,6 +54,10 @@ export const PaneContainer = memo(function PaneContainer({
   onCloseBrowser,
 }: PaneContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
+  const shouldSuppressTerminalFocus =
+    isAndroidChromeNativeInputSuppressed || suppressTerminalFocus;
   const isFocused = layout.focusedPaneId === node.id;
   const terminalCommitStatusEnabled = useSettingsStore(
     (state) => state.terminalCommitStatusEnabled,
@@ -71,12 +80,23 @@ export const PaneContainer = memo(function PaneContainer({
     if (!container) return;
 
     const doReparent = () => {
+      if (shouldSuppressTerminalFocus) {
+        for (const sessionId of node.sessionIds) {
+          cancelScheduledTerminalFit(terminalRegistry.get(sessionId));
+        }
+      }
       attachTerminalsToHost({
         host: container,
         sessionIds: node.sessionIds,
         activeSessionId: node.activeSessionId,
-        suppressTerminalFocus,
+        suppressTerminalFocus: shouldSuppressTerminalFocus,
       });
+      for (const sessionId of node.sessionIds) {
+        syncNativeKeyboardSuppression(
+          terminalRegistry.get(sessionId)?.terminal ?? null,
+          shouldSuppressTerminalFocus,
+        );
+      }
     };
 
     // Initial reparent attempt
@@ -90,7 +110,7 @@ export const PaneContainer = memo(function PaneContainer({
     });
 
     return unsubscribe;
-  }, [node.sessionIds, node.activeSessionId, suppressTerminalFocus]);
+  }, [node.sessionIds, node.activeSessionId, shouldSuppressTerminalFocus]);
 
   // ── install keyboard handler on active terminal ──────────────────────────
   useEffect(() => {
@@ -133,7 +153,7 @@ export const PaneContainer = memo(function PaneContainer({
           if (prev.activeSessionId) {
             onSelectTab(prev.activeSessionId);
             const prevEntry = terminalRegistry.get(prev.activeSessionId);
-            if (!suppressTerminalFocus) prevEntry?.terminal.focus();
+            if (!shouldSuppressTerminalFocus) prevEntry?.terminal.focus();
           }
         }
         return false;
@@ -155,7 +175,7 @@ export const PaneContainer = memo(function PaneContainer({
           if (next.activeSessionId) {
             onSelectTab(next.activeSessionId);
             const nextEntry = terminalRegistry.get(next.activeSessionId);
-            if (!suppressTerminalFocus) nextEntry?.terminal.focus();
+            if (!shouldSuppressTerminalFocus) nextEntry?.terminal.focus();
           }
         }
         return false;
@@ -201,7 +221,7 @@ export const PaneContainer = memo(function PaneContainer({
     });
 
     // Focus terminal when pane receives focus
-    if (isFocused && !suppressTerminalFocus) {
+    if (isFocused && !shouldSuppressTerminalFocus) {
       terminal.focus();
     }
 
@@ -224,7 +244,7 @@ export const PaneContainer = memo(function PaneContainer({
     layout,
     onNewTerminal,
     onSelectTab,
-    suppressTerminalFocus,
+    shouldSuppressTerminalFocus,
   ]);
 
   // ── resize observer → fit active terminal ───────────────────────────────
@@ -257,7 +277,7 @@ export const PaneContainer = memo(function PaneContainer({
         layout.setFocusedPaneId(node.id);
         if (node.activeSessionId) {
           onSelectTab(node.activeSessionId);
-          if (!suppressTerminalFocus) {
+          if (!shouldSuppressTerminalFocus) {
             terminalRegistry.get(node.activeSessionId)?.terminal.focus();
           }
         }

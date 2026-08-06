@@ -10,6 +10,7 @@ import {
 import { Input } from "@/components/ui/Input.js";
 import { Label } from "@/components/ui/Label.js";
 import { Button } from "@/components/atoms/Button.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface Props {
   open: boolean;
@@ -20,9 +21,12 @@ interface Props {
 
 export function NewItemDialog({ open, type, onConfirm, onCancel }: Props) {
   const [name, setName] = useState("");
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
 
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault();
+    if (isAndroidChromeNativeInputSuppressed) return;
     if (name.trim()) {
       onConfirm(name.trim());
       setName("");
@@ -42,7 +46,9 @@ export function NewItemDialog({ open, type, onConfirm, onCancel }: Props) {
             Create New {type === "file" ? "File" : "Folder"}
           </DialogTitle>
           <DialogDescription>
-            Enter a name for the new {type === "file" ? "file" : "folder"}.
+            {isAndroidChromeNativeInputSuppressed
+              ? "Text entry is unavailable on Android Chrome. Use a desktop browser to create a new item."
+              : `Enter a name for the new ${type === "file" ? "file" : "folder"}.`}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="grid gap-4 py-4">
@@ -53,6 +59,7 @@ export function NewItemDialog({ open, type, onConfirm, onCancel }: Props) {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder={type === "file" ? "example.ts" : "src"}
+              disabled={isAndroidChromeNativeInputSuppressed}
               autoFocus
             />
           </div>
@@ -60,7 +67,16 @@ export function NewItemDialog({ open, type, onConfirm, onCancel }: Props) {
             <Button type="button" variant="ghost" onClick={handleCancel}>
               Cancel
             </Button>
-            <Button type="submit" variant="primary" disabled={!name.trim()}>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={isAndroidChromeNativeInputSuppressed || !name.trim()}
+              title={
+                isAndroidChromeNativeInputSuppressed
+                  ? "Unavailable on Android Chrome"
+                  : undefined
+              }
+            >
               Create {type === "file" ? "File" : "Folder"}
             </Button>
           </DialogFooter>

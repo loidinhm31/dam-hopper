@@ -22,6 +22,7 @@ import type { SessionInfo, ProjectType } from "@/api/client.js";
 import { getSessionStatus, getStatusDotColor } from "@/lib/session-status.js";
 import { withUiConfigDefaults } from "@/lib/ui-config.js";
 import { useGlobalConfig, useUpdateUiConfig } from "@/api/queries.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface Props {
   projects: TreeProject[];
@@ -242,18 +243,20 @@ function CommandEditorRow({
   onCommandChange,
   onSave,
   onCancel,
+  actionsDisabled,
 }: {
   value: Extract<EditState, { kind: "command" }>;
   onKeyChange: (key: string) => void;
   onCommandChange: (command: string) => void;
   onSave: () => void;
   onCancel: () => void;
+  actionsDisabled: boolean;
 }) {
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        void onSave();
+        if (!actionsDisabled) void onSave();
       }}
       className="mx-2 mb-2 mt-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3"
     >
@@ -265,7 +268,7 @@ function CommandEditorRow({
           onChange={(e) => onKeyChange(e.target.value)}
           onKeyDown={(e) => handleEditorKeyDown(e, onCancel)}
           placeholder="Command key"
-          disabled={value.saving}
+          disabled={value.saving || actionsDisabled}
         />
         <input
           className={inputClass}
@@ -273,7 +276,7 @@ function CommandEditorRow({
           onChange={(e) => onCommandChange(e.target.value)}
           onKeyDown={(e) => handleEditorKeyDown(e, onCancel)}
           placeholder="pnpm test"
-          disabled={value.saving}
+          disabled={value.saving || actionsDisabled}
         />
         {value.error && (
           <p className="text-[10px] text-[var(--color-danger)]">
@@ -291,7 +294,12 @@ function CommandEditorRow({
           </button>
           <button
             type="submit"
-            disabled={value.saving}
+            disabled={value.saving || actionsDisabled}
+            title={
+              actionsDisabled
+                ? "Saving is unavailable in Android Chrome"
+                : undefined
+            }
             className="rounded bg-[var(--color-primary)] px-2 py-1 text-xs text-white hover:opacity-90 disabled:opacity-60 transition-opacity"
           >
             {value.saving ? "Saving..." : "Save"}
@@ -368,6 +376,7 @@ function FreeTerminalRow({
   onKill,
   onRemove,
   onSave,
+  saveDisabled,
   onDragStart,
   onDragEnd,
   onDragOver,
@@ -384,6 +393,7 @@ function FreeTerminalRow({
   onKill: () => void;
   onRemove: () => void;
   onSave: () => void;
+  saveDisabled: boolean;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
   onDragOver: (e: React.DragEvent) => void;
@@ -421,9 +431,14 @@ function FreeTerminalRow({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              onSave();
+              if (!saveDisabled) onSave();
             }}
-            title="Save to project profile"
+            disabled={saveDisabled}
+            title={
+              saveDisabled
+                ? "Saving profiles is unavailable in Android Chrome"
+                : "Save to project profile"
+            }
             className={rowActionButtonClass(
               isCoarsePointer,
               "hover:bg-[var(--color-primary)]/20 hover:text-[var(--color-primary)]",
@@ -474,6 +489,7 @@ function ProfileEditorRow({
   onCwdChange,
   onSave,
   onCancel,
+  actionsDisabled,
 }: {
   value: Extract<EditState, { kind: "profile" }>;
   onNameChange: (name: string) => void;
@@ -481,12 +497,13 @@ function ProfileEditorRow({
   onCwdChange: (cwd: string) => void;
   onSave: () => void;
   onCancel: () => void;
+  actionsDisabled: boolean;
 }) {
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        void onSave();
+        if (!actionsDisabled) void onSave();
       }}
       className="mx-2 mb-2 mt-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3"
     >
@@ -498,7 +515,7 @@ function ProfileEditorRow({
           onChange={(e) => onNameChange(e.target.value)}
           onKeyDown={(e) => handleEditorKeyDown(e, onCancel)}
           placeholder="Profile name"
-          disabled={value.saving}
+          disabled={value.saving || actionsDisabled}
         />
         <input
           className={inputClass}
@@ -506,7 +523,7 @@ function ProfileEditorRow({
           onChange={(e) => onCommandChange(e.target.value)}
           onKeyDown={(e) => handleEditorKeyDown(e, onCancel)}
           placeholder="bash"
-          disabled={value.saving}
+          disabled={value.saving || actionsDisabled}
         />
         <input
           className={inputClass}
@@ -514,7 +531,7 @@ function ProfileEditorRow({
           onChange={(e) => onCwdChange(e.target.value)}
           onKeyDown={(e) => handleEditorKeyDown(e, onCancel)}
           placeholder="."
-          disabled={value.saving}
+          disabled={value.saving || actionsDisabled}
         />
         {value.error && (
           <p className="text-[10px] text-[var(--color-danger)]">
@@ -532,7 +549,12 @@ function ProfileEditorRow({
           </button>
           <button
             type="submit"
-            disabled={value.saving}
+            disabled={value.saving || actionsDisabled}
+            title={
+              actionsDisabled
+                ? "Saving is unavailable in Android Chrome"
+                : undefined
+            }
             className="rounded bg-[var(--color-primary)] px-2 py-1 text-xs text-white hover:opacity-90 disabled:opacity-60 transition-opacity"
           >
             {value.saving ? "Saving..." : "Save"}
@@ -720,6 +742,8 @@ export function TerminalTreeView({
   const { data: globalConfig } = useGlobalConfig();
   const updateUi = useUpdateUiConfig();
   const isCoarsePointer = useCoarsePointer();
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
 
   const [activeSuggestionProject, setActiveSuggestionProject] = useState<
     string | null
@@ -1121,6 +1145,7 @@ export function TerminalTreeView({
                 onKill={() => onKillFreeTerminal(session.id)}
                 onRemove={() => onRemoveFreeTerminal(session.id)}
                 onSave={() => onSaveFreeTerminal(session.id)}
+                saveDisabled={isAndroidChromeNativeInputSuppressed}
                 onDragStart={(e) => handleDragStart(e, "free", session.id)}
                 onDragEnd={handleDragEnd}
                 onDragOver={(e) => handleDragOver(e, "free", session.id)}
@@ -1244,6 +1269,9 @@ export function TerminalTreeView({
                               }
                               onSave={saveProfileEdit}
                               onCancel={() => setEditState(null)}
+                              actionsDisabled={
+                                isAndroidChromeNativeInputSuppressed
+                              }
                             />
                           ) : null
                         }
@@ -1349,6 +1377,7 @@ export function TerminalTreeView({
                           }
                           onSave={saveCommandEdit}
                           onCancel={() => setEditState(null)}
+                          actionsDisabled={isAndroidChromeNativeInputSuppressed}
                         />
                       )}
                     </div>

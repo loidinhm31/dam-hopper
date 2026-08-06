@@ -1,4 +1,5 @@
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 
@@ -23,6 +24,13 @@ export function TerminalKeepAliveHost({
   suppressNativeKeyboard = suppressAutoFocus,
   webglEnabledSessionIds,
 }: TerminalKeepAliveHostProps) {
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
+  const shouldSuppressNativeKeyboard =
+    isAndroidChromeNativeInputSuppressed || suppressNativeKeyboard;
+  const shouldSuppressTerminalFocus =
+    shouldSuppressNativeKeyboard || suppressAutoFocus;
+
   return (
     <div
       aria-hidden="true"
@@ -57,8 +65,8 @@ export function TerminalKeepAliveHost({
             onExit={() => onSessionExit?.(session.sessionId)}
             onNewTerminal={onNewTerminal}
             onTerminalReady={onTerminalReady}
-            suppressAutoFocus={suppressAutoFocus}
-            suppressNativeKeyboard={suppressNativeKeyboard}
+            suppressAutoFocus={shouldSuppressTerminalFocus}
+            suppressNativeKeyboard={shouldSuppressNativeKeyboard}
             terminalOrder={terminalOrder}
             webglEnabled={
               webglEnabledSessionIds?.has(session.sessionId) ?? false
