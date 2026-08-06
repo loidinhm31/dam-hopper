@@ -1,4 +1,10 @@
-import { useRef, useCallback, useEffect, useState, type ReactNode } from "react";
+import {
+  useRef,
+  useCallback,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   DndContext,
   DragOverlay,
@@ -20,6 +26,7 @@ import { terminalRegistry } from "@/lib/terminal-registry.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface LayoutTreeProps {
   node: LayoutNode;
@@ -199,6 +206,10 @@ export function SplitLayout({
   renderBrowserContent,
   onCloseBrowser,
 }: SplitLayoutProps) {
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
+  const shouldSuppressTerminalFocus =
+    isAndroidChromeNativeInputSuppressed || suppressTerminalFocus;
   // ── dnd-kit drag sensors (8px activation so clicks still work) ──────────
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -220,7 +231,8 @@ export function SplitLayout({
           .findIndex((pane) => pane.id === data.sourcePaneId);
         setActiveDragMeta({
           label: tab?.label ?? data.sessionId,
-          sourcePaneLabel: paneIndex >= 0 ? `Pane ${paneIndex + 1}` : "Current Pane",
+          sourcePaneLabel:
+            paneIndex >= 0 ? `Pane ${paneIndex + 1}` : "Current Pane",
         });
       }
     },
@@ -270,7 +282,7 @@ export function SplitLayout({
           onSelectTab={onSelectTab}
           onCloseTab={onCloseTab}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
-          suppressTerminalFocus={suppressTerminalFocus}
+          suppressTerminalFocus={shouldSuppressTerminalFocus}
           browserOpen={browserOpen}
           renderBrowserContent={renderBrowserContent}
           onCloseBrowser={onCloseBrowser}

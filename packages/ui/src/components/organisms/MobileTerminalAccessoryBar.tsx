@@ -6,11 +6,7 @@ import {
   type ChangeEvent,
   type KeyboardEvent,
 } from "react";
-import {
-  Keyboard,
-  ChevronDown,
-  ChevronUp,
-} from "lucide-react";
+import { Keyboard, ChevronDown, ChevronUp } from "lucide-react";
 import { getTransport } from "@/api/transport.js";
 import {
   getCustomMobileTerminalKeySequence,
@@ -22,6 +18,7 @@ import {
 } from "@/lib/mobile-terminal-keys.js";
 import { cn } from "@/lib/utils.js";
 import { useSettingsStore } from "@/stores/settings.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { MobileTerminalCustomKeyboard } from "@/components/organisms/MobileTerminalCustomKeyboard.js";
 import { MobileTerminalNativeKeyboardInput } from "@/components/organisms/MobileTerminalNativeKeyboardInput.js";
 import { MobileTerminalSpecialKeys } from "@/components/organisms/MobileTerminalSpecialKeys.js";
@@ -44,13 +41,20 @@ export function MobileTerminalAccessoryBar({
   const [isSymbolLayer, setIsSymbolLayer] = useState(false);
   const keyboardInputRef = useRef<HTMLInputElement>(null);
   const keyboardValueRef = useRef("");
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
   const mobileCustomKeyboardEnabled = useSettingsStore(
     (state) => state.mobileCustomKeyboardEnabled,
   );
+  const shouldUseCustomKeyboard =
+    isAndroidChromeNativeInputSuppressed || mobileCustomKeyboardEnabled;
+  const keyboardButtonLabel = isAndroidChromeNativeInputSuppressed
+    ? "Open custom terminal keyboard"
+    : "Open mobile keyboard";
 
   useEffect(() => {
-    if (mobileCustomKeyboardEnabled) keyboardInputRef.current?.blur();
-  }, [mobileCustomKeyboardEnabled]);
+    if (shouldUseCustomKeyboard) keyboardInputRef.current?.blur();
+  }, [shouldUseCustomKeyboard]);
 
   const handlePress = useCallback(
     (id: MobileTerminalKeyId) => {
@@ -64,7 +68,7 @@ export function MobileTerminalAccessoryBar({
     setIsKeyboardOpen((current) => {
       const next = !current;
       requestAnimationFrame(() => {
-        if (next && !mobileCustomKeyboardEnabled) {
+        if (next && !shouldUseCustomKeyboard) {
           keyboardInputRef.current?.focus();
         } else {
           keyboardInputRef.current?.blur();
@@ -72,7 +76,7 @@ export function MobileTerminalAccessoryBar({
       });
       return next;
     });
-  }, [mobileCustomKeyboardEnabled]);
+  }, [shouldUseCustomKeyboard]);
 
   const handleCustomKeyPress = useCallback(
     (key: CustomMobileTerminalKey) => {
@@ -162,8 +166,8 @@ export function MobileTerminalAccessoryBar({
             preventDefault(event);
             toggleKeyboard();
           }}
-          title="Open mobile keyboard"
-          aria-label="Open mobile keyboard"
+          title={keyboardButtonLabel}
+          aria-label={keyboardButtonLabel}
           className={cn(
             "flex h-10 items-center justify-center gap-1 rounded-md border px-3 text-[11px] font-semibold transition-colors",
             isKeyboardOpen
@@ -173,11 +177,11 @@ export function MobileTerminalAccessoryBar({
         >
           <Keyboard className="h-4 w-4 shrink-0" />
           <span className="whitespace-nowrap">
-            {mobileCustomKeyboardEnabled ? "Type" : "Kbd"}
+            {shouldUseCustomKeyboard ? "Type" : "Kbd"}
           </span>
         </button>
       </div>
-      {isKeyboardOpen && mobileCustomKeyboardEnabled ? (
+      {isKeyboardOpen && shouldUseCustomKeyboard ? (
         <MobileTerminalCustomKeyboard
           isShiftActive={isShiftActive}
           isCtrlActive={isCtrlActive}
@@ -191,9 +195,7 @@ export function MobileTerminalAccessoryBar({
           onKeyDown={handleKeyboardKeyDown}
         />
       ) : null}
-      {isExpanded ? (
-        <MobileTerminalSpecialKeys onPress={handlePress} />
-      ) : null}
+      {isExpanded ? <MobileTerminalSpecialKeys onPress={handlePress} /> : null}
     </div>
   );
 }

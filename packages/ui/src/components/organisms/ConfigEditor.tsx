@@ -6,6 +6,7 @@ import type {
   ServiceConfig,
   TerminalProfile,
 } from "@/api/client.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 // ── Small helpers ──────────────────────────────────────────────────────────
 
@@ -90,11 +91,13 @@ function ServiceForm({
   onChange,
   onRemove,
   disabled,
+  textDisabled,
 }: {
   service: ServiceConfig;
   onChange: (s: ServiceConfig) => void;
   onRemove: () => void;
   disabled?: boolean;
+  textDisabled?: boolean;
 }) {
   return (
     <div className="rounded border border-[var(--color-border)] bg-[var(--color-background)] p-3 space-y-2">
@@ -118,7 +121,7 @@ function ServiceForm({
             value={service.name}
             onChange={(e) => onChange({ ...service, name: e.target.value })}
             placeholder="frontend"
-            disabled={disabled}
+            disabled={disabled || textDisabled}
           />
         </Field>
         <Field label="Build command">
@@ -132,7 +135,7 @@ function ServiceForm({
               })
             }
             placeholder="pnpm build"
-            disabled={disabled}
+            disabled={disabled || textDisabled}
           />
         </Field>
         <Field label="Run command">
@@ -143,7 +146,7 @@ function ServiceForm({
               onChange({ ...service, runCommand: e.target.value || undefined })
             }
             placeholder="pnpm dev"
-            disabled={disabled}
+            disabled={disabled || textDisabled}
           />
         </Field>
       </div>
@@ -157,10 +160,12 @@ export function CommandsForm({
   commands,
   onChange,
   disabled,
+  textDisabled,
 }: {
   commands: Record<string, string>;
   onChange: (c: Record<string, string>) => void;
   disabled?: boolean;
+  textDisabled?: boolean;
 }) {
   const entries = Object.entries(commands);
   const [commandRowIds, setCommandRowIds] = useState(createCommandRowIdState);
@@ -207,7 +212,7 @@ export function CommandsForm({
             value={key}
             onChange={(e) => updateKey(key, e.target.value)}
             placeholder="test"
-            disabled={disabled}
+            disabled={disabled || textDisabled}
           />
           <span className="text-[var(--color-text-muted)] text-sm">=</span>
           <input
@@ -215,7 +220,7 @@ export function CommandsForm({
             value={value}
             onChange={(e) => updateValue(key, e.target.value)}
             placeholder="pnpm test"
-            disabled={disabled}
+            disabled={disabled || textDisabled}
           />
           <Button
             size="sm"
@@ -240,10 +245,12 @@ function TerminalProfilesForm({
   profiles,
   onChange,
   disabled,
+  textDisabled,
 }: {
   profiles: TerminalProfile[];
   onChange: (p: TerminalProfile[]) => void;
   disabled?: boolean;
+  textDisabled?: boolean;
 }) {
   function updateField(i: number, field: keyof TerminalProfile, value: string) {
     const next = profiles.map((p, idx) =>
@@ -291,7 +298,7 @@ function TerminalProfilesForm({
                 value={profile.name}
                 onChange={(e) => updateField(i, "name", e.target.value)}
                 placeholder="Dev Server"
-                disabled={disabled}
+                disabled={disabled || textDisabled}
               />
             </Field>
             <Field label="Command">
@@ -300,7 +307,7 @@ function TerminalProfilesForm({
                 value={profile.command}
                 onChange={(e) => updateField(i, "command", e.target.value)}
                 placeholder="bash"
-                disabled={disabled}
+                disabled={disabled || textDisabled}
               />
             </Field>
             <Field label="Working directory">
@@ -309,7 +316,7 @@ function TerminalProfilesForm({
                 value={profile.cwd}
                 onChange={(e) => updateField(i, "cwd", e.target.value)}
                 placeholder="."
-                disabled={disabled}
+                disabled={disabled || textDisabled}
               />
             </Field>
           </div>
@@ -330,12 +337,14 @@ function ProjectForm({
   onRemove,
   errors,
   disabled,
+  textDisabled,
 }: {
   project: ProjectConfig;
   onChange: (p: ProjectConfig) => void;
   onRemove: () => void;
   errors?: Record<string, string>;
   disabled?: boolean;
+  textDisabled?: boolean;
 }) {
   const [expanded, setExpanded] = useState(() => !project.name);
 
@@ -403,7 +412,7 @@ function ProjectForm({
                 value={project.name}
                 onChange={(e) => onChange({ ...project, name: e.target.value })}
                 placeholder="api-server"
-                disabled={disabled}
+                disabled={disabled || textDisabled}
               />
             </Field>
             <Field label="Path" error={errors?.path}>
@@ -412,7 +421,7 @@ function ProjectForm({
                 value={project.path}
                 onChange={(e) => onChange({ ...project, path: e.target.value })}
                 placeholder="./api-server"
-                disabled={disabled}
+                disabled={disabled || textDisabled}
               />
             </Field>
             <Field label="Type">
@@ -442,7 +451,7 @@ function ProjectForm({
                   onChange({ ...project, envFile: e.target.value || undefined })
                 }
                 placeholder=".env"
-                disabled={disabled}
+                disabled={disabled || textDisabled}
               />
             </Field>
           </div>
@@ -463,7 +472,7 @@ function ProjectForm({
                 });
               }}
               placeholder="backend, api"
-              disabled={disabled}
+              disabled={disabled || textDisabled}
             />
           </Field>
 
@@ -484,6 +493,7 @@ function ProjectForm({
                 onChange={(s) => updateService(i, s)}
                 onRemove={() => removeService(i)}
                 disabled={disabled}
+                textDisabled={textDisabled}
               />
             ))}
             <Button
@@ -510,6 +520,7 @@ function ProjectForm({
                 })
               }
               disabled={disabled}
+              textDisabled={textDisabled}
             />
           </div>
 
@@ -527,6 +538,7 @@ function ProjectForm({
                 })
               }
               disabled={disabled}
+              textDisabled={textDisabled}
             />
           </div>
         </div>
@@ -545,6 +557,8 @@ interface Props {
 }
 
 export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
   const [draft, setDraft] = useState<DamHopperConfig>(() =>
     structuredClone(config),
   );
@@ -599,6 +613,7 @@ export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
 
   // C2: wrap save in try/catch
   async function handleSave() {
+    if (isAndroidChromeNativeInputSuppressed) return;
     if (!validate()) return;
     setSaved(false);
     try {
@@ -676,7 +691,7 @@ export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
               })
             }
             placeholder="my-workspace"
-            disabled={isSaving}
+            disabled={isSaving || isAndroidChromeNativeInputSuppressed}
           />
         </Field>
       </section>
@@ -721,6 +736,7 @@ export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
                     .map(([k, v]) => [k.replace(`projects.${i}.`, ""), v]),
                 )}
                 disabled={isSaving}
+                textDisabled={isAndroidChromeNativeInputSuppressed}
               />
             ))}
           </div>
@@ -733,7 +749,14 @@ export function ConfigEditor({ config, onSave, isSaving, saveError }: Props) {
           variant="primary"
           onClick={() => void handleSave()}
           loading={isSaving}
-          disabled={!isDirty || isSaving}
+          disabled={
+            !isDirty || isSaving || isAndroidChromeNativeInputSuppressed
+          }
+          title={
+            isAndroidChromeNativeInputSuppressed
+              ? "Unavailable on Android Chrome: configuration editing is disabled"
+              : undefined
+          }
         >
           Save changes
         </Button>

@@ -4,6 +4,7 @@ import { Switch } from "@/components/atoms/Switch.js";
 import { SettingRow } from "@/components/molecules/SettingRow.js";
 import { TerminalAgentNotificationSettings } from "@/components/molecules/TerminalAgentNotificationSettings.js";
 import { useSettingsStore } from "@/stores/settings.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import {
   clearHistory,
   isHistoryEnabled,
@@ -12,6 +13,8 @@ import {
 
 export function SettingsAppearanceSection() {
   const [historyEnabled, setHistoryEnabledState] = useState(isHistoryEnabled);
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
   const {
     systemFontSize,
     editorFontSize,
@@ -192,14 +195,23 @@ export function SettingsAppearanceSection() {
 
       <SettingRow
         title="Custom mobile terminal keyboard"
-        description="Use the compact in-app keyboard instead of opening the device keyboard"
+        description={
+          isAndroidChromeNativeInputSuppressed
+            ? "Forced on Android Chrome because native text entry is unavailable; this setting is controlled by the platform policy."
+            : "Use the compact in-app keyboard instead of opening the device keyboard"
+        }
       >
         <Switch
-          checked={mobileCustomKeyboardEnabled}
-          ariaLabel="Enable custom mobile terminal keyboard"
-          onCheckedChange={(checked) =>
-            saveDebounced({ mobileCustomKeyboardEnabled: checked })
+          checked={
+            isAndroidChromeNativeInputSuppressed || mobileCustomKeyboardEnabled
           }
+          disabled={isAndroidChromeNativeInputSuppressed}
+          ariaLabel="Enable custom mobile terminal keyboard"
+          onCheckedChange={(checked) => {
+            if (!isAndroidChromeNativeInputSuppressed) {
+              saveDebounced({ mobileCustomKeyboardEnabled: checked });
+            }
+          }}
         />
       </SettingRow>
 

@@ -21,6 +21,7 @@ import { api } from "@/api/client.js";
 import type { DiffFileEntry } from "@/api/client.js";
 import { FilePathLabel } from "@/components/atoms/FilePathLabel.js";
 import { ContextMenu } from "@/components/ui/ContextMenu.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 // ---------------------------------------------------------------------------
 // ChangedFilesList — IntelliJ-style local changes panel
@@ -310,6 +311,8 @@ export function ChangedFilesList({
   onSelectFile,
 }: ChangedFilesListProps) {
   const queryClient = useQueryClient();
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
   const [commitMsg, setCommitMsg] = useState("");
   const [amendCommit, setAmendCommit] = useState(false);
   const [isCommitting, setIsCommitting] = useState(false);
@@ -484,7 +487,13 @@ export function ChangedFilesList({
   }
 
   async function handleCommit() {
-    if (!commitMsg.trim() || stagedCount === 0 || hasMixedStagedRoots) return;
+    if (
+      isAndroidChromeNativeInputSuppressed ||
+      !commitMsg.trim() ||
+      stagedCount === 0 ||
+      hasMixedStagedRoots
+    )
+      return;
     setMutationError(null);
     setIsCommitting(true);
     try {
@@ -775,10 +784,15 @@ export function ChangedFilesList({
           value={commitMsg}
           onChange={(e) => setCommitMsg(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.ctrlKey || e.metaKey))
+            if (
+              !isAndroidChromeNativeInputSuppressed &&
+              e.key === "Enter" &&
+              (e.ctrlKey || e.metaKey)
+            )
               void handleCommit();
           }}
           placeholder="Commit message…"
+          disabled={isAndroidChromeNativeInputSuppressed}
           rows={2}
           className="w-full resize-none rounded-sm border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-[11px] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)]/50 transition-colors"
         />
@@ -800,10 +814,16 @@ export function ChangedFilesList({
         <button
           onClick={() => void handleCommit()}
           disabled={
+            isAndroidChromeNativeInputSuppressed ||
             !commitMsg.trim() ||
             stagedCount === 0 ||
             hasMixedStagedRoots ||
             isCommitting
+          }
+          title={
+            isAndroidChromeNativeInputSuppressed
+              ? "Unavailable on Android Chrome: text entry is disabled"
+              : undefined
           }
           className="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 text-[11px] font-medium rounded-sm bg-[var(--color-primary)] text-white disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
         >
