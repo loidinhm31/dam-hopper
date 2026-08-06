@@ -112,12 +112,22 @@ describe("MobileTerminalAccessoryBar", () => {
 
     const buttons = container.querySelectorAll("button");
     expect(buttons).toHaveLength(2);
+    expect(
+      container.querySelector(
+        "[data-testid=mobile-terminal-accessory-controls]",
+      )?.className,
+    ).toContain("justify-end");
+    expect(
+      container.querySelector(
+        "[data-testid=mobile-terminal-accessory-controls]",
+      )?.className,
+    ).toContain("gap-0.5");
     expect(buttons[0]?.getAttribute("aria-label")).toBe("Show terminal keys");
-    expect(buttons[0]?.className).toContain("h-11");
-    expect(buttons[0]?.className).toContain("w-11");
+    expect(buttons[0]?.className).toContain("h-9");
+    expect(buttons[0]?.className).toContain("w-9");
     expect(buttons[0]?.querySelector(".sr-only")?.textContent).toBe("Keys");
-    expect(buttons[1]?.className).toContain("h-11");
-    expect(buttons[1]?.className).toContain("w-11");
+    expect(buttons[1]?.className).toContain("h-9");
+    expect(buttons[1]?.className).toContain("w-9");
     expect(buttons[1]?.querySelector(".sr-only")?.textContent).toBe("Kbd");
   });
 });
