@@ -10,7 +10,7 @@
 
 ## Overview
 
-**Date:** 2026-08-07 · **Priority:** P1 · **Status:** pending · **Effort:** 2h
+**Date:** 2026-08-07 · **Priority:** P1 · **Status:** completed · **Effort:** 2h
 
 Retain aggregate `dropped` compatibility while adding bounded, reason-specific in-memory counters.
 This is option C and the minimum observability needed to tell schema incompatibility from paused or
@@ -68,11 +68,11 @@ serializes totals through the existing authenticated Usage health/summary respon
 
 ## Todo list
 
-- [ ] Typed normalization reasons replace opaque `None`.
-- [ ] Five bounded counters plus legacy aggregate implemented.
-- [ ] Receiver status and queue semantics unchanged.
-- [ ] Unit/integration/API privacy tests added.
-- [ ] API and architecture docs updated minimally.
+- [x] Typed normalization reasons replace opaque `None`.
+- [x] Five bounded counters plus legacy aggregate implemented.
+- [x] Receiver status and queue semantics unchanged.
+- [x] Unit/integration/API privacy tests added.
+- [x] API and architecture docs updated minimally.
 
 ## Success criteria
 
@@ -96,6 +96,13 @@ contain no attacker-controlled labels or payload data. Loopback receiver auth re
 
 Use counter deltas in Phase 4 smoke. Do not interpret `unverifiedVersion` or `coreSchemaDrift` as a
 drop reason; those remain compatibility-quality signals.
+
+## Completion evidence
+
+- `cargo test --lib`: 550 passed, 0 failed, 1 ignored.
+- Focused normalizer, receiver, and authenticated API health tests pass.
+- Independent code review: GO; no Critical or Important findings.
+- Existing aggregate drop and HTTP 202/503 behavior remain covered.
 
 ## Unresolved questions
 

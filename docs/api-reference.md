@@ -292,9 +292,13 @@ than fabricated zero-valued usage.
 Returns telemetry availability, paused state, writer errors, rejected events, the sampling
 timestamp, and bounded Codex collector counters. Collector status is reported separately from
 usage totals so an unavailable receiver cannot be mistaken for no activity.
+The collector counters include the legacy aggregate `dropped` total plus additive
+`droppedMissingIdentity`, `droppedInvalidTimestamp`, `droppedPaused`, `droppedQueueFull`, and
+`droppedWorkerUnavailable` totals. These are fixed-cardinality in-memory counters, contain no
+source values or payload fragments, and reset when the server process restarts.
 Codex CLI 0.146.1 token-bearing `response.completed` records without a safe per-event identity
-remain fail-closed; this is internal admission behavior and does not add or change an API field or
-SQLite schema.
+remain fail-closed; this is internal admission behavior and does not add a Codex event field or
+change the SQLite schema. The fixed health counters above are the only additive diagnostic fields.
 
 ### GET/PATCH /api/usage/settings
 
