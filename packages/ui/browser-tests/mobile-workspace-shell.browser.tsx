@@ -117,30 +117,14 @@ function Harness({
     workspaceMode === "ide" ? ideSurfaces : terminalSurfaces;
 
   return (
-    <>
-      <MobileWorkspaceShell
-        surfaces={activeSurfaces}
-        activeSurfaceId={activeSurfaceId}
-        onSurfaceChange={setActiveSurfaceId}
-        workspaceMode={workspaceMode}
-        onWorkspaceModeChange={() => {}}
-        toolbarActions={<button type="button">Action</button>}
-      />
-      {workspaceMode === "terminal" && (
-        <div
-          data-testid="terminal-accessory-fixture"
-          aria-hidden="true"
-          style={{
-            position: "fixed",
-            right: 0,
-            bottom: 0,
-            left: 0,
-            height: "369px",
-            pointerEvents: "none",
-          }}
-        />
-      )}
-    </>
+    <MobileWorkspaceShell
+      surfaces={activeSurfaces}
+      activeSurfaceId={activeSurfaceId}
+      onSurfaceChange={setActiveSurfaceId}
+      workspaceMode={workspaceMode}
+      onWorkspaceModeChange={() => {}}
+      toolbarActions={<button type="button">Action</button>}
+    />
   );
 }
 
@@ -283,15 +267,7 @@ describe("mobile workspace shell in Chromium", () => {
 
     await act(async () => root.render(<Harness workspaceMode="terminal" />));
     await vi.waitFor(() => {
-      const accessoryRect = document
-        .querySelector<HTMLElement>(
-          '[data-testid="terminal-accessory-fixture"]',
-        )
-        ?.getBoundingClientRect();
-      expect(accessoryRect).toBeDefined();
-      expect(trigger().getBoundingClientRect().bottom).toBeLessThanOrEqual(
-        accessoryRect?.top ?? 0,
-      );
+      expect(trigger().className).toContain("z-[40]");
     });
 
     await page.viewport(320, 420);
@@ -366,7 +342,7 @@ describe("mobile workspace shell in Chromium", () => {
     );
   });
 
-  it("keeps the terminal surface set clear of the expanded accessory fixture", async () => {
+  it("keeps the terminal Panels trigger above local terminal controls", async () => {
     await page.viewport(375, 700);
     await act(async () => root.render(<Harness workspaceMode="terminal" />));
 
@@ -383,10 +359,8 @@ describe("mobile workspace shell in Chromium", () => {
     }
 
     const triggerRect = trigger().getBoundingClientRect();
-    const accessoryRect = document
-      .querySelector<HTMLElement>('[data-testid="terminal-accessory-fixture"]')
-      ?.getBoundingClientRect();
-    expect(accessoryRect).toBeDefined();
-    expect(triggerRect.bottom).toBeLessThanOrEqual(accessoryRect?.top ?? 0);
+    expect(triggerRect.left).toBeGreaterThanOrEqual(0);
+    expect(triggerRect.right).toBeLessThanOrEqual(window.innerWidth);
+    expect(trigger().className).toContain("z-[40]");
   });
 });

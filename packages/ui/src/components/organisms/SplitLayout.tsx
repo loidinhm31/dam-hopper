@@ -38,6 +38,7 @@ interface LayoutTreeProps {
   onSelectTab: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+  activeSessionId: string | null;
   suppressTerminalFocus?: boolean;
   browserOpen?: boolean;
   renderBrowserContent?: (onClose: () => void) => ReactNode;
@@ -54,6 +55,7 @@ function LayoutTree({
   onSelectTab,
   onCloseTab,
   onOpenDiagnosticsMenu,
+  activeSessionId,
   suppressTerminalFocus = false,
   browserOpen = false,
   renderBrowserContent,
@@ -97,6 +99,7 @@ function LayoutTree({
         onSelectTab={onSelectTab}
         onCloseTab={onCloseTab}
         onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
+        activeSessionId={activeSessionId}
         suppressTerminalFocus={suppressTerminalFocus}
         browserOpen={browserOpen}
         renderBrowserContent={renderBrowserContent}
@@ -122,6 +125,7 @@ function LayoutTree({
           onSelectTab={onSelectTab}
           onCloseTab={onCloseTab}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
+          activeSessionId={activeSessionId}
           suppressTerminalFocus={suppressTerminalFocus}
           browserOpen={browserOpen}
           renderBrowserContent={renderBrowserContent}
@@ -140,6 +144,7 @@ function LayoutTree({
           onSelectTab={onSelectTab}
           onCloseTab={onCloseTab}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
+          activeSessionId={activeSessionId}
           suppressTerminalFocus={suppressTerminalFocus}
           browserOpen={browserOpen}
           renderBrowserContent={renderBrowserContent}
@@ -160,6 +165,7 @@ export interface SplitLayoutProps {
   onSelectTab: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+  activeSessionId?: string | null;
   suppressTerminalFocus?: boolean;
   browserOpen?: boolean;
   renderBrowserContent?: (onClose: () => void) => ReactNode;
@@ -201,6 +207,7 @@ export function SplitLayout({
   onSelectTab,
   onCloseTab,
   onOpenDiagnosticsMenu,
+  activeSessionId = null,
   suppressTerminalFocus = false,
   browserOpen = false,
   renderBrowserContent,
@@ -282,6 +289,7 @@ export function SplitLayout({
           onSelectTab={onSelectTab}
           onCloseTab={onCloseTab}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
+          activeSessionId={activeSessionId}
           suppressTerminalFocus={shouldSuppressTerminalFocus}
           browserOpen={browserOpen}
           renderBrowserContent={renderBrowserContent}

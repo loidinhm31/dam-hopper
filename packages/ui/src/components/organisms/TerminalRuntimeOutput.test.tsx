@@ -6,7 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRuntimeOutput } from "./TerminalRuntimeOutput.js";
 
 const mockPolicy = vi.hoisted(() => ({ enabled: false }));
-const mockSettings = vi.hoisted(() => ({ customKeyboard: true }));
+const mockSettings = vi.hoisted(() => ({
+  customKeyboard: true,
+  scrollButtonsEnabled: true,
+}));
+const mockViewport = vi.hoisted(() => ({ compact: true, coarse: true }));
 const mockTerminal = vi.hoisted(() => ({
   focus: vi.fn(),
   options: { disableStdin: false },
@@ -37,22 +41,34 @@ vi.mock("@/lib/terminal-registry.js", () => ({
   subscribeToRegistry: () => () => {},
 }));
 vi.mock("@/components/organisms/TerminalScrollButtons.js", () => ({
-  TerminalScrollButtons: ({ className }: { className?: string }) => (
-    <div data-testid="terminal-scroll-buttons" data-class-name={className} />
+  TerminalScrollButtons: ({
+    className,
+    reserveAccessoryRail,
+  }: {
+    className?: string;
+    reserveAccessoryRail?: boolean;
+  }) => (
+    <div
+      data-testid="terminal-scroll-buttons"
+      data-class-name={className}
+      data-reserve-accessory-rail={reserveAccessoryRail}
+    />
   ),
 }));
 vi.mock("@/hooks/use-compact-workspace.js", () => ({
-  useCompactWorkspace: () => true,
+  useCompactWorkspace: () => mockViewport.compact,
 }));
 vi.mock("@/hooks/use-coarse-pointer.js", () => ({
-  useCoarsePointer: () => true,
+  useCoarsePointer: () => mockViewport.coarse,
 }));
 vi.mock("@/stores/settings.js", () => ({
   useSettingsStore: () => ({
     get mobileCustomKeyboardEnabled() {
       return mockSettings.customKeyboard;
     },
-    terminalScrollButtonsEnabled: true,
+    get terminalScrollButtonsEnabled() {
+      return mockSettings.scrollButtonsEnabled;
+    },
   }),
 }));
 vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
@@ -70,6 +86,9 @@ describe("TerminalRuntimeOutput", () => {
     renderedHostProps = null;
     mockPolicy.enabled = false;
     mockSettings.customKeyboard = true;
+    mockSettings.scrollButtonsEnabled = true;
+    mockViewport.compact = true;
+    mockViewport.coarse = true;
     mockTerminal.focus.mockClear();
     container = document.createElement("div");
     document.body.append(container);
@@ -89,7 +108,7 @@ describe("TerminalRuntimeOutput", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps the scroll control above the compact mobile accessory bar", () => {
+  it("keeps scroll and keyboard controls in the same positioned host", () => {
     const markup = renderToStaticMarkup(
       <TerminalRuntimeOutput
         activeSessionId="session-1"
@@ -101,7 +120,66 @@ describe("TerminalRuntimeOutput", () => {
     );
 
     expect(markup).toContain('data-testid="terminal-scroll-buttons"');
-    expect(markup).toContain('data-class-name="bottom-2"');
+    expect(markup).toContain('data-testid="mobile-terminal-accessory-bar"');
+    expect(markup).toContain('data-reserve-accessory-rail="true"');
+    expect(markup).not.toContain("safe-area-inline");
+  });
+
+  it("renders controls for desktop fine pointers without suppressing xterm input", () => {
+    mockViewport.compact = false;
+    mockViewport.coarse = false;
+
+    const markup = renderToStaticMarkup(
+      <TerminalRuntimeOutput
+        activeSessionId="session-1"
+        mountedSessions={[
+          { sessionId: "session-1", project: "demo", command: "shell" },
+        ]}
+        renderTerminals
+      />,
+    );
+
+    expect(markup).toContain('data-testid="mobile-terminal-accessory-bar"');
+    expect(markup).toContain('data-reserve-accessory-rail="true"');
+    expect(renderedHostProps).toEqual(
+      expect.objectContaining({
+        suppressAutoFocus: false,
+        suppressNativeKeyboard: false,
+      }),
+    );
+  });
+
+  it("reclaims the scroll lane when scroll controls are disabled", () => {
+    mockViewport.compact = false;
+    mockViewport.coarse = false;
+    mockSettings.scrollButtonsEnabled = false;
+
+    const markup = renderToStaticMarkup(
+      <TerminalRuntimeOutput
+        activeSessionId="session-1"
+        mountedSessions={[
+          { sessionId: "session-1", project: "demo", command: "shell" },
+        ]}
+        renderTerminals={false}
+      />,
+    );
+
+    expect(markup).not.toContain('data-testid="terminal-scroll-buttons"');
+    expect(markup).toContain('data-testid="mobile-terminal-accessory-bar"');
+    expect(markup).toContain("right:max(0.75rem, var(--safe-area-right, 0px))");
+  });
+
+  it("does not mount controls without an active session", () => {
+    const markup = renderToStaticMarkup(
+      <TerminalRuntimeOutput
+        activeSessionId={null}
+        mountedSessions={[]}
+        renderTerminals={false}
+      />,
+    );
+
+    expect(markup).not.toContain('data-testid="mobile-terminal-accessory-bar"');
+    expect(markup).not.toContain('data-testid="terminal-scroll-buttons"');
   });
 
   it("forces the accessory and suppresses the hidden host on Android policy", () => {

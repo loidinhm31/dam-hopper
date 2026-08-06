@@ -289,6 +289,48 @@ extension runs.
 - Reuses existing mounted session state from the terminal manager.
 - Does not create a second PTY lifecycle for terminal-mode rendering.
 - Refits visible panes when the workspace shell layout changes.
+- Threads the global `activeSessionId` through `SplitLayout` into each
+  `PaneContainer`. The active pane renders one host-local floating
+  `MobileTerminalAccessoryBar` inside its terminal output host, before any
+  browser split; it is never mounted over the whole split surface or once per
+  pane.
+
+### Floating Terminal Keyboard Controls
+
+**Locations:**
+
+- `packages/ui/src/components/organisms/MobileTerminalAccessoryBar.tsx`
+- `packages/ui/src/components/organisms/TerminalAccessoryControls.tsx`
+- `packages/ui/src/components/organisms/TerminalFloatingControlShell.tsx`
+- `packages/ui/src/components/organisms/TerminalRuntimeOutput.tsx`
+- `packages/ui/src/components/organisms/TerminalScrollButtons.tsx`
+- `packages/ui/src/components/organisms/PaneContainer.tsx`
+- `packages/ui/src/components/organisms/SplitLayout.tsx`
+
+**Behavior:**
+
+- Keys and Type are a host-local, absolute `z-10` overlay inside each positioned
+  terminal output host. The group uses the same translucent surface and dismissal
+  conventions as the scroll controls, with a safe-area-aware lower-right anchor.
+- TerminalScrollButtons keeps the outer lower-right rail. The keyboard group uses
+  the adjacent safe-area-aware lane, including the expanded rail width and an 8px
+  gap, when scrolling is enabled and reclaims that lane when it is disabled; its
+  outer wrapper is pointer-inert so empty overlay space does not steal xterm,
+  pane, or docking events.
+- Expanded special keys and custom/native Type input stay in the existing local
+  component state and continue writing through the active session's authenticated
+  terminal transport. The native Type input remains focusable; control presses
+  prevent xterm focus and stop host propagation. Escape and outside pointer
+  dismissal close open panels and Escape restores the invoking trigger focus.
+- Rendering the group is independent from native-input suppression. Android policy
+  and the existing compact/coarse/custom-keyboard policy still control xterm/native
+  input behavior; showing desktop controls alone never suppresses xterm input.
+  The custom keyboard is selected only for Android suppression or compact/coarse
+  pointers with the setting enabled; fine-pointer desktop Type always uses the
+  focusable native input.
+- Expanded content is bounded by the host and visual viewport (`dvh`), safe-area
+  insets, and a 22rem width cap, so opening a panel does not add an in-flow row or
+  reduce the xterm host height.
 
 ### Resize Handle Hook
 
