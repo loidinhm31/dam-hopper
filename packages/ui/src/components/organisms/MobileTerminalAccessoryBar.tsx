@@ -1,12 +1,13 @@
 import {
   useCallback,
   useEffect,
+  useId,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
   type KeyboardEvent,
 } from "react";
-import { Keyboard, ChevronDown, ChevronUp } from "lucide-react";
 import { getTransport } from "@/api/transport.js";
 import {
   getCustomMobileTerminalKeySequence,
@@ -16,12 +17,13 @@ import {
   getMobileTerminalKeySequence,
   type MobileTerminalKeyId,
 } from "@/lib/mobile-terminal-keys.js";
-import { cn } from "@/lib/utils.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { MobileTerminalCustomKeyboard } from "@/components/organisms/MobileTerminalCustomKeyboard.js";
 import { MobileTerminalNativeKeyboardInput } from "@/components/organisms/MobileTerminalNativeKeyboardInput.js";
 import { MobileTerminalSpecialKeys } from "@/components/organisms/MobileTerminalSpecialKeys.js";
+import { TerminalAccessoryControls } from "@/components/organisms/TerminalAccessoryControls.js";
+import { TerminalFloatingControlShell } from "@/components/organisms/TerminalFloatingControlShell.js";
 
 export function MobileTerminalAccessoryBar({
   sessionId,
@@ -35,6 +37,11 @@ export function MobileTerminalAccessoryBar({
   const [isShiftActive, setIsShiftActive] = useState(false);
   const [isCtrlActive, setIsCtrlActive] = useState(false);
   const [isSymbolLayer, setIsSymbolLayer] = useState(false);
+  const keysButtonRef = useRef<HTMLButtonElement>(null);
+  const keyboardButtonRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const outsideRefs = useMemo(() => [panelRef], []);
+  const invokingControlRef = useRef<"keys" | "keyboard">("keys");
   const keyboardInputRef = useRef<HTMLInputElement>(null);
   const keyboardValueRef = useRef("");
   const { isAndroidChromeNativeInputSuppressed } =
@@ -47,10 +54,29 @@ export function MobileTerminalAccessoryBar({
   const keyboardButtonLabel = isAndroidChromeNativeInputSuppressed
     ? "Open custom terminal keyboard"
     : "Open mobile keyboard";
-
+  const keyboardButtonText = shouldUseCustomKeyboard ? "Type" : "Kbd";
   useEffect(() => {
     if (shouldUseCustomKeyboard) keyboardInputRef.current?.blur();
   }, [shouldUseCustomKeyboard]);
+  const focusInvokingControl = useCallback(() => {
+    requestAnimationFrame(() => {
+      const button =
+        invokingControlRef.current === "keys"
+          ? keysButtonRef.current
+          : keyboardButtonRef.current;
+      button?.focus();
+    });
+  }, []);
+
+  const dismissPanels = useCallback(() => {
+    setIsExpanded(false);
+    setIsKeyboardOpen(false);
+    focusInvokingControl();
+  }, [focusInvokingControl]);
+  const dismissPanelsWithoutFocus = useCallback(() => {
+    setIsExpanded(false);
+    setIsKeyboardOpen(false);
+  }, []);
 
   const handlePress = useCallback(
     (id: MobileTerminalKeyId) => {
@@ -61,6 +87,7 @@ export function MobileTerminalAccessoryBar({
   );
 
   const toggleKeyboard = useCallback(() => {
+    invokingControlRef.current = "keyboard";
     setIsKeyboardOpen((current) => {
       const next = !current;
       requestAnimationFrame(() => {
@@ -101,11 +128,7 @@ export function MobileTerminalAccessoryBar({
       const appended = nextValue.startsWith(previousValue)
         ? nextValue.slice(previousValue.length)
         : nextValue;
-
-      if (appended) {
-        getTransport().terminalWrite(sessionId, appended);
-      }
-
+      if (appended) getTransport().terminalWrite(sessionId, appended);
       keyboardValueRef.current = "";
       event.target.value = "";
     },
@@ -119,9 +142,7 @@ export function MobileTerminalAccessoryBar({
         getTransport().terminalWrite(sessionId, "\x7f");
         keyboardValueRef.current = "";
         event.currentTarget.value = "";
-        return;
-      }
-      if (event.key === "Enter") {
+      } else if (event.key === "Enter") {
         event.preventDefault();
         getTransport().terminalWrite(sessionId, "\r");
         keyboardValueRef.current = "";
@@ -131,66 +152,94 @@ export function MobileTerminalAccessoryBar({
     [sessionId],
   );
 
+  const toggleKeys = useCallback(() => {
+    invokingControlRef.current = "keys";
+    setIsExpanded((current) => !current);
+  }, []);
+  const keyboardPanel = shouldUseCustomKeyboard ? (
+    <MobileTerminalCustomKeyboard
+      isShiftActive={isShiftActive}
+      isCtrlActive={isCtrlActive}
+      isSymbolLayer={isSymbolLayer}
+      onPress={handleCustomKeyPress}
+    />
+  ) : (
+    <MobileTerminalNativeKeyboardInput
+      inputRef={keyboardInputRef}
+      onChange={handleKeyboardInput}
+      onKeyDown={handleKeyboardKeyDown}
+    />
+  );
+  const controlId = `terminal-accessory-${useId().replaceAll(":", "")}`;
+  const keysPanelId = `${controlId}-keys-panel`;
+  const keyboardPanelId = `${controlId}-keyboard-panel`;
+  const guardPanelPointer = useCallback(
+    (
+      event:
+        | React.MouseEvent<HTMLDivElement>
+        | React.PointerEvent<HTMLDivElement>,
+    ) => {
+      if (event.target instanceof HTMLInputElement) {
+        event.stopPropagation();
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    [],
+  );
+
   return (
-    <div
-      className={cn(
-        "safe-area-inline shrink-0 border-t border-[var(--color-border)] bg-[var(--color-surface)]/96 pb-[max(0.25rem,var(--safe-area-bottom))] backdrop-blur-md",
-        className,
-      )}
-    >
-      <div
-        data-testid="mobile-terminal-accessory-controls"
-        className="flex justify-end gap-0.5 px-0.5 py-0.5"
+    <div className="relative w-full shrink-0">
+      <TerminalFloatingControlShell
+        sessionId={sessionId}
+        className={className}
+        isOpen={isExpanded || isKeyboardOpen}
+        outsideRefs={outsideRefs}
+        onDismiss={dismissPanelsWithoutFocus}
+        onEscape={dismissPanels}
       >
-        <button
-          type="button"
-          aria-pressed={isExpanded}
-          aria-label={isExpanded ? "Hide terminal keys" : "Show terminal keys"}
-          title={isExpanded ? "Hide terminal keys" : "Show terminal keys"}
-          onClick={() => setIsExpanded((current) => !current)}
-          className="inline-flex h-9 w-9 shrink-0 touch-manipulation items-center justify-center rounded-md border border-[var(--color-primary)]/35 bg-[var(--color-primary)]/14 p-0 text-[11px] font-semibold text-[var(--color-primary)] transition-colors active:bg-[var(--color-primary)]/20"
+        <TerminalAccessoryControls
+          isExpanded={isExpanded}
+          isKeyboardOpen={isKeyboardOpen}
+          keyboardButtonLabel={keyboardButtonLabel}
+          keyboardButtonText={keyboardButtonText}
+          keysButtonRef={keysButtonRef}
+          keyboardButtonRef={keyboardButtonRef}
+          onToggleKeys={toggleKeys}
+          onToggleKeyboard={toggleKeyboard}
+          keysPanelId={keysPanelId}
+          keyboardPanelId={keyboardPanelId}
+        />
+      </TerminalFloatingControlShell>
+
+      {isKeyboardOpen || isExpanded ? (
+        <div
+          ref={panelRef}
+          data-testid="mobile-terminal-accessory-panel"
+          className="safe-area-inline safe-area-bottom pointer-events-auto flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto border-t border-[var(--color-border)] bg-[var(--color-surface)]/96 p-1 pt-1 backdrop-blur-md"
+          onMouseDown={guardPanelPointer}
+          onPointerDown={guardPanelPointer}
+          onClick={(event) => {
+            if (event.target instanceof HTMLInputElement) {
+              event.stopPropagation();
+              return;
+            }
+            event.stopPropagation();
+          }}
         >
+          {isKeyboardOpen ? (
+            <div id={keyboardPanelId} className="min-w-0 shrink-0">
+              {keyboardPanel}
+            </div>
+          ) : null}
           {isExpanded ? (
-            <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
-          ) : (
-            <ChevronUp className="h-3 w-3 shrink-0" aria-hidden="true" />
-          )}
-          <span className="sr-only">Keys</span>
-        </button>
-        <button
-          type="button"
-          aria-pressed={isKeyboardOpen}
-          onClick={toggleKeyboard}
-          title={keyboardButtonLabel}
-          aria-label={keyboardButtonLabel}
-          className={cn(
-            "inline-flex h-9 w-9 shrink-0 touch-manipulation items-center justify-center rounded-md border p-0 text-[11px] font-semibold transition-colors",
-            isKeyboardOpen
-              ? "border-[var(--color-primary)]/35 bg-[var(--color-primary)]/14 text-[var(--color-primary)]"
-              : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)] active:bg-[var(--color-border)]",
-          )}
-        >
-          <Keyboard className="h-3 w-3 shrink-0" aria-hidden="true" />
-          <span className="sr-only">
-            {shouldUseCustomKeyboard ? "Type" : "Kbd"}
-          </span>
-        </button>
-      </div>
-      {isKeyboardOpen && shouldUseCustomKeyboard ? (
-        <MobileTerminalCustomKeyboard
-          isShiftActive={isShiftActive}
-          isCtrlActive={isCtrlActive}
-          isSymbolLayer={isSymbolLayer}
-          onPress={handleCustomKeyPress}
-        />
-      ) : isKeyboardOpen ? (
-        <MobileTerminalNativeKeyboardInput
-          inputRef={keyboardInputRef}
-          onChange={handleKeyboardInput}
-          onKeyDown={handleKeyboardKeyDown}
-        />
+            <div id={keysPanelId} className="min-w-0 shrink-0">
+              <MobileTerminalSpecialKeys onPress={handlePress} />
+            </div>
+          ) : null}
+        </div>
       ) : null}
-      {isExpanded ? <MobileTerminalSpecialKeys onPress={handlePress} /> : null}
     </div>
   );
 }

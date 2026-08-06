@@ -57,11 +57,16 @@ export function MobileTerminalCustomKeyboard({
                   preventDefault(event);
                   onPress(key);
                 }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  onPress(key);
+                }}
                 title={key.title}
                 aria-label={key.title}
                 aria-pressed={key.kind === "toggle" ? isActive : undefined}
                 className={cn(
-                  "flex min-w-0 items-center justify-center rounded-md border font-semibold transition-colors active:bg-[var(--color-border)]",
+                  "flex min-w-0 items-center justify-center rounded-md border font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] active:bg-[var(--color-border)]",
                   key.wide ? "flex-[2.4]" : "flex-1",
                   isActive
                     ? "border-[var(--color-primary)]/40 bg-[var(--color-primary)]/14 text-[var(--color-primary)]"

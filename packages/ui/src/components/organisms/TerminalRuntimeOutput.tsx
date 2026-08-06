@@ -5,7 +5,6 @@ import { TerminalKeepAliveHost } from "@/components/organisms/TerminalKeepAliveH
 import { TerminalScrollButtons } from "@/components/organisms/TerminalScrollButtons.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
-import { cn } from "@/lib/utils.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { attachTerminalsToHost } from "@/lib/terminal-host-attachment.js";
 import {
@@ -46,13 +45,13 @@ export function TerminalRuntimeOutput({
   const isCoarsePointer = useCoarsePointer();
   const { mobileCustomKeyboardEnabled, terminalScrollButtonsEnabled } =
     useSettingsStore();
-  const showMobileAccessoryBar =
+  const mobileInputPolicyApplies =
     !!activeSessionId &&
     (isAndroidChromeNativeInputSuppressed ||
       (isCompactWorkspace && isCoarsePointer));
   const suppressTerminalNativeInput =
     isAndroidChromeNativeInputSuppressed ||
-    (showMobileAccessoryBar && mobileCustomKeyboardEnabled);
+    (mobileInputPolicyApplies && mobileCustomKeyboardEnabled);
 
   const reparentActiveTerminal = useCallback(() => {
     const host = hostRef.current;
@@ -145,12 +144,11 @@ export function TerminalRuntimeOutput({
         {activeSessionId && terminalScrollButtonsEnabled && (
           <TerminalScrollButtons
             sessionId={activeSessionId}
-            className={cn(showMobileAccessoryBar && "bottom-2")}
+            reserveAccessoryRail={Boolean(activeSessionId)}
           />
         )}
       </div>
-
-      {showMobileAccessoryBar && activeSessionId ? (
+      {activeSessionId ? (
         <MobileTerminalAccessoryBar sessionId={activeSessionId} />
       ) : null}
     </div>

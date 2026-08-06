@@ -22,6 +22,7 @@ import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/Term
 import { useSettingsStore } from "@/stores/settings.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { syncNativeKeyboardSuppression } from "@/lib/terminal-native-input-policy.js";
+import { MobileTerminalAccessoryBar } from "@/components/organisms/MobileTerminalAccessoryBar.js";
 
 interface PaneContainerProps {
   node: PaneNode;
@@ -33,6 +34,7 @@ interface PaneContainerProps {
   onSelectTab: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
+  activeSessionId?: string | null;
   suppressTerminalFocus?: boolean;
   browserOpen?: boolean;
   renderBrowserContent?: (onClose: () => void) => ReactNode;
@@ -48,6 +50,7 @@ export const PaneContainer = memo(function PaneContainer({
   onSelectTab,
   onCloseTab,
   onOpenDiagnosticsMenu,
+  activeSessionId = null,
   suppressTerminalFocus = false,
   browserOpen = false,
   renderBrowserContent,
@@ -272,6 +275,7 @@ export const PaneContainer = memo(function PaneContainer({
   const terminalHost = (
     <div
       ref={containerRef}
+      data-testid="terminal-pane-output-host"
       className="flex-1 min-h-0 overflow-hidden relative bg-[#0f172a]"
       onClick={() => {
         layout.setFocusedPaneId(node.id);
@@ -319,6 +323,15 @@ export const PaneContainer = memo(function PaneContainer({
     </div>
   );
 
+  const terminalPane = (
+    <div className="relative flex h-full min-h-0 flex-col">
+      {terminalHost}
+      {node.activeSessionId && node.activeSessionId === activeSessionId ? (
+        <MobileTerminalAccessoryBar sessionId={node.activeSessionId} />
+      ) : null}
+    </div>
+  );
+
   return (
     <div
       className={cn(
@@ -355,7 +368,7 @@ export const PaneContainer = memo(function PaneContainer({
           data-testid="terminal-browser-split"
         >
           <Panel id={`${node.id}:terminal`} defaultSize={60} minSize={30}>
-            {terminalHost}
+            {terminalPane}
           </Panel>
           <Separator className="w-1 shrink-0 bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] data-[orientation=vertical]:cursor-col-resize" />
           <Panel id={`${node.id}:browser`} defaultSize={40} minSize={20}>
@@ -365,7 +378,7 @@ export const PaneContainer = memo(function PaneContainer({
           </Panel>
         </Group>
       ) : (
-        terminalHost
+        terminalPane
       )}
     </div>
   );

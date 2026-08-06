@@ -1,6 +1,5 @@
 import { useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import { Terminal as TerminalIcon } from "lucide-react";
-import { MobileTerminalAccessoryBar } from "@/components/organisms/MobileTerminalAccessoryBar.js";
 import { TerminalKeepAliveHost } from "@/components/organisms/TerminalKeepAliveHost.js";
 import { SplitLayout } from "@/components/organisms/SplitLayout.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
@@ -65,13 +64,13 @@ export function MultiTerminalDisplay({
     (state) => state.mobileCustomKeyboardEnabled,
   );
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
-  const showMobileAccessoryBar =
+  const mobileInputPolicyApplies =
     !!activeSessionId &&
     (isAndroidChromeNativeInputSuppressed ||
       (isCompactWorkspace && isCoarsePointer));
   const suppressTerminalNativeInput =
     isAndroidChromeNativeInputSuppressed ||
-    (showMobileAccessoryBar && mobileCustomKeyboardEnabled);
+    (mobileInputPolicyApplies && mobileCustomKeyboardEnabled);
   const visibleSessionIds = useMemo(
     () =>
       new Set(
@@ -158,7 +157,10 @@ export function MultiTerminalDisplay({
       )}
 
       {/* Visible split layout */}
-      <div className="min-h-0 flex-1 overflow-hidden">
+      <div
+        data-testid="multi-terminal-display-surface"
+        className="relative min-h-0 flex-1 overflow-hidden"
+      >
         <SplitLayout
           root={layout.root}
           layout={layout}
@@ -169,15 +171,13 @@ export function MultiTerminalDisplay({
           onSelectTab={onSelectTab ?? (() => {})}
           onCloseTab={onCloseTab ?? (() => {})}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
+          activeSessionId={activeSessionId}
           suppressTerminalFocus={suppressTerminalNativeInput}
           browserOpen={browserOpen}
           renderBrowserContent={renderBrowserContent}
           onCloseBrowser={onCloseBrowser}
         />
       </div>
-      {showMobileAccessoryBar && activeSessionId ? (
-        <MobileTerminalAccessoryBar sessionId={activeSessionId} />
-      ) : null}
     </div>
   );
 }
