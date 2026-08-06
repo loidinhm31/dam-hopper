@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { KeyRound, X } from "lucide-react";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import { cn } from "@/lib/utils.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface Props {
   open: boolean;
@@ -46,14 +47,16 @@ export function PassphraseDialog({
   const [selectedKey, setSelectedKey] = useState("");
   const [saveForLater, setSaveForLater] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
 
   // Handle focus
   useEffect(() => {
-    if (open) {
+    if (open && !isAndroidChromeNativeInputSuppressed) {
       const timer = setTimeout(() => inputRef.current?.focus(), 0);
       return () => clearTimeout(timer);
     }
-  }, [open]);
+  }, [isAndroidChromeNativeInputSuppressed, open]);
 
   // Escape to cancel
   useEffect(() => {
@@ -69,7 +72,7 @@ export function PassphraseDialog({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (loading) return;
+    if (loading || isAndroidChromeNativeInputSuppressed) return;
     const submission = buildPassphraseDialogSubmission(
       passphrase,
       selectedKey,
@@ -98,11 +101,19 @@ export function PassphraseDialog({
       <div className="absolute inset-0 bg-black/50" onClick={handleCancel} />
 
       {/* Dialog */}
-      <div className="relative z-10 w-full max-w-sm rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl p-5">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="passphrase-dialog-title"
+        className="relative z-10 w-full max-w-sm rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl p-5"
+      >
         {/* Header */}
         <div className="flex items-center gap-2 mb-4">
           <KeyRound className="h-4 w-4 text-[var(--color-primary)] shrink-0" />
-          <h2 className="text-sm font-semibold text-[var(--color-text)] flex-1">
+          <h2
+            id="passphrase-dialog-title"
+            className="text-sm font-semibold text-[var(--color-text)] flex-1"
+          >
             SSH Key Passphrase
           </h2>
           <button
@@ -119,6 +130,17 @@ export function PassphraseDialog({
           selected private key and retry. Leave blank if the key has no
           passphrase.
         </p>
+
+        {isAndroidChromeNativeInputSuppressed && (
+          <p
+            role="note"
+            id="passphrase-dialog-android-description"
+            className="mb-3 rounded border border-amber-400/30 bg-amber-400/10 px-2 py-1.5 text-xs text-amber-300"
+          >
+            Text entry and Load Key &amp; Retry are unavailable on Android
+            Chrome. Use a desktop browser to provide a passphrase.
+          </p>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-3">
           {/* SSH key selector */}
@@ -160,7 +182,12 @@ export function PassphraseDialog({
               placeholder="Enter passphrase..."
               value={passphrase}
               onChange={(e) => setPassphrase(e.target.value)}
-              disabled={loading}
+              disabled={loading || isAndroidChromeNativeInputSuppressed}
+              aria-describedby={
+                isAndroidChromeNativeInputSuppressed
+                  ? "passphrase-dialog-android-description"
+                  : undefined
+              }
               className={inputClass}
             />
           </div>
@@ -199,7 +226,18 @@ export function PassphraseDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" variant="primary" size="sm" loading={loading}>
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              loading={loading}
+              disabled={isAndroidChromeNativeInputSuppressed}
+              title={
+                isAndroidChromeNativeInputSuppressed
+                  ? "Unavailable on Android Chrome"
+                  : undefined
+              }
+            >
               Load Key & Retry
             </Button>
           </div>

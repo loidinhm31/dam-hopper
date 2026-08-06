@@ -21,6 +21,7 @@ import {
 } from "@/hooks/use-shortcuts.js";
 import { EDITOR_ZOOM_WHEEL_SHORTCUT } from "@/lib/shortcuts.js";
 import type { GitLineChange } from "@/api/client.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import {
   findGitLineChangeAtLine,
   gitLineChangesToDecorationDescriptors,
@@ -43,6 +44,16 @@ interface MonacoHostProps {
   onGitIndicatorClick?: () => void;
 }
 
+function blurEditorSurface(
+  editor: monacoNs.editor.IStandaloneCodeEditor,
+): void {
+  const domNode = editor.getDomNode();
+  const activeElement = domNode?.ownerDocument.activeElement;
+  if (activeElement && domNode?.contains(activeElement)) {
+    (activeElement as HTMLElement).blur();
+  }
+}
+
 export function MonacoHost({
   tabKey,
   path,
@@ -57,6 +68,8 @@ export function MonacoHost({
   lineChanges,
   onGitIndicatorClick,
 }: MonacoHostProps) {
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
   const editorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof monacoNs | null>(null);
   const viewStateRef = useRef<unknown>(viewState);
@@ -95,9 +108,14 @@ export function MonacoHost({
         );
       }
 
+      if (isAndroidChromeNativeInputSuppressed) {
+        editor.updateOptions({ readOnly: true });
+        blurEditorSurface(editor);
+      }
+
       // Ctrl+S / Cmd+S → save (use ref so the latest handleSave is always called)
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
-        onSaveRef.current(),
+        isAndroidChromeNativeInputSuppressed ? undefined : onSaveRef.current(),
       );
 
       editor.onMouseDown((event) => {
@@ -177,9 +195,17 @@ export function MonacoHost({
           };
       }
     },
+    // Re-run when the tab or platform policy changes; refs keep other callbacks current.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tabKey], // re-run only when tab changes
+    [isAndroidChromeNativeInputSuppressed, tabKey],
   );
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.updateOptions({ readOnly: isAndroidChromeNativeInputSuppressed });
+    if (isAndroidChromeNativeInputSuppressed) blurEditorSurface(editor);
+  }, [isAndroidChromeNativeInputSuppressed]);
 
   // Restore view state when switching tabs (content ref changes)
   useEffect(() => {
@@ -246,7 +272,9 @@ export function MonacoHost({
       value={content}
       language={language}
       theme="vs-dark"
-      onChange={(val) => onChange(val ?? "")}
+      onChange={(val) => {
+        if (!isAndroidChromeNativeInputSuppressed) onChange(val ?? "");
+      }}
       onMount={handleMount}
       options={{
         fontSize: initialFontSize,
@@ -260,7 +288,7 @@ export function MonacoHost({
         renderWhitespace: "selection",
         tabSize: 2,
         automaticLayout: false,
-        readOnly: false,
+        readOnly: isAndroidChromeNativeInputSuppressed,
       }}
     />
   );
