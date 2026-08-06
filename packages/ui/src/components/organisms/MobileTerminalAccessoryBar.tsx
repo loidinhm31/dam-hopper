@@ -134,23 +134,26 @@ export function MobileTerminalAccessoryBar({
   return (
     <div
       className={cn(
-        "safe-area-inline safe-area-bottom shrink-0 border-t border-[var(--color-border)] bg-[var(--color-surface)]/96 backdrop-blur-md",
+        "safe-area-inline shrink-0 border-t border-[var(--color-border)] bg-[var(--color-surface)]/96 pb-[max(0.25rem,var(--safe-area-bottom))] backdrop-blur-md",
         className,
       )}
     >
-      <div className="flex items-center gap-1 px-1 py-1">
+      <div
+        data-testid="mobile-terminal-accessory-controls"
+        className="flex justify-end gap-0.5 px-0.5 py-0.5"
+      >
         <button
           type="button"
           aria-pressed={isExpanded}
           aria-label={isExpanded ? "Hide terminal keys" : "Show terminal keys"}
           title={isExpanded ? "Hide terminal keys" : "Show terminal keys"}
           onClick={() => setIsExpanded((current) => !current)}
-          className="inline-flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded border border-[var(--color-primary)]/35 bg-[var(--color-primary)]/14 p-0 text-[11px] font-semibold text-[var(--color-primary)] transition-colors active:bg-[var(--color-primary)]/20"
+          className="inline-flex h-9 w-9 shrink-0 touch-manipulation items-center justify-center rounded-md border border-[var(--color-primary)]/35 bg-[var(--color-primary)]/14 p-0 text-[11px] font-semibold text-[var(--color-primary)] transition-colors active:bg-[var(--color-primary)]/20"
         >
           {isExpanded ? (
-            <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
           ) : (
-            <ChevronUp className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <ChevronUp className="h-3 w-3 shrink-0" aria-hidden="true" />
           )}
           <span className="sr-only">Keys</span>
         </button>
@@ -161,13 +164,13 @@ export function MobileTerminalAccessoryBar({
           title={keyboardButtonLabel}
           aria-label={keyboardButtonLabel}
           className={cn(
-            "inline-flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded border p-0 text-[11px] font-semibold transition-colors",
+            "inline-flex h-9 w-9 shrink-0 touch-manipulation items-center justify-center rounded-md border p-0 text-[11px] font-semibold transition-colors",
             isKeyboardOpen
               ? "border-[var(--color-primary)]/35 bg-[var(--color-primary)]/14 text-[var(--color-primary)]"
               : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)] active:bg-[var(--color-border)]",
           )}
         >
-          <Keyboard className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <Keyboard className="h-3 w-3 shrink-0" aria-hidden="true" />
           <span className="sr-only">
             {shouldUseCustomKeyboard ? "Type" : "Kbd"}
           </span>
