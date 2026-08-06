@@ -2349,6 +2349,84 @@ async fn usage_setup_status_is_opaque_to_the_browser() {
 }
 
 #[tokio::test]
+async fn usage_health_requires_auth_and_exposes_only_numeric_drop_counters() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let unauthorized = get_without_auth(state.clone(), "/api/usage/health").await;
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let enabled = patch_json(
+        state.clone(),
+        "/api/usage/settings",
+        serde_json::json!({
+            "enabled": true,
+            "collector": {"enabled": true, "host": "127.0.0.1", "port": port}
+        }),
+    )
+    .await;
+    assert_eq!(enabled.status(), StatusCode::OK);
+    let token = std::fs::read_to_string(tmp.path().join("collector-token")).unwrap();
+    let ingest = reqwest::Client::new()
+        .post(format!("http://127.0.0.1:{port}/v1/logs"))
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/x-protobuf")
+        .body(
+            include_bytes!(
+                "../telemetry/codex_otlp/fixtures/codex-cli-0.146.1-response-completed.bin"
+            )
+            .to_vec(),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ingest.status(), reqwest::StatusCode::ACCEPTED);
+
+    let response = get(state.clone(), "/api/usage/health").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let collector = &value["collector"];
+    for field in [
+        "droppedMissingIdentity",
+        "droppedInvalidTimestamp",
+        "droppedPaused",
+        "droppedQueueFull",
+        "droppedWorkerUnavailable",
+    ] {
+        assert!(collector[field].is_u64(), "{field} must be numeric");
+    }
+    assert_eq!(collector["dropped"], 1);
+    assert_eq!(collector["droppedMissingIdentity"], 1);
+    assert_eq!(collector["droppedInvalidTimestamp"], 0);
+    assert_eq!(collector["droppedPaused"], 0);
+    assert_eq!(collector["droppedQueueFull"], 0);
+    assert_eq!(collector["droppedWorkerUnavailable"], 0);
+    for forbidden in [
+        "authorization",
+        "Bearer",
+        "prompt",
+        "response",
+        "tool.content",
+        "0.146.1",
+        "\"version\"",
+        "\"identity\"",
+    ] {
+        assert!(!text.contains(forbidden), "health leaked {forbidden}");
+    }
+    assert!(!text.contains(&token));
+    state.telemetry_runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn usage_settings_enable_and_disable_apply_the_runtime_without_a_server_restart() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);

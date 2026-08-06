@@ -22,7 +22,7 @@ use crate::{
 use super::{
     decoder::{decode_response_completed, TokenCoverage},
     health::CollectorHealth,
-    normalizer::normalize,
+    normalizer::{normalize, NormalizationDropReason},
     secret::{default_secret_path, load_or_create_secret},
 };
 
@@ -150,9 +150,18 @@ async fn receive(
     let mut queued_any = false;
     for decoded in decoded {
         record_compatibility_health(&state.health, &decoded);
-        let Some(event) = normalize(decoded, &state.keys, now) else {
-            state.health.dropped();
-            continue;
+        let event = match normalize(decoded, &state.keys, now) {
+            Ok(event) => event,
+            Err(NormalizationDropReason::MissingSourceIdentity) => {
+                state.health.dropped_missing_identity();
+                state.health.dropped();
+                continue;
+            }
+            Err(NormalizationDropReason::InvalidTimestamp) => {
+                state.health.dropped_invalid_timestamp();
+                state.health.dropped();
+                continue;
+            }
         };
         match state.telemetry.try_record_codex_usage(event) {
             // A 202 means the record crossed the bounded receiver-to-worker
@@ -164,10 +173,22 @@ async fn receive(
             }
             // Pausing is an explicit local control, so acknowledge the
             // intentionally discarded record without prompting retries.
-            TelemetryEnqueue::Paused => state.health.dropped(),
+            TelemetryEnqueue::Paused => {
+                state.health.dropped_paused();
+                state.health.dropped();
+            }
             // A full/disconnected handoff has not accepted this event. Return
             // a retryable status rather than silently turning it into loss.
-            TelemetryEnqueue::Dropped | TelemetryEnqueue::Unavailable => {
+            TelemetryEnqueue::Dropped => {
+                state.health.dropped_queue_full();
+                state.health.dropped();
+                if queued_any {
+                    state.health.accepted(now);
+                }
+                return StatusCode::SERVICE_UNAVAILABLE;
+            }
+            TelemetryEnqueue::Unavailable => {
+                state.health.dropped_worker_unavailable();
                 state.health.dropped();
                 if queued_any {
                     state.health.accepted(now);

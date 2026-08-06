@@ -327,9 +327,39 @@ async fn accepts_pinned_binary_once_and_rejects_invalid_requests() {
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
     assert_eq!(health.snapshot().dropped, 1);
+    assert_eq!(health.snapshot().dropped_invalid_timestamp, 1);
+    assert_eq!(health.snapshot().dropped_missing_identity, 0);
+    assert_eq!(
+        health.snapshot().dropped,
+        health.snapshot().dropped_missing_identity
+            + health.snapshot().dropped_invalid_timestamp
+            + health.snapshot().dropped_paused
+            + health.snapshot().dropped_queue_full
+            + health.snapshot().dropped_worker_unavailable
+    );
     assert_eq!(
         health.snapshot().last_accepted_at_utc_ms,
         last_accepted_before_drop
+    );
+
+    let response = client
+        .post(&endpoint)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/x-protobuf")
+        .body(include_bytes!("fixtures/codex-cli-0.146.1-response-completed.bin").to_vec())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+    assert_eq!(health.snapshot().dropped, 2);
+    assert_eq!(health.snapshot().dropped_missing_identity, 1);
+    assert_eq!(
+        health.snapshot().dropped,
+        health.snapshot().dropped_missing_identity
+            + health.snapshot().dropped_invalid_timestamp
+            + health.snapshot().dropped_paused
+            + health.snapshot().dropped_queue_full
+            + health.snapshot().dropped_worker_unavailable
     );
 
     let mut canary_request = ExportLogsServiceRequest::decode(fixture.as_slice()).unwrap();
@@ -371,6 +401,16 @@ async fn accepts_pinned_binary_once_and_rejects_invalid_requests() {
         .await
         .unwrap();
     assert_eq!(paused.status(), reqwest::StatusCode::ACCEPTED);
+    assert_eq!(health.snapshot().dropped_paused, 1);
+    assert_eq!(health.snapshot().dropped, 3);
+    assert_eq!(
+        health.snapshot().dropped,
+        health.snapshot().dropped_missing_identity
+            + health.snapshot().dropped_invalid_timestamp
+            + health.snapshot().dropped_paused
+            + health.snapshot().dropped_queue_full
+            + health.snapshot().dropped_worker_unavailable
+    );
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(
         connection
@@ -456,6 +496,20 @@ async fn admits_newer_core_shape_and_reports_only_bounded_compatibility_health()
     assert_eq!(snapshot.unverified_version, 1);
     assert_eq!(snapshot.core_schema_drift, 1);
     assert_eq!(snapshot.unavailable_token_coverage, 0);
+    assert_eq!(snapshot.dropped, 0);
+    assert_eq!(snapshot.dropped_missing_identity, 0);
+    assert_eq!(snapshot.dropped_invalid_timestamp, 0);
+    assert_eq!(snapshot.dropped_paused, 0);
+    assert_eq!(snapshot.dropped_queue_full, 0);
+    assert_eq!(snapshot.dropped_worker_unavailable, 0);
+    assert_eq!(
+        snapshot.dropped,
+        snapshot.dropped_missing_identity
+            + snapshot.dropped_invalid_timestamp
+            + snapshot.dropped_paused
+            + snapshot.dropped_queue_full
+            + snapshot.dropped_worker_unavailable
+    );
     let health_json = serde_json::to_string(&snapshot).unwrap();
     assert!(!health_json.contains("999.0.0"));
     assert!(!health_json.contains("invalid"));
@@ -505,9 +559,66 @@ async fn returns_retryable_status_when_the_usage_queue_is_full() {
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(health.snapshot().dropped, 1);
+    assert_eq!(health.snapshot().dropped_queue_full, 1);
+    assert_eq!(health.snapshot().dropped_worker_unavailable, 0);
     assert_eq!(health.snapshot().queued, 1);
+    assert_eq!(
+        health.snapshot().dropped,
+        health.snapshot().dropped_missing_identity
+            + health.snapshot().dropped_invalid_timestamp
+            + health.snapshot().dropped_paused
+            + health.snapshot().dropped_queue_full
+            + health.snapshot().dropped_worker_unavailable
+    );
     assert!(health.snapshot().last_accepted_at_utc_ms.is_some());
 
+    collector.stop().await;
+}
+
+#[tokio::test]
+async fn reports_worker_unavailable_without_changing_retryable_status() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Arc::new(TelemetryStore::open(&temp.path().join("telemetry.db")).unwrap());
+    let keys = Arc::new(TelemetryKeyRing::load_or_create(temp.path().join("hmac")).unwrap());
+    let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+    drop(receiver);
+    let control = Arc::new(TelemetryControl::new(true));
+    let telemetry = TelemetryHandle::active(control, store, Some(sender)).with_hmac_keys(keys);
+    let config = TelemetryCollectorConfig {
+        enabled: true,
+        host: "127.0.0.1".to_string(),
+        port: 0,
+    };
+    let secret_path = temp.path().join("collector-token");
+    let health = CollectorHealth::default();
+    let collector = start_collector_at(&config, &telemetry, health.clone(), secret_path.clone())
+        .await
+        .unwrap();
+    let endpoint = format!("http://{}/v1/logs", collector.address());
+    let token = std::fs::read_to_string(secret_path).unwrap();
+    let response = reqwest::Client::new()
+        .post(&endpoint)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/x-protobuf")
+        .body(fixture_with_source_identity(29, 30))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    let snapshot = health.snapshot();
+    assert_eq!(snapshot.dropped, 1);
+    assert_eq!(snapshot.dropped_worker_unavailable, 1);
+    assert_eq!(snapshot.dropped_queue_full, 0);
+    assert_eq!(snapshot.queued, 0);
+    assert_eq!(
+        snapshot.dropped,
+        snapshot.dropped_missing_identity
+            + snapshot.dropped_invalid_timestamp
+            + snapshot.dropped_paused
+            + snapshot.dropped_queue_full
+            + snapshot.dropped_worker_unavailable
+    );
     collector.stop().await;
 }
 
