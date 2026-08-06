@@ -13,14 +13,19 @@ import { useSettingsStore } from "@/stores/settings.js";
 interface TerminalScrollButtonsProps {
   sessionId: string;
   className?: string;
+  reserveAccessoryRail?: boolean;
 }
 
 const controlClassName =
   "flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-muted)] transition-[background-color,color,transform] duration-150 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]";
+const SAFE_AREA_BOTTOM = "max(0.75rem, var(--safe-area-bottom, 0px))";
+const ACCESSORY_RAIL_RESERVATION = "6.25rem";
+const ACCESSORY_RAIL_GAP = "0.5rem";
 
 export function TerminalScrollButtons({
   sessionId,
   className,
+  reserveAccessoryRail = false,
 }: TerminalScrollButtonsProps) {
   const terminalScrollStep = useSettingsStore((s) => s.terminalScrollStep);
   const [isOpen, setIsOpen] = useState(false);
@@ -65,9 +70,15 @@ export function TerminalScrollButtons({
     <div
       ref={controlsRef}
       className={cn(
-        "absolute right-4 bottom-4 z-10 flex flex-col-reverse items-end gap-2",
+        "absolute right-[max(0.75rem,var(--safe-area-right))] z-10 flex flex-col-reverse items-end gap-2",
         className,
       )}
+      style={{
+        right: "max(0.75rem, var(--safe-area-right, 0px))",
+        bottom: reserveAccessoryRail
+          ? `calc(${SAFE_AREA_BOTTOM} + ${ACCESSORY_RAIL_RESERVATION} + ${ACCESSORY_RAIL_GAP})`
+          : SAFE_AREA_BOTTOM,
+      }}
     >
       <button
         type="button"
