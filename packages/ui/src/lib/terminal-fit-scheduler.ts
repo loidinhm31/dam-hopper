@@ -34,7 +34,7 @@ export function scheduleTerminalFit(
 
   const existing = scheduledFits.get(target);
   if (existing) {
-    existing.focus ||= options.focus ?? false;
+    if ("focus" in options) existing.focus = options.focus === true;
     return;
   }
 

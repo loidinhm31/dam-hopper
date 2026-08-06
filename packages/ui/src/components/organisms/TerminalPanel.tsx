@@ -8,7 +8,11 @@ import { logger } from "@dam-hopper/shared/logger";
 import { cn } from "@/lib/utils.js";
 import { getTransport } from "@/api/transport.js";
 import { api, type SessionInfo } from "@/api/client.js";
-import { registerTerminal, removeTerminal } from "@/lib/terminal-registry.js";
+import {
+  registerTerminal,
+  removeTerminal,
+  terminalRegistry,
+} from "@/lib/terminal-registry.js";
 import {
   TerminalFindController,
   type TerminalFindSnapshot,
@@ -17,6 +21,7 @@ import {
   cancelScheduledTerminalFit,
   scheduleTerminalFit,
 } from "@/lib/terminal-fit-scheduler.js";
+import { syncNativeKeyboardSuppression } from "@/lib/terminal-native-input-policy.js";
 import {
   activateTerminalWebglRenderer,
   type TerminalRendererHandle,
@@ -49,6 +54,7 @@ import {
 import { useSettingsStore } from "@/stores/settings.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useTerminalSuggestions } from "@/hooks/use-terminal-suggestions.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { TerminalFindBar } from "@/components/atoms/TerminalFindBar.js";
 import { TerminalSuggestionGhost } from "@/components/atoms/TerminalSuggestionGhost.js";
 import { TerminalHistoryList } from "@/components/organisms/TerminalHistoryList.js";
@@ -111,28 +117,6 @@ const EMPTY_FIND_SNAPSHOT: TerminalFindSnapshot = {
   status: "empty",
 };
 
-function syncNativeKeyboardSuppression(
-  term: Terminal | null,
-  shouldSuppress: boolean,
-) {
-  if (!term) return;
-
-  term.options.disableStdin = shouldSuppress;
-  const textarea = term.textarea;
-  if (!textarea) return;
-
-  if (shouldSuppress) {
-    textarea.inputMode = "none";
-    textarea.setAttribute("inputmode", "none");
-    textarea.tabIndex = -1;
-    textarea.blur();
-  } else {
-    textarea.inputMode = "text";
-    textarea.removeAttribute("inputmode");
-    textarea.tabIndex = 0;
-  }
-}
-
 export function TerminalPanel({
   sessionId,
   project,
@@ -147,6 +131,12 @@ export function TerminalPanel({
   webglEnabled = false,
   className,
 }: TerminalPanelProps) {
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
+  const shouldSuppressNativeKeyboard =
+    isAndroidChromeNativeInputSuppressed || suppressNativeKeyboard;
+  const shouldSuppressTerminalFocus =
+    shouldSuppressNativeKeyboard || suppressAutoFocus;
   const containerRef = useRef<HTMLDivElement>(null);
   // Sanitize session ID: server only allows [a-zA-Z0-9:._-]
   const safeSessionId = sessionId.replace(/[^a-zA-Z0-9:._-]/g, "-");
@@ -173,7 +163,7 @@ export function TerminalPanel({
   // Mobile/touch routing is not unified yet, so every coarse-pointer surface
   // fails closed rather than relying on a compact-width heuristic.
   const automaticSuggestionsAllowed =
-    !suppressNativeKeyboard && !isCoarsePointer;
+    !shouldSuppressNativeKeyboard && !isCoarsePointer;
   const findUnsubscribeRef = useRef<(() => void) | null>(null);
   const [findSnapshot, setFindSnapshot] =
     useState<TerminalFindSnapshot>(EMPTY_FIND_SNAPSHOT);
@@ -206,9 +196,9 @@ export function TerminalPanel({
       if (/\r|\n/.test(historyCommand)) return;
       suggestionsRef.current.closeExplicitList();
       getTransport().terminalWrite(safeSessionId, historyCommand);
-      if (!suppressNativeKeyboard) termRef.current?.focus();
+      if (!shouldSuppressNativeKeyboard) termRef.current?.focus();
     },
-    [safeSessionId, suppressNativeKeyboard],
+    [safeSessionId, shouldSuppressNativeKeyboard],
   );
 
   useEffect(() => {
@@ -252,7 +242,7 @@ export function TerminalPanel({
 
     // Expose terminal instance and element for suggestions hook + portal
     termRef.current = term;
-    syncNativeKeyboardSuppression(term, suppressNativeKeyboard);
+    syncNativeKeyboardSuppression(term, shouldSuppressNativeKeyboard);
     setTermElement(term.element ?? null);
 
     // Separate receipt from xterm's asynchronous replay completion. Live output
@@ -494,7 +484,7 @@ export function TerminalPanel({
 
     // Initial fit — container may be hidden (display:none); FitAddon safely no-ops if dims=0
     // Now safe because resize listener is already registered above.
-    scheduleTerminalFit(terminalEntry, { focus: !suppressAutoFocus });
+    scheduleTerminalFit(terminalEntry, { focus: !shouldSuppressTerminalFocus });
 
     const { cols, rows } = term;
     const finalCols = cols > 1 ? cols : 120;
@@ -709,8 +699,22 @@ export function TerminalPanel({
   }, [termElement]);
 
   useEffect(() => {
-    syncNativeKeyboardSuppression(termRef.current, suppressNativeKeyboard);
-  }, [suppressNativeKeyboard, termElement]);
+    syncNativeKeyboardSuppression(
+      termRef.current,
+      shouldSuppressNativeKeyboard,
+    );
+    if (!shouldSuppressTerminalFocus) return;
+    const entry = terminalRegistry.get(safeSessionId);
+    if (entry) {
+      cancelScheduledTerminalFit(entry);
+      scheduleTerminalFit(entry, { focus: false });
+    }
+  }, [
+    safeSessionId,
+    shouldSuppressNativeKeyboard,
+    shouldSuppressTerminalFocus,
+    termElement,
+  ]);
 
   useEffect(() => {
     if (suggestions.snapshot.state === "ghost") {
@@ -774,9 +778,9 @@ export function TerminalPanel({
             onPrevious={() => findControllerRef.current?.findPrevious()}
             onClose={() => {
               findControllerRef.current?.close();
-              if (!suppressNativeKeyboard) termRef.current?.focus();
+              if (!shouldSuppressNativeKeyboard) termRef.current?.focus();
             }}
-            autoFocusInput={!suppressNativeKeyboard}
+            autoFocusInput={!shouldSuppressNativeKeyboard}
           />,
           termElement,
         )}

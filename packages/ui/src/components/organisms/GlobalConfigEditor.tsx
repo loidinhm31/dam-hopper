@@ -9,10 +9,13 @@ import {
   useRemoveKnownWorkspace,
   useWorkspace,
 } from "@/api/queries.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 // ── Default Workspace Section ─────────────────────────────────────────────
 
 function DefaultWorkspaceSection() {
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
   const { data: globalConfig, isLoading } = useGlobalConfig();
   const updateDefaults = useUpdateGlobalDefaults();
   const [draft, setDraft] = useState<string | null>(null);
@@ -22,6 +25,7 @@ function DefaultWorkspaceSection() {
   const value = draft ?? currentDefault;
 
   async function handleSet() {
+    if (isAndroidChromeNativeInputSuppressed) return;
     const trimmed = value.trim();
     await updateDefaults.mutateAsync({ workspace: trimmed || undefined });
     setDraft(null);
@@ -54,13 +58,24 @@ function DefaultWorkspaceSection() {
               setSaved(false);
             }}
             placeholder="/path/to/workspace"
-            disabled={isLoading || isPending}
+            disabled={
+              isLoading || isPending || isAndroidChromeNativeInputSuppressed
+            }
           />
           <Button
             variant="primary"
             size="sm"
             onClick={() => void handleSet()}
-            disabled={!isDirty || isPending}
+            disabled={
+              !isDirty ||
+              isPending ||
+              isAndroidChromeNativeInputSuppressed
+            }
+            title={
+              isAndroidChromeNativeInputSuppressed
+                ? "Unavailable on Android Chrome: text entry is disabled"
+                : undefined
+            }
             loading={isPending}
           >
             Set
@@ -98,6 +113,8 @@ function DefaultWorkspaceSection() {
 // ── Known Workspaces Section ──────────────────────────────────────────────
 
 function KnownWorkspacesSection() {
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
   const { data: workspace } = useWorkspace();
   const { data: known, isLoading } = useKnownWorkspaces();
   const addMutation = useAddKnownWorkspace();
@@ -106,6 +123,7 @@ function KnownWorkspacesSection() {
   const [removingPath, setRemovingPath] = useState<string | null>(null);
 
   function handleAdd() {
+    if (isAndroidChromeNativeInputSuppressed) return;
     const trimmed = addPath.trim();
     if (!trimmed) return;
     removeMutation.reset();
@@ -200,13 +218,24 @@ function KnownWorkspacesSection() {
             }}
             placeholder="/path/to/workspace"
             className={inputClass}
-            disabled={addMutation.isPending}
+            disabled={
+              addMutation.isPending || isAndroidChromeNativeInputSuppressed
+            }
           />
           <Button
             variant="secondary"
             size="sm"
             onClick={handleAdd}
-            disabled={!addPath.trim() || addMutation.isPending}
+            disabled={
+              !addPath.trim() ||
+              addMutation.isPending ||
+              isAndroidChromeNativeInputSuppressed
+            }
+            title={
+              isAndroidChromeNativeInputSuppressed
+                ? "Unavailable on Android Chrome: text entry is disabled"
+                : undefined
+            }
             loading={addMutation.isPending}
           >
             Add

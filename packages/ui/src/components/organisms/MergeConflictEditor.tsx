@@ -42,6 +42,7 @@ import {
   hasMalformedConflicts,
   type ConflictRegion,
 } from "@/lib/conflict-parser.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 // Inject decoration CSS once — Monaco class names aren't Tailwind-aware
 const CONFLICT_STYLES = `
@@ -68,6 +69,16 @@ interface Props {
   fileLanguage?: string;
   onClose: () => void;
   onResolved: () => void;
+}
+
+function blurEditorSurface(
+  editor: monacoNs.editor.IStandaloneCodeEditor,
+): void {
+  const domNode = editor.getDomNode();
+  const activeElement = domNode?.ownerDocument.activeElement;
+  if (activeElement && domNode?.contains(activeElement)) {
+    (activeElement as HTMLElement).blur();
+  }
 }
 
 function buildDecorations(
@@ -138,6 +149,8 @@ export function MergeConflictEditor({
   onClose,
   onResolved,
 }: Props) {
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
   useConflictStyles();
 
   const { data: conflicts, isLoading: conflictsLoading } =
@@ -271,6 +284,10 @@ export function MergeConflictEditor({
     (editor, monaco) => {
       resultEditorRef.current = editor;
       modelsRef.current.result = editor.getModel();
+      if (isAndroidChromeNativeInputSuppressed) {
+        editor.updateOptions({ readOnly: true });
+        blurEditorSurface(editor);
+      }
       editor.onDidChangeModel(() => {
         modelsRef.current.result = editor.getModel();
       });
@@ -289,8 +306,15 @@ export function MergeConflictEditor({
       });
       attachResizeObserver(editor);
     },
-    [syncScroll],
+    [isAndroidChromeNativeInputSuppressed, syncScroll],
   );
+
+  useEffect(() => {
+    const editor = resultEditorRef.current;
+    if (!editor) return;
+    editor.updateOptions({ readOnly: isAndroidChromeNativeInputSuppressed });
+    if (isAndroidChromeNativeInputSuppressed) blurEditorSurface(editor);
+  }, [isAndroidChromeNativeInputSuppressed]);
 
   const handleOursMount: OnMount = useCallback(
     (editor, monaco) => {
@@ -347,12 +371,15 @@ export function MergeConflictEditor({
       lineNumber: region.startLine,
       column: 1,
     });
-    resultEditorRef.current?.focus();
+    if (!isAndroidChromeNativeInputSuppressed) {
+      resultEditorRef.current?.focus();
+    }
   }
 
   // ── Accept actions ───────────────────────────────────────────────────────────
 
   function applyAccept(regionIndex: number, side: "ours" | "theirs") {
+    if (isAndroidChromeNativeInputSuppressed) return;
     const regions = parseConflictRegions(resultContentRef.current);
     const region = regions[regionIndex];
     if (!region) return;
@@ -382,6 +409,7 @@ export function MergeConflictEditor({
   }
 
   function acceptAll(side: "ours" | "theirs") {
+    if (isAndroidChromeNativeInputSuppressed) return;
     let content = resultContentRef.current;
     // Accept from last to first to preserve line numbers for earlier conflicts
     const regions = parseConflictRegions(content);
@@ -400,7 +428,7 @@ export function MergeConflictEditor({
   // ── Resolve ──────────────────────────────────────────────────────────────────
 
   async function handleMarkResolved() {
-    if (!allResolved) return;
+    if (!allResolved || isAndroidChromeNativeInputSuppressed) return;
     setIsResolving(true);
     setResolveError(null);
     try {
@@ -484,7 +512,10 @@ export function MergeConflictEditor({
         <div className="shrink-0 flex items-center gap-1">
           <button
             onClick={() => acceptAll("theirs")}
-            disabled={conflictRegions.length === 0}
+            disabled={
+              isAndroidChromeNativeInputSuppressed ||
+              conflictRegions.length === 0
+            }
             title="Accept all incoming (theirs)"
             className="text-[10px] px-1.5 py-0.5 rounded border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-blue-400 hover:border-blue-400/40 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           >
@@ -492,7 +523,10 @@ export function MergeConflictEditor({
           </button>
           <button
             onClick={() => acceptAll("ours")}
-            disabled={conflictRegions.length === 0}
+            disabled={
+              isAndroidChromeNativeInputSuppressed ||
+              conflictRegions.length === 0
+            }
             title="Accept all current (ours)"
             className="text-[10px] px-1.5 py-0.5 rounded border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-green-400 hover:border-green-400/40 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           >
@@ -500,11 +534,17 @@ export function MergeConflictEditor({
           </button>
           <button
             onClick={() => void handleMarkResolved()}
-            disabled={!allResolved || isResolving}
+            disabled={
+              isAndroidChromeNativeInputSuppressed ||
+              !allResolved ||
+              isResolving
+            }
             title={
-              allResolved
-                ? "Write resolved content and stage file"
-                : "Resolve all conflicts first"
+              isAndroidChromeNativeInputSuppressed
+                ? "Unavailable on Android Chrome: result is read-only"
+                : allResolved
+                  ? "Write resolved content and stage file"
+                  : "Resolve all conflicts first"
             }
             className={cn(
               "text-[10px] px-1.5 py-0.5 rounded border transition-colors flex items-center gap-1",
@@ -529,6 +569,17 @@ export function MergeConflictEditor({
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
+
+      {isAndroidChromeNativeInputSuppressed && (
+        <p
+          role="note"
+          className="shrink-0 border-b border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-[11px] text-amber-300"
+        >
+          Text editing is unavailable on Android Chrome. Accept, apply, and
+          resolve actions are disabled; use a desktop browser to edit this
+          conflict.
+        </p>
+      )}
 
       {/* Resolve error */}
       {resolveError && (
@@ -582,7 +633,10 @@ export function MergeConflictEditor({
           defaultValue={workdirContent}
           language={language}
           theme="vs-dark"
-          options={editorOptions}
+          options={{
+            ...editorOptions,
+            readOnly: isAndroidChromeNativeInputSuppressed,
+          }}
           onMount={handleResultMount}
         />
 
@@ -614,6 +668,7 @@ export function MergeConflictEditor({
                 onNavigate={() => navigateToConflict(i)}
                 onAcceptOurs={() => applyAccept(i, "ours")}
                 onAcceptTheirs={() => applyAccept(i, "theirs")}
+                actionsDisabled={isAndroidChromeNativeInputSuppressed}
               />
             ))}
 
@@ -661,14 +716,16 @@ interface ConflictBlockProps {
   onNavigate: () => void;
   onAcceptOurs: () => void;
   onAcceptTheirs: () => void;
+  actionsDisabled: boolean;
 }
 
-function ConflictBlock({
+export function ConflictBlock({
   index,
   isSelected,
   onNavigate,
   onAcceptOurs,
   onAcceptTheirs,
+  actionsDisabled,
 }: ConflictBlockProps) {
   return (
     <div
@@ -685,22 +742,34 @@ function ConflictBlock({
         {index + 1}
       </span>
       <button
+        type="button"
         onClick={(e) => {
           e.stopPropagation();
           onAcceptTheirs();
         }}
-        title="Accept theirs (incoming)"
-        className="px-1 rounded text-blue-400 hover:bg-blue-400/10 transition-colors"
+        disabled={actionsDisabled}
+        title={
+          actionsDisabled
+            ? "Unavailable on Android Chrome: result is read-only"
+            : "Accept theirs (incoming)"
+        }
+        className="px-1 rounded text-blue-400 hover:bg-blue-400/10 transition-colors disabled:cursor-not-allowed disabled:opacity-30"
       >
         ←T
       </button>
       <button
+        type="button"
         onClick={(e) => {
           e.stopPropagation();
           onAcceptOurs();
         }}
-        title="Accept ours (current HEAD)"
-        className="px-1 rounded text-green-400 hover:bg-green-400/10 transition-colors"
+        disabled={actionsDisabled}
+        title={
+          actionsDisabled
+            ? "Unavailable on Android Chrome: result is read-only"
+            : "Accept ours (current HEAD)"
+        }
+        className="px-1 rounded text-green-400 hover:bg-green-400/10 transition-colors disabled:cursor-not-allowed disabled:opacity-30"
       >
         O→
       </button>

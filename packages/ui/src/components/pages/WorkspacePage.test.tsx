@@ -14,6 +14,17 @@ import { TERMINAL_FILE_PANEL_OPEN_KEY } from "@/lib/terminal-floating-file-panel
 let mockWorkspaceMode: "ide" | "terminal" = "ide";
 let mockActiveProject: string | null = null;
 let mockProjects = [{ name: "demo-project" }];
+let mockAndroidChromeSuppressed = false;
+let mockLaunchForm: {
+  projectName: string;
+  cwd: string;
+  command: string;
+} | null = null;
+let mockFreeTerminalSavePrompt: {
+  projectName: string;
+  name: string;
+  error?: string;
+} | null = null;
 let lastTerminalWorkspaceShellProps: Record<string, unknown> | null = null;
 const localStorageState = new Map<string, string>();
 
@@ -64,10 +75,16 @@ vi.mock("@/hooks/use-sidebar-collapse.js", () => ({
 }));
 
 vi.mock("@/components/atoms/Button.js", () => ({
-  Button: ({ children }: { children?: ReactNode }) => (
-    <button>{children}</button>
+  Button: ({ children, ...props }: { children?: ReactNode }) => (
+    <button {...props}>{children}</button>
   ),
   inputClass: "input-class",
+}));
+
+vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
+  useAndroidChromeInputPolicy: () => ({
+    isAndroidChromeNativeInputSuppressed: mockAndroidChromeSuppressed,
+  }),
 }));
 
 vi.mock("@/components/ui/Select.js", () => ({
@@ -113,8 +130,8 @@ vi.mock("@/hooks/use-terminal-manager.js", () => ({
       activeTab: null,
       openTabs: [],
       mountedSessions: [],
-      launchForm: null,
-      freeTerminalSavePrompt: null,
+      launchForm: mockLaunchForm,
+      freeTerminalSavePrompt: mockFreeTerminalSavePrompt,
       selection: null,
     },
     derived: {
@@ -199,6 +216,9 @@ describe("WorkspacePage", () => {
     mockWorkspaceMode = "ide";
     mockActiveProject = null;
     mockProjects = [{ name: "demo-project" }];
+    mockAndroidChromeSuppressed = false;
+    mockLaunchForm = null;
+    mockFreeTerminalSavePrompt = null;
     lastTerminalWorkspaceShellProps = null;
     localStorageState.clear();
     localStorageMock.getItem.mockClear();
@@ -270,6 +290,32 @@ describe("WorkspacePage", () => {
     expect(terminalMarkup).toContain("Git");
     expect(terminalMarkup).toContain("Ports");
     expect(terminalMarkup).toContain("Fleet");
+  });
+
+  it("disables text-dependent terminal actions when Android Chrome input is suppressed", () => {
+    stubMatchMedia(false);
+    mockWorkspaceMode = "terminal";
+    mockAndroidChromeSuppressed = true;
+    mockLaunchForm = { projectName: "demo-project", cwd: ".", command: "" };
+    mockFreeTerminalSavePrompt = {
+      projectName: "demo-project",
+      name: "",
+    };
+
+    renderToStaticMarkup(<WorkspacePage />);
+    const terminalMarkup = renderToStaticMarkup(
+      <>{lastTerminalWorkspaceShellProps?.terminalContent as ReactNode}</>,
+    );
+
+    expect(terminalMarkup).toContain(
+      "Launching with custom text is unavailable in Android Chrome",
+    );
+    expect(terminalMarkup).toContain(
+      "Saving profiles is unavailable in Android Chrome",
+    );
+    expect(terminalMarkup).toMatch(
+      /<button[^>]*disabled=""[^>]*title="Launching with custom text is unavailable in Android Chrome"/,
+    );
   });
 
   it("restores the floating file panel state in desktop terminal mode", () => {

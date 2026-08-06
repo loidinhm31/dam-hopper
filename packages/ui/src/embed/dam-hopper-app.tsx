@@ -26,6 +26,8 @@ import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialo
 import { WorkspaceSetupWizard } from "@/components/organisms/WorkspaceSetupWizard.js";
 import { TerminalNotificationToastViewport } from "@/components/organisms/TerminalNotificationToastViewport.js";
 import { EncryptProvider } from "@/contexts/EncryptContext.js";
+import { AndroidChromeInputPolicyProvider } from "@/contexts/AndroidChromeInputPolicyContext.js";
+import { AndroidChromeKeyboardNotice } from "@/components/organisms/AndroidChromeKeyboardNotice.js";
 import { PassphrasePrompt } from "@/components/molecules/PassphrasePrompt.js";
 import { useBrowserShortcutGuard } from "@/hooks/use-browser-shortcut-guard.js";
 import { useBrowserContextMenuSuppression } from "@/hooks/use-browser-context-menu-suppression.js";
@@ -305,89 +307,92 @@ export function DamHopperApp() {
 
   return (
     <EncryptProvider>
-      <BrowserRouter basename={routerBasename}>
-        <GlobalShortcuts />
-        <TerminalNotificationToastViewport />
-        <RouteDiagnostics />
-        <PassphrasePrompt />
-        <ServerProfileGuard>
-          <AuthGuard>
-            <WorkspaceGuard>
-              <Routes>
-                <Route
-                  path="/"
-                  element={
-                    <ErrorBoundary>
-                      <Suspense fallback={LOADING_FALLBACK}>
-                        <DashboardPage />
-                      </Suspense>
-                    </ErrorBoundary>
-                  }
-                />
-                <Route
-                  path="/workspace"
-                  element={
-                    <ErrorBoundary>
-                      <Suspense fallback={LOADING_FALLBACK}>
-                        <WorkspacePage />
-                      </Suspense>
-                    </ErrorBoundary>
-                  }
-                />
-                {/* Backward-compat redirects — preserve search params for deep-links */}
-                <Route
-                  path="/terminals"
-                  element={<LegacyRedirect to="/workspace" />}
-                />
-                <Route
-                  path="/ide"
-                  element={<LegacyRedirect to="/workspace" />}
-                />
-                <Route
-                  path="/git"
-                  element={
-                    <ErrorBoundary>
-                      <Suspense fallback={LOADING_FALLBACK}>
-                        <GitPage />
-                      </Suspense>
-                    </ErrorBoundary>
-                  }
-                />
-                <Route
-                  path="/settings"
-                  element={
-                    <ErrorBoundary>
-                      <Suspense fallback={LOADING_FALLBACK}>
-                        <SettingsPage />
-                      </Suspense>
-                    </ErrorBoundary>
-                  }
-                />
-                <Route
-                  path="/agent-store"
-                  element={
-                    <ErrorBoundary>
-                      <Suspense fallback={LOADING_FALLBACK}>
-                        <AgentStorePage />
-                      </Suspense>
-                    </ErrorBoundary>
-                  }
-                />
-                <Route
-                  path="/usage"
-                  element={
-                    <ErrorBoundary>
-                      <Suspense fallback={LOADING_FALLBACK}>
-                        <UsagePage />
-                      </Suspense>
-                    </ErrorBoundary>
-                  }
-                />
-              </Routes>
-            </WorkspaceGuard>
-          </AuthGuard>
-        </ServerProfileGuard>
-      </BrowserRouter>
+      <AndroidChromeInputPolicyProvider>
+        <BrowserRouter basename={routerBasename}>
+          <AndroidChromeKeyboardNotice />
+          <GlobalShortcuts />
+          <TerminalNotificationToastViewport />
+          <RouteDiagnostics />
+          <PassphrasePrompt />
+          <ServerProfileGuard>
+            <AuthGuard>
+              <WorkspaceGuard>
+                <Routes>
+                  <Route
+                    path="/"
+                    element={
+                      <ErrorBoundary>
+                        <Suspense fallback={LOADING_FALLBACK}>
+                          <DashboardPage />
+                        </Suspense>
+                      </ErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/workspace"
+                    element={
+                      <ErrorBoundary>
+                        <Suspense fallback={LOADING_FALLBACK}>
+                          <WorkspacePage />
+                        </Suspense>
+                      </ErrorBoundary>
+                    }
+                  />
+                  {/* Backward-compat redirects — preserve search params for deep-links */}
+                  <Route
+                    path="/terminals"
+                    element={<LegacyRedirect to="/workspace" />}
+                  />
+                  <Route
+                    path="/ide"
+                    element={<LegacyRedirect to="/workspace" />}
+                  />
+                  <Route
+                    path="/git"
+                    element={
+                      <ErrorBoundary>
+                        <Suspense fallback={LOADING_FALLBACK}>
+                          <GitPage />
+                        </Suspense>
+                      </ErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/settings"
+                    element={
+                      <ErrorBoundary>
+                        <Suspense fallback={LOADING_FALLBACK}>
+                          <SettingsPage />
+                        </Suspense>
+                      </ErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/agent-store"
+                    element={
+                      <ErrorBoundary>
+                        <Suspense fallback={LOADING_FALLBACK}>
+                          <AgentStorePage />
+                        </Suspense>
+                      </ErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/usage"
+                    element={
+                      <ErrorBoundary>
+                        <Suspense fallback={LOADING_FALLBACK}>
+                          <UsagePage />
+                        </Suspense>
+                      </ErrorBoundary>
+                    }
+                  />
+                </Routes>
+              </WorkspaceGuard>
+            </AuthGuard>
+          </ServerProfileGuard>
+        </BrowserRouter>
+      </AndroidChromeInputPolicyProvider>
     </EncryptProvider>
   );
 }

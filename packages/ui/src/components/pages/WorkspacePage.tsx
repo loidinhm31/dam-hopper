@@ -47,6 +47,7 @@ import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { useSearchUiStore } from "@/stores/search-ui.js";
 import { useSettingsStore } from "@/stores/settings.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { useTerminalManager } from "@/hooks/use-terminal-manager.js";
 import { useBrowserDebug } from "@/hooks/use-browser-debug.js";
 import { useBrowserDebugHost } from "@/contexts/BrowserDebugHostContext.js";
@@ -374,6 +375,8 @@ export default function WorkspacePage() {
   const terminalNotificationActivationRef = useRef<() => void>(() => {});
   const isCompactWorkspace = useCompactWorkspace();
   const isCoarsePointer = useCoarsePointer();
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
   const mobileCustomKeyboardEnabled = useSettingsStore(
     (state) => state.mobileCustomKeyboardEnabled,
   );
@@ -979,9 +982,10 @@ export default function WorkspacePage() {
           selectSession: handleSelectTab,
           focusTerminal: (selectedSessionId) => {
             const suppressNativeFocus =
-              isCompactWorkspace &&
-              isCoarsePointer &&
-              mobileCustomKeyboardEnabled;
+              isAndroidChromeNativeInputSuppressed ||
+              (isCompactWorkspace &&
+                isCoarsePointer &&
+                mobileCustomKeyboardEnabled);
             terminalNotificationActivationRef.current();
             terminalNotificationActivationRef.current =
               activateTerminalAfterNavigation({
@@ -1001,6 +1005,7 @@ export default function WorkspacePage() {
     [
       handleSelectTab,
       isCoarsePointer,
+      isAndroidChromeNativeInputSuppressed,
       isCompactWorkspace,
       mobileCustomKeyboardEnabled,
       mountedSessions,
@@ -1239,6 +1244,12 @@ export default function WorkspacePage() {
               <Button
                 size="sm"
                 variant="primary"
+                disabled={isAndroidChromeNativeInputSuppressed}
+                title={
+                  isAndroidChromeNativeInputSuppressed
+                    ? "Saving profiles is unavailable in Android Chrome"
+                    : undefined
+                }
                 onClick={handleSaveFreeTerminalToProject}
               >
                 Save
@@ -1295,6 +1306,12 @@ export default function WorkspacePage() {
               <Button
                 size="sm"
                 variant="primary"
+                disabled={isAndroidChromeNativeInputSuppressed}
+                title={
+                  isAndroidChromeNativeInputSuppressed
+                    ? "Launching with custom text is unavailable in Android Chrome"
+                    : undefined
+                }
                 onClick={handleLaunchFormSubmit}
               >
                 Launch
@@ -1319,7 +1336,7 @@ export default function WorkspacePage() {
                 onSessionExit={handleSessionExit}
                 onNewTerminal={handleOpenCurrentTerminal}
                 suppressAutoFocus
-                suppressNativeKeyboard={false}
+                suppressNativeKeyboard={isAndroidChromeNativeInputSuppressed}
                 webglEnabledSessionIds={webglEnabledSessionIds}
               />
             </Suspense>
@@ -1462,6 +1479,7 @@ export default function WorkspacePage() {
       terminalFilePanelOpen,
       workspaceMode,
       isCompactWorkspace,
+      isAndroidChromeNativeInputSuppressed,
       activateTerminalPanelShortcut,
       toggleTerminalFilePanel,
       diagnosticsWindowMinutes,

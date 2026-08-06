@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils.js";
 import { useGitFileDiff, useGitCommitFileDiff } from "@/api/queries.js";
 import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 function transport(): WsTransport {
   return getTransport() as WsTransport;
@@ -47,6 +48,16 @@ interface DiffViewerProps {
 }
 
 type SaveState = "idle" | "saving" | "error";
+
+function blurEditorSurface(
+  editor: monacoNs.editor.IStandaloneCodeEditor,
+): void {
+  const domNode = editor.getDomNode();
+  const activeElement = domNode?.ownerDocument.activeElement;
+  if (activeElement && domNode?.contains(activeElement)) {
+    (activeElement as HTMLElement).blur();
+  }
+}
 
 function statusLabel(status: string): string {
   switch (status) {
@@ -89,6 +100,8 @@ export function DiffViewer({
   diffPath,
   onClose,
 }: DiffViewerProps) {
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
   const root = gitRootId && gitRootId !== "." ? gitRootId : undefined;
   const localDiff = useGitFileDiff(
     project,
@@ -123,6 +136,11 @@ export function DiffViewer({
 
   const isDeleted = fileStatus === "deleted";
   const isAdded = fileStatus === "added";
+  const modifiedEditorReadOnly =
+    isAndroidChromeNativeInputSuppressed ||
+    isDeleted ||
+    isAdded ||
+    !!commitHash;
 
   // Reset state when file selection changes
   useEffect(() => {
@@ -165,6 +183,11 @@ export function DiffViewer({
     (editor: monacoNs.editor.IStandaloneDiffEditor) => {
       diffEditorRef.current = editor;
       const modifiedEditor = editor.getModifiedEditor();
+      modifiedEditor.updateOptions({ readOnly: modifiedEditorReadOnly });
+      if (isAndroidChromeNativeInputSuppressed) {
+        blurEditorSurface(editor.getOriginalEditor());
+        blurEditorSurface(modifiedEditor);
+      }
 
       // Save model refs for manual disposal on unmount.
       const model = editor.getModel();
@@ -201,44 +224,66 @@ export function DiffViewer({
           ro.disconnect();
       }
     },
-    [],
+    [isAndroidChromeNativeInputSuppressed, modifiedEditorReadOnly],
   );
 
-  function navigateHunk(direction: "prev" | "next") {
+  useEffect(() => {
     const editor = diffEditorRef.current;
     if (!editor) return;
-    const changes = editor.getLineChanges();
-    if (!changes || changes.length === 0) return;
-    const modEditor = editor.getModifiedEditor();
-    const pos = modEditor.getPosition();
-    const currentLine = pos?.lineNumber ?? 0;
-
-    let target: monacoNs.editor.ILineChange | undefined;
-    if (direction === "next") {
-      target = changes.find((c) => {
-        const line = c.modifiedStartLineNumber || c.modifiedEndLineNumber;
-        return line > currentLine;
-      });
-      if (!target) target = changes[0]; // wrap around
-    } else {
-      const before = [...changes].reverse().find((c) => {
-        const line = c.modifiedStartLineNumber || c.modifiedEndLineNumber;
-        return line < currentLine;
-      });
-      target = before ?? changes[changes.length - 1]; // wrap around
+    editor
+      .getModifiedEditor()
+      .updateOptions({ readOnly: modifiedEditorReadOnly });
+    if (isAndroidChromeNativeInputSuppressed) {
+      blurEditorSurface(editor.getOriginalEditor());
+      blurEditorSurface(editor.getModifiedEditor());
     }
+  }, [isAndroidChromeNativeInputSuppressed, modifiedEditorReadOnly]);
 
-    if (!target) return;
-    const line = target.modifiedStartLineNumber || target.modifiedEndLineNumber;
-    if (!line) return;
-    modEditor.revealLineInCenter(line, 0);
-    modEditor.setPosition({ lineNumber: line, column: 1 });
-    modEditor.focus();
-  }
+  const navigateHunk = useCallback(
+    (direction: "prev" | "next") => {
+      const editor = diffEditorRef.current;
+      if (!editor) return;
+      const changes = editor.getLineChanges();
+      if (!changes || changes.length === 0) return;
+      const modEditor = editor.getModifiedEditor();
+      const pos = modEditor.getPosition();
+      const currentLine = pos?.lineNumber ?? 0;
+
+      let target: monacoNs.editor.ILineChange | undefined;
+      if (direction === "next") {
+        target = changes.find((c) => {
+          const line = c.modifiedStartLineNumber || c.modifiedEndLineNumber;
+          return line > currentLine;
+        });
+        if (!target) target = changes[0]; // wrap around
+      } else {
+        const before = [...changes].reverse().find((c) => {
+          const line = c.modifiedStartLineNumber || c.modifiedEndLineNumber;
+          return line < currentLine;
+        });
+        target = before ?? changes[changes.length - 1]; // wrap around
+      }
+
+      if (!target) return;
+      const line =
+        target.modifiedStartLineNumber || target.modifiedEndLineNumber;
+      if (!line) return;
+      modEditor.revealLineInCenter(line, 0);
+      modEditor.setPosition({ lineNumber: line, column: 1 });
+      if (!isAndroidChromeNativeInputSuppressed) modEditor.focus();
+    },
+    [isAndroidChromeNativeInputSuppressed],
+  );
 
   const handleSave = useCallback(async () => {
     const editor = diffEditorRef.current;
-    if (!editor || !isDirty || saveState === "saving") return;
+    if (
+      isAndroidChromeNativeInputSuppressed ||
+      !editor ||
+      !isDirty ||
+      saveState === "saving"
+    )
+      return;
     const content = editor.getModifiedEditor().getValue();
     setSaveState("saving");
     setSaveError(null);
@@ -280,7 +325,14 @@ export function DiffViewer({
       setSaveState("error");
       setSaveError(e instanceof Error ? e.message : String(e));
     }
-  }, [filePath, isDirty, project, qc, saveState]);
+  }, [
+    filePath,
+    isAndroidChromeNativeInputSuppressed,
+    isDirty,
+    project,
+    qc,
+    saveState,
+  ]);
 
   // Keyboard shortcuts: Alt+↑/↓ for hunk nav, Ctrl+S for save.
   // `handleSave` stays stable so the listener always sees current save eligibility.
@@ -299,7 +351,7 @@ export function DiffViewer({
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [handleSave]); // re-bind when save eligibility changes
+  }, [handleSave, navigateHunk]); // re-bind when save/navigation eligibility changes
 
   const fileName = filePath.split("/").pop() ?? filePath;
   const dirPath = filePath.includes("/")
@@ -413,8 +465,16 @@ export function DiffViewer({
           {!isDeleted && !commitHash && (
             <button
               onClick={() => void handleSave()}
-              disabled={!isDirty || saveState === "saving"}
-              title="Save to disk (Ctrl+S)"
+              disabled={
+                isAndroidChromeNativeInputSuppressed ||
+                !isDirty ||
+                saveState === "saving"
+              }
+              title={
+                isAndroidChromeNativeInputSuppressed
+                  ? "Unavailable on Android Chrome: editor is read-only"
+                  : "Save to disk (Ctrl+S)"
+              }
               className={cn(
                 "p-1 rounded transition-colors",
                 isDirty && saveState !== "saving"
@@ -440,6 +500,17 @@ export function DiffViewer({
           </button>
         </div>
       </div>
+
+      {isAndroidChromeNativeInputSuppressed && (
+        <p
+          role="note"
+          className="shrink-0 border-b border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-[11px] text-amber-300"
+        >
+          Editing and Save are unavailable on Android Chrome. Use a desktop
+          browser to change this file; viewing, scrolling, and navigation remain
+          available.
+        </p>
+      )}
 
       {/* Save error banner — auto-dismisses after 5 s */}
       {saveState === "error" && saveError && (
@@ -471,7 +542,7 @@ export function DiffViewer({
           options={{
             renderSideBySide: sideBySide,
             originalEditable: false,
-            readOnly: isDeleted || isAdded || !!commitHash,
+            readOnly: modifiedEditorReadOnly,
             renderMarginRevertIcon: !commitHash,
             hideUnchangedRegions: { enabled: false },
             diffAlgorithm: "advanced",

@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Eye, EyeOff, Lock, X } from "lucide-react";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface PassphrasePromptProps {
   /** Project name for display. */
@@ -16,6 +17,8 @@ interface PassphrasePromptProps {
 export function PassphrasePrompt({ project }: PassphrasePromptProps) {
   const { isPrompting, promptingProject, resolvePrompt, rejectPrompt } =
     useEncryptMode();
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
 
   const [passphrase, setPassphrase] = useState("");
   const [showPassphrase, setShowPassphrase] = useState(false);
@@ -29,11 +32,11 @@ export function PassphrasePrompt({ project }: PassphrasePromptProps) {
       const timer = setTimeout(() => {
         setPassphrase("");
         setError(null);
-        inputRef.current?.focus();
+        if (!isAndroidChromeNativeInputSuppressed) inputRef.current?.focus();
       }, 50);
       return () => clearTimeout(timer);
     }
-  }, [isPrompting]);
+  }, [isAndroidChromeNativeInputSuppressed, isPrompting]);
 
   // Trap focus inside modal
   useEffect(() => {
@@ -51,6 +54,7 @@ export function PassphrasePrompt({ project }: PassphrasePromptProps) {
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
+      if (isAndroidChromeNativeInputSuppressed) return;
       if (!passphrase.trim()) {
         setError("Passphrase is required");
         return;
@@ -61,7 +65,7 @@ export function PassphrasePrompt({ project }: PassphrasePromptProps) {
       }
       resolvePrompt(passphrase);
     },
-    [passphrase, resolvePrompt],
+    [isAndroidChromeNativeInputSuppressed, passphrase, resolvePrompt],
   );
 
   if (!isPrompting) return null;
@@ -124,6 +128,7 @@ export function PassphrasePrompt({ project }: PassphrasePromptProps) {
                 className={`pp-input${error ? " pp-input--error" : ""}`}
                 placeholder="Enter passphrase (min. 8 characters)"
                 autoComplete="new-password"
+                disabled={isAndroidChromeNativeInputSuppressed}
               />
               <button
                 type="button"
@@ -151,7 +156,16 @@ export function PassphrasePrompt({ project }: PassphrasePromptProps) {
             >
               Cancel
             </button>
-            <button type="submit" className="pp-btn pp-btn--submit">
+            <button
+              type="submit"
+              className="pp-btn pp-btn--submit"
+              disabled={isAndroidChromeNativeInputSuppressed}
+              title={
+                isAndroidChromeNativeInputSuppressed
+                  ? "Passphrase entry is unavailable in Android Chrome"
+                  : undefined
+              }
+            >
               Enable Lock Mode
             </button>
           </div>

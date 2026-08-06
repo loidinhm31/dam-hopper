@@ -9,12 +9,15 @@ import {
 import type { DiffFileEntry } from "@/api/client.js";
 import { Button } from "@/components/atoms/Button.js";
 import { FilePathLabel } from "@/components/atoms/FilePathLabel.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface GitLocalChangesProps {
   project: string;
 }
 
 export function GitLocalChanges({ project }: GitLocalChangesProps) {
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
   const { data: diff, isLoading, refetch } = useGitDiff(project);
   const [commitMessage, setCommitMessage] = useState("");
   const [amendCommit, setAmendCommit] = useState(false);
@@ -29,7 +32,7 @@ export function GitLocalChanges({ project }: GitLocalChangesProps) {
   const unstagedFiles = diff?.entries.filter((e) => !e.staged) || [];
 
   const handleCommit = async () => {
-    if (!commitMessage.trim()) return;
+    if (isAndroidChromeNativeInputSuppressed || !commitMessage.trim()) return;
     setCommitError(null);
     try {
       await commitMutation.mutateAsync({
@@ -194,6 +197,7 @@ export function GitLocalChanges({ project }: GitLocalChangesProps) {
           value={commitMessage}
           onChange={(e) => setCommitMessage(e.target.value)}
           placeholder="Commit message..."
+          disabled={isAndroidChromeNativeInputSuppressed}
           className="w-full h-20 p-2 text-xs bg-[var(--color-surface)] border border-[var(--color-border)] rounded focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none mb-2"
         />
         <div className="mb-2 flex items-center justify-between">
@@ -215,9 +219,15 @@ export function GitLocalChanges({ project }: GitLocalChangesProps) {
             size="sm"
             variant="primary"
             disabled={
+              isAndroidChromeNativeInputSuppressed ||
               stagedFiles.length === 0 ||
               !commitMessage.trim() ||
               commitMutation.isPending
+            }
+            title={
+              isAndroidChromeNativeInputSuppressed
+                ? "Unavailable on Android Chrome: text entry is disabled"
+                : undefined
             }
             onClick={handleCommit}
           >

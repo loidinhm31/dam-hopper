@@ -54,6 +54,18 @@ describe("terminal fit scheduler", () => {
     expect(terminal.terminal.focus).toHaveBeenCalledOnce();
   });
 
+  it("lets a later explicit focus false revoke a queued focus request", () => {
+    const frames = animationFrameFixture();
+    const terminal = target();
+
+    scheduleTerminalFit(terminal, { focus: true });
+    scheduleTerminalFit(terminal, { focus: false });
+    frames.flush();
+
+    expect(terminal.fitAddon.fit).toHaveBeenCalledOnce();
+    expect(terminal.terminal.focus).not.toHaveBeenCalled();
+  });
+
   it("runs immediate fits synchronously", () => {
     const terminal = target();
     fitTerminalNow(terminal, { focus: true });

@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 const renderedPanelProps: Array<Record<string, unknown>> = [];
+const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 
 vi.mock("@/components/organisms/TerminalPanel.js", () => ({
   TerminalPanel: (props: Record<string, unknown>) => {
@@ -10,9 +11,38 @@ vi.mock("@/components/organisms/TerminalPanel.js", () => ({
   },
 }));
 
+vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
+  useAndroidChromeInputPolicy: () => ({
+    isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
+  }),
+}));
+
 import { TerminalKeepAliveHost } from "./TerminalKeepAliveHost.js";
 
 describe("TerminalKeepAliveHost", () => {
+  it("overrides an explicit native-input opt-out when Android policy is active", () => {
+    renderedPanelProps.length = 0;
+    mockPolicy.enabled = true;
+
+    renderToStaticMarkup(
+      <TerminalKeepAliveHost
+        mountedSessions={[
+          { sessionId: "android", project: "web", command: "bash" },
+        ]}
+        suppressAutoFocus
+        suppressNativeKeyboard={false}
+      />,
+    );
+
+    expect(renderedPanelProps[0]).toEqual(
+      expect.objectContaining({
+        suppressAutoFocus: true,
+        suppressNativeKeyboard: true,
+      }),
+    );
+    mockPolicy.enabled = false;
+  });
+
   it("passes the current 1-based open-tab order to each terminal", () => {
     renderedPanelProps.length = 0;
 

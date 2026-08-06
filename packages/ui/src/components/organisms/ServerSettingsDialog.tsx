@@ -17,6 +17,7 @@ import {
   updateProfile,
   setActiveProfile,
 } from "@/api/server-config.js";
+import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface Props {
   open: boolean;
@@ -35,6 +36,8 @@ export function ServerSettingsDialog({
   profile,
   onSaved,
 }: Props) {
+  const { isAndroidChromeNativeInputSuppressed } =
+    useAndroidChromeInputPolicy();
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [authType, setAuthType] = useState<"basic" | "none">("basic");
@@ -93,6 +96,7 @@ export function ServerSettingsDialog({
     urlSchemeValid && normalized ? isCrossOriginServer(normalized) : false;
 
   async function testConnection() {
+    if (isAndroidChromeNativeInputSuppressed) return;
     if (!normalized || !urlSchemeValid) return;
     setTestState("testing");
     setTestError(null);
@@ -136,6 +140,7 @@ export function ServerSettingsDialog({
   }
 
   function handleSave() {
+    if (isAndroidChromeNativeInputSuppressed) return;
     if (!urlSchemeValid) return;
 
     const t = token.trim();
@@ -275,6 +280,7 @@ export function ServerSettingsDialog({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="My Server"
+                disabled={isAndroidChromeNativeInputSuppressed}
                 className="w-full rounded-lg border px-3.5 py-2 text-sm transition-colors focus:outline-none focus:ring-2"
                 style={{
                   background: "var(--color-background)",
@@ -298,6 +304,7 @@ export function ServerSettingsDialog({
                 setTestState("idle");
               }}
               placeholder="http://localhost:4800"
+              disabled={isAndroidChromeNativeInputSuppressed}
               className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2"
               style={{
                 background: "var(--color-background)",
@@ -363,6 +370,7 @@ export function ServerSettingsDialog({
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="Username"
+                  disabled={isAndroidChromeNativeInputSuppressed}
                   className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2"
                   style={{
                     background: "var(--color-background)",
@@ -384,6 +392,7 @@ export function ServerSettingsDialog({
                     setPassword(e.target.value);
                   }}
                   placeholder="Password"
+                  disabled={isAndroidChromeNativeInputSuppressed}
                   className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2 mb-2"
                   style={{
                     background: "var(--color-background)",
@@ -401,7 +410,15 @@ export function ServerSettingsDialog({
             <button
               onClick={testConnection}
               disabled={
-                !normalized || !urlSchemeValid || testState === "testing"
+                isAndroidChromeNativeInputSuppressed ||
+                !normalized ||
+                !urlSchemeValid ||
+                testState === "testing"
+              }
+              title={
+                isAndroidChromeNativeInputSuppressed
+                  ? "Unavailable on Android Chrome: text entry is disabled"
+                  : undefined
               }
               className="rounded-lg px-3.5 py-2 text-xs font-semibold transition-opacity disabled:opacity-40"
               style={{
@@ -461,10 +478,16 @@ export function ServerSettingsDialog({
             <button
               onClick={handleSave}
               disabled={
+                isAndroidChromeNativeInputSuppressed ||
                 saved ||
                 !urlSchemeValid ||
                 testState !== "ok" ||
                 (authType === "basic" && (!username || !password))
+              }
+              title={
+                isAndroidChromeNativeInputSuppressed
+                  ? "Unavailable on Android Chrome: text entry is disabled"
+                  : undefined
               }
               className="rounded-lg px-4 py-2 text-xs font-semibold text-white transition-opacity disabled:opacity-60"
               style={{

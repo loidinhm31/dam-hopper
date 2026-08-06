@@ -13,20 +13,25 @@ vi.mock("./TerminalDockPreview.js", () => ({
   TerminalDockPreview: () => null,
 }));
 
+vi.mock("@/lib/terminal-native-input-policy.js", () => ({
+  syncNativeKeyboardSuppression: vi.fn(),
+}));
+
 vi.mock("react-resizable-panels", () => ({
-  Group: ({ children, ...props }: HTMLAttributes<HTMLDivElement> & { children?: ReactNode }) => (
+  Group: ({
+    children,
+    ...props
+  }: HTMLAttributes<HTMLDivElement> & { children?: ReactNode }) => (
     <div {...props}>{children}</div>
   ),
-  Panel: ({ children, ...props }: HTMLAttributes<HTMLDivElement> & { children?: ReactNode }) => (
+  Panel: ({
+    children,
+    ...props
+  }: HTMLAttributes<HTMLDivElement> & { children?: ReactNode }) => (
     <div {...props}>{children}</div>
   ),
   Separator: (props: HTMLAttributes<HTMLDivElement>) => (
-    <div
-      {...props}
-      role="separator"
-      aria-orientation="vertical"
-      tabIndex={0}
-    />
+    <div {...props} role="separator" aria-orientation="vertical" tabIndex={0} />
   ),
 }));
 
@@ -86,7 +91,11 @@ describe("PaneContainer browser integration", () => {
             browserOpen
             onCloseBrowser={onCloseBrowser}
             renderBrowserContent={(onClose) => (
-              <button data-testid="embedded-browser" type="button" onClick={onClose}>
+              <button
+                data-testid="embedded-browser"
+                type="button"
+                onClick={onClose}
+              >
                 Browser
               </button>
             )}
@@ -95,13 +104,19 @@ describe("PaneContainer browser integration", () => {
       );
     });
 
-    expect(container.querySelector("[data-testid=terminal-browser-split]")).not.toBeNull();
-    expect(container.querySelector("[data-testid=terminal-tab-bar]")).not.toBeNull();
+    expect(
+      container.querySelector("[data-testid=terminal-browser-split]"),
+    ).not.toBeNull();
+    expect(
+      container.querySelector("[data-testid=terminal-tab-bar]"),
+    ).not.toBeNull();
     const divider = container.querySelector('[role="separator"]');
     expect(divider?.getAttribute("aria-orientation")).toBe("vertical");
 
     await act(async () =>
-      container.querySelector<HTMLButtonElement>("[data-testid=embedded-browser]")?.click(),
+      container
+        .querySelector<HTMLButtonElement>("[data-testid=embedded-browser]")
+        ?.click(),
     );
     expect(onCloseBrowser).toHaveBeenCalledOnce();
   });
