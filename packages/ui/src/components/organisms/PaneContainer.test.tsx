@@ -13,6 +13,15 @@ vi.mock("./TerminalDockPreview.js", () => ({
   TerminalDockPreview: () => null,
 }));
 
+vi.mock("./MobileTerminalAccessoryBar.js", () => ({
+  MobileTerminalAccessoryBar: ({ sessionId }: { sessionId: string }) => (
+    <div
+      data-testid="pane-floating-terminal-controls"
+      data-session-id={sessionId}
+    />
+  ),
+}));
+
 vi.mock("@/lib/terminal-native-input-policy.js", () => ({
   syncNativeKeyboardSuppression: vi.fn(),
 }));
@@ -88,6 +97,7 @@ describe("PaneContainer browser integration", () => {
             onSessionExit={vi.fn()}
             onSelectTab={vi.fn()}
             onCloseTab={vi.fn()}
+            activeSessionId="shell:demo"
             browserOpen
             onCloseBrowser={onCloseBrowser}
             renderBrowserContent={(onClose) => (
@@ -110,6 +120,21 @@ describe("PaneContainer browser integration", () => {
     expect(
       container.querySelector("[data-testid=terminal-tab-bar]"),
     ).not.toBeNull();
+    const outputHost = container.querySelector(
+      "[data-testid=terminal-pane-output-host]",
+    );
+    expect(outputHost).not.toBeNull();
+    expect(
+      outputHost?.parentElement?.querySelector(
+        "[data-testid=pane-floating-terminal-controls]",
+      ),
+    ).not.toBeNull();
+    expect(
+      container
+        .querySelector("[data-testid=terminal-browser-split]")
+        ?.querySelector("[data-testid=pane-floating-terminal-controls]")
+        ?.getAttribute("data-session-id"),
+    ).toBe("shell:demo");
     const divider = container.querySelector('[role="separator"]');
     expect(divider?.getAttribute("aria-orientation")).toBe("vertical");
 
@@ -119,5 +144,29 @@ describe("PaneContainer browser integration", () => {
         ?.click(),
     );
     expect(onCloseBrowser).toHaveBeenCalledOnce();
+  });
+
+  it("does not render the group in a pane that is not the global active target", async () => {
+    await act(async () => {
+      root.render(
+        <DndContext>
+          <PaneContainer
+            node={pane}
+            layout={layout as never}
+            mountedSessions={[]}
+            openTabs={[{ sessionId: "shell:demo", label: "Demo shell" }]}
+            onNewTerminal={vi.fn()}
+            onSessionExit={vi.fn()}
+            onSelectTab={vi.fn()}
+            onCloseTab={vi.fn()}
+            activeSessionId="shell:other"
+          />
+        </DndContext>,
+      );
+    });
+
+    expect(
+      container.querySelector("[data-testid=pane-floating-terminal-controls]"),
+    ).toBeNull();
   });
 });

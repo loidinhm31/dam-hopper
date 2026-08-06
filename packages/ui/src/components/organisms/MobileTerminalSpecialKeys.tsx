@@ -58,9 +58,14 @@ export function MobileTerminalSpecialKeys({
               preventDefault(event);
               onPress(key.id);
             }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              onPress(key.id);
+            }}
             title={key.title}
             aria-label={key.title}
-            className="flex min-w-0 items-center justify-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] font-semibold text-[var(--color-text)] transition-colors active:bg-[var(--color-border)]"
+            className="flex min-w-0 items-center justify-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] font-semibold text-[var(--color-text)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] active:bg-[var(--color-border)]"
             style={{
               fontSize: mobileCustomKeyboardFontSize,
               minHeight: keyHeight,
