@@ -83,7 +83,7 @@ describe("MobileTerminalAccessoryBar", () => {
         .querySelector<HTMLButtonElement>(
           '[aria-label="Open custom terminal keyboard"]',
         )
-        ?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+        ?.click();
     });
 
     expect(
@@ -98,12 +98,26 @@ describe("MobileTerminalAccessoryBar", () => {
     act(() => {
       container
         .querySelector<HTMLButtonElement>('[aria-label="Open mobile keyboard"]')
-        ?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+        ?.click();
     });
 
     expect(
       container.querySelector("[data-testid=native-keyboard]"),
     ).not.toBeNull();
     expect(container.querySelector("[data-testid=custom-keyboard]")).toBeNull();
+  });
+
+  it("keeps the bottom controls compact while preserving accessible labels", () => {
+    renderBar();
+
+    const buttons = container.querySelectorAll("button");
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0]?.getAttribute("aria-label")).toBe("Show terminal keys");
+    expect(buttons[0]?.className).toContain("h-11");
+    expect(buttons[0]?.className).toContain("w-11");
+    expect(buttons[0]?.querySelector(".sr-only")?.textContent).toBe("Keys");
+    expect(buttons[1]?.className).toContain("h-11");
+    expect(buttons[1]?.className).toContain("w-11");
+    expect(buttons[1]?.querySelector(".sr-only")?.textContent).toBe("Kbd");
   });
 });

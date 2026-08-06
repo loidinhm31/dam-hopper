@@ -226,6 +226,84 @@ describe("mobile workspace shell in Chromium", () => {
     expect(rect.height).toBeGreaterThanOrEqual(44);
   });
 
+  it("drags the trigger without reopening the menu and clamps it to the viewport", async () => {
+    await page.viewport(375, 700);
+    const button = trigger();
+    const initialRect = button.getBoundingClientRect();
+    const pointerId = 41;
+    await act(async () => {
+      button.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          isPrimary: true,
+          pointerId,
+          pointerType: "mouse",
+          clientX: initialRect.left + 12,
+          clientY: initialRect.top + 12,
+        }),
+      );
+    });
+    await act(async () => {
+      button.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          buttons: 1,
+          isPrimary: true,
+          pointerId,
+          pointerType: "mouse",
+          clientX: 9999,
+          clientY: 9999,
+        }),
+      );
+    });
+    expect(button.getAttribute("data-dragging")).toBe("true");
+    await act(async () => {
+      button.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          isPrimary: true,
+          pointerId,
+          pointerType: "mouse",
+          clientX: 9999,
+          clientY: 9999,
+        }),
+      );
+    });
+
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="listbox"]')).toBeNull(),
+    );
+    const movedRect = trigger().getBoundingClientRect();
+    expect(movedRect.left).toBeGreaterThan(initialRect.left);
+    expect(movedRect.top).toBeGreaterThan(initialRect.top);
+    expect(movedRect.right).toBeLessThanOrEqual(window.innerWidth);
+    expect(movedRect.bottom).toBeLessThanOrEqual(window.innerHeight);
+
+    await act(async () => root.render(<Harness workspaceMode="terminal" />));
+    await vi.waitFor(() => {
+      const accessoryRect = document
+        .querySelector<HTMLElement>(
+          '[data-testid="terminal-accessory-fixture"]',
+        )
+        ?.getBoundingClientRect();
+      expect(accessoryRect).toBeDefined();
+      expect(trigger().getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        accessoryRect?.top ?? 0,
+      );
+    });
+
+    await page.viewport(320, 420);
+    await vi.waitFor(() => {
+      const resizedRect = trigger().getBoundingClientRect();
+      expect(resizedRect.left).toBeGreaterThanOrEqual(0);
+      expect(resizedRect.top).toBeGreaterThanOrEqual(0);
+      expect(resizedRect.right).toBeLessThanOrEqual(window.innerWidth);
+      expect(resizedRect.bottom).toBeLessThanOrEqual(window.innerHeight);
+    });
+  });
+
   it("switches surfaces, dismisses, and restores trigger focus", async () => {
     await page.viewport(375, 700);
     const listbox = await openMenu();
