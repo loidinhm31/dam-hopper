@@ -10,6 +10,7 @@ import WorkspacePage, {
 import { createChangedFileSelection } from "@/components/organisms/ChangedFilesList.js";
 import { COMPACT_WORKSPACE_QUERY } from "@/hooks/compact-workspace-media-query.js";
 import { TERMINAL_FILE_PANEL_OPEN_KEY } from "@/lib/terminal-floating-file-panel-state.js";
+import type { TerminalWorkspacePanelControls } from "@/lib/terminal-workspace-panel.js";
 
 let mockWorkspaceMode: "ide" | "terminal" = "ide";
 let mockActiveProject: string | null = null;
@@ -26,6 +27,19 @@ let mockFreeTerminalSavePrompt: {
   error?: string;
 } | null = null;
 let lastTerminalWorkspaceShellProps: Record<string, unknown> | null = null;
+const terminalPanelControls: TerminalWorkspacePanelControls = {
+  zIndex: 20,
+  onActivate: () => undefined,
+};
+
+function renderTerminalOverlayContent() {
+  const renderContent =
+    lastTerminalWorkspaceShellProps?.terminalOverlayContent as
+      | ((controls: TerminalWorkspacePanelControls) => ReactElement)
+      | undefined;
+  expect(renderContent).toEqual(expect.any(Function));
+  return renderContent!(terminalPanelControls);
+}
 let lastTerminalManagerOptions: {
   terminalAutoSwitchProjectEnabled: boolean;
   setActiveProject: (project: string | null) => void;
@@ -312,9 +326,10 @@ describe("WorkspacePage", () => {
     expect(markup).not.toContain("Panels");
 
     expect(markup).toContain('data-shell="terminal-shell"');
-    expect(
-      lastTerminalWorkspaceShellProps?.terminalOverlayContent,
-    ).toBeTruthy();
+    expect(lastTerminalWorkspaceShellProps?.terminalOverlayContent).toEqual(
+      expect.any(Function),
+    );
+    expect(lastTerminalWorkspaceShellProps?.terminalOverlayOpen).toBe(false);
     expect(lastTerminalWorkspaceShellProps?.toolbarActions).toBeUndefined();
     expect(terminalMarkup).toContain('aria-label="Diagnostics time window"');
     expect(terminalMarkup).toContain('value="10" selected=""');
@@ -356,15 +371,28 @@ describe("WorkspacePage", () => {
     localStorage.setItem(TERMINAL_FILE_PANEL_OPEN_KEY, "true");
 
     renderToStaticMarkup(<WorkspacePage />);
-    const overlayMarkup = renderToStaticMarkup(
-      <>
-        {lastTerminalWorkspaceShellProps?.terminalOverlayContent as ReactNode}
-      </>,
-    );
+    const overlayMarkup = renderToStaticMarkup(renderTerminalOverlayContent());
 
     expect(overlayMarkup).toContain("Workspace Files");
     expect(overlayMarkup).toContain("Close files panel");
     expect(overlayMarkup).toContain("terminal-file-panel-changes-panel");
+  });
+
+  it("threads desktop floating-panel stacking controls into Files", () => {
+    stubMatchMedia(false);
+    mockWorkspaceMode = "terminal";
+    localStorage.setItem(TERMINAL_FILE_PANEL_OPEN_KEY, "true");
+
+    renderToStaticMarkup(<WorkspacePage />);
+    const renderContent =
+      lastTerminalWorkspaceShellProps?.terminalOverlayContent as (
+        controls: TerminalWorkspacePanelControls,
+      ) => ReactElement;
+    const markup = renderToStaticMarkup(
+      renderContent({ zIndex: 25, onActivate: () => undefined }),
+    );
+
+    expect(markup).toContain('style="z-index:25"');
   });
 
   it("provides a no-project Changes fallback in the terminal panel", () => {
@@ -374,10 +402,9 @@ describe("WorkspacePage", () => {
     localStorage.setItem(TERMINAL_FILE_PANEL_OPEN_KEY, "true");
 
     renderToStaticMarkup(<WorkspacePage />);
-    const overlay =
-      lastTerminalWorkspaceShellProps?.terminalOverlayContent as ReactElement<{
-        changesContent: ReactNode;
-      }>;
+    const overlay = renderTerminalOverlayContent() as ReactElement<{
+      changesContent: ReactNode;
+    }>;
     const changesMarkup = renderToStaticMarkup(
       <>{overlay.props.changesContent}</>,
     );
