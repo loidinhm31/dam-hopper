@@ -15,6 +15,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 01 — Implement and verify: [COMPLETED 2026-08-06 22:51 +07:00]**: floating Keys/Type controls delivered for active desktop/mobile terminal surfaces with split-session ownership preserved; 19/19 focused unit and 16/16 relevant Chromium checks passed, builds/lint/formatting/diff checks passed, review approved 9/10.
 - Unrelated stale `terminalRegistry` browser import failure remains; remaining warnings are non-blocking and tracked separately.
 
+### Terminal Floating Panel Z-Order (2026-08-07)
+
+- **Phases 01–02 — [COMPLETED 2026-08-07 19:58 +07:00]**: shell-local interaction/focus-aware stacking implemented and verified with 41/41 focused unit tests and 3/3 Chromium hit-testing tests; active panels use z-index 25, peers 20, and higher global layers remain above.
+- `pnpm check` reached successful web/native builds and deb/rpm bundling, then was blocked by missing native release-signing setup; no code or configuration change made for the environment-only blocker.
+
 ### Production Git Changes Resilience
 
 - **Phase 01 Git-unavailable state — [COMPLETED 2026-08-01]**: typed non-Git API outcome, client/query mapping, and Changes UI unavailable state with mutation suppression.

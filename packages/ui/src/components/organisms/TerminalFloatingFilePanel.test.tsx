@@ -9,6 +9,7 @@ import {
   TerminalFloatingFilePanel,
 } from "./TerminalFloatingFilePanel.js";
 import { getTerminalFloatingFilePanelTabForKey } from "@/lib/terminal-floating-file-panel-tabs.js";
+import { TERMINAL_FLOATING_PANEL_FRONT_Z_INDEX } from "@/lib/terminal-workspace-panel.js";
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -16,7 +17,10 @@ import { getTerminalFloatingFilePanelTabForKey } from "@/lib/terminal-floating-f
 
 let root: Root | null = null;
 
-async function renderPanel(open: boolean) {
+async function renderPanel(
+  open: boolean,
+  options: { onActivate?: () => void; zIndex?: number } = {},
+) {
   if (!root) {
     const container = document.createElement("div");
     document.body.append(container);
@@ -32,6 +36,8 @@ async function renderPanel(open: boolean) {
         changesContent={<div data-content="changes">Changes content</div>}
         editorContent={<div>Editor</div>}
         treeResizeHandleProps={{ onMouseDown: () => undefined }}
+        zIndex={options.zIndex}
+        onActivate={options.onActivate}
         onClose={() => undefined}
       />,
     );
@@ -105,6 +111,23 @@ describe("TerminalFloatingFilePanel", () => {
     expect(markup).toContain("Resize files panel");
   });
 
+  it("applies the requested layer to the overlay root", () => {
+    const markup = renderToStaticMarkup(
+      <TerminalFloatingFilePanel
+        open
+        treeWidth={280}
+        explorerContent={<div>Explorer</div>}
+        changesContent={<div>Changes</div>}
+        editorContent={<div>Editor</div>}
+        treeResizeHandleProps={{ onMouseDown: () => undefined }}
+        zIndex={TERMINAL_FLOATING_PANEL_FRONT_Z_INDEX}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('style="z-index:25"');
+  });
+
   it("bounds each tab panel for scrollable active content", async () => {
     await renderPanel(true);
 
@@ -114,6 +137,27 @@ describe("TerminalFloatingFilePanel", () => {
       expect(panel.classList.contains("min-h-0")).toBe(true);
       expect(panel.classList.contains("overflow-hidden")).toBe(true);
     }
+  });
+
+  it("activates from descendant pointer and focus interactions", async () => {
+    const onActivate = vi.fn();
+    await renderPanel(true, { onActivate });
+
+    const explorer = document.querySelector('[data-content="explorer"]');
+    expect(explorer).not.toBeNull();
+    await act(async () => {
+      explorer?.dispatchEvent(
+        new Event("pointerdown", { bubbles: true }),
+      );
+    });
+    expect(onActivate).toHaveBeenCalledOnce();
+
+    const editorRegion = document.querySelector<HTMLElement>(
+      '[data-testid="terminal-floating-file-panel"] [tabindex="-1"]',
+    );
+    expect(editorRegion).not.toBeNull();
+    await act(async () => editorRegion?.focus());
+    expect(onActivate).toHaveBeenCalledTimes(2);
   });
 
   it("closes on Escape", () => {
