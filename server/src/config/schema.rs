@@ -528,6 +528,12 @@ pub struct UiConfig {
     #[serde(default = "default_true", alias = "terminal_suggestions_enabled")]
     pub terminal_suggestions_enabled: bool,
     #[serde(
+        default = "default_true",
+        alias = "terminal_auto_switch_project_enabled",
+        alias = "terminalAutoSwitchProjectEnabled"
+    )]
+    pub terminal_auto_switch_project_enabled: bool,
+    #[serde(
         default,
         alias = "terminal_codex_notifications_enabled",
         alias = "terminalCodexNotificationsEnabled",
@@ -644,6 +650,7 @@ impl Default for UiConfig {
             ports_panel_shortcut: default_ports_panel_shortcut(),
             fleet_terminal_shortcut: default_fleet_terminal_shortcut(),
             terminal_suggestions_enabled: true,
+            terminal_auto_switch_project_enabled: true,
             terminal_codex_notifications_enabled: false,
             terminal_codex_notification_toast_enabled: true,
             terminal_codex_browser_notifications_enabled: true,

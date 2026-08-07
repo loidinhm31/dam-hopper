@@ -594,6 +594,7 @@ export interface UiConfig {
   portsPanelShortcut: string;
   fleetTerminalShortcut: string;
   terminalSuggestionsEnabled?: boolean;
+  terminalAutoSwitchProjectEnabled?: boolean;
   terminalCodexNotificationsEnabled?: boolean;
   terminalCodexNotificationToastEnabled?: boolean;
   terminalCodexBrowserNotificationsEnabled?: boolean;
