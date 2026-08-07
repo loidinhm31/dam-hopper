@@ -1496,6 +1496,7 @@ Refactored `IdeShell.tsx` into a flexible, extensible "Tool Window" system.
 - **ToolWindowDef:** Standardized interface for defining tools (id, label, icon, content).
 - **Persistence:** Active tool IDs are persisted in `localStorage`.
 - **Extensibility:** Enables easy addition of new side panels without modifying `IdeShell` layout logic.
+- **Terminal floating-panel layering:** In terminal mode, Files and tool overlays use a shared base `z-index` of `20`; activating one raises it to `25`. Global Browser/debug overlays remain above this layer.
 - **Bottom panel maximize toggle:** The bottom tool panel header exposes an IntelliJ-style maximize/restore button (session-only state, not persisted). Maximizing hides the top area (explorer/editor/right panels via `display:none`) and stretches the bottom panel to fill the workspace body; activity bars stay visible. Closing the maximized bottom tool resets the state. Implemented as sibling-only CSS class flips so the terminal keep-alive element is never remounted (no PTY duplication); layout decisions live in the pure `resolveBottomPanelLayout` helper. Maximizing also unselects active top tools on both sides; reselecting a top tool from the activity bar (or a reveal-active-file request) restores the normal layout. State transitions live in the pure `resolveMaximizeToggle` / `resolveTopToolToggle` helpers.
 
 **Native Browser Debug (Windows v1; Linux experimental):** The Tauri host
