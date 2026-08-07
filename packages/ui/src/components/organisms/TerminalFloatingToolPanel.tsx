@@ -1,10 +1,17 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
 import { Grip, Move, X } from "lucide-react";
 import {
   clampTerminalFloatingPanelLayout,
   TERMINAL_FILE_PANEL_MARGIN,
   type TerminalFloatingFilePanelLayout,
 } from "@/lib/terminal-floating-file-panel-state.js";
+import { TERMINAL_FLOATING_PANEL_BASE_Z_INDEX } from "@/lib/terminal-workspace-panel.js";
 
 const TOOL_PANEL_LAYOUT: TerminalFloatingFilePanelLayout = {
   width: 720,
@@ -25,6 +32,8 @@ interface TerminalFloatingToolPanelProps {
   title: string;
   content: ReactNode;
   onClose: () => void;
+  zIndex?: number;
+  onActivate?: () => void;
 }
 
 export function handleTerminalFloatingToolPanelKeyDown(
@@ -52,6 +61,8 @@ export function TerminalFloatingToolPanel({
   title,
   content,
   onClose,
+  zIndex = TERMINAL_FLOATING_PANEL_BASE_Z_INDEX,
+  onActivate,
 }: TerminalFloatingToolPanelProps) {
   const boundsRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -157,7 +168,11 @@ export function TerminalFloatingToolPanel({
   };
 
   return (
-    <div ref={boundsRef} className="pointer-events-none absolute inset-0 z-20">
+    <div
+      ref={boundsRef}
+      className="pointer-events-none absolute inset-0"
+      style={{ zIndex }}
+    >
       <section
         ref={panelRef}
         className="pointer-events-auto absolute flex min-h-0 max-w-[calc(100%-2rem)] flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)]/96 shadow-2xl backdrop-blur-xl"
@@ -168,6 +183,8 @@ export function TerminalFloatingToolPanel({
           width: layout.width,
           height: layout.height,
         }}
+        onPointerDownCapture={onActivate}
+        onFocusCapture={onActivate}
         data-testid="terminal-floating-tool-panel"
       >
         <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)]/90 px-3">

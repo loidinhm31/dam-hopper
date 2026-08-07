@@ -1,8 +1,27 @@
 export type TerminalWorkspacePanelId = "git" | "ports" | "terminals";
 
+export type TerminalFloatingPanelId = "files" | "tool";
+
+export const TERMINAL_FLOATING_PANEL_BASE_Z_INDEX = 20;
+export const TERMINAL_FLOATING_PANEL_FRONT_Z_INDEX = 25;
+
 export interface TerminalWorkspacePanelRequest {
   nonce: number;
   targetId: TerminalWorkspacePanelId;
+}
+
+export interface TerminalWorkspacePanelControls {
+  zIndex: number;
+  onActivate: () => void;
+}
+
+export function resolveTerminalFloatingPanelZIndex(
+  frontPanelId: TerminalFloatingPanelId | null,
+  panelId: TerminalFloatingPanelId,
+) {
+  return frontPanelId === panelId
+    ? TERMINAL_FLOATING_PANEL_FRONT_Z_INDEX
+    : TERMINAL_FLOATING_PANEL_BASE_Z_INDEX;
 }
 
 /**

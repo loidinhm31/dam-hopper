@@ -1,6 +1,35 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { resolveTerminalWorkspacePanelActivation } from "@/lib/terminal-workspace-panel.js";
+import {
+  resolveTerminalFloatingPanelZIndex,
+  resolveTerminalWorkspacePanelActivation,
+  TERMINAL_FLOATING_PANEL_BASE_Z_INDEX,
+  TERMINAL_FLOATING_PANEL_FRONT_Z_INDEX,
+} from "@/lib/terminal-workspace-panel.js";
+
+describe("resolveTerminalFloatingPanelZIndex", () => {
+  it("keeps both floating panels at the baseline before activation", () => {
+    expect(resolveTerminalFloatingPanelZIndex(null, "files")).toBe(
+      TERMINAL_FLOATING_PANEL_BASE_Z_INDEX,
+    );
+    expect(resolveTerminalFloatingPanelZIndex(null, "tool")).toBe(
+      TERMINAL_FLOATING_PANEL_BASE_Z_INDEX,
+    );
+  });
+
+  it.each(["files", "tool"] as const)(
+    "raises only the active %s panel above its peer",
+    (panelId) => {
+      const peer = panelId === "files" ? "tool" : "files";
+      expect(resolveTerminalFloatingPanelZIndex(panelId, panelId)).toBe(
+        TERMINAL_FLOATING_PANEL_FRONT_Z_INDEX,
+      );
+      expect(resolveTerminalFloatingPanelZIndex(panelId, peer)).toBe(
+        TERMINAL_FLOATING_PANEL_BASE_Z_INDEX,
+      );
+    },
+  );
+});
 
 describe("resolveTerminalWorkspacePanelActivation", () => {
   it.each([

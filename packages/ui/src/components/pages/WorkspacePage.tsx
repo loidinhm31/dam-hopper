@@ -91,7 +91,10 @@ import type { ToolWindowDef } from "@/types/ide.js";
 import type { MobileWorkspaceSurface } from "@/components/templates/MobileWorkspaceShell.js";
 import type { ActivateToolRequest } from "@/lib/reveal-active-file.js";
 import type { TerminalPanelToolId } from "@/lib/ide-shell-layout.js";
-import type { TerminalWorkspacePanelRequest } from "@/lib/terminal-workspace-panel.js";
+import type {
+  TerminalWorkspacePanelControls,
+  TerminalWorkspacePanelRequest,
+} from "@/lib/terminal-workspace-panel.js";
 import type { FileTreeRevealRequest } from "@/lib/file-tree-reveal.js";
 import { resolveRevealActiveFileOutcome } from "@/lib/reveal-active-file.js";
 import { scheduleTerminalFit } from "@/lib/terminal-fit-scheduler.js";
@@ -1898,13 +1901,15 @@ export default function WorkspacePage() {
   );
 
   const terminalFilePanelContent = useMemo(
-    () => (
+    () => (controls: TerminalWorkspacePanelControls) => (
       <TerminalFloatingFilePanel
         open={terminalFilePanelOpen}
         treeWidth={terminalFileTreeWidth}
         isDragging={isTerminalFileTreeResizing}
         focusEditorSignal={terminalFilePanelEditorFocusSignal}
         treeResizeHandleProps={terminalFileTreeResizeHandleProps}
+        zIndex={controls.zIndex}
+        onActivate={controls.onActivate}
         explorerContent={
           projectName ? (
             <Suspense fallback={<PanelFallback label="Loading files…" />}>
@@ -1987,6 +1992,7 @@ export default function WorkspacePage() {
         <TerminalWorkspaceShell
           terminalContent={terminalContent}
           terminalOverlayContent={terminalFilePanelContent}
+          terminalOverlayOpen={terminalFilePanelOpen}
           fleetContent={fleetContent}
           gitContent={terminalGitContent}
           portsContent={portsContent}

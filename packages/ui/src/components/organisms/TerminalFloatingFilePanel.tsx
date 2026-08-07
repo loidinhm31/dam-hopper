@@ -18,6 +18,7 @@ import {
   getTerminalFloatingFilePanelTabForKey,
   type TerminalFloatingFilePanelTab,
 } from "@/lib/terminal-floating-file-panel-tabs.js";
+import { TERMINAL_FLOATING_PANEL_BASE_Z_INDEX } from "@/lib/terminal-workspace-panel.js";
 import { cn } from "@/lib/utils.js";
 
 const EXPLORER_TAB_ID = "terminal-file-panel-explorer-tab";
@@ -39,6 +40,8 @@ interface TerminalFloatingFilePanelProps {
   editorContent: ReactNode;
   treeResizeHandleProps: ResizeHandleProps;
   onClose: () => void;
+  zIndex?: number;
+  onActivate?: () => void;
 }
 
 type TerminalFloatingFilePanelContentProps = Omit<
@@ -72,6 +75,8 @@ function TerminalFloatingFilePanelContent({
   editorContent,
   treeResizeHandleProps,
   onClose,
+  zIndex = TERMINAL_FLOATING_PANEL_BASE_Z_INDEX,
+  onActivate,
 }: TerminalFloatingFilePanelContentProps) {
   const boundsRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -238,7 +243,11 @@ function TerminalFloatingFilePanelContent({
   };
 
   return (
-    <div ref={boundsRef} className="pointer-events-none absolute inset-0 z-20">
+    <div
+      ref={boundsRef}
+      className="pointer-events-none absolute inset-0"
+      style={{ zIndex }}
+    >
       <div
         ref={panelRef}
         className={cn(
@@ -252,6 +261,8 @@ function TerminalFloatingFilePanelContent({
           width: layout.width,
           height: layout.height,
         }}
+        onPointerDownCapture={onActivate}
+        onFocusCapture={onActivate}
         data-testid="terminal-floating-file-panel"
       >
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
