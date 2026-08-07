@@ -28,6 +28,7 @@ export function SettingsAppearanceSection() {
     terminalCodexNotificationSoundPattern,
     terminalScrollButtonsEnabled,
     terminalCommitStatusEnabled,
+    terminalAutoSwitchProjectEnabled,
     terminalScrollStep,
     explorerShowHidden,
     mobileCustomKeyboardEnabled,
@@ -115,6 +116,21 @@ export function SettingsAppearanceSection() {
           ariaLabel="Show latest commit in terminal"
           onCheckedChange={(checked) =>
             saveDebounced({ terminalCommitStatusEnabled: checked })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Switch project on terminal selection"
+        description="Selecting a terminal assigned to a project activates that project; free terminals leave the current project unchanged."
+      >
+        <Switch
+          checked={terminalAutoSwitchProjectEnabled}
+          ariaLabel="Enable project switching on terminal selection"
+          onCheckedChange={(checked) =>
+            saveDebounced({ terminalAutoSwitchProjectEnabled: checked })
           }
         />
       </SettingRow>
