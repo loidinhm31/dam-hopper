@@ -256,16 +256,21 @@ Collector health preserves the aggregate `dropped` count and adds five fixed-car
 in-memory reason counters: missing source identity, invalid timestamp, paused admission, full
 queue, and unavailable worker. Normalization and enqueue outcomes increment exactly one reason
 counter alongside the aggregate; the counters never include source versions, models, identifiers,
-paths, errors, or payload content, and reset on process restart. Queue-full and worker-unavailable
-outcomes retain retryable `503` responses, while normalization and paused records retain their
-existing `202` behavior.
+paths, errors, or payload content, and reset on process restart. The missing-identity field is
+retained for health API compatibility and remains zero when the bounded fallback is active.
+Queue-full and worker-unavailable outcomes retain retryable `503` responses, while normalization
+and paused records retain their existing `202` behavior.
 
 Codex CLI 0.146.1 emits token fields in `response.completed`, but its OTLP records provide no safe
-per-event identity (no usable trace/span identity or provider event ID). Usage therefore remains
-fail-closed for those records until such an identity is available; receipt time, conversation ID,
-and fabricated IDs are not fallback keys. This is an ingestion-admission decision only: it makes no
-Codex event or SQLite schema change; the bounded reason counters above are the sole additive health
-diagnostic surface.
+per-event trace/span or provider event ID. When trace/span are absent, Usage derives a
+domain-separated HMAC fallback from bounded decoded fields: source version and timestamp,
+conversation/model identifiers, bounded token components, duration, and counter semantic. Raw
+content, receipt time, conversation ID alone, and fabricated random IDs are never fallback keys.
+Valid trace/span identity takes precedence over the fallback.
+The fallback is stable for replay but can dedupe identical same-millisecond decoded events; this is
+an explicit compatibility tradeoff, and those events remain `unverified`. Invalid timestamps still
+fail closed. This is an ingestion-admission decision only: it makes no Codex event or SQLite schema
+change.
 
 Development invariant: remove the Usage middle layer from every PTY production path, including
 constructor parameters, session options, restart/restore handoff, reader-loop state, environment

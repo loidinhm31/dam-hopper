@@ -15,6 +15,11 @@
 Run focused and broad backend gates, restart the production server without touching telemetry data,
 then prove a 0.146.1 event is accepted or identify its exact remaining drop reason.
 
+Current evidence: focused Codex OTLP tests (37), the authenticated Usage health regression, and
+`cargo check` passed; the release binary was built; live 4800/4811 health and Usage smoke accepted
+unverified events with nonzero response/token totals. Keep this phase open because the broad backend
+suite and a stable helper-driven restart have not been fully verified.
+
 ## Key insights
 
 - Unit success is insufficient: production currently has decoded traffic but no persisted row.
@@ -60,16 +65,18 @@ not transform storage, so rollback is binary-only.
    for worker flush, then read health, summary, and sessions again.
 8. Accept smoke only if `queued` and last accepted advance, reason-specific drops do not advance,
    and Usage gains an unverified response/session without exposing source version or content.
-9. If still dropped, classify by counter: missing identity returns to Phase 1/B gate; invalid timestamp
-   validates raw shape; paused restores intended admission state; queue full/worker unavailable is an
-   operational queue/runtime issue. Do not add an identity fallback for operational failures.
+9. If still dropped, classify by counter: a nonzero missing-identity delta indicates the running
+   binary is stale or a strict-mode regression; invalid timestamp validates raw shape; paused restores
+   intended admission state; queue full/worker unavailable is an operational queue/runtime issue.
+   Do not add a second identity fallback for operational failures.
 
 ## Todo list
 
-- [ ] Focused OTLP and Usage API privacy tests pass.
+- [x] Focused OTLP and Usage API privacy tests pass.
 - [ ] `cargo check` and full backend suite pass.
-- [ ] Release build/restart preserves telemetry DB and secrets.
-- [ ] Production smoke advances accepted/persisted Usage.
+- [ ] Release build/restart preserves telemetry DB and secrets (release build and live smoke verified;
+      stable helper-driven restart remains open).
+- [x] Production smoke advances accepted/persisted Usage.
 - [ ] Any residual loss is assigned one bounded reason.
 - [ ] Rollback path verified and results recorded in plan status during `/code`.
 

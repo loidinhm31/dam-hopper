@@ -296,9 +296,14 @@ The collector counters include the legacy aggregate `dropped` total plus additiv
 `droppedMissingIdentity`, `droppedInvalidTimestamp`, `droppedPaused`, `droppedQueueFull`, and
 `droppedWorkerUnavailable` totals. These are fixed-cardinality in-memory counters, contain no
 source values or payload fragments, and reset when the server process restarts.
-Codex CLI 0.146.1 token-bearing `response.completed` records without a safe per-event identity
-remain fail-closed; this is internal admission behavior and does not add a Codex event field or
-change the SQLite schema. The fixed health counters above are the only additive diagnostic fields.
+`droppedMissingIdentity` is retained for compatibility with older collector behavior and remains
+zero when the bounded fallback is active.
+Codex CLI 0.146.1 token-bearing `response.completed` records without trace/span identity use a
+bounded domain-separated HMAC fallback over normalized decoded fields and remain `unverified`.
+When a valid trace/span identity is present, it takes precedence over the fallback.
+The fallback is stable for replay but may dedupe identical same-millisecond decoded events. Invalid
+timestamps still fail closed. The fixed health counters above are the only additive diagnostic
+fields; no raw identity, content, or new Codex event/SQLite field is exposed.
 
 ### GET/PATCH /api/usage/settings
 

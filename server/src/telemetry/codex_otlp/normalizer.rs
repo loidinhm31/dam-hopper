@@ -1,18 +1,19 @@
 use std::sync::Arc;
 
 use crate::telemetry::{
-    CodexUsageEvent, CodexVersion, SafeIdentifier, SourceQuality, TelemetryKeyRing, TokenQuality,
-    MAX_DURATION_MS, MAX_TIMESTAMP_UTC_MS, MAX_TOKEN_COMPONENT, TELEMETRY_SCHEMA_VERSION,
+    CodexUsageEvent, CodexVersion, SafeIdentifier, SourceQuality, TelemetryKeyRing,
+    TokenCounterSemantic, TokenQuality, MAX_DURATION_MS, MAX_TIMESTAMP_UTC_MS, MAX_TOKEN_COMPONENT,
+    TELEMETRY_SCHEMA_VERSION,
 };
 
 use super::decoder::{DecodedCodexUsage, TimestampStatus};
 
 const CODEX_DEDUPE_DOMAIN: &[u8] = b"codex-usage:v1";
 const CODEX_SESSION_DOMAIN: &[u8] = b"codex-conversation:v1";
+const CODEX_FALLBACK_IDENTITY_DOMAIN: &[u8] = b"codex-usage:fallback-v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NormalizationDropReason {
-    MissingSourceIdentity,
     InvalidTimestamp,
 }
 
@@ -28,19 +29,12 @@ pub(crate) fn normalize(
         .source_version
         .clone()
         .unwrap_or_else(CodexVersion::unknown);
-    let source_identity = decoded
-        .source_identity
-        .as_deref()
-        .ok_or(NormalizationDropReason::MissingSourceIdentity)?;
     let source_timestamp = match (decoded.timestamp_status, decoded.occurred_at_utc_ms) {
         (TimestampStatus::Invalid, _) | (TimestampStatus::Valid, None) => {
             return Err(NormalizationDropReason::InvalidTimestamp);
         }
         (_, timestamp) => timestamp,
     };
-    // Millisecond timestamps are not unique event identities. Without a
-    // complete source identity, retries and distinct same-millisecond events
-    // cannot be separated safely, so the record is not a durable fact.
     let occurred_at_utc_ms = source_timestamp.unwrap_or(received_at_utc_ms);
     if occurred_at_utc_ms <= 0 || occurred_at_utc_ms > MAX_TIMESTAMP_UTC_MS {
         return Err(NormalizationDropReason::InvalidTimestamp);
@@ -76,6 +70,33 @@ pub(crate) fn normalize(
     let output = token_component_fingerprint(output_tokens);
     let reasoning = token_component_fingerprint(reasoning_tokens);
     let duration = token_component_fingerprint(duration_ms);
+    let semantic = match decoded.counter_semantic {
+        TokenCounterSemantic::Delta => b"delta".as_slice(),
+        TokenCounterSemantic::Cumulative => b"cumulative".as_slice(),
+    };
+    let fallback_identity = keys.digest(
+        CODEX_FALLBACK_IDENTITY_DOMAIN,
+        &[
+            source_version_text.as_bytes(),
+            &occurred,
+            decoded
+                .conversation_id
+                .as_ref()
+                .map_or(b"".as_slice(), |id| id.as_str().as_bytes()),
+            model.as_bytes(),
+            &input,
+            &cached,
+            &output,
+            &reasoning,
+            &duration,
+            semantic,
+        ],
+    );
+    let fallback_identity_text = String::from(fallback_identity);
+    let source_identity = decoded
+        .source_identity
+        .as_deref()
+        .unwrap_or(fallback_identity_text.as_bytes());
     let id = keys.digest(
         CODEX_DEDUPE_DOMAIN,
         &[
@@ -305,17 +326,27 @@ mod tests {
             .unwrap()
             .pop()
             .unwrap();
-        assert!(matches!(
-            normalize(ambiguous, &keys, 10),
-            Err(NormalizationDropReason::MissingSourceIdentity)
-        ));
+        let fallback = normalize(ambiguous, &keys, 10).unwrap();
+        let fallback_replay = normalize(
+            decode_response_completed(&request.encode_to_vec())
+                .unwrap()
+                .pop()
+                .unwrap(),
+            &keys,
+            20,
+        )
+        .unwrap();
+        assert_eq!(fallback.id, fallback_replay.id);
+        assert_eq!(fallback.occurred_at_utc_ms, 10);
+        assert_eq!(fallback_replay.occurred_at_utc_ms, 20);
     }
 
     #[test]
-    fn rejects_zero_or_malformed_source_identity_shapes() {
+    fn uses_fallback_for_zero_or_malformed_source_identity_shapes() {
         let temp = tempfile::tempdir().unwrap();
         let keys = Arc::new(TelemetryKeyRing::load_or_create(temp.path().join("key")).unwrap());
         let fixture = include_bytes!("fixtures/codex-cli-0.145.0-response-completed.bin");
+        let mut ids = Vec::new();
 
         for (trace_id, span_id) in [
             (vec![0; 16], vec![2; 8]),
@@ -331,15 +362,13 @@ mod tests {
                 .unwrap()
                 .pop()
                 .unwrap();
-            assert!(matches!(
-                normalize(decoded, &keys, 10),
-                Err(NormalizationDropReason::MissingSourceIdentity)
-            ));
+            ids.push(normalize(decoded, &keys, 10).unwrap().id);
         }
+        assert!(ids.windows(2).all(|pair| pair[0] == pair[1]));
     }
 
     #[test]
-    fn missing_identity_reason_precedes_invalid_timestamp_reason() {
+    fn invalid_timestamp_still_precedes_fallback_identity() {
         let temp = tempfile::tempdir().unwrap();
         let keys = Arc::new(TelemetryKeyRing::load_or_create(temp.path().join("key")).unwrap());
         let fixture = include_bytes!("fixtures/codex-cli-0.145.0-response-completed.bin");
@@ -363,7 +392,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             normalize(decoded, &keys, 10),
-            Err(NormalizationDropReason::MissingSourceIdentity)
+            Err(NormalizationDropReason::InvalidTimestamp)
         ));
     }
 
@@ -401,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_timestamped_records_without_source_identity() {
+    fn admits_timestamped_records_without_source_identity() {
         let temp = tempfile::tempdir().unwrap();
         let keys = Arc::new(TelemetryKeyRing::load_or_create(temp.path().join("key")).unwrap());
         let decoded = decode_response_completed(include_bytes!(
@@ -410,10 +439,50 @@ mod tests {
         .unwrap()
         .pop()
         .unwrap();
-        assert!(matches!(
-            normalize(decoded, &keys, 1),
-            Err(NormalizationDropReason::MissingSourceIdentity)
-        ));
+        let event = normalize(decoded, &keys, 1).unwrap();
+        assert_eq!(event.source_quality, SourceQuality::Verified);
+    }
+
+    #[test]
+    fn fallback_identity_replays_and_changes_with_decoded_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let keys = Arc::new(TelemetryKeyRing::load_or_create(temp.path().join("key")).unwrap());
+        let fixture = include_bytes!("fixtures/codex-cli-0.146.1-response-completed.bin");
+
+        let first = normalize(
+            decode_response_completed(fixture).unwrap().pop().unwrap(),
+            &keys,
+            1,
+        )
+        .unwrap();
+        let replay = normalize(
+            decode_response_completed(fixture).unwrap().pop().unwrap(),
+            &keys,
+            2,
+        )
+        .unwrap();
+        assert_eq!(first.id, replay.id);
+        assert_eq!(first.source_quality, SourceQuality::Unverified);
+
+        let mut changed = ExportLogsServiceRequest::decode(fixture.as_slice()).unwrap();
+        let output = changed.resource_logs[0].scope_logs[0].log_records[0]
+            .attributes
+            .iter_mut()
+            .find(|attribute| attribute.key == "output_token_count")
+            .unwrap();
+        output.value = Some(AnyValue {
+            value: Some(Value::IntValue(8)),
+        });
+        let changed = normalize(
+            decode_response_completed(&changed.encode_to_vec())
+                .unwrap()
+                .pop()
+                .unwrap(),
+            &keys,
+            1,
+        )
+        .unwrap();
+        assert_ne!(first.id, changed.id);
     }
 
     #[test]

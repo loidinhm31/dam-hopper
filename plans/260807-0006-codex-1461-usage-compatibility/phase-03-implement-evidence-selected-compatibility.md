@@ -10,25 +10,31 @@
 
 ## Overview
 
-**Date:** 2026-08-07 · **Priority:** P1 · **Status:** blocked · **Effort:** 2h
+**Date:** 2026-08-07 · **Priority:** P1 · **Status:** completed · **Effort:** 2h
 
-Make the smallest evidence-supported change. Keep 0.145.0 as the sole verified semantic baseline.
-Phase 1 proves that Codex 0.146.1 has no safe per-event identity, so compatibility admission is
-blocked; only diagnostics may proceed until a future provider identity is proven.
+Make the smallest explicitly approved compatibility change. Keep 0.145.0 as the sole verified
+semantic baseline. Phase 1 proves that Codex 0.146.1 has no trace/span identity, so use a bounded
+HMAC of decoded fields only when the real identity is absent. This restores admission while keeping
+the version unverified and making the dedupe tradeoff explicit.
 
 ## Key insights
 
 - Event/version filters and the four core token attributes are already forward-compatible.
 - Optional field drift is harmless because decoder allowlists known fields.
-- Durable dedupe requires a stable per-event source identity; timestamp or conversation is unsafe.
-- The safest likely result is A: real fixture plus regressions, with no new identity fallback.
+- Durable dedupe is strongest with a stable per-event source identity; timestamp or conversation
+  alone is unsafe.
+- The selected compatibility fallback is stable for replay of the same decoded event, but can
+  intentionally collide for identical same-millisecond decoded events.
+- Focused validation passed: 37 Codex OTLP tests, the authenticated Usage health regression, and
+  `cargo check`; the release binary was built and live 4800/4811 smoke showed accepted unverified
+  events with nonzero response/token totals.
 
 ## Requirements
 
 - Exact 0.146.1 fixture decodes four token components and source version, with unverified quality,
-  but remains intentionally non-admissible without source identity.
-- Receiver continues to fail closed; no replay/persistence acceptance criterion is possible until a
-  safe identity is available.
+  and is admissible through the fallback when trace/span are absent.
+- Receiver continues to fail closed for invalid timestamps and other existing bounded failures;
+  missing trace/span alone is no longer a drop for this compatibility path.
 - Existing 0.145.0 fixture remains verified and all missing/partial-token behavior remains nullable.
 - Unknown content attributes stay ignored and absent from decoded/persisted/API/log output.
 - Never change `BASELINE_CODEX_VERSION` to 0.146.1 in this task.
@@ -37,18 +43,20 @@ blocked; only diagnostics may proceed until a future provider identity is proven
 
 | Evidence | Implementation | Forbidden |
 |---|---|---|
-| Valid nonzero 16-byte trace + 8-byte span | **A:** fixture/tests only; use existing `t...s...` identity | New fallback |
-| Trace/span absent; stable unique bounded provider event ID proven | **B:** domain-tagged in-memory ID fallback | Raw ID persistence/logging |
-| No safe per-event identity — current 0.146.1 evidence | **Blocked:** retain fail-closed drop and expose reason | Receipt time, timestamp, conversation ID, random UUID |
+| Valid nonzero 16-byte trace + 8-byte span | Existing `t...s...` identity takes precedence | Replacing provider identity |
+| Trace/span absent — current 0.146.1 | **Selected B2:** HMAC of bounded decoded fields with `codex-usage:fallback-v1` domain | Raw content, receipt time, conversation ID alone, random UUID |
+| Invalid timestamp | Existing `InvalidTimestamp` drop | Admitting an unbounded/invalid event |
 
-For B, trace/span remains preferred. Provider identity must have a distinct domain prefix, strict
-type/length checks, and exist only as HMAC input. Prove same-event replay stability and distinct
-event uniqueness from controlled captures/source semantics before coding it.
+For B2, trace/span remains preferred. The fallback input is limited to normalized source version,
+source timestamp (or a fixed missing marker), conversation/model values, bounded token components,
+duration, and counter semantic. It exists only as HMAC input and is never persisted as raw data.
+Same-event replay stability is required; distinct-event uniqueness is best-effort and the known
+collision limitation is accepted by the operator.
 
 ## Related code files
 
-- **Modify:** `/mnt/data/ws/sharing/dam-hopper/server/src/telemetry/codex_otlp/decoder.rs` — add 0.146.1 fixture tests; B-only bounded provider-ID allowlist/fallback.
-- **Modify:** `/mnt/data/ws/sharing/dam-hopper/server/src/telemetry/codex_otlp/normalizer.rs` — fixture quality/dedupe tests; B only if identity representation needs explicit domain handling.
+- **Modify:** `/mnt/data/ws/sharing/dam-hopper/server/src/telemetry/codex_otlp/decoder.rs` — retain 0.146.1 fixture tests and identity-shape coverage.
+- **Modify:** `/mnt/data/ws/sharing/dam-hopper/server/src/telemetry/codex_otlp/normalizer.rs` — add B2 fallback construction and replay/change regression tests.
 - **Modify:** `/mnt/data/ws/sharing/dam-hopper/server/src/telemetry/codex_otlp/tests.rs` — end-to-end fixture admission, persistence, replay, health, privacy.
 - **Use:** `/mnt/data/ws/sharing/dam-hopper/server/src/telemetry/codex_otlp/fixtures/codex-cli-0.146.1-response-completed.bin`.
 - **No changes:** API DTOs, SQLite schema/store, worker queue, config manager, UI, auth, PTY.
@@ -60,35 +68,35 @@ event uniqueness from controlled captures/source semantics before coding it.
 2. Add normalizer regression asserting `SourceQuality::Unverified`, exact/nullable token quality,
    bounded occurred time, HMAC session fingerprint, and stable HMAC event ID on replay.
 3. Add authenticated receiver integration test posting exact sanitized bytes. Assert 202, `queued=1`,
-   `dropped=0`, `unverifiedVersion=1`, non-null last accepted time, and one unverified DB row.
+   `dropped=0`, `droppedMissingIdentity=0`, `unverifiedVersion=1`, non-null last accepted time,
+   and one unverified DB row.
 4. Post the same fixture again; wait for worker flush; assert one event/session and one duplicate.
 5. Inject prompt/response/tool canaries into a decoded copy and prove they never reach SQLite,
    health JSON, or Usage API responses.
 6. Run old 0.145.0 fixture regressions to prove verified behavior remains unchanged.
-7. If Phase 1 selected B, first add failing missing-trace/span test, then implement only the proven
-   attribute as domain-separated source identity. Add malformed/oversize/content-like rejection,
-   trace/span precedence, replay, and distinct-event collision tests.
-8. If neither A nor B can admit safely, stop implementation. Report exact missing-identity counter;
-   do not weaken normalization to satisfy acceptance artificially.
+7. Prove missing trace/span uses fallback, real trace/span still wins, invalid timestamps still drop,
+   and fallback input changes alter the dedupe ID without exposing content.
 
 ## Todo list
 
-- [x] Evidence decision recorded as blocked: real 0.146.1 capture has no safe per-event identity.
-- [ ] 0.146.1 decode/normalize/receiver regressions added.
-- [ ] Replay dedupe and distinct-event behavior proven.
-- [ ] 0.145.0 verified baseline unchanged.
-- [ ] Content/privacy canaries absent from all durable/public surfaces.
+- [x] Evidence decision recorded: real 0.146.1 capture has no trace/span identity; B2 explicitly selected.
+- [x] 0.146.1 decode/normalize/receiver regressions added.
+- [x] Replay dedupe and fallback change behavior proven.
+- [x] 0.145.0 verified baseline unchanged.
+- [x] Content/privacy canaries absent from all durable/public surfaces.
 
 ## Success criteria
 
-This phase is blocked. The sanitized 0.146.1 fixture decodes and the decoder regression passes, but
-it must not cross normalization, queue, worker, or SQLite without a safe per-event identity. No
-unsafe identity or raw content may cross normalization.
+The sanitized 0.146.1 fixture must cross normalization, queue, worker, and SQLite through the
+bounded fallback while remaining `unverified`. No raw content or source IDs may cross into durable
+storage or public health output. Same decoded payloads must replay-dedupe; the accepted collision
+limitation must be documented.
 
 ## Risk assessment
 
 - Promoting version baseline would overstate token-semantic proof. Keep unverified.
-- A provider field may be response-scoped but not event-unique. B requires explicit collision proof.
+- The fallback is intentionally weaker than a provider event ID; identical same-millisecond decoded
+  events can dedupe. A future provider identity should supersede it when proven.
 - Tests that inject trace/span into a fixture with missing raw identity can hide incompatibility;
   exact-byte receiver test must use fixture as checked in.
 
@@ -99,11 +107,10 @@ semantics, and no raw content logging. No secret/config/auth code changes are au
 
 ## Next steps
 
-Do not proceed to Phase 4 compatibility acceptance until a future controlled capture proves a safe
-per-event identity and the required privacy/dedupe tests pass. Phase 02 remains pending.
+Proceed to Phase 4 for the remaining broad-suite and deployment-helper verification. Do not change
+the verified-version baseline or reset `telemetry.db`.
 
 ## Unresolved questions
 
-- No unresolved Phase 01 decision remains: current 0.146.1 evidence blocks both fallback and
-  compatibility admission. B field name and bound remain unspecified unless future evidence proves
-  one; do not invent them in implementation.
+- The operator accepted the bounded fallback tradeoff. Focused and live compatibility evidence is
+  complete; broad-suite and stable helper-restart evidence remain in Phase 4.
