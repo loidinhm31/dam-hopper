@@ -152,11 +152,6 @@ async fn receive(
         record_compatibility_health(&state.health, &decoded);
         let event = match normalize(decoded, &state.keys, now) {
             Ok(event) => event,
-            Err(NormalizationDropReason::MissingSourceIdentity) => {
-                state.health.dropped_missing_identity();
-                state.health.dropped();
-                continue;
-            }
             Err(NormalizationDropReason::InvalidTimestamp) => {
                 state.health.dropped_invalid_timestamp();
                 state.health.dropped();

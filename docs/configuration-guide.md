@@ -401,11 +401,16 @@ Codex session summaries are flat and retention-bounded, not permanent. Raw `resp
 events are applied before the configured detail-retention purge removes expired summaries and
 events. `delta` counters accumulate, while `cumulative` counters accept only newer non-regressing
 values.
-Codex CLI 0.146.1 may emit token fields without a safe per-event identity, so those records remain
-fail-closed until a provider identity is available; no receipt-time, conversation-ID, or fabricated
-ID fallback is used. This does not change telemetry configuration, event fields, or the SQLite
-schema. The existing Usage health response additionally exposes fixed-cardinality in-memory drop counters;
-they reset on process restart and contain no source or payload values.
+Codex CLI 0.146.1 may emit token fields without trace/span identity. Those records use a
+domain-separated HMAC fallback over bounded decoded fields, remain `unverified`, and are stable for
+replay; valid trace/span identity always takes precedence. Identical same-millisecond decoded events
+can dedupe as the documented compatibility
+tradeoff; invalid timestamps still fail closed. No receipt-time, conversation-ID-alone, random-ID,
+raw-content, or config-secret fallback is used. This does not change telemetry configuration,
+event fields, or the SQLite schema. The existing Usage health response additionally exposes
+fixed-cardinality in-memory drop counters; they reset on process restart and contain no source or
+payload values. Its legacy `droppedMissingIdentity` counter remains available for API compatibility
+and stays zero while this fallback is active.
 Telemetry uses a fresh v1 Codex-only schema containing only Codex sessions, usage events, daily
 rollups, and health state. There is no legacy-data migration or import. During development, startup
 checks the SQLite version and complete schema object set; a legacy, malformed, or otherwise
