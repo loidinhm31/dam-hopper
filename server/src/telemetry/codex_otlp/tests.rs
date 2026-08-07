@@ -351,8 +351,10 @@ async fn accepts_pinned_binary_once_and_rejects_invalid_requests() {
         .await
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
-    assert_eq!(health.snapshot().dropped, 2);
-    assert_eq!(health.snapshot().dropped_missing_identity, 1);
+    assert_eq!(health.snapshot().dropped, 1);
+    assert_eq!(health.snapshot().dropped_missing_identity, 0);
+    assert_eq!(health.snapshot().unverified_version, 1);
+    assert_eq!(health.snapshot().queued, 3);
     assert_eq!(
         health.snapshot().dropped,
         health.snapshot().dropped_missing_identity
@@ -402,7 +404,7 @@ async fn accepts_pinned_binary_once_and_rejects_invalid_requests() {
         .unwrap();
     assert_eq!(paused.status(), reqwest::StatusCode::ACCEPTED);
     assert_eq!(health.snapshot().dropped_paused, 1);
-    assert_eq!(health.snapshot().dropped, 3);
+    assert_eq!(health.snapshot().dropped, 2);
     assert_eq!(
         health.snapshot().dropped,
         health.snapshot().dropped_missing_identity
@@ -416,6 +418,16 @@ async fn accepts_pinned_binary_once_and_rejects_invalid_requests() {
         connection
             .query_row("SELECT count(*) FROM codex_usage_events", [], |row| row
                 .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM codex_usage_events WHERE source_quality = 'unverified'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
             .unwrap(),
         1
     );

@@ -2404,8 +2404,10 @@ async fn usage_health_requires_auth_and_exposes_only_numeric_drop_counters() {
     ] {
         assert!(collector[field].is_u64(), "{field} must be numeric");
     }
-    assert_eq!(collector["dropped"], 1);
-    assert_eq!(collector["droppedMissingIdentity"], 1);
+    assert_eq!(collector["queued"], 1);
+    assert_eq!(collector["unverifiedVersion"], 1);
+    assert_eq!(collector["dropped"], 0);
+    assert_eq!(collector["droppedMissingIdentity"], 0);
     assert_eq!(collector["droppedInvalidTimestamp"], 0);
     assert_eq!(collector["droppedPaused"], 0);
     assert_eq!(collector["droppedQueueFull"], 0);

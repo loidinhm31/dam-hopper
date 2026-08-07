@@ -76,7 +76,9 @@ serializes totals through the existing authenticated Usage health/summary respon
 
 ## Success criteria
 
-- A missing-identity fixture increments only `droppedMissingIdentity` plus `dropped`.
+- Before the Phase 3 compatibility decision, a missing-identity fixture incremented only
+  `droppedMissingIdentity` plus `dropped`; the selected Phase 3 fallback now keeps that legacy
+  field at zero for admitted 0.146.1 events.
 - Paused, queue-full, unavailable-worker, and invalid-timestamp tests are independently observable.
 - Accepted events still increment `queued` and set `lastAcceptedAtUtcMs`; no DB/API usage fields leak.
 

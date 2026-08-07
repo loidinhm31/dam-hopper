@@ -10,6 +10,7 @@ pub struct CollectorHealth {
     rejected: Arc<AtomicU64>,
     queued: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
+    // Retained as a stable health field; the compatibility fallback keeps it at zero.
     dropped_missing_identity: Arc<AtomicU64>,
     dropped_invalid_timestamp: Arc<AtomicU64>,
     dropped_paused: Arc<AtomicU64>,
@@ -84,10 +85,6 @@ impl CollectorHealth {
     }
     pub(crate) fn dropped(&self) {
         self.dropped.fetch_add(1, Ordering::Relaxed);
-    }
-    pub(crate) fn dropped_missing_identity(&self) {
-        self.dropped_missing_identity
-            .fetch_add(1, Ordering::Relaxed);
     }
     pub(crate) fn dropped_invalid_timestamp(&self) {
         self.dropped_invalid_timestamp
