@@ -380,6 +380,9 @@ export default function WorkspacePage() {
   const mobileCustomKeyboardEnabled = useSettingsStore(
     (state) => state.mobileCustomKeyboardEnabled,
   );
+  const terminalAutoSwitchProjectEnabled = useSettingsStore(
+    (state) => state.terminalAutoSwitchProjectEnabled,
+  );
   const defaultCompactSurfaceId = getDefaultCompactSurfaceId(workspaceMode);
   const availableCompactSurfaceIds = getCompactSurfaceIds(workspaceMode);
   const [requestedCompactSurface, setRequestedCompactSurface] = useState(
@@ -429,6 +432,7 @@ export default function WorkspacePage() {
   const { state, derived, actions } = useTerminalManager(
     searchParams,
     setSearchParams,
+    { terminalAutoSwitchProjectEnabled, setActiveProject },
   );
   const {
     activeTab,

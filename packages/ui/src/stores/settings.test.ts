@@ -44,6 +44,7 @@ function resetSettingsStore() {
     portsPanelShortcut: "Mod+Shift+KeyP",
     fleetTerminalShortcut: "Mod+Shift+KeyM",
     terminalSuggestionsEnabled: true,
+    terminalAutoSwitchProjectEnabled: true,
     terminalCodexNotificationsEnabled: false,
     terminalCodexNotificationToastEnabled: true,
     terminalCodexBrowserNotificationsEnabled: true,
@@ -83,6 +84,10 @@ describe("settings store terminal agent notification fields", () => {
       },
     });
 
+    expect(useSettingsStore.getState().terminalAutoSwitchProjectEnabled).toBe(
+      true,
+    );
+
     await useSettingsStore.getState().hydrate();
 
     const state = useSettingsStore.getState();
@@ -95,6 +100,35 @@ describe("settings store terminal agent notification fields", () => {
     expect(state.terminalCodexNotificationSoundVolume).toBe(100);
     expect(state.terminalCodexNotificationSoundPattern).toBe("default");
     expect(state.terminalCommitStatusEnabled).toBe(false);
+    expect(state.terminalAutoSwitchProjectEnabled).toBe(true);
+  });
+
+  it("hydrates the terminal auto-switch preference when explicitly enabled", async () => {
+    getGlobalConfig.mockResolvedValue({
+      ui: {
+        terminalAutoSwitchProjectEnabled: true,
+      },
+    });
+
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().terminalAutoSwitchProjectEnabled).toBe(
+      true,
+    );
+  });
+
+  it("hydrates the terminal auto-switch preference when explicitly disabled", async () => {
+    getGlobalConfig.mockResolvedValue({
+      ui: {
+        terminalAutoSwitchProjectEnabled: false,
+      },
+    });
+
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().terminalAutoSwitchProjectEnabled).toBe(
+      false,
+    );
   });
 
   it("persists codex notification changes", async () => {
@@ -171,6 +205,21 @@ describe("settings store terminal agent notification fields", () => {
     const state = useSettingsStore.getState();
     expect(state.hydrated).toBe(true);
     expect(state.terminalCodexNotificationsEnabled).toBe(false);
+    expect(state.terminalAutoSwitchProjectEnabled).toBe(true);
+  });
+
+  it("persists only the terminal auto-switch preference patch", async () => {
+    updateUi.mockResolvedValue({ updated: true });
+
+    useSettingsStore.getState().saveDebounced({
+      terminalAutoSwitchProjectEnabled: false,
+    });
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(updateUi).toHaveBeenCalledWith({
+      terminalAutoSwitchProjectEnabled: false,
+    });
   });
 
   it("hydrates codex notifications from the legacy toggle when needed", async () => {

@@ -13,6 +13,7 @@ describe("withUiConfigDefaults", () => {
     expect(ui.portsPanelShortcut).toBe("Mod+Shift+KeyP");
     expect(ui.fleetTerminalShortcut).toBe("Mod+Shift+KeyM");
     expect(ui.terminalCodexNotificationsEnabled).toBe(false);
+    expect(ui.terminalAutoSwitchProjectEnabled).toBe(true);
     expect(ui.terminalCodexNotificationToastEnabled).toBe(true);
     expect(ui.terminalCodexBrowserNotificationsEnabled).toBe(true);
     expect(ui.terminalCodexNotificationSoundEnabled).toBe(true);

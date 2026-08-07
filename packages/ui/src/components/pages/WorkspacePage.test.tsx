@@ -26,7 +26,12 @@ let mockFreeTerminalSavePrompt: {
   error?: string;
 } | null = null;
 let lastTerminalWorkspaceShellProps: Record<string, unknown> | null = null;
+let lastTerminalManagerOptions: {
+  terminalAutoSwitchProjectEnabled: boolean;
+  setActiveProject: (project: string | null) => void;
+} | null = null;
 const localStorageState = new Map<string, string>();
+const mockSetActiveProject = vi.fn();
 
 const localStorageMock = {
   getItem: vi.fn((key: string) => localStorageState.get(key) ?? null),
@@ -102,7 +107,7 @@ vi.mock("@/components/ui/Select.js", () => ({
 vi.mock("@/stores/workspace.js", () => ({
   useWorkspaceStore: () => ({
     activeProject: mockActiveProject,
-    setActiveProject: vi.fn(),
+    setActiveProject: mockSetActiveProject,
   }),
 }));
 
@@ -125,25 +130,35 @@ vi.mock("@/stores/settings.js", () => ({
 }));
 
 vi.mock("@/hooks/use-terminal-manager.js", () => ({
-  useTerminalManager: () => ({
-    state: {
-      activeTab: null,
-      openTabs: [],
-      mountedSessions: [],
-      launchForm: mockLaunchForm,
-      freeTerminalSavePrompt: mockFreeTerminalSavePrompt,
-      selection: null,
+  useTerminalManager: (
+    _searchParams: URLSearchParams,
+    _setSearchParams: unknown,
+    options: {
+      terminalAutoSwitchProjectEnabled: boolean;
+      setActiveProject: (project: string | null) => void;
     },
-    derived: {
-      tree: [],
-      freeTerminals: [],
-      isLoading: false,
-      tabsWithLiveSession: [],
-      selectedId: null,
-      sessionMap: new Map(),
-    },
-    actions: terminalActions,
-  }),
+  ) => {
+    lastTerminalManagerOptions = options;
+    return {
+      state: {
+        activeTab: null,
+        openTabs: [],
+        mountedSessions: [],
+        launchForm: mockLaunchForm,
+        freeTerminalSavePrompt: mockFreeTerminalSavePrompt,
+        selection: null,
+      },
+      derived: {
+        tree: [],
+        freeTerminals: [],
+        isLoading: false,
+        tabsWithLiveSession: [],
+        selectedId: null,
+        sessionMap: new Map(),
+      },
+      actions: terminalActions,
+    };
+  },
 }));
 
 vi.mock("@/hooks/use-shortcuts.js", () => ({
@@ -175,6 +190,7 @@ const settingsStore = {
   terminalWorkspaceShortcut: "mod+`",
   terminalFilePanelShortcut: "mod+shift+e",
   revealActiveFileShortcut: "alt+f1",
+  terminalAutoSwitchProjectEnabled: true,
 };
 
 const terminalActions = {
@@ -217,9 +233,12 @@ describe("WorkspacePage", () => {
     mockActiveProject = null;
     mockProjects = [{ name: "demo-project" }];
     mockAndroidChromeSuppressed = false;
+    settingsStore.terminalAutoSwitchProjectEnabled = true;
     mockLaunchForm = null;
     mockFreeTerminalSavePrompt = null;
     lastTerminalWorkspaceShellProps = null;
+    lastTerminalManagerOptions = null;
+    mockSetActiveProject.mockClear();
     localStorageState.clear();
     localStorageMock.getItem.mockClear();
     localStorageMock.setItem.mockClear();
@@ -243,6 +262,17 @@ describe("WorkspacePage", () => {
     expect(markup).toContain("Editor");
     expect(markup).toContain("Git");
     expect(markup).toContain("Project");
+  });
+
+  it("passes the terminal auto-switch preference and workspace setter to the manager", () => {
+    settingsStore.terminalAutoSwitchProjectEnabled = true;
+
+    renderToStaticMarkup(<WorkspacePage />);
+
+    expect(lastTerminalManagerOptions).toEqual({
+      terminalAutoSwitchProjectEnabled: true,
+      setActiveProject: mockSetActiveProject,
+    });
   });
 
   it("renders the mobile shell with terminal surfaces in terminal mode", () => {

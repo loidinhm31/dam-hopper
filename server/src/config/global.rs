@@ -136,6 +136,7 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
             "portsPanelShortcut" => "ports_panel_shortcut",
             "fleetTerminalShortcut" => "fleet_terminal_shortcut",
             "terminalSuggestionsEnabled" => "terminal_suggestions_enabled",
+            "terminalAutoSwitchProjectEnabled" => "terminal_auto_switch_project_enabled",
             "terminalCodexNotificationsEnabled" => "terminal_codex_notifications_enabled",
             "terminalAgentNotificationsEnabled" => "terminal_codex_notifications_enabled",
             "terminalCodexNotificationToastEnabled" => "terminal_codex_notification_toast_enabled",

@@ -248,7 +248,7 @@ server share a filesystem; remote/container agents need a future resource API.
 
 ### UI Configuration
 
-The global UI config includes terminal workspace/panel shortcuts, inline terminal suggestions, and Codex terminal notification settings.
+The global UI config includes terminal workspace/panel shortcuts, inline terminal suggestions, Codex terminal notification settings, and terminal project switching.
 
 | Field                               | Type     | Default                   | Notes |
 | ----------------------------------- | -------- | ------------------------- | ----- |
@@ -258,6 +258,7 @@ The global UI config includes terminal workspace/panel shortcuts, inline termina
 | fleet_terminal_shortcut             | string   | `Mod+Shift+KeyM`          | Toggle the Fleet Terminal panel in IDE or Terminal mode |
 | terminal_suggestions_enabled         | bool     | `true`                    | Kill switch for automatic suggestions and lifecycle-driven history writes |
 | terminal_scroll_buttons_enabled     | bool     | `false`                   | Show the expandable floating terminal scroll control |
+| terminal_auto_switch_project_enabled | bool     | `true`                    | Switch the active project when selecting a project-assigned terminal |
 | terminal_codex_notifications_enabled | bool    | `false`                   | Master switch for Codex OSC 9 notifications and Codex TUI synchronization |
 | terminal_codex_notification_toast_enabled | bool | `true`                    | Persisted preference for transient in-app toasts; notification history remains independent |
 | terminal_codex_browser_notifications_enabled | bool | `true`                 | Persisted preference for native browser popups; browser permission remains runtime-only |
@@ -275,6 +276,7 @@ ports_panel_shortcut = "Mod+Shift+KeyP"
 fleet_terminal_shortcut = "Mod+Shift+KeyM"
 terminal_suggestions_enabled = true
 terminal_scroll_buttons_enabled = false
+terminal_auto_switch_project_enabled = true
 terminal_codex_notifications_enabled = false
 terminal_codex_notification_toast_enabled = true
 terminal_codex_browser_notifications_enabled = true
@@ -289,7 +291,9 @@ step up/down (using the configured terminal scroll step), and jump-to-bottom.
 The menu closes on outside click or `Escape`; the preference is UI-only and does
 not affect retained server scrollback.
 
-The API exposes these UI fields in `camelCase` (for example, `terminalCodexNotificationToastEnabled`) and persists them as the snake_case TOML keys shown above. Older `terminal_agent_notifications_enabled` and `terminalAgentNotificationsEnabled` values remain read-compatible aliases for the master switch. Missing child preferences default to enabled, volume `100`, and pattern `"default"`.
+The API exposes these UI fields in `camelCase` (for example, `terminalCodexNotificationToastEnabled` and `terminalAutoSwitchProjectEnabled`) and persists them as the snake_case TOML keys shown above. Older `terminal_agent_notifications_enabled` and `terminalAgentNotificationsEnabled` values remain read-compatible aliases for the master switch. Missing child preferences default to enabled, volume `100`, and pattern `"default"`.
+
+`terminalAutoSwitchProjectEnabled` is a global preference and defaults to `true` so terminal selection follows the requested project context immediately. In Settings > Appearance, the **Switch project on terminal selection** switch uses the copy: “Selecting a terminal assigned to a project activates that project; free terminals leave the current project unchanged.” When enabled, selecting a project-assigned terminal or an already-open project terminal tab changes the active project before the tab or panel renders; when disabled, selection opens the terminal without changing the active project. Free terminals, unowned terminals with blank project metadata, and unknown sessions (including unrecognized session-ID prefixes) never switch the active project; free terminals remain excluded even if incidental metadata contains a project. The top-bar project switcher and project-scoped panels (Explorer, Search, Git, Commit, Project Info, and editor) all consume the resulting active project. This uses the existing global UI-config persistence path and requires no new endpoint or migration.
 
 Only updates to `terminalCodexNotificationsEnabled` synchronize `~/.codex/config.toml`. Toast, browser-popup, sound, volume, and pattern updates persist only to DamHopper's global UI config. Browser notification permission is browser-managed and runtime-only: only the explicit **Request permission** action can request it; toggling or saving a browser-popup preference never requests, revokes, or persists it. **Play sound** previews the selected synthesized in-app pattern and volume only; it does not create a browser popup or request permission.
 
