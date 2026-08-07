@@ -15,6 +15,10 @@ import {
   parseTerminalSessionId,
 } from "@/lib/terminal-auto-attach.js";
 import { upsertMountedSession } from "@/lib/terminal-mounted-sessions.js";
+import {
+  selectTerminal,
+  syncTerminalProject,
+} from "@/lib/terminal-selection.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { TreeCommand, TreeProject } from "@/hooks/use-terminal-tree.js";
@@ -110,6 +114,11 @@ export interface TerminalManagerActions {
   ) => void;
 }
 
+interface TerminalManagerOptions {
+  terminalAutoSwitchProjectEnabled: boolean;
+  setActiveProject: (project: string | null) => void;
+}
+
 const INVALID_PROFILE_NAME_RE = /[:]/;
 
 function validateProfileName(name: string, existing: string[]): string | null {
@@ -134,19 +143,35 @@ function findSessionMeta(
   sessionId: string,
   tree: TreeProject[],
   sessionMap: Map<string, SessionInfo>,
-): { project: string; command: string } | null {
+): {
+  project: string;
+  command: string;
+  sessionType?: SessionInfo["type"];
+} | null {
   for (const project of tree) {
     for (const cmd of project.commands) {
       if (cmd.type === "terminal") {
         const match = cmd.sessions?.find((s) => s.id === sessionId);
-        if (match) return { project: project.name, command: cmd.command };
+        if (match) {
+          return {
+            project: project.name,
+            command: cmd.command,
+            sessionType: match.type,
+          };
+        }
       } else if (cmd.sessionId === sessionId) {
-        return { project: project.name, command: cmd.command };
+        return {
+          project: project.name,
+          command: cmd.command,
+          sessionType: cmd.session?.type,
+        };
       }
     }
   }
   const s = sessionMap.get(sessionId);
-  return s ? { project: s.project ?? "", command: s.command } : null;
+  return s
+    ? { project: s.project ?? "", command: s.command, sessionType: s.type }
+    : null;
 }
 
 function sameOpenTabs(a: TabEntry[], b: TabEntry[]) {
@@ -184,6 +209,10 @@ function sameMountedSessions(a: MountedSession[], b: MountedSession[]) {
 export function useTerminalManager(
   searchParams: URLSearchParams,
   setSearchParams: SetURLSearchParams,
+  {
+    terminalAutoSwitchProjectEnabled,
+    setActiveProject,
+  }: TerminalManagerOptions,
 ) {
   const qc = useQueryClient();
   const { tree, freeTerminals, isLoading } = useTerminalTree();
@@ -402,9 +431,13 @@ export function useTerminalManager(
 
   function handleSelectTerminal(sessionId: string) {
     const meta = findSessionMeta(sessionId, tree, sessionMap);
-    if (meta) {
-      openTerminalTab(sessionId, meta.project, meta.command);
-    }
+    selectTerminal({
+      sessionId,
+      metadata: meta,
+      terminalAutoSwitchProjectEnabled,
+      setActiveProject,
+      openTerminalTab,
+    });
   }
 
   function handleLaunchTerminal(projectName: string, cmd: TreeCommand) {
@@ -793,6 +826,12 @@ export function useTerminalManager(
   }
 
   function handleSelectTab(sessionId: string) {
+    syncTerminalProject({
+      sessionId,
+      metadata: findSessionMeta(sessionId, tree, sessionMap),
+      terminalAutoSwitchProjectEnabled,
+      setActiveProject,
+    });
     setActiveTab(sessionId);
     setSelection({ type: "terminal", sessionId });
 

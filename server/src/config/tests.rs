@@ -1242,6 +1242,7 @@ fn ui_config_defaults() {
     assert_eq!(ui.git_panel_shortcut, "Mod+Shift+KeyG");
     assert_eq!(ui.ports_panel_shortcut, "Mod+Shift+KeyP");
     assert_eq!(ui.fleet_terminal_shortcut, "Mod+Shift+KeyM");
+    assert!(ui.terminal_auto_switch_project_enabled);
     assert!(!ui.terminal_codex_notifications_enabled);
     assert!(ui.terminal_codex_notification_toast_enabled);
     assert!(ui.terminal_codex_browser_notifications_enabled);
@@ -1278,6 +1279,7 @@ fn ui_config_serde_roundtrip() {
             ports_panel_shortcut: "Ctrl+Shift+KeyP".to_string(),
             fleet_terminal_shortcut: "Ctrl+Shift+KeyM".to_string(),
             terminal_suggestions_enabled: true,
+            terminal_auto_switch_project_enabled: true,
             terminal_codex_notifications_enabled: true,
             terminal_codex_notification_toast_enabled: false,
             terminal_codex_browser_notifications_enabled: false,
@@ -1319,11 +1321,15 @@ fn ui_config_serde_roundtrip() {
         .get("terminal_codex_notification_sound_pattern")
         .is_none());
     assert_eq!(json["terminalCommitStatusEnabled"], true);
+    assert_eq!(json["terminalAutoSwitchProjectEnabled"], true);
+    assert!(json.get("terminal_auto_switch_project_enabled").is_none());
 
     write_global_config_at(&cfg_path, &cfg).unwrap();
     let written = std::fs::read_to_string(&cfg_path).unwrap();
     assert!(written.contains("terminal_commit_status_enabled = true"));
     assert!(!written.contains("terminalCommitStatusEnabled"));
+    assert!(written.contains("terminal_auto_switch_project_enabled = true"));
+    assert!(!written.contains("terminalAutoSwitchProjectEnabled"));
     let loaded = read_global_config_at(&cfg_path).unwrap().unwrap();
     let ui = loaded.ui.unwrap();
     assert_eq!(ui.system_font_size, 16);
@@ -1338,6 +1344,7 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(ui.ports_panel_shortcut, "Ctrl+Shift+KeyP");
     assert_eq!(ui.fleet_terminal_shortcut, "Ctrl+Shift+KeyM");
     assert!(ui.terminal_codex_notifications_enabled);
+    assert!(ui.terminal_auto_switch_project_enabled);
     assert!(!ui.terminal_codex_notification_toast_enabled);
     assert!(!ui.terminal_codex_browser_notifications_enabled);
     assert!(!ui.terminal_codex_notification_sound_enabled);
@@ -1473,6 +1480,43 @@ fn ui_config_serde_aliases_terminal_commit_status() {
         let loaded: GlobalConfig = toml::from_str(&toml).unwrap();
         assert!(loaded.ui.unwrap().terminal_commit_status_enabled);
     }
+}
+
+#[test]
+fn ui_config_serde_aliases_terminal_auto_switch_project() {
+    for key in [
+        "terminal_auto_switch_project_enabled",
+        "terminalAutoSwitchProjectEnabled",
+    ] {
+        let toml = format!("[ui]\n{key} = true\n");
+        let loaded: GlobalConfig = toml::from_str(&toml).unwrap();
+        assert!(loaded.ui.unwrap().terminal_auto_switch_project_enabled);
+    }
+
+    let json = serde_json::from_value::<UiConfig>(serde_json::json!({
+        "terminalAutoSwitchProjectEnabled": true
+    }))
+    .unwrap();
+    assert!(json.terminal_auto_switch_project_enabled);
+
+    let json = serde_json::from_value::<UiConfig>(serde_json::json!({
+        "terminalAutoSwitchProjectEnabled": false
+    }))
+    .unwrap();
+    assert!(!json.terminal_auto_switch_project_enabled);
+
+    let toml: GlobalConfig =
+        toml::from_str("[ui]\nterminal_auto_switch_project_enabled = false\n").unwrap();
+    assert!(!toml.ui.unwrap().terminal_auto_switch_project_enabled);
+}
+
+#[test]
+fn ui_config_missing_terminal_auto_switch_project_defaults_true() {
+    let json = serde_json::from_value::<UiConfig>(serde_json::json!({})).unwrap();
+    assert!(json.terminal_auto_switch_project_enabled);
+
+    let toml: GlobalConfig = toml::from_str("[ui]\n").unwrap();
+    assert!(toml.ui.unwrap().terminal_auto_switch_project_enabled);
 }
 
 #[test]

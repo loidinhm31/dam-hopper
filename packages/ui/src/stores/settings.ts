@@ -76,6 +76,7 @@ interface PersistedSettingsState {
   portsPanelShortcut: string;
   fleetTerminalShortcut: string;
   terminalSuggestionsEnabled: boolean;
+  terminalAutoSwitchProjectEnabled: boolean;
   terminalCodexNotificationsEnabled: boolean;
   terminalCodexNotificationToastEnabled: boolean;
   terminalCodexBrowserNotificationsEnabled: boolean;
@@ -122,6 +123,7 @@ function pickPersistedSettings(
     portsPanelShortcut: state.portsPanelShortcut,
     fleetTerminalShortcut: state.fleetTerminalShortcut,
     terminalSuggestionsEnabled: state.terminalSuggestionsEnabled,
+    terminalAutoSwitchProjectEnabled: state.terminalAutoSwitchProjectEnabled,
     terminalCodexNotificationsEnabled: state.terminalCodexNotificationsEnabled,
     terminalCodexNotificationToastEnabled:
       state.terminalCodexNotificationToastEnabled,
@@ -170,6 +172,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   portsPanelShortcut: DEFAULT_PORTS_PANEL_SHORTCUT,
   fleetTerminalShortcut: DEFAULT_FLEET_TERMINAL_SHORTCUT,
   terminalSuggestionsEnabled: true,
+  terminalAutoSwitchProjectEnabled: true,
   terminalCodexNotificationsEnabled: false,
   terminalCodexNotificationToastEnabled: true,
   terminalCodexBrowserNotificationsEnabled: true,
@@ -203,6 +206,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         portsPanelShortcut: ui.portsPanelShortcut,
         fleetTerminalShortcut: ui.fleetTerminalShortcut,
         terminalSuggestionsEnabled: ui.terminalSuggestionsEnabled ?? true,
+        terminalAutoSwitchProjectEnabled:
+          ui.terminalAutoSwitchProjectEnabled ?? true,
         terminalCodexNotificationsEnabled:
           ui.terminalCodexNotificationsEnabled ??
           (ui as { terminalAgentNotificationsEnabled?: boolean } | undefined)
@@ -264,6 +269,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.fleetTerminalShortcut = partial.fleetTerminalShortcut;
     if (partial.terminalSuggestionsEnabled !== undefined)
       clamped.terminalSuggestionsEnabled = partial.terminalSuggestionsEnabled;
+    if (partial.terminalAutoSwitchProjectEnabled !== undefined)
+      clamped.terminalAutoSwitchProjectEnabled =
+        partial.terminalAutoSwitchProjectEnabled;
     if (partial.terminalCodexNotificationsEnabled !== undefined)
       clamped.terminalCodexNotificationsEnabled =
         partial.terminalCodexNotificationsEnabled;

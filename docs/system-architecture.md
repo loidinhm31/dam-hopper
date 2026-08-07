@@ -1286,6 +1286,25 @@ Frontend now uses a split host/package layout: `apps/web` is the thin Vite brows
   - ⚪ Gray: exited cleanly (exit=0)
 - Expandable profile nodes show instance children + alive count badge
 
+### Terminal selection and active-project synchronization
+
+`TerminalTreeView` remains presentational: row clicks flow through
+`WorkspacePage` into `useTerminalManager`. The terminal manager resolves the
+selected session's project with `findSessionMeta`. When the persisted global UI
+preference `terminalAutoSwitchProjectEnabled` is enabled, the resolved project
+is non-empty, and the session is project-owned rather than a `free:` session,
+`handleSelectTerminal` and already-open terminal-tab selection update
+`useWorkspaceStore`'s `activeProject` before the terminal or project panel
+renders. Free terminals are excluded even when incidental
+metadata contains a project; unknown sessions, including sessions with
+unrecognized ID prefixes, and unowned terminals without a non-blank project
+continue to open normally without changing the active project. The preference is part of `UiConfig` and uses the existing
+`globalConfig:get` / `globalConfig:updateUi` persistence path, so the behavior
+is shared across workspace sessions without changing project configuration or
+terminal APIs. The preference defaults to `true` so terminal selection follows
+the requested project context immediately; users can opt out from Settings >
+Appearance.
+
 **DashboardPage** (`packages/ui/src/components/pages/DashboardPage.tsx`)
 
 - Main view: all sessions with metadata (uptime, exit code)

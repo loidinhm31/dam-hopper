@@ -16,6 +16,7 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   editorFontSize: 14,
   editorZoomWheelEnabled: true,
   terminalSuggestionsEnabled: true,
+  terminalAutoSwitchProjectEnabled: true,
   terminalCodexNotificationsEnabled: false,
   terminalCodexNotificationToastEnabled: true,
   terminalCodexBrowserNotificationsEnabled: true,
@@ -53,6 +54,9 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
   return {
     ...DEFAULT_UI_CONFIG,
     ...ui,
+    terminalAutoSwitchProjectEnabled:
+      ui?.terminalAutoSwitchProjectEnabled ??
+      DEFAULT_UI_CONFIG.terminalAutoSwitchProjectEnabled,
     terminalOrder: ui?.terminalOrder ?? DEFAULT_UI_CONFIG.terminalOrder,
     projectOrder: ui?.projectOrder ?? DEFAULT_UI_CONFIG.projectOrder,
     projectCommandOrder:
