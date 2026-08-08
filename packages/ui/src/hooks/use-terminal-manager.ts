@@ -15,6 +15,7 @@ import {
   parseTerminalSessionId,
 } from "@/lib/terminal-auto-attach.js";
 import { upsertMountedSession } from "@/lib/terminal-mounted-sessions.js";
+import { isTerminalTabClosable } from "@/lib/terminal-tab-state.js";
 import {
   selectTerminal,
   syncTerminalProject,
@@ -84,6 +85,7 @@ export interface TerminalManagerActions {
   handleAddShell: (projectName: string) => void;
   handleLaunchShell: (projectName: string) => void;
   handleSelectTab: (sessionId: string) => void;
+  handleToggleTabPin: (sessionId: string) => void;
   handleCloseTab: (sessionId: string) => void;
   handleKillTerminal: (sessionId: string) => void;
   handleRemoveFreeTerminal: (sessionId: string) => void;
@@ -184,7 +186,8 @@ function sameOpenTabs(a: TabEntry[], b: TabEntry[]) {
         tab.sessionId === other.sessionId &&
         tab.label === other.label &&
         tab.session === other.session &&
-        tab.isSaveable === other.isSaveable
+        tab.isSaveable === other.isSaveable &&
+        tab.isPinned === other.isPinned
       );
     })
   );
@@ -848,7 +851,19 @@ export function useTerminalManager(
     });
   }
 
+  function handleToggleTabPin(sessionId: string) {
+    setOpenTabs((prev) => {
+      if (!prev.some((tab) => tab.sessionId === sessionId)) return prev;
+      return prev.map((tab) =>
+        tab.sessionId === sessionId
+          ? { ...tab, isPinned: !tab.isPinned }
+          : tab,
+      );
+    });
+  }
+
   function handleCloseTab(sessionId: string) {
+    if (!isTerminalTabClosable(openTabs, sessionId)) return;
     suppressedAutoAttachIdsRef.current.add(sessionId);
     pendingAutoAttachIdsRef.current.delete(sessionId);
     // Terminate the terminal session when the tab is closed
@@ -950,6 +965,7 @@ export function useTerminalManager(
       label,
       session: sessionMap.get(t.sessionId) ?? t.session,
       isSaveable: isAdHoc,
+      isPinned: t.isPinned,
     };
   });
 
@@ -994,6 +1010,7 @@ export function useTerminalManager(
       handleAddShell,
       handleLaunchShell,
       handleSelectTab,
+      handleToggleTabPin,
       handleCloseTab,
       handleKillTerminal,
       handleRemoveFreeTerminal,
