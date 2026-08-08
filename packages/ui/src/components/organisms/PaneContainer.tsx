@@ -32,6 +32,7 @@ interface PaneContainerProps {
   onNewTerminal: () => void;
   onSessionExit: (sessionId: string) => void;
   onSelectTab: (sessionId: string) => void;
+  onToggleTabPin?: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   activeSessionId?: string | null;
@@ -48,6 +49,7 @@ export const PaneContainer = memo(function PaneContainer({
   openTabs,
   onNewTerminal,
   onSelectTab,
+  onToggleTabPin,
   onCloseTab,
   onOpenDiagnosticsMenu,
   activeSessionId = null,
@@ -276,7 +278,7 @@ export const PaneContainer = memo(function PaneContainer({
     <div
       ref={containerRef}
       data-testid="terminal-pane-output-host"
-      className="flex-1 min-h-0 overflow-hidden relative bg-[#0f172a]"
+      className="flex-1 min-h-0 overflow-hidden relative bg-[var(--color-background)]"
       onClick={() => {
         layout.setFocusedPaneId(node.id);
         if (node.activeSessionId) {
@@ -352,6 +354,7 @@ export const PaneContainer = memo(function PaneContainer({
           layout.setFocusedPaneId(node.id);
           onSelectTab(sessionId);
         }}
+        onToggleTabPin={onToggleTabPin ?? (() => {})}
         onCloseTab={onCloseTab}
         onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
         onNewTerminal={onNewTerminal}

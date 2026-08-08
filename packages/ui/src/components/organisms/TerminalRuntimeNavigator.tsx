@@ -14,6 +14,7 @@ interface Props {
   disableReorder?: boolean;
   touchOptimized?: boolean;
   onSelectSession?: (sessionId: string) => void;
+  onToggleTabPin?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   onNewProjectTerminal?: (projectName: string) => void;
@@ -33,6 +34,7 @@ export function TerminalRuntimeNavigator({
   disableReorder = false,
   touchOptimized = false,
   onSelectSession,
+  onToggleTabPin,
   onCloseSession,
   onOpenDiagnosticsMenu,
   onNewProjectTerminal,
@@ -78,6 +80,7 @@ export function TerminalRuntimeNavigator({
               dragState={dragState}
               group={group}
               onCloseSession={onCloseSession}
+              onToggleTabPin={onToggleTabPin}
               onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
               onMoveGroup={onMoveGroup}
               onMoveItem={onMoveItem}

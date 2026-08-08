@@ -10,6 +10,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Next Milestone:** Product follow-ups: terminal commit status Phase 03 validation and release checks
 - **Current Feature:** Settings commit summary Phase 01 and terminal scroll-control redesign Phase 02 completed 2026-07-26; terminal commit status Phase 03 planned
 
+### Terminal Pinning and Runtime Contrast (2026-08-08)
+
+- **Phases 01–02 — [COMPLETED 2026-08-08]**: session-only terminal pin protection, shared Traditional/Runtime controls, Runtime contrast/framing, focused DOM coverage, and implementation review completed.
+- Manual Chromium contrast/reparent, PTY identity, resize/refit, and host/renderer checks remain documented follow-ups; no fresh validation commands were rerun during tracking update.
+
 ### Floating Terminal Key Controls (2026-08-06)
 
 - **Phase 01 — Implement and verify: [COMPLETED 2026-08-06 22:51 +07:00]**: floating Keys/Type controls delivered for active desktop/mobile terminal surfaces with split-session ownership preserved; 19/19 focused unit and 16/16 relevant Chromium checks passed, builds/lint/formatting/diff checks passed, review approved 9/10.
