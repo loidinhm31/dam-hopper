@@ -459,6 +459,7 @@ interface TerminalPanelProps {
 - `TabBar` exposes insertion droppables before the first tab, between tabs, and after the last tab for reorder and cross-pane insertion.
 - `PaneContainer` renders labeled five-zone docking previews only while dragging, keeping pointer interference off the live terminal during normal input.
 - Re-dropping onto the same pane center only changes active tab focus; invalid self-edge splits are ignored.
+- Terminal pin/unpin is session-only open-tab state shared by the IDE tab bar and Runtime navigator; pinned sessions hide their close action and cannot be closed until unpinned. IDE and Runtime terminal output use the theme background, with Runtime output adding an inset border and focus ring for clearer contrast.
 - Terminal layout persistence remains in localStorage under `dam-hopper:terminal-layout`.
 
 **Runtime verification notes:**
