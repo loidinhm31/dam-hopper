@@ -10,6 +10,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Next Milestone:** Product follow-ups: terminal commit status Phase 03 validation and release checks
 - **Current Feature:** Settings commit summary Phase 01 and terminal scroll-control redesign Phase 02 completed 2026-07-26; terminal commit status Phase 03 planned
 
+### Linux Host Resource Monitoring and Gated Remediation (2026-08-08)
+
+- **Phase 01 Architecture + threat-model gate — [COMPLETED 2026-08-08 12:21 +07:00]**: read-only monitoring/action trust boundaries, abuse cases, helper enrollment proof, approval/IPC invariants, fixed-action constraints, and residual risks recorded. Phase 02 may begin.
+- **Operational/security sign-offs remaining**: real-systemd-host caller/enrollment validation and security-owner acceptance of enrolled-server-compromise residual risk. Privileged helper/actions are not implemented or approved for rollout.
+
 ### Floating Terminal Key Controls (2026-08-06)
 
 - **Phase 01 — Implement and verify: [COMPLETED 2026-08-06 22:51 +07:00]**: floating Keys/Type controls delivered for active desktop/mobile terminal surfaces with split-session ownership preserved; 19/19 focused unit and 16/16 relevant Chromium checks passed, builds/lint/formatting/diff checks passed, review approved 9/10.

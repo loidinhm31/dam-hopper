@@ -240,6 +240,35 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Sensitive metadata is redacted before sink delivery unless local diagnostics explicitly disable it
 - ✓ Shared logger is used by the high-value UI surfaces noted above
 
+### PR-009: Linux Host Resource Monitoring and Gated Remediation (Phase 01 gate)
+
+**Status:** Architecture/threat-model gate approved for planning; implementation pending. This requirement does not enroll a helper or enable host mutation.
+
+**Functional Requirements:**
+
+- Keep `HostResourceMonitor` read-only and independent from `HostActionService`; expose bounded snapshots and alert events without an automatic action path.
+- Preserve `GET /api/system/metrics` compatibility; add resource APIs as versioned siblings when implementation begins.
+- Treat fresh DamHopper re-auth as one-shot intent approval only, never as OS/root authorization.
+- Permit only typed, allowlisted fixed actions. Reject commands, shells, executable paths, arbitrary signals, process groups, PID-only targets, client-selected cache values, and automatic remediation.
+- Require helper-side peer, enrollment, action, freshness, replay, rate, host-namespace, and target revalidation. Prefer pidfd for process actions; fail closed when proof is unavailable.
+- Keep actions monitoring-only under `--no-auth`, missing MongoDB-backed re-auth, non-Linux hosts, Docker/nohup installs, absent enrollment/helper/policy/IPC, or incomplete target evidence.
+
+**Acceptance Criteria:**
+
+- ✓ Dataflow and abuse-case matrix are recorded in [system architecture](./system-architecture.md#host-resource-monitoring-and-remediation-planned).
+- ✓ Feasibility evidence records readable procfs/PSI, unified cgroup v2, systemd, and SELinux on the development Fedora host, while explicitly noting that no DamHopper unit/helper/socket/policy is installed.
+- ✓ Caller proof requires an atomically obtained peer pidfd, `SO_PEERCRED`, systemd `MainPID`, per-request `SCM_PIDFD`, root-owned identity, and close-on-exec one-shot IPC; same-user means the enrolled server effective UID, not the browser account.
+- ✓ Target proof binds host PID/mount/user namespace inodes, boot ID, PID start ticks, UID, cgroup, and bounded command identity; incomplete or ambiguous namespace evidence disables action.
+- [ ] Phase 02+ implement and test read-only parsers/monitoring contracts.
+- [ ] Phase 04+ implement app approval lifecycle and audit.
+- [ ] Phase 05+ implement separately enrolled fixed-action helper only after sign-off.
+
+**Warnings and unresolved decisions:**
+
+- The development-host check proves platform feasibility, not enrollment or capability. Until later phases install and validate the actual unit, binary, socket, ownership, and peer identity, the honest capability is `actions = disabled`.
+- Support minimum kernel/distro/systemd versions, pidfd fallback policy, cgroup-v1 behavior, action-audit retention, threshold defaults, and approval of the global cache action remain open. Unknown layouts stay monitoring-only.
+- A compromised enrolled server remains able to request the helper's narrow fixed action set; a security owner must accept this residual risk before privileged implementation.
+
 ## Non-Functional Requirements
 
 ### Performance
