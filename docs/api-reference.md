@@ -262,6 +262,18 @@ Notes:
 - when `terminalIds` is provided, backend events with `sessionId` are scoped to those ids while global events remain included
 - **Phase 04:** `system` field contains host metrics sampled from the config directory (`~/.config/dam-hopper/` by default) for host-context only, not project sandboxes
 
+### Host resource snapshot compatibility
+
+Phase 02 defines the internal read-only `HostResourceSnapshotV1` contract; it is
+not a new public route yet. Snapshots use camelCase fields and section-level
+availability states (`available`, `unsupported`, `permissionDenied`,
+`temporarilyUnavailable`, or `stale`) with optional detail codes. Text reads are
+bounded by actual bytes (256 KiB per file); cgroup v2 PSI/limits and process
+inventory report explicit degradation plus bounded scan/deadline and issue
+counters. Cache attribution labels are descriptive and may overlap, so clients
+must not add them as an accounting total. The existing `GET /api/system/metrics`
+response remains compatible and is not replaced by this contract.
+
 ## Codex Usage Analytics
 
 Protected, aggregate-only analytics for the local Codex telemetry store. All routes require

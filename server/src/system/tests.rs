@@ -6,6 +6,76 @@ use super::{
 };
 
 #[test]
+fn v1_snapshot_serializes_camel_case_contract() {
+    use super::{Availability, MemorySnapshot, MountContext};
+    let snapshot = super::HostResourceSnapshotV1::new(
+        42,
+        MemorySnapshot {
+            availability: Availability::available(42),
+            ..MemorySnapshot::empty()
+        },
+        MountContext::for_workspace(Path::new("/workspace")),
+    );
+    let value = serde_json::to_value(snapshot).unwrap();
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["sampledAt"], 42);
+    assert!(value.get("actionCapabilities").is_some());
+}
+
+#[test]
+fn legacy_host_metrics_serializes_compatibility_shape() {
+    let metrics = super::HostMetrics {
+        sampled_at: 1,
+        hostname: Some("host".into()),
+        os_name: Some("linux".into()),
+        uptime_seconds: 2,
+        cpu: super::CpuMetrics {
+            usage_percent: 3.0,
+            logical_core_count: 4,
+            physical_core_count: Some(4),
+            load_average: None,
+        },
+        memory: super::MemoryMetrics {
+            total_bytes: 10,
+            used_bytes: 5,
+            available_bytes: 5,
+            usage_percent: 50.0,
+        },
+        disk: super::DiskMetrics {
+            name: "root".into(),
+            mount_point: "/".into(),
+            total_bytes: 10,
+            available_bytes: 5,
+            used_bytes: 5,
+            usage_percent: 50.0,
+        },
+        disks: Vec::new(),
+        temperatures: Vec::new(),
+    };
+    let value = serde_json::to_value(metrics).unwrap();
+    let keys = value
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(keys.len(), 9);
+    for key in [
+        "sampledAt",
+        "hostname",
+        "osName",
+        "uptimeSeconds",
+        "cpu",
+        "memory",
+        "disk",
+        "disks",
+        "temperatures",
+    ] {
+        assert!(value.get(key).is_some(), "missing legacy key {key}");
+    }
+}
+
+#[test]
 fn usage_percent_handles_zero_totals() {
     assert_eq!(usage_percent(10, 0), 0.0);
 }

@@ -1213,11 +1213,12 @@ Server bootstrap:
 - Router registration (ide_explorer routes conditional)
 - Port binding + graceful shutdown
 
-## Host resource monitoring and remediation (planned)
+## Host resource monitoring and remediation (Phase 02 read-only contract)
 
 This design keeps host observation and host mutation in separate trust domains.
-It is a Phase 01 architecture gate, not an enabled remediation feature. Until
-the enrolled helper and its policy checks exist, every deployment remains
+Phase 02 implements the read-only `HostResourceSnapshotV1` collection contract;
+it does not expose host mutation or enroll a privileged helper. Until the
+enrolled helper and its policy checks exist, every deployment remains
 monitoring-only.
 
 ### Data flow and trust boundary
@@ -1249,6 +1250,32 @@ sanitized state. They cannot enqueue or execute an action. The existing
 `GET /api/system/metrics` remains a compatible basic-metrics endpoint; new
 resource APIs are versioned siblings. Phase 03 moves it to the shared monitor's
 cached projection without changing its response shape.
+
+### Phase 02 snapshot boundaries
+
+`HostResourceSnapshotV1` is serialized in camelCase and reports explicit
+availability for each deep section. Collection is read-only and uses startup-owned
+`/proc`, `/sys`, and cgroup roots; callers cannot provide alternate roots. Every
+text read is bounded by the actual stream at 256 KiB, and oversize, invalid UTF-8,
+permission, parse, and race failures degrade the relevant section instead of
+failing the snapshot.
+
+Linux deep metrics include memory PSI (`some`/`full`) and discovered unified cgroup
+v2 membership. Cgroup records report current usage, max/high limits (including
+unlimited markers), file cache, memory events, and cgroup PSI. Mount and
+membership validation runs before cgroup reads; unsupported or invalid layouts
+remain explicitly degraded.
+
+Process inventory is bounded to 4,096 scanned PIDs, 20 returned processes, and PSS
+reads for the top 5 by RSS, with a 100 ms deadline. The response includes scan,
+truncation, deadline, skipped, and issue counters for permission denied, invalid
+UTF-8, malformed, and disappeared process files. Process strings are capped at
+256 bytes.
+
+Cache attribution is descriptive rather than additive accounting. Labels identify
+system-file cache, cgroup-file cache, process-file RSS, mount-file mappings, or
+unattributed shared cache; clients must not sum overlapping labels. Each carries
+optional bytes, confidence, and collection method.
 
 ### Fixed v1 contract
 
