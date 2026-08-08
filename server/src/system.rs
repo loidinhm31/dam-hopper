@@ -12,6 +12,12 @@ mod types;
 pub use types::{
     CpuMetrics, DiskMetrics, HostMetrics, LoadAverageMetrics, MemoryMetrics, TemperatureMetrics,
 };
+pub mod platform;
+mod types_v1;
+pub use types_v1::*;
+
+#[cfg(target_os = "linux")]
+mod linux;
 
 const THERMAL_ZONE_ROOT: &str = "/sys/class/thermal";
 
