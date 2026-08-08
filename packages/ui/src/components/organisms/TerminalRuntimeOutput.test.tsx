@@ -122,6 +122,8 @@ describe("TerminalRuntimeOutput", () => {
     expect(markup).toContain('data-testid="terminal-scroll-buttons"');
     expect(markup).toContain('data-testid="mobile-terminal-accessory-bar"');
     expect(markup).toContain('data-reserve-accessory-rail="true"');
+    expect(markup).toContain("bg-[var(--color-background)]");
+    expect(markup).toContain("ring-inset");
     expect(markup).not.toContain("safe-area-inline");
   });
 

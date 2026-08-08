@@ -10,9 +10,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Next Milestone:** Product follow-ups: terminal commit status Phase 03 validation and release checks
 - **Current Feature:** Settings commit summary Phase 01 and terminal scroll-control redesign Phase 02 completed 2026-07-26; terminal commit status Phase 03 planned
 
-### Native SSH Port-Forwarding Control (2026-08-09)
+### Terminal Pinning and Runtime Contrast (2026-08-08)
 
-- **Phase 01 — [BLOCKED / NO-GO 2026-08-09]**: ACL/dependency feasibility spike completed, but Phase 02 remains blocked pending native runner, storage race/reparse-safe handle, and agent-runtime evidence. Follow-ups remain in the Phase 01 gate report.
+- **Phases 01–02 — [COMPLETED 2026-08-08]**: session-only terminal pin protection, shared Traditional/Runtime controls, Runtime contrast/framing, focused DOM coverage, and implementation review completed.
+- Manual Chromium contrast/reparent, PTY identity, resize/refit, and host/renderer checks remain documented follow-ups; no fresh validation commands were rerun during tracking update.
 
 ### Floating Terminal Key Controls (2026-08-06)
 

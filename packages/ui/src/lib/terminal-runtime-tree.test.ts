@@ -27,6 +27,27 @@ function port(portNumber: number, overrides: Partial<PortEntry> = {}): PortEntry
 }
 
 describe("buildRuntimeTree", () => {
+  it("propagates pin state to standalone and grouped Runtime leaves", () => {
+    const groups = buildRuntimeTree({
+      terminals: [
+        terminal("terminal:web:_:1", "web"),
+        terminal("terminal:web:_:2", "web", "node worker.js"),
+      ],
+      tabs: [
+        { ...tab("terminal:web:_:1", "web:one", 10), isPinned: true },
+        { ...tab("terminal:web:_:2", "web:two", 20), isPinned: false },
+      ],
+      ports: [port(3001, { sessionId: "terminal:web:_:1", project: "web" })],
+    });
+
+    expect(groups[0]?.items).toMatchObject([
+      {
+        kind: "service-group",
+        sessions: [{ sessionId: "terminal:web:_:1", isPinned: true }],
+      },
+      { kind: "session", sessionId: "terminal:web:_:2", isPinned: false },
+    ]);
+  });
   it("groups port-backed terminals into one project service node", () => {
     const groups = buildRuntimeTree({
       terminals: [

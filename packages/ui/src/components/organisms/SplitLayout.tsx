@@ -36,6 +36,7 @@ interface LayoutTreeProps {
   onNewTerminal: () => void;
   onSessionExit: (sessionId: string) => void;
   onSelectTab: (sessionId: string) => void;
+  onToggleTabPin?: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   activeSessionId: string | null;
@@ -53,6 +54,7 @@ function LayoutTree({
   onNewTerminal,
   onSessionExit,
   onSelectTab,
+  onToggleTabPin,
   onCloseTab,
   onOpenDiagnosticsMenu,
   activeSessionId,
@@ -97,6 +99,7 @@ function LayoutTree({
         onNewTerminal={onNewTerminal}
         onSessionExit={onSessionExit}
         onSelectTab={onSelectTab}
+        onToggleTabPin={onToggleTabPin ?? (() => {})}
         onCloseTab={onCloseTab}
         onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
         activeSessionId={activeSessionId}
@@ -123,6 +126,7 @@ function LayoutTree({
           onNewTerminal={onNewTerminal}
           onSessionExit={onSessionExit}
           onSelectTab={onSelectTab}
+          onToggleTabPin={onToggleTabPin}
           onCloseTab={onCloseTab}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           activeSessionId={activeSessionId}
@@ -142,6 +146,7 @@ function LayoutTree({
           onNewTerminal={onNewTerminal}
           onSessionExit={onSessionExit}
           onSelectTab={onSelectTab}
+          onToggleTabPin={onToggleTabPin}
           onCloseTab={onCloseTab}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           activeSessionId={activeSessionId}
@@ -163,6 +168,7 @@ export interface SplitLayoutProps {
   onNewTerminal: () => void;
   onSessionExit: (sessionId: string) => void;
   onSelectTab: (sessionId: string) => void;
+  onToggleTabPin?: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   activeSessionId?: string | null;
@@ -205,6 +211,7 @@ export function SplitLayout({
   onNewTerminal,
   onSessionExit,
   onSelectTab,
+  onToggleTabPin,
   onCloseTab,
   onOpenDiagnosticsMenu,
   activeSessionId = null,
@@ -287,6 +294,7 @@ export function SplitLayout({
           onNewTerminal={onNewTerminal}
           onSessionExit={onSessionExit}
           onSelectTab={onSelectTab}
+          onToggleTabPin={onToggleTabPin}
           onCloseTab={onCloseTab}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           activeSessionId={activeSessionId}

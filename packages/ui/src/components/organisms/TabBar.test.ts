@@ -48,4 +48,57 @@ describe("splitActionToPaneDirection", () => {
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(stopPropagation).toHaveBeenCalledOnce();
   });
+
+  it("routes pinning and omits close for a pinned traditional tab", () => {
+    const onTogglePin = vi.fn();
+    const onClose = vi.fn();
+    const unpinned = DraggableTab({
+      paneId: "pane-1",
+      tab: { sessionId: "bash-2", label: "api:bash" },
+      isActive: false,
+      onSelect: vi.fn(),
+      onTogglePin,
+      onClose,
+    });
+    const children = Children.toArray(unpinned.props.children);
+    const pinButton = children.find(
+      (child) =>
+        isValidElement(child) && child.props["aria-label"] === "Pin terminal",
+    );
+    const closeButton = children.find(
+      (child) =>
+        isValidElement(child) &&
+        child.props["aria-label"] === "Close terminal",
+    );
+
+    expect(pinButton).not.toBeUndefined();
+    expect(closeButton).not.toBeUndefined();
+    expect(pinButton?.props["aria-pressed"]).toBe(false);
+    pinButton?.props.onClick({ stopPropagation: vi.fn() });
+    expect(onTogglePin).toHaveBeenCalledWith("bash-2");
+
+    const pinned = DraggableTab({
+      paneId: "pane-1",
+      tab: { sessionId: "bash-2", label: "api:bash", isPinned: true },
+      isActive: false,
+      onSelect: vi.fn(),
+      onTogglePin,
+      onClose,
+    });
+    const pinnedChildren = Children.toArray(pinned.props.children);
+    const unpinButton = pinnedChildren.find(
+      (child) =>
+        isValidElement(child) &&
+        child.props["aria-label"] === "Unpin terminal",
+    );
+
+    expect(unpinButton?.props["aria-pressed"]).toBe(true);
+    expect(
+      pinnedChildren.find(
+        (child) =>
+          isValidElement(child) &&
+          child.props["aria-label"] === "Close terminal",
+      ),
+    ).toBeUndefined();
+  });
 });

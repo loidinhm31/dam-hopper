@@ -16,6 +16,7 @@ interface Props {
     | null;
   group: RuntimeTreeGroup;
   onSelectSession?: (sessionId: string) => void;
+  onToggleTabPin?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   onNewProjectTerminal?: (projectName: string) => void;
@@ -39,6 +40,7 @@ export function TerminalRuntimeNavigatorGroup({
   dragState,
   group,
   onSelectSession,
+  onToggleTabPin,
   onCloseSession,
   onOpenDiagnosticsMenu,
   onNewProjectTerminal,
@@ -101,6 +103,7 @@ export function TerminalRuntimeNavigatorGroup({
             dragState={dragState}
             item={item}
             onCloseSession={onCloseSession}
+            onToggleTabPin={onToggleTabPin}
             onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
             onMoveItem={onMoveItem}
             onSelectSession={onSelectSession}

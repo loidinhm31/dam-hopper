@@ -465,6 +465,7 @@ export default function WorkspacePage() {
     handleLaunchSuggestedCommand,
     handleLaunchShell,
     handleSelectTab,
+    handleToggleTabPin,
     handleCloseTab,
     handleKillTerminal,
     handleRemoveFreeTerminal,
@@ -1363,6 +1364,7 @@ export default function WorkspacePage() {
                 onNewProjectTerminal={handleLaunchShell}
                 onNewFreeTerminal={handleAddFreeTerminal}
                 onSelectTab={handleSelectTab}
+                onToggleTabPin={handleToggleTabPin}
                 onOpenDiagnosticsMenu={openTerminalDiagnosticsMenu}
                 onOpenTunnelInBrowser={handleOpenTunnelInBrowser}
                 browserOpen={browserOpen && !isCompactWorkspace}
@@ -1383,6 +1385,7 @@ export default function WorkspacePage() {
                 onSessionExit={handleSessionExit}
                 onNewTerminal={handleOpenCurrentTerminal}
                 onSelectTab={handleSelectTab}
+                onToggleTabPin={handleToggleTabPin}
                 onCloseTab={handleCloseTab}
                 onOpenDiagnosticsMenu={openTerminalDiagnosticsMenu}
                 onVisibleSessionIdsChange={handleVisibleSplitSessionsChange}
@@ -1472,6 +1475,7 @@ export default function WorkspacePage() {
       activeTab,
       compactTerminalLayoutRevision,
       handleSelectTab,
+      handleToggleTabPin,
       handleCloseTab,
       setFreeTerminalSavePrompt,
       setLaunchForm,
