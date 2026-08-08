@@ -246,6 +246,22 @@ describe("deriveTerminalAutoAttachState", () => {
     ]);
   });
 
+  it("preserves a pinned existing tab during SessionInfo refresh", () => {
+    const id = "free:existing";
+    const result = derive({
+      sessions: [session(id, { type: "free", command: "bash" })],
+      openTabs: [{ sessionId: id, label: "old label", isPinned: true }],
+      activeTab: id,
+      freeTerminalIndexMap: new Map([[id, 1]]),
+    });
+
+    expect(result.openTabs[0]).toMatchObject({
+      sessionId: id,
+      label: "Terminal 1",
+      isPinned: true,
+    });
+  });
+
   it("activates the newest live terminal when the current active tab is gone", () => {
     const result = derive({
       sessions: [

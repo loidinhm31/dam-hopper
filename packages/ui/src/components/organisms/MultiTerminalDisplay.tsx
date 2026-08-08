@@ -29,6 +29,7 @@ interface Props {
   onSessionExit?: (sessionId: string) => void;
   onNewTerminal?: () => void;
   onSelectTab?: (sessionId: string) => void;
+  onToggleTabPin?: (sessionId: string) => void;
   onCloseTab?: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   layoutRevision?: number;
@@ -46,6 +47,7 @@ export function MultiTerminalDisplay({
   onSessionExit,
   onNewTerminal,
   onSelectTab,
+  onToggleTabPin,
   onCloseTab,
   onOpenDiagnosticsMenu,
   layoutRevision = 0,
@@ -169,6 +171,7 @@ export function MultiTerminalDisplay({
           onNewTerminal={onNewTerminal ?? (() => {})}
           onSessionExit={onSessionExit ?? (() => {})}
           onSelectTab={onSelectTab ?? (() => {})}
+          onToggleTabPin={onToggleTabPin ?? (() => {})}
           onCloseTab={onCloseTab ?? (() => {})}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           activeSessionId={activeSessionId}

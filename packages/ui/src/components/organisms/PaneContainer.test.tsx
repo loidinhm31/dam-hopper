@@ -124,6 +124,8 @@ describe("PaneContainer browser integration", () => {
       "[data-testid=terminal-pane-output-host]",
     );
     expect(outputHost).not.toBeNull();
+    expect(outputHost?.className).toContain("bg-[var(--color-background)]");
+    expect(outputHost?.className).not.toContain("#0f172a");
     expect(
       outputHost?.parentElement?.querySelector(
         "[data-testid=pane-floating-terminal-controls]",

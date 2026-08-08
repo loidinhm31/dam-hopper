@@ -27,6 +27,7 @@ export interface RuntimeSessionItem {
   project: string;
   command: string;
   cwd?: string;
+  isPinned?: boolean;
   alive?: boolean;
   startedAt: number;
   ports: RuntimePort[];
@@ -206,6 +207,7 @@ export function buildRuntimeTree({
       project: terminal.project,
       command: terminal.command,
       cwd: terminal.cwd,
+      isPinned: Boolean(tab?.isPinned),
       alive: tab?.session?.alive,
       startedAt:
         tab?.session?.startedAt ??

@@ -126,7 +126,7 @@ export function TerminalRuntimeOutput({
       <div
         ref={hostRef}
         data-testid="terminal-runtime-output-host"
-        className="relative min-h-0 flex-1 overflow-hidden bg-[#0f172a]"
+        className="relative min-h-0 flex-1 overflow-hidden bg-[var(--color-background)] ring-1 ring-inset ring-[var(--color-border)] focus-within:ring-2 focus-within:ring-[var(--color-ring)]"
         onClick={() => {
           if (!activeSessionId) return;
           onSelectActive?.(activeSessionId);

@@ -2,6 +2,8 @@ import { Fragment, useState } from "react";
 import { useDndMonitor, useDraggable } from "@dnd-kit/core";
 import {
   GripVertical,
+  Pin,
+  PinOff,
   SplitSquareHorizontal,
   SplitSquareVertical,
   X,
@@ -35,6 +37,7 @@ interface DraggableTabProps {
   tab: TabEntry;
   isActive: boolean;
   onSelect: (sessionId: string) => void;
+  onTogglePin?: (sessionId: string) => void;
   onClose: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
 }
@@ -44,6 +47,7 @@ export function DraggableTab({
   tab,
   isActive,
   onSelect,
+  onTogglePin,
   onClose,
   onOpenDiagnosticsMenu,
 }: DraggableTabProps) {
@@ -92,26 +96,48 @@ export function DraggableTab({
         <span className="max-w-32 truncate block font-mono">{tab.label}</span>
       </button>
 
-      {/* Close button */}
-      <span
-        role="button"
-        aria-label="Close terminal"
-        title="Close terminal (terminates process)"
-        tabIndex={0}
-        className="pr-2 py-1.5 opacity-40 hover:opacity-100 rounded transition-opacity"
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose(tab.sessionId);
+      <button
+        type="button"
+        aria-label={tab.isPinned ? "Unpin terminal" : "Pin terminal"}
+        aria-pressed={tab.isPinned === true}
+        title={
+          tab.isPinned
+            ? "Unpin terminal (allows closing)"
+            : "Pin terminal (prevents closing)"
+        }
+        className={cn(
+          "rounded p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]",
+          tab.isPinned
+            ? "text-[var(--color-primary)] bg-[var(--color-primary)]/15"
+            : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
+        )}
+        onClick={(event) => {
+          event.stopPropagation();
+          onTogglePin?.(tab.sessionId);
         }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.stopPropagation();
-            onClose(tab.sessionId);
-          }
-        }}
+        onKeyDown={(event) => event.stopPropagation()}
       >
-        <X className="h-2.5 w-2.5 hover:text-[var(--color-danger)]" />
-      </span>
+        {tab.isPinned ? (
+          <PinOff className="h-3 w-3" />
+        ) : (
+          <Pin className="h-3 w-3" />
+        )}
+      </button>
+      {!tab.isPinned ? (
+        <button
+          type="button"
+          aria-label="Close terminal"
+          title="Close terminal (terminates process)"
+          className="rounded p-1.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-danger)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]"
+          onClick={(event) => {
+            event.stopPropagation();
+            onClose(tab.sessionId);
+          }}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          <X className="h-2.5 w-2.5" />
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -126,6 +152,7 @@ export interface TabBarProps {
   terminalCommitStatusEnabled: boolean;
   hasSplit: boolean;
   onSelectTab: (sessionId: string) => void;
+  onToggleTabPin: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   onNewTerminal: () => void;
@@ -142,6 +169,7 @@ export function TabBar({
   terminalCommitStatusEnabled,
   hasSplit,
   onSelectTab,
+  onToggleTabPin,
   onCloseTab,
   onOpenDiagnosticsMenu,
   onNewTerminal,
@@ -191,6 +219,7 @@ export function TabBar({
                   tab={tab}
                   isActive={tab.sessionId === activeSessionId}
                   onSelect={onSelectTab}
+                  onTogglePin={onToggleTabPin}
                   onClose={onCloseTab}
                   onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
                 />

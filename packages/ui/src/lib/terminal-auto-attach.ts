@@ -139,6 +139,8 @@ export function deriveTerminalAutoAttachState({
         return {
           ...tab,
           ...tabForSession(session, profileSessionIds, freeTerminalIndexMap),
+          // SessionInfo refreshes metadata only; preserve the transient pin bit.
+          isPinned: tab.isPinned,
         };
       }),
     ...liveSessions
