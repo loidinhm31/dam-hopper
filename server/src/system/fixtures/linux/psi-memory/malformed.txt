@@ -1,0 +1,1 @@
+some avg10=NaN avg60=1 avg300=1 total=1

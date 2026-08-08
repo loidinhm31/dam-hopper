@@ -240,9 +240,9 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Sensitive metadata is redacted before sink delivery unless local diagnostics explicitly disable it
 - ✓ Shared logger is used by the high-value UI surfaces noted above
 
-### PR-009: Linux Host Resource Monitoring and Gated Remediation (Phase 01 gate)
+### PR-009: Linux Host Resource Monitoring and Gated Remediation (Phase 02)
 
-**Status:** Architecture/threat-model gate approved for planning; implementation pending. This requirement does not enroll a helper or enable host mutation.
+**Status:** Phase 02 read-only snapshot contract implemented; privileged remediation remains unimplemented. This requirement does not enroll a helper or enable host mutation.
 
 **Functional Requirements:**
 
@@ -255,11 +255,12 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 **Acceptance Criteria:**
 
-- ✓ Dataflow and abuse-case matrix are recorded in [system architecture](./system-architecture.md#host-resource-monitoring-and-remediation-planned).
+- ✓ Dataflow and abuse-case matrix are recorded in [system architecture](./system-architecture.md#host-resource-monitoring-and-remediation-phase-02-read-only-contract).
 - ✓ Feasibility evidence records readable procfs/PSI, unified cgroup v2, systemd, and SELinux on the development Fedora host, while explicitly noting that no DamHopper unit/helper/socket/policy is installed.
 - ✓ Caller proof requires an atomically obtained peer pidfd, `SO_PEERCRED`, systemd `MainPID`, per-request `SCM_PIDFD`, root-owned identity, and close-on-exec one-shot IPC; same-user means the enrolled server effective UID, not the browser account.
 - ✓ Target proof binds host PID/mount/user namespace inodes, boot ID, PID start ticks, UID, cgroup, and bounded command identity; incomplete or ambiguous namespace evidence disables action.
-- [ ] Phase 02+ implement and test read-only parsers/monitoring contracts.
+- [x] Phase 02 implements and tests the read-only `HostResourceSnapshotV1` contract: bounded actual-byte reads, explicit degradation states, cgroup v2/PSI and limits, bounded process inventory with deadlines and issue counters, and non-overlapping cache attribution.
+- [ ] Phase 03 expose the shared monitor's cached projection while preserving the legacy metrics response shape.
 - [ ] Phase 04+ implement app approval lifecycle and audit.
 - [ ] Phase 05+ implement separately enrolled fixed-action helper only after sign-off.
 
