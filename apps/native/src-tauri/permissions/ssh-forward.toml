@@ -1,0 +1,17 @@
+[[permission]]
+identifier = "ssh-forward"
+description = "Allows the main desktop webview to control native SSH local forwards."
+commands.allow = [
+  "ssh_forward_open_client",
+  "ssh_forward_activate_scope",
+  "ssh_forward_snapshot",
+  "ssh_forward_create_profile",
+  "ssh_forward_update_profile",
+  "ssh_forward_delete_profile",
+  "ssh_forward_start",
+  "ssh_forward_stop",
+  "ssh_forward_restart",
+  "ssh_forward_list_keys",
+  "ssh_forward_approve_host",
+  "ssh_forward_purge_scope",
+]
