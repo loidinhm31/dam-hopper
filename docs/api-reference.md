@@ -262,17 +262,41 @@ Notes:
 - when `terminalIds` is provided, backend events with `sessionId` are scoped to those ids while global events remain included
 - **Phase 04:** `system` field contains host metrics sampled from the config directory (`~/.config/dam-hopper/` by default) for host-context only, not project sandboxes
 
-### Host resource snapshot compatibility
+### Host resource snapshot and alerts
 
-Phase 02 defines the internal read-only `HostResourceSnapshotV1` contract; it is
-not a new public route yet. Snapshots use camelCase fields and section-level
+Phase 03 exposes the read-only `HostResourceSnapshotV1` contract through
+protected routes. Snapshots use camelCase fields and section-level
 availability states (`available`, `unsupported`, `permissionDenied`,
 `temporarilyUnavailable`, or `stale`) with optional detail codes. Text reads are
 bounded by actual bytes (256 KiB per file); cgroup v2 PSI/limits and process
 inventory report explicit degradation plus bounded scan/deadline and issue
 counters. Cache attribution labels are descriptive and may overlap, so clients
 must not add them as an accounting total. The existing `GET /api/system/metrics`
-response remains compatible and is not replaced by this contract.
+response remains compatible and is served from the monitor's cached projection.
+
+#### GET /api/system/resources/v1/snapshot
+
+Returns the latest bounded deep host snapshot. Sampling cadence and source roots
+are server-owned; incomplete cycles are represented as stale or degraded
+availability rather than fabricated values.
+
+#### GET /api/system/resources/v1/alerts
+
+Returns bounded host-level alert incidents, newest first. Optional `limit` is
+clamped by the server (default 50). Incidents include state, severity,
+timestamps, duration, scope, confidence, threshold, bounded evidence, and a
+next-action description. This endpoint reports evidence only and performs no
+remediation.
+
+Server tuning is configured in TOML under `[server.host_resources]` using
+snake_case keys: `light_sample_seconds` (5), `process_sample_seconds` (15),
+`pss_sample_seconds` (60), `jitter_millis` (250),
+`process_deadline_millis` (150), `snapshot_deadline_millis` (500),
+`ring_capacity` (144), `max_alert_incidents` (50),
+`reclaimable_cache_percent` (25), `available_warning_percent` (15),
+`available_critical_percent` (10), `available_oom_percent` (5),
+`psi_some_percent` (10), and `psi_full_percent` (1). Values are clamped to
+safe ranges at runtime.
 
 ## Codex Usage Analytics
 

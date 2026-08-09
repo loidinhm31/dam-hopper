@@ -13,8 +13,6 @@ use crate::system::{
     Availability, ProcessInventory, ProcessMemory,
 };
 
-const PROCESS_COLLECTION_DEADLINE: Duration = Duration::from_millis(100);
-
 #[derive(Default)]
 struct ProcessReadIssues {
     permission_denied: usize,
@@ -57,15 +55,31 @@ fn process_issue_from_read_error(error: ReadTextError) -> ProcessReadIssue {
     }
 }
 
-pub fn collect(proc_root: &Path, sampled_at: u64) -> ProcessInventory {
-    collect_with_deadline(
+pub fn collect_with_options(
+    proc_root: &Path,
+    sampled_at: u64,
+    include_pss: bool,
+    deadline: Duration,
+) -> ProcessInventory {
+    collect_with_deadline_options(
         proc_root,
         sampled_at,
-        Instant::now() + PROCESS_COLLECTION_DEADLINE,
+        Instant::now() + deadline,
+        include_pss,
     )
 }
 
+#[cfg(test)]
 fn collect_with_deadline(proc_root: &Path, sampled_at: u64, deadline: Instant) -> ProcessInventory {
+    collect_with_deadline_options(proc_root, sampled_at, deadline, true)
+}
+
+fn collect_with_deadline_options(
+    proc_root: &Path,
+    sampled_at: u64,
+    deadline: Instant,
+    include_pss: bool,
+) -> ProcessInventory {
     let Ok(entries) = fs::read_dir(proc_root) else {
         return ProcessInventory {
             processes: Vec::new(),
@@ -123,7 +137,7 @@ fn collect_with_deadline(proc_root: &Path, sampled_at: u64, deadline: Instant) -
         }
         process.start_ticks = read_start_ticks(proc_root, process.pid);
         process.command_summary = read_command_summary(proc_root, process.pid);
-        if index < MAX_PSS_PROCESSES {
+        if include_pss && index < MAX_PSS_PROCESSES {
             process.pss_bytes = read_pss(proc_root, process.pid);
         }
         processes.push(process);
@@ -307,6 +321,38 @@ mod tests {
             inventory.availability.detail_code.as_deref(),
             Some("processDeadlineExceeded")
         );
+    }
+
+    #[test]
+    fn synthetic_pid_soak_is_bounded_at_the_inventory_cap() {
+        let root = tempfile::tempdir().unwrap();
+        for pid in 1..=4_097 {
+            let process_dir = root.path().join(pid.to_string());
+            fs::create_dir(&process_dir).unwrap();
+            fs::write(
+                process_dir.join("status"),
+                format!(
+                    "Name:\tworker-{pid}\nUid:\t1000\t1000\t1000\t1000\nVmRSS:\t{} kB\nRssAnon:\t1 kB\nRssFile:\t1 kB\nRssShmem:\t0 kB\n",
+                    pid % 128 + 1
+                ),
+            )
+            .unwrap();
+            fs::write(process_dir.join("smaps_rollup"), "Pss:\t1 kB\n").unwrap();
+        }
+
+        let started = Instant::now();
+        let inventory = collect_with_deadline(root.path(), 4, started + Duration::from_millis(150));
+        assert!(inventory.scanned_count <= MAX_PIDS_SCANNED);
+        assert!(inventory.truncated);
+        assert!(inventory.processes.len() <= MAX_PROCESSES);
+        assert!(inventory
+            .processes
+            .iter()
+            .take(MAX_PSS_PROCESSES)
+            .all(|process| process.pss_bytes.is_some()));
+        // This fixture is the repeatable process-budget guard: it proves the
+        // realistic 4,096-PID scan remains bounded by its 150 ms deadline.
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

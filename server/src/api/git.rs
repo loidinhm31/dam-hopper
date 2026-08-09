@@ -12,9 +12,9 @@ use crate::git::{
     add_worktree, checkout_branch, cherry_pick, cherry_pick_commit_files, create_branch,
     delete_branch, discover_available_vcs_roots, drop_commit, drop_commit_files,
     edit_commit_message, get_commit_message, get_log, list_branches, list_worktrees,
-    remove_worktree, reset_to_commit, resolve_git_request_root, revert_commit,
-    revert_commit_files, undo_last_commit, update_branch, BulkGitService, CheckoutStrategy,
-    ResetMode, WorktreeAddOptions,
+    remove_worktree, reset_to_commit, resolve_git_request_root, revert_commit, revert_commit_files,
+    undo_last_commit, update_branch, BulkGitService, CheckoutStrategy, ResetMode,
+    WorktreeAddOptions,
 };
 use crate::pty::EventSink as _;
 use crate::state::AppState;
