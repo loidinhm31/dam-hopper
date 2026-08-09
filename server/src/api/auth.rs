@@ -11,6 +11,7 @@ use bcrypt::{hash, verify, DEFAULT_COST};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use mongodb::bson::doc;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 use crate::state::AppState;
 
@@ -39,10 +40,27 @@ fn unauthorized() -> Response {
 // Token / JWT helpers
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Claims {
     sub: String,
     exp: usize,
+}
+
+/// Identity established by the protected-route middleware.
+///
+/// This intentionally contains no bearer material. Sensitive routes use it to
+/// bind short-lived approvals to the authenticated account that requested them.
+#[derive(Clone, Debug)]
+pub struct AuthenticatedActor {
+    pub subject: String,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum CredentialVerificationError {
+    AuthenticationUnavailable,
+    InvalidCredentials,
+    AccountDisabled,
+    ActorMismatch,
 }
 
 /// Extract token from `Authorization: Bearer <token>` header, falling back to cookie.
@@ -60,6 +78,10 @@ fn extract_token<'a>(request: &'a Request, jar: &'a CookieJar) -> Option<String>
 }
 
 pub fn validate_jwt(provided: &str, secret: &str) -> bool {
+    validated_claims(provided, secret).is_some()
+}
+
+fn validated_claims(provided: &str, secret: &str) -> Option<Claims> {
     let mut validation = Validation::default();
     validation.validate_exp = true;
     decode::<Claims>(
@@ -67,7 +89,8 @@ pub fn validate_jwt(provided: &str, secret: &str) -> bool {
         &DecodingKey::from_secret(secret.as_bytes()),
         &validation,
     )
-    .is_ok()
+    .ok()
+    .map(|token| token.claims)
 }
 
 /// Generate JWT token for a given subject (username) with 30-day expiration.
@@ -97,7 +120,7 @@ fn generate_jwt(subject: &str, secret: &str) -> anyhow::Result<String> {
 pub async fn require_auth(
     State(state): State<AppState>,
     jar: CookieJar,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
     // Dev mode: skip JWT validation entirely (perf: avoids decode + signature check)
@@ -105,13 +128,15 @@ pub async fn require_auth(
         return next.run(request).await;
     }
 
-    let ok = extract_token(&request, &jar)
-        .map(|t| validate_jwt(&t, &state.jwt_secret))
-        .unwrap_or(false);
-
-    if !ok {
+    let Some(claims) =
+        extract_token(&request, &jar).and_then(|token| validated_claims(&token, &state.jwt_secret))
+    else {
         return unauthorized();
-    }
+    };
+
+    request.extensions_mut().insert(AuthenticatedActor {
+        subject: claims.sub,
+    });
 
     next.run(request).await
 }
@@ -140,6 +165,61 @@ struct User {
     username: String,
     password_hash: String,
     is_enabled: bool,
+}
+
+/// Verify an enabled MongoDB user without minting or refreshing a session.
+/// The supplied password is wiped before this function returns.
+pub async fn verify_enabled_user(
+    db: Option<&mongodb::Database>,
+    username: &str,
+    password: &mut String,
+) -> Result<(), CredentialVerificationError> {
+    let result = match db {
+        None => Err(CredentialVerificationError::AuthenticationUnavailable),
+        Some(db) => {
+            let collection = db.collection::<User>("users");
+            match collection.find_one(doc! { "username": username }).await {
+                Ok(Some(user)) if verify(&mut *password, &user.password_hash).unwrap_or(false) => {
+                    if user.is_enabled {
+                        Ok(())
+                    } else {
+                        Err(CredentialVerificationError::AccountDisabled)
+                    }
+                }
+                _ => Err(CredentialVerificationError::InvalidCredentials),
+            }
+        }
+    };
+    password.zeroize();
+    result
+}
+
+/// Check a JWT subject is still an enabled account without accepting a password.
+/// Sensitive action reads and intent admission call this before using actor data.
+pub async fn is_enabled_user(db: Option<&mongodb::Database>, username: &str) -> bool {
+    let Some(db) = db else {
+        return false;
+    };
+    db.collection::<User>("users")
+        .find_one(doc! { "username": username })
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|user| user.is_enabled)
+}
+
+/// Re-authentication accepts credentials only for the same JWT subject.
+pub async fn verify_actor_credentials(
+    state: &AppState,
+    actor: &AuthenticatedActor,
+    username: &str,
+    password: &mut String,
+) -> Result<(), CredentialVerificationError> {
+    if username != actor.subject {
+        password.zeroize();
+        return Err(CredentialVerificationError::ActorMismatch);
+    }
+    verify_enabled_user(state.db.as_ref(), username, password).await
 }
 
 /// POST /api/auth/register — registers a user in mongodb
@@ -185,7 +265,7 @@ pub async fn register(State(state): State<AppState>, Json(body): Json<LoginBody>
 }
 
 /// POST /api/auth/login — authenticates via mongodb or fallback to token, returns JWT
-pub async fn login(State(state): State<AppState>, Json(body): Json<LoginBody>) -> Response {
+pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody>) -> Response {
     // Dev mode: return dev token immediately (no credentials check)
     if state.no_auth {
         let jwt_token = match generate_jwt("dev-user", &state.jwt_secret) {
@@ -219,38 +299,25 @@ pub async fn login(State(state): State<AppState>, Json(body): Json<LoginBody>) -
             .into_response();
     }
 
-    let mut is_authenticated = false;
-    let mut logged_in_sub = "unknown".to_string();
-
-    if let (Some(username), Some(password), Some(db)) = (&body.username, &body.password, &state.db)
-    {
-        let collection = db.collection::<User>("users");
-        if let Ok(Some(user)) = collection.find_one(doc! { "username": username }).await {
-            is_authenticated = verify(password, &user.password_hash).unwrap_or(false);
-            if is_authenticated && !user.is_enabled {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(ErrorBody {
-                        error: "Account is pending approval or disabled".into(),
-                    }),
-                )
-                    .into_response();
-            }
-            if is_authenticated {
-                logged_in_sub = username.clone();
-            }
-        }
-    }
-
-    if !is_authenticated {
+    let (Some(username), Some(password)) = (body.username.take(), body.password.as_mut()) else {
+        return unauthorized();
+    };
+    let verification = verify_enabled_user(state.db.as_ref(), &username, password).await;
+    if let Err(error) = verification {
+        let message = if error == CredentialVerificationError::AccountDisabled {
+            "Account is pending approval or disabled"
+        } else {
+            "Invalid credentials"
+        };
         return (
             StatusCode::UNAUTHORIZED,
             Json(ErrorBody {
-                error: "Invalid credentials".into(),
+                error: message.into(),
             }),
         )
             .into_response();
     }
+    let logged_in_sub = username;
 
     let jwt_token = match generate_jwt(&logged_in_sub, &state.jwt_secret) {
         Ok(token) => token,

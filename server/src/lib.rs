@@ -8,6 +8,7 @@ pub mod diagnostics;
 pub mod error;
 pub mod fs;
 pub mod git;
+pub mod host_actions;
 pub mod persistence;
 pub mod port_forward;
 pub mod pty;

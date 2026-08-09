@@ -1213,13 +1213,13 @@ Server bootstrap:
 - Router registration (ide_explorer routes conditional)
 - Port binding + graceful shutdown
 
-## Host resource monitoring and remediation (Phase 03 read-only APIs)
+## Host resource monitoring and remediation (Phase 04 lifecycle; helper-gated)
 
 This design keeps host observation and host mutation in separate trust domains.
-Phase 03 implements the shared cached monitor and read-only snapshot/alert APIs;
-it does not expose host mutation or enroll a privileged helper. Until the
-enrolled helper and its policy checks exist, every deployment remains
-monitoring-only.
+Phase 03 implemented the shared cached monitor and read-only snapshot/alert
+APIs. Phase 04 adds the server-side action intent, re-authentication, approval,
+execution, and audit lifecycle, but does not enroll or execute a privileged
+helper. Every deployment without an enrolled helper remains monitoring-only.
 
 ### Data flow and trust boundary
 
@@ -1230,7 +1230,7 @@ Linux procfs / PSI / cgroup v2
   -> browser diagnostics UI
 
 browser action intent
-  -> protected REST route + fresh app re-auth
+  -> protected REST route + authenticated actor + fresh app re-auth
   -> canonical one-shot approval
   -> HostActionService queue
   -> authenticated local IPC
@@ -1239,7 +1239,8 @@ browser action intent
 ```
 
 The browser trust boundary ends at the authenticated API. Fresh app re-auth
-approves one DamHopper intent; it is not OS-administrator authentication. The
+approves one DamHopper intent; it is not OS-administrator authentication and
+does not invoke an OS password prompt. The
 helper is a separately enrolled, host-local authority and must independently
 reject any request that cannot prove its peer, policy, target, freshness, and
 rate limit.
@@ -1278,6 +1279,13 @@ unattributed shared cache; clients must not sum overlapping labels. Each carries
 optional bytes, confidence, and collection method.
 
 ### Fixed v1 contract
+
+Phase 04 is fail-closed: capabilities advertise the fixed action kinds but
+report `available = false` with `helperNotEnrolled` until enrollment. Approvals
+are consumed once; lifecycle outcomes are recorded in bounded local audit
+storage; and unavailable audit or execution state cannot be reported as
+success. This phase performs no OS password, sudo/polkit/PTY escalation,
+privileged syscall, or automatic remediation.
 
 - The only client-selectable value is a typed, allowlisted intent. The client
   cannot supply a command, shell, executable path, signal number, process
