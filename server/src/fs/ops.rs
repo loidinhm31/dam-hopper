@@ -11,6 +11,11 @@ use crate::fs::error::FsError;
 /// exceeding this size.
 pub const MAX_READ_BYTES: u64 = 100 * 1024 * 1024;
 
+/// Maximum filesystem entries inspected by a single language scan.
+pub const MAX_LANGUAGE_SCAN_ENTRIES: usize = 200_000;
+/// Maximum supported language files returned by a single language scan.
+pub const MAX_LANGUAGE_SCAN_FILES: usize = 20_000;
+
 const BINARY_PROBE_BYTES: usize = 8192;
 
 #[derive(Debug, Serialize)]
@@ -611,6 +616,134 @@ mod tests {
         assert!(truncated);
         assert_eq!(matches.len(), 3);
     }
+
+    #[tokio::test]
+    async fn language_scan_classifies_sorts_and_honors_walk_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("web")).unwrap();
+        std::fs::write(root.join("src/main.RS"), "fn main() {}\n").unwrap();
+        std::fs::write(root.join("src/Component.JsX"), "export {};\n").unwrap();
+        std::fs::write(root.join("src/App.tSx"), "export {};\n").unwrap();
+        std::fs::write(root.join("src/Main.JAVA"), "class Main {}\n").unwrap();
+        std::fs::write(root.join("web/script.Js"), "export {};\n").unwrap();
+        std::fs::write(root.join(".hidden.ts"), "export {};\n").unwrap();
+        std::fs::write(root.join("ignored.rs"), "fn ignored() {}\n").unwrap();
+        std::fs::write(root.join("repository-ignored.rs"), "fn ignored() {}\n").unwrap();
+        std::fs::write(root.join("notes.txt"), "not source\n").unwrap();
+        std::fs::write(root.join(format!(".{}ignore", "git")), "ignored.rs\n").unwrap();
+
+        let repository = git2::Repository::init(root).unwrap();
+        std::fs::write(
+            repository.path().join("info/exclude"),
+            "repository-ignored.rs\n",
+        )
+        .unwrap();
+
+        let result = scan_language_files(root).await.unwrap();
+        let paths: Vec<_> = result.files.iter().map(|file| file.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                ".hidden.ts",
+                "src/App.tSx",
+                "src/Component.JsX",
+                "src/Main.JAVA",
+                "src/main.RS",
+                "web/script.Js",
+            ]
+        );
+        assert_eq!(
+            result.files[0].language,
+            LanguageFamily::JavascriptTypescript
+        );
+        assert_eq!(result.files[3].language, LanguageFamily::Java);
+        assert_eq!(result.files[4].language, LanguageFamily::Rust);
+        assert!(result.files.iter().all(|file| file.mtime >= 0));
+        assert!(!result.truncated);
+        assert_eq!(result.limit, MAX_LANGUAGE_SCAN_FILES);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn language_scan_excludes_symlinked_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("real.rs"), "fn real() {}\n").unwrap();
+        let external = outside.path().join("external.rs");
+        std::fs::write(&external, "fn external() {}\n").unwrap();
+        std::os::unix::fs::symlink(&external, root.join("external-link.rs")).unwrap();
+        std::os::unix::fs::symlink(root.join("real.rs"), root.join("internal-link.rs")).unwrap();
+
+        let result = scan_language_files(root).await.unwrap();
+        let paths: Vec<_> = result.files.iter().map(|file| file.path.as_str()).collect();
+        assert_eq!(paths, vec!["real.rs"]);
+    }
+
+    #[test]
+    fn language_scan_marks_exact_result_cap_as_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for index in 0..3 {
+            std::fs::write(root.join(format!("source-{index}.rs")), "fn source() {}\n").unwrap();
+        }
+
+        let result = scan_language_files_sync(root, 10, 2).unwrap();
+        assert!(result.truncated);
+        assert_eq!(result.limit, 2);
+        assert_eq!(result.files.len(), 2);
+        let paths: Vec<_> = result.files.iter().map(|file| file.path.as_str()).collect();
+        assert_eq!(paths, vec!["source-0.rs", "source-1.rs"]);
+    }
+
+    #[test]
+    fn language_scan_marks_exact_regular_file_cap_as_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("01.rs"), "fn source() {}\n").unwrap();
+        std::fs::write(root.join("02.java"), "class Source {}\n").unwrap();
+        std::fs::write(root.join("03.ts"), "export {};\n").unwrap();
+
+        let result = scan_language_files_sync(root, 2, 10).unwrap();
+        assert!(result.truncated);
+        assert_eq!(result.limit, 10);
+        assert_eq!(result.files.len(), 2);
+    }
+
+    #[test]
+    fn language_scan_applies_entry_cap_in_path_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("z.rs"), "fn source() {}\n").unwrap();
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::write(root.join("a/inside.rs"), "fn source() {}\n").unwrap();
+
+        let result = scan_language_files_sync(root, 2, 10).unwrap();
+        assert!(result.truncated);
+        let paths: Vec<_> = result.files.iter().map(|file| file.path.as_str()).collect();
+        assert_eq!(paths, vec!["a/inside.rs"]);
+    }
+
+    #[test]
+    fn language_scan_refuses_paths_outside_the_root() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        assert!(normalized_relative_path(root.path(), outside.path()).is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn language_scan_preserves_backslashes_in_unix_file_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source\\module.rs");
+        std::fs::write(&path, "fn source() {}\n").unwrap();
+
+        let result = scan_language_files(dir.path()).await.unwrap();
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].path, "source\\module.rs");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -638,6 +771,160 @@ pub struct PathSearchMatch {
     pub project: Option<String>,
 }
 
+/// The closed language families supported by Explorer's language navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LanguageFamily {
+    Rust,
+    JavascriptTypescript,
+    Java,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanguageFile {
+    /// Forward-slash-normalized path relative to the scanned project root.
+    pub path: String,
+    pub size: u64,
+    /// Unix timestamp in seconds, matching Explorer's existing file metadata.
+    pub mtime: i64,
+    pub language: LanguageFamily,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanguageScanResult {
+    pub files: Vec<LanguageFile>,
+    pub truncated: bool,
+    pub limit: usize,
+}
+
+/// Configure ignore behavior shared by project-scoped path operations.
+fn project_walker_builder(root: &Path) -> ignore::WalkBuilder {
+    let mut builder = ignore::WalkBuilder::new(root);
+    builder
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .require_git(false)
+        .follow_links(false)
+        .current_dir(root);
+    builder
+}
+
+fn project_walker(root: &Path) -> ignore::Walk {
+    project_walker_builder(root).build()
+}
+
+/// Build the language-scan walker, excluding repository metadata only for this
+/// endpoint without changing the behavior of existing search operations.
+fn language_scan_walker(root: &Path) -> ignore::Walk {
+    let mut builder = project_walker_builder(root);
+    builder
+        .filter_entry(|entry| entry.file_name().as_encoded_bytes() != b"\x2egit")
+        .sort_by_file_path(|left, right| left.cmp(right));
+    builder.build()
+}
+
+/// Return the supported source-language family for a path, if any.
+fn language_family(path: &Path) -> Option<LanguageFamily> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "rs" => Some(LanguageFamily::Rust),
+        "js" | "jsx" | "ts" | "tsx" => Some(LanguageFamily::JavascriptTypescript),
+        "java" => Some(LanguageFamily::Java),
+        _ => None,
+    }
+}
+
+fn normalized_relative_path(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?.to_string_lossy().into_owned();
+    if cfg!(windows) {
+        Some(relative.replace('\\', "/"))
+    } else {
+        Some(relative)
+    }
+}
+
+/// Scan a project for source files used by Explorer language navigation.
+///
+/// The public operation always applies the fixed product limits; the synchronous
+/// helper accepts limits only so focused tests can exercise exact-bound behavior.
+pub async fn scan_language_files(root: &Path) -> Result<LanguageScanResult, FsError> {
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        scan_language_files_sync(&root, MAX_LANGUAGE_SCAN_ENTRIES, MAX_LANGUAGE_SCAN_FILES)
+    })
+    .await
+    .map_err(|error| FsError::Io(std::io::Error::other(error.to_string())))?
+}
+
+fn scan_language_files_sync(
+    root: &Path,
+    max_entries: usize,
+    max_files: usize,
+) -> Result<LanguageScanResult, FsError> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut visited_entries = 0;
+    let mut matched_files = 0;
+    let mut truncated = false;
+
+    for entry in language_scan_walker(root).filter_map(Result::ok) {
+        let path = entry.path();
+        if path == root {
+            continue;
+        }
+        visited_entries += 1;
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        let file_type = metadata.file_type();
+        if file_type.is_symlink() || !file_type.is_file() {
+            continue;
+        }
+
+        if let Some(language) = language_family(path) {
+            let Some(relative_path) = normalized_relative_path(root, path) else {
+                continue;
+            };
+            let mtime = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs() as i64)
+                .unwrap_or(0);
+            let file = LanguageFile {
+                path: relative_path,
+                size: metadata.len(),
+                mtime,
+                language,
+            };
+            matched_files += 1;
+            if files.len() < max_files {
+                files.insert(file.path.clone(), file);
+            } else if let Some((largest_path, _)) = files.last_key_value() {
+                if file.path < *largest_path {
+                    files.pop_last();
+                    files.insert(file.path.clone(), file);
+                }
+            }
+        }
+
+        if visited_entries >= max_entries {
+            truncated = true;
+            break;
+        }
+    }
+
+    truncated |= matched_files >= max_files;
+    Ok(LanguageScanResult {
+        files: files.into_values().collect(),
+        truncated,
+        limit: max_files,
+    })
+}
+
 /// Search file contents within `root` for `query` (plain text, internally regex-escaped).
 ///
 /// Returns `(matches, truncated)`. Walks only text files; respects .gitignore via the
@@ -653,7 +940,6 @@ pub async fn search_files(
     let max = max_results.min(MAX_SEARCH_RESULTS);
 
     tokio::task::spawn_blocking(move || {
-        use ignore::WalkBuilder;
         use regex::RegexBuilder;
 
         let re = RegexBuilder::new(&escaped)
@@ -669,15 +955,7 @@ pub async fn search_files(
         let mut matches: Vec<SearchMatch> = Vec::new();
         let mut truncated = false;
 
-        for entry in WalkBuilder::new(&root_clone)
-            .hidden(false)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .require_git(false)
-            .build()
-            .filter_map(|e| e.ok())
-        {
+        for entry in project_walker(&root_clone).filter_map(Result::ok) {
             if !entry.file_type().map_or(false, |ft| ft.is_file()) {
                 continue;
             }
@@ -751,20 +1029,10 @@ pub async fn search_paths(
     let max = max_results.min(MAX_SEARCH_RESULTS);
 
     tokio::task::spawn_blocking(move || {
-        use ignore::WalkBuilder;
-
         let mut matches: Vec<PathSearchMatch> = Vec::new();
         let mut truncated = false;
 
-        for entry in WalkBuilder::new(&root_clone)
-            .hidden(false)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .require_git(false)
-            .build()
-            .filter_map(|e| e.ok())
-        {
+        for entry in project_walker(&root_clone).filter_map(Result::ok) {
             if !entry.file_type().map_or(false, |ft| ft.is_file()) {
                 continue;
             }
