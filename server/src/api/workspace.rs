@@ -164,6 +164,10 @@ pub async fn init_workspace(
 
     state.fs.reinit_sandbox(project_roots_from_config(&cfg));
     *state.workspace_dir.write().await = workspace_dir_from_config(&cfg);
+    state
+        .host_resource_monitor
+        .reconfigure(cfg.server.host_resources.clone())
+        .await;
     *state.config.write().await = cfg;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -184,6 +188,10 @@ pub async fn switch_workspace(
     state.fs.reinit_sandbox(project_roots_from_config(&cfg));
 
     *state.workspace_dir.write().await = workspace_dir_from_config(&cfg);
+    state
+        .host_resource_monitor
+        .reconfigure(cfg.server.host_resources.clone())
+        .await;
     *state.config.write().await = cfg;
 
     state.event_sink.broadcast(

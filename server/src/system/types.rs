@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostMetrics {
     pub sampled_at: u64,
@@ -14,7 +14,7 @@ pub struct HostMetrics {
     pub temperatures: Vec<TemperatureMetrics>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CpuMetrics {
     pub usage_percent: f64,
@@ -23,7 +23,7 @@ pub struct CpuMetrics {
     pub load_average: Option<LoadAverageMetrics>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadAverageMetrics {
     pub one: f64,
@@ -31,7 +31,7 @@ pub struct LoadAverageMetrics {
     pub fifteen: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryMetrics {
     pub total_bytes: u64,

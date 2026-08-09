@@ -118,7 +118,7 @@ impl HostResourceSource for SystemHostResourceSource {
 }
 
 pub fn collect_host_resource_snapshot(
-    source: &impl HostResourceSource,
+    source: &(dyn HostResourceSource + '_),
     workspace: &Path,
 ) -> HostResourceSnapshotV1 {
     #[cfg(target_os = "linux")]
@@ -131,9 +131,33 @@ pub fn collect_host_resource_snapshot(
     }
 }
 
+pub fn collect_host_resource_snapshot_with_options(
+    source: &(dyn HostResourceSource + '_),
+    workspace: &Path,
+    collect_processes: bool,
+    collect_pss: bool,
+    process_deadline_millis: u64,
+) -> HostResourceSnapshotV1 {
+    #[cfg(target_os = "linux")]
+    {
+        super::linux::collect_with_options(
+            source,
+            workspace,
+            collect_processes,
+            collect_pss,
+            process_deadline_millis,
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (collect_processes, collect_pss, process_deadline_millis);
+        unsupported_snapshot(source, workspace)
+    }
+}
+
 #[cfg(not(target_os = "linux"))]
 fn unsupported_snapshot(
-    source: &impl HostResourceSource,
+    source: &(dyn HostResourceSource + '_),
     workspace: &Path,
 ) -> HostResourceSnapshotV1 {
     use super::{Availability, MemorySnapshot, MountContext};

@@ -363,6 +363,10 @@ pub async fn update_settings(
             .await;
         return Err(ApiError::from_app(error));
     }
+    state
+        .host_resource_monitor
+        .reconfigure(config.server.host_resources.clone())
+        .await;
     *state.config.write().await = config.clone();
     Ok(Json(settings_response(
         config.server.telemetry,

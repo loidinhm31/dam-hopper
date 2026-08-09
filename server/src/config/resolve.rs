@@ -68,16 +68,18 @@ pub struct ConfigResolution {
     pub source: ConfigSource,
 }
 
-pub fn resolve_startup_config(
-    input: ConfigResolutionInput,
-) -> Result<ConfigResolution, AppError> {
+pub fn resolve_startup_config(input: ConfigResolutionInput) -> Result<ConfigResolution, AppError> {
     if let Some(path) = input.explicit_config {
         return load_config_at(&path, ConfigSource::ExplicitConfig);
     }
 
     if let Some(workspace_dir) = input.workspace_dir {
         return match load_workspace_config(&workspace_dir) {
-            Ok(config) => Ok(build_resolution(config, ConfigSource::Workspace, &workspace_dir)),
+            Ok(config) => Ok(build_resolution(
+                config,
+                ConfigSource::Workspace,
+                &workspace_dir,
+            )),
             Err(error) => {
                 tracing::warn!(
                     error = %error,
@@ -94,10 +96,9 @@ pub fn resolve_startup_config(
     }
 
     if let Some(workspace_dir) = input.global_default_workspace {
-        if let Some(resolution) = try_workspace_candidate(
-            &workspace_dir,
-            ConfigSource::GlobalDefaultWorkspace,
-        ) {
+        if let Some(resolution) =
+            try_workspace_candidate(&workspace_dir, ConfigSource::GlobalDefaultWorkspace)
+        {
             return resolution;
         }
     }

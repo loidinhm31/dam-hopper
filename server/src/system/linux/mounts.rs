@@ -6,7 +6,7 @@ use crate::system::{
 };
 
 pub fn collect(
-    source: &impl HostResourceSource,
+    source: &(dyn HostResourceSource + '_),
     workspace: &Path,
     sampled_at: u64,
 ) -> MountContext {

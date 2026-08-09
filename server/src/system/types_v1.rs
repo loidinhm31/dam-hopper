@@ -2,6 +2,8 @@ use serde::Serialize;
 use std::path::Path;
 use uuid::Uuid;
 
+use super::alerts::AlertSummary;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AvailabilityState {
@@ -38,6 +40,13 @@ impl Availability {
     pub fn unavailable(sampled_at: u64, detail_code: impl Into<String>) -> Self {
         Self {
             state: AvailabilityState::TemporarilyUnavailable,
+            sampled_at,
+            detail_code: Some(detail_code.into()),
+        }
+    }
+    pub fn stale(sampled_at: u64, detail_code: impl Into<String>) -> Self {
+        Self {
+            state: AvailabilityState::Stale,
             sampled_at,
             detail_code: Some(detail_code.into()),
         }
@@ -194,6 +203,22 @@ pub struct ProcessInventory {
     pub disappeared_count: usize,
     pub availability: Availability,
 }
+impl ProcessInventory {
+    pub fn unavailable(sampled_at: u64, detail_code: impl Into<String>) -> Self {
+        Self {
+            processes: Vec::new(),
+            scanned_count: 0,
+            truncated: false,
+            deadline_exceeded: false,
+            skipped_count: 0,
+            permission_denied_count: 0,
+            invalid_utf8_count: 0,
+            malformed_count: 0,
+            disappeared_count: 0,
+            availability: Availability::unavailable(sampled_at, detail_code),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -242,7 +267,7 @@ pub struct HostResourceSnapshotV1 {
     pub cgroups: Vec<CgroupMemory>,
     pub processes: ProcessInventory,
     pub mount_context: MountContext,
-    pub alert: Option<()>,
+    pub alert: Option<AlertSummary>,
     pub action_capabilities: ActionCapabilities,
 }
 #[derive(Clone, Debug, Serialize)]
@@ -268,6 +293,19 @@ pub struct ActionCapabilities {
     pub availability: Availability,
 }
 impl HostResourceSnapshotV1 {
+    pub fn unavailable(sampled_at: u64, workspace: &Path) -> Self {
+        Self::new(
+            sampled_at,
+            MemorySnapshot::empty_at(sampled_at),
+            MountContext::for_workspace_at(workspace, sampled_at),
+        )
+        .with_deep_sections(
+            Availability::unavailable(sampled_at, "snapshotDeadlineExceeded"),
+            Availability::unavailable(sampled_at, "snapshotDeadlineExceeded"),
+            Availability::unavailable(sampled_at, "snapshotDeadlineExceeded"),
+        )
+    }
+
     pub fn new(sampled_at: u64, memory: MemorySnapshot, mount_context: MountContext) -> Self {
         let unavailable = Availability::unavailable(sampled_at, "notCollected");
         Self {
