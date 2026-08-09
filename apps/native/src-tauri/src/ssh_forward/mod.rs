@@ -44,10 +44,7 @@ mod tests {
         let capability: serde_json::Value = serde_json::from_str(CAPABILITY_MANIFEST).unwrap();
         assert_eq!(capability["identifier"], "ssh-forward-main");
         assert_eq!(capability["windows"], serde_json::json!(["main"]));
-        assert_eq!(
-            capability["platforms"],
-            serde_json::json!(["linux", "macOS", "windows"])
-        );
+        assert_eq!(capability["platforms"], serde_json::json!(["windows"]));
         assert_eq!(
             capability["permissions"],
             serde_json::json!(["ssh-forward"])
@@ -69,3 +66,12 @@ mod tests {
         assert!(!cfg!(mobile));
     }
 }
+
+#[cfg(all(test, windows))]
+mod windows_agent_probe;
+
+#[cfg(all(test, windows))]
+mod windows_storage_probe;
+
+#[cfg(all(test, windows))]
+mod windows_atomic_probe;

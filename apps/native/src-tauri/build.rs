@@ -18,7 +18,7 @@ fn main() {
     }
     fs::copy(&bridge_asset, embedded_asset).expect("copy browser bridge asset");
     let attributes = match env::var("CARGO_CFG_TARGET_OS").as_deref() {
-        Ok("windows" | "macos" | "linux") => {
+        Ok("windows") => {
             Attributes::new().app_manifest(AppManifest::new().commands(SSH_FORWARD_COMMANDS))
         }
         _ => Attributes::new(),
