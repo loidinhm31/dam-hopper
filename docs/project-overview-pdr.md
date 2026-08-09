@@ -240,35 +240,37 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Sensitive metadata is redacted before sink delivery unless local diagnostics explicitly disable it
 - ✓ Shared logger is used by the high-value UI surfaces noted above
 
-### PR-009: Linux Host Resource Monitoring and Gated Remediation (Phase 02)
+### PR-009: Host Resource Monitoring (Current Delivery)
 
-**Status:** Phase 02 read-only snapshot contract implemented; privileged remediation remains unimplemented. This requirement does not enroll a helper or enable host mutation.
+**Status:** Monitoring implementation delivered through Phase 06; Phase 07 release validation remains. Re-authentication, mutation lifecycle/audit, privileged IPC, enrollment, and fixed host operations are deferred together and are not part of the current release.
 
-**Functional Requirements:**
+**Current Functional Requirements:**
 
-- Keep `HostResourceMonitor` read-only and independent from `HostActionService`; expose bounded snapshots and alert events without an automatic action path.
-- Preserve `GET /api/system/metrics` compatibility; add resource APIs as versioned siblings when implementation begins.
-- Treat fresh DamHopper re-auth as one-shot intent approval only, never as OS/root authorization.
-- Permit only typed, allowlisted fixed actions. Reject commands, shells, executable paths, arbitrary signals, process groups, PID-only targets, client-selected cache values, and automatic remediation.
-- Require helper-side peer, enrollment, action, freshness, replay, rate, host-namespace, and target revalidation. Prefer pidfd for process actions; fail closed when proof is unavailable.
-- Keep actions monitoring-only under `--no-auth`, missing MongoDB-backed re-auth, non-Linux hosts, Docker/nohup installs, absent enrollment/helper/policy/IPC, or incomplete target evidence.
+- Keep `HostResourceMonitor` read-only, bounded, startup-owned, and independent from every mutation subsystem.
+- Preserve the `GET /api/system/metrics` response shape from the monitor cache; expose immutable deep snapshots and bounded incident history through versioned protected read APIs.
+- Publish sanitized `host:alertChanged` refresh events; REST remains authoritative after reconnect, lag, or missed events.
+- Render in-app status, alert history, evidence, uncertainty, and static operator guidance without credentials or host-mutation controls.
+- Feature-detect Linux procfs, PSI, and cgroup v2 data. Return explicit unsupported/stale/partial states on constrained Linux, containers, and non-Linux hosts.
 
-**Acceptance Criteria:**
+**Current Acceptance Criteria:**
 
-- ✓ Dataflow and abuse-case matrix are recorded in [system architecture](./system-architecture.md#host-resource-monitoring-and-remediation-phase-02-read-only-contract).
-- ✓ Feasibility evidence records readable procfs/PSI, unified cgroup v2, systemd, and SELinux on the development Fedora host, while explicitly noting that no DamHopper unit/helper/socket/policy is installed.
-- ✓ Caller proof requires an atomically obtained peer pidfd, `SO_PEERCRED`, systemd `MainPID`, per-request `SCM_PIDFD`, root-owned identity, and close-on-exec one-shot IPC; same-user means the enrolled server effective UID, not the browser account.
-- ✓ Target proof binds host PID/mount/user namespace inodes, boot ID, PID start ticks, UID, cgroup, and bounded command identity; incomplete or ambiguous namespace evidence disables action.
-- [x] Phase 02 implements and tests the read-only `HostResourceSnapshotV1` contract: bounded actual-byte reads, explicit degradation states, cgroup v2/PSI and limits, bounded process inventory with deadlines and issue counters, and non-overlapping cache attribution.
-- [ ] Phase 03 expose the shared monitor's cached projection while preserving the legacy metrics response shape.
-- [ ] Phase 04+ implement app approval lifecycle and audit.
-- [ ] Phase 05+ implement separately enrolled fixed-action helper only after sign-off.
+- [x] `HostResourceSnapshotV1` uses bounded actual-byte reads, explicit degradation states, cgroup v2/PSI data, bounded process inventory, and non-overlapping cache attribution.
+- [x] One background monitor owns sampling, cached legacy/deep projections, alert state, and shutdown lifecycle independently of UI visibility.
+- [x] `GET /api/system/metrics` remains compatible; `/api/system/resources/v1/snapshot` and `/alerts` return cached read-only state.
+- [x] Sustained alert classification, bounded incident history, and `host:alertChanged` delivery are implemented and tested.
+- [x] The top-nav diagnosis UI consumes cached snapshot/alert state and exposes no remediation control.
+- [ ] Phase 07 validates packaging, compatibility, graceful degradation, platform/browser matrices, soak budgets, documentation, rollout, and rollback.
 
-**Warnings and unresolved decisions:**
+**Accepted Monitoring Follow-ups:**
 
-- The development-host check proves platform feasibility, not enrollment or capability. Until later phases install and validate the actual unit, binary, socket, ownership, and peer identity, the honest capability is `actions = disabled`.
-- Support minimum kernel/distro/systemd versions, pidfd fallback policy, cgroup-v1 behavior, action-audit retention, threshold defaults, and approval of the global cache action remain open. Unknown layouts stay monitoring-only.
-- A compromised enrolled server remains able to request the helper's narrow fixed action set; a security owner must accept this residual risk before privileged implementation.
+- Release gate: preserve alert subscriptions across profile switches; tighten event validation; keep legacy metrics visible when deep reads fail; cover profile/disconnect/reconnect behavior in Chromium.
+- Backlog polish: refine warning-badge severity semantics after release evidence and threshold tuning.
+
+**Deferred Remediation Backlog and Sign-off:**
+
+- Re-authentication/action lifecycle and privileged helper/IPC/enrollment remain one inactive backlog. They are not dependencies of monitoring Phase 07.
+- Preserve the deferred threat model in [system architecture](./system-architecture.md#deferred-remediation-design-fixed-v1-contract); do not treat it as shipped capability.
+- Before any future privileged implementation: reopen architecture/security review; define kernel/distro/systemd and pidfd policy; approve audit retention and any global cache operation; accept residual enrolled-server compromise risk.
 
 ## Non-Functional Requirements
 

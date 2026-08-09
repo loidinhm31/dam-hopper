@@ -6,7 +6,7 @@ use tower::ServiceExt;
 
 use crate::{
     agent_store::AgentStoreService,
-    api::build_router,
+    api::{build_router, router::build_router_with_web_dir},
     config::{
         DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo,
     },
@@ -394,6 +394,71 @@ async fn system_metrics_returns_sane_json() {
     assert!(json["disk"]["usagePercent"].as_f64().unwrap() >= 0.0);
     assert!(json["disks"].as_array().is_some());
     assert!(json["temperatures"].as_array().is_some());
+}
+
+#[tokio::test]
+async fn legacy_metrics_remain_cached_when_deep_snapshot_is_unavailable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let snapshot = get(state.clone(), "/api/system/resources/v1/snapshot").await;
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    let snapshot = axum::body::to_bytes(snapshot.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let snapshot: serde_json::Value = serde_json::from_slice(&snapshot).unwrap();
+    assert_eq!(
+        snapshot["capabilities"]["linuxDeepMetrics"]["state"],
+        "temporarilyUnavailable"
+    );
+
+    let first = get(state.clone(), "/api/system/metrics").await;
+    let second = get(state, "/api/system/metrics").await;
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::OK);
+    let first = axum::body::to_bytes(first.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let second = axum::body::to_bytes(second.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let first: serde_json::Value = serde_json::from_slice(&first).unwrap();
+    let second: serde_json::Value = serde_json::from_slice(&second).unwrap();
+    assert_eq!(
+        first, second,
+        "legacy endpoint must project the monitor cache"
+    );
+    assert!(first["cpu"]["usagePercent"].is_number());
+    assert!(first["memory"]["availableBytes"].is_number());
+    assert!(first["disk"]["usagePercent"].is_number());
+}
+
+#[tokio::test]
+async fn package_router_serves_spa_without_masking_unknown_api_routes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let web_dir = tempfile::tempdir().unwrap();
+    std::fs::write(web_dir.path().join("index.html"), "<h1>DamHopper</h1>").unwrap();
+    let router = build_router_with_web_dir(make_state(&tmp), vec![], web_dir.path().into());
+
+    let index = router
+        .clone()
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(index.status(), StatusCode::OK);
+    let index = axum::body::to_bytes(index.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(index.as_ref(), b"<h1>DamHopper</h1>");
+
+    for path in ["/api", "/api/", "/api/not-a-real-route"] {
+        let api_miss = router
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(api_miss.status(), StatusCode::NOT_FOUND, "{path}");
+    }
 }
 
 #[tokio::test]

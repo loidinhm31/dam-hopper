@@ -254,14 +254,17 @@ export function HostResourceDiagnosis({
   );
 }
 
-function percentage(part?: number, total?: number): number | undefined {
-  return part !== undefined && total !== undefined && total > 0
+function percentage(
+  part?: number | null,
+  total?: number | null,
+): number | undefined {
+  return part != null && total != null && total > 0
     ? (part / total) * 100
     : undefined;
 }
 
-function formatPsi(some?: number, full?: number): string {
-  return some === undefined && full === undefined
+function formatPsi(some?: number | null, full?: number | null): string {
+  return some == null && full == null
     ? "Unavailable"
     : `${some?.toFixed(1) ?? "—"}% / ${full?.toFixed(1) ?? "—"}%`;
 }

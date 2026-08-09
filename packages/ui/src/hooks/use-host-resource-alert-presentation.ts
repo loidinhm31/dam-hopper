@@ -12,7 +12,7 @@ type AlertVersion = Pick<
 interface HostResourceAlertPresentationState {
   versions: AlertVersion[];
   unreadIds: string[];
-  recordAlert: (alert?: HostResourceAlert) => void;
+  recordAlert: (alert?: HostResourceAlert | null) => void;
   markRead: () => void;
   reset: () => void;
 }
@@ -58,7 +58,9 @@ export const useHostResourceAlertPresentationStore =
     reset: () => set({ versions: [], unreadIds: [] }),
   }));
 
-export function useHostResourceAlertPresentation(alert?: HostResourceAlert) {
+export function useHostResourceAlertPresentation(
+  alert?: HostResourceAlert | null,
+) {
   const recordAlert = useHostResourceAlertPresentationStore(
     (state) => state.recordAlert,
   );

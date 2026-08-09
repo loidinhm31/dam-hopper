@@ -25,6 +25,8 @@ describe("host resource state formatting", () => {
     ).toBe("Stale data (monitorStale)");
     expect(formatOptionalBytes(undefined)).toBe("Unavailable");
     expect(formatOptionalPercent(undefined)).toBe("Unavailable");
+    expect(formatOptionalBytes(null)).toBe("Unavailable");
+    expect(formatOptionalPercent(null)).toBe("Unavailable");
   });
 
   it("maps severity to the existing semantic color tokens", () => {

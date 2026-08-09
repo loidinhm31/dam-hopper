@@ -73,6 +73,41 @@ fn legacy_host_metrics_serializes_compatibility_shape() {
     ] {
         assert!(value.get(key).is_some(), "missing legacy key {key}");
     }
+    assert_eq!(
+        value["cpu"].as_object().unwrap().len(),
+        4,
+        "legacy CPU shape changed"
+    );
+    for key in [
+        "usagePercent",
+        "logicalCoreCount",
+        "physicalCoreCount",
+        "loadAverage",
+    ] {
+        assert!(
+            value["cpu"].get(key).is_some(),
+            "missing legacy cpu key {key}"
+        );
+    }
+    for key in ["totalBytes", "usedBytes", "availableBytes", "usagePercent"] {
+        assert!(
+            value["memory"].get(key).is_some(),
+            "missing legacy memory key {key}"
+        );
+    }
+    for key in [
+        "name",
+        "mountPoint",
+        "totalBytes",
+        "availableBytes",
+        "usedBytes",
+        "usagePercent",
+    ] {
+        assert!(
+            value["disk"].get(key).is_some(),
+            "missing legacy disk key {key}"
+        );
+    }
 }
 
 #[test]

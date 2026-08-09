@@ -181,6 +181,35 @@ If omitted, defaults to `.dam-hopper/agent-store/` relative to the loaded regist
 
 All features are enabled by default.
 
+## Host Resource Monitoring (Read-only)
+
+The server-owned monitor is enabled with safe defaults and does not require a
+new credential, helper, service, capability, or elevated host privilege. Its
+optional TOML settings belong under `[server.host_resources]`; use snake_case
+keys only. The default intervals are 5 seconds for light data, 15 seconds for
+the bounded process inventory, and 60 seconds for PSS. Deep collection has a
+150 ms process deadline and a 500 ms snapshot deadline; values are clamped to
+safe ranges by the server.
+
+```toml
+[server.host_resources]
+light_sample_seconds = 5
+process_sample_seconds = 15
+process_deadline_millis = 150
+snapshot_deadline_millis = 500
+```
+
+The monitor reads bounded `/proc`, PSI, cgroup v2, and mount evidence when the
+platform permits it. Containers can expose a namespace-limited view; cgroup v1
+and non-Linux deep collection are explicitly unsupported. Missing, denied,
+malformed, stale, or timed-out sources degrade only the affected deep section.
+`GET /api/system/metrics` remains available as the compatible basic-metrics
+fallback. Host diagnostics expose bounded process names and summaries only;
+they do not expose raw argv or environment values.
+
+Do not add re-authentication, action, helper, IPC, enrollment, or host-mutation
+settings to this release. Those remain deferred backlog, not configuration.
+
 ### Browser Debug Preview
 
 The Browser tool has no server configuration flag. It embeds the selected
@@ -360,20 +389,14 @@ When the database opens successfully:
 - Exact shell/process memory continuity is not guaranteed across server or host restart
 - Dead sessions are kept for 60 seconds to allow reconnection; buffers are cleaned up per TTL
 
-### Host actions (Phase 04)
+### Deferred host-action scaffolding (inactive)
 
-Host action lifecycle routes are available only when normal authentication and
-MongoDB-backed re-authentication are configured. The capability remains
-disabled (`helperNotEnrolled`) until a supported host helper is explicitly
-enrolled; there is no host-action configuration switch that bypasses this
-check. The fixed action set is limited to clean-cache drop and termination of
-a same-user process.
-
-Phase 04 does not prompt for an operating-system password and does not perform
-sudo/polkit/PTY escalation, privileged execution, automatic remediation, or
-helper IPC execution. Deployments without enrollment remain read-only for host
-resources. Action approvals are actor-bound and one-shot; lifecycle/audit
-failures fail closed.
+This Phase 07 release has no supported host-action configuration or client
+contract. Inert, fail-closed route scaffolding remains in the server for a
+future approved design, but authentication, re-authentication, helper
+enrollment, lifecycle/audit, IPC, and host mutation are deferred together. Do
+not configure or call those deferred routes for monitoring; no current setting
+enables them.
 
 ### Telemetry Configuration
 

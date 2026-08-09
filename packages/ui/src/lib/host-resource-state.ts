@@ -28,12 +28,14 @@ export function formatAvailability(availability: Availability): string {
     : AVAILABILITY_LABELS[availability.state];
 }
 
-export function formatOptionalBytes(bytes: number | undefined): string {
-  return bytes === undefined ? "Unavailable" : formatBytes(bytes);
+export function formatOptionalBytes(bytes: number | null | undefined): string {
+  return bytes == null ? "Unavailable" : formatBytes(bytes);
 }
 
-export function formatOptionalPercent(percent: number | undefined): string {
-  return percent === undefined ? "Unavailable" : `${Math.round(percent)}%`;
+export function formatOptionalPercent(
+  percent: number | null | undefined,
+): string {
+  return percent == null ? "Unavailable" : `${Math.round(percent)}%`;
 }
 
 export function severityClass(severity: AlertSeverity): string {

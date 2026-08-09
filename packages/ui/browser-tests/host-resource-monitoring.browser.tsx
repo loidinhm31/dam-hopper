@@ -1,7 +1,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HostResourceSnapshotV1 } from "@/api/client.js";
+import type { HostMetrics, HostResourceSnapshotV1 } from "@/api/client.js";
 
 const availability = { state: "available", sampledAt: 1 } as const;
 const snapshot: HostResourceSnapshotV1 = {
@@ -51,14 +51,41 @@ const snapshot: HostResourceSnapshotV1 = {
   },
 };
 
+const legacyMetrics: HostMetrics = {
+  sampledAt: 1,
+  hostname: "monitor-host",
+  osName: "Fedora",
+  uptimeSeconds: 1,
+  cpu: { usagePercent: 42, logicalCoreCount: 4 },
+  memory: {
+    totalBytes: 1_024,
+    usedBytes: 512,
+    availableBytes: 512,
+    usagePercent: 50,
+  },
+  disk: {
+    name: "root",
+    mountPoint: "/",
+    totalBytes: 1_024,
+    availableBytes: 256,
+    usedBytes: 768,
+    usagePercent: 75,
+  },
+  disks: [],
+  temperatures: [],
+};
+
+let snapshotResult: {
+  data?: HostResourceSnapshotV1;
+  isLoading: boolean;
+  isError: boolean;
+};
+let legacyMetricsResult: { data?: HostMetrics };
+
 vi.mock("@/api/queries.js", () => ({
-  useHostResourceSnapshot: () => ({
-    data: snapshot,
-    isLoading: false,
-    isError: false,
-  }),
+  useHostResourceSnapshot: () => snapshotResult,
   useHostResourceAlerts: () => ({ data: [] }),
-  useHostMetrics: () => ({ data: undefined }),
+  useHostMetrics: () => legacyMetricsResult,
 }));
 
 import { HostResourcePopover } from "@/components/organisms/HostResourcePopover.js";
@@ -69,6 +96,8 @@ describe("host resource monitoring in Chromium", () => {
   let root: Root;
 
   beforeEach(() => {
+    snapshotResult = { data: snapshot, isLoading: false, isError: false };
+    legacyMetricsResult = { data: undefined };
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -118,5 +147,29 @@ describe("host resource monitoring in Chromium", () => {
     expect(container.querySelector('[role="dialog"]')).toBeNull();
     expect(document.activeElement).toBe(trigger);
     outside.remove();
+  });
+
+  it("keeps compatible basic metrics visible when the deep snapshot fails", async () => {
+    snapshotResult = {
+      data: { ...snapshot, alert: undefined },
+      isLoading: false,
+      isError: true,
+    };
+    legacyMetricsResult = { data: legacyMetrics };
+    await act(async () => root.render(<HostResourcePopover />));
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Host resources: Sampling host"]',
+    );
+    await act(async () => trigger?.click());
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
+    expect(dialog?.textContent).toContain("Resource snapshot unavailable");
+    expect(dialog?.textContent).toContain(
+      "Deep metrics unavailable; showing compatible basic metrics.",
+    );
+    expect(dialog?.textContent).toContain("42%");
+    expect(dialog?.textContent).toContain("75%");
+    expect(dialog?.textContent).not.toContain("Memory available");
+    expect(dialog?.textContent).not.toContain("Approve");
   });
 });
