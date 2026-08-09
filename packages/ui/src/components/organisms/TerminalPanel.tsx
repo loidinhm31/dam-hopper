@@ -55,6 +55,7 @@ import { useSettingsStore } from "@/stores/settings.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useTerminalSuggestions } from "@/hooks/use-terminal-suggestions.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
+import { useTransportGeneration } from "@/hooks/use-transport-generation.js";
 import { TerminalFindBar } from "@/components/atoms/TerminalFindBar.js";
 import { TerminalSuggestionGhost } from "@/components/atoms/TerminalSuggestionGhost.js";
 import { TerminalHistoryList } from "@/components/organisms/TerminalHistoryList.js";
@@ -131,6 +132,7 @@ export function TerminalPanel({
   webglEnabled = false,
   className,
 }: TerminalPanelProps) {
+  const transportGeneration = useTransportGeneration();
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
   const shouldSuppressNativeKeyboard =
@@ -659,7 +661,7 @@ export function TerminalPanel({
       term.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // intentionally run once per mount — use key prop to force remount
+  }, [transportGeneration]);
 
   useEffect(() => {
     const term = termRef.current;
