@@ -13,7 +13,7 @@
 ## Overview
 
 - **Priority:** P1
-- **Status:** Complete — limited Windows GO; secure-store implementation remains blocked (2026-08-10)
+- **Status:** Complete — limited Windows GO; Phase 02 contract design may proceed; durable-store implementation remains blocked (2026-08-10)
 - **Effort:** 10h
 - **Description:** Block implementation until the SSH crate, crypto/agent APIs, Windows reparse-safe storage primitives, Tauri app-command ACL, Windows Cargo graph, and mobile/non-Windows exclusion compile on supported targets.
 - **Estimate gate:** Remaining 78h/88h total is conditional on all mandatory proofs. A second platform stack, missing safe store/maintenance primitive, or narrowed OS support stops work for explicit scope/support/effort replan.
@@ -130,7 +130,7 @@ No server or shared transport code participates. Existing `server/src/port_forwa
 - [x] Android/iOS Cargo trees exclude SSH dependencies and handlers.
 - [x] Go/no-go report completed before Phase 02.
 
-**2026-08-10 status:** Windows agent signing and primitive retained-handle storage proofs passed. Phase 02 contract design may proceed, but durable-store implementation remains blocked until every operation has race/fault coverage. Linux/macOS/iOS runner evidence remains deferred.
+**2026-08-10 status:** Windows agent signing and contained-handle feasibility proofs cover profile/trust/meta reads, staged writes, replacement, backup/recovery, quarantine, and purge. Phase 02 contract design may proceed. Durable-store implementation remains blocked pending production deterministic per-operation race/fault coverage and durable replacement proof. Linux/macOS/iOS runner evidence remains deferred.
 
 ## Success Criteria
 
@@ -157,7 +157,7 @@ No server or shared transport code participates. Existing `server/src/port_forwa
 
 ## Next steps
 
-- Phase 02 starts only after a documented go decision.
+- Phase 02 contract design starts after this documented limited GO; durable-store implementation waits for deterministic race/fault coverage and durable replacement proof.
 - Carry exact versions, ACL identifiers, and supported agent protocols forward without reinterpreting them.
 
 ### Unresolved Questions

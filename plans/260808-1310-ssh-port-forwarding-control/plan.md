@@ -34,8 +34,8 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 | # | Phase | Status | Progress | Effort | Link |
 |---|---|---|---:|---:|---|
 | 1 | Windows dependency, ACL, and platform feasibility gates | Complete | 100% | 10h | [Phase 01](./phase-01-dependency-platform-gates.md) |
-| 2 | Contracts, persistence, scope retention | Design only — durable store blocked pending Phase 01 secure-store GO | 0% | 12h | [Phase 02](./phase-02-native-contracts-persistence.md) |
-| 3 | SSH transport, credentials, trust, errors | Pending | 0% | 14h | [Phase 03](./phase-03-ssh-transport-trust.md) |
+| 2 | Contracts, persistence, scope retention | Design may proceed — durable-store implementation blocked pending deterministic race/fault coverage and durable replacement proof | 0% | 12h | [Phase 02](./phase-02-native-contracts-persistence.md) |
+| 3 | SSH transport, authentication, trust, errors | Pending | 0% | 14h | [Phase 03](./phase-03-ssh-transport-trust.md) |
 | 4 | Manager ordering, lifecycle, IPC, shutdown | Pending | 0% | 16h | [Phase 04](./phase-04-native-manager-tauri-ipc.md) |
 | 5 | Browser-safe host and ordered adapter | Pending | 0% | 10h | [Phase 05](./phase-05-host-context-native-adapter.md) |
 | 6 | Desktop-only control surface | Pending | 0% | 10h | [Phase 06](./phase-06-desktop-control-surface.md) |
@@ -49,7 +49,8 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 
 ## Release dependencies
 
-- Windows Phase 01 go decision for exact SSH crate/crypto/agent/ACL and Windows storage graph.
+- Windows Phase 01 limited GO for exact SSH crate/crypto/agent/ACL and Windows storage graph; Phase 02 contract design may proceed.
+- Durable-store implementation remains blocked pending production deterministic per-operation race/fault coverage and durable replacement proof.
 - Windows automated/package runtime evidence; Linux/macOS/iOS evidence is deferred with platform expansion.
 - Security approval of ACL/trust/target/remediation and product acceptance of other-local-process exposure.
 - The 88h estimate remains conditional on Windows-only Phase 01 proofs. Any failed mandatory Windows gate, fallback, updater/relaunch enablement, or trust-repair primitive gap stops later phases. Adding Linux/macOS/iOS support requires a separate scope and estimate review.
@@ -58,7 +59,7 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 
 ## Current status
 
-**2026-08-10 — Phase 01 limited GO:** Windows OpenSSH named-pipe identity listing and signing passed with a disposable Ed25519 identity. The retained-handle storage probes cover junction, hard-link, ancestor-junction, atomic-replace, locking, and name-swap denial. Phase 02 durable-store work remains blocked until per-operation race and fault coverage is complete. Linux/macOS/iOS evidence remains deferred.
+**2026-08-10 — Phase 01 limited GO:** Windows dependency, ACL, identity-listing/signing, and platform primitive feasibility is complete. Windows OpenSSH named-pipe signing passed with a disposable Ed25519 identity; retained-handle probes cover junction, hard-link, ancestor-junction, atomic-replace, locking, and name-swap denial. Phase 02 contract design may proceed. Durable-store implementation remains blocked pending production deterministic per-operation race/fault coverage and durable replacement proof. Linux/macOS/iOS evidence remains deferred.
 
 - Phase 02 must retain the approved `russh`/`ring` and Windows OpenSSH named-pipe choices until a separate security review changes them.
 - Named release/security/product owners and protected runtime-evidence environment must be configured.

@@ -1,6 +1,6 @@
 # Phase 01 Native Dependency and Platform Gate
 
-Date: 2026-08-09
+Date: 2026-08-10
 Branch: `features/ssh-port-forwarding-control`
 Decision: **Windows-scoped LIMITED GO — dependency, ACL, and agent work may proceed; durable-store implementation remains blocked.**
 
@@ -68,7 +68,7 @@ cancellation, cleanup, or agent behavior at runtime.
 |---|---|---|
 | Desktop formatting | PASS | `cargo fmt --manifest-path apps/native/src-tauri/Cargo.toml -- --check` |
 | Windows desktop compile | PASS | `cargo check --manifest-path apps/native/src-tauri/Cargo.toml` |
-| Native unit tests | PASS | 21 ordinary tests passed; the live Windows agent gate also passed with a disposable identity |
+| Native unit tests | PASS | 29 tests passed, with one Windows agent runtime test correctly ignored until a disposable identity is loaded |
 | Windows SSH dependency path | PASS | `cargo tree --target x86_64-pc-windows-msvc -p russh` shows the pinned closure |
 | Android SSH exclusion | PASS | `cargo tree --target aarch64-linux-android` has no `russh`, `ring`, `pageant`, or `ssh-key` package |
 | Android compile | PASS | `cargo check --target aarch64-linux-android` |
@@ -76,18 +76,22 @@ cancellation, cleanup, or agent behavior at runtime.
 | iOS compile | DEFERRED | Native mobile support is outside the current Windows scope |
 | macOS/Linux desktop compile/runtime | DEFERRED | Non-Windows support is outside the current scope |
 | Windows agent runtime | PASS | On 2026-08-09, Windows OpenSSH agent listed a disposable Ed25519 identity and completed a named-pipe signing request through `russh` |
-| no-follow/reparse-safe storage | PARTIAL PASS | Windows retained relative-handle probe rejects junctions and multi-link files; same-directory replacement and exclusive-lock primitives pass, while product race coverage remains |
+| no-follow/reparse-safe storage | PARTIAL PASS | Windows retained relative-handle probe covers every managed file through raw bounded reads, staged write, replacement, backup/recovery, quarantine, and purge; it rejects tested junctions, hard links, unsafe components, ancestor swaps, and name swaps. Production durability and deterministic race coverage remain required. |
 | advisory/license automation | PASS WITH WARNINGS | `cargo audit --file apps/native/src-tauri/Cargo.lock` reports 18 allowed warnings, including unmaintained/unsound advisories; `cargo-deny` is unavailable |
 
 ## Go/no-go rationale
 
 The ACL, Windows agent, and primitive storage probes are sufficient to carry their
-decisions into Phase 02 design. Durable-store implementation must remain blocked until
-every profile/trust/meta operation has contained-handle, race, and fault evidence. The
-implementation must use the existing Windows OpenSSH agent and surface a typed
-unavailable-agent result when it cannot be reached. The selected SSH closure contains
-release-candidate key packages and 18 audit warnings that still require release-owner
-review before shipment.
+decisions into Phase 02 design. The test-only seam now covers every planned
+profile/trust/meta lifecycle operation through retained handles: bounded raw read, staged
+write, replacement, and backup/recovery sequence before replacement,
+quarantine/tombstone rename, and purge. It validates opened objects before use and
+never reopens a validated path by string. Durable-store implementation remains blocked
+until production storage adds deterministic per-operation race/fault coverage and
+durable replacement semantics. The implementation must use the existing Windows
+OpenSSH agent and surface a typed unavailable-agent result when it cannot be reached.
+The selected SSH closure contains release-candidate key packages and 18 audit warnings
+that still require release-owner review before shipment.
 RSA remains explicitly unsupported by this candidate until a safe maintained SSH/key
 stack is approved.
 No subprocess `ssh -L` fallback, path-based key access, Pageant fallback, or weakened
@@ -101,10 +105,11 @@ intended for source control.
 
 1. Add host-key rejection, direct-tcpip, keepalive, cancellation, and clean-close
    runtime tests while implementing the forwarding runtime.
-2. Extend the Windows reparse-safe contained-handle probe to every profile/trust/meta
-   operation, backup/quarantine, and tombstone purge.
-3. Add Windows crash/fault tests for same-directory atomic replacement, protected
-   backups, cleanup, and runtime/maintenance locking.
+2. Add deterministic Windows race/fault coverage for production profile/trust/meta
+   operations, including reparse/component swaps, durable replacement, backup recovery,
+   cleanup, and runtime/maintenance locks.
+3. Retain the Windows contained-handle pattern in Phase 02 production storage. Any new
+   store operation needs a corresponding adversarial contained-handle test before use.
 4. Install the repository-approved license tooling, review every transitive license and
    the 18 audit warnings, and obtain security approval for the `-rc` key package and
    the non-RSA compatibility decision.
