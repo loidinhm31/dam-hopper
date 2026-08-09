@@ -43,6 +43,7 @@ describe("explorer language scan cache", () => {
     expect(getExplorerLanguageScanCache(queryClient, "alpha")).toEqual({
       result,
       generation: 0,
+      resultVersion: 1,
       stale: false,
       scannedAt: 100,
     });
@@ -59,6 +60,7 @@ describe("explorer language scan cache", () => {
     expect(getExplorerLanguageScanCache(queryClient, "alpha")).toEqual({
       result,
       generation: 1,
+      resultVersion: 1,
       stale: true,
       scannedAt: 200,
     });
@@ -77,6 +79,21 @@ describe("explorer language scan cache", () => {
     ).rejects.toThrow("scan failed");
 
     expect(getExplorerLanguageScanCache(queryClient, "alpha")).toEqual(before);
+  });
+
+  it("increments the result version for a same-generation rescan", () => {
+    const queryClient = new QueryClient();
+    const first = beginExplorerLanguageScan(queryClient, "alpha");
+    commitExplorerLanguageScan(queryClient, "alpha", first, result, 100);
+    const second = beginExplorerLanguageScan(queryClient, "alpha");
+    commitExplorerLanguageScan(queryClient, "alpha", second, result, 200);
+
+    expect(getExplorerLanguageScanCache(queryClient, "alpha")).toMatchObject({
+      generation: 0,
+      resultVersion: 2,
+      stale: false,
+      scannedAt: 200,
+    });
   });
 
   it("does not recreate removed project scans after workspace cleanup", async () => {
@@ -189,11 +206,11 @@ describe("explorer language scan cache", () => {
 
     expect(secondRun).toMatchObject({
       committed: true,
-      cache: { result: secondResult },
+      cache: { result: secondResult, resultVersion: 1 },
     });
     expect(firstRun).toMatchObject({
       committed: false,
-      cache: { result: secondResult },
+      cache: { result: secondResult, resultVersion: 1 },
     });
     expect(getExplorerLanguageScanCache(queryClient, "alpha")?.result).toEqual(
       secondResult,
