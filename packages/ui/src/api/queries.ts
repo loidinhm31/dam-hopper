@@ -1,13 +1,18 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
+import { useCallback, useSyncExternalStore } from "react";
 import { api, isGitUnavailableError } from "./client.js";
 import { getTransport } from "./transport.js";
 import { useEditorStore } from "@/stores/editor.js";
-import type { ExplorerLanguageScanCache } from "@/lib/explorer-language-scan.js";
+import type {
+  ExplorerLanguageScanCache,
+  ExplorerLanguageScanCommitResult,
+} from "@/lib/explorer-language-scan.js";
 import {
   beginExplorerLanguageScan,
   commitExplorerLanguageScan,
   emptyExplorerLanguageScanCache,
+  EXPLORER_LANGUAGE_SCAN_QUERY_PREFIX,
   explorerLanguageScanQueryKey,
   getExplorerLanguageScanCache,
 } from "@/lib/explorer-language-scan.js";
@@ -264,17 +269,20 @@ type ExplorerLanguageScanQueryClient = Pick<
   "getQueryData" | "setQueryData" | "removeQueries"
 >;
 
-/** Run a project scan only when the caller explicitly invokes this function. */
+/**
+ * Run a project scan only when the caller explicitly invokes this function.
+ * Return cache state and commit status so stale responses cannot be rendered
+ * accidentally as the current project result.
+ */
 export async function scanExplorerLanguageFiles(
   queryClient: ExplorerLanguageScanQueryClient,
   project: string,
   fetcher: (project: string) => ReturnType<typeof api.fs.languageFiles> = api.fs
     .languageFiles,
-) {
-  const startedGeneration = beginExplorerLanguageScan(queryClient, project);
+): Promise<ExplorerLanguageScanCommitResult> {
+  const scanToken = beginExplorerLanguageScan(queryClient, project);
   const result = await fetcher(project);
-  commitExplorerLanguageScan(queryClient, project, startedGeneration, result);
-  return result;
+  return commitExplorerLanguageScan(queryClient, project, scanToken, result);
 }
 
 /**
@@ -297,8 +305,31 @@ export function useExplorerLanguageScan(project: string) {
   const scan = useMutation({
     mutationFn: () => scanExplorerLanguageFiles(queryClient, project),
   });
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      queryClient.getQueryCache().subscribe((event) => {
+        const queryKey = event.query.queryKey;
+        if (
+          queryKey.length === 2 &&
+          queryKey[0] === EXPLORER_LANGUAGE_SCAN_QUERY_PREFIX &&
+          queryKey[1] === project
+        ) {
+          listener();
+        }
+      }),
+    [project, queryClient],
+  );
+  const getCacheSnapshot = useCallback(() => {
+    const cache = getExplorerLanguageScanCache(queryClient, project);
+    return cache?.result ? cache : null;
+  }, [project, queryClient]);
+  const cache = useSyncExternalStore(
+    subscribe,
+    getCacheSnapshot,
+    getCacheSnapshot,
+  );
 
-  return { ...query, scan, cache: query.data ?? null };
+  return { ...query, scan, cache };
 }
 
 export function useGlobalConfig() {
