@@ -827,9 +827,19 @@ metadata for Rust, combined JavaScript/TypeScript, and Java files.
 - The selected `All | Rust | JS/TS | Java` filter is a global UI preference persisted
   through the existing global-config/settings path. Scan results, stale state, and
   expanded scan-tree folders are not persisted.
-- Phase 03 consumes the cache to build the filtered navigation-only hierarchy and
-  integrate reveal/selection behavior; those Explorer rendering changes are not part
-  of this phase.
+- The Explorer consumes the cache to build a complete, sorted, navigation-only
+  synthetic hierarchy for the selected language. `All` remains the live lazy
+  filesystem tree; synthetic rows are not mutation targets, so create, rename,
+  delete, upload, and related filesystem actions are disabled while filtered.
+- The header presents explicit `Scan`/`Rescan` controls and reports last-scan,
+  stale, in-progress, truncation, error, and empty-result states. Committed
+  results carry a monotonic `resultVersion` (including same-generation rescans)
+  so rendering follows the latest committed snapshot rather than an obsolete
+  tree projection.
+- Reveal/selection requests switch a filtered view to `All` when necessary, then
+  wait for the live tree's committed render after each lazy-child load before
+  opening ancestors and focusing the target. Completion is recorded only after
+  successful reveal, and a request nonce permits a later retry.
 
 The first version is extension-based and limited to `.rs`, `.js`, `.jsx`, `.ts`,
 `.tsx`, and `.java`. It does not provide parser/LSP semantics, symbols/references,

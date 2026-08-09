@@ -3,8 +3,10 @@ import {
   useRef,
   useState,
   useEffect,
+  useLayoutEffect,
   useCallback,
   useMemo,
+  useId,
   type ComponentPropsWithoutRef,
 } from "react";
 import { Tree } from "react-arborist";
@@ -36,7 +38,17 @@ import { EncryptedUploadDialog } from "@/components/organisms/EncryptedUploadDia
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useEditorStore } from "@/stores/editor.js";
-import { useGitDiff, useProject } from "@/api/queries.js";
+import {
+  useExplorerLanguageScan,
+  useGitDiff,
+  useProject,
+} from "@/api/queries.js";
+import type { ExplorerLanguageFilter } from "@/api/fs-types.js";
+import { isExplorerLanguageFilter } from "@/lib/ui-config.js";
+import {
+  buildExplorerLanguageTree,
+  collectExplorerLanguageTreeIds,
+} from "@/lib/explorer-language-tree.js";
 import {
   buildGitFileStateIndex,
   gitStateTitle,
@@ -52,6 +64,13 @@ import { useCopyToClipboard } from "@/hooks/use-clipboard.js";
 import { buildTreeCopyPaths } from "@/lib/tree-copy-paths.js";
 
 const LOADING_SENTINEL_PREFIX = "__loading__:" as const;
+
+const LANGUAGE_FILTER_LABELS: Record<ExplorerLanguageFilter, string> = {
+  all: "All",
+  rust: "Rust",
+  "javascript-typescript": "JS/TS",
+  java: "Java",
+};
 
 function loadingSentinel(parentId: string): FsArborNode {
   return {
@@ -280,10 +299,23 @@ export function FileTree({
   className,
   revealRequest,
 }: FileTreeProps) {
-  const { explorerShowHidden: showHidden, saveDebounced } = useSettingsStore();
+  const {
+    explorerShowHidden: showHidden,
+    explorerLanguageFilter: configuredLanguageFilter,
+    saveDebounced,
+  } = useSettingsStore();
+  const languageFilter: ExplorerLanguageFilter = isExplorerLanguageFilter(
+    configuredLanguageFilter,
+  )
+    ? configuredLanguageFilter
+    : "all";
+  const isLanguageMode = languageFilter !== "all";
+  const languageFilterId = useId();
   const [encUploadOpen, setEncUploadOpen] = useState(false);
   const { data, isLoading, isError, error, loadChildren, refetch, isFetching } =
     useFsSubscription(project, path);
+  const languageScan = useExplorerLanguageScan(project);
+  const { cache: languageScanCache, scan } = languageScan;
   const { data: gitDiff } = useGitDiff(project, "*");
   const openDiff = useEditorStore((s) => s.openDiff);
   const ops = useFsOps(project, path);
@@ -305,15 +337,37 @@ export function FileTree({
   const [opError, setOpError] = useState<string | null>(null);
   const [uploadDir, setUploadDir] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const treeRef = useRef<TreeApi<FsArborNode> | undefined>(undefined);
   const handledRevealNonceRef = useRef<number | null>(null);
+  const pendingRevealRef = useRef<FileTreeRevealRequest | null>(null);
+  const liveTreeCommitVersionRef = useRef(0);
+  const liveTreeCommitWaitersRef = useRef<Set<() => void>>(new Set());
 
   // Track dirs the user has expanded so we can auto-reload them after a refetch
   // wipes children back to null.
   const expandedDirsRef = useRef<Set<string>>(new Set());
 
+  // Parent layout effects run after Arborist has committed its new rows. Lazy
+  // reveal waits on this boundary before invoking TreeApi for loaded children.
+  useLayoutEffect(() => {
+    if (!data || languageFilter !== "all") return;
+    liveTreeCommitVersionRef.current += 1;
+    for (const resolve of liveTreeCommitWaitersRef.current) resolve();
+    liveTreeCommitWaitersRef.current.clear();
+  }, [data, languageFilter]);
+
+  const waitForLiveTreeCommitAfter = useCallback((version: number) => {
+    if (liveTreeCommitVersionRef.current > version) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      liveTreeCommitWaitersRef.current.add(resolve);
+    });
+  }, []);
+
   useEffect(() => {
-    if (!data) return;
+    if (!data || isLanguageMode) return;
     const unloaded = collectUnloadedExpanded(
       data.nodes,
       expandedDirsRef.current,
@@ -321,7 +375,38 @@ export function FileTree({
     for (const id of unloaded) {
       void loadChildren(id);
     }
-  }, [data, loadChildren]);
+  }, [data, isLanguageMode, loadChildren]);
+
+  const clearTreeSelection = useCallback(() => {
+    const tree = treeRef.current as
+      | (TreeApi<FsArborNode> & {
+          deselectAll?: () => void;
+        })
+      | undefined;
+    tree?.deselectAll?.();
+    setNewItemDialog(null);
+    setRename(null);
+    setDeleteState(null);
+    setEncUploadOpen(false);
+    const active = document.activeElement;
+    if (
+      active instanceof HTMLElement &&
+      containerRef.current?.contains(active) &&
+      active.getAttribute("role") === "treeitem"
+    ) {
+      active.blur();
+    }
+  }, []);
+
+  useEffect(() => {
+    clearTreeSelection();
+  }, [
+    clearTreeSelection,
+    languageFilter,
+    languageScanCache?.result,
+    project,
+    showHidden,
+  ]);
 
   useEffect(() => {
     if (
@@ -331,22 +416,44 @@ export function FileTree({
       return;
     }
     if (revealRequest.project !== project) return;
+    if (languageFilter !== "all") {
+      if (pendingRevealRef.current?.nonce !== revealRequest.nonce) {
+        pendingRevealRef.current = revealRequest;
+        clearTreeSelection();
+        saveDebounced({ explorerLanguageFilter: "all" });
+      }
+      return;
+    }
     if (!data || !treeRef.current) return;
 
     let cancelled = false;
+    pendingRevealRef.current = null;
     void revealFileTreePath({
       path: revealRequest.path,
       nodes: data.nodes,
       tree: treeRef.current,
       loadChildren,
-    }).finally(() => {
-      if (!cancelled) handledRevealNonceRef.current = revealRequest.nonce;
+      getTreeCommitVersion: () => liveTreeCommitVersionRef.current,
+      waitForTreeCommitAfter: waitForLiveTreeCommitAfter,
+    }).then((revealed) => {
+      if (!cancelled && revealed) {
+        handledRevealNonceRef.current = revealRequest.nonce;
+      }
     });
 
     return () => {
       cancelled = true;
     };
-  }, [data, loadChildren, project, revealRequest]);
+  }, [
+    clearTreeSelection,
+    data,
+    languageFilter,
+    loadChildren,
+    project,
+    revealRequest,
+    saveDebounced,
+    waitForLiveTreeCommitAfter,
+  ]);
 
   const visibleNodes = useMemo(
     () =>
@@ -354,6 +461,29 @@ export function FileTree({
         ? (data?.nodes ?? [])
         : (data?.nodes ?? []).filter((n) => !n.name.startsWith(".")),
     [data, showHidden],
+  );
+  const languageNodes = useMemo(() => {
+    if (!isLanguageMode || !languageScanCache?.result) return [];
+    return buildExplorerLanguageTree(
+      languageScanCache.result.files,
+      languageFilter,
+      showHidden,
+    );
+  }, [isLanguageMode, languageFilter, languageScanCache?.result, showHidden]);
+  const renderedNodes = isLanguageMode ? languageNodes : visibleNodes;
+  // Arborist owns a focused-node pointer independently from DOM focus. Remount
+  // when a projection changes so synthetic nodes cannot retain live-tree focus.
+  const treeKey = isLanguageMode
+    ? `${project}:${languageFilter}:${showHidden}:${languageScanCache?.resultVersion ?? -1}`
+    : `${project}:all:${showHidden}`;
+  const renderedLiveTreeIds = useMemo(
+    () => collectExplorerLanguageTreeIds(visibleNodes),
+    [visibleNodes],
+  );
+  const isRenderedLiveNode = useCallback(
+    (node: FsArborNode) =>
+      !isLanguageMode && renderedLiveTreeIds.has(node.id),
+    [isLanguageMode, renderedLiveTreeIds],
   );
   const gitIndex = useMemo(
     () => buildGitFileStateIndex(gitDiff?.entries),
@@ -373,7 +503,7 @@ export function FileTree({
     if (node.data.kind === "file") {
       onFileOpen?.(node.data);
     } else {
-      if (node.data.children === null) {
+      if (!isLanguageMode && node.data.children === null) {
         expandedDirsRef.current.add(node.data.id);
         void loadChildren(node.data.id);
       }
@@ -382,6 +512,7 @@ export function FileTree({
   }
 
   function handleCopyAbsolutePath(node: FsArborNode) {
+    if (!isRenderedLiveNode(node)) return;
     const { absolutePath } = buildTreeCopyPaths({
       projectRoot,
       subPath: path,
@@ -391,6 +522,7 @@ export function FileTree({
   }
 
   function handleCopyRelativePath(node: FsArborNode) {
+    if (!isRenderedLiveNode(node)) return;
     const { relativePath } = buildTreeCopyPaths({
       projectRoot,
       subPath: path,
@@ -402,17 +534,26 @@ export function FileTree({
   // ── Context menu actions ────────────────────────────────────────────────
 
   function handleNewFile(node: FsArborNode) {
+    if (!isRenderedLiveNode(node)) return;
     const dir = node.kind === "dir" ? node.id : parentDir(node.id);
     setNewItemDialog({ open: true, type: "file", parentPath: dir });
   }
 
   function handleNewFolder(node: FsArborNode) {
+    if (!isRenderedLiveNode(node)) return;
     const dir = node.kind === "dir" ? node.id : parentDir(node.id);
     setNewItemDialog({ open: true, type: "folder", parentPath: dir });
   }
 
   function handleNewItemConfirm(name: string) {
-    if (!newItemDialog) return;
+    if (
+      !newItemDialog ||
+      isLanguageMode ||
+      (newItemDialog.parentPath &&
+        !renderedLiveTreeIds.has(newItemDialog.parentPath))
+    ) {
+      return;
+    }
     const { type, parentPath } = newItemDialog;
     const fullPath = parentPath ? `${parentPath}/${name}` : name;
 
@@ -430,6 +571,7 @@ export function FileTree({
   }
 
   function handleRenameStart(node: FsArborNode) {
+    if (!isRenderedLiveNode(node)) return;
     setRenaming(false);
     setRenameValue(node.name);
     setRename({ path: node.id, currentName: node.name });
@@ -443,7 +585,13 @@ export function FileTree({
   }
 
   async function handleRenameSubmit() {
-    if (renaming) return;
+    if (
+      renaming ||
+      isLanguageMode ||
+      (rename && !renderedLiveTreeIds.has(rename.path))
+    ) {
+      return;
+    }
     if (!rename || !renameValue.trim() || renameValue === rename.currentName) {
       handleRenameCancel();
       return;
@@ -464,6 +612,7 @@ export function FileTree({
   }
 
   function getContextNodes(node: NodeApi<FsArborNode>): FsArborNode[] {
+    if (!isRenderedLiveNode(node.data)) return [];
     const selectedNodes = (
       treeRef.current as
         | (TreeApi<FsArborNode> & { selectedNodes?: NodeApi<FsArborNode>[] })
@@ -472,18 +621,30 @@ export function FileTree({
     const nodes = selectedNodes?.some((selected) => selected.id === node.id)
       ? selectedNodes.map((selected) => selected.data)
       : [node.data];
-    return normalizeOperationNodes(nodes);
+    return normalizeOperationNodes(nodes).filter((candidate) =>
+      renderedLiveTreeIds.has(candidate.id),
+    );
   }
 
   function handleDeleteStart(nodes: FsArborNode[]) {
+    if (isLanguageMode) return;
+    const liveNodes = nodes.filter(isRenderedLiveNode);
+    if (liveNodes.length === 0) return;
     setDeleteState({
-      nodes,
+      nodes: liveNodes,
       loading: false,
     });
   }
 
   function handleDeleteConfirm() {
-    if (!deleteState || deleteState.loading) return;
+    if (
+      !deleteState ||
+      deleteState.loading ||
+      isLanguageMode ||
+      deleteState.nodes.some((node) => !isRenderedLiveNode(node))
+    ) {
+      return;
+    }
     setDeleteState((s) => (s ? { ...s, loading: true } : null));
     void (async () => {
       const failures: string[] = [];
@@ -511,18 +672,20 @@ export function FileTree({
   }
 
   function handleDownload(node: FsArborNode) {
-    if (node.kind !== "file") return;
+    if (!isRenderedLiveNode(node) || node.kind !== "file") return;
     void ops.download(node.id).catch((error) => {
       setOpError(error?.message ?? "Download failed");
     });
   }
 
   function handleUploadHere(node: FsArborNode) {
+    if (!isRenderedLiveNode(node)) return;
     setUploadDir(node.kind === "dir" ? node.id : parentDir(node.id));
     fileInputRef.current?.click();
   }
 
   function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    if (isLanguageMode) return;
     const files = Array.from(e.target.files ?? []);
     if (files.length === 0) return;
     for (const file of files) {
@@ -532,6 +695,7 @@ export function FileTree({
   }
 
   function handleDropzoneDrop(dir: string, files: File[]) {
+    if (isLanguageMode) return;
     for (const file of files) {
       void upload(dir, file);
     }
@@ -546,13 +710,22 @@ export function FileTree({
     parentId: string | null;
     parentNode: NodeApi<FsArborNode> | null;
   }) {
+    if (isLanguageMode) return;
+    if (
+      (parentNode && !isRenderedLiveNode(parentNode.data)) ||
+      (parentId && !renderedLiveTreeIds.has(parentId))
+    ) {
+      return;
+    }
     // Drop on file → use its parent dir as target
     let destDir = parentId ?? "";
     if (parentNode && parentNode.data.kind !== "dir") {
       destDir = parentDir(parentNode.data.id);
     }
 
-    const sourcePaths = normalizeOperationPaths(dragIds);
+    const sourcePaths = normalizeOperationPaths(dragIds).filter((id) =>
+      renderedLiveTreeIds.has(id),
+    );
     const failures: string[] = [];
     for (const srcPath of sourcePaths) {
       const name = srcPath.split("/").pop()!;
@@ -571,7 +744,6 @@ export function FileTree({
     if (failures.length > 0) setOpError(failures.join("; "));
   }
 
-  const containerRef = useRef<HTMLDivElement>(null);
   const [treeBodyHeight, setTreeBodyHeight] = useState(0);
   const [treeBodyWidth, setTreeBodyWidth] = useState(0);
 
@@ -610,6 +782,7 @@ export function FileTree({
         currentDir={path}
         onDrop={handleDropzoneDrop}
         progress={progress}
+        disabled={isLanguageMode}
         className={cn("flex flex-col h-full", className)}
       >
         {/* Header */}
@@ -627,7 +800,8 @@ export function FileTree({
               }
               title="New File in project root"
               aria-label="New File in project root"
-              className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]"
+              disabled={isLanguageMode}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)] disabled:pointer-events-none disabled:opacity-40"
             >
               <FilePlus className="h-3.5 w-3.5" />
             </button>
@@ -638,7 +812,8 @@ export function FileTree({
               }
               title="New Folder in project root"
               aria-label="New Folder in project root"
-              className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]"
+              disabled={isLanguageMode}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)] disabled:pointer-events-none disabled:opacity-40"
             >
               <FolderPlus className="h-3.5 w-3.5" />
             </button>
@@ -647,7 +822,7 @@ export function FileTree({
               onClick={() => void refetch()}
               title="Refresh file tree"
               aria-label="Refresh file tree"
-              disabled={isFetching}
+              disabled={isFetching || isLanguageMode}
               className="shrink-0 p-1 rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
             >
               <RefreshCw
@@ -679,40 +854,151 @@ export function FileTree({
             {isEncryptEnabled(project) && (
               <button
                 type="button"
-                onClick={() => setEncUploadOpen(true)}
+                onClick={() => {
+                  if (!isLanguageMode) setEncUploadOpen(true);
+                }}
                 title="Encrypted file upload"
-                className="p-1 rounded-sm text-[var(--color-accent,#7c6aff)] hover:bg-[var(--color-accent,#7c6aff)]/10 transition-colors"
+                disabled={isLanguageMode}
+                className="p-1 rounded-sm text-[var(--color-accent,#7c6aff)] hover:bg-[var(--color-accent,#7c6aff)]/10 transition-colors disabled:pointer-events-none disabled:opacity-40"
               >
                 <Upload size={13} />
               </button>
             )}
-            <LockToggle project={project} />
+            {!isLanguageMode && <LockToggle project={project} />}
           </div>
+        </div>
+
+        {/* Explicit project-wide scan controls. The preference is persisted,
+            while scan results remain in-memory and are never auto-fetched. */}
+        <div className="border-b border-[var(--color-border)] px-2 pb-2 shrink-0">
+          <label
+            htmlFor={languageFilterId}
+            className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]"
+          >
+            Filter Explorer by language
+          </label>
+          <div className="flex items-center gap-1.5">
+            <select
+              id={languageFilterId}
+              aria-label="Filter Explorer by language"
+              value={languageFilter}
+              onChange={(event) => {
+                const next = event.target.value;
+                if (!isExplorerLanguageFilter(next)) return;
+                clearTreeSelection();
+                saveDebounced({ explorerLanguageFilter: next });
+              }}
+              className="h-7 min-w-0 flex-1 rounded-sm border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 text-[11px] text-[var(--color-text)] outline-none transition-colors focus-visible:border-[var(--color-primary)] focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]"
+            >
+              {(
+                Object.keys(LANGUAGE_FILTER_LABELS) as ExplorerLanguageFilter[]
+              ).map((value) => (
+                <option key={value} value={value}>
+                  {LANGUAGE_FILTER_LABELS[value]}
+                </option>
+              ))}
+            </select>
+            {isLanguageMode && (
+              <button
+                type="button"
+                onClick={() => {
+                  scan.reset();
+                  void scan.mutateAsync().catch(() => undefined);
+                }}
+                disabled={scan.isPending}
+                className="inline-flex h-7 shrink-0 items-center gap-1 rounded-sm bg-[var(--color-primary)]/10 px-2 text-[10px] font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-primary)]/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)] disabled:pointer-events-none disabled:opacity-50"
+              >
+                {scan.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                {languageScanCache?.result ? "Rescan" : "Scan"}
+              </button>
+            )}
+          </div>
+          {isLanguageMode && languageScanCache?.scannedAt && (
+            <p className="mt-1 text-[10px] text-[var(--color-text-muted)]">
+              Last scanned {formatScanTime(languageScanCache.scannedAt)}
+            </p>
+          )}
+          {isLanguageMode && languageScanCache?.stale && (
+            <p className="mt-1 text-[10px] text-amber-300" role="status">
+              Results may be outdated. Rescan to refresh.
+            </p>
+          )}
+          {isLanguageMode && scan.isPending && languageScanCache?.result && (
+            <p
+              className="mt-1 text-[10px] text-[var(--color-primary)]"
+              role="status"
+            >
+              Rescanning project… current results remain available.
+            </p>
+          )}
+          {isLanguageMode && languageScanCache?.result?.truncated && (
+            <p className="mt-1 text-[10px] text-amber-300" role="status">
+              Showing first {languageScanCache.result.limit.toLocaleString()}{" "}
+              matching files.
+            </p>
+          )}
+          {isLanguageMode && scan.isError && (
+            <p className="mt-1 text-[10px] text-red-400" role="alert">
+              {scan.error instanceof Error ? scan.error.message : "Scan failed"}
+            </p>
+          )}
         </div>
 
         {/* Tree body — overflow-hidden and flex-1 to consume full space */}
         <div ref={containerRef} className="flex-1 min-h-0 overflow-hidden">
-          {isLoading && (
+          {!isLanguageMode && isLoading && (
             <div className="flex items-center justify-center h-16 gap-2 text-xs text-[var(--color-text-muted)]">
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading…
             </div>
           )}
-          {isError && (
+          {!isLanguageMode && isError && (
             <div className="px-3 py-2 text-xs text-red-400">
               {error instanceof Error ? error.message : "Failed to load"}
             </div>
           )}
-          {data && (
+          {isLanguageMode && !languageScanCache?.result && !scan.isPending && (
+            <div className="flex h-24 flex-col items-center justify-center gap-1 px-3 text-center text-xs text-[var(--color-text-muted)]">
+              <span>
+                Scan project to show {LANGUAGE_FILTER_LABELS[languageFilter]}{" "}
+                files
+              </span>
+              <span className="text-[10px]">
+                Use Scan above to build a navigation-only view.
+              </span>
+            </div>
+          )}
+          {isLanguageMode && scan.isPending && !languageScanCache?.result && (
+            <div
+              className="flex h-24 items-center justify-center gap-2 text-xs text-[var(--color-text-muted)]"
+              role="status"
+            >
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Scanning project…
+            </div>
+          )}
+          {isLanguageMode &&
+            languageScanCache?.result &&
+            languageNodes.length === 0 &&
+            !scan.isPending && (
+              <div className="flex h-24 items-center justify-center px-3 text-center text-xs text-[var(--color-text-muted)]">
+                No {LANGUAGE_FILTER_LABELS[languageFilter]} files found.
+              </div>
+            )}
+          {(!isLanguageMode ? data : languageScanCache?.result) && (
             <Tree<FsArborNode>
+              key={treeKey}
               ref={treeRef}
-              data={visibleNodes}
+              data={renderedNodes}
               childrenAccessor={childrenAccessor}
               openByDefault={false}
               onActivate={handleActivate}
-              onMove={handleMove}
-              disableDrag={(node) => isLoadingSentinel(node.id)}
+              onMove={isLanguageMode ? undefined : handleMove}
+              disableDrag={(node) =>
+                isLanguageMode || isLoadingSentinel(node.id)
+              }
               disableDrop={({ parentNode, dragNodes }) => {
+                if (isLanguageMode) return true;
                 if (!parentNode?.data) return false;
                 if (isLoadingSentinel(parentNode.data.id)) return true;
                 // Prevent drop onto self or descendant
@@ -729,25 +1015,8 @@ export function FileTree({
               height={treeBodyHeight || undefined}
               width={treeBodyWidth || undefined}
             >
-              {(props) => (
-                <TreeContextMenu
-                  isDir={props.node.data.kind === "dir"}
-                  onCopyAbsolutePath={() =>
-                    handleCopyAbsolutePath(props.node.data)
-                  }
-                  onCopyRelativePath={() =>
-                    handleCopyRelativePath(props.node.data)
-                  }
-                  absolutePathDisabled={!projectRoot}
-                  onNewFile={() => handleNewFile(props.node.data)}
-                  onNewFolder={() => handleNewFolder(props.node.data)}
-                  onRename={() => handleRenameStart(props.node.data)}
-                  onDelete={() =>
-                    handleDeleteStart(getContextNodes(props.node))
-                  }
-                  onDownload={() => handleDownload(props.node.data)}
-                  onUpload={() => handleUploadHere(props.node.data)}
-                >
+              {(props) => {
+                const node = (
                   <NodeRenderer
                     {...props}
                     gitState={gitIndex.files.get(props.node.data.id)}
@@ -767,8 +1036,31 @@ export function FileTree({
                       )
                     }
                   />
-                </TreeContextMenu>
-              )}
+                );
+                if (isLanguageMode) return node;
+                return (
+                  <TreeContextMenu
+                    isDir={props.node.data.kind === "dir"}
+                    onCopyAbsolutePath={() =>
+                      handleCopyAbsolutePath(props.node.data)
+                    }
+                    onCopyRelativePath={() =>
+                      handleCopyRelativePath(props.node.data)
+                    }
+                    absolutePathDisabled={!projectRoot}
+                    onNewFile={() => handleNewFile(props.node.data)}
+                    onNewFolder={() => handleNewFolder(props.node.data)}
+                    onRename={() => handleRenameStart(props.node.data)}
+                    onDelete={() =>
+                      handleDeleteStart(getContextNodes(props.node))
+                    }
+                    onDownload={() => handleDownload(props.node.data)}
+                    onUpload={() => handleUploadHere(props.node.data)}
+                  >
+                    {node}
+                  </TreeContextMenu>
+                );
+              }}
             </Tree>
           )}
         </div>
@@ -857,6 +1149,17 @@ function parentDir(nodePath: string): string {
   const parts = nodePath.split("/");
   parts.pop();
   return parts.join("/");
+}
+
+function formatScanTime(epochMs: number): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "short",
+      timeStyle: "short",
+    }).format(new Date(epochMs));
+  } catch {
+    return new Date(epochMs).toLocaleString();
+  }
 }
 
 /** Keep a bulk operation from acting on a selected child after its ancestor. */
