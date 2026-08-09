@@ -1422,6 +1422,37 @@ Response:
 }
 ```
 
+**GET /api/fs/language-files?project=NAME**
+Scan the configured project root for supported language files. The endpoint is
+authenticated and project-scoped; it does not accept a caller-supplied root or
+scan limit. The walk honors Git ignore/global-ignore/repository-exclude rules,
+includes hidden paths, excludes `.git` metadata, and returns regular files only
+(symlinks are not followed or returned).
+
+Supported extensions are `.rs` (`rust`), `.js`, `.jsx`, `.ts`, and `.tsx`
+(`javascript-typescript`), plus `.java` (`java`), matched case-insensitively.
+Paths are relative to the project root and use forward slashes where the host
+platform requires normalization. Results are sorted by path and capped at
+20,000 files or 200,000 visited entries; `truncated` is true when either cap is
+reached.
+
+Response:
+
+```json
+{
+  "files": [
+    {
+      "path": "src/main.rs",
+      "size": 1024,
+      "mtime": 1712577600,
+      "language": "rust"
+    }
+  ],
+  "truncated": false,
+  "limit": 20000
+}
+```
+
 **Error Responses:**
 
 - 400: Invalid path (outside sandbox)

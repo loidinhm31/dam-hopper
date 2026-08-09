@@ -49,6 +49,11 @@ pub struct PathSearchResponse {
     pub truncated: bool,
 }
 
+#[derive(Deserialize)]
+pub struct LanguageFilesParams {
+    pub project: String,
+}
+
 // ---------------------------------------------------------------------------
 // Shared param / response types
 // ---------------------------------------------------------------------------
@@ -161,6 +166,23 @@ pub async fn stat(
         .map_err(ApiError::from)?;
     let file_stat = ops::stat(&canonical).await.map_err(AppError::Fs)?;
     Ok(Json(file_stat))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/fs/language-files?project=NAME
+// ---------------------------------------------------------------------------
+
+pub async fn language_files(
+    State(state): State<AppState>,
+    Query(params): Query<LanguageFilesParams>,
+) -> Result<Json<ops::LanguageScanResult>, ApiError> {
+    let root = resolve(&state, &params.project, "")
+        .await
+        .map_err(ApiError::from)?;
+    let result = ops::scan_language_files(&root)
+        .await
+        .map_err(AppError::Fs)?;
+    Ok(Json(result))
 }
 
 // ---------------------------------------------------------------------------

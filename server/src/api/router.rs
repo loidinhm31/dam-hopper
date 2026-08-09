@@ -352,6 +352,7 @@ pub(crate) fn build_router_with_web_dir(
         .route("/api/fs/read", get(fs_api::read))
         .route("/api/fs/stat", get(fs_api::stat))
         .route("/api/fs/download", get(fs_api::download))
+        .route("/api/fs/language-files", get(fs_api::language_files))
         .route("/api/fs/search", get(fs_api::search))
         .route("/api/fs/search-paths", get(fs_api::search_paths))
         .route_layer(middleware::from_fn_with_state(

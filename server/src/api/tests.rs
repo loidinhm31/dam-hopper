@@ -1626,6 +1626,57 @@ async fn fs_rest_validates_against_selected_project_root() {
     assert_eq!(missing_resp.status(), StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn language_files_returns_normalized_contract_and_enforces_project_boundary() {
+    let registry_tmp = tempfile::tempdir().unwrap();
+    let projects_tmp = tempfile::tempdir().unwrap();
+    let alpha = projects_tmp.path().join("alpha");
+    let beta = projects_tmp.path().join("beta");
+    std::fs::create_dir_all(alpha.join("src")).unwrap();
+    std::fs::create_dir_all(&beta).unwrap();
+    std::fs::write(alpha.join("src/main.RS"), "fn main() {}\n").unwrap();
+    std::fs::write(alpha.join("notes.txt"), "not source\n").unwrap();
+
+    let state = make_state_with_project_roots(
+        &registry_tmp,
+        vec![("alpha", alpha.as_path()), ("beta", beta.as_path())],
+    );
+
+    let response = get(state.clone(), "/api/fs/language-files?project=alpha").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["limit"], crate::fs::ops::MAX_LANGUAGE_SCAN_FILES);
+    assert_eq!(json["truncated"], false);
+    assert_eq!(json["files"].as_array().unwrap().len(), 1);
+    assert_eq!(json["files"][0]["path"], "src/main.RS");
+    assert_eq!(json["files"][0]["language"], "rust");
+    assert!(json["files"][0]["size"].is_u64());
+    assert!(json["files"][0]["mtime"].is_i64());
+    assert!(!bytes
+        .windows(alpha.to_string_lossy().len())
+        .any(|window| { window == alpha.to_string_lossy().as_bytes() }));
+
+    let empty = get(state.clone(), "/api/fs/language-files?project=beta").await;
+    assert_eq!(empty.status(), StatusCode::OK);
+    let empty_json: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(empty.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(empty_json["files"], serde_json::json!([]));
+
+    let missing = get(state.clone(), "/api/fs/language-files?project=missing").await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    let malformed = get(state.clone(), "/api/fs/language-files").await;
+    assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+    let unauthenticated = get_without_auth(state, "/api/fs/language-files?project=alpha").await;
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+}
+
 fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
     let mut project = test_project_config(&workspace_dir);
