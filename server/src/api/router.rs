@@ -20,8 +20,8 @@ use crate::state::AppState;
 
 use super::{
     agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
-    fs as fs_api, git, git_diff, port_forward as port_forward_api, settings, ssh, system, terminal,
-    tunnel, usage, usage_sessions, workspace, ws,
+    fs as fs_api, git, git_diff, host_actions, port_forward as port_forward_api, settings, ssh,
+    system, terminal, tunnel, usage, usage_sessions, workspace, ws,
 };
 
 /// Build the full Axum router with auth middleware, CORS, and all routes.
@@ -223,6 +223,34 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             get(system::get_snapshot),
         )
         .route("/api/system/resources/v1/alerts", get(system::get_alerts))
+        // Host actions are present but fail closed until a Phase 05 helper is enrolled.
+        .route(
+            "/api/system/actions/v1/capabilities",
+            get(host_actions::capabilities),
+        )
+        .route(
+            "/api/system/actions/v1/intents",
+            post(host_actions::create_intent)
+                .layer(RequestBodyLimitLayer::new(8 * 1024))
+                .route_layer(middleware::from_fn(host_actions::require_action_request)),
+        )
+        .route(
+            "/api/system/actions/v1/intents/{id}/approve",
+            post(host_actions::approve_intent)
+                .layer(RequestBodyLimitLayer::new(8 * 1024))
+                .route_layer(middleware::from_fn(host_actions::require_action_request)),
+        )
+        .route(
+            "/api/system/actions/v1/executions",
+            post(host_actions::create_execution)
+                .layer(RequestBodyLimitLayer::new(8 * 1024))
+                .route_layer(middleware::from_fn(host_actions::require_action_request)),
+        )
+        .route(
+            "/api/system/actions/v1/executions/{id}",
+            get(host_actions::get_execution),
+        )
+        .route("/api/system/actions/v1/audit", get(host_actions::get_audit))
         // Diagnostics
         .route(
             "/api/diagnostics/export",

@@ -14,6 +14,7 @@ use crate::crypto::{DamHopperOpaqueSuite, OpaqueRegistrations};
 use crate::diagnostics::DiagnosticStore;
 use crate::error::AppError;
 use crate::fs::FsSubsystem;
+use crate::host_actions::HostActionService;
 use crate::port_forward::PortForwardManager;
 use crate::pty::{BroadcastEventSink, PtySessionManager};
 use crate::ssh::SshCredStore;
@@ -73,6 +74,9 @@ pub struct AppState {
     pub opaque_registrations: OpaqueRegistrations,
     /// Single background owner for host snapshots, alerts, and legacy metrics.
     pub host_resource_monitor: HostResourceMonitor,
+    /// Memory-only intent/approval lifecycle. The only production executor is
+    /// deliberately unavailable until an enrolled helper exists in Phase 05.
+    pub host_actions: HostActionService,
     /// Backend diagnostics ring and JSONL persistence handle.
     pub diagnostics: DiagnosticStore,
     /// Short-lived browser selection bundles, isolated from workspace roots.
@@ -139,6 +143,12 @@ impl AppState {
             event_sink.clone(),
             config.server.host_resources.clone(),
         );
+        let host_action_config_dir = config
+            .config_path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let host_actions = HostActionService::new(host_action_config_dir);
 
         // Production safety guards for no-auth mode
         if no_auth {
@@ -194,6 +204,7 @@ impl AppState {
             opaque_server_setup: Arc::new(opaque_server_setup),
             opaque_registrations: OpaqueRegistrations::default(),
             host_resource_monitor,
+            host_actions,
             diagnostics,
             browser_debug_artifacts,
             telemetry: telemetry_runtime.handle_cell(),

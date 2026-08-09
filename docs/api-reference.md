@@ -288,6 +288,59 @@ timestamps, duration, scope, confidence, threshold, bounded evidence, and a
 next-action description. This endpoint reports evidence only and performs no
 remediation.
 
+### Host action lifecycle (Phase 04)
+
+Phase 04 adds an authenticated, server-side lifecycle for host actions. The
+capability response is fail-closed: `available` is `false` with
+`reason: "helperNotEnrolled"` unless a supported helper is enrolled and
+authentication/re-authentication is configured. Fixed action kinds are
+`dropCleanCaches` and `terminateSameUserProcess`; clients cannot submit
+commands, executables, arbitrary signals, paths, or cache values.
+
+Routes use the normal API authentication and JSON mutation requests. Cookie
+requests must have an Origin matching the request Host.
+
+#### GET /api/system/actions/v1/capabilities
+
+Returns `{ available, reason, actions }`; it does not enable an action.
+
+#### POST /api/system/actions/v1/intents
+
+Creates a short-lived challenge from a typed intent and the current resource
+snapshot. Fields are `action`, `sampleId`, optional `alertId`, and optional
+`reason`. A process target uses `bootId`, `pid`, `startTimeTicks`, `uid`, and
+`name`; the cache action is `{ "kind": "dropCleanCaches" }`. Success is `201`
+with `intentId`, `challengeNonce`, `expiresAt`, and typed `preview`.
+
+#### POST /api/system/actions/v1/intents/{intentId}/approve
+
+Requires fresh actor re-authentication. The JSON fields are
+`challengeNonce`, `username`, and `password`; the password is verification-only
+and is never forwarded to a helper. Success returns one-shot `approvalToken`
+and `expiresAt`, bound to the actor and canonical intent.
+
+#### POST /api/system/actions/v1/executions
+
+Consumes one approval and queues the fixed action. The JSON fields are
+`intentId` and `approvalToken`; success is `202` with an execution record.
+There is no automatic retry.
+
+#### GET /api/system/actions/v1/executions/{executionId}
+
+Returns the requesting actor's execution record, or an `unknown` state with
+`code: "executionLostOrUnknown"` when it is unavailable.
+
+#### GET /api/system/actions/v1/audit
+
+Returns the actor's bounded audit page. Optional query parameters are `cursor`
+and `limit` (default 50). Audit failures return `503` with
+`code: "auditUnavailable"`; lifecycle and audit errors fail closed.
+
+This phase performs no OS password prompt, sudo/polkit/PTY escalation,
+privileged execution, automatic remediation, or helper IPC execution. Until
+enrollment and policy verification exist, action requests remain disabled while
+read-only resource APIs continue to operate.
+
 Server tuning is configured in TOML under `[server.host_resources]` using
 snake_case keys: `light_sample_seconds` (5), `process_sample_seconds` (15),
 `pss_sample_seconds` (60), `jitter_millis` (250),
