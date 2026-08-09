@@ -3,8 +3,10 @@
 
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import { getTransport } from "../api/transport.js";
 import type { ConnectionStatus } from "../components/atoms/ConnectionDot.js";
+import { removeExplorerLanguageScanCaches } from "@/lib/explorer-language-scan.js";
 
 export type IpcStatus = ConnectionStatus;
 
@@ -97,6 +99,14 @@ export function handleIpcStatusChange(
   }
 }
 
+export function handleWorkspaceChanged(
+  queryClient: Pick<QueryClient, "invalidateQueries" | "removeQueries">,
+): void {
+  removeExplorerLanguageScanCaches(queryClient);
+  void queryClient.invalidateQueries();
+  void queryClient.invalidateQueries({ queryKey: ["known-workspaces"] });
+}
+
 export function useIpc(): { status: IpcStatus } {
   const qc = useQueryClient();
 
@@ -132,8 +142,7 @@ export function useIpc(): { status: IpcStatus } {
       }),
 
       subscribeIpc("workspace:changed", () => {
-        void qc.invalidateQueries();
-        void qc.invalidateQueries({ queryKey: ["known-workspaces"] });
+        handleWorkspaceChanged(qc);
       }),
 
       subscribeIpc("terminal:changed", () => {

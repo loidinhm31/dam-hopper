@@ -160,6 +160,28 @@ describe("WsTransport usage setup endpoints", () => {
   });
 });
 
+describe("WsTransport explorer language scan endpoint", () => {
+  it("maps a project name to the protected language-files route", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ files: [], truncated: false, limit: 20_000 }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("fs:languageFiles", { project: "demo project" });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/fs/language-files?project=demo+project",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "GET" });
+    transport.destroy();
+  });
+});
+
 describe("WsTransport commit message endpoints", () => {
   it("loads and edits the full commit message with root scope", async () => {
     installMockWebSocket();

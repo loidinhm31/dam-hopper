@@ -3,7 +3,11 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FsEventDto, FsTreeData } from "@/api/fs-types.js";
+import type {
+  FsEventDto,
+  FsTreeData,
+} from "@/api/fs-types.js";
+import type { ExplorerLanguageScanCache } from "@/lib/explorer-language-scan.js";
 import { GIT_FS_INVALIDATION_DEBOUNCE_MS } from "@/lib/git-fs-invalidation.js";
 import { useFsSubscription } from "./use-fs-subscription.js";
 
@@ -11,6 +15,8 @@ const mocks = vi.hoisted(() => {
   const queryClient = {
     invalidateQueries: vi.fn(() => Promise.resolve()),
     setQueryData: vi.fn(),
+    getQueryData: vi.fn(),
+    removeQueries: vi.fn(),
   };
   const transport = {
     fsSubscribeTree: vi.fn(async () => ({
@@ -89,6 +95,41 @@ afterEach(() => {
 });
 
 describe("useFsSubscription Git refresh", () => {
+  it("marks the existing language scan stale when a tree event arrives", async () => {
+    vi.useFakeTimers();
+    let scanCache: ExplorerLanguageScanCache = {
+      result: {
+        files: [],
+        truncated: false,
+        limit: 20_000,
+      },
+      generation: 0,
+      stale: false,
+      scannedAt: 100,
+    };
+    mocks.queryClient.getQueryData.mockImplementation((key: unknown[]) =>
+      key[0] === "explorer-language-scan" ? scanCache : undefined,
+    );
+    mocks.queryClient.setQueryData.mockImplementation(
+      (key: unknown[], update: unknown) => {
+        if (key[0] === "explorer-language-scan") {
+          scanCache = update as ExplorerLanguageScanCache;
+        }
+      },
+    );
+
+    await mount();
+    await act(async () =>
+      eventHandler?.({ kind: "modify", path: "/workspace/src/app.ts" }),
+    );
+
+    expect(scanCache).toMatchObject({
+      generation: 1,
+      stale: true,
+    });
+    vi.advanceTimersByTime(GIT_FS_INVALIDATION_DEBOUNCE_MS);
+  });
+
   it("keeps the tree delta path and schedules a Git refresh", async () => {
     vi.useFakeTimers();
     let cache: FsTreeData = {
@@ -106,8 +147,10 @@ describe("useFsSubscription Git refresh", () => {
       ],
     };
     mocks.queryClient.setQueryData.mockImplementation(
-      (_key: unknown[], update: (current: FsTreeData) => FsTreeData) => {
-        cache = update(cache);
+      (key: unknown[], update: unknown) => {
+        if (key[0] === "fs-tree") {
+          cache = (update as (current: FsTreeData) => FsTreeData)(cache);
+        }
       },
     );
 

@@ -1,7 +1,16 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import { api, isGitUnavailableError } from "./client.js";
 import { getTransport } from "./transport.js";
 import { useEditorStore } from "@/stores/editor.js";
+import type { ExplorerLanguageScanCache } from "@/lib/explorer-language-scan.js";
+import {
+  beginExplorerLanguageScan,
+  commitExplorerLanguageScan,
+  emptyExplorerLanguageScanCache,
+  explorerLanguageScanQueryKey,
+  getExplorerLanguageScanCache,
+} from "@/lib/explorer-language-scan.js";
 import type {
   DamHopperConfig,
   ProjectConfig,
@@ -248,6 +257,48 @@ export function useKnownWorkspaces() {
     queryFn: () => api.workspace.known(),
     staleTime: 30_000,
   });
+}
+
+type ExplorerLanguageScanQueryClient = Pick<
+  QueryClient,
+  "getQueryData" | "setQueryData" | "removeQueries"
+>;
+
+/** Run a project scan only when the caller explicitly invokes this function. */
+export async function scanExplorerLanguageFiles(
+  queryClient: ExplorerLanguageScanQueryClient,
+  project: string,
+  fetcher: (project: string) => ReturnType<typeof api.fs.languageFiles> = api.fs
+    .languageFiles,
+) {
+  const startedGeneration = beginExplorerLanguageScan(queryClient, project);
+  const result = await fetcher(project);
+  commitExplorerLanguageScan(queryClient, project, startedGeneration, result);
+  return result;
+}
+
+/**
+ * Read project scan metadata from QueryClient and expose an explicit Scan/
+ * Rescan mutation. The disabled observer never performs a network request.
+ */
+export function useExplorerLanguageScan(project: string) {
+  const queryClient = useQueryClient();
+  const query = useQuery<ExplorerLanguageScanCache>({
+    queryKey: explorerLanguageScanQueryKey(project),
+    queryFn: () =>
+      Promise.resolve(
+        getExplorerLanguageScanCache(queryClient, project) ??
+          emptyExplorerLanguageScanCache(),
+      ),
+    enabled: false,
+    staleTime: Infinity,
+    retry: false,
+  });
+  const scan = useMutation({
+    mutationFn: () => scanExplorerLanguageFiles(queryClient, project),
+  });
+
+  return { ...query, scan, cache: query.data ?? null };
 }
 
 export function useGlobalConfig() {

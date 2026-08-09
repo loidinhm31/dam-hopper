@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleIpcStatusChange } from "./use-sse.js";
+import { handleIpcStatusChange, handleWorkspaceChanged } from "./use-sse.js";
 
 describe("handleIpcStatusChange", () => {
   it("invalidates terminal sessions on connected status", () => {
@@ -20,5 +20,24 @@ describe("handleIpcStatusChange", () => {
 
     expect(setStatus).toHaveBeenCalledWith("disconnected");
     expect(invalidate).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleWorkspaceChanged", () => {
+  it("removes project language scans before broad invalidation", () => {
+    const queryClient = {
+      removeQueries: vi.fn(),
+      invalidateQueries: vi.fn(() => Promise.resolve()),
+    };
+
+    handleWorkspaceChanged(queryClient);
+
+    expect(queryClient.removeQueries).toHaveBeenCalledWith({
+      queryKey: ["explorer-language-scan"],
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenNthCalledWith(1);
+    expect(queryClient.invalidateQueries).toHaveBeenNthCalledWith(2, {
+      queryKey: ["known-workspaces"],
+    });
   });
 });
