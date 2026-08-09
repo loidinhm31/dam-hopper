@@ -360,6 +360,21 @@ When the database opens successfully:
 - Exact shell/process memory continuity is not guaranteed across server or host restart
 - Dead sessions are kept for 60 seconds to allow reconnection; buffers are cleaned up per TTL
 
+### Host actions (Phase 04)
+
+Host action lifecycle routes are available only when normal authentication and
+MongoDB-backed re-authentication are configured. The capability remains
+disabled (`helperNotEnrolled`) until a supported host helper is explicitly
+enrolled; there is no host-action configuration switch that bypasses this
+check. The fixed action set is limited to clean-cache drop and termination of
+a same-user process.
+
+Phase 04 does not prompt for an operating-system password and does not perform
+sudo/polkit/PTY escalation, privileged execution, automatic remediation, or
+helper IPC execution. Deployments without enrollment remain read-only for host
+resources. Action approvals are actor-bound and one-shot; lifecycle/audit
+failures fail closed.
+
 ### Telemetry Configuration
 
 Telemetry is opt-in and disabled by default. The settings live under `[server.telemetry]` in

@@ -10,6 +10,7 @@ pub mod error;
 pub mod fs;
 pub mod git;
 pub mod git_diff;
+pub mod host_actions;
 pub mod port_forward;
 pub mod router;
 pub mod settings;

@@ -337,9 +337,12 @@ async fn main() -> anyhow::Result<()> {
         let _ = tokio::signal::ctrl_c().await;
     };
 
-    let serve_result = axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal)
-        .await;
+    let serve_result = axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal)
+    .await;
 
     host_resource_monitor_shutdown.shutdown().await;
     // Reap all tunnel children before exit — no orphaned cloudflared processes.
