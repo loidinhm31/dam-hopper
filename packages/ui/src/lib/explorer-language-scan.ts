@@ -7,6 +7,8 @@ export const EXPLORER_LANGUAGE_SCAN_QUERY_PREFIX =
 export interface ExplorerLanguageScanCache {
   result: LanguageFilesResponse | null;
   generation: number;
+  /** Increments for every committed result, including same-generation rescans. */
+  resultVersion: number;
   stale: boolean;
   /** Epoch milliseconds for the last completed scan, including stale results. */
   scannedAt: number | null;
@@ -61,6 +63,7 @@ export function emptyExplorerLanguageScanCache(): ExplorerLanguageScanCache {
   return {
     result: null,
     generation: 0,
+    resultVersion: 0,
     stale: true,
     scannedAt: null,
   };
@@ -144,6 +147,7 @@ export function commitExplorerLanguageScan(
   const cache = {
     result,
     generation: current.generation,
+    resultVersion: current.resultVersion + 1,
     stale: current.generation !== scanToken.generation,
     scannedAt,
   } satisfies ExplorerLanguageScanCache;

@@ -5,6 +5,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiffFileEntry, GitLogEntry } from "@/api/client.js";
+import type { FsArborNode } from "@/api/fs-types.js";
 import { ContextMenu } from "@/components/ui/ContextMenu.js";
 import { CommitFileContextMenu } from "./CommitDetailsPanel.js";
 import { GitContextMenuPopover } from "./ChangedFilesList.js";
@@ -31,6 +32,7 @@ const fileTreeHarness = vi.hoisted(() => ({
     isSymlink: false,
     children: null,
   },
+  nodes: [] as FsArborNode[],
   treeRenderCount: 0,
   onMove: undefined as
     | undefined
@@ -99,7 +101,7 @@ vi.mock("react-arborist", async () => {
 
 vi.mock("@/hooks/use-fs-subscription.js", () => ({
   useFsSubscription: () => ({
-    data: { nodes: [fileTreeHarness.node] },
+    data: { nodes: fileTreeHarness.nodes },
     isLoading: false,
     isError: false,
     error: null,
@@ -124,6 +126,16 @@ vi.mock("@/hooks/use-fs-upload.js", () => ({
 vi.mock("@/api/queries.js", () => ({
   useGitDiff: () => ({ data: undefined }),
   useProject: () => ({ data: { path: "/workspace/demo" } }),
+  useExplorerLanguageScan: () => ({
+    cache: null,
+    scan: {
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+      mutateAsync: vi.fn(),
+    },
+  }),
 }));
 
 vi.mock("@/contexts/EncryptContext.js", () => ({
@@ -205,6 +217,7 @@ beforeEach(() => {
     isSymlink: false,
     children: null,
   };
+  fileTreeHarness.nodes = [fileTreeHarness.node];
   fileTreeHarness.treeRenderCount = 0;
   fileTreeHarness.onMove = undefined;
   fileTreeHarness.selectedNodes = [];
@@ -309,6 +322,7 @@ describe("migrated context-menu consumers", () => {
       isSymlink: false,
       children: [],
     };
+    fileTreeHarness.nodes = [fileTreeHarness.node];
     await mount(<FileTree project="demo" />);
     const row = document.querySelector<HTMLElement>(
       "[data-testid=virtual-tree-row]",
@@ -440,6 +454,7 @@ describe("migrated context-menu consumers", () => {
       isSymlink: false,
       children: [],
     };
+    fileTreeHarness.nodes = [fileTreeHarness.node];
     fileTreeHarness.selected = true;
     fileTreeHarness.selectedNodes = [
       { id: "src", data: fileTreeHarness.node },
@@ -499,6 +514,35 @@ describe("migrated context-menu consumers", () => {
   });
 
   it("moves every selected top-level path in a deterministic order", async () => {
+    fileTreeHarness.nodes = [
+      {
+        id: "README.md",
+        name: "README.md",
+        kind: "file",
+        size: 1,
+        mtime: 0,
+        isSymlink: false,
+        children: null,
+      },
+      {
+        id: "src",
+        name: "src",
+        kind: "dir",
+        size: 0,
+        mtime: 0,
+        isSymlink: false,
+        children: [fileTreeHarness.node],
+      },
+      {
+        id: "dest",
+        name: "dest",
+        kind: "dir",
+        size: 0,
+        mtime: 0,
+        isSymlink: false,
+        children: [],
+      },
+    ];
     await mount(<FileTree project="demo" />);
     await fileTreeHarness.onMove?.({
       dragIds: ["src/main.ts", "src", "README.md"],
@@ -520,6 +564,35 @@ describe("migrated context-menu consumers", () => {
   });
 
   it("continues a bulk move after one rejected request", async () => {
+    fileTreeHarness.nodes = [
+      {
+        id: "README.md",
+        name: "README.md",
+        kind: "file",
+        size: 1,
+        mtime: 0,
+        isSymlink: false,
+        children: null,
+      },
+      {
+        id: "src",
+        name: "src",
+        kind: "dir",
+        size: 0,
+        mtime: 0,
+        isSymlink: false,
+        children: [fileTreeHarness.node],
+      },
+      {
+        id: "dest",
+        name: "dest",
+        kind: "dir",
+        size: 0,
+        mtime: 0,
+        isSymlink: false,
+        children: [],
+      },
+    ];
     fileTreeHarness.ops.move
       .mockRejectedValueOnce(new Error("locked"))
       .mockResolvedValueOnce({ ok: true });
@@ -530,6 +603,22 @@ describe("migrated context-menu consumers", () => {
       parentNode: { data: { id: "dest", kind: "dir" } },
     });
     expect(fileTreeHarness.ops.move).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores stale drag sources and destinations", async () => {
+    await mount(<FileTree project="demo" />);
+    await fileTreeHarness.onMove?.({
+      dragIds: ["removed.ts"],
+      parentId: null,
+      parentNode: null,
+    });
+    await fileTreeHarness.onMove?.({
+      dragIds: ["src/main.ts"],
+      parentId: "removed-dir",
+      parentNode: { data: { id: "removed-dir", kind: "dir" } },
+    });
+
+    expect(fileTreeHarness.ops.move).not.toHaveBeenCalled();
   });
 
   it("preserves editor-tab disabled state and callback identity", async () => {
