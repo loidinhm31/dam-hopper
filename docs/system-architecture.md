@@ -1213,13 +1213,21 @@ Server bootstrap:
 - Router registration (ide_explorer routes conditional)
 - Port binding + graceful shutdown
 
-## Host resource monitoring and remediation (Phase 04 lifecycle; helper-gated)
+## Host resource monitoring and remediation (monitoring-only UI; Phase 04 lifecycle)
 
 This design keeps host observation and host mutation in separate trust domains.
 Phase 03 implemented the shared cached monitor and read-only snapshot/alert
 APIs. Phase 04 adds the server-side action intent, re-authentication, approval,
 execution, and audit lifecycle, but does not enroll or execute a privileged
 helper. Every deployment without an enrolled helper remains monitoring-only.
+
+The current browser experience is intentionally monitoring-only: the top-nav
+host-resource popover presents the cached snapshot, bounded alert history, and
+diagnostic evidence, and exposes no remediation controls. The UI reads the
+versioned snapshot and alert routes below. A `host:alertChanged` push event
+invalidates both cached read-only queries so the next render reflects the
+authoritative REST projections; it is a refresh signal, not an action request.
+Privileged helper enrollment and remediation remain deferred to Phase 5.
 
 ### Data flow and trust boundary
 

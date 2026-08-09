@@ -20,6 +20,8 @@ import type {
   UsageSummaryQuery,
   UsageSessionQuery,
   HostMetrics,
+  HostResourceAlertIncident,
+  HostResourceSnapshotV1,
   SshCredentialStatus,
   SshForgetCredentialResult,
   SshLoadKeyResult,
@@ -191,6 +193,24 @@ export function useHostMetrics(enabled: boolean) {
     queryFn: () => api.system.metrics(),
     enabled,
     refetchInterval: enabled ? 1_000 : false,
+  });
+}
+
+export function useHostResourceSnapshot(enabled = true) {
+  return useQuery<HostResourceSnapshotV1>({
+    queryKey: ["system", "resource-snapshot"],
+    queryFn: () => api.system.resourceSnapshot(),
+    enabled,
+    refetchInterval: enabled ? 15_000 : false,
+  });
+}
+
+export function useHostResourceAlerts(enabled: boolean, limit = 20) {
+  return useQuery<HostResourceAlertIncident[]>({
+    queryKey: ["system", "resource-alerts", limit],
+    queryFn: () => api.system.resourceAlerts(limit),
+    enabled,
+    refetchInterval: enabled ? 30_000 : false,
   });
 }
 
