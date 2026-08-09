@@ -3,10 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  FsEventDto,
-  FsTreeData,
-} from "@/api/fs-types.js";
+import type { FsEventDto, FsTreeData } from "@/api/fs-types.js";
 import type { ExplorerLanguageScanCache } from "@/lib/explorer-language-scan.js";
 import { GIT_FS_INVALIDATION_DEBOUNCE_MS } from "@/lib/git-fs-invalidation.js";
 import { useFsSubscription } from "./use-fs-subscription.js";
@@ -59,7 +56,9 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@/api/transport.js", () => ({
+  getTransportGeneration: () => 0,
   getTransport: () => mocks.transport,
+  subscribeTransportChanges: () => () => {},
 }));
 
 vi.mock("@/api/client.js", () => ({

@@ -115,8 +115,11 @@ Bearer token required. JSON body is limited to 64 KiB and uses camelCase:
 {
   "terminalId": "pty-uuid",
   "selection": {
-    "version": 1, "tag": "button", "role": "button",
-    "accessibleName": "Save", "text": "Save",
+    "version": 1,
+    "tag": "button",
+    "role": "button",
+    "accessibleName": "Save",
+    "text": "Save",
     "attributes": { "data-testid": "save" },
     "locator": "button[data-testid=save]",
     "bounds": { "x": 10, "y": 20, "width": 80, "height": 32 }
@@ -1265,8 +1268,8 @@ All functions in `packages/web/src/api/server-config.ts`.
 **Migration:**
 
 - `migrateToProfiles(): void` — (called in `App.tsx`) converts legacy single-server config to profile system on first app load
-  - if profiles already exist → no-op
-  - if legacy `damhopper_server_url` exists → creates "Default Server" profile and sets active
+  - restores a valid active profile when the stored selection is missing
+  - migrates the legacy URL, username, and token only when the legacy URL matches the destination profile
 
 ### Storage Breakdown
 
@@ -1274,8 +1277,11 @@ All functions in `packages/web/src/api/server-config.ts`.
 | ----------------------------- | -------------- | ----------------- | ---------------------- |
 | `damhopper_server_profiles`   | localStorage   | Shared (all tabs) | Survives browser close |
 | `damhopper_active_profile_id` | localStorage   | Shared (all tabs) | Survives browser close |
-| `damhopper_auth_token`        | sessionStorage | Per-tab           | Cleared on tab close   |
+| `damhopper_auth_token_<id>`   | localStorage   | Per-profile       | Survives browser close |
 | `damhopper_auth_username`     | sessionStorage | Per-tab           | Cleared on tab close   |
+
+Bearer tokens are persisted locally per profile to support Android/browser recreation. They are readable by JavaScript; deploy trusted HTTPS frontend assets and never store passwords.
+Changing a normalized profile URL clears its token and requires login again; trailing-slash-only formatting changes preserve it.
 
 **POST /api/git/:project/stage**
 Stage files for commit.
@@ -1457,6 +1463,7 @@ Request body:
 ```
 
 On switch:
+
 - Configuration is reloaded from the specified path
 - File API sandbox is reinitialized from project roots in the new config
 - All PTY sessions are disposed

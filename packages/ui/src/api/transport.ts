@@ -83,9 +83,17 @@ export interface Transport {
 }
 
 let _transport: Transport | null = null;
+let _transportGeneration = 0;
+const transportChangeListeners = new Set<() => void>();
+
+function notifyTransportChange(): void {
+  _transportGeneration += 1;
+  transportChangeListeners.forEach((listener) => listener());
+}
 
 export function initTransport(transport: Transport): void {
   _transport = transport;
+  notifyTransportChange();
 }
 
 export function getTransport(): Transport {
@@ -101,9 +109,22 @@ export function getTransport(): Transport {
  */
 export function reconfigureTransport(transport: Transport): void {
   _transport = transport;
+  notifyTransportChange();
+}
+
+/** Snapshot used by React consumers that must rebind to a replacement transport. */
+export function getTransportGeneration(): number {
+  return _transportGeneration;
+}
+
+/** Subscribe to transport replacement events. */
+export function subscribeTransportChanges(callback: () => void): () => void {
+  transportChangeListeners.add(callback);
+  return () => transportChangeListeners.delete(callback);
 }
 
 /** Reset for testing. */
 export function resetTransport(): void {
   _transport = null;
+  notifyTransportChange();
 }
