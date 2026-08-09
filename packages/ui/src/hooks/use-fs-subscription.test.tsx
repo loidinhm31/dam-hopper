@@ -7,10 +7,13 @@ import type { FsEventDto, FsTreeData } from "@/api/fs-types.js";
 import type { ExplorerLanguageScanCache } from "@/lib/explorer-language-scan.js";
 import { GIT_FS_INVALIDATION_DEBOUNCE_MS } from "@/lib/git-fs-invalidation.js";
 import { useFsSubscription } from "./use-fs-subscription.js";
+import { handleWorkspaceChanged } from "./use-sse.js";
 
 const mocks = vi.hoisted(() => {
   const queryClient = {
     invalidateQueries: vi.fn(() => Promise.resolve()),
+    resetQueries: vi.fn(() => Promise.resolve()),
+    setQueriesData: vi.fn(),
     setQueryData: vi.fn(),
     getQueryData: vi.fn(),
     removeQueries: vi.fn(),
@@ -174,8 +177,100 @@ describe("useFsSubscription Git refresh", () => {
     ]);
   });
 
+  it("ignores a late FS event after workspace cleanup", async () => {
+    let scanCache: ExplorerLanguageScanCache | undefined = {
+      result: {
+        files: [],
+        truncated: false,
+        limit: 20_000,
+      },
+      generation: 0,
+      stale: false,
+      scannedAt: 100,
+    };
+    let treeCache: FsTreeData = {
+      sub_id: 7,
+      nodes: [
+        {
+          id: "src/app.ts",
+          name: "app.ts",
+          kind: "file",
+          size: 4,
+          mtime: 100,
+          isSymlink: false,
+          children: null,
+        },
+      ],
+    };
+    let scanSetCalls = 0;
+    mocks.queryClient.getQueryData.mockImplementation((key: unknown[]) =>
+      key[0] === "explorer-language-scan" ? scanCache : undefined,
+    );
+    mocks.queryClient.setQueryData.mockImplementation(
+      (key: unknown[], update: unknown) => {
+        if (key[0] === "explorer-language-scan") {
+          scanSetCalls += 1;
+          scanCache = update as ExplorerLanguageScanCache;
+        } else if (key[0] === "fs-tree") {
+          treeCache = (update as (current: FsTreeData) => FsTreeData)(
+            treeCache,
+          );
+        }
+      },
+    );
+    mocks.queryClient.resetQueries.mockImplementation(() => {
+      scanCache = undefined;
+      return Promise.resolve();
+    });
+    mocks.queryClient.removeQueries.mockImplementation(() => {
+      scanCache = undefined;
+    });
+
+    await mount();
+    await handleWorkspaceChanged(mocks.queryClient);
+    scanCache = {
+      result: {
+        files: [],
+        truncated: false,
+        limit: 20_000,
+      },
+      generation: 0,
+      stale: false,
+      scannedAt: 200,
+    };
+    const scanSetCallsBeforeLateEvent = scanSetCalls;
+    await act(async () =>
+      eventHandler?.({ kind: "modify", path: "/workspace/src/app.ts" }),
+    );
+
+    expect(scanSetCalls).toBe(scanSetCallsBeforeLateEvent);
+    expect(scanCache).toMatchObject({ generation: 0, stale: false });
+    expect(treeCache.nodes[0]?.mtime).toBe(100);
+  });
+
   it("preserves refetch behavior for unknown tree deltas", async () => {
     vi.useFakeTimers();
+    let cache: FsTreeData = {
+      sub_id: 7,
+      nodes: [
+        {
+          id: "src/app.ts",
+          name: "app.ts",
+          kind: "file",
+          size: 4,
+          mtime: 1,
+          isSymlink: false,
+          children: null,
+        },
+      ],
+    };
+    mocks.queryClient.setQueryData.mockImplementation(
+      (key: unknown[], update: unknown) => {
+        if (key[0] === "fs-tree") {
+          cache = (update as (current: FsTreeData) => FsTreeData)(cache);
+        }
+      },
+    );
     await mount();
 
     await act(async () =>

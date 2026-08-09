@@ -124,6 +124,9 @@ export function useFsSubscription(project: string, path: string) {
     const t = getTransport() as WsTransport;
     const workspaceEpoch = explorerLanguageScanWorkspaceEpoch(qc);
     const off = t.onFsEvent(subId, (ev: FsEventDto) => {
+      if (explorerLanguageScanWorkspaceEpoch(qc) !== workspaceEpoch) {
+        return;
+      }
       markExplorerLanguageScanStale(qc, project, workspaceEpoch);
       qc.setQueryData<FsTreeData>(["fs-tree", project, path], (prev) => {
         if (!prev) return prev;
