@@ -2,11 +2,11 @@
 
 Date: 2026-08-09
 Branch: `features/ssh-port-forwarding-control`
-Decision: **NO-GO — Phase 02 is blocked pending native runner evidence and storage primitive proofs.**
+Decision: **Windows-scoped LIMITED GO — dependency, ACL, and agent work may proceed; durable-store implementation remains blocked.**
 
 ## Scope
 
-This gate validates the desktop-only dependency graph, the Tauri ACL boundary, and the
+This gate validates the Windows desktop dependency graph, the Tauri ACL boundary, and the
 minimum API evidence needed before implementing forwarding, persistence, credentials, or
 trust. It does not implement SSH forwarding behavior.
 
@@ -51,17 +51,16 @@ cancellation, cleanup, or agent behavior at runtime.
 ## Implemented gates
 
 - `build.rs` keeps browser-debug asset embedding and uses `AppManifest::commands` for
-  exactly 12 desktop commands. Android/iOS builds receive no SSH command manifest.
+  exactly 12 Windows commands. Non-Windows/mobile builds receive no SSH command manifest.
 - `permissions/ssh-forward.toml` allows exactly the 12 planned snake_case commands.
-- `capabilities/ssh-forward.json` grants only `ssh-forward` to `main` on Linux, macOS,
-  and Windows; it adds no `core:event`, shell, filesystem, HTTP, opener, or remote URL
+- `capabilities/ssh-forward.json` grants only `ssh-forward` to `main` on Windows; it adds
+  no `core:event`, shell, filesystem, HTTP, opener, or remote URL
   permission. Existing `default.json` still supplies the merged `core:default` baseline.
 - `src/ssh_forward/mod.rs` provides the desktop main-window label seam and structured
   manifest tests. The command names are shared with `build.rs` through one source list;
   later handlers must call the seam for every command.
-- `Cargo.toml` puts `russh` and direct Tokio support under Windows/macOS/Linux target
-  dependencies. The forwarding module remains `cfg(desktop)` and mobile has no host
-  fallback.
+- Current Windows-only wiring places `russh`, direct Tokio, and Windows handle APIs in
+  `cfg(windows)` dependencies; non-Windows support is deferred.
 
 ## Validation evidence
 
@@ -69,25 +68,28 @@ cancellation, cleanup, or agent behavior at runtime.
 |---|---|---|
 | Desktop formatting | PASS | `cargo fmt --manifest-path apps/native/src-tauri/Cargo.toml -- --check` |
 | Windows desktop compile | PASS | `cargo check --manifest-path apps/native/src-tauri/Cargo.toml` |
-| Native unit tests | PASS | 17 passed, 0 failed |
+| Native unit tests | PASS | 21 ordinary tests passed; the live Windows agent gate also passed with a disposable identity |
 | Windows SSH dependency path | PASS | `cargo tree --target x86_64-pc-windows-msvc -p russh` shows the pinned closure |
 | Android SSH exclusion | PASS | `cargo tree --target aarch64-linux-android` has no `russh`, `ring`, `pageant`, or `ssh-key` package |
 | Android compile | PASS | `cargo check --target aarch64-linux-android` |
 | iOS dependency resolution/exclusion | PASS | `cargo tree --target aarch64-apple-ios` resolves without SSH packages |
-| iOS compile | BLOCKED | Native iOS compilation is not runnable on this Windows host; macOS/Xcode (`xcrun`/clang plus the iOS target) is required |
-| macOS/Linux desktop compile/runtime | NOT RUN | Requires native CI runners |
-| Unix/Windows agent runtime | NOT PROVEN | Requires Linux/macOS sockets and Windows OpenSSH named-pipe runner tests |
-| no-follow/reparse-safe storage | NOT PROVEN | No Phase 01 contained-handle/atomic-replace implementation or native race harness exists yet |
-| advisory/license automation | PASS WITH WARNINGS | `cargo audit --file apps/native/src-tauri/Cargo.lock` found 0 vulnerabilities and 18 allowed warnings after `plist 1.10.0`/`quick-xml 0.41.0`; `cargo-deny` license automation remains unavailable |
+| iOS compile | DEFERRED | Native mobile support is outside the current Windows scope |
+| macOS/Linux desktop compile/runtime | DEFERRED | Non-Windows support is outside the current scope |
+| Windows agent runtime | PASS | On 2026-08-09, Windows OpenSSH agent listed a disposable Ed25519 identity and completed a named-pipe signing request through `russh` |
+| no-follow/reparse-safe storage | PARTIAL PASS | Windows retained relative-handle probe rejects junctions and multi-link files; same-directory replacement and exclusive-lock primitives pass, while product race coverage remains |
+| advisory/license automation | PASS WITH WARNINGS | `cargo audit --file apps/native/src-tauri/Cargo.lock` reports 18 allowed warnings, including unmaintained/unsound advisories; `cargo-deny` is unavailable |
 
 ## Go/no-go rationale
 
-The ACL and dependency exclusion changes are safe to carry forward as a feasibility
-spike. Phase 02 must not start because mandatory platform and storage gates remain
-unproven and the selected SSH closure contains a release-candidate key package. The
-audit is clean for vulnerabilities, but its 18 unmaintained/unsound warnings still
-need release-owner review. RSA remains explicitly unsupported by this candidate until
-a safe maintained SSH/key stack is approved.
+The ACL, Windows agent, and primitive storage probes are sufficient to carry their
+decisions into Phase 02 design. Durable-store implementation must remain blocked until
+every profile/trust/meta operation has contained-handle, race, and fault evidence. The
+implementation must use the existing Windows OpenSSH agent and surface a typed
+unavailable-agent result when it cannot be reached. The selected SSH closure contains
+release-candidate key packages and 18 audit warnings that still require release-owner
+review before shipment.
+RSA remains explicitly unsupported by this candidate until a safe maintained SSH/key
+stack is approved.
 No subprocess `ssh -L` fallback, path-based key access, Pageant fallback, or weakened
 trust/storage rule is authorized by this result.
 
@@ -97,22 +99,20 @@ intended for source control.
 
 ## Required follow-up before Phase 02
 
-1. Run the same commit on Windows, Linux, and macOS runners with generated temporary
-   identities only; prove OpenSSH agent signing, host-key rejection, direct-tcpip,
-   keepalive, cancellation, and clean close.
-2. Add deterministic Unix no-follow and Windows reparse-safe contained-handle tests for
-   every profile/trust/meta operation, backup/quarantine, and tombstone purge.
-3. Add crash/fault tests for same-directory atomic replacement, protected backups,
-   cleanup, permissions (`0600` on Unix), and runtime/maintenance locking.
+1. Add host-key rejection, direct-tcpip, keepalive, cancellation, and clean-close
+   runtime tests while implementing the forwarding runtime.
+2. Extend the Windows reparse-safe contained-handle probe to every profile/trust/meta
+   operation, backup/quarantine, and tombstone purge.
+3. Add Windows crash/fault tests for same-directory atomic replacement, protected
+   backups, cleanup, and runtime/maintenance locking.
 4. Install the repository-approved license tooling, review every transitive license and
    the 18 audit warnings, and obtain security approval for the `-rc` key package and
    the non-RSA compatibility decision.
-5. Run iOS compilation in its native macOS CI environment and attach hash-bound runner
-   evidence before changing this decision to GO.
+5. Defer Linux/macOS/iOS runner evidence until support is explicitly expanded.
 
 ## Unresolved questions
 
 - Which exact Windows OpenSSH named-pipe discovery policy is supported in the packaged app?
 - Is Pageant excluded permanently, or will a named product/security owner accept it after runtime proof?
 - Is non-RSA authentication acceptable for v1, or must a later SSH/key stack add safe RSA support?
-- Which named owners provide the protected macOS/Linux/iOS runtime and storage-race evidence?
+- Which approved Windows account/environment provides the agent and packaged runtime evidence?

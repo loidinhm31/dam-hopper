@@ -3,6 +3,6 @@
   "identifier": "ssh-forward-main",
   "description": "Native SSH forwarding for the main desktop webview.",
   "windows": ["main"],
-  "platforms": ["linux", "macOS", "windows"],
+  "platforms": ["windows"],
   "permissions": ["ssh-forward"]
 }
