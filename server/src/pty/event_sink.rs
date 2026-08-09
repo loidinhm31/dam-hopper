@@ -17,6 +17,9 @@ pub trait EventSink: Send + Sync + 'static {
         let _ = (session_id, state, generation, command);
     }
     fn broadcast(&self, event_type: &str, payload: serde_json::Value);
+    fn send_host_alert_changed(&self, alert: &crate::system::AlertSummary) {
+        let _ = alert;
+    }
 
     /// Enhanced terminal exit with restart metadata.
     /// Optional fields are skipped if None (backward-compatible JSON).
@@ -50,6 +53,7 @@ impl EventSink for NoopEventSink {
     fn send_terminal_exit(&self, _id: &str, _exit_code: Option<i32>) {}
     fn send_terminal_changed(&self) {}
     fn broadcast(&self, _event_type: &str, _payload: serde_json::Value) {}
+    fn send_host_alert_changed(&self, _alert: &crate::system::AlertSummary) {}
 
     fn send_terminal_exit_enhanced(
         &self,
@@ -78,16 +82,24 @@ impl EventSink for NoopEventSink {
 #[derive(Clone)]
 pub struct BroadcastEventSink {
     tx: broadcast::Sender<String>,
+    host_alert_tx: broadcast::Sender<String>,
 }
 
 impl BroadcastEventSink {
     pub fn new(capacity: usize) -> (Self, broadcast::Receiver<String>) {
         let (tx, rx) = broadcast::channel(capacity);
-        (Self { tx }, rx)
+        let (host_alert_tx, _) = broadcast::channel(capacity);
+        (Self { tx, host_alert_tx }, rx)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<String> {
         self.tx.subscribe()
+    }
+
+    /// Alerts have an independent bounded stream so terminal-output pressure
+    /// cannot make an alert transition disappear from a connected client.
+    pub fn subscribe_host_alerts(&self) -> broadcast::Receiver<String> {
+        self.host_alert_tx.subscribe()
     }
 
     fn send_json(&self, msg: serde_json::Value) {
@@ -137,6 +149,12 @@ impl EventSink for BroadcastEventSink {
         self.send_json(json!({ "kind": event_type, "payload": payload }));
     }
 
+    fn send_host_alert_changed(&self, alert: &crate::system::AlertSummary) {
+        let _ = self
+            .host_alert_tx
+            .send(json!({ "kind": "host:alertChanged", "payload": alert }).to_string());
+    }
+
     fn send_terminal_exit_enhanced(
         &self,
         session_id: &str,
@@ -178,5 +196,41 @@ impl EventSink for BroadcastEventSink {
 
         // Also fire terminal:changed for dashboard/sidebar refresh
         self.send_terminal_changed();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn host_alert_event_uses_the_typed_websocket_contract() {
+        let (sink, _) = BroadcastEventSink::new(1);
+        let mut receiver = sink.subscribe_host_alerts();
+        sink.send_host_alert_changed(&crate::system::AlertSummary {
+            state: crate::system::AlertState::MemoryPressure,
+            severity: crate::system::AlertSeverity::Critical,
+            incident_id: Some("host-incident-1".into()),
+            opened_at: Some(1),
+            updated_at: 2,
+            duration_seconds: 1,
+            scope: "host".into(),
+            confidence: crate::system::Confidence::High,
+            threshold: "available<10%".into(),
+            evidence: crate::system::AlertEvidence {
+                available_percent: Some(8.0),
+                reclaimable_percent: None,
+                psi_some_avg10: Some(12.0),
+                psi_full_avg10: None,
+                cgroup_oom_delta: false,
+            },
+            next_action: "Inspect top consumers".into(),
+        });
+
+        let event: serde_json::Value =
+            serde_json::from_str(&receiver.recv().await.unwrap()).unwrap();
+        assert_eq!(event["kind"], "host:alertChanged");
+        assert_eq!(event["payload"]["incidentId"], "host-incident-1");
+        assert_eq!(event["payload"]["state"], "memoryPressure");
     }
 }

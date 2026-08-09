@@ -357,6 +357,34 @@ async fn system_metrics_returns_sane_json() {
 }
 
 #[tokio::test]
+async fn resource_snapshot_and_alerts_are_protected_and_bounded() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let unauthorized = get_without_auth(state.clone(), "/api/system/resources/v1/snapshot").await;
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let snapshot = get(state.clone(), "/api/system/resources/v1/snapshot").await;
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(snapshot.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(body.len() <= 256 * 1024);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["schemaVersion"], 1);
+    assert!(json["alert"].is_object());
+    assert_eq!(json["alert"]["scope"], "host");
+
+    let alerts = get(state, "/api/system/resources/v1/alerts?limit=999").await;
+    assert_eq!(alerts.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(alerts.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json.as_array().is_some_and(|items| items.len() <= 50));
+}
+
+#[tokio::test]
 async fn diagnostics_export_requires_auth() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
@@ -2568,10 +2596,7 @@ async fn usage_settings_retry_collector_failure_restores_previous_runtime_and_co
     )
     .await;
     assert_eq!(retry.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        state.config.read().await.server.telemetry,
-        previous_config
-    );
+    assert_eq!(state.config.read().await.server.telemetry, previous_config);
     assert_eq!(
         std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap(),
         previous_file

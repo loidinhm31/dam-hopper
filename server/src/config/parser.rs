@@ -340,6 +340,67 @@ fn server_to_toml(server: &super::schema::ServerConfig) -> toml::Value {
         table.insert("collector".to_string(), Value::Table(collector));
         config.insert("telemetry".to_string(), Value::Table(table));
     }
+    if server.host_resources != Default::default() {
+        let resources = &server.host_resources;
+        let mut table = toml::map::Map::new();
+        table.insert(
+            "light_sample_seconds".into(),
+            Value::Integer(resources.light_sample_seconds as i64),
+        );
+        table.insert(
+            "process_sample_seconds".into(),
+            Value::Integer(resources.process_sample_seconds as i64),
+        );
+        table.insert(
+            "pss_sample_seconds".into(),
+            Value::Integer(resources.pss_sample_seconds as i64),
+        );
+        table.insert(
+            "jitter_millis".into(),
+            Value::Integer(resources.jitter_millis as i64),
+        );
+        table.insert(
+            "process_deadline_millis".into(),
+            Value::Integer(resources.process_deadline_millis as i64),
+        );
+        table.insert(
+            "snapshot_deadline_millis".into(),
+            Value::Integer(resources.snapshot_deadline_millis as i64),
+        );
+        table.insert(
+            "ring_capacity".into(),
+            Value::Integer(resources.ring_capacity as i64),
+        );
+        table.insert(
+            "max_alert_incidents".into(),
+            Value::Integer(resources.max_alert_incidents as i64),
+        );
+        table.insert(
+            "reclaimable_cache_percent".into(),
+            Value::Integer(resources.reclaimable_cache_percent as i64),
+        );
+        table.insert(
+            "available_warning_percent".into(),
+            Value::Integer(resources.available_warning_percent as i64),
+        );
+        table.insert(
+            "available_critical_percent".into(),
+            Value::Integer(resources.available_critical_percent as i64),
+        );
+        table.insert(
+            "available_oom_percent".into(),
+            Value::Integer(resources.available_oom_percent as i64),
+        );
+        table.insert(
+            "psi_some_percent".into(),
+            Value::Integer(resources.psi_some_percent as i64),
+        );
+        table.insert(
+            "psi_full_percent".into(),
+            Value::Integer(resources.psi_full_percent as i64),
+        );
+        config.insert("host_resources".into(), Value::Table(table));
+    }
     Value::Table(config)
 }
 

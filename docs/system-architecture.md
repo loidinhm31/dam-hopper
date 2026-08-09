@@ -1213,10 +1213,10 @@ Server bootstrap:
 - Router registration (ide_explorer routes conditional)
 - Port binding + graceful shutdown
 
-## Host resource monitoring and remediation (Phase 02 read-only contract)
+## Host resource monitoring and remediation (Phase 03 read-only APIs)
 
 This design keeps host observation and host mutation in separate trust domains.
-Phase 02 implements the read-only `HostResourceSnapshotV1` collection contract;
+Phase 03 implements the shared cached monitor and read-only snapshot/alert APIs;
 it does not expose host mutation or enroll a privileged helper. Until the
 enrolled helper and its policy checks exist, every deployment remains
 monitoring-only.
@@ -1251,7 +1251,7 @@ sanitized state. They cannot enqueue or execute an action. The existing
 resource APIs are versioned siblings. Phase 03 moves it to the shared monitor's
 cached projection without changing its response shape.
 
-### Phase 02 snapshot boundaries
+### Snapshot boundaries
 
 `HostResourceSnapshotV1` is serialized in camelCase and reports explicit
 availability for each deep section. Collection is read-only and uses startup-owned

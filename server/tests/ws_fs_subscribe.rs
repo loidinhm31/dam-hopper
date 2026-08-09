@@ -79,7 +79,12 @@ fn make_test_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) 
         .collect();
     let sandbox_roots = projects
         .iter()
-        .map(|project| (project.name.clone(), std::path::PathBuf::from(&project.path)))
+        .map(|project| {
+            (
+                project.name.clone(),
+                std::path::PathBuf::from(&project.path),
+            )
+        })
         .collect();
 
     let config = DamHopperConfig {

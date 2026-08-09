@@ -11,7 +11,7 @@ use crate::system::{
     Availability, CgroupMemory, MemoryPressure,
 };
 
-pub fn collect(source: &impl HostResourceSource, sampled_at: u64) -> Vec<CgroupMemory> {
+pub fn collect(source: &(dyn HostResourceSource + '_), sampled_at: u64) -> Vec<CgroupMemory> {
     let mountinfo_path = source.proc_root().join("self/mountinfo");
     let mountinfo = match read_bounded_text(&mountinfo_path) {
         Ok(value) => value,

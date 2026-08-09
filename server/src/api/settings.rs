@@ -18,6 +18,10 @@ pub async fn cache_clear(State(state): State<AppState>) -> impl IntoResponse {
     match read_config(&config_path) {
         Ok(cfg) => {
             state.fs.reinit_sandbox(project_roots_from_config(&cfg));
+            state
+                .host_resource_monitor
+                .reconfigure(cfg.server.host_resources.clone())
+                .await;
             *state.config.write().await = cfg;
             Json(serde_json::json!({ "ok": true })).into_response()
         }

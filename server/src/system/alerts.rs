@@ -1,0 +1,832 @@
+use super::{AvailabilityState, Confidence, HostResourceSnapshotV1};
+
+const COOLDOWN_MS: u64 = 5 * 60 * 1_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AlertState {
+    Healthy,
+    ReclaimableCacheHigh,
+    ElevatedNoPressure,
+    MemoryPressure,
+    OomRisk,
+    LimitedData,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AlertSeverity {
+    Info,
+    Warning,
+    Critical,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlertEvidence {
+    pub available_percent: Option<f64>,
+    pub reclaimable_percent: Option<f64>,
+    pub psi_some_avg10: Option<f64>,
+    pub psi_full_avg10: Option<f64>,
+    pub cgroup_oom_delta: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlertSummary {
+    pub state: AlertState,
+    pub severity: AlertSeverity,
+    pub incident_id: Option<String>,
+    pub opened_at: Option<u64>,
+    pub updated_at: u64,
+    pub duration_seconds: u64,
+    /// Alert evidence applies to the monitored host, not a client-selected process.
+    pub scope: String,
+    pub confidence: Confidence,
+    pub threshold: String,
+    pub evidence: AlertEvidence,
+    pub next_action: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlertIncident {
+    pub incident_id: String,
+    pub state: AlertState,
+    pub severity: AlertSeverity,
+    pub opened_at: u64,
+    pub updated_at: u64,
+    pub resolved_at: Option<u64>,
+    pub duration_seconds: u64,
+    pub scope: String,
+    pub threshold: String,
+    pub confidence: Confidence,
+    pub evidence: AlertEvidence,
+    pub next_action: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AlertSample {
+    /// Monotonic elapsed time owned by the monitor or a fake clock in tests.
+    pub observed_at_ms: u64,
+    /// Wall-clock sample time used only for API/audit presentation.
+    pub reported_at_ms: u64,
+    pub available_percent: Option<f64>,
+    pub reclaimable_percent: Option<f64>,
+    pub psi_some_avg10: Option<f64>,
+    pub psi_full_avg10: Option<f64>,
+    pub primary_memory_available: bool,
+    pub primary_psi_available: bool,
+    pub oom_events_total: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AlertThresholds {
+    pub reclaimable_cache_percent: f64,
+    pub available_warning_percent: f64,
+    pub available_critical_percent: f64,
+    pub available_oom_percent: f64,
+    pub psi_some_percent: f64,
+    pub psi_full_percent: f64,
+}
+
+impl Default for AlertThresholds {
+    fn default() -> Self {
+        Self {
+            reclaimable_cache_percent: 25.0,
+            available_warning_percent: 15.0,
+            available_critical_percent: 10.0,
+            available_oom_percent: 5.0,
+            psi_some_percent: 10.0,
+            psi_full_percent: 1.0,
+        }
+    }
+}
+
+impl AlertThresholds {
+    pub fn from_config(config: &crate::system::config::HostResourceMonitorConfig) -> Self {
+        Self {
+            reclaimable_cache_percent: config.reclaimable_cache_percent as f64,
+            available_warning_percent: config.available_warning_percent as f64,
+            available_critical_percent: config.available_critical_percent as f64,
+            available_oom_percent: config.available_oom_percent as f64,
+            psi_some_percent: config.psi_some_percent as f64,
+            psi_full_percent: config.psi_full_percent as f64,
+        }
+    }
+}
+
+impl AlertSample {
+    /// The caller supplies a monotonic observation time. Wall-clock
+    /// `sampled_at` is retained separately for API/audit presentation and must
+    /// never be used for transition durations.
+    pub fn from_snapshot_with_monotonic(
+        snapshot: &HostResourceSnapshotV1,
+        observed_at_ms: u64,
+    ) -> Self {
+        let available_percent = snapshot
+            .memory
+            .available_bytes
+            .zip(snapshot.memory.total_bytes)
+            .and_then(|(available, total)| {
+                (total > 0).then_some(available as f64 * 100.0 / total as f64)
+            });
+        let reclaimable_percent = snapshot
+            .memory
+            .file_cache_bytes
+            .unwrap_or(0)
+            .checked_add(snapshot.memory.reclaimable_slab_bytes.unwrap_or(0))
+            .zip(snapshot.memory.total_bytes)
+            .and_then(|(reclaimable, total)| {
+                (total > 0).then_some(reclaimable as f64 * 100.0 / total as f64)
+            });
+        let pressure = &snapshot.pressure.memory;
+        let oom_events_total = snapshot
+            .cgroups
+            .iter()
+            .flat_map(|cgroup| cgroup.events.iter())
+            .filter(|(name, _)| name == "oom" || name == "oom_kill")
+            .map(|(_, value)| *value)
+            .sum::<u64>();
+
+        Self {
+            observed_at_ms,
+            reported_at_ms: snapshot.sampled_at,
+            available_percent,
+            reclaimable_percent,
+            psi_some_avg10: pressure.some.as_ref().map(|line| line.avg10),
+            psi_full_avg10: pressure.full.as_ref().map(|line| line.avg10),
+            primary_memory_available: matches!(
+                snapshot.memory.availability.state,
+                AvailabilityState::Available
+            ) && snapshot.memory.available_bytes.is_some(),
+            primary_psi_available: matches!(
+                pressure.availability.state,
+                AvailabilityState::Available
+            ) && (pressure.some.is_some() || pressure.full.is_some()),
+            oom_events_total: (!snapshot.cgroups.is_empty()).then_some(oom_events_total),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AlertEngineState {
+    pub current: AlertState,
+    current_since_ms: u64,
+    candidate: Option<(AlertState, u64)>,
+    recovery_since_ms: Option<u64>,
+    recovery_samples: u8,
+    pub incident_id: Option<String>,
+    next_incident: u64,
+    opened_at: Option<u64>,
+    incident_since_ms: Option<u64>,
+    last_observed_at_ms: u64,
+    cooldown_until_ms: Option<u64>,
+    last_oom_total: Option<u64>,
+}
+
+pub struct AlertEngine;
+
+impl AlertEngine {
+    pub fn advance(previous: &AlertEngineState, sample: &AlertSample) -> AlertTransition {
+        AlertEngineState::advance(previous, sample)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AlertChange {
+    Opened,
+    Escalated,
+    Updated,
+    Resolved,
+}
+
+#[derive(Clone, Debug)]
+pub struct AlertTransition {
+    pub next: AlertEngineState,
+    pub summary: AlertSummary,
+    pub incident: Option<AlertIncident>,
+    pub change: Option<AlertChange>,
+}
+
+struct TransitionInput<'a> {
+    now: u64,
+    sample: &'a AlertSample,
+    oom_delta: bool,
+    thresholds: &'a AlertThresholds,
+}
+
+impl AlertEngineState {
+    pub fn healthy(now_ms: u64) -> Self {
+        Self {
+            current: AlertState::Healthy,
+            current_since_ms: now_ms,
+            candidate: None,
+            recovery_since_ms: None,
+            recovery_samples: 0,
+            incident_id: None,
+            next_incident: 1,
+            opened_at: None,
+            incident_since_ms: None,
+            last_observed_at_ms: now_ms,
+            cooldown_until_ms: None,
+            last_oom_total: None,
+        }
+    }
+}
+
+impl AlertEngineState {
+    /// Pure state transition. The caller owns the returned state and can feed
+    /// it back into the next call, which keeps fake-clock tests deterministic.
+    pub fn advance(previous: &Self, sample: &AlertSample) -> AlertTransition {
+        Self::advance_with_thresholds(previous, sample, &AlertThresholds::default())
+    }
+
+    pub fn advance_with_thresholds(
+        previous: &Self,
+        sample: &AlertSample,
+        thresholds: &AlertThresholds,
+    ) -> AlertTransition {
+        let now = sample.observed_at_ms.max(previous.last_observed_at_ms);
+        let oom_delta = sample
+            .oom_events_total
+            .zip(previous.last_oom_total)
+            .is_some_and(|(current, old)| current > old);
+        let target = classify(sample, oom_delta, thresholds);
+        let mut next = previous.clone();
+        next.last_observed_at_ms = now;
+        // A cgroup may restart and reset its counter. Keep the newest observed
+        // value so a subsequent increment is still detected immediately.
+        next.last_oom_total = sample.oom_events_total;
+        let mut change = None;
+        let mut incident = None;
+        let input = TransitionInput {
+            now,
+            sample,
+            oom_delta,
+            thresholds,
+        };
+
+        if target == previous.current {
+            next.candidate = None;
+            next.recovery_since_ms = None;
+            if target == AlertState::LimitedData {
+                next.recovery_samples = 0;
+            }
+        } else if target == AlertState::LimitedData {
+            // Loss of both primary signals is itself immediately actionable
+            // context. Do not retain a prior pressure state when its evidence
+            // can no longer be evaluated.
+            transition(&mut next, target, &input, &mut change, &mut incident);
+        } else if previous.current == AlertState::LimitedData {
+            if target != AlertState::LimitedData {
+                next.recovery_samples = previous.recovery_samples.saturating_add(1);
+                if next.recovery_samples >= 2 {
+                    transition(&mut next, target, &input, &mut change, &mut incident);
+                }
+            }
+        } else if state_rank(target) > state_rank(previous.current)
+            || previous.current == AlertState::Healthy
+        {
+            next.recovery_since_ms = None;
+            let since = match previous.candidate {
+                Some((candidate, started)) if candidate == target => started,
+                _ => now,
+            };
+            next.candidate = Some((target, since));
+            let duration = entry_duration_ms(target, sample, oom_delta, thresholds);
+            if now.saturating_sub(since) >= duration {
+                transition(&mut next, target, &input, &mut change, &mut incident);
+            }
+        } else if recovery_met(previous.current, sample, thresholds) {
+            let since = previous.recovery_since_ms.unwrap_or(now);
+            next.recovery_since_ms = Some(since);
+            if now.saturating_sub(since) >= recovery_duration_ms(previous.current) {
+                transition(
+                    &mut next,
+                    AlertState::Healthy,
+                    &input,
+                    &mut change,
+                    &mut incident,
+                );
+            }
+        } else {
+            next.recovery_since_ms = None;
+        }
+
+        let summary = summary(&next, now, sample, oom_delta, thresholds);
+        AlertTransition {
+            next,
+            summary,
+            incident,
+            change,
+        }
+    }
+}
+
+fn transition(
+    next: &mut AlertEngineState,
+    state: AlertState,
+    input: &TransitionInput<'_>,
+    change: &mut Option<AlertChange>,
+    incident: &mut Option<AlertIncident>,
+) {
+    let old = next.current;
+    next.current = state;
+    next.current_since_ms = input.now;
+    next.candidate = None;
+    next.recovery_since_ms = None;
+    next.recovery_samples = 0;
+    if old == AlertState::Healthy && state != AlertState::Healthy {
+        let id = format!("host-incident-{}", next.next_incident);
+        next.next_incident = next.next_incident.saturating_add(1);
+        next.incident_id = Some(id);
+        next.opened_at = Some(input.sample.reported_at_ms);
+        next.incident_since_ms = Some(input.now);
+        *change = if next
+            .cooldown_until_ms
+            .is_some_and(|until| input.now < until)
+        {
+            None
+        } else {
+            Some(AlertChange::Opened)
+        };
+        *incident = Some(incident_from(next, input, None));
+    } else if old != AlertState::Healthy && state == AlertState::Healthy {
+        if let Some(id) = next.incident_id.clone() {
+            *change = Some(AlertChange::Resolved);
+            *incident = Some(incident_from(
+                next,
+                input,
+                Some(input.sample.reported_at_ms),
+            ));
+            next.cooldown_until_ms = Some(input.now.saturating_add(COOLDOWN_MS));
+            let _ = id;
+        }
+        next.incident_id = None;
+        next.opened_at = None;
+        next.incident_since_ms = None;
+    } else if old != state && next.incident_id.is_some() {
+        *change = Some(if state_rank(state) > state_rank(old) {
+            AlertChange::Escalated
+        } else {
+            AlertChange::Updated
+        });
+        *incident = Some(incident_from(next, input, None));
+    }
+}
+
+fn classify(sample: &AlertSample, oom_delta: bool, thresholds: &AlertThresholds) -> AlertState {
+    if !sample.primary_memory_available && !sample.primary_psi_available {
+        return AlertState::LimitedData;
+    }
+    if oom_delta
+        || (sample
+            .available_percent
+            .is_some_and(|value| value < thresholds.available_oom_percent)
+            && (sample.psi_some_avg10.is_some_and(|value| value >= 20.0)
+                || sample.psi_full_avg10.is_some_and(|value| value >= 5.0)))
+    {
+        return AlertState::OomRisk;
+    }
+    if sample
+        .available_percent
+        .is_some_and(|value| value < thresholds.available_critical_percent)
+        || sample
+            .psi_some_avg10
+            .is_some_and(|value| value >= thresholds.psi_some_percent)
+        || sample
+            .psi_full_avg10
+            .is_some_and(|value| value >= thresholds.psi_full_percent)
+    {
+        return AlertState::MemoryPressure;
+    }
+    if sample
+        .available_percent
+        .is_some_and(|value| value < thresholds.available_warning_percent)
+    {
+        return AlertState::ElevatedNoPressure;
+    }
+    if sample
+        .reclaimable_percent
+        .is_some_and(|value| value >= thresholds.reclaimable_cache_percent)
+        && sample
+            .available_percent
+            .is_some_and(|value| value >= thresholds.available_warning_percent)
+        && sample.primary_psi_available
+        && sample.psi_some_avg10.unwrap_or(0.0) < thresholds.psi_some_percent
+        && sample.psi_full_avg10.unwrap_or(0.0) < thresholds.psi_full_percent
+    {
+        return AlertState::ReclaimableCacheHigh;
+    }
+    AlertState::Healthy
+}
+
+fn severity(state: AlertState) -> AlertSeverity {
+    match state {
+        AlertState::Healthy => AlertSeverity::Info,
+        AlertState::ReclaimableCacheHigh
+        | AlertState::ElevatedNoPressure
+        | AlertState::LimitedData => AlertSeverity::Warning,
+        AlertState::MemoryPressure | AlertState::OomRisk => AlertSeverity::Critical,
+    }
+}
+
+fn state_rank(state: AlertState) -> u8 {
+    match state {
+        AlertState::Healthy => 0,
+        AlertState::ReclaimableCacheHigh => 1,
+        AlertState::ElevatedNoPressure => 2,
+        AlertState::MemoryPressure => 3,
+        AlertState::OomRisk => 4,
+        AlertState::LimitedData => 1,
+    }
+}
+
+fn entry_duration_ms(
+    state: AlertState,
+    sample: &AlertSample,
+    oom_delta: bool,
+    thresholds: &AlertThresholds,
+) -> u64 {
+    if oom_delta {
+        return 0;
+    }
+    match state {
+        AlertState::OomRisk => 15_000,
+        AlertState::MemoryPressure
+            if sample
+                .psi_full_avg10
+                .is_some_and(|value| value >= thresholds.psi_full_percent) =>
+        {
+            15_000
+        }
+        AlertState::MemoryPressure => 30_000,
+        AlertState::LimitedData => 0,
+        AlertState::ReclaimableCacheHigh | AlertState::ElevatedNoPressure => 30_000,
+        AlertState::Healthy => 0,
+    }
+}
+
+fn recovery_met(state: AlertState, sample: &AlertSample, thresholds: &AlertThresholds) -> bool {
+    match state {
+        AlertState::ReclaimableCacheHigh => sample
+            .reclaimable_percent
+            .is_none_or(|value| value < (thresholds.reclaimable_cache_percent - 5.0).max(0.0)),
+        AlertState::ElevatedNoPressure => sample
+            .available_percent
+            .is_some_and(|value| value >= (thresholds.available_warning_percent + 5.0).min(100.0)),
+        AlertState::MemoryPressure => {
+            sample
+                .available_percent
+                .is_some_and(|value| value >= thresholds.available_warning_percent)
+                && sample
+                    .psi_some_avg10
+                    .is_none_or(|value| value < thresholds.psi_some_percent / 2.0)
+                && sample
+                    .psi_full_avg10
+                    .is_none_or(|value| value < thresholds.psi_full_percent / 2.0)
+        }
+        AlertState::OomRisk => {
+            sample.oom_events_total.is_some()
+                && recovery_met(AlertState::MemoryPressure, sample, thresholds)
+        }
+        AlertState::Healthy | AlertState::LimitedData => false,
+    }
+}
+
+fn recovery_duration_ms(state: AlertState) -> u64 {
+    match state {
+        AlertState::OomRisk => 120_000,
+        AlertState::ReclaimableCacheHigh
+        | AlertState::ElevatedNoPressure
+        | AlertState::MemoryPressure => 60_000,
+        AlertState::Healthy | AlertState::LimitedData => 0,
+    }
+}
+
+fn summary(
+    state: &AlertEngineState,
+    now: u64,
+    sample: &AlertSample,
+    oom_delta: bool,
+    thresholds: &AlertThresholds,
+) -> AlertSummary {
+    AlertSummary {
+        state: state.current,
+        severity: severity(state.current),
+        incident_id: state.incident_id.clone(),
+        opened_at: state.opened_at,
+        updated_at: sample.reported_at_ms,
+        duration_seconds: state
+            .incident_since_ms
+            .map(|started| now.saturating_sub(started) / 1_000)
+            .unwrap_or(0),
+        scope: "host".into(),
+        confidence: confidence(state.current, sample),
+        threshold: threshold(state.current, thresholds),
+        evidence: evidence(sample, oom_delta),
+        next_action: next_action(state.current),
+    }
+}
+
+fn incident_from(
+    state: &AlertEngineState,
+    input: &TransitionInput<'_>,
+    resolved_at: Option<u64>,
+) -> AlertIncident {
+    let summary = summary(
+        state,
+        input.now,
+        input.sample,
+        input.oom_delta,
+        input.thresholds,
+    );
+    AlertIncident {
+        incident_id: state
+            .incident_id
+            .clone()
+            .unwrap_or_else(|| "unknown".into()),
+        state: summary.state,
+        severity: summary.severity,
+        opened_at: state.opened_at.unwrap_or(input.sample.reported_at_ms),
+        updated_at: input.sample.reported_at_ms,
+        resolved_at,
+        duration_seconds: summary.duration_seconds,
+        scope: summary.scope,
+        threshold: summary.threshold,
+        confidence: summary.confidence,
+        evidence: summary.evidence,
+        next_action: summary.next_action,
+    }
+}
+
+fn confidence(state: AlertState, sample: &AlertSample) -> Confidence {
+    if state == AlertState::LimitedData {
+        return Confidence::Low;
+    }
+    if sample.available_percent.is_some() && sample.psi_some_avg10.is_some() {
+        Confidence::High
+    } else {
+        Confidence::Medium
+    }
+}
+
+fn threshold(state: AlertState, thresholds: &AlertThresholds) -> String {
+    match state {
+        AlertState::Healthy => "none".into(),
+        AlertState::ReclaimableCacheHigh => format!(
+            "reclaimable>={}%,available>={}%,psi_some<{}%,psi_full<{}%",
+            thresholds.reclaimable_cache_percent,
+            thresholds.available_warning_percent,
+            thresholds.psi_some_percent,
+            thresholds.psi_full_percent,
+        ),
+        AlertState::ElevatedNoPressure => {
+            format!("available<{}%", thresholds.available_warning_percent)
+        }
+        AlertState::MemoryPressure => format!(
+            "available<{}% or psi_some>={}%,psi_full>={}%",
+            thresholds.available_critical_percent,
+            thresholds.psi_some_percent,
+            thresholds.psi_full_percent
+        ),
+        AlertState::OomRisk => format!(
+            "oom_delta or available<{}% correlated with pressure",
+            thresholds.available_oom_percent
+        ),
+        AlertState::LimitedData => "MemAvailable and PSI unavailable".into(),
+    }
+}
+
+fn next_action(state: AlertState) -> String {
+    match state {
+        AlertState::Healthy => "No action required".into(),
+        AlertState::ReclaimableCacheHigh => {
+            "Inspect cache consumers; no mutation is suggested".into()
+        }
+        AlertState::ElevatedNoPressure => "Inspect top memory consumers and workload trend".into(),
+        AlertState::MemoryPressure => "Inspect top consumers, PSI, swap, and cgroup limits".into(),
+        AlertState::OomRisk => {
+            "Stop starting memory-heavy work and inspect cgroup OOM evidence".into()
+        }
+        AlertState::LimitedData => "Restore readable MemAvailable and PSI sources".into(),
+    }
+}
+
+fn evidence(sample: &AlertSample, oom_delta: bool) -> AlertEvidence {
+    AlertEvidence {
+        available_percent: sample.available_percent,
+        reclaimable_percent: sample.reclaimable_percent,
+        psi_some_avg10: sample.psi_some_avg10,
+        psi_full_avg10: sample.psi_full_avg10,
+        cgroup_oom_delta: oom_delta,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample(
+        at: u64,
+        available: Option<f64>,
+        some: Option<f64>,
+        full: Option<f64>,
+    ) -> AlertSample {
+        AlertSample {
+            observed_at_ms: at,
+            reported_at_ms: at,
+            available_percent: available,
+            reclaimable_percent: Some(5.0),
+            psi_some_avg10: some,
+            psi_full_avg10: full,
+            primary_memory_available: available.is_some(),
+            primary_psi_available: some.is_some() || full.is_some(),
+            oom_events_total: Some(0),
+        }
+    }
+
+    #[test]
+    fn requires_sustained_pressure_and_honors_hysteresis() {
+        let mut state = AlertEngineState::healthy(0);
+        state = AlertEngineState::advance(&state, &sample(0, Some(8.0), Some(0.0), Some(0.0))).next;
+        assert_eq!(state.current, AlertState::Healthy);
+        state = AlertEngineState::advance(&state, &sample(29_999, Some(8.0), Some(0.0), Some(0.0)))
+            .next;
+        assert_eq!(state.current, AlertState::Healthy);
+        state = AlertEngineState::advance(&state, &sample(30_000, Some(8.0), Some(0.0), Some(0.0)))
+            .next;
+        assert_eq!(state.current, AlertState::MemoryPressure);
+        state =
+            AlertEngineState::advance(&state, &sample(90_000, Some(16.0), Some(0.0), Some(0.0)))
+                .next;
+        assert_eq!(state.current, AlertState::MemoryPressure);
+        state =
+            AlertEngineState::advance(&state, &sample(150_000, Some(16.0), Some(0.0), Some(0.0)))
+                .next;
+        assert_eq!(state.current, AlertState::Healthy);
+    }
+
+    #[test]
+    fn clock_backwards_does_not_shortcut_entry() {
+        let state = AlertEngineState::healthy(100_000);
+        let next =
+            AlertEngineState::advance(&state, &sample(0, Some(8.0), Some(0.0), Some(0.0))).next;
+        assert_eq!(next.current, AlertState::Healthy);
+    }
+
+    #[test]
+    fn escalation_keeps_incident_id_and_oom_delta_is_immediate() {
+        let mut state = AlertEngineState::healthy(0);
+        state = AlertEngineState::advance(&state, &sample(0, Some(8.0), Some(0.0), Some(0.0))).next;
+        state = AlertEngineState::advance(&state, &sample(30_000, Some(8.0), Some(0.0), Some(0.0)))
+            .next;
+        let id = state.incident_id.clone().unwrap();
+        let transition = AlertEngineState::advance(
+            &state,
+            &AlertSample {
+                oom_events_total: Some(1),
+                ..sample(31_000, Some(4.0), Some(20.0), Some(5.0))
+            },
+        );
+        assert_eq!(transition.next.current, AlertState::OomRisk);
+        assert_eq!(transition.next.incident_id.as_deref(), Some(id.as_str()));
+        assert_eq!(transition.change, Some(AlertChange::Escalated));
+        assert_eq!(transition.summary.duration_seconds, 1);
+        assert_eq!(transition.incident.unwrap().duration_seconds, 1);
+    }
+
+    #[test]
+    fn incident_duration_survives_escalation_until_resolution() {
+        let mut state = AlertEngineState::healthy(0);
+        state = AlertEngineState::advance(&state, &sample(0, Some(8.0), Some(0.0), Some(0.0))).next;
+        state = AlertEngineState::advance(&state, &sample(30_000, Some(8.0), Some(0.0), Some(0.0)))
+            .next;
+        state = AlertEngineState::advance(
+            &state,
+            &AlertSample {
+                oom_events_total: Some(1),
+                ..sample(31_000, Some(4.0), Some(20.0), Some(5.0))
+            },
+        )
+        .next;
+
+        let state = AlertEngineState::advance(
+            &state,
+            &AlertSample {
+                oom_events_total: Some(1),
+                ..sample(151_000, Some(20.0), Some(0.0), Some(0.0))
+            },
+        )
+        .next;
+        let transition = AlertEngineState::advance(
+            &state,
+            &AlertSample {
+                oom_events_total: Some(1),
+                ..sample(271_000, Some(20.0), Some(0.0), Some(0.0))
+            },
+        );
+
+        assert_eq!(transition.change, Some(AlertChange::Resolved));
+        assert_eq!(transition.incident.unwrap().duration_seconds, 241);
+    }
+
+    #[test]
+    fn limited_data_recovers_after_two_samples() {
+        let mut state = AlertEngineState::healthy(0);
+        state = AlertEngineState::advance(&state, &sample(0, None, None, None)).next;
+        assert_eq!(state.current, AlertState::LimitedData);
+        state = AlertEngineState::advance(&state, &sample(1, Some(50.0), None, None)).next;
+        assert_eq!(state.current, AlertState::LimitedData);
+        state = AlertEngineState::advance(&state, &sample(2, Some(50.0), None, None)).next;
+        assert_eq!(state.current, AlertState::Healthy);
+    }
+
+    #[test]
+    fn loss_of_primary_signals_replaces_an_active_pressure_state() {
+        let mut state = AlertEngineState::healthy(0);
+        state = AlertEngineState::advance(&state, &sample(0, Some(8.0), Some(0.0), Some(0.0))).next;
+        state = AlertEngineState::advance(&state, &sample(30_000, Some(8.0), Some(0.0), Some(0.0)))
+            .next;
+        let incident_id = state.incident_id.clone();
+
+        let transition = AlertEngineState::advance(&state, &sample(31_000, None, None, None));
+        assert_eq!(transition.next.current, AlertState::LimitedData);
+        assert_eq!(transition.next.incident_id, incident_id);
+        assert_eq!(transition.change, Some(AlertChange::Updated));
+    }
+
+    #[test]
+    fn forward_wall_clock_jump_does_not_bypass_monotonic_entry_duration() {
+        let state = AlertEngineState::healthy(0);
+        let state =
+            AlertEngineState::advance(&state, &sample(0, Some(8.0), Some(0.0), Some(0.0))).next;
+        let transition = AlertEngineState::advance(
+            &state,
+            &AlertSample {
+                reported_at_ms: u64::MAX,
+                ..sample(29_999, Some(8.0), Some(0.0), Some(0.0))
+            },
+        );
+
+        assert_eq!(transition.next.current, AlertState::Healthy);
+    }
+
+    #[test]
+    fn configured_thresholds_drive_labels_and_recovery() {
+        let thresholds = AlertThresholds {
+            available_warning_percent: 30.0,
+            available_critical_percent: 20.0,
+            available_oom_percent: 10.0,
+            psi_some_percent: 8.0,
+            psi_full_percent: 2.0,
+            ..Default::default()
+        };
+        let mut state = AlertEngineState::healthy(0);
+        state = AlertEngineState::advance_with_thresholds(
+            &state,
+            &sample(0, Some(19.0), Some(0.0), Some(0.0)),
+            &thresholds,
+        )
+        .next;
+        let transition = AlertEngineState::advance_with_thresholds(
+            &state,
+            &sample(30_000, Some(19.0), Some(0.0), Some(0.0)),
+            &thresholds,
+        );
+
+        assert_eq!(transition.next.current, AlertState::MemoryPressure);
+        assert!(transition.summary.threshold.contains("available<20%"));
+    }
+
+    #[test]
+    fn cgroup_counter_reset_rebases_the_next_oom_delta() {
+        let state = AlertEngineState::healthy(0);
+        let state = AlertEngineState::advance(
+            &state,
+            &AlertSample {
+                oom_events_total: Some(5),
+                ..sample(0, Some(50.0), Some(0.0), Some(0.0))
+            },
+        )
+        .next;
+        let state = AlertEngineState::advance(
+            &state,
+            &AlertSample {
+                oom_events_total: Some(1),
+                ..sample(1, Some(50.0), Some(0.0), Some(0.0))
+            },
+        )
+        .next;
+        let transition = AlertEngineState::advance(
+            &state,
+            &AlertSample {
+                oom_events_total: Some(2),
+                ..sample(2, Some(50.0), Some(0.0), Some(0.0))
+            },
+        );
+
+        assert_eq!(transition.next.current, AlertState::OomRisk);
+    }
+}

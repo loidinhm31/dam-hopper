@@ -1,3 +1,12 @@
+pub mod alerts;
+pub mod config;
+pub mod monitor;
+pub use alerts::{
+    AlertChange, AlertEngine, AlertEngineState, AlertEvidence, AlertIncident, AlertSample,
+    AlertSeverity, AlertState, AlertSummary, AlertThresholds,
+};
+pub use monitor::HostResourceMonitor;
+
 use std::{
     ffi::OsStr,
     fs,

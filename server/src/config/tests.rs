@@ -73,6 +73,35 @@ type = "cargo"
 }
 
 #[test]
+fn host_resource_monitor_config_uses_snake_case_and_roundtrips() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[workspace]
+name = "resources"
+
+[server.host_resources]
+light_sample_seconds = 7
+process_deadline_millis = 150
+max_alert_incidents = 12
+"#,
+    )
+    .unwrap();
+
+    let config = read_config(&config_path).unwrap();
+    assert_eq!(config.server.host_resources.light_sample_seconds, 7);
+    assert_eq!(config.server.host_resources.process_deadline_millis, 150);
+    assert_eq!(config.server.host_resources.max_alert_incidents, 12);
+
+    write_config(&config_path, &config).unwrap();
+    let written = std::fs::read_to_string(&config_path).unwrap();
+    assert!(written.contains("light_sample_seconds = 7"));
+    assert!(!written.contains("lightSampleSeconds"));
+}
+
+#[test]
 fn telemetry_config_rejects_removed_usage_keys() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("dam-hopper.toml");
@@ -866,6 +895,7 @@ fn global_config_writes_snake_case_ui_and_server_keys() {
             session_db_path: "/tmp/sessions.db".to_string(),
             session_buffer_ttl_hours: 12,
             telemetry: crate::config::TelemetryConfig::default(),
+            host_resources: crate::config::HostResourceMonitorConfig::default(),
         },
     };
 
