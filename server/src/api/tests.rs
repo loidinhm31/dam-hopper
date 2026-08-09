@@ -332,6 +332,46 @@ async fn system_metrics_requires_auth() {
 }
 
 #[tokio::test]
+async fn host_action_capabilities_are_protected_and_fail_closed_without_reauth() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let unauthorized = get_without_auth(state.clone(), "/api/system/actions/v1/capabilities").await;
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let available = get(state, "/api/system/actions/v1/capabilities").await;
+    assert_eq!(available.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(available.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["available"], false);
+    assert_eq!(json["reason"], "reauthUnavailable");
+}
+
+#[tokio::test]
+async fn host_action_cookie_mutations_require_a_same_origin_json_request() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let router = build_router(state, vec![]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/system/actions/v1/intents")
+        .header("Content-Type", "application/json")
+        .header("Cookie", auth_cookie())
+        .body(Body::from(
+            serde_json::json!({
+                "action": {"kind": "dropCleanCaches"},
+                "sampleId": "sample"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn system_metrics_returns_sane_json() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
