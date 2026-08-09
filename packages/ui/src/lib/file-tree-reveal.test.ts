@@ -99,6 +99,32 @@ describe("file-tree-reveal", () => {
     expect(tree.focus).toHaveBeenCalledTimes(2);
   });
 
+  it("waits for a committed lazy-child render before focusing", async () => {
+    let releaseCommit: (() => void) | undefined;
+    const tree = {
+      openParents: vi.fn(),
+      select: vi.fn(),
+      focus: vi.fn(),
+      scrollTo: vi.fn(),
+    };
+    const reveal = revealFileTreePath({
+      path: "src/app.ts",
+      nodes: [dir("src", null)],
+      tree,
+      loadChildren: vi.fn(async () => [file("src/app.ts")]),
+      getTreeCommitVersion: () => 4,
+      waitForTreeCommitAfter: vi.fn(
+        () => new Promise<void>((resolve) => (releaseCommit = resolve)),
+      ),
+    });
+
+    await Promise.resolve();
+    expect(tree.focus).not.toHaveBeenCalled();
+    releaseCommit?.();
+    await expect(reveal).resolves.toBe(true);
+    expect(tree.focus).toHaveBeenCalledWith("src/app.ts", { scroll: false });
+  });
+
   it("no-ops safely when the target node cannot be found", async () => {
     const tree = {
       openParents: vi.fn(),

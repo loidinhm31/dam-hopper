@@ -106,6 +106,7 @@ describe("useFsSubscription Git refresh", () => {
         limit: 20_000,
       },
       generation: 0,
+      resultVersion: 1,
       stale: false,
       scannedAt: 100,
     };
@@ -185,6 +186,7 @@ describe("useFsSubscription Git refresh", () => {
         limit: 20_000,
       },
       generation: 0,
+      resultVersion: 1,
       stale: false,
       scannedAt: 100,
     };
@@ -235,6 +237,7 @@ describe("useFsSubscription Git refresh", () => {
         limit: 20_000,
       },
       generation: 0,
+      resultVersion: 1,
       stale: false,
       scannedAt: 200,
     };

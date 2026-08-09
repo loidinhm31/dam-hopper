@@ -10,6 +10,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Next Milestone:** Product follow-ups: terminal commit status Phase 03 validation and release checks
 - **Current Feature:** Settings commit summary Phase 01 and terminal scroll-control redesign Phase 02 completed 2026-07-26; terminal commit status Phase 03 planned
 
+### Programming Language Navigation in Explorer (2026-08-10)
+
+- **Phase 03 — [COMPLETED 2026-08-10 00:36:17 +07:00]**: full-project Rust/JS-TS/Java navigation, manual scan states, navigation-only capability gating, selection cleanup, commit-gated reveal, and focused release validation completed.
+- Release caveats: temporary-file checks require a `TMPDIR` workaround for exhausted `/tmp` quota; `pnpm check` is blocked at native package validation by disk quota; broad browser coverage retains an unrelated terminal import failure.
+
 ### Terminal Pinning and Runtime Contrast (2026-08-08)
 
 - **Phases 01–02 — [COMPLETED 2026-08-08]**: session-only terminal pin protection, shared Traditional/Runtime controls, Runtime contrast/framing, focused DOM coverage, and implementation review completed.

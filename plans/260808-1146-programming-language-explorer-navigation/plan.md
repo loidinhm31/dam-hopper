@@ -1,7 +1,7 @@
 ---
 title: "Programming Language Navigation in Explorer"
 description: "Add manual full-project Rust, JavaScript/TypeScript, and Java navigation to Explorer."
-status: in-progress
+status: completed
 priority: P2
 effort: 16h
 branch: main
@@ -33,7 +33,7 @@ Add explicit full-project language scans and navigation for Rust, combined JavaS
 |---|---|---|---:|---|
 | 1 | Sandboxed server language scan | Completed 2026-08-09 (+07:00) | 5h | [phase-01](./phase-01-language-model-and-tree-filter.md) |
 | 2 | Typed client cache and persisted filter | Completed 2026-08-09 13:42:02 (+07:00) | 4.5h | [phase-02](./phase-02-explorer-language-filter-ui.md) |
-| 3 | Explorer navigation, reveal, and release validation | Pending | 6.5h | [phase-03](./phase-03-validation-and-documentation.md) |
+| 3 | Explorer navigation, reveal, and release validation | Completed 2026-08-10 00:36:17 (+07:00) | 6.5h | [phase-03](./phase-03-validation-and-documentation.md) |
 
 ## Dependencies
 
@@ -50,6 +50,12 @@ No automatic/background scan, persisted index, recursive client listing, content
 ## Final validation
 
 Run focused Rust/API and UI unit/browser tests first, then `pnpm --filter @dam-hopper/ui build`, `pnpm lint`, `pnpm test`, and `pnpm check`. Report unrelated dirty-worktree failures without widening scope.
+
+## Phase 03 Completion (2026-08-10 00:36:17 +07:00)
+
+Phase 03 implementation and review are complete. Navigation hierarchy, manual scan states, navigation-only capability boundaries, selection cleanup, commit-gated reveal, focused tests, and browser regression coverage were delivered.
+
+Validation evidence recorded in the Phase 03 plan: focused UI/Rust/API tests and UI build passed; broad browser validation was attempted but has an unrelated existing terminal import failure; `pnpm check` reached the native package stage but was blocked by native package disk quota; temporary-file-producing checks require a `TMPDIR` workaround because `/tmp` quota is exhausted. These are environment/baseline caveats, not feature failures.
 
 ## Validation Summary
 

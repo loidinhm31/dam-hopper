@@ -620,11 +620,15 @@ interface TerminalPanelProps {
 
 **Behavior:**
 
-- `All` continues to use the existing live, lazy filesystem tree. Phase 03 will
-  consume the bounded project scan to build the filtered navigation-only hierarchy.
+- `All` uses the existing live, lazy filesystem tree. `Rust`, `JS/TS`, and `Java`
+  project the bounded scan result into a complete, navigation-only synthetic
+  hierarchy; these rows are not live filesystem nodes and file mutations are
+  disabled while a language filter is active.
 - Scanning is explicit through `Scan`/`Rescan`; hydrating the persisted filter, changing projects, or receiving filesystem events never starts a request automatically. The typed QueryClient entry is keyed by `['explorer-language-scan', project]` and stores the result, generation, stale flag, and last completed timestamp in memory only.
-- A filesystem event increments the project generation and marks an existing scan stale without refetching. If an event arrives during a scan, the response remains usable but stays stale. Failed rescans preserve the previous result; workspace changes remove all language-scan entries, and query-client reset/reload clears them naturally.
+- A filesystem event increments the project generation and marks an existing scan stale without refetching. If an event arrives during a scan, the response remains usable but stays stale. Failed rescans preserve the previous result; workspace changes remove all language-scan entries, and query-client reset/reload clears them naturally. Each successfully committed result increments `resultVersion`, including same-generation rescans, so the synthetic tree remounts from the committed snapshot.
 - The selected `explorerLanguageFilter` is persisted through the global UI settings path, defaulting to `all`. Scan results, stale state, timestamps, and expanded scan-tree folders are not persisted.
+- Scan presentation exposes the last completed time, stale warning, in-progress rescan status, truncation warning, and scan errors; a filter with no result prompts for `Scan`, while an empty committed result reports no matching files.
+- Revealing an active file safely switches a filtered view back to `All`, then waits for the live tree's committed lazy-child render before opening parents, selecting, and scrolling. A reveal is marked handled only after success and its request nonce makes retries independently triggerable.
 
 ### GitPage
 
