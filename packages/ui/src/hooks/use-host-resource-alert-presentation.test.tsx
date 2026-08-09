@@ -63,4 +63,16 @@ describe("useHostResourceAlertPresentation", () => {
     await act(async () => button.click());
     expect(button.textContent).toBe("0");
   });
+
+  it("clears retained incidents for a server-profile switch", () => {
+    useHostResourceAlertPresentationStore.getState().recordAlert(alert);
+    expect(useHostResourceAlertPresentationStore.getState().unreadIds).toEqual([
+      "incident-1",
+    ]);
+
+    useHostResourceAlertPresentationStore.getState().reset();
+    expect(useHostResourceAlertPresentationStore.getState().unreadIds).toEqual(
+      [],
+    );
+  });
 });

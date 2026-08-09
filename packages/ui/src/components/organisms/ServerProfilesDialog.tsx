@@ -9,6 +9,7 @@ import {
   deleteProfile,
 } from "@/api/server-config.js";
 import { reinitializeTransport } from "@/api/transport-utils.js";
+import { useHostResourceAlertPresentationStore } from "@/hooks/use-host-resource-alert-presentation.js";
 
 interface Props {
   open: boolean;
@@ -33,6 +34,7 @@ export function ServerProfilesDialog({
 
   function handleSwitch(profile: ServerProfile) {
     setActiveProfile(profile.id);
+    useHostResourceAlertPresentationStore.getState().reset();
     onSwitchProfile(profile);
     onClose();
 

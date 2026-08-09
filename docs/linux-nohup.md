@@ -75,6 +75,31 @@ pnpm server:restart
 
 The restart command copies the newly built binary into `~/.config/dam-hopper/bin/`, stops the old process using the pid file, and starts the new process with `nohup`.
 
+## Host Resource Monitoring Release and Rollback
+
+This deployment path ships read-only host-resource monitoring only. It adds no
+privileged helper, IPC socket, enrollment, action lifecycle, re-authentication,
+or host-mutation control. Before a staged rollout, verify that authenticated
+`GET /api/system/metrics` still returns its compatible basic CPU, memory, disk,
+and temperature shape; then check the versioned snapshot and alerts routes.
+
+Container builds serve the compiled browser assets from `/opt/dam-hopper/web`.
+For a nohup deployment that serves the browser from the same process, set
+`DAM_HOPPER_WEB_DIR` to a separately built, readable `apps/web/dist`; otherwise
+use an external browser-asset host.
+
+Start with a canary host, observe source-availability states and alert rate for
+the monitor cadence, then broaden only after the cached endpoint latency and
+resource budget are acceptable. In containers, treat the reported data as that
+container's namespace view. Cgroup v1 and non-Linux deep metrics are expected
+to show unsupported rather than a fabricated zero.
+
+If deep collection regresses, roll back the release binary while retaining
+`GET /api/system/metrics`. Confirm the legacy endpoint remains authenticated
+and cached, the browser diagnosis shows its compatible basic-metrics fallback,
+and no alert subscription remains bound to the replaced server profile. Do not
+use rollback to enable any deferred remediation capability.
+
 ## Uninstall
 
 ```bash

@@ -38,6 +38,16 @@ const ALERT_SEVERITIES = new Set<AlertSeverity>([
   "warning",
   "critical",
 ]);
+const ALERT_CONFIDENCES = new Set(["low", "medium", "high"]);
+const ALERT_SCOPE = "host";
+const MAX_ALERT_TEXT_LENGTH = 256;
+const MAX_INCIDENT_ID_LENGTH = 64;
+const IPC_STATUSES = new Set<IpcStatus>([
+  "connected",
+  "connecting",
+  "disconnected",
+  "error",
+]);
 
 type Listener = (event: IpcEvent) => void;
 
@@ -53,6 +63,13 @@ function dispatch(type: string, data: unknown) {
   const event: IpcEvent = { type, data, timestamp: Date.now() };
   listeners.get(type)?.forEach((cb) => cb(event));
   listeners.get("*")?.forEach((cb) => cb(event));
+}
+
+/** Relay the active WebSocket status through the stable listener bus. */
+export function publishTransportStatus(status: unknown): void {
+  if (typeof status === "string" && IPC_STATUSES.has(status as IpcStatus)) {
+    dispatch("transport:status", status);
+  }
 }
 
 const PUSH_EVENT_CHANNELS = [
@@ -92,21 +109,61 @@ export function asHostResourceAlertChangedEvent(
     return null;
   }
   const alert = event.data as Partial<HostResourceAlert>;
-  return typeof alert.state === "string" &&
+  return Number.isFinite(event.timestamp) &&
+    event.timestamp >= 0 &&
+    typeof alert.state === "string" &&
     ALERT_STATES.has(alert.state as AlertState) &&
     typeof alert.severity === "string" &&
     ALERT_SEVERITIES.has(alert.severity as AlertSeverity) &&
-    typeof alert.updatedAt === "number" &&
-    typeof alert.durationSeconds === "number" &&
-    typeof alert.scope === "string" &&
+    isNonNegativeFiniteNumber(alert.updatedAt) &&
+    isNonNegativeFiniteNumber(alert.durationSeconds) &&
+    alert.scope === ALERT_SCOPE &&
     typeof alert.confidence === "string" &&
-    typeof alert.threshold === "string" &&
-    typeof alert.nextAction === "string" &&
+    ALERT_CONFIDENCES.has(alert.confidence) &&
+    isBoundedText(alert.threshold) &&
+    isBoundedText(alert.nextAction) &&
+    hasValidOptionalIncidentId(alert.incidentId) &&
+    hasValidOptionalTimestamp(alert.openedAt) &&
     typeof alert.evidence === "object" &&
     alert.evidence !== null &&
-    typeof alert.evidence.cgroupOomDelta === "boolean"
+    typeof alert.evidence.cgroupOomDelta === "boolean" &&
+    hasValidOptionalPercent(alert.evidence.availablePercent) &&
+    hasValidOptionalPercent(alert.evidence.reclaimablePercent) &&
+    hasValidOptionalPercent(alert.evidence.psiSomeAvg10) &&
+    hasValidOptionalPercent(alert.evidence.psiFullAvg10)
     ? (event as HostResourceAlertChangedEvent)
     : null;
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isBoundedText(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    value.length <= MAX_ALERT_TEXT_LENGTH
+  );
+}
+
+function hasValidOptionalIncidentId(value: unknown): boolean {
+  return (
+    value == null ||
+    (typeof value === "string" &&
+      value.length > 0 &&
+      value.length <= MAX_INCIDENT_ID_LENGTH)
+  );
+}
+
+function hasValidOptionalTimestamp(value: unknown): boolean {
+  return value == null || isNonNegativeFiniteNumber(value);
+}
+
+function hasValidOptionalPercent(value: unknown): boolean {
+  return (
+    value == null || (isNonNegativeFiniteNumber(value) && value <= 100)
+  );
 }
 
 let initialized = false;
@@ -120,6 +177,12 @@ export function initTransportListeners(): void {
   for (const channel of PUSH_EVENT_CHANNELS) {
     const unsub = transport.onEvent(channel, (data) => dispatch(channel, data));
     unsubscribers.push(unsub);
+  }
+  if (hasWsStatus(transport)) {
+    unsubscribers.push(
+      transport.onStatusChange((status) => publishTransportStatus(status)),
+    );
+    publishTransportStatus(transport.getStatus());
   }
 }
 
@@ -172,9 +235,19 @@ export function useIpc(): { status: IpcStatus } {
   });
 
   useEffect(() => {
-    initTransportListeners();
-
     const unsubs = [
+      subscribeIpc("transport:status", (event) => {
+        if (
+          typeof event.data !== "string" ||
+          !IPC_STATUSES.has(event.data as IpcStatus)
+        ) {
+          return;
+        }
+        handleIpcStatusChange(event.data as IpcStatus, setWsStatus, () => {
+          void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+          invalidateHostResourceQueries(qc);
+        });
+      }),
       subscribeIpc("status:changed", (e) => {
         try {
           const { projectName } = e.data as { projectName: string };
@@ -204,13 +277,12 @@ export function useIpc(): { status: IpcStatus } {
 
       subscribeIpc("host:alertChanged", (event) => {
         const alertEvent = asHostResourceAlertChangedEvent(event);
-        if (alertEvent) {
-          qc.setQueryData<HostResourceSnapshotV1>(
-            ["system", "resource-snapshot"],
-            (snapshot) =>
-              snapshot ? { ...snapshot, alert: alertEvent.data } : snapshot,
-          );
-        }
+        if (!alertEvent) return;
+        qc.setQueryData<HostResourceSnapshotV1>(
+          ["system", "resource-snapshot"],
+          (snapshot) =>
+            snapshot ? { ...snapshot, alert: alertEvent.data } : snapshot,
+        );
         invalidateHostResourceQueries(qc);
       }),
 
@@ -219,22 +291,9 @@ export function useIpc(): { status: IpcStatus } {
       ),
     ];
 
-    return () => unsubs.forEach((fn) => fn());
-  }, [qc]);
+    initTransportListeners();
 
-  useEffect(() => {
-    try {
-      const t = getTransport();
-      if (!hasWsStatus(t)) return;
-      return t.onStatusChange((status) =>
-        handleIpcStatusChange(status as IpcStatus, setWsStatus, () => {
-          void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
-          invalidateHostResourceQueries(qc);
-        }),
-      );
-    } catch {
-      return;
-    }
+    return () => unsubs.forEach((fn) => fn());
   }, [qc]);
 
   return { status: wsStatus };

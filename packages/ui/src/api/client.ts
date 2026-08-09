@@ -223,7 +223,7 @@ export type AvailabilityState =
 export interface Availability {
   state: AvailabilityState;
   sampledAt: number;
-  detailCode?: string;
+  detailCode?: string | null;
 }
 
 export type AlertState =
@@ -238,18 +238,18 @@ export type AlertSeverity = "info" | "warning" | "critical";
 export type Confidence = "low" | "medium" | "high";
 
 export interface HostResourceAlertEvidence {
-  availablePercent?: number;
-  reclaimablePercent?: number;
-  psiSomeAvg10?: number;
-  psiFullAvg10?: number;
+  availablePercent?: number | null;
+  reclaimablePercent?: number | null;
+  psiSomeAvg10?: number | null;
+  psiFullAvg10?: number | null;
   cgroupOomDelta: boolean;
 }
 
 export interface HostResourceAlert {
   state: AlertState;
   severity: AlertSeverity;
-  incidentId?: string;
-  openedAt?: number;
+  incidentId?: string | null;
+  openedAt?: number | null;
   updatedAt: number;
   durationSeconds: number;
   scope: string;
@@ -262,12 +262,16 @@ export interface HostResourceAlert {
 export interface HostResourceAlertIncident extends HostResourceAlert {
   incidentId: string;
   openedAt: number;
-  resolvedAt?: number;
+  resolvedAt?: number | null;
 }
 
 export interface MemoryPressure {
-  some?: { avg10: number; avg60: number; avg300: number; totalMicros: number };
-  full?: { avg10: number; avg60: number; avg300: number; totalMicros: number };
+  some?:
+    | { avg10: number; avg60: number; avg300: number; totalMicros: number }
+    | null;
+  full?:
+    | { avg10: number; avg60: number; avg300: number; totalMicros: number }
+    | null;
   availability: Availability;
 }
 
@@ -278,7 +282,7 @@ export interface CacheAttribution {
     | "processFileRss"
     | "mountFileMappings"
     | "unattributedSharedCache";
-  bytes?: number;
+  bytes?: number | null;
   confidence: Confidence;
   method: string;
 }
@@ -287,15 +291,19 @@ export interface HostResourceSnapshotV1 {
   schemaVersion: 1;
   sampleId: string;
   sampledAt: number;
-  host: { bootId?: string; hostname?: string; osName?: string };
+  host: {
+    bootId?: string | null;
+    hostname?: string | null;
+    osName?: string | null;
+  };
   capabilities: { linuxDeepMetrics: Availability };
   memory: {
-    totalBytes?: number;
-    availableBytes?: number;
-    anonBytes?: number;
-    fileCacheBytes?: number;
-    reclaimableSlabBytes?: number;
-    swapUsedBytes?: number;
+    totalBytes?: number | null;
+    availableBytes?: number | null;
+    anonBytes?: number | null;
+    fileCacheBytes?: number | null;
+    reclaimableSlabBytes?: number | null;
+    swapUsedBytes?: number | null;
     availability: Availability;
   };
   pressure: {
@@ -304,12 +312,12 @@ export interface HostResourceSnapshotV1 {
   cgroups: Array<{
     path: string;
     namespace: string;
-    currentBytes?: number;
-    maxBytes?: number;
+    currentBytes?: number | null;
+    maxBytes?: number | null;
     maxUnlimited: boolean;
-    highBytes?: number;
+    highBytes?: number | null;
     highUnlimited: boolean;
-    fileCacheBytes?: number;
+    fileCacheBytes?: number | null;
     events: Array<[string, number]>;
     pressure: MemoryPressure;
     availability: Availability;
@@ -317,15 +325,15 @@ export interface HostResourceSnapshotV1 {
   processes: {
     processes: Array<{
       pid: number;
-      startTicks?: number;
-      uid?: number;
+      startTicks?: number | null;
+      uid?: number | null;
       name: string;
-      commandSummary?: string;
-      rssBytes?: number;
-      anonRssBytes?: number;
-      fileRssBytes?: number;
-      shmemRssBytes?: number;
-      pssBytes?: number;
+      commandSummary?: string | null;
+      rssBytes?: number | null;
+      anonRssBytes?: number | null;
+      fileRssBytes?: number | null;
+      shmemRssBytes?: number | null;
+      pssBytes?: number | null;
       availability: Availability;
     }>;
     scannedCount: number;
@@ -340,14 +348,14 @@ export interface HostResourceSnapshotV1 {
   };
   mountContext: {
     mountPoint: string;
-    fsType?: string;
-    freeBytes?: number;
+    fsType?: string | null;
+    freeBytes?: number | null;
     activeMappedPaths: string[];
     activeMappedPathsAvailability: Availability;
     cacheAttribution: CacheAttribution;
     availability: Availability;
   };
-  alert?: HostResourceAlert;
+  alert?: HostResourceAlert | null;
   actionCapabilities: { availability: Availability };
 }
 
