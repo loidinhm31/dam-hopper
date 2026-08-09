@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use uuid::Uuid;
 
@@ -114,6 +114,17 @@ async fn manager_list_empty_on_new() {
     let driver = Arc::new(NoopDriver);
     let manager = TunnelSessionManager::new(sink, driver);
     assert!(manager.list().await.is_empty());
+}
+
+#[tokio::test]
+async fn manager_dispose_all_is_immediate_without_tunnels() {
+    let sink = Arc::new(NoopEventSink::default());
+    let driver = Arc::new(NoopDriver);
+    let manager = TunnelSessionManager::new(sink, driver);
+
+    tokio::time::timeout(Duration::from_millis(100), manager.dispose_all())
+        .await
+        .expect("an empty manager must not delay server shutdown");
 }
 
 // ---------------------------------------------------------------------------

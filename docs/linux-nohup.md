@@ -88,6 +88,12 @@ For a nohup deployment that serves the browser from the same process, set
 `DAM_HOPPER_WEB_DIR` to a separately built, readable `apps/web/dist`; otherwise
 use an external browser-asset host.
 
+Build the container from the repository `Dockerfile`; its Rust builder is pinned
+to the ABI-compatible Bookworm toolchain and includes the server asset bundle.
+The web stage also copies the root TypeScript configuration required by the
+workspace build. Keep these inputs in the build context when producing a
+release image.
+
 Start with a canary host, observe source-availability states and alert rate for
 the monitor cadence, then broaden only after the cached endpoint latency and
 resource budget are acceptable. In containers, treat the reported data as that
