@@ -10,10 +10,9 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Next Milestone:** Product follow-ups: terminal commit status Phase 03 validation and release checks
 - **Current Feature:** Settings commit summary Phase 01 and terminal scroll-control redesign Phase 02 completed 2026-07-26; terminal commit status Phase 03 planned
 
-### Linux Host Resource Monitoring and Gated Remediation (2026-08-08)
+### Native SSH Port-Forwarding Control (2026-08-09)
 
-- **Phase 01 Architecture + threat-model gate — [COMPLETED 2026-08-08 12:21 +07:00]**: read-only monitoring/action trust boundaries, abuse cases, helper enrollment proof, approval/IPC invariants, fixed-action constraints, and residual risks recorded. Phase 02 may begin.
-- **Operational/security sign-offs remaining**: real-systemd-host caller/enrollment validation and security-owner acceptance of enrolled-server-compromise residual risk. Privileged helper/actions are not implemented or approved for rollout.
+- **Phase 01 — [BLOCKED / NO-GO 2026-08-09]**: ACL/dependency feasibility spike completed, but Phase 02 remains blocked pending native runner, storage race/reparse-safe handle, and agent-runtime evidence. Follow-ups remain in the Phase 01 gate report.
 
 ### Floating Terminal Key Controls (2026-08-06)
 
