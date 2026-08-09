@@ -1,6 +1,11 @@
 // Transport-agnostic API client — delegates through the active Transport singleton.
 import { getTransport } from "./transport.js";
-import type { FsListResponse, HealthResponse } from "./fs-types.js";
+import type {
+  ExplorerLanguageFilter,
+  FsListResponse,
+  HealthResponse,
+  LanguageFilesResponse,
+} from "./fs-types.js";
 import type { CommandHistoryEntry } from "@/lib/command-history.js";
 
 export class ApiRequestError extends Error {
@@ -753,6 +758,7 @@ export interface UiConfig {
   terminalCommitStatusEnabled?: boolean;
   terminalScrollStep?: number;
   explorerShowHidden?: boolean;
+  explorerLanguageFilter?: ExplorerLanguageFilter;
   mobileCustomKeyboardEnabled?: boolean;
   mobileCustomKeyboardFontSize?: number;
   mobileCustomKeyboardPadding?: number;
@@ -1477,6 +1483,10 @@ export const api = {
   fs: {
     list: (project: string, path: string) =>
       getTransport().invoke<FsListResponse>("fs:list", { project, path }),
+    languageFiles: (project: string) =>
+      getTransport().invoke<LanguageFilesResponse>("fs:languageFiles", {
+        project,
+      }),
   },
   tunnels: {
     list: () => getTransport().invoke<TunnelInfo[]>("tunnel:list"),
