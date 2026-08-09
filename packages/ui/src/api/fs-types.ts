@@ -107,3 +107,28 @@ export interface FsUploadResult {
   newMtime?: number;
   error?: string;
 }
+
+/** Closed set of project-wide language filters available in Explorer. */
+export type ExplorerLanguageFilter =
+  | "all"
+  | "rust"
+  | "javascript-typescript"
+  | "java";
+
+export type LanguageFileFamily = Exclude<ExplorerLanguageFilter, "all">;
+
+/** File metadata returned by the bounded project language scan. */
+export interface LanguageFile {
+  path: string;
+  size: number;
+  /** Unix seconds, matching the existing Explorer metadata contract. */
+  mtime: number;
+  language: LanguageFileFamily;
+}
+
+/** Response from GET /api/fs/language-files. */
+export interface LanguageFilesResponse {
+  files: LanguageFile[];
+  truncated: boolean;
+  limit: number;
+}

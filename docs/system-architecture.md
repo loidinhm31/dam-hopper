@@ -763,6 +763,36 @@ other child-local paths.
 - Registry returns safe defaults for unknown files, no throw path.
 - UI components should consume the shared helpers instead of re-implementing filename parsing.
 
+### Explorer language filter (Phase 02 shipped)
+
+The Explorer language filter uses a user-triggered, project-root scan rather than
+recursively expanding the lazy filesystem tree. An authenticated one-shot endpoint
+resolves the selected project through the existing filesystem sandbox, walks regular
+files with the shared `ignore::WalkBuilder` policy, and returns bounded project-relative
+metadata for Rust, combined JavaScript/TypeScript, and Java files.
+
+- The scan honors Git ignore sources, includes hidden paths so the existing
+  `explorerShowHidden` preference can control presentation, excludes symlinks, does
+  not follow directory links, and returns normalized relative paths only.
+- Results are capped and expose `truncated`; they are stored only in the typed TanStack
+  Query project cache `['explorer-language-scan', project]`, whose metadata includes the
+  result, generation, stale flag, and last completed scan timestamp. `Scan`/`Rescan` is
+  always explicit. Filesystem events increment the project generation and mark the cached
+  result stale without triggering a background scan. A response finishing after such an
+  event remains usable but stale; a failed rescan preserves the prior result. Workspace
+  changes remove all language-scan cache entries.
+- The selected `All | Rust | JS/TS | Java` filter is a global UI preference persisted
+  through the existing global-config/settings path. Scan results, stale state, and
+  expanded scan-tree folders are not persisted.
+- Phase 03 consumes the cache to build the filtered navigation-only hierarchy and
+  integrate reveal/selection behavior; those Explorer rendering changes are not part
+  of this phase.
+
+The first version is extension-based and limited to `.rs`, `.js`, `.jsx`, `.ts`,
+`.tsx`, and `.java`. It does not provide parser/LSP semantics, symbols/references,
+automatic rescans, persistent indexes, streaming progress, or caller-configurable
+language families.
+
 ### Multi-Server Profile Management (Phase 2)
 
 **Client-side only** — no backend involvement. React component integration:

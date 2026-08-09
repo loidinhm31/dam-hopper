@@ -55,6 +55,7 @@ function resetSettingsStore() {
     terminalCommitStatusEnabled: false,
     terminalScrollStep: 3,
     explorerShowHidden: false,
+    explorerLanguageFilter: "all",
     mobileCustomKeyboardEnabled: true,
     mobileCustomKeyboardFontSize: 11,
     mobileCustomKeyboardPadding: 6,
@@ -101,6 +102,7 @@ describe("settings store terminal agent notification fields", () => {
     expect(state.terminalCodexNotificationSoundPattern).toBe("default");
     expect(state.terminalCommitStatusEnabled).toBe(false);
     expect(state.terminalAutoSwitchProjectEnabled).toBe(true);
+    expect(state.explorerLanguageFilter).toBe("all");
   });
 
   it("hydrates the terminal auto-switch preference when explicitly enabled", async () => {
@@ -159,6 +161,39 @@ describe("settings store terminal agent notification fields", () => {
     expect(updateUi).toHaveBeenCalledWith(
       expect.objectContaining({ terminalCommitStatusEnabled: true }),
     );
+  });
+
+  it("hydrates and persists the explorer language filter", async () => {
+    getGlobalConfig.mockResolvedValue({
+      ui: { explorerLanguageFilter: "javascript-typescript" },
+    });
+    updateUi.mockResolvedValue({ updated: true });
+
+    await useSettingsStore.getState().hydrate();
+    expect(useSettingsStore.getState().explorerLanguageFilter).toBe(
+      "javascript-typescript",
+    );
+
+    useSettingsStore
+      .getState()
+      .saveDebounced({ explorerLanguageFilter: "java" });
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(updateUi).toHaveBeenCalledWith({
+      explorerLanguageFilter: "java",
+    });
+  });
+
+  it("does not persist an invalid runtime language filter", async () => {
+    updateUi.mockResolvedValue({ updated: true });
+
+    useSettingsStore.getState().saveDebounced({
+      explorerLanguageFilter: "python" as never,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(updateUi).not.toHaveBeenCalled();
+    expect(useSettingsStore.getState().explorerLanguageFilter).toBe("all");
   });
 
   it("clamps and persists notification sound settings", async () => {

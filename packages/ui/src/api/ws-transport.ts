@@ -461,6 +461,11 @@ function channelToEndpoint(
       const params = new URLSearchParams({ project: d.project, path: d.path });
       return { method: "GET", url: `/api/fs/list?${params}` };
     }
+    case "fs:languageFiles": {
+      const d = data as { project: string };
+      const params = new URLSearchParams({ project: d.project });
+      return { method: "GET", url: `/api/fs/language-files?${params}` };
+    }
     case "fs:search": {
       const d = data as {
         project?: string;

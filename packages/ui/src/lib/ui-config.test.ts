@@ -19,6 +19,7 @@ describe("withUiConfigDefaults", () => {
     expect(ui.terminalCodexNotificationSoundEnabled).toBe(true);
     expect(ui.terminalCodexNotificationSoundVolume).toBe(100);
     expect(ui.terminalCodexNotificationSoundPattern).toBe("default");
+    expect(ui.explorerLanguageFilter).toBe("all");
     expect(ui.mobileCustomKeyboardEnabled).toBe(true);
     expect(ui.mobileCustomKeyboardFontSize).toBe(11);
     expect(ui.mobileCustomKeyboardPadding).toBe(6);
@@ -49,6 +50,7 @@ describe("withUiConfigDefaults", () => {
       terminalCodexNotificationSoundEnabled: false,
       terminalCodexNotificationSoundVolume: 45,
       terminalCodexNotificationSoundPattern: "urgent",
+      explorerLanguageFilter: "java",
       mobileCustomKeyboardEnabled: false,
       mobileCustomKeyboardFontSize: 14,
       mobileCustomKeyboardPadding: 9,
@@ -73,6 +75,7 @@ describe("withUiConfigDefaults", () => {
     expect(ui.terminalCodexNotificationSoundEnabled).toBe(false);
     expect(ui.terminalCodexNotificationSoundVolume).toBe(45);
     expect(ui.terminalCodexNotificationSoundPattern).toBe("urgent");
+    expect(ui.explorerLanguageFilter).toBe("java");
     expect(ui.mobileCustomKeyboardEnabled).toBe(false);
     expect(ui.mobileCustomKeyboardFontSize).toBe(14);
     expect(ui.mobileCustomKeyboardPadding).toBe(9);
@@ -85,5 +88,14 @@ describe("withUiConfigDefaults", () => {
     });
 
     expect(ui.terminalCodexNotificationsEnabled).toBe(true);
+  });
+
+  it("normalizes missing and unknown language filters to all", () => {
+    expect(
+      withUiConfigDefaults({
+        explorerLanguageFilter: "python" as never,
+      }).explorerLanguageFilter,
+    ).toBe("all");
+    expect(withUiConfigDefaults().explorerLanguageFilter).toBe("all");
   });
 });
