@@ -276,9 +276,14 @@ response remains compatible and is served from the monitor's cached projection.
 
 The current UI is monitoring-only. It displays the snapshot, bounded alert
 history, and diagnostic evidence; it does not offer remediation controls. The
-`host:alertChanged` push event invalidates the cached snapshot and alert
-queries, while the REST responses remain authoritative. Privileged helper
-enrollment and remediation are deferred to Phase 5.
+`host:alertChanged` push event is accepted only when its bounded typed alert
+payload is valid, then invalidates the cached snapshot and alert queries. REST
+responses remain authoritative after reconnect, missed events, profile changes,
+or malformed push data. If the deep snapshot is unavailable, the diagnosis
+popover retains CPU and disk from the compatible metrics endpoint and labels the
+deep data unavailable; it never fabricates a zero value. Cgroup v1 is reported
+as unsupported; constrained Linux and containers report per-section
+availability and scope rather than host-wide failure.
 
 #### GET /api/system/resources/v1/snapshot
 
@@ -294,58 +299,15 @@ timestamps, duration, scope, confidence, threshold, bounded evidence, and a
 next-action description. This endpoint reports evidence only and performs no
 remediation.
 
-### Host action lifecycle (Phase 04)
+### Deferred remediation backlog
 
-Phase 04 adds an authenticated, server-side lifecycle for host actions. The
-capability response is fail-closed: `available` is `false` with
-`reason: "helperNotEnrolled"` unless a supported helper is enrolled and
-authentication/re-authentication is configured. Fixed action kinds are
-`dropCleanCaches` and `terminateSameUserProcess`; clients cannot submit
-commands, executables, arbitrary signals, paths, or cache values.
-
-Routes use the normal API authentication and JSON mutation requests. Cookie
-requests must have an Origin matching the request Host.
-
-#### GET /api/system/actions/v1/capabilities
-
-Returns `{ available, reason, actions }`; it does not enable an action.
-
-#### POST /api/system/actions/v1/intents
-
-Creates a short-lived challenge from a typed intent and the current resource
-snapshot. Fields are `action`, `sampleId`, optional `alertId`, and optional
-`reason`. A process target uses `bootId`, `pid`, `startTimeTicks`, `uid`, and
-`name`; the cache action is `{ "kind": "dropCleanCaches" }`. Success is `201`
-with `intentId`, `challengeNonce`, `expiresAt`, and typed `preview`.
-
-#### POST /api/system/actions/v1/intents/{intentId}/approve
-
-Requires fresh actor re-authentication. The JSON fields are
-`challengeNonce`, `username`, and `password`; the password is verification-only
-and is never forwarded to a helper. Success returns one-shot `approvalToken`
-and `expiresAt`, bound to the actor and canonical intent.
-
-#### POST /api/system/actions/v1/executions
-
-Consumes one approval and queues the fixed action. The JSON fields are
-`intentId` and `approvalToken`; success is `202` with an execution record.
-There is no automatic retry.
-
-#### GET /api/system/actions/v1/executions/{executionId}
-
-Returns the requesting actor's execution record, or an `unknown` state with
-`code: "executionLostOrUnknown"` when it is unavailable.
-
-#### GET /api/system/actions/v1/audit
-
-Returns the actor's bounded audit page. Optional query parameters are `cursor`
-and `limit` (default 50). Audit failures return `503` with
-`code: "auditUnavailable"`; lifecycle and audit errors fail closed.
-
-This phase performs no OS password prompt, sudo/polkit/PTY escalation,
-privileged execution, automatic remediation, or helper IPC execution. Until
-enrollment and policy verification exist, action requests remain disabled while
-read-only resource APIs continue to operate.
+Re-authentication, action lifecycle, privileged helper/IPC, enrollment, and
+host mutation are not part of this release and are intentionally not a current
+supported API surface. Some inert, fail-closed route scaffolding remains in the
+server for a future design, but it is not an enabled monitoring capability and
+is not documented as a client contract. A separate approved architecture and
+security gate is required before it can become active. This reference documents
+only the read-only monitoring routes above.
 
 Server tuning is configured in TOML under `[server.host_resources]` using
 snake_case keys: `light_sample_seconds` (5), `process_sample_seconds` (15),

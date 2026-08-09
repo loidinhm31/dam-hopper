@@ -27,10 +27,18 @@ WORKDIR /build
 RUN corepack enable && corepack prepare pnpm@9 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY packages/web/package.json ./packages/web/
+COPY apps/web/package.json ./apps/web/
+COPY apps/browser-extension/package.json ./apps/browser-extension/
+COPY packages/browser-bridge/package.json ./packages/browser-bridge/
+COPY packages/shared/package.json ./packages/shared/
+COPY packages/ui/package.json ./packages/ui/
 RUN pnpm install --frozen-lockfile
 
-COPY packages/web ./packages/web
+COPY apps/web ./apps/web
+COPY apps/browser-extension ./apps/browser-extension
+COPY packages/browser-bridge ./packages/browser-bridge
+COPY packages/shared ./packages/shared
+COPY packages/ui ./packages/ui
 RUN pnpm build
 
 # Stage 3: Runtime — pinned digest for reproducible builds
@@ -41,7 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=server-builder /build/target/release/dam-hopper-server /usr/local/bin/dam-hopper-server
-COPY --from=web-builder /build/packages/web/dist /opt/dam-hopper/web
+COPY --from=web-builder /build/apps/web/dist /opt/dam-hopper/web
 
 EXPOSE 4800
 

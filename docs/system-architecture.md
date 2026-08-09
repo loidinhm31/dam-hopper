@@ -1213,21 +1213,28 @@ Server bootstrap:
 - Router registration (ide_explorer routes conditional)
 - Port binding + graceful shutdown
 
-## Host resource monitoring and remediation (monitoring-only UI; Phase 04 lifecycle)
+## Host resource monitoring (current delivery; remediation deferred)
 
-This design keeps host observation and host mutation in separate trust domains.
-Phase 03 implemented the shared cached monitor and read-only snapshot/alert
-APIs. Phase 04 adds the server-side action intent, re-authentication, approval,
-execution, and audit lifecycle, but does not enroll or execute a privileged
-helper. Every deployment without an enrolled helper remains monitoring-only.
+The current delivery boundary is monitoring-only. Phase 03 implements one
+shared cached monitor, the compatible legacy metrics projection, versioned
+read-only snapshot and alert APIs, and bounded alert events. Phase 06 implements
+the in-app diagnosis UI. Phase 07 packages, validates, and rolls out only those
+observation surfaces. It must not enable, package, exercise, or claim support
+for host mutation.
 
-The current browser experience is intentionally monitoring-only: the top-nav
-host-resource popover presents the cached snapshot, bounded alert history, and
-diagnostic evidence, and exposes no remediation controls. The UI reads the
-versioned snapshot and alert routes below. A `host:alertChanged` push event
-invalidates both cached read-only queries so the next render reflects the
-authoritative REST projections; it is a refresh signal, not an action request.
-Privileged helper enrollment and remediation remain deferred to Phase 5.
+The top-nav host-resource popover presents the cached snapshot, bounded alert
+history, and diagnostic evidence, with no remediation controls. A
+`host:alertChanged` push event invalidates the cached read-only queries so the
+next render reflects authoritative REST projections; it is a refresh signal,
+not a mutation request. Deep Linux reads degrade per signal, while
+`GET /api/system/metrics` remains the compatibility fallback and rollback seam.
+
+Re-authentication, mutation lifecycle/audit, local privileged IPC, enrollment,
+and fixed host operations are one future remediation backlog. Existing
+server-side lifecycle scaffolding, where present, is outside the current
+delivery and has no privileged executor. It must remain incapable of host
+mutation. The deferred threat model below is retained for a future design gate;
+it is not a dependency of Phase 07.
 
 ### Data flow and trust boundary
 
@@ -1236,22 +1243,7 @@ Linux procfs / PSI / cgroup v2
   -> HostResourceMonitor (read-only, bounded, cached)
   -> protected snapshot and alert APIs / host:alertChanged event
   -> browser diagnostics UI
-
-browser action intent
-  -> protected REST route + authenticated actor + fresh app re-auth
-  -> canonical one-shot approval
-  -> HostActionService queue
-  -> authenticated local IPC
-  -> enrolled fixed-action helper
-  -> syscall or fixed kernel-file write + local audit receipt
 ```
-
-The browser trust boundary ends at the authenticated API. Fresh app re-auth
-approves one DamHopper intent; it is not OS-administrator authentication and
-does not invoke an OS password prompt. The
-helper is a separately enrolled, host-local authority and must independently
-reject any request that cannot prove its peer, policy, target, freshness, and
-rate limit.
 
 `HostResourceMonitor` has no dependency on `HostActionService`, helper IPC, or
 action configuration. Alert collection and delivery can only publish bounded,
@@ -1286,14 +1278,19 @@ system-file cache, cgroup-file cache, process-file RSS, mount-file mappings, or
 unattributed shared cache; clients must not sum overlapping labels. Each carries
 optional bytes, confidence, and collection method.
 
-### Fixed v1 contract
+### Deferred remediation design: fixed v1 contract
 
-Phase 04 is fail-closed: capabilities advertise the fixed action kinds but
-report `available = false` with `helperNotEnrolled` until enrollment. Approvals
-are consumed once; lifecycle outcomes are recorded in bounded local audit
-storage; and unavailable audit or execution state cannot be reported as
-success. This phase performs no OS password, sudo/polkit/PTY escalation,
-privileged syscall, or automatic remediation.
+This subsection and the remaining remediation subsections are backlog design,
+not current behavior or Phase 07 scope. Re-activation requires a new
+architecture/security gate and explicit product sign-off. Until then no
+privileged component is packaged or enrolled, and no mutation capability may be
+advertised as available.
+
+The deferred lifecycle must fail closed: approvals are consumed once;
+lifecycle outcomes are recorded in bounded local audit storage; and unavailable
+audit or execution state cannot be reported as success. It must perform no OS
+password, sudo/polkit/PTY escalation, generic command execution, or automatic
+remediation.
 
 - The only client-selectable value is a typed, allowlisted intent. The client
   cannot supply a command, shell, executable path, signal number, process
@@ -1322,7 +1319,7 @@ privileged syscall, or automatic remediation.
   on non-Linux hosts, in Docker/nohup installs, or whenever enrollment, IPC,
   policy, or target revalidation is unavailable.
 
-### Helper enrollment proof
+### Deferred remediation design: helper enrollment proof
 
 Enrollment requires a feature probe for both `SO_PEERPIDFD` and
 `SO_PASSPIDFD`; an unavailable or failing probe makes actions unavailable. The
@@ -1356,7 +1353,7 @@ signal or kernel write. Same-user means the enrolled server's effective UID,
 not the browser account name. A remote browser is never a polkit agent and its
 password is never accepted or transported.
 
-### Host-namespace target proof
+### Deferred remediation design: host-namespace target proof
 
 The enrolled helper must run in the host PID, mount, and user namespaces. It
 opens and revalidates the target using its own host `/proc`, never a client
@@ -1367,7 +1364,7 @@ identity with the canonical target. It rejects absent, changed, non-host, or
 unreadable namespace evidence. This denies ambiguous nested-systemd and
 container targets rather than attempting a best-effort signal.
 
-### Abuse-case matrix
+### Deferred remediation threat model: abuse-case matrix
 
 | Asset or entry point        | Abuse                                        | Required control                                                                                          | Residual risk and test                                                                                        |
 | --------------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
@@ -1383,7 +1380,7 @@ container targets rather than attempting a best-effort signal.
 | Monitor, alerts, or WS      | Automatic remediation or evidence leakage    | Negative dependency boundary, sanitized bounded events, REST snapshot authoritative                       | Broadcast loss is expected; test monitor cannot import action modules                                         |
 | Partial failure or shutdown | Half-completed action or unsafe retry        | Owned queue, cancellation, receipt state, no automatic retry                                              | Syscalls are not reversible; record outcome and require a new approval                                        |
 
-### Phase 01 host feasibility evidence
+### Deferred remediation evidence: Phase 01 host feasibility
 
 The development host was checked read-only on 2026-08-08. It runs Fedora 44
 with Linux 7.1.5, systemd 259 as PID 1, unified cgroup v2 mounted at
@@ -1392,13 +1389,13 @@ enforcing mode. The current Codex process is an unprivileged user-session
 cgroup. No DamHopper systemd unit, helper binary, Unix socket, or root-owned
 policy exists on this host.
 
-This confirms that the planned systemd/cgroup/peer-credential design is
-feasible here, but it does not prove enrollment. Phase 5 must validate the
-actual installed unit, binary, socket, ownership, and peer identity before it
-reports action capability. Until then, `actions = disabled` is the only honest
-capability result.
+This confirms only that the deferred systemd/cgroup/peer-credential design is
+feasible on that host; it does not prove enrollment or authorize implementation.
+Any future remediation phase must validate the actual installed unit, binary,
+socket, ownership, and peer identity before it reports capability. Current
+delivery remains monitoring-only.
 
-### Required sign-off before privileged implementation
+### Deferred remediation sign-off before privileged implementation
 
 - A security owner must accept the residual risk of a compromised enrolled
   server requesting only the helper's fixed action set.
@@ -1407,9 +1404,9 @@ capability result.
 - The operator must explicitly accept the retention target for the local action
   audit and whether the global cache action is permitted at all.
 
-No privileged helper code, auto-remediation, sudo/PTY escalation, generic
-command execution, or development bypass is permitted before these decisions
-are recorded.
+No privileged helper, auto-remediation, sudo/PTY escalation, generic command
+execution, or development bypass may enter a delivery phase before these
+decisions are recorded and the architecture gate is reopened.
 
 ## Data Flow: File List Request
 
