@@ -647,7 +647,7 @@ packages/ui/src/
 
 `apps/web` owns browser bootstrapping only: `QueryClientProvider`, `initTransport(new WsTransport(getServerUrl()))`, DOM mount, and host Vite config.
 
-`apps/native` owns Tauri bootstrapping only: the same `QueryClientProvider` and `DamHopperApp` mount, native Vite config on strict port `1420`, and the minimal `src-tauri` shell. It must remain a remote client; do not add backend sidecars, filesystem permissions, shell permissions, or opener/http plugins without a phase plan that justifies the native API surface.
+`apps/native` owns Tauri bootstrapping only: the same `QueryClientProvider` and `DamHopperApp` mount, native Vite config on strict port `1420`, and the minimal `src-tauri` shell. The Phase 01 SSH feasibility seam is desktop-only: its target-OS dependencies and the narrowly scoped `ssh-forward` capability/permission are excluded from mobile builds. It must remain a remote client; do not add backend sidecars, filesystem, shell, opener, or HTTP permissions without a phase plan that justifies the native API surface.
 
 Native startup must not depend on packaged webview same-origin fallback. Use the shared server profile flow, and keep the no-profile transport idle until the shared `ServerProfileGuard` prompts for an explicit profile.
 
