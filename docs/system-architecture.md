@@ -51,6 +51,49 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### Host resource monitoring and remediation (planned)
+
+Host resources remains a host-context feature, not a project-sandbox feature. The
+existing `HostMetricsSampler` will evolve into one shared `HostResourceMonitor`
+owned by `AppState`. It periodically reads available Linux procfs, PSI, cgroup,
+process, and mount signals, keeps a bounded in-memory sample/alert window, and
+serves both the protected snapshot API and background alert events. The UI must
+not create a second sampler for each open popover.
+
+The monitor is descriptive and degrades per signal:
+
+- `/proc/meminfo`, PSI, cgroup v2, process RSS/PSS, and mount observations are
+  parsed directly; shell utilities are not part of the observation path.
+- Missing files, unsupported kernels, namespaces, and permission failures become
+  explicit availability states, not whole-request failures.
+- `MemAvailable` and sustained PSI are primary alert inputs. Cache/slab/anon,
+  swap, process, cgroup, and mount values explain the state; high cache alone is
+  not an incident.
+- Exact page-cache bytes for an arbitrary mount are not promised. Mount identity,
+  filesystem/access context, and any estimate carry an uncertainty label.
+
+Privileged actions use a separate host-local fixed-action helper. The DamHopper
+server never accepts an arbitrary command, shell string, executable path, or host
+password from the browser. The helper is reachable only through restricted local
+IPC and accepts typed operations such as `drop-clean-caches` and
+`terminate-same-user-pid`. Every request requires fresh single-use DamHopper
+re-authentication plus explicit confirmation, then the helper revalidates target
+identity and records a sanitized audit event.
+
+The v1 action boundary is intentionally narrow:
+
+- cache dropping is an explicit diagnostic operation with before/after samples;
+- process control is same-user graceful `SIGTERM` only, with PID start-time and
+  UID revalidation;
+- root-owned/other-user processes are visible but not killable;
+- no automatic cache dropping, process killing, service/container control, or
+  generic root shell is allowed.
+
+The helper may integrate with polkit when a host authentication agent exists, but
+headless/remote hosts must use an explicit host enrollment path and fail closed
+when the helper is unavailable. This preserves the distinction between web-app
+authentication and OS privilege.
+
 ## Module Breakdown
 
 ### Browser debug artifacts (Phase 2; Phase 6 hardened)
@@ -562,7 +605,7 @@ permissions to `core:default`.
 
 **Frontend host:**
 
-- `apps/native/src/main.tsx` mirrors `apps/web/src/main.tsx`: configures the shared logger, initializes `WsTransport(getNativeServerUrl())` when an active profile exists, otherwise installs an idle transport for the setup screen, creates the TanStack Query client, and mounts `DamHopperApp`.
+- `apps/native/src/main.tsx` mirrors `apps/web/src/main.tsx`: configures the shared logger, initializes `WsTransport(getNativeServerUrl(), activeProfile.id)` when an active profile exists, otherwise installs an idle transport for the setup screen, creates the TanStack Query client, and mounts `DamHopperApp`.
 - `apps/native/vite.config.ts` uses Tauri's fixed dev port `1420`, strict port mode, `TAURI_DEV_HOST` HMR support on port `1421`, and ignores `src-tauri` in Vite file watching.
 - The shared `ServerProfileGuard` still controls startup. If no server profile exists, the native host installs an idle transport and opens the server setup dialog instead of relying on the packaged webview's same-origin URL.
 
@@ -812,15 +855,16 @@ language families.
 **Integration in shared UI and host bootstraps:**
 
 - `DamHopperApp` calls `migrateToProfiles()` at startup to convert legacy config
-- Browser host initializes `WsTransport(getServerUrl())`
-- Native host initializes `WsTransport(getNativeServerUrl())` when an active profile exists, otherwise installs `IdleTransport`
+- Browser host initializes `WsTransport(getServerUrl(), activeProfile.id)`
+- Native host initializes `WsTransport(getNativeServerUrl(), activeProfile.id)` when an active profile exists, otherwise installs `IdleTransport`
 - Sidebar triggers profile switcher dialog and the setup flow remains profile-driven in both hosts
 
 **Data Persistence:**
 
 - Profiles: localStorage (survives browser close, shared across tabs)
 - Active profile ID: localStorage (survives browser close, shared across tabs)
-- Auth token: sessionStorage (cleared on tab close, isolated per tab) — password never stored
+- Auth token: localStorage, keyed by profile ID (survives browser close; bearer token is readable by JavaScript) — password never stored
+- Profile changes emit a reactive revision so tabs rebind auth state and transport; changing a normalized backend URL clears that profile token and requires login again
 
 ### SSH Credential Persistence (Phase 02)
 

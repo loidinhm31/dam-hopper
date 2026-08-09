@@ -6,8 +6,10 @@ import "@dam-hopper/ui/styles";
 
 import { initTransport } from "@dam-hopper/ui/api/transport";
 import { WsTransport } from "@dam-hopper/ui/api/ws-transport";
+import { IdleTransport } from "@dam-hopper/ui/api/idle-transport";
+import { profileScopedQueryKeyHash } from "@dam-hopper/ui/api/query-client";
 import {
-  getServerUrl,
+  getActiveProfile,
   migrateToProfiles,
 } from "@dam-hopper/ui/api/server-config";
 import {
@@ -28,9 +30,12 @@ initializeClientDiagnostics();
 
 migrateToProfiles();
 
-const transport = new WsTransport(getServerUrl());
+const activeProfile = getActiveProfile();
+const transport = activeProfile
+  ? new WsTransport(activeProfile.url, activeProfile.id)
+  : new IdleTransport();
 setClientTransportStatus(transport.getStatus());
-transport.onStatusChange(setClientTransportStatus);
+transport.onStatusChange((status) => setClientTransportStatus(status));
 initTransport(transport);
 
 const queryClient = new QueryClient({
@@ -38,6 +43,7 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 10_000,
       retry: 1,
+      queryKeyHashFn: profileScopedQueryKeyHash,
     },
   },
 });

@@ -15,11 +15,12 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client.js";
 import type { WorkspaceMode } from "@/lib/workspace-mode.js";
 import {
-  getActiveProfile,
+  getProfileChangeVersion,
   getServerUrl,
   buildAuthHeaders,
   type ServerProfile,
 } from "@/api/server-config.js";
+import { useServerProfile } from "@/hooks/use-server-profile.js";
 
 interface TopNavProps {
   collapsed?: boolean;
@@ -52,7 +53,8 @@ export function TopNav({
   >(undefined);
   const [isDevMode, setIsDevMode] = useState(false);
 
-  const activeProfile = getActiveProfile();
+  const activeProfile = useServerProfile();
+  const profileRevision = getProfileChangeVersion();
   const selectedProject = activeProject ?? projects[0]?.name;
   const showProjectToolbar = projects.length > 0 && Boolean(selectedProject);
   const compactMobileMenuOpen = isCompactWorkspace && !collapsed;
@@ -71,9 +73,12 @@ export function TopNav({
       }
 
       try {
-        const res = await fetch(`${getServerUrl()}/api/auth/status`, {
-          headers: buildAuthHeaders(),
-        });
+        const res = await fetch(
+          `${activeProfile?.url ?? getServerUrl()}/api/auth/status`,
+          {
+            headers: buildAuthHeaders(activeProfile?.id),
+          },
+        );
         if (res.ok) {
           const data = await res.json();
           if (!cancelled) {
@@ -88,7 +93,7 @@ export function TopNav({
     return () => {
       cancelled = true;
     };
-  }, [status]);
+  }, [activeProfile?.id, activeProfile?.url, profileRevision, status]);
 
   useEffect(() => {
     const updateHeight = () => {
@@ -207,7 +212,6 @@ export function TopNav({
           setEditingProfile(p);
           setServerSettingsOpen(true);
         }}
-        onSwitchProfile={() => {}}
       />
     </header>
   );

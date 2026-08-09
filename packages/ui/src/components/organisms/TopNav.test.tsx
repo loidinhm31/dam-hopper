@@ -45,13 +45,18 @@ vi.mock("@/stores/workspace.js", () => ({
 
 vi.mock("@/api/server-config.js", () => ({
   getActiveProfile: () => ({ name: "Local" }),
+  getProfileChangeVersion: () => 0,
+  subscribeToProfileChanges: () => () => {},
   getServerUrl: () => "http://127.0.0.1:4800",
   buildAuthHeaders: () => ({}),
 }));
 
 vi.mock("@/components/organisms/GitBranchControl.js", () => ({
   GitBranchControl: ({ showFeedback = true }: { showFeedback?: boolean }) => (
-    <div data-testid="git-branch-control" data-show-feedback={String(showFeedback)} />
+    <div
+      data-testid="git-branch-control"
+      data-show-feedback={String(showFeedback)}
+    />
   ),
 }));
 
