@@ -9,8 +9,8 @@ use super::{
     presets::{get_effective_command, get_preset},
     resolve::{resolve_startup_config, ConfigResolutionInput, ConfigSource},
     schema::{
-        CommandKind, GlobalConfig, KnownWorkspace, ProjectType, RestartPolicy,
-        TerminalCodexNotificationSoundPattern, UiConfig,
+        CommandKind, ExplorerLanguageFilter, GlobalConfig, KnownWorkspace, ProjectType,
+        RestartPolicy, TerminalCodexNotificationSoundPattern, UiConfig,
     },
 };
 
@@ -1282,6 +1282,7 @@ fn ui_config_defaults() {
         ui.terminal_codex_notification_sound_pattern,
         TerminalCodexNotificationSoundPattern::Default
     );
+    assert_eq!(ui.explorer_language_filter, ExplorerLanguageFilter::All);
     assert!(ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 11);
     assert_eq!(ui.mobile_custom_keyboard_padding, 6);
@@ -1318,6 +1319,7 @@ fn ui_config_serde_roundtrip() {
             terminal_codex_notification_sound_pattern:
                 TerminalCodexNotificationSoundPattern::TwoTone,
             explorer_show_hidden: false,
+            explorer_language_filter: ExplorerLanguageFilter::JavascriptTypescript,
             mobile_custom_keyboard_enabled: false,
             mobile_custom_keyboard_font_size: 13,
             mobile_custom_keyboard_padding: 8,
@@ -1347,6 +1349,10 @@ fn ui_config_serde_roundtrip() {
         json["terminalCodexNotificationSoundPattern"],
         serde_json::json!("two-tone")
     );
+    assert_eq!(
+        json["explorerLanguageFilter"],
+        serde_json::json!("javascript-typescript")
+    );
     assert!(json
         .get("terminal_codex_notification_sound_pattern")
         .is_none());
@@ -1360,6 +1366,8 @@ fn ui_config_serde_roundtrip() {
     assert!(!written.contains("terminalCommitStatusEnabled"));
     assert!(written.contains("terminal_auto_switch_project_enabled = true"));
     assert!(!written.contains("terminalAutoSwitchProjectEnabled"));
+    assert!(written.contains("explorer_language_filter = \"javascript-typescript\""));
+    assert!(!written.contains("explorerLanguageFilter"));
     let loaded = read_global_config_at(&cfg_path).unwrap().unwrap();
     let ui = loaded.ui.unwrap();
     assert_eq!(ui.system_font_size, 16);
@@ -1382,6 +1390,10 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(
         ui.terminal_codex_notification_sound_pattern,
         TerminalCodexNotificationSoundPattern::TwoTone
+    );
+    assert_eq!(
+        ui.explorer_language_filter,
+        ExplorerLanguageFilter::JavascriptTypescript
     );
     assert!(!ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 13);
@@ -1538,6 +1550,29 @@ fn ui_config_serde_aliases_terminal_auto_switch_project() {
     let toml: GlobalConfig =
         toml::from_str("[ui]\nterminal_auto_switch_project_enabled = false\n").unwrap();
     assert!(!toml.ui.unwrap().terminal_auto_switch_project_enabled);
+}
+
+#[test]
+fn ui_config_serde_aliases_explorer_language_filter() {
+    for key in ["explorer_language_filter", "explorerLanguageFilter"] {
+        let toml = format!("[ui]\n{key} = \"java\"\n");
+        let loaded: GlobalConfig = toml::from_str(&toml).unwrap();
+        assert_eq!(
+            loaded.ui.unwrap().explorer_language_filter,
+            ExplorerLanguageFilter::Java
+        );
+    }
+
+    let json = serde_json::from_value::<UiConfig>(serde_json::json!({
+        "explorerLanguageFilter": "rust"
+    }))
+    .unwrap();
+    assert_eq!(json.explorer_language_filter, ExplorerLanguageFilter::Rust);
+
+    let invalid = serde_json::from_value::<UiConfig>(serde_json::json!({
+        "explorerLanguageFilter": "python"
+    }));
+    assert!(invalid.is_err());
 }
 
 #[test]

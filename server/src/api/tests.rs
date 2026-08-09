@@ -2898,6 +2898,19 @@ fn merge_global_ui_config_rejects_invalid_notification_sound_pattern() {
     assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
 }
 
+#[test]
+fn merge_global_ui_config_rejects_invalid_explorer_language_filter() {
+    let err = crate::api::config::merge_global_ui_config(
+        Some(crate::config::schema::UiConfig::default()),
+        &serde_json::json!({
+            "explorerLanguageFilter": "python",
+        }),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+}
+
 #[tokio::test]
 async fn update_global_ui_at_path_persists_partial_merge_and_updates_state() {
     let tmp = tempfile::tempdir().unwrap();

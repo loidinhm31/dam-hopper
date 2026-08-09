@@ -1,4 +1,5 @@
 import type { UiConfig } from "@/api/client.js";
+import type { ExplorerLanguageFilter } from "@/api/fs-types.js";
 import {
   DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
   DEFAULT_FLEET_TERMINAL_SHORTCUT,
@@ -27,6 +28,7 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   terminalCommitStatusEnabled: false,
   terminalScrollStep: 3,
   explorerShowHidden: false,
+  explorerLanguageFilter: "all",
   mobileCustomKeyboardEnabled: true,
   mobileCustomKeyboardFontSize: 11,
   mobileCustomKeyboardPadding: 6,
@@ -46,6 +48,23 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   fleetTerminalShortcut: DEFAULT_FLEET_TERMINAL_SHORTCUT,
 };
 
+export function isExplorerLanguageFilter(
+  value: unknown,
+): value is ExplorerLanguageFilter {
+  return (
+    value === "all" ||
+    value === "rust" ||
+    value === "javascript-typescript" ||
+    value === "java"
+  );
+}
+
+export function normalizeExplorerLanguageFilter(
+  value: unknown,
+): ExplorerLanguageFilter {
+  return isExplorerLanguageFilter(value) ? value : "all";
+}
+
 export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
   const legacyTerminalAgentNotificationsEnabled = (
     ui as { terminalAgentNotificationsEnabled?: boolean } | null | undefined
@@ -54,6 +73,10 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
   return {
     ...DEFAULT_UI_CONFIG,
     ...ui,
+    explorerLanguageFilter: normalizeExplorerLanguageFilter(
+      (ui as { explorerLanguageFilter?: unknown } | null | undefined)
+        ?.explorerLanguageFilter,
+    ),
     terminalAutoSwitchProjectEnabled:
       ui?.terminalAutoSwitchProjectEnabled ??
       DEFAULT_UI_CONFIG.terminalAutoSwitchProjectEnabled,

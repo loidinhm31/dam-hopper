@@ -160,27 +160,24 @@ describe("WsTransport usage setup endpoints", () => {
   });
 });
 
-describe("WsTransport host resource endpoints", () => {
-  it("maps the monitoring-only snapshot and bounded alert history routes", async () => {
+describe("WsTransport explorer language scan endpoint", () => {
+  it("maps a project name to the protected language-files route", async () => {
     installMockWebSocket();
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ schemaVersion: 1 }), { status: 200 }),
-      )
-      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ files: [], truncated: false, limit: 20_000 }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const transport = new WsTransport("http://localhost:4800");
 
-    await transport.invoke("system:resourceSnapshot");
-    await transport.invoke("system:resourceAlerts", { limit: 12 });
+    await transport.invoke("fs:languageFiles", { project: "demo project" });
 
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "http://localhost:4800/api/system/resources/v1/snapshot",
+      "http://localhost:4800/api/fs/language-files?project=demo+project",
     );
-    expect(fetchMock.mock.calls[1][0]).toBe(
-      "http://localhost:4800/api/system/resources/v1/alerts?limit=12",
-    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "GET" });
     transport.destroy();
   });
 });

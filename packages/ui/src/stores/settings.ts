@@ -7,8 +7,12 @@
 import { create } from "zustand";
 import { api } from "@/api/client.js";
 import type { TerminalCodexNotificationSoundPattern } from "@/api/client.js";
+import type { ExplorerLanguageFilter } from "@/api/fs-types.js";
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
-import { withUiConfigDefaults } from "@/lib/ui-config.js";
+import {
+  isExplorerLanguageFilter,
+  withUiConfigDefaults,
+} from "@/lib/ui-config.js";
 import {
   DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
   DEFAULT_FLEET_TERMINAL_SHORTCUT,
@@ -87,6 +91,7 @@ interface PersistedSettingsState {
   terminalCommitStatusEnabled: boolean;
   terminalScrollStep: number;
   explorerShowHidden: boolean;
+  explorerLanguageFilter: ExplorerLanguageFilter;
   mobileCustomKeyboardEnabled: boolean;
   mobileCustomKeyboardFontSize: number;
   mobileCustomKeyboardPadding: number;
@@ -139,6 +144,7 @@ function pickPersistedSettings(
     terminalCommitStatusEnabled: state.terminalCommitStatusEnabled,
     terminalScrollStep: state.terminalScrollStep,
     explorerShowHidden: state.explorerShowHidden,
+    explorerLanguageFilter: state.explorerLanguageFilter,
     mobileCustomKeyboardEnabled: state.mobileCustomKeyboardEnabled,
     mobileCustomKeyboardFontSize: state.mobileCustomKeyboardFontSize,
     mobileCustomKeyboardPadding: state.mobileCustomKeyboardPadding,
@@ -151,11 +157,13 @@ function pickPersistedSettingsPatch(
   state: PersistedSettingsState | SettingsState,
 ): Partial<PersistedSettingsState> {
   const persisted = pickPersistedSettings(state);
+  const keys = Object.keys(partial).filter(
+    (key) =>
+      key !== "explorerLanguageFilter" ||
+      isExplorerLanguageFilter(partial.explorerLanguageFilter),
+  );
   return Object.fromEntries(
-    Object.keys(partial).map((key) => [
-      key,
-      persisted[key as keyof PersistedSettingsState],
-    ]),
+    keys.map((key) => [key, persisted[key as keyof PersistedSettingsState]]),
   ) as Partial<PersistedSettingsState>;
 }
 
@@ -183,6 +191,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   terminalCommitStatusEnabled: false,
   terminalScrollStep: 3,
   explorerShowHidden: false,
+  explorerLanguageFilter: "all",
   mobileCustomKeyboardEnabled: true,
   mobileCustomKeyboardFontSize: 11,
   mobileCustomKeyboardPadding: 6,
@@ -229,6 +238,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         terminalCommitStatusEnabled: ui.terminalCommitStatusEnabled ?? false,
         terminalScrollStep: ui.terminalScrollStep ?? 3,
         explorerShowHidden: ui.explorerShowHidden ?? false,
+        explorerLanguageFilter: ui.explorerLanguageFilter ?? "all",
         mobileCustomKeyboardEnabled: ui.mobileCustomKeyboardEnabled ?? true,
         mobileCustomKeyboardFontSize: ui.mobileCustomKeyboardFontSize ?? 11,
         mobileCustomKeyboardPadding: ui.mobileCustomKeyboardPadding ?? 6,
@@ -304,6 +314,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       );
     if (partial.explorerShowHidden !== undefined)
       clamped.explorerShowHidden = partial.explorerShowHidden;
+    if (
+      partial.explorerLanguageFilter !== undefined &&
+      isExplorerLanguageFilter(partial.explorerLanguageFilter)
+    )
+      clamped.explorerLanguageFilter = partial.explorerLanguageFilter;
     if (partial.mobileCustomKeyboardEnabled !== undefined)
       clamped.mobileCustomKeyboardEnabled = partial.mobileCustomKeyboardEnabled;
     if (partial.mobileCustomKeyboardFontSize !== undefined)
@@ -324,9 +339,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   saveDebounced: (partial) => {
     const localEditId = ++latestLocalEditId;
     get().set(partial);
+    const persistedPatch = pickPersistedSettingsPatch(partial, get());
+    if (Object.keys(persistedPatch).length === 0) return;
     pendingPersistedPatch = {
       ...pendingPersistedPatch,
-      ...pickPersistedSettingsPatch(partial, get()),
+      ...persistedPatch,
     };
     if (debounceTimer !== null) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
