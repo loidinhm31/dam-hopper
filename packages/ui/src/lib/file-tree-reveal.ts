@@ -15,6 +15,10 @@ interface RevealFileTreePathOptions {
     "focus" | "openParents" | "scrollTo" | "select"
   >;
   loadChildren: (nodeId: string) => Promise<FsArborNode[]>;
+  /** Live-tree render revision before a lazy child request starts. */
+  getTreeCommitVersion?: () => number;
+  /** Resolves after Arborist has committed a render newer than `version`. */
+  waitForTreeCommitAfter?: (version: number) => Promise<void>;
 }
 
 export function getAncestorDirectoryIds(path: string) {
@@ -57,6 +61,8 @@ export async function revealFileTreePath({
   nodes: initialNodes,
   tree,
   loadChildren,
+  getTreeCommitVersion,
+  waitForTreeCommitAfter,
 }: RevealFileTreePathOptions) {
   try {
     let nodes = initialNodes;
@@ -65,8 +71,12 @@ export async function revealFileTreePath({
       const ancestor = findNodeById(nodes, ancestorId);
       if (!ancestor || ancestor.kind !== "dir") return false;
       if (ancestor.children !== null) continue;
+      const commitVersion = getTreeCommitVersion?.();
       const children = await loadChildren(ancestorId);
       nodes = replaceNodeChildren(nodes, ancestorId, children);
+      if (commitVersion !== undefined && waitForTreeCommitAfter) {
+        await waitForTreeCommitAfter(commitVersion);
+      }
     }
 
     const target = findNodeById(nodes, path);

@@ -60,6 +60,7 @@ describe("useExplorerLanguageScan", () => {
     queryClient.setQueryData(["explorer-language-scan", "alpha"], {
       result: { files: [], truncated: false, limit: 20_000 },
       generation: 0,
+      resultVersion: 1,
       stale: false,
       scannedAt: 100,
     });

@@ -33,6 +33,16 @@ vi.mock("@/hooks/use-fs-upload.js", () => ({
 vi.mock("@/api/queries.js", () => ({
   useGitDiff: () => ({ data: undefined }),
   useProject: () => ({ data: { path: "/workspace/demo" } }),
+  useExplorerLanguageScan: () => ({
+    cache: null,
+    scan: {
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+      mutateAsync: vi.fn(),
+    },
+  }),
   useBranches: () => ({ data: [{ name: "main", isCurrent: true, isRemote: false }, { name: "feature/demo", isCurrent: false, isRemote: false }] }),
   useProjectStatus: () => ({ data: { branch: "main" } }),
   useGitCheckoutBranch: () => ({ isPending: false, mutateAsync: harness.checkout }),
