@@ -24,14 +24,32 @@ describe("handleIpcStatusChange", () => {
 });
 
 describe("handleWorkspaceChanged", () => {
-  it("removes project language scans before broad invalidation", () => {
+  it("removes project language scans before broad invalidation", async () => {
+    let resolveReset!: () => void;
     const queryClient = {
       removeQueries: vi.fn(),
+      resetQueries: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveReset = resolve;
+          }),
+      ),
+      setQueriesData: vi.fn(),
       invalidateQueries: vi.fn(() => Promise.resolve()),
     };
 
-    handleWorkspaceChanged(queryClient);
+    const cleanup = handleWorkspaceChanged(queryClient);
+    expect(queryClient.invalidateQueries).not.toHaveBeenCalled();
+    resolveReset();
+    await cleanup;
 
+    expect(queryClient.resetQueries).toHaveBeenCalledWith({
+      queryKey: ["explorer-language-scan"],
+    });
+    expect(queryClient.setQueriesData).toHaveBeenCalledWith(
+      { queryKey: ["explorer-language-scan"] },
+      expect.any(Function),
+    );
     expect(queryClient.removeQueries).toHaveBeenCalledWith({
       queryKey: ["explorer-language-scan"],
     });
@@ -39,5 +57,8 @@ describe("handleWorkspaceChanged", () => {
     expect(queryClient.invalidateQueries).toHaveBeenNthCalledWith(2, {
       queryKey: ["known-workspaces"],
     });
+    expect(queryClient.removeQueries.mock.invocationCallOrder[0]).toBeLessThan(
+      queryClient.invalidateQueries.mock.invocationCallOrder[0]!,
+    );
   });
 });

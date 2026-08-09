@@ -104,11 +104,15 @@ export function handleIpcStatusChange(
 }
 
 export function handleWorkspaceChanged(
-  queryClient: Pick<QueryClient, "invalidateQueries" | "removeQueries">,
-): void {
-  removeExplorerLanguageScanCaches(queryClient);
-  void queryClient.invalidateQueries();
-  void queryClient.invalidateQueries({ queryKey: ["known-workspaces"] });
+  queryClient: Pick<
+    QueryClient,
+    "invalidateQueries" | "removeQueries" | "resetQueries" | "setQueriesData"
+  >,
+): Promise<void> {
+  return removeExplorerLanguageScanCaches(queryClient).then(() => {
+    void queryClient.invalidateQueries();
+    void queryClient.invalidateQueries({ queryKey: ["known-workspaces"] });
+  });
 }
 
 export function useIpc(): { status: IpcStatus } {
@@ -151,7 +155,7 @@ export function useIpc(): { status: IpcStatus } {
       }),
 
       subscribeIpc("workspace:changed", () => {
-        handleWorkspaceChanged(qc);
+        void handleWorkspaceChanged(qc);
       }),
 
       subscribeIpc("terminal:changed", () => {

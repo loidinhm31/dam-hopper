@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import type { LanguageFilesResponse } from "@/api/fs-types.js";
 import {
@@ -54,13 +54,7 @@ describe("explorer language scan cache", () => {
     const scanToken = beginExplorerLanguageScan(queryClient, "alpha");
 
     markExplorerLanguageScanStale(queryClient, "alpha");
-    commitExplorerLanguageScan(
-      queryClient,
-      "alpha",
-      scanToken,
-      result,
-      200,
-    );
+    commitExplorerLanguageScan(queryClient, "alpha", scanToken, result, 200);
 
     expect(getExplorerLanguageScanCache(queryClient, "alpha")).toEqual({
       result,
@@ -85,14 +79,16 @@ describe("explorer language scan cache", () => {
     expect(getExplorerLanguageScanCache(queryClient, "alpha")).toEqual(before);
   });
 
-  it("does not recreate removed project scans after workspace cleanup", () => {
+  it("does not recreate removed project scans after workspace cleanup", async () => {
     const queryClient = new QueryClient();
     const oldToken = beginExplorerLanguageScan(queryClient, "alpha");
-    removeExplorerLanguageScanCaches(queryClient);
+    await removeExplorerLanguageScanCaches(queryClient);
     const currentToken = beginExplorerLanguageScan(queryClient, "alpha");
 
     commitExplorerLanguageScan(queryClient, "alpha", oldToken, result, 100);
-    expect(getExplorerLanguageScanCache(queryClient, "alpha")?.result).toBeNull();
+    expect(
+      getExplorerLanguageScanCache(queryClient, "alpha")?.result,
+    ).toBeNull();
 
     commitExplorerLanguageScan(queryClient, "alpha", currentToken, result, 100);
     expect(getExplorerLanguageScanCache(queryClient, "alpha")?.result).toEqual(
@@ -100,16 +96,66 @@ describe("explorer language scan cache", () => {
     );
   });
 
-  it("ignores late events from the previous workspace epoch", () => {
+  it("reports a discarded response after workspace cleanup", async () => {
     const queryClient = new QueryClient();
-    const oldEpoch = beginExplorerLanguageScan(queryClient, "alpha").workspaceEpoch;
-    removeExplorerLanguageScanCaches(queryClient);
+    let resolveScan: ((value: LanguageFilesResponse) => void) | undefined;
+    const scan = scanExplorerLanguageFiles(
+      queryClient,
+      "alpha",
+      () =>
+        new Promise<LanguageFilesResponse>((resolve) => {
+          resolveScan = resolve;
+        }),
+    );
+
+    await removeExplorerLanguageScanCaches(queryClient);
+    resolveScan?.(result);
+
+    await expect(scan).resolves.toEqual({
+      committed: false,
+      cache: undefined,
+    });
+  });
+
+  it("does not remove a scan started while workspace cleanup is pending", async () => {
+    const queryClient = new QueryClient();
+    let resolveReset!: () => void;
+    const removeQueries = vi.spyOn(queryClient, "removeQueries");
+    vi.spyOn(queryClient, "resetQueries").mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveReset = resolve;
+        }),
+    );
+
+    const cleanup = removeExplorerLanguageScanCaches(queryClient);
+    const scanToken = beginExplorerLanguageScan(queryClient, "alpha");
+    commitExplorerLanguageScan(queryClient, "alpha", scanToken, result, 100);
+
+    resolveReset();
+    await cleanup;
+
+    expect(removeQueries).not.toHaveBeenCalled();
+    expect(getExplorerLanguageScanCache(queryClient, "alpha")?.result).toEqual(
+      result,
+    );
+  });
+
+  it("ignores late events from the previous workspace epoch", async () => {
+    const queryClient = new QueryClient();
+    const oldEpoch = beginExplorerLanguageScan(
+      queryClient,
+      "alpha",
+    ).workspaceEpoch;
+    await removeExplorerLanguageScanCaches(queryClient);
     const currentToken = beginExplorerLanguageScan(queryClient, "alpha");
     commitExplorerLanguageScan(queryClient, "alpha", currentToken, result, 100);
 
     markExplorerLanguageScanStale(queryClient, "alpha", oldEpoch);
 
-    expect(getExplorerLanguageScanCache(queryClient, "alpha")?.stale).toBe(false);
+    expect(getExplorerLanguageScanCache(queryClient, "alpha")?.stale).toBe(
+      false,
+    );
   });
 
   it("commits only the latest concurrent rescan", async () => {
@@ -137,10 +183,18 @@ describe("explorer language scan cache", () => {
     );
 
     resolveSecond?.(secondResult);
-    await second;
+    const secondRun = await second;
     resolveFirst?.(firstResult);
-    await first;
+    const firstRun = await first;
 
+    expect(secondRun).toMatchObject({
+      committed: true,
+      cache: { result: secondResult },
+    });
+    expect(firstRun).toMatchObject({
+      committed: false,
+      cache: { result: secondResult },
+    });
     expect(getExplorerLanguageScanCache(queryClient, "alpha")?.result).toEqual(
       secondResult,
     );

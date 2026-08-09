@@ -16,12 +16,20 @@ type ExplorerLanguageScanCacheQueryClient = Pick<
   QueryClient,
   "getQueryData" | "setQueryData"
 >;
-type ExplorerLanguageScanCleanupClient = Pick<QueryClient, "removeQueries">;
+type ExplorerLanguageScanCleanupClient = Pick<
+  QueryClient,
+  "removeQueries" | "resetQueries" | "setQueriesData"
+>;
 
 export interface ExplorerLanguageScanToken {
   generation: number;
   workspaceEpoch: number;
   requestId: number;
+}
+
+export interface ExplorerLanguageScanCommitResult {
+  committed: boolean;
+  cache: ExplorerLanguageScanCache | undefined;
 }
 
 interface ExplorerLanguageScanRuntime {
@@ -122,23 +130,25 @@ export function commitExplorerLanguageScan(
   scanToken: ExplorerLanguageScanToken,
   result: LanguageFilesResponse,
   scannedAt = Date.now(),
-): void {
+): ExplorerLanguageScanCommitResult {
   const runtime = runtimeFor(queryClient);
+  const current = getExplorerLanguageScanCache(queryClient, project);
   if (
     runtime.workspaceEpoch !== scanToken.workspaceEpoch ||
     runtime.latestRequestByProject.get(project) !== scanToken.requestId
   ) {
-    return;
+    return { committed: false, cache: current };
   }
-  const current = getExplorerLanguageScanCache(queryClient, project);
-  if (!current) return;
+  if (!current) return { committed: false, cache: undefined };
 
-  queryClient.setQueryData(explorerLanguageScanQueryKey(project), {
+  const cache = {
     result,
     generation: current.generation,
     stale: current.generation !== scanToken.generation,
     scannedAt,
-  } satisfies ExplorerLanguageScanCache);
+  } satisfies ExplorerLanguageScanCache;
+  queryClient.setQueryData(explorerLanguageScanQueryKey(project), cache);
+  return { committed: true, cache };
 }
 
 export function explorerLanguageScanWorkspaceEpoch(
@@ -149,11 +159,29 @@ export function explorerLanguageScanWorkspaceEpoch(
 
 export function removeExplorerLanguageScanCaches(
   queryClient: ExplorerLanguageScanCleanupClient,
-): void {
+): Promise<void> {
   const runtime = runtimeFor(queryClient);
   runtime.workspaceEpoch += 1;
   runtime.latestRequestByProject.clear();
-  queryClient.removeQueries({
-    queryKey: [EXPLORER_LANGUAGE_SCAN_QUERY_PREFIX],
-  });
+  const cleanupEpoch = runtime.workspaceEpoch;
+  const cleanupRequestId = runtime.nextRequestId;
+  queryClient.setQueriesData<ExplorerLanguageScanCache>(
+    { queryKey: [EXPLORER_LANGUAGE_SCAN_QUERY_PREFIX] },
+    () => emptyExplorerLanguageScanCache(),
+  );
+  return queryClient
+    .resetQueries({
+      queryKey: [EXPLORER_LANGUAGE_SCAN_QUERY_PREFIX],
+    })
+    .then(() => {
+      if (
+        runtime.workspaceEpoch !== cleanupEpoch ||
+        runtime.nextRequestId !== cleanupRequestId
+      ) {
+        return;
+      }
+      queryClient.removeQueries({
+        queryKey: [EXPLORER_LANGUAGE_SCAN_QUERY_PREFIX],
+      });
+    });
 }
