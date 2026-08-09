@@ -29,6 +29,7 @@ function derive({
   freeTerminalIndexMap = new Map<string, number>(),
   ignoredSessionIds,
   pendingSessionIds,
+  pinnedSessionIds,
 }: {
   sessions: SessionInfo[];
   openTabs?: TabEntry[];
@@ -38,6 +39,7 @@ function derive({
   freeTerminalIndexMap?: Map<string, number>;
   ignoredSessionIds?: Set<string>;
   pendingSessionIds?: Set<string>;
+  pinnedSessionIds?: Set<string>;
 }) {
   return deriveTerminalAutoAttachState({
     sessions,
@@ -48,6 +50,7 @@ function derive({
     freeTerminalIndexMap,
     ignoredSessionIds,
     pendingSessionIds,
+    pinnedSessionIds,
   });
 }
 
@@ -260,6 +263,51 @@ describe("deriveTerminalAutoAttachState", () => {
       label: "Terminal 1",
       isPinned: true,
     });
+  });
+
+  it("restores a persisted pin only when attaching a matching live session", () => {
+    const result = derive({
+      sessions: [
+        session("free:pinned", { type: "free", startedAt: 1 }),
+        session("free:open", { type: "free", startedAt: 2 }),
+      ],
+      pinnedSessionIds: new Set(["free:pinned", "free:stale"]),
+      freeTerminalIndexMap: new Map([
+        ["free:pinned", 1],
+        ["free:open", 2],
+      ]),
+    });
+
+    expect(result.openTabs).toMatchObject([
+      { sessionId: "free:pinned", isPinned: true },
+      { sessionId: "free:open", isPinned: false },
+    ]);
+  });
+
+  it("does not re-pin an existing tab after it was unpinned", () => {
+    const result = derive({
+      sessions: [session("free:existing", { type: "free" })],
+      openTabs: [
+        { sessionId: "free:existing", label: "Terminal 1", isPinned: false },
+      ],
+      pinnedSessionIds: new Set(["free:existing"]),
+      activeTab: "free:existing",
+      freeTerminalIndexMap: new Map([["free:existing", 1]]),
+    });
+
+    expect(result.openTabs[0]?.isPinned).toBe(false);
+  });
+
+  it("hydrates a persisted pin for a tab opened before a live snapshot", () => {
+    const result = derive({
+      sessions: [session("free:pending", { type: "free" })],
+      openTabs: [{ sessionId: "free:pending", label: "Terminal 1" }],
+      pinnedSessionIds: new Set(["free:pending"]),
+      activeTab: "free:pending",
+      freeTerminalIndexMap: new Map([["free:pending", 1]]),
+    });
+
+    expect(result.openTabs[0]?.isPinned).toBe(true);
   });
 
   it("activates the newest live terminal when the current active tab is gone", () => {
