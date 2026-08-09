@@ -90,13 +90,15 @@ In the **Server Connections** dialog, each profile shows:
 
 **All profiles are saved in browser localStorage:**
 
-| Item                | Storage        | Persistence                                |
-| ------------------- | -------------- | ------------------------------------------ |
-| All profiles (JSON) | localStorage   | Survives browser close, shared across tabs |
-| Active profile ID   | localStorage   | Survives browser close, shared across tabs |
-| Auth token          | sessionStorage | Cleared on tab close, isolated per tab     |
+| Item                | Storage      | Persistence                                |
+| ------------------- | ------------ | ------------------------------------------ |
+| All profiles (JSON) | localStorage | Survives browser close, shared across tabs |
+| Active profile ID   | localStorage | Survives browser close, shared across tabs |
+| Auth token          | localStorage | Per-profile, survives browser close        |
 
 **Browser Tabs:** All tabs in the same browser share the profiles list. Switching profiles in one tab shows the new active profile in all open tabs.
+
+Profile selection and profile tokens are therefore shared by tabs in the same browser storage area. Use separate browser profiles or containers when you need independent simultaneous server sessions.
 
 **Browser Close:** Profiles persist indefinitely until manually deleted.
 
@@ -105,7 +107,8 @@ In the **Server Connections** dialog, each profile shows:
 ## Security Notes
 
 - **Passwords are never stored** locally. Only the username for display purposes.
-- **Auth tokens** (Bearer tokens) are stored in sessionStorage, which **clears on tab close** — not persisted permanently.
+- **Auth tokens** (Bearer tokens) are stored in localStorage under a profile-specific key so Android/browser recreation does not discard the login. Tokens are readable by JavaScript; use trusted HTTPS deployments and do not store passwords.
+- **Server URL changes** clear the profile token and require login again. Equivalent formatting changes, such as trailing slashes, do not clear it.
 - **URLs are stored in plain text** in localStorage. Keep your browser secure.
 - **No data sent to server** for profile management — entirely client-side.
 
@@ -129,13 +132,13 @@ In the **Server Connections** dialog, each profile shows:
 
 ### Multi-Tab Setup
 
-Open multiple browser tabs with different profiles:
+For simultaneous independent sessions, open separate browser profiles or containers:
 
-- Tab 1: "Local Dev" (localhost:4800)
-- Tab 2: "Staging" (staging server)
-- Tab 3: "Production" (prod server)
+- Container 1: "Local Dev" (localhost:4800)
+- Container 2: "Staging" (staging server)
+- Container 3: "Production" (prod server)
 
-Each tab maintains its own token and can operate independently.
+Ordinary tabs share the active profile and profile-scoped token storage.
 
 ## Troubleshooting
 

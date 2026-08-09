@@ -18,12 +18,14 @@ vi.mock("@/api/client.js", () => ({
 }));
 
 vi.mock("@/api/transport.js", () => ({
+  getTransportGeneration: () => 0,
   getTransport: () => ({
     onEvent: (event: string, listener: () => void) => {
       eventListeners.set(event, listener);
       return () => eventListeners.delete(event);
     },
   }),
+  subscribeTransportChanges: () => () => {},
 }));
 
 vi.mock("./use-browser-extension-presence.js", () => ({
@@ -38,17 +40,19 @@ describe("useBrowserDebug tunnel lifecycle", () => {
   beforeEach(() => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     localStorage.clear();
-    listTunnels.mockResolvedValueOnce([
-      {
-        id: "tunnel-1",
-        port: 3000,
-        label: "web",
-        driver: "cloudflared",
-        status: "ready",
-        url: "https://example.trycloudflare.com",
-        startedAt: 0,
-      },
-    ]).mockResolvedValue([]);
+    listTunnels
+      .mockResolvedValueOnce([
+        {
+          id: "tunnel-1",
+          port: 3000,
+          label: "web",
+          driver: "cloudflared",
+          status: "ready",
+          url: "https://example.trycloudflare.com",
+          startedAt: 0,
+        },
+      ])
+      .mockResolvedValue([]);
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -118,7 +122,9 @@ describe("useBrowserDebug tunnel lifecycle", () => {
     });
 
     await act(async () => {
-      latestRef.current?.setInputUrl("https://example.trycloudflare.com/settings?tab=debug");
+      latestRef.current?.setInputUrl(
+        "https://example.trycloudflare.com/settings?tab=debug",
+      );
     });
     await act(async () => latestRef.current?.navigate());
 

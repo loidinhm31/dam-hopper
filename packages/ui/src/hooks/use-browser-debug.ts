@@ -5,7 +5,7 @@ import {
   type BrowserCaptureStatus,
 } from "@/hooks/use-browser-capture.js";
 import { api, type TunnelInfo } from "@/api/client.js";
-import { getTransport } from "@/api/transport.js";
+import { getTransport, getTransportGeneration } from "@/api/transport.js";
 import {
   resolveBrowserDebugTarget,
   type BrowserDebugTarget,
@@ -23,6 +23,7 @@ import {
   useBrowserExtensionPresence,
   type BrowserExtensionPresence,
 } from "@/hooks/use-browser-extension-presence.js";
+import { useTransportGeneration } from "@/hooks/use-transport-generation.js";
 
 export type { BrowserDebugBridgeStatus } from "@/lib/browser-debug-host.js";
 
@@ -71,6 +72,7 @@ export interface BrowserDebugController {
 
 /** Owns Browser tool state while its iframe is kept alive outside tool shells. */
 export function useBrowserDebug(): BrowserDebugController {
+  const transportGeneration = useTransportGeneration();
   const extensionPresence = useBrowserExtensionPresence();
   const parentOrigin =
     typeof window === "undefined" ? undefined : window.location?.origin;
@@ -110,25 +112,34 @@ export function useBrowserDebug(): BrowserDebugController {
     [stopCapture],
   );
 
-  const refreshTunnels = useCallback(async () => {
-    try {
-      const nextTunnels = await api.tunnels.list();
-      setTunnels(nextTunnels);
-      const currentTarget = targetRef.current;
-      if (
-        currentTarget &&
-        !resolveBrowserDebugTarget(currentTarget.url, nextTunnels, parentOrigin)
-      ) {
-        invalidateTarget("The selected tunnel is no longer ready.");
+  const refreshTunnels = useCallback(
+    async (expectedGeneration = transportGeneration) => {
+      try {
+        const nextTunnels = await api.tunnels.list();
+        if (getTransportGeneration() !== expectedGeneration) return;
+        setTunnels(nextTunnels);
+        const currentTarget = targetRef.current;
+        if (
+          currentTarget &&
+          !resolveBrowserDebugTarget(
+            currentTarget.url,
+            nextTunnels,
+            parentOrigin,
+          )
+        ) {
+          invalidateTarget("The selected tunnel is no longer ready.");
+        }
+      } catch {
+        if (getTransportGeneration() !== expectedGeneration) return;
+        // Loopback targets remain usable when the tunnel query is unavailable.
+        setTunnels([]);
+        if (targetRef.current?.source === "tunnel") {
+          invalidateTarget("The selected tunnel could no longer be verified.");
+        }
       }
-    } catch {
-      // Loopback targets remain usable when the tunnel query is unavailable.
-      setTunnels([]);
-      if (targetRef.current?.source === "tunnel") {
-        invalidateTarget("The selected tunnel could no longer be verified.");
-      }
-    }
-  }, [invalidateTarget, parentOrigin]);
+    },
+    [invalidateTarget, parentOrigin, transportGeneration],
+  );
 
   useEffect(() => {
     queueMicrotask(() => void refreshTunnels());
@@ -145,7 +156,7 @@ export function useBrowserDebug(): BrowserDebugController {
     } catch {
       return;
     }
-  }, [refreshTunnels]);
+  }, [refreshTunnels, transportGeneration]);
 
   const applyNavigationTarget = useCallback(
     (nextTarget: BrowserDebugTarget) => {

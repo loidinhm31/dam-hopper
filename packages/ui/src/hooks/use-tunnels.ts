@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type SetStateAction } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getTransport } from "../api/transport.js";
+import { getTransport, getTransportGeneration } from "../api/transport.js";
+import { getActiveProfileId } from "../api/server-config.js";
 import { subscribeIpc, hasWsStatus } from "./use-sse.js";
+import { useTransportGeneration } from "./use-transport-generation.js";
 import type { TunnelInfo } from "../api/client.js";
 
 export interface InstallState {
@@ -11,15 +13,40 @@ export interface InstallState {
   error?: string;
 }
 
+const IDLE_INSTALL_STATE: InstallState = {
+  status: "idle",
+  downloaded: 0,
+  total: 0,
+};
+
 export function useTunnels() {
   const qc = useQueryClient();
+  const transportGeneration = useTransportGeneration();
   const transport = getTransport();
 
-  const [installState, setInstallState] = useState<InstallState>({
-    status: "idle",
-    downloaded: 0,
-    total: 0,
-  });
+  const [installStateSnapshot, setInstallStateSnapshot] = useState<{
+    generation: number;
+    state: InstallState;
+  }>({ generation: transportGeneration, state: IDLE_INSTALL_STATE });
+  const updateInstallState = useCallback(
+    (next: SetStateAction<InstallState>) => {
+      setInstallStateSnapshot((previous) => {
+        const previousState =
+          previous.generation === transportGeneration
+            ? previous.state
+            : IDLE_INSTALL_STATE;
+        return {
+          generation: transportGeneration,
+          state: typeof next === "function" ? next(previousState) : next,
+        };
+      });
+    },
+    [transportGeneration],
+  );
+  const currentInstallState =
+    installStateSnapshot.generation === transportGeneration
+      ? installStateSnapshot.state
+      : IDLE_INSTALL_STATE;
 
   const query = useQuery({
     queryKey: ["tunnels"],
@@ -59,34 +86,39 @@ export function useTunnels() {
       }),
     ];
     return () => unsubs.forEach((fn) => fn());
-  }, [qc]);
+  }, [qc, transportGeneration]);
 
   // Install progress events
   useEffect(() => {
+    const isCurrentTransport = () => getTransport() === transport;
     const unsubs = [
       subscribeIpc("install:progress", ({ data }) => {
+        if (!isCurrentTransport()) return;
         const { downloaded, total } = data as {
           downloaded: number;
           total: number;
         };
-        setInstallState({ status: "installing", downloaded, total });
+        updateInstallState({ status: "installing", downloaded, total });
       }),
       subscribeIpc("install:done", () => {
-        setInstallState({ status: "done", downloaded: 0, total: 0 });
+        if (!isCurrentTransport()) return;
+        updateInstallState({ status: "done", downloaded: 0, total: 0 });
       }),
       subscribeIpc("install:failed", ({ data }) => {
+        if (!isCurrentTransport()) return;
         const { error } = data as { error: string };
-        setInstallState({ status: "error", downloaded: 0, total: 0, error });
+        updateInstallState({ status: "error", downloaded: 0, total: 0, error });
       }),
     ];
     return () => unsubs.forEach((fn) => fn());
-  }, []);
+  }, [transport, transportGeneration, updateInstallState]);
 
   // Resync on WS reconnect to recover from missed events
   useEffect(() => {
     try {
       const t = getTransport();
       if (!hasWsStatus(t)) return;
+      const boundGeneration = transportGeneration;
       // Init from current status so first-connect doesn't double-fetch
       let wasConnected = t.getStatus() === "connected";
       return t.onStatusChange((status) => {
@@ -98,7 +130,13 @@ export function useTunnels() {
               "tunnel:install:status",
             )
             .then(({ installed, installing: stillInstalling }) => {
-              setInstallState((s) => {
+              if (
+                getTransport() !== t ||
+                getTransportGeneration() !== boundGeneration
+              ) {
+                return;
+              }
+              updateInstallState((s) => {
                 if (s.status !== "installing") return s;
                 if (installed)
                   return { status: "done", downloaded: 0, total: 0 };
@@ -108,8 +146,14 @@ export function useTunnels() {
               });
             })
             .catch(() => {
+              if (
+                getTransport() !== t ||
+                getTransportGeneration() !== boundGeneration
+              ) {
+                return;
+              }
               // best-effort; if endpoint unavailable just reset to idle
-              setInstallState((s) =>
+              updateInstallState((s) =>
                 s.status === "installing"
                   ? { status: "idle", downloaded: 0, total: 0 }
                   : s,
@@ -121,24 +165,32 @@ export function useTunnels() {
     } catch {
       return;
     }
-  }, [qc]);
+  }, [qc, transportGeneration, updateInstallState]);
 
   const installCloudflared = useCallback(async () => {
-    setInstallState({ status: "installing", downloaded: 0, total: 0 });
+    const requestGeneration = transportGeneration;
+    const requestTransport = transport;
+    updateInstallState({ status: "installing", downloaded: 0, total: 0 });
     try {
-      await transport.invoke("tunnel:install");
+      await requestTransport.invoke("tunnel:install");
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
       // 409 = already installing server-side; keep "installing" state and wait for WS events.
       if (msg.toLowerCase().includes("already in progress")) return;
-      setInstallState({
+      if (
+        getTransport() !== requestTransport ||
+        getTransportGeneration() !== requestGeneration
+      ) {
+        return;
+      }
+      updateInstallState({
         status: "error",
         downloaded: 0,
         total: 0,
         error: msg || "Install request failed",
       });
     }
-  }, [transport]);
+  }, [transport, transportGeneration, updateInstallState]);
 
   const createTunnel = useCallback(
     async (port: number, label: string) => {
@@ -151,6 +203,7 @@ export function useTunnels() {
   const stopTunnel = useCallback(
     async (id: string) => {
       // Optimistic remove with rollback on failure
+      const mutationProfileId = getActiveProfileId();
       const snapshot = qc.getQueryData<TunnelInfo[]>(["tunnels"]);
       qc.setQueryData<TunnelInfo[]>(["tunnels"], (prev = []) =>
         prev.filter((t) => t.id !== id),
@@ -158,7 +211,12 @@ export function useTunnels() {
       try {
         await transport.invoke("tunnel:stop", { id });
       } catch (e) {
-        qc.setQueryData(["tunnels"], snapshot);
+        if (
+          getActiveProfileId() === mutationProfileId &&
+          getTransport() === transport
+        ) {
+          qc.setQueryData(["tunnels"], snapshot);
+        }
         throw e;
       }
     },
@@ -172,6 +230,6 @@ export function useTunnels() {
     createTunnel,
     stopTunnel,
     installCloudflared,
-    installState,
+    installState: currentInstallState,
   };
 }

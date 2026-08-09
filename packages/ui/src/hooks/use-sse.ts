@@ -1,10 +1,14 @@
 // Event bridge — routes backend push events into the in-memory listener bus.
 // Forwards WebSocket push events via WsTransport.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
-import { getTransport } from "../api/transport.js";
+import {
+  getTransport,
+  getTransportGeneration,
+  subscribeTransportChanges,
+} from "../api/transport.js";
 import type { ConnectionStatus } from "../components/atoms/ConnectionDot.js";
 import { removeExplorerLanguageScanCaches } from "@/lib/explorer-language-scan.js";
 
@@ -109,6 +113,11 @@ export function handleWorkspaceChanged(
 
 export function useIpc(): { status: IpcStatus } {
   const qc = useQueryClient();
+  const transportGeneration = useSyncExternalStore(
+    subscribeTransportChanges,
+    getTransportGeneration,
+    getTransportGeneration,
+  );
 
   const [wsStatus, setWsStatus] = useState<IpcStatus>(() => {
     try {
@@ -151,21 +160,29 @@ export function useIpc(): { status: IpcStatus } {
     ];
 
     return () => unsubs.forEach((fn) => fn());
-  }, [qc]);
+  }, [qc, transportGeneration]);
 
   useEffect(() => {
     try {
       const t = getTransport();
       if (!hasWsStatus(t)) return;
-      return t.onStatusChange((status) =>
+      let cancelled = false;
+      const unsubscribe = t.onStatusChange((status) =>
         handleIpcStatusChange(status as IpcStatus, setWsStatus, () => {
           void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
         }),
       );
+      queueMicrotask(() => {
+        if (!cancelled) setWsStatus(t.getStatus());
+      });
+      return () => {
+        cancelled = true;
+        unsubscribe();
+      };
     } catch {
       return;
     }
-  }, [qc]);
+  }, [qc, transportGeneration]);
 
   return { status: wsStatus };
 }
