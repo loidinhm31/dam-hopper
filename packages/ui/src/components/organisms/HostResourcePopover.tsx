@@ -7,6 +7,7 @@ import {
 } from "@/api/queries.js";
 import { HostResourceDiagnosis } from "@/components/organisms/HostResourceDiagnosis.js";
 import { useHostResourceAlertPresentation } from "@/hooks/use-host-resource-alert-presentation.js";
+import { formatPercent } from "@/lib/host-metrics-format.js";
 import { formatAlertState, severityClass } from "@/lib/host-resource-state.js";
 import { cn } from "@/lib/utils.js";
 
@@ -150,12 +151,39 @@ export function HostResourcePopover() {
               </div>
             )}
             {snapshot.isError && (
-              <div className="flex items-center gap-2 text-xs text-[var(--color-danger)]">
-                <AlertTriangle className="h-3.5 w-3.5" />
-                Resource snapshot unavailable
-              </div>
+              <>
+                <div className="flex items-center gap-2 text-xs text-[var(--color-danger)]">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  Resource snapshot unavailable
+                </div>
+                {legacyMetrics.data && (
+                  <section
+                    aria-label="Compatible basic metrics"
+                    className="mt-3 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/50 p-2.5"
+                  >
+                    <p className="text-xs font-bold text-[var(--color-text)]">
+                      Deep metrics unavailable; showing compatible basic
+                      metrics.
+                    </p>
+                    <dl className="mt-2 grid grid-cols-2 gap-2 text-[10px] text-[var(--color-text-muted)]">
+                      <div>
+                        <dt>CPU</dt>
+                        <dd className="text-xs text-[var(--color-text)]">
+                          {formatPercent(legacyMetrics.data.cpu.usagePercent)}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Disk</dt>
+                        <dd className="text-xs text-[var(--color-text)]">
+                          {formatPercent(legacyMetrics.data.disk.usagePercent)}
+                        </dd>
+                      </div>
+                    </dl>
+                  </section>
+                )}
+              </>
             )}
-            {snapshot.data && (
+            {!snapshot.isError && snapshot.data && (
               <HostResourceDiagnosis
                 snapshot={snapshot.data}
                 alerts={alerts.data ?? []}
