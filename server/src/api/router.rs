@@ -218,6 +218,11 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/ports", get(port_forward_api::list_ports))
         // Host system metrics
         .route("/api/system/metrics", get(system::get_metrics))
+        .route(
+            "/api/system/resources/v1/snapshot",
+            get(system::get_snapshot),
+        )
+        .route("/api/system/resources/v1/alerts", get(system::get_alerts))
         // Diagnostics
         .route(
             "/api/diagnostics/export",

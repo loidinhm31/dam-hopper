@@ -42,6 +42,7 @@ use crate::state::AppState;
 /// Both use 512 cap to handle burst scenarios (large git operations, parallel builds).
 const PTY_CHAN_CAP: usize = 512;
 const FS_CHAN_CAP: usize = 512;
+const ALERT_CHAN_CAP: usize = 32;
 
 /// WS close code for backpressure overflow (deprecated with channel split).
 const CLOSE_OVERFLOW: u16 = 4001;
@@ -112,14 +113,18 @@ fn websocket_auth_ok(no_auth: bool, token: Option<String>, jwt_secret: &str) -> 
 async fn handle_socket(socket: WebSocket, state: AppState) {
     let (mut ws_tx, mut ws_rx) = socket.split();
 
-    // Split channels: PTY (with backpressure) + FS (try_send, overflow drops sub only)
+    // Split channels: alerts get a priority queue ahead of PTY output; FS uses
+    // try_send and drops only the overflowing subscription.
     let (pty_tx, mut pty_rx) = mpsc::channel::<WireMsg>(PTY_CHAN_CAP);
     let (fs_tx, mut fs_rx) = mpsc::channel::<WireMsg>(FS_CHAN_CAP);
+    let (alert_tx, mut alert_rx) = mpsc::channel::<WireMsg>(ALERT_CHAN_CAP);
 
     // Writer task: drains both channels → WS sink using select.
     let writer = tokio::spawn(async move {
         loop {
             let msg = tokio::select! {
+                biased;
+                Some(m) = alert_rx.recv() => m,
                 Some(m) = pty_rx.recv() => m,
                 Some(m) = fs_rx.recv() => m,
                 else => break,
@@ -144,11 +149,14 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         }
     });
 
-    // PTY broadcast pump (uses pty_tx with .await for proper backpressure)
+    // PTY output and host alerts use independent broadcast streams, so a noisy
+    // terminal cannot cause an alert-stream gap.
     let pty_order = Arc::new(tokio::sync::Mutex::new(()));
     let pty_rx_broadcast = state.event_sink.subscribe();
     let pty_out = pty_tx.clone();
     let pty_pump = tokio::spawn(pump_pty(pty_rx_broadcast, pty_out, Arc::clone(&pty_order)));
+    let host_alert_rx = state.event_sink.subscribe_host_alerts();
+    let host_alert_pump = tokio::spawn(pump_host_alerts(host_alert_rx, alert_tx));
 
     // Per-conn fs subscription pumps: sub_id → JoinHandle
     let mut fs_pumps: HashMap<u64, tokio::task::JoinHandle<()>> = HashMap::new();
@@ -1427,6 +1435,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         state.fs.unsubscribe_tree(sub_id);
     }
     pty_pump.abort();
+    host_alert_pump.abort();
     writer.abort();
 }
 
@@ -2105,6 +2114,41 @@ async fn pump_pty(
     }
 }
 
+async fn pump_host_alerts(
+    mut rx: tokio::sync::broadcast::Receiver<String>,
+    alert_tx: mpsc::Sender<WireMsg>,
+) {
+    loop {
+        match rx.recv().await {
+            Ok(msg) => {
+                if alert_tx.send(WireMsg::Text(msg)).await.is_err() {
+                    break;
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                warn!(
+                    dropped = n,
+                    "host alert broadcast lagged; invalidating alerts"
+                );
+                if alert_tx
+                    .send(WireMsg::Text(
+                        serde_json::json!({
+                            "kind": "host:alertsInvalidated",
+                            "payload": { "reason": "lagged" },
+                        })
+                        .to_string(),
+                    ))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // FS subscribe helper
 // ---------------------------------------------------------------------------
@@ -2253,7 +2297,7 @@ mod tests {
 
     use tokio::sync::{broadcast, mpsc};
 
-    use super::{pump_pty, websocket_auth_ok};
+    use super::{pump_host_alerts, pump_pty, websocket_auth_ok};
     use crate::api::ws_protocol::WireMsg;
 
     #[test]
@@ -2284,6 +2328,24 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(matches!(message, WireMsg::Text(value) if value == "live-output"));
+        pump.abort();
+    }
+
+    #[tokio::test]
+    async fn host_alert_pump_invalidates_resource_alerts_after_broadcast_lag() {
+        let (broadcast_tx, broadcast_rx) = broadcast::channel(1);
+        let (out_tx, mut out_rx) = mpsc::channel(4);
+        broadcast_tx.send("first".into()).unwrap();
+        broadcast_tx.send("second".into()).unwrap();
+        let pump = tokio::spawn(pump_host_alerts(broadcast_rx, out_tx));
+
+        let message = tokio::time::timeout(std::time::Duration::from_secs(1), out_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(message, WireMsg::Text(value) if value.contains("host:alertsInvalidated"))
+        );
         pump.abort();
     }
 }
