@@ -147,6 +147,7 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
             "terminalCodexNotificationSoundVolume" => "terminal_codex_notification_sound_volume",
             "terminalCodexNotificationSoundPattern" => "terminal_codex_notification_sound_pattern",
             "explorerShowHidden" => "explorer_show_hidden",
+            "explorerLanguageFilter" => "explorer_language_filter",
             "mobileCustomKeyboardEnabled" => "mobile_custom_keyboard_enabled",
             "mobileCustomKeyboardFontSize" => "mobile_custom_keyboard_font_size",
             "mobileCustomKeyboardPadding" => "mobile_custom_keyboard_padding",

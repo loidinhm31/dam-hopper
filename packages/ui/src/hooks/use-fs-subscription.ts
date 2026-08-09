@@ -10,6 +10,10 @@ import type {
 } from "@/api/fs-types.js";
 import { api } from "@/api/client.js";
 import { scheduleGitFsInvalidation } from "@/lib/git-fs-invalidation.js";
+import {
+  explorerLanguageScanWorkspaceEpoch,
+  markExplorerLanguageScanStale,
+} from "@/lib/explorer-language-scan.js";
 
 // ---------------------------------------------------------------------------
 // Delta application
@@ -107,7 +111,9 @@ export function useFsSubscription(project: string, path: string) {
   useEffect(() => {
     if (subId == null) return;
     const t = getTransport() as WsTransport;
+    const workspaceEpoch = explorerLanguageScanWorkspaceEpoch(qc);
     const off = t.onFsEvent(subId, (ev: FsEventDto) => {
+      markExplorerLanguageScanStale(qc, project, workspaceEpoch);
       qc.setQueryData<FsTreeData>(["fs-tree", project, path], (prev) => {
         if (!prev) return prev;
         const next = applyFsDelta(prev, ev);
