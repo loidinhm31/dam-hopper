@@ -4,6 +4,12 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getTransport } from "../api/transport.js";
+import type {
+  AlertSeverity,
+  AlertState,
+  HostResourceAlert,
+  HostResourceSnapshotV1,
+} from "../api/client.js";
 import type { ConnectionStatus } from "../components/atoms/ConnectionDot.js";
 
 export type IpcStatus = ConnectionStatus;
@@ -13,6 +19,25 @@ export interface IpcEvent {
   data: unknown;
   timestamp: number;
 }
+
+export interface HostResourceAlertChangedEvent extends IpcEvent {
+  type: "host:alertChanged";
+  data: HostResourceAlert;
+}
+
+const ALERT_STATES = new Set<AlertState>([
+  "healthy",
+  "reclaimableCacheHigh",
+  "elevatedNoPressure",
+  "memoryPressure",
+  "oomRisk",
+  "limitedData",
+]);
+const ALERT_SEVERITIES = new Set<AlertSeverity>([
+  "info",
+  "warning",
+  "critical",
+]);
 
 type Listener = (event: IpcEvent) => void;
 
@@ -45,12 +70,49 @@ const PUSH_EVENT_CHANNELS = [
   "install:progress",
   "install:done",
   "install:failed",
+  "host:alertChanged",
+  "host:alertsInvalidated",
 ] as const;
+
+export function invalidateHostResourceQueries(
+  qc: Pick<ReturnType<typeof useQueryClient>, "invalidateQueries">,
+) {
+  void qc.invalidateQueries({ queryKey: ["system", "resource-snapshot"] });
+  void qc.invalidateQueries({ queryKey: ["system", "resource-alerts"] });
+}
+
+export function asHostResourceAlertChangedEvent(
+  event: IpcEvent,
+): HostResourceAlertChangedEvent | null {
+  if (
+    event.type !== "host:alertChanged" ||
+    typeof event.data !== "object" ||
+    event.data === null
+  ) {
+    return null;
+  }
+  const alert = event.data as Partial<HostResourceAlert>;
+  return typeof alert.state === "string" &&
+    ALERT_STATES.has(alert.state as AlertState) &&
+    typeof alert.severity === "string" &&
+    ALERT_SEVERITIES.has(alert.severity as AlertSeverity) &&
+    typeof alert.updatedAt === "number" &&
+    typeof alert.durationSeconds === "number" &&
+    typeof alert.scope === "string" &&
+    typeof alert.confidence === "string" &&
+    typeof alert.threshold === "string" &&
+    typeof alert.nextAction === "string" &&
+    typeof alert.evidence === "object" &&
+    alert.evidence !== null &&
+    typeof alert.evidence.cgroupOomDelta === "boolean"
+    ? (event as HostResourceAlertChangedEvent)
+    : null;
+}
 
 let initialized = false;
 const unsubscribers: Array<() => void> = [];
 
-function initTransportListeners(): void {
+export function initTransportListeners(): void {
   if (initialized) return;
   initialized = true;
 
@@ -139,6 +201,22 @@ export function useIpc(): { status: IpcStatus } {
       subscribeIpc("terminal:changed", () => {
         void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
       }),
+
+      subscribeIpc("host:alertChanged", (event) => {
+        const alertEvent = asHostResourceAlertChangedEvent(event);
+        if (alertEvent) {
+          qc.setQueryData<HostResourceSnapshotV1>(
+            ["system", "resource-snapshot"],
+            (snapshot) =>
+              snapshot ? { ...snapshot, alert: alertEvent.data } : snapshot,
+          );
+        }
+        invalidateHostResourceQueries(qc);
+      }),
+
+      subscribeIpc("host:alertsInvalidated", () =>
+        invalidateHostResourceQueries(qc),
+      ),
     ];
 
     return () => unsubs.forEach((fn) => fn());
@@ -151,6 +229,7 @@ export function useIpc(): { status: IpcStatus } {
       return t.onStatusChange((status) =>
         handleIpcStatusChange(status as IpcStatus, setWsStatus, () => {
           void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+          invalidateHostResourceQueries(qc);
         }),
       );
     } catch {

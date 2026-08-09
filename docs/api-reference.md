@@ -274,6 +274,12 @@ counters. Cache attribution labels are descriptive and may overlap, so clients
 must not add them as an accounting total. The existing `GET /api/system/metrics`
 response remains compatible and is served from the monitor's cached projection.
 
+The current UI is monitoring-only. It displays the snapshot, bounded alert
+history, and diagnostic evidence; it does not offer remediation controls. The
+`host:alertChanged` push event invalidates the cached snapshot and alert
+queries, while the REST responses remain authoritative. Privileged helper
+enrollment and remediation are deferred to Phase 5.
+
 #### GET /api/system/resources/v1/snapshot
 
 Returns the latest bounded deep host snapshot. Sampling cadence and source roots

@@ -211,6 +211,146 @@ export interface DiskMetrics {
   usagePercent: number;
 }
 
+// ── Host resource monitoring ────────────────────────────────────────────────
+
+export type AvailabilityState =
+  | "available"
+  | "unsupported"
+  | "permissionDenied"
+  | "temporarilyUnavailable"
+  | "stale";
+
+export interface Availability {
+  state: AvailabilityState;
+  sampledAt: number;
+  detailCode?: string;
+}
+
+export type AlertState =
+  | "healthy"
+  | "reclaimableCacheHigh"
+  | "elevatedNoPressure"
+  | "memoryPressure"
+  | "oomRisk"
+  | "limitedData";
+
+export type AlertSeverity = "info" | "warning" | "critical";
+export type Confidence = "low" | "medium" | "high";
+
+export interface HostResourceAlertEvidence {
+  availablePercent?: number;
+  reclaimablePercent?: number;
+  psiSomeAvg10?: number;
+  psiFullAvg10?: number;
+  cgroupOomDelta: boolean;
+}
+
+export interface HostResourceAlert {
+  state: AlertState;
+  severity: AlertSeverity;
+  incidentId?: string;
+  openedAt?: number;
+  updatedAt: number;
+  durationSeconds: number;
+  scope: string;
+  confidence: Confidence;
+  threshold: string;
+  evidence: HostResourceAlertEvidence;
+  nextAction: string;
+}
+
+export interface HostResourceAlertIncident extends HostResourceAlert {
+  incidentId: string;
+  openedAt: number;
+  resolvedAt?: number;
+}
+
+export interface MemoryPressure {
+  some?: { avg10: number; avg60: number; avg300: number; totalMicros: number };
+  full?: { avg10: number; avg60: number; avg300: number; totalMicros: number };
+  availability: Availability;
+}
+
+export interface CacheAttribution {
+  label:
+    | "systemFileCache"
+    | "cgroupFileCache"
+    | "processFileRss"
+    | "mountFileMappings"
+    | "unattributedSharedCache";
+  bytes?: number;
+  confidence: Confidence;
+  method: string;
+}
+
+export interface HostResourceSnapshotV1 {
+  schemaVersion: 1;
+  sampleId: string;
+  sampledAt: number;
+  host: { bootId?: string; hostname?: string; osName?: string };
+  capabilities: { linuxDeepMetrics: Availability };
+  memory: {
+    totalBytes?: number;
+    availableBytes?: number;
+    anonBytes?: number;
+    fileCacheBytes?: number;
+    reclaimableSlabBytes?: number;
+    swapUsedBytes?: number;
+    availability: Availability;
+  };
+  pressure: {
+    memory: MemoryPressure;
+  };
+  cgroups: Array<{
+    path: string;
+    namespace: string;
+    currentBytes?: number;
+    maxBytes?: number;
+    maxUnlimited: boolean;
+    highBytes?: number;
+    highUnlimited: boolean;
+    fileCacheBytes?: number;
+    events: Array<[string, number]>;
+    pressure: MemoryPressure;
+    availability: Availability;
+  }>;
+  processes: {
+    processes: Array<{
+      pid: number;
+      startTicks?: number;
+      uid?: number;
+      name: string;
+      commandSummary?: string;
+      rssBytes?: number;
+      anonRssBytes?: number;
+      fileRssBytes?: number;
+      shmemRssBytes?: number;
+      pssBytes?: number;
+      availability: Availability;
+    }>;
+    scannedCount: number;
+    truncated: boolean;
+    deadlineExceeded: boolean;
+    skippedCount: number;
+    permissionDeniedCount: number;
+    invalidUtf8Count: number;
+    malformedCount: number;
+    disappearedCount: number;
+    availability: Availability;
+  };
+  mountContext: {
+    mountPoint: string;
+    fsType?: string;
+    freeBytes?: number;
+    activeMappedPaths: string[];
+    activeMappedPathsAvailability: Availability;
+    cacheAttribution: CacheAttribution;
+    availability: Availability;
+  };
+  alert?: HostResourceAlert;
+  actionCapabilities: { availability: Availability };
+}
+
 export interface DiagnosticExportRequest {
   windowMinutes?: number;
   includeTerminalOutput?: boolean;
@@ -1293,6 +1433,15 @@ export const api = {
   },
   system: {
     metrics: () => getTransport().invoke<HostMetrics>("system:metrics"),
+    resourceSnapshot: () =>
+      getTransport().invoke<HostResourceSnapshotV1>("system:resourceSnapshot"),
+    resourceAlerts: (limit = 20) =>
+      getTransport().invoke<HostResourceAlertIncident[]>(
+        "system:resourceAlerts",
+        {
+          limit,
+        },
+      ),
   },
   usage: {
     summary: (query: UsageSummaryQuery = {}) =>
