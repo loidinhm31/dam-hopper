@@ -6,12 +6,14 @@ import "@dam-hopper/ui/styles";
 
 import { initTransport } from "@dam-hopper/ui/api/transport";
 import { WsTransport } from "@dam-hopper/ui/api/ws-transport";
+import { profileScopedQueryKeyHash } from "@dam-hopper/ui/api/query-client";
 import {
   initializeClientDiagnostics,
   setClientTransportStatus,
 } from "@dam-hopper/ui/diagnostics-client";
 import { IdleTransport } from "./idle-transport";
 import { getNativeServerUrl } from "./native-server-url";
+import { getActiveProfile } from "@dam-hopper/ui/api/server-config";
 import {
   getNativeBrowserDebugEnvironment,
   isNativeBrowserDebugEnabled,
@@ -62,7 +64,7 @@ initializeClientDiagnostics();
 
 const serverUrl = getNativeServerUrl();
 if (serverUrl) {
-  const transport = new WsTransport(serverUrl);
+  const transport = new WsTransport(serverUrl, getActiveProfile()?.id);
   setClientTransportStatus(transport.getStatus());
   transport.onStatusChange(setClientTransportStatus);
   initTransport(transport);
@@ -76,6 +78,7 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 10_000,
       retry: 1,
+      queryKeyHashFn: profileScopedQueryKeyHash,
     },
   },
 });

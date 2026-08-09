@@ -558,7 +558,7 @@ export function saveProfiles(profiles: ServerProfile[]): void {
 
 // Backward Compatibility
 export function migrateToProfiles(): void {
-  // If profiles already exist → no-op
+  // Repair the active profile and safely migrate a matching legacy token
   // If legacy damhopper_server_url exists → create "Default Server" profile
   // Called in DamHopperApp at startup
 }
@@ -569,12 +569,12 @@ export function migrateToProfiles(): void {
 - `damhopper_server_profiles` — JSON stringified array of `ServerProfile[]`
 - `damhopper_active_profile_id` — active profile UUID
 - `damhopper_server_url` — _(legacy, migrated away)_ single server URL
-- `damhopper_auth_token` — _(sessionStorage, not localStorage)_ Bearer token (cleared on tab close)
+- `damhopper_auth_token_<profileId>` — _(localStorage)_ profile-scoped Bearer token (survives browser close; readable by JavaScript)
 - `damhopper_auth_username` — _(sessionStorage, not localStorage)_ username (cleared on tab close)
 
 **Error Handling:**
 
-All localStorage operations wrapped in `try/catch`. Failures silently return defaults (empty array, null). localStorage may be unavailable in private browsing or sandboxed contexts.
+All localStorage operations are wrapped in `try/catch`. Reads return safe defaults; token writes return failure so login is not reported as saved when persistence is unavailable. Legacy tokens are migrated only when their URL matches the destination profile; otherwise they are discarded rather than sent to an unrelated server.
 
 **Component Integration:**
 
@@ -588,6 +588,7 @@ All localStorage operations wrapped in `try/catch`. Failures silently return def
   - calls `createProfile(data)` or `updateProfile(id, data)`
   - accepts profile object (or null for new)
   - auto-normalizes URL (strips trailing slash, prepends http:// if no scheme)
+  - clears the profile token when the normalized backend URL changes
 
 - `Sidebar.tsx` — active profile pill + "Change Server" button
   - displays `getActiveProfile()?.name` or "Not Connected"

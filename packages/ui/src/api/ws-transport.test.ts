@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "./client.js";
 import { WsTransport } from "./ws-transport.js";
+import { setActiveProfile, setAuthToken } from "./server-config.js";
 
 class MockWebSocket {
   static OPEN = 1;
@@ -267,6 +268,48 @@ describe("WsTransport typed API errors", () => {
       }),
     ).rejects.toThrow("Unsupported usage setup field: terminalCorrelationEnabled");
     expect(fetchMock).not.toHaveBeenCalled();
+    transport.destroy();
+  });
+});
+
+describe("WsTransport profile credentials", () => {
+  it("keeps the URL and token bound to its captured profile", async () => {
+    installMockWebSocket();
+    const createStorage = () => {
+      const values = new Map<string, string>();
+      return {
+        get length() {
+          return values.size;
+        },
+        clear: () => values.clear(),
+        getItem: (key: string) => values.get(key) ?? null,
+        key: (index: number) => Array.from(values.keys())[index] ?? null,
+        removeItem: (key: string) => values.delete(key),
+        setItem: (key: string, value: string) => values.set(key, value),
+      } as Storage;
+    };
+    vi.stubGlobal("localStorage", createStorage());
+    vi.stubGlobal("sessionStorage", createStorage());
+    setAuthToken("token-a", "profile-a");
+    const transport = new WsTransport("http://a.test", "profile-a");
+    setActiveProfile("profile-b");
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => "application/json" },
+      json: async () => ({ ok: true }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await transport.invoke("workspace:status");
+
+    expect(sockets[0].url).toContain("token-a");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://a.test/api/workspace/status",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer token-a" },
+      }),
+    );
     transport.destroy();
   });
 });

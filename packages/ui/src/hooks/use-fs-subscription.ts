@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
@@ -10,6 +10,7 @@ import type {
 } from "@/api/fs-types.js";
 import { api } from "@/api/client.js";
 import { scheduleGitFsInvalidation } from "@/lib/git-fs-invalidation.js";
+import { useTransportGeneration } from "@/hooks/use-transport-generation.js";
 import {
   explorerLanguageScanWorkspaceEpoch,
   markExplorerLanguageScanStale,
@@ -74,6 +75,8 @@ export function applyFsDelta(
  */
 export function useFsSubscription(project: string, path: string) {
   const qc = useQueryClient();
+  const transportGeneration = useTransportGeneration();
+  const boundTransportGenerationRef = useRef(transportGeneration);
 
   const query = useQuery<FsTreeData>({
     queryKey: ["fs-tree", project, path],
@@ -110,6 +113,14 @@ export function useFsSubscription(project: string, path: string) {
   const subId = query.data?.sub_id;
   useEffect(() => {
     if (subId == null) return;
+    if (boundTransportGenerationRef.current !== transportGeneration) {
+      boundTransportGenerationRef.current = transportGeneration;
+      void qc.resetQueries({
+        queryKey: ["fs-tree", project, path],
+        exact: true,
+      });
+      return;
+    }
     const t = getTransport() as WsTransport;
     const workspaceEpoch = explorerLanguageScanWorkspaceEpoch(qc);
     const off = t.onFsEvent(subId, (ev: FsEventDto) => {
@@ -128,9 +139,9 @@ export function useFsSubscription(project: string, path: string) {
 
     return () => {
       off();
-      (getTransport() as WsTransport).fsUnsubscribeTree(subId);
+      t.fsUnsubscribeTree(subId);
     };
-  }, [subId, project, path, qc]);
+  }, [subId, project, path, qc, transportGeneration]);
 
   /** Load children for a dir node and splice them into the cached tree. */
   async function loadChildren(nodeId: string) {

@@ -1,8 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { X, Server, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import type { ServerProfile } from "@/api/server-config.js";
 import {
   getServerUrl,
+  haveServerUrlsChanged,
+  normalizeServerUrl,
+  shouldClearAuthTokenForUrlChange,
   setServerUrl,
   clearServerUrl,
   getAuthToken,
@@ -12,8 +15,13 @@ import {
   getAuthUsername,
   setAuthUsername,
   clearAuthUsername,
-  buildAuthHeaders,
+  hasServerUrl,
+  getActiveProfile,
+  getActiveProfileId,
+  clearActiveProfile,
   createProfile,
+  getProfiles,
+  saveProfiles,
   updateProfile,
   setActiveProfile,
 } from "@/api/server-config.js";
@@ -44,14 +52,24 @@ export function ServerSettingsDialog({
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [token, setToken] = useState("");
+  const [initialUrl, setInitialUrl] = useState("");
+  const [initialToken, setInitialToken] = useState("");
   const [testState, setTestState] = useState<TestState>("idle");
   const [testError, setTestError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const latestUrlRef = useRef("");
+  const latestProfileIdRef = useRef<string | undefined>(profile?.id);
+  const testRequestIdRef = useRef(0);
+  latestProfileIdRef.current = profile?.id;
 
   const isEditMode = profile !== undefined;
 
   useEffect(() => {
     if (open) {
+      const storedUrl =
+        profile?.url ?? (profile === undefined ? getServerUrl() : "");
+      latestUrlRef.current = normalizeServerUrl(storedUrl);
+      testRequestIdRef.current += 1;
       if (profile) {
         // Edit existing profile
         setName(profile.name);
@@ -74,7 +92,16 @@ export function ServerSettingsDialog({
         setUsername(getAuthUsername());
         setPassword("");
       }
-      setToken(getAuthToken() ?? "");
+      const tokenProfileId =
+        profile?.id ??
+        (profile === undefined
+          ? (getActiveProfileId() ?? undefined)
+          : undefined);
+      const storedToken =
+        profile === null ? "" : (getAuthToken(tokenProfileId) ?? "");
+      setInitialUrl(storedUrl);
+      setInitialToken(storedToken);
+      setToken(storedToken);
       setTestState("idle");
       setTestError(null);
       setSaved(false);
@@ -85,19 +112,38 @@ export function ServerSettingsDialog({
 
   const rawUrl = url.trim();
   // Auto-prepend protocol for display normalization (matches setServerUrl behavior)
-  const normalized =
-    rawUrl && !/^https?:\/\//i.test(rawUrl)
-      ? `http://${rawUrl}`.replace(/\/$/, "")
-      : rawUrl.replace(/\/$/, "");
+  const normalized = normalizeServerUrl(rawUrl);
 
   /** Reject non-http(s) schemes to prevent javascript:, data:, etc. */
-  const urlSchemeValid = !normalized || /^https?:\/\/.+/i.test(normalized);
+  const hasUnsupportedScheme =
+    /^[a-z][a-z\d+.-]*:/i.test(rawUrl) &&
+    !/^https?:\/\//i.test(rawUrl) &&
+    !/^(?:[a-z\d.-]+|\[[0-9a-f:]+\]):\d+(?:[/?#]|$)/i.test(rawUrl);
+  const urlSchemeValid =
+    !rawUrl ||
+    (!hasUnsupportedScheme &&
+      Boolean(normalized) &&
+      /^https?:\/\/.+/i.test(normalized));
   const crossOrigin =
     urlSchemeValid && normalized ? isCrossOriginServer(normalized) : false;
+  const invalidateConnectionTest = () => {
+    testRequestIdRef.current += 1;
+    setTestState("idle");
+    setTestError(null);
+  };
 
   async function testConnection() {
     if (isAndroidChromeNativeInputSuppressed) return;
     if (!normalized || !urlSchemeValid) return;
+    const requestId = ++testRequestIdRef.current;
+    const requestUrl = normalized;
+    const requestProfileId = profile?.id;
+    latestUrlRef.current = requestUrl;
+    const isCurrentRequest = () =>
+      requestId === testRequestIdRef.current &&
+      requestUrl === latestUrlRef.current &&
+      requestProfileId === latestProfileIdRef.current;
+
     setTestState("testing");
     setTestError(null);
     try {
@@ -118,6 +164,8 @@ export function ServerSettingsDialog({
         });
         const data = await res.json().catch(() => null);
 
+        if (!isCurrentRequest()) return;
+
         if (res.ok && data?.token) {
           setToken(data.token);
           setTestState("ok");
@@ -134,8 +182,10 @@ export function ServerSettingsDialog({
         clearTimeout(timeout);
       }
     } catch (e) {
-      setTestState("fail");
-      setTestError(e instanceof Error ? e.message : String(e));
+      if (isCurrentRequest()) {
+        setTestState("fail");
+        setTestError(e instanceof Error ? e.message : String(e));
+      }
     }
   }
 
@@ -144,8 +194,30 @@ export function ServerSettingsDialog({
     if (!urlSchemeValid) return;
 
     const t = token.trim();
+    const urlChanged = haveServerUrlsChanged(initialUrl, normalized);
+    const tokenMustBeCleared = shouldClearAuthTokenForUrlChange(
+      initialUrl,
+      normalized,
+      initialToken,
+      t,
+    );
 
     if (isEditMode) {
+      const previousProfiles = getProfiles();
+      const previousActiveProfileId = getActiveProfileId();
+      const previousProfileToken = profile?.id
+        ? getAuthToken(profile.id)
+        : null;
+      const restoreProfileState = (profileId: string): boolean => {
+        const profilesRestored = saveProfiles(previousProfiles);
+        const activeProfileRestored = previousActiveProfileId
+          ? setActiveProfile(previousActiveProfileId)
+          : clearActiveProfile();
+        const tokenRestored = previousProfileToken
+          ? setAuthToken(previousProfileToken, profileId)
+          : clearAuthToken(profileId);
+        return profilesRestored && activeProfileRestored && tokenRestored;
+      };
       // Profile mode: create or update profile
       const profileData = {
         name: name.trim() || "Unnamed Server",
@@ -155,20 +227,82 @@ export function ServerSettingsDialog({
           authType === "basic" ? username.trim() || undefined : undefined,
       };
 
+      let tokenClearedForUrlChange = false;
+      if (profile && urlChanged) {
+        if (!clearAuthToken(profile.id)) {
+          restoreProfileState(profile.id);
+          setTestState("fail");
+          setTestError(
+            "Unable to clear the old login token; server URL was not changed",
+          );
+          return;
+        }
+        tokenClearedForUrlChange = true;
+      }
+
       let savedProfile: ServerProfile;
       if (profile) {
         // Update existing profile
-        updateProfile(profile.id, profileData);
+        if (!updateProfile(profile.id, profileData)) {
+          const restored = restoreProfileState(profile.id);
+          setTestState("fail");
+          setTestError(
+            restored
+              ? "Unable to persist the server profile in this browser"
+              : "Unable to persist the server profile and restore the old login",
+          );
+          return;
+        }
         savedProfile = { ...profile, ...profileData };
       } else {
         // Create new profile
         savedProfile = createProfile(profileData);
-        setActiveProfile(savedProfile.id);
+        const persistedProfile = getProfiles().find(
+          (candidate) => candidate.id === savedProfile.id,
+        );
+        if (
+          !persistedProfile ||
+          normalizeServerUrl(persistedProfile.url) !== normalized
+        ) {
+          setTestState("fail");
+          setTestError("Unable to persist the server profile in this browser");
+          return;
+        }
+        if (!setActiveProfile(savedProfile.id)) {
+          const restored = restoreProfileState(savedProfile.id);
+          setTestState("fail");
+          setTestError(
+            restored
+              ? "Unable to activate the new server profile"
+              : "Unable to activate the new profile and restore the previous state",
+          );
+          return;
+        }
       }
 
-      // Store token for this profile
-      if (t) {
-        setAuthToken(t);
+      // Never carry a token across a backend URL change. A newly tested token
+      // for the replacement URL may be stored instead.
+      if (!tokenClearedForUrlChange && (tokenMustBeCleared || !t)) {
+        if (!clearAuthToken(savedProfile.id)) {
+          const restored = restoreProfileState(savedProfile.id);
+          setTestState("fail");
+          setTestError(
+            restored
+              ? "Unable to clear the login token in this browser"
+              : "Unable to clear the login token and restore the previous state",
+          );
+          return;
+        }
+      }
+      if (t && !tokenMustBeCleared && !setAuthToken(t, savedProfile.id)) {
+        const restored = restoreProfileState(savedProfile.id);
+        setTestState("fail");
+        setTestError(
+          restored
+            ? "Unable to persist the login token in this browser"
+            : "Unable to persist the login token and restore the previous state",
+        );
+        return;
       }
 
       setSaved(true);
@@ -176,23 +310,76 @@ export function ServerSettingsDialog({
       // Notify parent and close
       onSaved?.(savedProfile);
 
-      // Reload for clean reconnect
-      setTimeout(() => window.location.reload(), 800);
+      // Reload only when the live connection changed. Editing an inactive
+      // profile must not interrupt the active server session.
+      if (savedProfile.id === getActiveProfileId()) {
+        setTimeout(() => window.location.reload(), 800);
+      }
     } else {
       // Legacy mode: direct URL/token storage
       const isSameOrigin =
         !normalized || normalized === `${location.protocol}//${location.host}`;
 
-      if (isSameOrigin) {
-        clearServerUrl();
-      } else {
-        setServerUrl(normalized);
+      const activeProfileId = getActiveProfileId() ?? undefined;
+      const previousLegacyToken = getAuthToken(activeProfileId);
+      const previousUrlWasExplicit = hasServerUrl();
+      const restoreLegacyState = (): boolean => {
+        const urlRestored = previousUrlWasExplicit
+          ? setServerUrl(initialUrl)
+          : clearServerUrl();
+        const tokenRestored = previousLegacyToken
+          ? setAuthToken(previousLegacyToken, activeProfileId)
+          : clearAuthToken(activeProfileId);
+        return urlRestored && tokenRestored;
+      };
+      let tokenClearedForUrlChange = false;
+      if (urlChanged) {
+        if (!clearAuthToken(activeProfileId)) {
+          restoreLegacyState();
+          setTestState("fail");
+          setTestError(
+            "Unable to clear the old login token; server URL was not changed",
+          );
+          return;
+        }
+        tokenClearedForUrlChange = true;
       }
-
-      if (t) {
-        setAuthToken(t);
-      } else {
-        clearAuthToken();
+      const urlPersisted = isSameOrigin
+        ? clearServerUrl()
+        : setServerUrl(normalized);
+      if (!urlPersisted) {
+        const restored = restoreLegacyState();
+        setTestState("fail");
+        setTestError(
+          restored
+            ? "Unable to persist the server URL in this browser"
+            : "Unable to persist the server URL and restore the old login",
+        );
+        return;
+      }
+      if (
+        !tokenClearedForUrlChange &&
+        (tokenMustBeCleared || !t) &&
+        !clearAuthToken(activeProfileId)
+      ) {
+        const restored = restoreLegacyState();
+        setTestState("fail");
+        setTestError(
+          restored
+            ? "Unable to clear the login token in this browser"
+            : "Unable to clear the login token and restore the previous state",
+        );
+        return;
+      }
+      if (t && !tokenMustBeCleared && !setAuthToken(t, activeProfileId)) {
+        const restored = restoreLegacyState();
+        setTestState("fail");
+        setTestError(
+          restored
+            ? "Unable to persist the login token in this browser"
+            : "Unable to persist the login token and restore the previous state",
+        );
+        return;
       }
 
       if (username) {
@@ -207,19 +394,35 @@ export function ServerSettingsDialog({
   }
 
   function handleReset() {
-    setUrl(`${location.protocol}//${location.host}`);
+    const defaultUrl = `${location.protocol}//${location.host}`;
+    invalidateConnectionTest();
+    latestUrlRef.current = normalizeServerUrl(defaultUrl);
+    setUrl(defaultUrl);
     setToken("");
     setUsername("");
     setPassword("");
   }
 
   async function handleLogout() {
+    const storedProfile = profile?.id
+      ? getProfiles().find((candidate) => candidate.id === profile.id)
+      : getActiveProfile();
+    if (profile?.id && !storedProfile) {
+      clearAuthToken(profile.id);
+      onClose();
+      return;
+    }
+    const targetProfileId =
+      storedProfile?.id ??
+      (profile === undefined ? (getActiveProfileId() ?? undefined) : undefined);
+    const targetServerUrl = storedProfile?.url ?? getServerUrl();
+    const targetToken = getAuthToken(targetProfileId);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
     try {
-      await fetch(`${getServerUrl()}/api/auth/logout`, {
+      await fetch(`${targetServerUrl}/api/auth/logout`, {
         method: "POST",
-        headers: buildAuthHeaders(),
+        headers: targetToken ? { Authorization: `Bearer ${targetToken}` } : {},
         signal: controller.signal,
       });
     } catch {
@@ -227,16 +430,31 @@ export function ServerSettingsDialog({
     } finally {
       clearTimeout(timeout);
     }
-    clearAuthToken();
+    if (targetToken && getAuthToken(targetProfileId) === targetToken) {
+      if (!clearAuthToken(targetProfileId)) {
+        setTestState("fail");
+        setTestError("Unable to clear the login token in this browser");
+        return;
+      }
+    }
     clearAuthUsername();
     setToken("");
     setUsername("");
     setPassword("");
     setTestState("idle");
     setSaved(false);
-    // Reload page to force AuthGuard to lock the app
-    window.location.reload();
+    // Only the active profile needs a full app reload.
+    if (profile === undefined || profile?.id === getActiveProfileId()) {
+      window.location.reload();
+    } else {
+      onClose();
+    }
   }
+
+  const targetProfileId =
+    profile?.id ??
+    (profile === undefined ? (getActiveProfileId() ?? undefined) : undefined);
+  const hasToken = profile !== null && Boolean(getAuthToken(targetProfileId));
 
   return (
     <div
@@ -300,6 +518,8 @@ export function ServerSettingsDialog({
               type="text"
               value={url}
               onChange={(e) => {
+                testRequestIdRef.current += 1;
+                latestUrlRef.current = normalizeServerUrl(e.target.value);
                 setUrl(e.target.value);
                 setTestState("idle");
               }}
@@ -339,7 +559,10 @@ export function ServerSettingsDialog({
                     name="authType"
                     value="basic"
                     checked={authType === "basic"}
-                    onChange={() => setAuthType("basic")}
+                    onChange={() => {
+                      invalidateConnectionTest();
+                      setAuthType("basic");
+                    }}
                     className="cursor-pointer"
                   />
                   Basic Auth
@@ -350,7 +573,10 @@ export function ServerSettingsDialog({
                     name="authType"
                     value="none"
                     checked={authType === "none"}
-                    onChange={() => setAuthType("none")}
+                    onChange={() => {
+                      invalidateConnectionTest();
+                      setAuthType("none");
+                    }}
                     className="cursor-pointer"
                   />
                   No Auth (Dev Mode)
@@ -368,7 +594,10 @@ export function ServerSettingsDialog({
                 <input
                   type="text"
                   value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  onChange={(e) => {
+                    invalidateConnectionTest();
+                    setUsername(e.target.value);
+                  }}
                   placeholder="Username"
                   disabled={isAndroidChromeNativeInputSuppressed}
                   className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2"
@@ -389,6 +618,7 @@ export function ServerSettingsDialog({
                   type="password"
                   value={password}
                   onChange={(e) => {
+                    invalidateConnectionTest();
                     setPassword(e.target.value);
                   }}
                   placeholder="Password"
@@ -457,7 +687,7 @@ export function ServerSettingsDialog({
             >
               Reset to default
             </button>
-            {getAuthToken() && (
+            {hasToken && (
               <button
                 onClick={handleLogout}
                 className="text-xs font-semibold text-red-500 hover:text-red-400 transition-colors"

@@ -11,17 +11,20 @@ import {
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
 import { getTransport } from "@/api/transport.js";
+import { reinitializeTransport } from "@/api/transport-utils.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useWorkspaceStatus } from "@/api/queries.js";
 import {
   getServerUrl,
   buildAuthHeaders,
-  migrateToProfiles,
   getActiveProfile,
+  migrateToProfiles,
+  normalizeServerUrl,
   getAuthToken,
   setAuthToken,
   getProfiles,
 } from "@/api/server-config.js";
+import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 import { WorkspaceSetupWizard } from "@/components/organisms/WorkspaceSetupWizard.js";
 import { TerminalNotificationToastViewport } from "@/components/organisms/TerminalNotificationToastViewport.js";
@@ -125,7 +128,7 @@ function RouteDiagnostics() {
 
 function ServerProfileGuard({ children }: { children: React.ReactNode }) {
   const profiles = getProfiles();
-  const activeProfile = getActiveProfile();
+  const activeProfile = useServerProfile();
   const needsSetup = profiles.length === 0 || !activeProfile;
 
   if (needsSetup) {
@@ -149,23 +152,37 @@ function ServerProfileGuard({ children }: { children: React.ReactNode }) {
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const [autoLoginAttempted, setAutoLoginAttempted] = useState(false);
-  const profile = getActiveProfile();
+  const profile = useServerProfile();
+  const profileId = profile?.id;
+  const profileAuthType = profile?.authType;
+  const profileServerUrl = profile?.url ?? getServerUrl();
+  const profileRevision = JSON.stringify([
+    profileId ?? "",
+    profile ? normalizeServerUrl(profile.url) : "",
+    profileAuthType ?? "",
+    profileId ? (getAuthToken(profileId) ?? "") : "",
+  ]);
+
+  useEffect(() => {
+    setAutoLoginAttempted(false);
+  }, [profileId]);
 
   // Auto-login for "none" auth profiles if no token exists
   useEffect(() => {
+    let cancelled = false;
+
     const attemptAutoLogin = async () => {
       if (autoLoginAttempted) return;
-      if (!profile) return;
-      if (profile.authType !== "none") return;
-      if (getAuthToken()) {
-        setAutoLoginAttempted(true);
+      if (!profileId || profileAuthType !== "none") return;
+      if (getAuthToken(profileId)) {
+        if (!cancelled) setAutoLoginAttempted(true);
         return;
       }
 
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 10000);
-        const res = await fetch(`${getServerUrl()}/api/auth/login`, {
+        const res = await fetch(`${profileServerUrl}/api/auth/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({}),
@@ -173,26 +190,40 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
         });
         clearTimeout(timeout);
         const data = await res.json();
-        if (data.token) {
-          setAuthToken(data.token);
+        const currentProfile = getActiveProfile();
+        const profileStillMatches =
+          currentProfile?.id === profileId &&
+          normalizeServerUrl(currentProfile.url) ===
+            normalizeServerUrl(profileServerUrl);
+        if (!cancelled && profileStillMatches && data.token) {
+          if (!setAuthToken(data.token, profileId)) {
+            logger.warn("AuthGuard", "auto-login token was not persisted", {
+              profileId,
+            });
+          }
         }
       } catch (err) {
-        logger.error("AuthGuard", "auto-login failed", { error: err });
+        if (!cancelled) {
+          logger.error("AuthGuard", "auto-login failed", { error: err });
+        }
       }
-      setAutoLoginAttempted(true);
+      if (!cancelled) setAutoLoginAttempted(true);
     };
 
     void attemptAutoLogin();
-  }, [profile, autoLoginAttempted]);
+    return () => {
+      cancelled = true;
+    };
+  }, [autoLoginAttempted, profileAuthType, profileId, profileServerUrl]);
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["auth-status"],
+    queryKey: ["auth-status", profileId, profileRevision],
     queryFn: async () => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10000);
       try {
-        const res = await fetch(`${getServerUrl()}/api/auth/status`, {
-          headers: buildAuthHeaders(),
+        const res = await fetch(`${profileServerUrl}/api/auth/status`, {
+          headers: buildAuthHeaders(profileId),
           signal: controller.signal,
         });
         clearTimeout(timeout);
@@ -208,10 +239,10 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
     },
     retry: false,
     // Wait for auto-login attempt if needed
-    enabled: !profile || profile.authType !== "none" || autoLoginAttempted,
+    enabled: !profile || profileAuthType !== "none" || autoLoginAttempted,
   });
 
-  if (isLoading || (profile?.authType === "none" && !autoLoginAttempted)) {
+  if (isLoading || (profileAuthType === "none" && !autoLoginAttempted)) {
     return <>{LOADING_FALLBACK}</>;
   }
 
@@ -221,7 +252,12 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
         <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-2 text-xs text-red-400">
           {error instanceof Error ? error.message : "Connection failed"}
         </div>
-        <ServerSettingsDialog open={true} onClose={() => {}} closable={false} />
+        <ServerSettingsDialog
+          open={true}
+          onClose={() => {}}
+          closable={false}
+          profile={profile}
+        />
       </div>
     );
   }
@@ -282,6 +318,15 @@ export function DamHopperApp() {
   useBrowserShortcutGuard();
   useBrowserContextMenuSuppression();
   const qc = useQueryClient();
+  const activeProfile = useServerProfile();
+  const activeProfileId = activeProfile?.id;
+  const activeProfileUrl = activeProfile?.url;
+  const activeProfileConnectionKey = JSON.stringify([
+    activeProfileId ?? "",
+    activeProfileUrl ? normalizeServerUrl(activeProfileUrl) : "",
+    activeProfile?.authType ?? "",
+    activeProfileId ? (getAuthToken(activeProfileId) ?? "") : "",
+  ]);
   const routerBasename = normalizeRouterBasename(import.meta.env.BASE_URL);
 
   useEffect(() => {
@@ -299,11 +344,16 @@ export function DamHopperApp() {
   }, []);
 
   useEffect(() => {
+    reinitializeTransport(activeProfileUrl, activeProfileId);
+    // Cancel old-server work before resetting shared query keys. This keeps
+    // late responses from an old profile from repopulating current views.
+    void qc.cancelQueries().then(() => qc.resetQueries());
+
     const transport = getTransport();
     return transport.onEvent("workspace:changed", () => {
       void qc.invalidateQueries({ queryKey: ["workspace-status"] });
     });
-  }, [qc]);
+  }, [activeProfileConnectionKey, activeProfileId, activeProfileUrl, qc]);
 
   return (
     <EncryptProvider>
