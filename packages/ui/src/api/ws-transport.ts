@@ -862,6 +862,15 @@ function channelToEndpoint(
     // System
     case "system:metrics":
       return { method: "GET", url: "/api/system/metrics" };
+    case "system:resourceSnapshot":
+      return { method: "GET", url: "/api/system/resources/v1/snapshot" };
+    case "system:resourceAlerts": {
+      const limit = (data as { limit?: number } | undefined)?.limit ?? 20;
+      return {
+        method: "GET",
+        url: `/api/system/resources/v1/alerts?limit=${encodeURIComponent(String(limit))}`,
+      };
+    }
 
     // Usage analytics (REST only; never sent to the terminal WebSocket).
     case "usage:summary": {

@@ -1,230 +1,170 @@
-import { useEffect, useRef, useState } from "react";
-import { Activity, AlertTriangle, Loader2 } from "lucide-react";
-import { useHostMetrics } from "@/api/queries.js";
-import type { DiskMetrics, HostMetrics } from "@/api/client.js";
-import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
+import { useEffect, useId, useRef, useState } from "react";
+import { Activity, AlertTriangle, Loader2, X } from "lucide-react";
 import {
-  formatCelsius,
-  formatPercent,
-  formatUsage,
-} from "@/lib/host-metrics-format.js";
+  useHostMetrics,
+  useHostResourceAlerts,
+  useHostResourceSnapshot,
+} from "@/api/queries.js";
+import { HostResourceDiagnosis } from "@/components/organisms/HostResourceDiagnosis.js";
+import { useHostResourceAlertPresentation } from "@/hooks/use-host-resource-alert-presentation.js";
+import { formatAlertState, severityClass } from "@/lib/host-resource-state.js";
 import { cn } from "@/lib/utils.js";
 
 export function HostResourcePopover() {
-  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const panelId = useId();
   const [open, setOpen] = useState(false);
-  const [panelTop, setPanelTop] = useState(64);
-  const isCompactWorkspace = useCompactWorkspace();
-  const { data, isLoading, isError } = useHostMetrics(open);
+  const snapshot = useHostResourceSnapshot();
+  const alerts = useHostResourceAlerts(true);
+  const legacyMetrics = useHostMetrics(open);
+  const alert = snapshot.data?.alert;
+  const alertPresentation = useHostResourceAlertPresentation(alert);
+
+  const closeAndRestoreFocus = () => {
+    setOpen(false);
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  };
 
   useEffect(() => {
-    if (!open || !isCompactWorkspace) {
-      return;
-    }
+    if (!open) return;
 
-    const updatePanelPosition = () => {
-      const rect = buttonRef.current?.getBoundingClientRect();
-      if (!rect) {
+    const focusFrame = requestAnimationFrame(() => panelRef.current?.focus());
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node))
+        closeAndRestoreFocus();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeAndRestoreFocus();
         return;
       }
-
-      setPanelTop(Math.round(rect.bottom + 8));
+      if (event.key === "Tab") {
+        const focusable = panelRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        );
+        const first = focusable?.[0];
+        const last = focusable?.[focusable.length - 1];
+        if (!first || !last) return;
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
     };
 
-    updatePanelPosition();
-    window.addEventListener("resize", updatePanelPosition);
-    window.addEventListener("scroll", updatePanelPosition, true);
-
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
     return () => {
-      window.removeEventListener("resize", updatePanelPosition);
-      window.removeEventListener("scroll", updatePanelPosition, true);
+      cancelAnimationFrame(focusFrame);
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
     };
-  }, [open, isCompactWorkspace]);
+  }, [open]);
+
+  const alertLabel = alert ? formatAlertState(alert.state) : "Sampling host";
+  const hasConcern = alert && alert.state !== "healthy";
 
   return (
-    <div className="relative">
+    <div ref={rootRef} className="relative">
       <button
-        ref={buttonRef}
-        onClick={() => setOpen((value) => !value)}
+        ref={triggerRef}
+        type="button"
+        onClick={() =>
+          setOpen((value) => {
+            if (!value) alertPresentation.markRead();
+            return !value;
+          })
+        }
         className={cn(
-          "p-1.5 rounded-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors",
-          open
-            ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
-            : "hover:bg-[var(--color-surface-2)]",
+          "relative inline-flex min-h-11 min-w-11 items-center justify-center rounded-sm text-[var(--color-text-muted)] transition-colors",
+          "hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-2 focus-visible:outline-[var(--color-ring)]",
+          open && "bg-[var(--color-primary)]/15 text-[var(--color-primary)]",
         )}
-        title="Host resources"
-        aria-label="Host resources"
+        title={`Host resources: ${alertLabel}`}
+        aria-label={`Host resources: ${alertLabel}`}
+        aria-haspopup="dialog"
         aria-expanded={open}
+        aria-controls={panelId}
       >
-        <Activity size={16} />
+        <Activity aria-hidden="true" size={16} />
+        {(hasConcern || alertPresentation.unreadCount > 0) && (
+          <span
+            aria-label={`${alertPresentation.unreadCount} unread host incidents`}
+            className={cn(
+              "absolute -right-0.5 -top-0.5 min-w-4 rounded-full px-1 text-center text-[9px] font-bold leading-4 text-white shadow-sm",
+              alertPresentation.unreadCount > 0
+                ? "bg-[var(--color-danger)]"
+                : cn("bg-current", severityClass(alert?.severity ?? "info")),
+            )}
+          >
+            {alertPresentation.unreadCount > 0
+              ? Math.min(alertPresentation.unreadCount, 99)
+              : "!"}
+          </span>
+        )}
       </button>
 
       {open && (
-        <div
-          className="fixed left-1/2 top-0 z-[60] max-h-[calc(100vh-5rem)] w-[min(20rem,calc(100vw-1rem))] -translate-x-1/2 overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 shadow-xl glass-card-blur sm:absolute sm:left-auto sm:right-0 sm:top-9 sm:w-80 sm:translate-x-0"
-          style={isCompactWorkspace ? { top: panelTop } : undefined}
+        <section
+          ref={panelRef}
+          id={panelId}
+          role="dialog"
+          aria-modal="true"
+          tabIndex={-1}
+          aria-labelledby={`${panelId}-title`}
+          className="glass-card-blur fixed left-1/2 top-[calc(var(--top-nav-height)+0.75rem)] z-[75] flex max-h-[min(38rem,calc(100dvh-var(--top-nav-height)-var(--safe-area-bottom)-1.5rem))] w-[min(26rem,calc(100vw-1rem-var(--safe-area-left)-var(--safe-area-right)))] -translate-x-1/2 flex-col overflow-hidden rounded-md border border-[var(--color-border)] shadow-2xl outline-none sm:absolute sm:left-auto sm:right-0 sm:top-12 sm:w-[26rem] sm:translate-x-0"
         >
-          {isLoading && (
-            <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--color-primary)]" />
-              Sampling host
+          <header className="flex items-start justify-between gap-3 border-b border-[var(--color-border)] px-3 py-2.5">
+            <div className="min-w-0">
+              <h2
+                id={`${panelId}-title`}
+                className="text-xs font-bold text-[var(--color-text)]"
+              >
+                Host resources
+              </h2>
+              <p className="truncate text-[10px] text-[var(--color-text-muted)]">
+                Read-only monitoring and diagnosis
+              </p>
             </div>
-          )}
+            <button
+              type="button"
+              onClick={closeAndRestoreFocus}
+              className="rounded p-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-2 focus-visible:outline-[var(--color-ring)]"
+              aria-label="Close host resources"
+            >
+              <X aria-hidden="true" size={15} />
+            </button>
+          </header>
 
-          {isError && (
-            <div className="flex items-center gap-2 text-xs text-[var(--color-danger)]">
-              <AlertTriangle className="h-3.5 w-3.5" />
-              Metrics unavailable
-            </div>
-          )}
-
-          {data && <MetricsRows metrics={data} />}
-        </div>
+          <div className="min-h-0 overflow-y-auto p-3">
+            {snapshot.isLoading && (
+              <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--color-primary)]" />
+                Sampling host
+              </div>
+            )}
+            {snapshot.isError && (
+              <div className="flex items-center gap-2 text-xs text-[var(--color-danger)]">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                Resource snapshot unavailable
+              </div>
+            )}
+            {snapshot.data && (
+              <HostResourceDiagnosis
+                snapshot={snapshot.data}
+                alerts={alerts.data ?? []}
+                legacyMetrics={legacyMetrics.data}
+              />
+            )}
+          </div>
+        </section>
       )}
     </div>
   );
-}
-
-function MetricsRows({ metrics }: { metrics: HostMetrics }) {
-  const temperatures = metrics.temperatures ?? [];
-  const disks = getDiskRows(metrics);
-  const hottestTemperature = temperatures.reduce<
-    HostMetrics["temperatures"][number] | null
-  >((hottest, reading) => {
-    if (!hottest || reading.celsius > hottest.celsius) return reading;
-    return hottest;
-  }, null);
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] pb-2">
-        <div className="min-w-0">
-          <p className="truncate text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-muted)]">
-            {metrics.hostname || "Host"}
-          </p>
-          <p className="truncate text-[10px] text-[var(--color-text-muted)]/70">
-            {metrics.osName || "System"}
-          </p>
-        </div>
-        <span className="shrink-0 text-[10px] text-[var(--color-text-muted)]/70">
-          {new Date(metrics.sampledAt).toLocaleTimeString()}
-        </span>
-      </div>
-
-      <MetricRow
-        label="CPU"
-        percent={metrics.cpu.usagePercent}
-        detail={`${metrics.cpu.logicalCoreCount} logical${metrics.cpu.physicalCoreCount ? ` / ${metrics.cpu.physicalCoreCount} physical` : ""}`}
-      />
-      <MetricRow
-        label="Memory"
-        percent={metrics.memory.usagePercent}
-        detail={formatUsage(
-          metrics.memory.usedBytes,
-          metrics.memory.totalBytes,
-        )}
-      />
-      {disks.map((disk, index) => (
-        <MetricRow
-          key={`${disk.mountPoint || disk.name}-${index}`}
-          label={disks.length === 1 ? "Disk" : formatDiskLabel(disk, index)}
-          percent={disk.usagePercent}
-          detail={formatDiskDetail(disk, disks.length === 1)}
-        />
-      ))}
-      {hottestTemperature && (
-        <TemperatureRow
-          value={formatCelsius(hottestTemperature.celsius)}
-          detail={formatTemperatureDetail(temperatures)}
-        />
-      )}
-
-      {metrics.cpu.loadAverage && (
-        <p className="truncate text-[10px] text-[var(--color-text-muted)]/70">
-          Load {metrics.cpu.loadAverage.one.toFixed(2)} /{" "}
-          {metrics.cpu.loadAverage.five.toFixed(2)} /{" "}
-          {metrics.cpu.loadAverage.fifteen.toFixed(2)}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function getDiskRows(metrics: HostMetrics): DiskMetrics[] {
-  return metrics.disks?.length ? metrics.disks : [metrics.disk];
-}
-
-function formatDiskLabel(disk: DiskMetrics, index: number): string {
-  if (disk.mountPoint === "/") return "Root disk";
-  return disk.mountPoint || disk.name || `Disk ${index + 1}`;
-}
-
-function formatDiskDetail(disk: DiskMetrics, includeMountPoint: boolean): string {
-  const mountPoint = disk.mountPoint || disk.name || "disk";
-  const name = disk.name && disk.name !== disk.mountPoint ? ` · ${disk.name}` : "";
-  if (includeMountPoint) {
-    return `${formatUsage(disk.usedBytes, disk.totalBytes)} on ${mountPoint}${name}`;
-  }
-  return `${formatUsage(disk.usedBytes, disk.totalBytes)}${name}`;
-}
-
-function TemperatureRow({ value, detail }: { value: string; detail: string }) {
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-text)]">
-          Temperature
-        </span>
-        <span className="text-[11px] font-bold text-[var(--color-primary)]">
-          {value}
-        </span>
-      </div>
-      <p className="truncate text-[10px] text-[var(--color-text-muted)]">
-        {detail}
-      </p>
-    </div>
-  );
-}
-
-function MetricRow({
-  label,
-  percent,
-  detail,
-}: {
-  label: string;
-  percent: number;
-  detail: string;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-3">
-        <span
-          className="min-w-0 flex-1 truncate text-[10px] font-bold uppercase tracking-widest text-[var(--color-text)]"
-          title={label}
-        >
-          {label}
-        </span>
-        <span className="text-[11px] font-bold text-[var(--color-primary)]">
-          {formatPercent(percent)}
-        </span>
-      </div>
-      <div className="h-1.5 overflow-hidden rounded-sm bg-[var(--color-surface-2)]">
-        <div
-          className="h-full rounded-sm bg-[var(--color-primary)] transition-all duration-300"
-          style={{ width: formatPercent(percent) }}
-        />
-      </div>
-      <p className="truncate text-[10px] text-[var(--color-text-muted)]" title={detail}>
-        {detail}
-      </p>
-    </div>
-  );
-}
-
-function formatTemperatureDetail(
-  temperatures: HostMetrics["temperatures"],
-): string {
-  return temperatures
-    .map((reading) => `${reading.label} ${formatCelsius(reading.celsius)}`)
-    .join(" / ");
 }
