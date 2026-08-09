@@ -23,9 +23,10 @@ tauri = { version = "=2.11.5", features = ["unstable"] }
 [target.'cfg(windows)'.dependencies]
 webview2-com = "=0.38.2"
 windows = { version = "0.61", features = ["Win32_Foundation"] }
+windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO"] }
+russh = { version = "=0.62.5", default-features = false, features = ["ring"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
-russh = { version = "=0.62.5", default-features = false, features = ["ring"] }
-tokio = { version = "1", features = ["io-util", "net", "sync", "time"] }
 
 [workspace]
