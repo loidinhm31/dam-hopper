@@ -1,11 +1,15 @@
 # Stage 1: Build Rust server
 # vendored feature bundles libgit2 + openssl statically — no system libs needed at runtime
-FROM rust:1.82-slim AS server-builder
+# Keep the builder at or above the locked dependency MSRV (currently Rust 1.95
+# for sysinfo) so a fresh release build cannot select an unsupported toolchain.
+FROM rust:1.97.1-bookworm AS server-builder
 
 WORKDIR /build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
+    make \
+    perl \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
@@ -16,6 +20,7 @@ RUN mkdir src && echo 'fn main() {}' > src/main.rs \
     && rm -rf src
 
 COPY server/src ./src
+COPY server/assets ./assets
 RUN touch src/main.rs && cargo build --release --features vendored
 
 # Stage 2: Build web SPA
@@ -26,7 +31,7 @@ WORKDIR /build
 # pnpm version kept in sync with .github/workflows — update both when upgrading
 RUN corepack enable && corepack prepare pnpm@9 --activate
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/web/package.json ./apps/web/
 COPY apps/browser-extension/package.json ./apps/browser-extension/
 COPY packages/browser-bridge/package.json ./packages/browser-bridge/
