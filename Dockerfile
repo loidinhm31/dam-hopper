@@ -46,7 +46,8 @@ COPY packages/shared ./packages/shared
 COPY packages/ui ./packages/ui
 RUN pnpm build
 
-# Stage 3: Runtime — pinned digest for reproducible builds
+# Stage 3: Runtime. Base tags are explicit but mutable; pin image digests before
+# publishing a release when byte-for-byte reproduction is required.
 FROM debian:bookworm-20250317-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
