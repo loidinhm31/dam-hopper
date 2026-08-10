@@ -1,13 +1,20 @@
-import type { AlertSeverity, AlertState, Availability } from "@/api/client.js";
+import type {
+  AlertSeverity,
+  AlertState,
+  Availability,
+  ResourceAlertState,
+} from "@/api/client.js";
 import { formatBytes } from "@/lib/host-metrics-format.js";
 
-const ALERT_LABELS: Record<AlertState, string> = {
+const ALERT_LABELS: Record<AlertState | ResourceAlertState, string> = {
   healthy: "Healthy",
   reclaimableCacheHigh: "High reclaimable cache",
   elevatedNoPressure: "Elevated, no pressure",
   memoryPressure: "Memory pressure",
   oomRisk: "OOM risk",
   limitedData: "Limited data",
+  temperatureHigh: "High temperature",
+  diskFull: "Disk nearly full",
 };
 
 const AVAILABILITY_LABELS: Record<Availability["state"], string> = {
@@ -18,7 +25,9 @@ const AVAILABILITY_LABELS: Record<Availability["state"], string> = {
   stale: "Stale data",
 };
 
-export function formatAlertState(state: AlertState): string {
+export function formatAlertState(
+  state: AlertState | ResourceAlertState,
+): string {
   return ALERT_LABELS[state];
 }
 

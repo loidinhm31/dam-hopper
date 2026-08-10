@@ -40,7 +40,8 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Host Resource Monitor Restoration Alerts (2026-08-11)
 
-- **Phase 01 — [COMPLETED 2026-08-11 03:00:34 +07:00]**: monitor signal/keyed alert model accepted. Validation: 58 focused Rust tests, `cargo check` all targets, scoped `rustfmt`, and diff check passed. **Medium residual risk:** normalized host samples are not capped before `BTreeMap` allocation; fix before pending Phase 02. Phases 02–04 remain pending. [Plan](../plans/260811-0145-host-resource-monitor-restoration-alerts/plan.md).
+- **Phase 01 — [COMPLETED 2026-08-11 03:00:34 +07:00]**: monitor signal/keyed alert model accepted. Validation: 58 focused Rust tests, `cargo check` all targets, scoped `rustfmt`, and diff check passed.
+- **Phase 02 — [COMPLETED 2026-08-11]**: added bounded, additive `currentAlerts` for concurrent thermal/disk incidents without changing the legacy memory alert; merged memory and resource incidents into newest-first bounded history; published compatible `host:alertChanged` payloads; and added strict client validation, old-server omission compatibility, and per-target recovery handling. Accepted UI caveat: a resource-only critical badge can be info-colored after acknowledgement. [Plan](../plans/260811-0145-host-resource-monitor-restoration-alerts/plan.md).
 
 ### Linux Host Resource Monitoring and Gated Remediation (2026-08-08)
 

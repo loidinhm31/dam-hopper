@@ -21,6 +21,32 @@ Shared runtime libraries:
 - **Tailwind CSS v4** for styling
 - **xterm.js** for terminal rendering
 
+## Host-resource alert presentation
+
+**Locations:** `packages/ui/src/components/organisms/HostResourcePopover.tsx`,
+`HostResourceDiagnosis.tsx`, `packages/ui/src/hooks/use-sse.ts`, and
+`use-host-resource-alert-presentation.ts`.
+
+The top-nav popover reads the legacy memory `alert` and additive `currentAlerts`
+from the authoritative snapshot, while the diagnosis panel renders the bounded,
+mixed alert-history response. Concurrent thermal and disk incidents are tracked
+by `incidentId`; a recovery event with `resolvedAt` removes only that target and
+the history retains its resolved record. `resolvedAt: 0` is still a recovery.
+
+The transport listener accepts legacy memory events and resource events on the
+same `host:alertChanged` channel. It validates each resource kind, state,
+finite timestamp/value, required bounded text, and exact evidence keys before
+updating the query cache; invalid payloads do nothing. It then refetches
+snapshot and history, so REST corrects missed events, reconnects, and profile
+switches. A current server's explicit empty `currentAlerts` array clears
+resource presentation; an omitted field is treated as an older-server response
+and does not falsely clear an active incident.
+
+Opening the popover acknowledges the presentation count but does not dismiss an
+active resource incident. Known accepted UI caveat: after acknowledgement, a
+resource-only critical badge can render with the info color; its active count
+and underlying incident state remain correct.
+
 ## Error Boundary and stale lazy-chunk recovery
 
 **Location:** `packages/ui/src/components/ui/ErrorBoundary.tsx`

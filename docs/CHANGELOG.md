@@ -1,3 +1,14 @@
+## 2026-08-11
+
+- **Host-resource restoration alerts (Phase 02).** Added additive snapshot
+  `currentAlerts` for concurrent thermal/disk incidents without changing the
+  legacy memory alert, newest-first mixed incident history, and compatible
+  `host:alertChanged` resource payloads. The client validates event shape and
+  nested evidence before cache updates, preserves active incidents if an older
+  server omits the additive field, and removes only the recovered target. Known
+  accepted UI caveat: after acknowledgement, a resource-only critical badge can
+  render info-colored while its active count and incident state remain correct.
+
 ## 2026-08-05
 
 - **Codex OTel-only Usage refactor.** Removed terminal Usage work from PTY production paths and

@@ -1,5 +1,92 @@
-import { describe, expect, it, vi } from "vitest";
-import { handleIpcStatusChange, handleWorkspaceChanged } from "./use-sse.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostResourceSnapshotV1 } from "../api/client.js";
+
+const getTransport = vi.hoisted(() => vi.fn());
+
+vi.mock("../api/transport.js", () => ({ getTransport }));
+
+import {
+  applyHostResourceAlert,
+  asHostResourceAlertChangedEvent,
+  handleIpcStatusChange,
+  initTransportListeners,
+  invalidateHostResourceQueries,
+  resetTransportListeners,
+  subscribeIpc,
+  handleWorkspaceChanged,
+} from "./use-sse.js";
+
+function validAlertEvent() {
+  return {
+    type: "host:alertChanged" as const,
+    timestamp: 1,
+    data: {
+      state: "memoryPressure",
+      severity: "critical",
+      updatedAt: 1,
+      durationSeconds: 1,
+      scope: "host",
+      confidence: "high",
+      threshold: "available memory",
+      nextAction: "Inspect workload.",
+      evidence: { cgroupOomDelta: false, availablePercent: 12 },
+    },
+  };
+}
+
+function validTemperatureAlertEvent() {
+  return {
+    type: "host:alertChanged" as const,
+    timestamp: 1,
+    data: {
+      kind: "temperature",
+      key: "temperature:thermal_zone0",
+      state: "temperatureHigh",
+      severity: "critical",
+      incidentId: "host-resource-incident-1",
+      openedAt: 1,
+      updatedAt: 1,
+      durationSeconds: 0,
+      scope: "temperature:thermal_zone0",
+      threshold: "celsius>60C for 5 minutes",
+      nextAction: "Inspect cooling.",
+      evidence: {
+        temperatureSource: "thermal_zone0",
+        temperatureLabel: "package",
+        temperatureCelsius: 60.1,
+      },
+    },
+  };
+}
+
+function eventTransport() {
+  const callbacks = new Map<string, (data: unknown) => void>();
+  const statusCallbacks = new Set<(status: string) => void>();
+  return {
+    onEvent: vi.fn((channel: string, callback: (data: unknown) => void) => {
+      callbacks.set(channel, callback);
+      return () => callbacks.delete(channel);
+    }),
+    emit(channel: string, data: unknown) {
+      callbacks.get(channel)?.(data);
+    },
+    getStatus: vi.fn(() => "connecting"),
+    onStatusChange: vi.fn((callback: (status: string) => void) => {
+      statusCallbacks.add(callback);
+      return () => statusCallbacks.delete(callback);
+    }),
+    emitStatus(status: string) {
+      statusCallbacks.forEach((callback) => callback(status));
+    },
+  };
+}
+
+beforeEach(() => {
+  resetTransportListeners();
+  vi.clearAllMocks();
+});
+
+afterEach(() => resetTransportListeners());
 
 describe("handleIpcStatusChange", () => {
   it("invalidates terminal sessions on connected status", () => {
@@ -60,5 +147,207 @@ describe("handleWorkspaceChanged", () => {
     expect(queryClient.removeQueries.mock.invocationCallOrder[0]).toBeLessThan(
       queryClient.invalidateQueries.mock.invocationCallOrder[0]!,
     );
+  });
+});
+
+describe("asHostResourceAlertChangedEvent", () => {
+  it("accepts only typed host alert event payloads", () => {
+    expect(asHostResourceAlertChangedEvent(validAlertEvent())).not.toBeNull();
+    expect(
+      asHostResourceAlertChangedEvent({
+        ...validAlertEvent(),
+        data: {
+          ...validAlertEvent().data,
+          incidentId: null,
+          openedAt: null,
+          evidence: {
+            cgroupOomDelta: false,
+            availablePercent: null,
+            reclaimablePercent: null,
+            psiSomeAvg10: null,
+            psiFullAvg10: null,
+          },
+        },
+      }),
+    ).not.toBeNull();
+    expect(
+      asHostResourceAlertChangedEvent({
+        type: "host:alertChanged",
+        timestamp: 1,
+        data: {},
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts a complete additive temperature event and rejects invalid nested evidence", () => {
+    expect(
+      asHostResourceAlertChangedEvent(validTemperatureAlertEvent()),
+    ).not.toBeNull();
+    for (const data of [
+      { ...validTemperatureAlertEvent().data, key: "" },
+      {
+        ...validTemperatureAlertEvent().data,
+        evidence: { temperatureSource: "thermal_zone0", temperatureCelsius: NaN },
+      },
+      {
+        ...validTemperatureAlertEvent().data,
+        evidence: {
+          ...validTemperatureAlertEvent().data.evidence,
+          unexpected: "untrusted",
+        },
+      },
+    ]) {
+      expect(
+        asHostResourceAlertChangedEvent({ ...validTemperatureAlertEvent(), data }),
+      ).toBeNull();
+    }
+  });
+
+  it("rejects malformed or out-of-scope data before it can refresh resource state", () => {
+    for (const event of [
+      { ...validAlertEvent(), timestamp: Number.NaN },
+      {
+        ...validAlertEvent(),
+        data: { ...validAlertEvent().data, scope: "container" },
+      },
+      {
+        ...validAlertEvent(),
+        data: { ...validAlertEvent().data, confidence: "unknown" },
+      },
+      {
+        ...validAlertEvent(),
+        data: { ...validAlertEvent().data, durationSeconds: -1 },
+      },
+      {
+        ...validAlertEvent(),
+        data: {
+          ...validAlertEvent().data,
+          evidence: { cgroupOomDelta: false, psiSomeAvg10: 101 },
+        },
+      },
+      {
+        ...validAlertEvent(),
+        data: { ...validAlertEvent().data, incidentId: 7 },
+      },
+      {
+        ...validAlertEvent(),
+        data: { ...validAlertEvent().data, openedAt: -1 },
+      },
+      {
+        ...validAlertEvent(),
+        data: { ...validAlertEvent().data, nextAction: "x".repeat(257) },
+      },
+    ]) {
+      expect(asHostResourceAlertChangedEvent(event)).toBeNull();
+    }
+  });
+});
+
+describe("resource alert cache updates", () => {
+  it("keeps concurrent target alerts and removes only the recovered target", () => {
+    const temperature = validTemperatureAlertEvent().data;
+    const disk = {
+      ...temperature,
+      kind: "disk" as const,
+      key: "disk:/data",
+      state: "diskFull" as const,
+      incidentId: "host-resource-incident-2",
+      scope: "disk:/data",
+      evidence: {
+        diskMountPoint: "/data",
+        diskName: "data",
+        diskUsagePercent: 95,
+      },
+    };
+    const snapshot = { currentAlerts: [] } as HostResourceSnapshotV1;
+    const withTemperature = applyHostResourceAlert(snapshot, temperature)!;
+    const withBoth = applyHostResourceAlert(withTemperature, disk)!;
+    expect(withBoth.currentAlerts).toHaveLength(2);
+
+    const recovered = applyHostResourceAlert(withBoth, {
+      ...temperature,
+      resolvedAt: 0,
+    })!;
+    expect(recovered.currentAlerts).toEqual([disk]);
+  });
+
+  it("caps valid resource alert cache updates", () => {
+    const updated = Array.from({ length: 51 }, (_, index) => index).reduce(
+      (snapshot, index) =>
+        applyHostResourceAlert(snapshot, {
+          ...validTemperatureAlertEvent().data,
+          incidentId: `host-resource-incident-${index}`,
+          key: `temperature:thermal_zone${index}`,
+          scope: `temperature:thermal_zone${index}`,
+        })!,
+      { currentAlerts: [] } as HostResourceSnapshotV1,
+    );
+
+    expect(updated.currentAlerts).toHaveLength(50);
+  });
+});
+
+describe("host resource transport listeners", () => {
+  it("moves alert delivery to the replacement profile transport without retaining the old listener", () => {
+    const first = eventTransport();
+    const second = eventTransport();
+    const delivered = vi.fn();
+    const unsubscribe = subscribeIpc("host:alertChanged", delivered);
+
+    getTransport.mockReturnValue(first);
+    initTransportListeners();
+    first.emit("host:alertChanged", validAlertEvent().data);
+    expect(delivered).toHaveBeenCalledOnce();
+
+    resetTransportListeners();
+    getTransport.mockReturnValue(second);
+    initTransportListeners();
+    first.emit("host:alertChanged", validAlertEvent().data);
+    expect(delivered).toHaveBeenCalledOnce();
+
+    second.emit("host:alertChanged", validAlertEvent().data);
+    expect(delivered).toHaveBeenCalledTimes(2);
+    unsubscribe();
+  });
+
+  it("moves status delivery to the replacement profile transport", () => {
+    const first = eventTransport();
+    const second = eventTransport();
+    const statuses = vi.fn();
+    const unsubscribe = subscribeIpc("transport:status", (event) =>
+      statuses(event.data),
+    );
+
+    getTransport.mockReturnValue(first);
+    initTransportListeners();
+    expect(statuses).toHaveBeenLastCalledWith("connecting");
+    first.emitStatus("connected");
+    expect(statuses).toHaveBeenLastCalledWith("connected");
+
+    resetTransportListeners();
+    getTransport.mockReturnValue(second);
+    initTransportListeners();
+    const callsAfterReplacement = statuses.mock.calls.length;
+    first.emitStatus("disconnected");
+    expect(statuses).toHaveBeenCalledTimes(callsAfterReplacement);
+
+    second.emitStatus("error");
+    expect(statuses).toHaveBeenLastCalledWith("error");
+    unsubscribe();
+  });
+});
+
+describe("invalidateHostResourceQueries", () => {
+  it("invalidates both cached read-only resource endpoints", () => {
+    const invalidateQueries = vi.fn();
+
+    invalidateHostResourceQueries({ invalidateQueries });
+
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["system", "resource-snapshot"],
+    });
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["system", "resource-alerts"],
+    });
   });
 });

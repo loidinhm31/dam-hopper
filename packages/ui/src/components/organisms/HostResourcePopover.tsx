@@ -21,7 +21,11 @@ export function HostResourcePopover() {
   const alerts = useHostResourceAlerts(true);
   const legacyMetrics = useHostMetrics(open);
   const alert = snapshot.data?.alert;
-  const alertPresentation = useHostResourceAlertPresentation(alert);
+  const currentAlerts = snapshot.data?.currentAlerts ?? [];
+  const alertPresentation = useHostResourceAlertPresentation(
+    alert,
+    snapshot.data?.currentAlerts,
+  );
 
   const closeAndRestoreFocus = () => {
     setOpen(false);
@@ -68,8 +72,14 @@ export function HostResourcePopover() {
     };
   }, [open]);
 
-  const alertLabel = alert ? formatAlertState(alert.state) : "Sampling host";
-  const hasConcern = alert && alert.state !== "healthy";
+  const alertLabel =
+    currentAlerts.length > 0
+      ? `${currentAlerts.length} active resource incident${currentAlerts.length === 1 ? "" : "s"}`
+      : alert
+        ? formatAlertState(alert.state)
+        : "Sampling host";
+  const hasConcern =
+    currentAlerts.length > 0 || (alert != null && alert.state !== "healthy");
 
   return (
     <div ref={rootRef} className="relative">

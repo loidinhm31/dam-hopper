@@ -241,7 +241,7 @@ export function HostResourceDiagnosis({
                   {formatAlertState(incident.state)}
                 </span>
                 <span className="shrink-0 text-[var(--color-text-muted)]">
-                  {incident.resolvedAt
+                  {incident.resolvedAt != null
                     ? "resolved"
                     : `${incident.durationSeconds}s`}
                 </span>
