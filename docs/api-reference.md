@@ -115,8 +115,11 @@ Bearer token required. JSON body is limited to 64 KiB and uses camelCase:
 {
   "terminalId": "pty-uuid",
   "selection": {
-    "version": 1, "tag": "button", "role": "button",
-    "accessibleName": "Save", "text": "Save",
+    "version": 1,
+    "tag": "button",
+    "role": "button",
+    "accessibleName": "Save",
+    "text": "Save",
     "attributes": { "data-testid": "save" },
     "locator": "button[data-testid=save]",
     "bounds": { "x": 10, "y": 20, "width": 80, "height": 32 }
@@ -322,8 +325,10 @@ safe ranges at runtime.
 Phase 07 validation covered Rust format/check/tests, vendored server tests, UI
 unit/type/browser tests, lint, web/server builds, and a `linux/amd64` Docker
 build. The no-tunnel container shutdown measurement is not a claim about active
-tunnel teardown. A real non-Linux runtime result, staged canary, rollback
-rehearsal, and release-owner approval remain open release gates.
+tunnel teardown. The release owner approved Phase 07 completion with the
+still-unobserved Windows CI result, canary-host profiling, staged
+monitor/in-app-alert canary, and rollback rehearsal deferred as post-release
+work; none of those checks is passed evidence.
 
 ## Codex Usage Analytics
 
@@ -1489,6 +1494,7 @@ Request body:
 ```
 
 On switch:
+
 - Configuration is reloaded from the specified path
 - File API sandbox is reinitialized from project roots in the new config
 - All PTY sessions are disposed
