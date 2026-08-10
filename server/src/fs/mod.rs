@@ -7,6 +7,7 @@ pub mod mutate;
 pub mod ops;
 pub mod sandbox;
 pub mod upload;
+pub mod video_ticket;
 pub mod watcher;
 
 pub use decrypt::{decrypt_and_write, decrypt_blob, DecryptResult};
@@ -20,6 +21,11 @@ pub use ops::{
 };
 pub use sandbox::{ProjectSandbox, WorkspaceSandbox};
 pub use upload::{UploadState, MAX_UPLOAD_BYTES};
+pub(crate) use video_ticket::VideoTicketIssue;
+pub use video_ticket::{
+    is_supported_video, VideoFileVersion, VideoStreamTicketStore, VideoTicketPurpose,
+    VideoTicketRecord,
+};
 pub use watcher::FsWatcherManager;
 
 use std::collections::HashMap;

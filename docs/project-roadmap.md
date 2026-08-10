@@ -2,6 +2,12 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Explorer Browser Video Playback and Direct Download (2026-08-10)
+
+- **Phase 01 — [COMPLETED 2026-08-10 11:51:39 +07:00]**: purpose-bound playback/download ticket issuance and lifecycle delivered: authenticated opaque capabilities, sandboxed resource/version binding, independent purpose isolation, deterministic 256-ticket capacity and 30-minute idle/8-hour absolute expiry, authenticated revoke, and workspace-change invalidation.
+- **Phase 02 — [PENDING/DEFERRED]**: shared bounded Range stream and inline/attachment response policy remain pending.
+- **Phases 03–04 — [PENDING]**: Explorer browser playback/download UX and protocol/browser/resource-safety release gates remain pending.
+
 ## Status Overview
 
 - **Current Phase:** Session Model Delegation Audit complete (Phase 07 released 2026-08-01)
@@ -19,6 +25,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 - **Phases 01–02 — [COMPLETED 2026-08-08]**: session-only terminal pin protection, shared Traditional/Runtime controls, Runtime contrast/framing, focused DOM coverage, and implementation review completed.
 - Manual Chromium contrast/reparent, PTY identity, resize/refit, and host/renderer checks remain documented follow-ups; no fresh validation commands were rerun during tracking update.
+
+### Deferred: terminal runtime activity (2026-08-09)
+
+- The runtime-activity implementation from `0ad51a5` was removed after it was implicated in a Codex terminal-notification regression.
+- Revisit this only as a separate PTY-lifecycle design: preserve raw terminal notification signals through shutdown/replacement, order persistence removal after reader drain, and add race coverage for an OSC notification emitted while a session is being replaced or removed.
 
 ### Floating Terminal Key Controls (2026-08-06)
 
