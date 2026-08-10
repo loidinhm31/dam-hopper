@@ -1252,6 +1252,15 @@ sanitized state. They cannot enqueue or execute an action. The existing
 resource APIs are versioned siblings. Phase 03 moves it to the shared monitor's
 cached projection without changing its response shape.
 
+The release image is built explicitly for `linux/amd64` and uses pinned base
+image digests. Phase 07 evidence measures clean shutdown only for a server with
+no active tunnel sessions; active tunnel disposal has a separate three-second
+child-process grace period. The full release command set includes Rust
+format/check/tests, UI unit/type/browser tests, lint, web/server builds, and the
+Docker build. Non-Linux runtime evidence, staged canary, rollback rehearsal, and
+release-owner approval remain external gates; this documentation does not imply
+release sign-off.
+
 ### Snapshot boundaries
 
 `HostResourceSnapshotV1` is serialized in camelCase and reports explicit

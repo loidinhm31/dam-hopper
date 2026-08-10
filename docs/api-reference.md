@@ -319,6 +319,12 @@ snake_case keys: `light_sample_seconds` (5), `process_sample_seconds` (15),
 `psi_some_percent` (10), and `psi_full_percent` (1). Values are clamped to
 safe ranges at runtime.
 
+Phase 07 validation covered Rust format/check/tests, vendored server tests, UI
+unit/type/browser tests, lint, web/server builds, and a `linux/amd64` Docker
+build. The no-tunnel container shutdown measurement is not a claim about active
+tunnel teardown. A real non-Linux runtime result, staged canary, rollback
+rehearsal, and release-owner approval remain open release gates.
+
 ## Codex Usage Analytics
 
 Protected, aggregate-only analytics for the local Codex telemetry store. All routes require
