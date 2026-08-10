@@ -1,19 +1,16 @@
-use std::path::PathBuf;
-
 use axum::http::{
     header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE},
-    Method, StatusCode,
+    Method,
 };
 use axum::{
     extract::DefaultBodyLimit,
     middleware,
-    routing::{any, delete, get, patch, post, put},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     limit::RequestBodyLimitLayer,
-    services::{ServeDir, ServeFile},
 };
 
 /// 10 MB — generous for config/settings payloads, blocks accidental multi-GB uploads.
@@ -23,20 +20,12 @@ use crate::state::AppState;
 
 use super::{
     agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
-    fs as fs_api, git, git_diff, host_actions, port_forward as port_forward_api, settings, ssh,
-    system, terminal, tunnel, usage, usage_sessions, workspace, ws,
+    fs as fs_api, fs_video, git, git_diff, port_forward as port_forward_api, settings, ssh, system,
+    terminal, tunnel, usage, usage_sessions, workspace, ws,
 };
 
 /// Build the full Axum router with auth middleware, CORS, and all routes.
 pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
-    build_router_with_web_dir(state, allowed_origins, static_web_dir())
-}
-
-pub(crate) fn build_router_with_web_dir(
-    state: AppState,
-    allowed_origins: Vec<String>,
-    web_dir: PathBuf,
-) -> Router {
     let cors = build_cors(&allowed_origins);
 
     // Public routes — no auth required
@@ -229,39 +218,6 @@ pub(crate) fn build_router_with_web_dir(
         .route("/api/ports", get(port_forward_api::list_ports))
         // Host system metrics
         .route("/api/system/metrics", get(system::get_metrics))
-        .route(
-            "/api/system/resources/v1/snapshot",
-            get(system::get_snapshot),
-        )
-        .route("/api/system/resources/v1/alerts", get(system::get_alerts))
-        // Deferred host-action scaffolding stays fail-closed and out of Phase 07 scope.
-        .route(
-            "/api/system/actions/v1/capabilities",
-            get(host_actions::capabilities),
-        )
-        .route(
-            "/api/system/actions/v1/intents",
-            post(host_actions::create_intent)
-                .layer(RequestBodyLimitLayer::new(8 * 1024))
-                .route_layer(middleware::from_fn(host_actions::require_action_request)),
-        )
-        .route(
-            "/api/system/actions/v1/intents/{id}/approve",
-            post(host_actions::approve_intent)
-                .layer(RequestBodyLimitLayer::new(8 * 1024))
-                .route_layer(middleware::from_fn(host_actions::require_action_request)),
-        )
-        .route(
-            "/api/system/actions/v1/executions",
-            post(host_actions::create_execution)
-                .layer(RequestBodyLimitLayer::new(8 * 1024))
-                .route_layer(middleware::from_fn(host_actions::require_action_request)),
-        )
-        .route(
-            "/api/system/actions/v1/executions/{id}",
-            get(host_actions::get_execution),
-        )
-        .route("/api/system/actions/v1/audit", get(host_actions::get_audit))
         // Diagnostics
         .route(
             "/api/diagnostics/export",
@@ -352,6 +308,10 @@ pub(crate) fn build_router_with_web_dir(
         .route("/api/fs/read", get(fs_api::read))
         .route("/api/fs/stat", get(fs_api::stat))
         .route("/api/fs/download", get(fs_api::download))
+        .route(
+            "/api/fs/video/tickets",
+            post(fs_video::issue_ticket).delete(fs_video::revoke_ticket),
+        )
         .route("/api/fs/language-files", get(fs_api::language_files))
         .route("/api/fs/search", get(fs_api::search))
         .route("/api/fs/search-paths", get(fs_api::search_paths))
@@ -364,22 +324,9 @@ pub(crate) fn build_router_with_web_dir(
         .merge(public)
         .merge(protected)
         .merge(ide_routes)
-        // Preserve API 404 semantics; the SPA fallback is only for browser paths.
-        .route("/api", any(|| async { StatusCode::NOT_FOUND }))
-        .route("/api/", any(|| async { StatusCode::NOT_FOUND }))
-        .route("/api/{*path}", any(|| async { StatusCode::NOT_FOUND }))
-        .fallback_service(
-            ServeDir::new(&web_dir).not_found_service(ServeFile::new(web_dir.join("index.html"))),
-        )
         .layer(cors)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
-}
-
-fn static_web_dir() -> PathBuf {
-    std::env::var_os("DAM_HOPPER_WEB_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/opt/dam-hopper/web"))
 }
 
 fn build_cors(allowed_origins: &[String]) -> CorsLayer {

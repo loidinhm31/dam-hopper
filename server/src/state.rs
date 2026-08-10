@@ -13,12 +13,11 @@ use crate::config::{DamHopperConfig, GlobalConfig};
 use crate::crypto::{DamHopperOpaqueSuite, OpaqueRegistrations};
 use crate::diagnostics::DiagnosticStore;
 use crate::error::AppError;
-use crate::fs::FsSubsystem;
-use crate::host_actions::HostActionService;
+use crate::fs::{FsSubsystem, VideoStreamTicketStore};
 use crate::port_forward::PortForwardManager;
 use crate::pty::{BroadcastEventSink, PtySessionManager};
 use crate::ssh::SshCredStore;
-use crate::system::HostResourceMonitor;
+use crate::system::HostMetricsSampler;
 use crate::telemetry::worker::TelemetryHandle;
 use crate::telemetry::{codex_otlp::CodexExporterManager, TelemetryRuntime};
 use crate::tunnel::TunnelSessionManager;
@@ -58,6 +57,10 @@ pub struct AppState {
     /// Workspace-scoped filesystem subsystem (sandbox + watcher in Phase 02).
     /// Clone is cheap — Arc-backed.
     pub fs: FsSubsystem,
+    /// Memory-only, purpose-bound capabilities for browser video streaming.
+    pub video_stream_tickets: VideoStreamTicketStore,
+    /// Serializes sandbox replacement against video ticket issuance.
+    pub workspace_context_guard: Arc<RwLock<()>>,
     /// MongoDB Database, if configured
     pub db: Option<mongodb::Database>,
     /// Dev mode: skip authentication checks
@@ -72,11 +75,8 @@ pub struct AppState {
     /// In-memory OPAQUE registration records (identifier → ServerRegistration).
     /// Lost on server restart — acceptable for encrypt-in-transit model.
     pub opaque_registrations: OpaqueRegistrations,
-    /// Single background owner for host snapshots, alerts, and legacy metrics.
-    pub host_resource_monitor: HostResourceMonitor,
-    /// Memory-only intent/approval lifecycle. The only production executor is
-    /// deliberately unavailable until an enrolled helper exists in Phase 05.
-    pub host_actions: HostActionService,
+    /// Host metrics sampler with retained sysinfo state for CPU deltas.
+    pub host_metrics: HostMetricsSampler,
     /// Backend diagnostics ring and JSONL persistence handle.
     pub diagnostics: DiagnosticStore,
     /// Short-lived browser selection bundles, isolated from workspace roots.
@@ -137,18 +137,6 @@ impl AppState {
         telemetry_runtime: TelemetryRuntime,
     ) -> anyhow::Result<Self> {
         pty_manager.set_diagnostics(diagnostics.clone());
-        let workspace_dir = Arc::new(RwLock::new(workspace_dir));
-        let host_resource_monitor = HostResourceMonitor::system(
-            Arc::clone(&workspace_dir),
-            event_sink.clone(),
-            config.server.host_resources.clone(),
-        );
-        let host_action_config_dir = config
-            .config_path
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let host_actions = HostActionService::new(host_action_config_dir);
 
         // Production safety guards for no-auth mode
         if no_auth {
@@ -187,7 +175,7 @@ impl AppState {
             .map_err(|error| anyhow::anyhow!("browser debug artifacts unavailable: {error}"))?;
 
         Ok(Self {
-            workspace_dir,
+            workspace_dir: Arc::new(RwLock::new(workspace_dir)),
             config: Arc::new(RwLock::new(config)),
             global_config: Arc::new(RwLock::new(global_config)),
             pty_manager,
@@ -197,14 +185,15 @@ impl AppState {
             jwt_secret: Arc::new(jwt_secret),
             ssh_creds: Arc::new(RwLock::new(None)),
             fs,
+            video_stream_tickets: VideoStreamTicketStore::new(),
+            workspace_context_guard: Arc::new(RwLock::new(())),
             db,
             no_auth,
             tunnel_manager,
             port_forward_manager,
             opaque_server_setup: Arc::new(opaque_server_setup),
             opaque_registrations: OpaqueRegistrations::default(),
-            host_resource_monitor,
-            host_actions,
+            host_metrics: HostMetricsSampler::new(),
             diagnostics,
             browser_debug_artifacts,
             telemetry: telemetry_runtime.handle_cell(),

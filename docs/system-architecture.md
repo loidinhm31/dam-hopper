@@ -25,6 +25,7 @@
 │  │  ├─ agent_store: Arc<AgentStoreService>                │
 │  │  ├─ event_sink: BroadcastEventSink                     │
 │  │  ├─ fs: FsSubsystem                                    │
+│  │  ├─ video_stream_tickets: VideoStreamTicketStore       │
 │  │  ├─ ssh_creds: Arc<RwLock<Option<...>>>               │
 │  │  ├─ auth_token: Arc<String>                            │
 │  ├─ opaque_server_setup: Arc<ServerSetup<...>>            │
@@ -35,6 +36,7 @@
 │  │  ├─ /api/ports → Port detection list                   │
 │  │  ├─ /api/git/* → Clone/push/status/branch/root ops     │
 │  │  ├─ /api/fs/* → [conditional] List/read/stat (per-proj)│
+│  │  ├─ /api/fs/video/* → Ticket issuance/revocation (P1) │
 │  │  ├─ /api/agent-store/* → Distribution/import           │
 │  │  ├─ /api/workspace/* → Config switching                │
 │  │  ├─ /api/usage/* → Codex OTel usage (opt-in)           │
@@ -764,6 +766,90 @@ pub struct PersistedSession {
 - Seeded/reinitialized from config projects on startup and workspace switch
 - Cheap clone pattern
 
+### Explorer video playback and download (Phase 1 complete; streaming Phase 2)
+
+Phase 1 delivers the authenticated, purpose-bound ticket boundary for future
+Explorer playback and download. Ticket issuance and revocation are shipped;
+streaming remains Phase 2.
+
+The following sequence is the Phase 2 target design; the stream API and browser
+integration are not shipped in Phase 1.
+
+```mermaid
+sequenceDiagram
+    participant E as Explorer and EditorTabs
+    participant V as VideoPreview
+    participant A as Authenticated ticket API
+    participant S as Ticketed stream API
+    participant F as ProjectSandbox and file
+    E->>A: POST project, path, and purpose with Bearer auth
+    A->>F: Resolve sandbox path and stat regular file
+    F-->>A: Canonical resource metadata
+    A-->>E: Opaque resource and purpose scoped URL
+    alt Playback purpose
+        E->>V: Open recognized video extension
+        V->>S: GET playback URL with Range
+        S-->>V: Inline 206 stream for play and seek
+    else Download purpose
+        E->>S: Navigate to download URL
+        S-->>E: Attachment stream handled by browser
+    end
+    S->>F: Revalidate ticket, sandbox path, and metadata
+    F-->>S: Seekable bounded file reader
+```
+
+`POST /api/fs/video/tickets` stays behind normal authentication. It accepts only
+a configured project, project-relative path, and closed `playback | download`
+purpose. It resolves through the existing `ProjectSandbox`, verifies a regular
+video candidate, and returns a random opaque ticket URL. `DELETE
+/api/fs/video/tickets` revokes a ticket idempotently. The in-memory ticket store is
+capped at 256 live tickets, prunes expired entries before admission, and binds each
+ticket to one canonical project resource, one immutable purpose, and issuance
+metadata. Tickets are never persisted into editor state, browser storage,
+diagnostics, or logs. They use a 30-minute idle expiry capped by an eight-hour
+absolute lifetime; lookup refreshes idle expiry without extending the absolute
+deadline. Workspace reinitialization and configuration changes revoke all tickets
+and advance the generation, preventing issuance across a changed context.
+
+Phase 2 — not shipped in Phase 1: `GET|HEAD /api/fs/video/stream/{ticket}` will be
+authorized by that scoped ticket, not by a long-lived credential in the URL. It
+will revalidate the resource before opening
+it. A no-range `GET` streams the representation as `200`; a valid single byte range
+returns `206`, exact `Content-Length`, and `Content-Range`; an unsatisfiable or
+multi-range request returns `416` with `Content-Range: bytes */size`. Responses set
+`Accept-Ranges: bytes`, media `Content-Type`, private cache policy, and stable
+metadata validators. Disposition comes only from the stored purpose: `inline` for
+playback or a sanitized RFC 5987 `attachment` filename for download. The client
+cannot upgrade a playback ticket into a download ticket. The handler uses checked
+range arithmetic, async seek, a bounded reader, and Hyper backpressure. Client
+disconnect drops the body and file without a detached producer. No filesystem or
+ticket-store lock is held while streaming.
+
+Phase 2 — not shipped in Phase 1: the frontend will route recognized video
+extensions to `VideoPreview` before generic binary or large-text tiering. The
+player will request a fresh ticket on mount, use one
+native `<video controls preload="metadata" playsInline>` element, and clears its
+source on tab switch or unmount. Download actions request a separate download
+ticket, then activate a temporary anchor so browser download handling consumes the
+stream directly without `fetch().blob()`. Playback and download can run concurrently
+and expire or revoke independently. Extension and MIME are routing hints only;
+codec failure becomes an actionable unsupported-media state. V1 targets the browser
+host; packaged Tauri playback/download and CSP verification are deferred. V1 does
+not add thumbnails, custom controls, Media Source Extensions, HLS/DASH, codec probing,
+or transcoding.
+
+Key invariants:
+
+- Workspace sandbox and authentication checks happen before any file bytes leave.
+- Browser URLs never contain the profile JWT, username, absolute path, or raw file content.
+- Memory remains proportional to stream chunk size and active streams, never file size.
+- One ticket selects one resource and one purpose; it cannot enumerate projects,
+  change paths, or switch between inline and attachment behavior.
+- Playback never depends on download completion; each action owns a separate ticket
+  and response stream over the same validated file.
+- File replacement or metadata drift invalidates the prior ticket/range sequence.
+- Unsupported containers/codecs fail visibly without falling back to a 1–3 GB blob read.
+
 ### git/
 
 Git operations and repository discovery helpers.
@@ -845,6 +931,74 @@ The first version is extension-based and limited to `.rs`, `.js`, `.jsx`, `.ts`,
 `.tsx`, and `.java`. It does not provide parser/LSP semantics, symbols/references,
 automatic rescans, persistent indexes, streaming progress, or caller-configurable
 language families.
+
+### Semantic code navigation (planned)
+
+Semantic navigation is an editor capability separate from the Explorer language
+filter. Monaco exposes Go to Definition, Go to Implementation, Find References,
+modifier-click, and keyboard/context-menu actions through registered language
+providers. A typed client adapter sends project-relative document and navigation
+messages over a dedicated authenticated WebSocket. The backend translates those
+messages to standard LSP JSON-RPC over stdio for an allowlisted language server.
+V1 targets `rust-analyzer`, `typescript-language-server`, and Eclipse JDT LS; the
+registry stays generic so later languages add descriptors rather than UI forks.
+
+DamHopper does not embed a VS Code workbench or general extension host for this
+feature. VS Code language extensions ultimately use the same language-server
+processes, while an extension host would add incompatible contribution APIs,
+Node/browser runtime assumptions, marketplace installation, and a broader code
+execution boundary. A real extension host remains a separate future product
+decision, not a prerequisite for semantic navigation.
+
+```mermaid
+sequenceDiagram
+    participant M as Monaco provider
+    participant C as Semantic client
+    participant W as Authenticated semantic WS
+    participant R as LSP registry and supervisor
+    participant L as Allowlisted language server
+    M->>C: Open model with project-relative path and version
+    C->>W: document/open or incremental document/change
+    W->>R: Resolve project, language, and server descriptor
+    R->>L: Lazy start, initialize, and replay open documents
+    M->>C: Definition, implementation, or references request
+    C->>W: Navigation request with cancellation token
+    W->>L: Standard LSP request over stdio
+    L-->>W: Locations plus progress or capability state
+    W-->>C: Bounded project-relative targets
+    C-->>M: Jump directly or show a multi-target result list
+```
+
+The supervisor reuses one process per authenticated client, configured project,
+and server descriptor. Opening the first supported Monaco model may prewarm that
+server, but no workspace-wide language scan or server fan-out occurs. Interactive
+requests have bounded queues and deadlines; superseded requests propagate
+`$/cancelRequest`, and late responses are discarded by document/request version.
+After an inactivity grace period, warm processes become LRU eviction candidates
+even if tabs remain open. A later request restarts the process and replays current
+open document snapshots. Per-client and global process limits prevent a workspace
+with many languages from starting every server at once.
+
+The browser never selects an executable, arguments, root URI, or absolute path.
+Server descriptors are built in or loaded only from trusted global configuration;
+commands are spawned without a shell and with a sanitized environment. Every
+incoming project/path is resolved through `ProjectSandbox`. LSP `file://` URIs and
+host paths stay behind the backend adapter, which returns only normalized
+project-relative targets and bounded display metadata.
+
+Key invariants:
+
+- Semantic navigation starts on supported editor demand; Explorer scans and
+  filesystem events never start a language server.
+- One language-server failure degrades only that project/language and never blocks
+  file editing, terminal I/O, saving, or other WebSocket traffic.
+- Unsaved Monaco content is synchronized by version and is never persisted by the
+  semantic transport; reconnect/restart replays only currently open documents.
+- Warm navigation latency, cold-start/indexing time, queue wait, cancellation,
+  process RSS/CPU, crashes, and evictions are measured without logging source text
+  or absolute paths.
+- Missing binaries and unsupported capabilities produce explicit setup/degraded
+  states; the server never downloads or executes a project-supplied language tool.
 
 ### Multi-Server Profile Management (Phase 2)
 
