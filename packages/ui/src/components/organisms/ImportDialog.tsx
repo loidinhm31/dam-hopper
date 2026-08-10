@@ -109,7 +109,7 @@ export function ImportDialog({ onClose }: Props) {
       ? "Import from Git Repository"
       : "Import from Local Directory";
   const inputPlaceholder =
-    source === "repo" ? "https://github.com/org/repo" : "/home/user/devkit";
+    source === "repo" ? "https://github.com/org/repo" : "/home/user/evcrate";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
