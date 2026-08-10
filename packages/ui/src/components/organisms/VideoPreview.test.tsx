@@ -57,6 +57,19 @@ async function mount() {
   });
 }
 
+async function render(path: string) {
+  await act(async () => {
+    root?.render(
+      <VideoPreview
+        project="demo"
+        path={path}
+        fileName={path.split("/").pop() ?? path}
+        mime="video/webm"
+      />,
+    );
+  });
+}
+
 describe("VideoPreview", () => {
   it("attaches a playback ticket directly to one native, non-autoplay player", async () => {
     const revoke = vi.fn().mockResolvedValue(undefined);
@@ -109,5 +122,95 @@ describe("VideoPreview", () => {
     expect(document.querySelector("video")?.getAttribute("src")).toContain(
       "playback-token",
     );
+  });
+
+  it("revokes a delayed stale playback ticket instead of replacing the active source", async () => {
+    let resolveFirst: ((value: unknown) => void) | undefined;
+    const first = new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+    const staleRevoke = vi.fn();
+    const activeRevoke = vi.fn();
+    issueVideoTicket
+      .mockImplementationOnce(() => first)
+      .mockResolvedValueOnce({
+        purpose: "playback",
+        url: "https://api.test/api/fs/video/stream/active-token",
+        expiresAt: 1,
+        revoke: activeRevoke,
+      });
+
+    await mount();
+    await render("clips/active.webm");
+    await act(async () => {
+      resolveFirst?.({
+        purpose: "playback",
+        url: "https://api.test/api/fs/video/stream/stale-token",
+        expiresAt: 1,
+        revoke: staleRevoke,
+      });
+      await Promise.resolve();
+    });
+
+    expect(staleRevoke).toHaveBeenCalledOnce();
+    expect(document.querySelector("video")?.getAttribute("src")).toContain(
+      "active-token",
+    );
+    expect(activeRevoke).not.toHaveBeenCalled();
+  });
+
+  it("maps codec errors to a retryable fallback without exposing the source", async () => {
+    issueVideoTicket.mockResolvedValue({
+      purpose: "playback",
+      url: "https://api.test/api/fs/video/stream/playback-token",
+      expiresAt: 1,
+      revoke: vi.fn(),
+    });
+    await mount();
+    const player = document.querySelector("video") as HTMLVideoElement;
+    Object.defineProperty(player, "currentSrc", {
+      configurable: true,
+      value: "https://api.test/api/fs/video/stream/playback-token",
+    });
+    Object.defineProperty(player, "error", {
+      configurable: true,
+      value: { code: 3 },
+    });
+    await act(async () => player.dispatchEvent(new Event("error")));
+
+    expect(document.body.textContent).toContain("cannot decode");
+    expect(document.body.textContent).not.toContain("playback-token");
+    const retry = [...document.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Retry"),
+    );
+    await act(async () => retry?.click());
+    expect(issueVideoTicket).toHaveBeenCalledTimes(2);
+  });
+
+  it("debounces repeated download clicks while playback remains mounted", async () => {
+    issueVideoTicket.mockResolvedValue({
+      purpose: "playback",
+      url: "https://api.test/api/fs/video/stream/playback-token",
+      expiresAt: 1,
+      revoke: vi.fn(),
+    });
+    let resolveDownload: (() => void) | undefined;
+    startVideoDownload.mockImplementation(
+      () => new Promise<void>((resolve) => (resolveDownload = resolve)),
+    );
+    await mount();
+    const download = [...document.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Download"),
+    );
+    await act(async () => {
+      download?.click();
+      download?.click();
+    });
+
+    expect(startVideoDownload).toHaveBeenCalledOnce();
+    expect(document.querySelector("video")?.getAttribute("src")).toContain(
+      "playback-token",
+    );
+    await act(async () => resolveDownload?.());
   });
 });

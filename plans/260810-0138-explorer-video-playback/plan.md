@@ -1,7 +1,7 @@
 ---
 title: "Explorer Browser Video Playback and Direct Download"
 description: "Add low-latency native playback and direct streaming download for 1–3 GB Explorer videos without whole-file browser buffering."
-status: in_progress
+status: completed
 priority: P2
 effort: 38h
 branch: main
@@ -29,7 +29,7 @@ Explorer opens six recognized video containers in a native browser player and do
 | 1 | Purpose-bound ticket store and issuance | Completed | 100% | 7h | [phase-01](./phase-01-purpose-bound-ticket-store-and-issuance.md) |
 | 2 | Shared Range stream and response policy | Completed | 100% | 11h | [phase-02](./phase-02-shared-range-stream-and-response-policy.md) |
 | 3 | Explorer browser playback and direct-download UX | Completed | 100% | 10h | [phase-03](./phase-03-explorer-browser-playback-and-direct-download-ux.md) |
-| 4 | Protocol, browser, and resource-safety gates | Pending | 0% | 10h | [phase-04](./phase-04-protocol-browser-and-resource-safety-gates.md) |
+| 4 | Protocol, browser, and resource-safety gates | Completed | 100% | 10h | [phase-04](./phase-04-protocol-browser-and-resource-safety-gates.md) |
 
 ## Dependencies
 
@@ -46,15 +46,15 @@ Explorer opens six recognized video containers in a native browser player and do
 
 ## Validation Summary
 
-**Revalidated:** 2026-08-10 — Phases 1–3 implementation and focused validation complete; Phase 04 resource-safety/protocol gates remain pending.
+**Revalidated:** 2026-08-10 15:25:44 +07:00 — Phases 1–4 implementation and focused validation complete; browser-host scope validated. `pnpm check` remains blocked by missing `TAURI_SIGNING_PRIVATE_KEY`. Final reviewer noted the stale-ticket Chromium assertion accepts any `DELETE`; this caveat was reviewed and approved by the user.
 
 ## Action Items
 
 - [x] Implement Phase 01 purpose-bound ticket store and issuance.
 - [x] Implement Phase 02 shared Range stream and response policy.
 - [x] Implement Phase 03 Explorer browser playback and direct-download UX.
-- [ ] Implement Phase 04 protocol, browser, and resource-safety gates.
-- [ ] Keep Tauri support and performance tuning as separately justified follow-ups, not v1 release claims.
+- [x] Implement Phase 04 protocol, browser, and resource-safety gates.
+- [x] Keep Tauri support and performance tuning as separately justified follow-ups, not v1 release claims.
 
 ## Unresolved questions
 

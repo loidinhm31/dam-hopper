@@ -1,13 +1,16 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const config = vi.hoisted(() => ({
+  profile: { id: "profile-a", url: "https://api.test/" },
   getActiveProfile: vi.fn(() => ({
-    id: "profile-a",
-    url: "https://api.test/",
+    id: config.profile.id,
+    url: config.profile.url,
   })),
-  getAuthToken: vi.fn(() => "secret-token"),
+  getAuthToken: vi.fn((profileId?: string) =>
+    profileId === "profile-b" ? "new-token" : "secret-token",
+  ),
   getServerUrl: vi.fn(() => "https://fallback.test"),
   normalizeServerUrl: vi.fn((url: string) => url.replace(/\/$/, "")),
 }));
@@ -15,6 +18,14 @@ const config = vi.hoisted(() => ({
 vi.mock("./server-config.js", () => config);
 
 import { issueVideoTicket, VideoTicketError } from "./video-tickets.js";
+
+beforeEach(() => {
+  config.profile = { id: "profile-a", url: "https://api.test/" };
+  config.getActiveProfile.mockImplementation(() => config.profile);
+  config.getAuthToken.mockImplementation((profileId?: string) =>
+    profileId === "profile-b" ? "new-token" : "secret-token",
+  );
+});
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -67,17 +78,15 @@ describe("issueVideoTicket", () => {
   it("rejects purpose and stream-path manipulation without leaking server content", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          new Response(
-            JSON.stringify({
-              ...issued("download"),
-              streamPath: "https://other.test/steal",
-            }),
-            { status: 201 },
-          ),
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            ...issued("download"),
+            streamPath: "https://other.test/steal",
+          }),
+          { status: 201 },
         ),
+      ),
     );
 
     await expect(
@@ -96,5 +105,113 @@ describe("issueVideoTicket", () => {
     await expect(
       issueVideoTicket("project", "clips/demo.webm", "download"),
     ).rejects.toMatchObject<Partial<VideoTicketError>>({ code: "HTTP_429" });
+  });
+
+  it("omits authorization when the issuing profile has no token", async () => {
+    config.getAuthToken.mockReturnValueOnce(null);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify(issued("download")), { status: 201 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await issueVideoTicket("project", "clips/demo.webm", "download");
+
+    const options = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(options.headers).not.toHaveProperty("Authorization");
+    expect(options.body).toBe(
+      JSON.stringify({
+        project: "project",
+        path: "clips/demo.webm",
+        purpose: "download",
+      }),
+    );
+  });
+
+  it("turns a caller cancellation into a fixed error code", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new DOMException("aborted", "AbortError")),
+    );
+
+    await expect(
+      issueVideoTicket(
+        "project",
+        "clips/demo.webm",
+        "playback",
+        controller.signal,
+      ),
+    ).rejects.toMatchObject<Partial<VideoTicketError>>({ code: "ABORTED" });
+  });
+
+  it("rejects malformed capability paths without exposing a response body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            ...issued("playback"),
+            streamPath: "/api/fs/video/stream/opaque_token?filename=secret",
+          }),
+          { status: 201 },
+        ),
+      ),
+    );
+
+    await expect(
+      issueVideoTicket("project", "clips/demo.webm", "playback"),
+    ).rejects.toMatchObject<Partial<VideoTicketError>>({
+      code: "INVALID_RESPONSE",
+    });
+  });
+
+  it("uses the original profile URL and authorization when revoking playback", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(issued("playback")), { status: 201 }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ticket = await issueVideoTicket(
+      "project",
+      "clips/demo.webm",
+      "playback",
+    );
+    config.profile = { id: "profile-b", url: "https://new-api.test/" };
+    if (ticket.purpose === "playback") await ticket.revoke();
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "https://api.test/api/fs/video/tickets",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+  });
+
+  it("never includes server response canaries in its fixed errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("private ticket-canary clips/demo.webm", {
+          status: 500,
+        }),
+      ),
+    );
+
+    const error = await issueVideoTicket(
+      "project",
+      "clips/demo.webm",
+      "playback",
+    ).catch((reason: unknown) => reason as Error);
+    expect(error.message).not.toContain("private");
+    expect(error.message).not.toContain("ticket-canary");
+    expect(error.message).not.toContain("clips/demo.webm");
   });
 });

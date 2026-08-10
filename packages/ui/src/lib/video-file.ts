@@ -16,8 +16,12 @@ export type VideoMimeType =
 
 /** Returns a MIME hint for an exact final extension, or undefined for non-video files. */
 export function videoMimeType(name: string): VideoMimeType | undefined {
-  const extension = name.trim().split(".").at(-1)?.toLowerCase();
-  if (!extension || extension === name.trim().toLowerCase()) return undefined;
+  const fileName = name.trim().split("/").at(-1) ?? "";
+  const dot = fileName.lastIndexOf(".");
+  // Match Path::extension semantics: a dotfile has no file extension, while
+  // dots in directory names never affect the final filename's classification.
+  if (dot <= 0 || dot === fileName.length - 1) return undefined;
+  const extension = fileName.slice(dot + 1).toLowerCase();
   return VIDEO_MIME_BY_EXTENSION[
     extension as keyof typeof VIDEO_MIME_BY_EXTENSION
   ];

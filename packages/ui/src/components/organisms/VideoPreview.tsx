@@ -84,32 +84,36 @@ export function VideoPreview({
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const downloadPendingRef = useRef(false);
 
-  const teardownPlayback = useCallback(() => {
-    issueControllerRef.current?.abort();
-    issueControllerRef.current = null;
+  const teardownPlayback = useCallback(
+    (videoOverride: HTMLVideoElement | null = videoRef.current) => {
+      issueControllerRef.current?.abort();
+      issueControllerRef.current = null;
 
-    const video = videoRef.current;
-    if (video) {
-      video.pause();
-      video.removeAttribute("src");
-      // load() cancels a pending native request after removing the source.
-      try {
-        video.load();
-      } catch {
-        // A detached/jsdom media element may not implement load().
+      const video = videoOverride;
+      if (video) {
+        video.pause();
+        video.removeAttribute("src");
+        // load() cancels a pending native request after removing the source.
+        try {
+          video.load();
+        } catch {
+          // A detached/jsdom media element may not implement load().
+        }
       }
-    }
 
-    sourceGenerationRef.current = 0;
-    sourceUrlRef.current = null;
-    const oldPlayback = playbackRef.current;
-    playbackRef.current = null;
-    revokePlayback(oldPlayback);
-  }, []);
+      sourceGenerationRef.current = 0;
+      sourceUrlRef.current = null;
+      const oldPlayback = playbackRef.current;
+      playbackRef.current = null;
+      revokePlayback(oldPlayback);
+    },
+    [],
+  );
 
   useEffect(() => {
     const profileVersion = getProfileChangeVersion();
     const generation = ++generationRef.current;
+    const cleanupVideo = videoRef.current;
     // The previous effect cleanup normally ran first; this is also safe when
     // React replays effects in development StrictMode.
     teardownPlayback();
@@ -161,11 +165,9 @@ export function VideoPreview({
 
     return () => {
       if (generationRef.current === generation) generationRef.current += 1;
-      teardownPlayback();
+      teardownPlayback(cleanupVideo);
     };
   }, [path, project, retryToken, teardownPlayback]);
-
-  useEffect(() => () => teardownPlayback(), [teardownPlayback]);
 
   useEffect(
     () =>
