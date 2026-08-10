@@ -103,6 +103,20 @@ resource budget are acceptable. In containers, treat the reported data as that
 container's namespace view. Cgroup v1 and non-Linux deep metrics are expected
 to show unsupported rather than a fabricated zero.
 
+Before promoting a Linux canary, run the collector-only profiler from the
+release checkout and attach its one-line JSON result to the change record:
+
+```bash
+bash scripts/profile-host-resource-deep-scan.sh 100 /path/to/workspace
+```
+
+It measures CPU only while deep collection runs, the largest per-collection
+wall time, retained RSS delta over the requested iterations, snapshot size,
+and deadline counts. Compare the CPU and wall-time peaks with the configured
+deep-sampling interval and 150 ms process deadline, and keep retained RSS below
+the 5 MiB Phase 03 budget. This does not replace a real non-Linux CI run, staged
+canary, rollback rehearsal, or release-owner sign-off.
+
 If deep collection regresses, roll back to the recorded prior image digest (or
 release binary) while retaining `GET /api/system/metrics`. Confirm the legacy
 endpoint remains authenticated and cached, the browser diagnosis shows its

@@ -62,6 +62,11 @@ jobs:
         with:
           workspaces: server
 
+      # The unsupported envelope is selected at compile time on Windows; run
+      # the test suite here so release validation has a real non-Linux runtime.
+      - name: Run server tests on Windows
+        run: cd server && cargo test --features vendored
+
       - name: Build release binary
         run: cd server && cargo build --release --features vendored
 

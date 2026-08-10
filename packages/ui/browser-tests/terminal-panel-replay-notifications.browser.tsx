@@ -86,6 +86,7 @@ vi.mock("@/api/transport.js", () => ({
 vi.mock("@/lib/terminal-registry.js", () => ({
   registerTerminal: () => ({}),
   removeTerminal: vi.fn(),
+  terminalRegistry: { get: () => undefined },
 }));
 vi.mock("@/lib/terminal-find-controller.js", () => ({
   TerminalFindController: class {
