@@ -2619,10 +2619,7 @@ async fn usage_settings_retry_collector_failure_restores_previous_runtime_and_co
     )
     .await;
     assert_eq!(retry.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        state.config.read().await.server.telemetry,
-        previous_config
-    );
+    assert_eq!(state.config.read().await.server.telemetry, previous_config);
     assert_eq!(
         std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap(),
         previous_file
@@ -3771,9 +3768,10 @@ async fn video_ticket_capacity_returns_retryable_structured_error() {
 }
 
 #[tokio::test]
-async fn workspace_reinitialization_revokes_every_video_ticket() {
+async fn workspace_reinitialization_revokes_every_media_ticket() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("clip.webm"), b"metadata-only").unwrap();
+    std::fs::write(tmp.path().join("cover.png"), b"metadata-only").unwrap();
     let state = make_state_with_project(&tmp);
     let issued = post_json(
         state.clone(),
@@ -3792,6 +3790,7 @@ async fn workspace_reinitialization_revokes_every_video_ticket() {
     )
     .unwrap();
     let ticket = issued["ticket"].as_str().unwrap().to_owned();
+    let image_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
 
     let reinitialized = super::workspace::init_workspace(
         axum::extract::State(state.clone()),
@@ -3805,6 +3804,10 @@ async fn workspace_reinitialization_revokes_every_video_ticket() {
     assert!(state
         .video_stream_tickets
         .lookup_and_touch(&ticket)
+        .is_none());
+    assert!(state
+        .image_stream_tickets
+        .lookup_and_touch(&image_ticket)
         .is_none());
 }
 
@@ -4067,4 +4070,412 @@ async fn video_stream_is_capability_authorized_and_exposes_media_headers_to_brow
         stream_video(state, "unknown", "GET", &[]).await.status(),
         StatusCode::NOT_FOUND
     );
+}
+
+// ---------------------------------------------------------------------------
+// Capability-bound image preview API
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn image_tickets_use_a_closed_allowlist_and_fixed_preview_contract() {
+    let tmp = tempfile::tempdir().unwrap();
+    for extension in ["png", "JPG", "jpeg", "gif", "WEBP"] {
+        std::fs::write(
+            tmp.path().join(format!("preview.{extension}")),
+            b"image bytes",
+        )
+        .unwrap();
+    }
+    let state = make_state_with_project(&tmp);
+
+    for extension in ["png", "JPG", "jpeg", "gif", "WEBP"] {
+        let path = format!("preview.{extension}");
+        let response = post_json(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "project": "test-project", "path": path.clone() }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let ticket = json["ticket"].as_str().unwrap();
+        assert_eq!(json["purpose"], "preview");
+        assert_eq!(json["streamPath"], format!("/api/fs/image/stream/{ticket}"));
+        assert!(!json.to_string().contains("test-project"));
+        assert!(!json.to_string().contains(&path));
+    }
+}
+
+#[tokio::test]
+async fn image_ticket_capacity_is_shared_and_has_image_specific_error_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("preview.png"), b"image bytes").unwrap();
+    let state = make_state_with_project(&tmp);
+    for _ in 0..crate::fs::image_ticket::MAX_IMAGE_TICKETS {
+        let response = post_json(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "project": "test-project", "path": "preview.png" }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    let response = post_json(
+        state,
+        "/api/fs/image/tickets",
+        serde_json::json!({ "project": "test-project", "path": "preview.png" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers()["retry-after"], "1");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "IMAGE_TICKET_CAPACITY");
+    assert_eq!(json["error"], "image ticket capacity reached");
+}
+
+#[tokio::test]
+async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("document.svg"), b"svg").unwrap();
+    std::fs::write(tmp.path().join("document.avif"), b"avif").unwrap();
+    std::fs::create_dir(tmp.path().join("folder.png")).unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let body = serde_json::json!({ "project": "test-project", "path": "document.svg" });
+    assert_eq!(
+        post_json_without_auth(state.clone(), "/api/fs/image/tickets", body.clone())
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    for path in ["document.svg", "document.avif", "folder.png"] {
+        let response = post_json(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "project": "test-project", "path": path }),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            if path == "folder.png" {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_REQUEST
+            }
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains(path));
+    }
+    let traversal = post_json(
+        state,
+        "/api/fs/image/tickets",
+        serde_json::json!({ "project": "test-project", "path": "../outside.png" }),
+    )
+    .await;
+    assert_eq!(traversal.status(), StatusCode::FORBIDDEN);
+    assert!(!String::from_utf8_lossy(
+        &axum::body::to_bytes(traversal.into_body(), usize::MAX)
+            .await
+            .unwrap()
+    )
+    .contains("outside.png"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn image_ticket_issuance_rejects_symlinks_and_fifos() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("real.png"), b"png").unwrap();
+    std::os::unix::fs::symlink(tmp.path().join("real.png"), tmp.path().join("link.png")).unwrap();
+    let real_dir = tmp.path().join("real-dir");
+    std::fs::create_dir(&real_dir).unwrap();
+    std::fs::write(real_dir.join("nested.png"), b"png").unwrap();
+    std::os::unix::fs::symlink(&real_dir, tmp.path().join("link-dir")).unwrap();
+    let fifo = tmp.path().join("trap.gif");
+    assert!(Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap()
+        .success());
+    let state = make_state_with_project(&tmp);
+
+    for path in ["link.png", "link-dir/nested.png", "trap.gif"] {
+        let response = post_json(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "project": "test-project", "path": path }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+}
+
+async fn issue_image_stream_ticket(state: AppState, path: &str) -> String {
+    let response = post_json(
+        state,
+        "/api/fs/image/tickets",
+        serde_json::json!({ "project": "test-project", "path": path }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice::<serde_json::Value>(&body).unwrap()["ticket"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn stream_image(
+    state: AppState,
+    ticket: &str,
+    method: &str,
+    headers: &[(&str, &str)],
+) -> axum::response::Response {
+    let router = build_router(state, vec![]);
+    let mut request = Request::builder()
+        .method(method)
+        .uri(format!("/api/fs/image/stream/{ticket}"))
+        .body(Body::empty())
+        .unwrap();
+    for (name, value) in headers {
+        request.headers_mut().append(
+            name.parse::<axum::http::HeaderName>().unwrap(),
+            value.parse().unwrap(),
+        );
+    }
+    router.oneshot(request).await.unwrap()
+}
+
+#[tokio::test]
+async fn image_stream_is_inline_mime_typed_rangeable_and_capability_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("cover.WEBP"), b"0123456789").unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_image_stream_ticket(state.clone(), "cover.WEBP").await;
+
+    let response = stream_image(
+        state.clone(),
+        &ticket,
+        "GET",
+        &[
+            ("range", "bytes=2-4"),
+            ("origin", "https://browser.example"),
+        ],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(response.headers()["content-type"], "image/webp");
+    assert_eq!(response.headers()["content-disposition"], "inline");
+    assert_eq!(response.headers()["cache-control"], "private, no-store");
+    assert_eq!(response.headers()["content-range"], "bytes 2-4/10");
+    assert!(response.headers()["access-control-expose-headers"]
+        .to_str()
+        .unwrap()
+        .contains("content-range"));
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+        "234"
+    );
+
+    let head = stream_image(
+        state.clone(),
+        &ticket,
+        "HEAD",
+        &[("range", "bytes=2-4"), ("if-range", "not-a-validator")],
+    )
+    .await;
+    assert_eq!(head.status(), StatusCode::OK);
+    assert_eq!(head.headers()["content-length"], "10");
+    assert!(head.headers().get("content-range").is_none());
+    assert!(axum::body::to_bytes(head.into_body(), usize::MAX)
+        .await
+        .unwrap()
+        .is_empty());
+
+    let invalid = stream_image(state, &ticket, "GET", &[("range", "bytes=0-1,2-3")]).await;
+    assert_eq!(invalid.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    assert!(invalid.headers().get("content-type").is_none());
+    assert!(invalid.headers().get("content-disposition").is_none());
+}
+
+#[tokio::test]
+async fn image_stream_rejects_video_kind_revokes_and_fails_closed_on_stale_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("cover.png"), b"png").unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"webm").unwrap();
+    let state = make_state_with_project(&tmp);
+    let image_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    let video_ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+
+    assert_eq!(
+        stream_image(state.clone(), &video_ticket, "GET", &[])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        stream_video(state.clone(), &image_ticket, "GET", &[])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        delete_json(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "ticket": video_ticket.clone() }),
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        stream_video(state.clone(), &video_ticket, "GET", &[])
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        delete_json(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "ticket": image_ticket.clone() }),
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        delete_json(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "ticket": image_ticket.clone() }),
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        stream_image(state.clone(), &image_ticket, "GET", &[])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let stale_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    std::fs::write(tmp.path().join("cover.png"), b"replacement image").unwrap();
+    let stale = stream_image(state.clone(), &stale_ticket, "GET", &[]).await;
+    assert_eq!(stale.status(), StatusCode::GONE);
+    assert_eq!(
+        stream_image(state, &stale_ticket, "GET", &[])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn image_revoke_requires_auth_and_context_reload_revokes_both_media_kinds() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("cover.png"), b"png").unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"webm").unwrap();
+    let state = make_state_with_project(&tmp);
+    let image_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    let video_ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+
+    assert_eq!(
+        post_json_without_auth(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "project": "test-project", "path": "cover.png" }),
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let revoke_without_auth = Request::builder()
+        .method("DELETE")
+        .uri("/api/fs/image/tickets")
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "ticket": image_ticket }).to_string(),
+        ))
+        .unwrap();
+    let response = build_router(state.clone(), vec![])
+        .oneshot(revoke_without_auth)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    state.media_tickets.revoke_all();
+    assert!(state
+        .image_stream_tickets
+        .lookup_and_touch(&image_ticket)
+        .is_none());
+    assert!(state
+        .video_stream_tickets
+        .lookup_and_touch(&video_ticket)
+        .is_none());
+}
+
+#[tokio::test]
+async fn config_and_settings_reload_revoke_shared_media_tickets() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("cover.png"), b"png").unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"webm").unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let config_image = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    let config_video = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+    let config_response = put_json(
+        state.clone(),
+        "/api/config",
+        serde_json::json!({
+            "workspace": { "name": "reloaded", "root": "." },
+            "projects": [{ "name": "test-project", "path": ".", "type": "custom" }]
+        }),
+    )
+    .await;
+    assert_eq!(config_response.status(), StatusCode::OK);
+    assert!(state
+        .image_stream_tickets
+        .lookup_and_touch(&config_image)
+        .is_none());
+    assert!(state
+        .video_stream_tickets
+        .lookup_and_touch(&config_video)
+        .is_none());
+
+    let settings_image = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    let settings_video = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+    let settings_response = post_json(
+        state.clone(),
+        "/api/settings/cache-clear",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(settings_response.status(), StatusCode::OK);
+    assert!(state
+        .image_stream_tickets
+        .lookup_and_touch(&settings_image)
+        .is_none());
+    assert!(state
+        .video_stream_tickets
+        .lookup_and_touch(&settings_video)
+        .is_none());
 }
