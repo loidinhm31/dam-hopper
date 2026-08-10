@@ -13,7 +13,7 @@
 ## Overview
 
 - **Priority:** P1
-- **Status:** Pending
+- **Status:** In progress — review remediation underway (5/10 re-review; not approved)
 - **Effort:** 12h
 - **Description:** Freeze decimal-string IPC counters, client/activation ordering identities, profile/runtime DTOs, independent stores, stable desktop identity, and deterministic orphan-scope retention/purge.
 
