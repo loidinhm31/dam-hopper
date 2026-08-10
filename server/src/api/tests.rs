@@ -3830,3 +3830,241 @@ async fn video_ticket_issuance_rejects_fifo_before_opening_it() {
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+async fn issue_video_stream_ticket(state: AppState, path: &str, purpose: &str) -> String {
+    let response = post_json(
+        state,
+        "/api/fs/video/tickets",
+        serde_json::json!({
+            "project": "test-project",
+            "path": path,
+            "purpose": purpose,
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice::<serde_json::Value>(&body).unwrap()["ticket"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn stream_video(
+    state: AppState,
+    ticket: &str,
+    method: &str,
+    headers: &[(&str, &str)],
+) -> axum::response::Response {
+    let router = build_router(state, vec![]);
+    let mut request = Request::builder()
+        .method(method)
+        .uri(format!("/api/fs/video/stream/{ticket}"))
+        .body(Body::empty())
+        .unwrap();
+    for (name, value) in headers {
+        request.headers_mut().append(
+            name.parse::<axum::http::HeaderName>().unwrap(),
+            value.parse().unwrap(),
+        );
+    }
+    router.oneshot(request).await.unwrap()
+}
+
+#[tokio::test]
+async fn video_stream_uses_one_range_core_for_inline_and_attachment_purposes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let filename = "clip space.webm";
+    std::fs::write(tmp.path().join(filename), b"0123456789").unwrap();
+    let state = make_state_with_project(&tmp);
+    let playback = issue_video_stream_ticket(state.clone(), filename, "playback").await;
+    let download = issue_video_stream_ticket(state.clone(), filename, "download").await;
+
+    let (playback, download) = tokio::join!(
+        stream_video(state.clone(), &playback, "GET", &[("range", "bytes=2-4")]),
+        stream_video(state, &download, "GET", &[("range", "bytes=2-4")]),
+    );
+    assert_eq!(playback.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(playback.headers()["content-range"], "bytes 2-4/10");
+    assert_eq!(playback.headers()["content-length"], "3");
+    assert_eq!(playback.headers()["content-disposition"], "inline");
+    assert_eq!(
+        axum::body::to_bytes(playback.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+        "234"
+    );
+    assert_eq!(download.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        download.headers()["content-disposition"],
+        "attachment; filename=\"clip_space.webm\"; filename*=UTF-8''clip%20space.webm"
+    );
+    assert_eq!(
+        axum::body::to_bytes(download.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+        "234"
+    );
+}
+
+#[tokio::test]
+async fn video_stream_head_ignores_range_and_if_range_mismatch_falls_back_to_full_body() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"0123456789").unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+
+    let head = stream_video(
+        state.clone(),
+        &ticket,
+        "HEAD",
+        &[("range", "bytes=2-4"), ("if-range", "not-a-validator")],
+    )
+    .await;
+    assert_eq!(head.status(), StatusCode::OK);
+    assert_eq!(head.headers()["content-length"], "10");
+    assert!(head.headers().get("content-range").is_none());
+    assert_eq!(
+        axum::body::to_bytes(head.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
+
+    let full = stream_video(
+        state,
+        &ticket,
+        "GET",
+        &[("range", "bytes=2-4"), ("if-range", "not-a-validator")],
+    )
+    .await;
+    assert_eq!(full.status(), StatusCode::OK);
+    assert_eq!(full.headers()["content-length"], "10");
+    assert_eq!(
+        axum::body::to_bytes(full.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+        "0123456789"
+    );
+}
+
+#[tokio::test]
+async fn video_stream_serves_zero_byte_files_but_rejects_zero_byte_ranges() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::File::create(tmp.path().join("empty.webm")).unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_video_stream_ticket(state.clone(), "empty.webm", "playback").await;
+
+    let full = stream_video(state.clone(), &ticket, "GET", &[]).await;
+    assert_eq!(full.status(), StatusCode::OK);
+    assert_eq!(full.headers()["content-length"], "0");
+    assert!(axum::body::to_bytes(full.into_body(), 1)
+        .await
+        .unwrap()
+        .is_empty());
+
+    let range = stream_video(state, &ticket, "GET", &[("range", "bytes=0-0")]).await;
+    assert_eq!(range.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(range.headers()["content-range"], "bytes */0");
+}
+
+#[tokio::test]
+async fn video_stream_rejects_invalid_ranges_without_disclosing_filename_or_type() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"0123456789").unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "download").await;
+
+    for headers in [
+        vec![("range", "bytes=-0")],
+        vec![("range", "bytes=0-1,2-3")],
+        vec![("range", "bytes=0-1"), ("range", "bytes=2-3")],
+    ] {
+        let response = stream_video(state.clone(), &ticket, "GET", &headers).await;
+        assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        assert_eq!(response.headers()["content-length"], "0");
+        assert_eq!(response.headers()["content-range"], "bytes */10");
+        assert!(response.headers().get("content-type").is_none());
+        assert!(response.headers().get("content-disposition").is_none());
+    }
+}
+
+#[tokio::test]
+async fn video_stream_revokes_stale_files_and_handles_sparse_ranges_without_full_buffering() {
+    let tmp = tempfile::tempdir().unwrap();
+    let stale = tmp.path().join("stale.webm");
+    std::fs::write(&stale, b"old").unwrap();
+    let state = make_state_with_project(&tmp);
+    let stale_ticket = issue_video_stream_ticket(state.clone(), "stale.webm", "playback").await;
+    std::fs::write(stale, b"replacement").unwrap();
+    let stale = stream_video(state.clone(), &stale_ticket, "GET", &[]).await;
+    assert_eq!(stale.status(), StatusCode::GONE);
+    for name in [
+        axum::http::header::ACCEPT_RANGES,
+        axum::http::header::CONTENT_TYPE,
+        axum::http::header::CONTENT_RANGE,
+        axum::http::header::CONTENT_DISPOSITION,
+        axum::http::header::ETAG,
+        axum::http::header::LAST_MODIFIED,
+        axum::http::header::CACHE_CONTROL,
+    ] {
+        assert!(stale.headers().get(name).is_none());
+    }
+    assert_eq!(stale.headers()[axum::http::header::CONTENT_LENGTH], "0");
+    assert!(axum::body::to_bytes(stale.into_body(), 1)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        stream_video(state.clone(), &stale_ticket, "GET", &[])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let sparse_size = 3_u64 * 1024 * 1024 * 1024;
+    let sparse = tmp.path().join("large.webm");
+    std::fs::File::create(&sparse)
+        .unwrap()
+        .set_len(sparse_size)
+        .unwrap();
+    let sparse_ticket = issue_video_stream_ticket(state.clone(), "large.webm", "playback").await;
+    let response = stream_video(
+        state,
+        &sparse_ticket,
+        "GET",
+        &[("range", "bytes=3221225471-3221225471")],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(response.headers()["content-length"], "1");
+    let bytes = axum::body::to_bytes(response.into_body(), 2).await.unwrap();
+    assert_eq!(bytes.as_ref(), &[0]);
+}
+
+#[tokio::test]
+async fn video_stream_is_capability_authorized_and_exposes_media_headers_to_browsers() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"x").unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+    let response = stream_video(
+        state.clone(),
+        &ticket,
+        "GET",
+        &[("origin", "https://browser.example")],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers()["access-control-expose-headers"]
+        .to_str()
+        .unwrap()
+        .contains("content-range"));
+    assert_eq!(
+        stream_video(state, "unknown", "GET", &[]).await.status(),
+        StatusCode::NOT_FOUND
+    );
+}
