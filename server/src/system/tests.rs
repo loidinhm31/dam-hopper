@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    read_thermal_zones, select_workspace_disk, sorted_disk_snapshots, usage_percent,
-    DiskMountSnapshot,
+    is_real_persistent_disk, read_thermal_zones, select_workspace_disk, sorted_disk_snapshots,
+    usage_percent, DiskMountSnapshot,
 };
 
 #[test]
@@ -48,6 +48,9 @@ fn legacy_host_metrics_serializes_compatibility_shape() {
             available_bytes: 5,
             used_bytes: 5,
             usage_percent: 50.0,
+            file_system: Some("ext4".into()),
+            source: None,
+            source_kind: super::DiskSourceKind::Unknown,
         },
         disks: Vec::new(),
         temperatures: Vec::new(),
@@ -108,6 +111,7 @@ fn legacy_host_metrics_serializes_compatibility_shape() {
             "missing legacy disk key {key}"
         );
     }
+    assert_eq!(value["disk"].as_object().unwrap().len(), 6);
 }
 
 #[test]
@@ -130,18 +134,27 @@ fn selects_longest_matching_mount_for_workspace() {
                 mount_point: PathBuf::from("/"),
                 total_bytes: 100,
                 available_bytes: 50,
+                file_system: Some("ext4".into()),
+                source: None,
+                source_kind: super::DiskSourceKind::Unknown,
             },
             DiskMountSnapshot {
                 name: "work".into(),
                 mount_point: PathBuf::from("/work"),
                 total_bytes: 200,
                 available_bytes: 80,
+                file_system: Some("ext4".into()),
+                source: None,
+                source_kind: super::DiskSourceKind::Unknown,
             },
             DiskMountSnapshot {
                 name: "repos".into(),
                 mount_point: PathBuf::from("/work/repos"),
                 total_bytes: 300,
                 available_bytes: 120,
+                file_system: Some("ext4".into()),
+                source: None,
+                source_kind: super::DiskSourceKind::Unknown,
             },
         ],
     )
@@ -159,6 +172,9 @@ fn ignores_non_matching_mounts() {
             mount_point: PathBuf::from("/var"),
             total_bytes: 100,
             available_bytes: 50,
+            file_system: Some("ext4".into()),
+            source: None,
+            source_kind: super::DiskSourceKind::Unknown,
         }],
     );
 
@@ -183,18 +199,27 @@ fn sorts_disk_snapshots_by_mount_point_then_name() {
             mount_point: PathBuf::from("/data"),
             total_bytes: 100,
             available_bytes: 50,
+            file_system: Some("ext4".into()),
+            source: None,
+            source_kind: super::DiskSourceKind::Unknown,
         },
         DiskMountSnapshot {
             name: "root".into(),
             mount_point: PathBuf::from("/"),
             total_bytes: 100,
             available_bytes: 50,
+            file_system: Some("ext4".into()),
+            source: None,
+            source_kind: super::DiskSourceKind::Unknown,
         },
         DiskMountSnapshot {
             name: "a-data".into(),
             mount_point: PathBuf::from("/data"),
             total_bytes: 100,
             available_bytes: 50,
+            file_system: Some("ext4".into()),
+            source: None,
+            source_kind: super::DiskSourceKind::Unknown,
         },
     ]);
 
@@ -253,4 +278,108 @@ fn missing_thermal_root_returns_no_temperatures() {
     let readings = read_thermal_zones(&temp.path().join("missing"));
 
     assert!(readings.is_empty());
+}
+
+fn disk_metrics(
+    source: Option<&str>,
+    source_kind: super::DiskSourceKind,
+    file_system: Option<&str>,
+    mount_point: &str,
+    total_bytes: u64,
+    available_bytes: u64,
+) -> super::DiskMetrics {
+    super::DiskMetrics {
+        name: "disk".into(),
+        mount_point: mount_point.into(),
+        total_bytes,
+        available_bytes,
+        used_bytes: total_bytes.saturating_sub(available_bytes),
+        usage_percent: usage_percent(total_bytes.saturating_sub(available_bytes), total_bytes),
+        file_system: file_system.map(str::to_owned),
+        source: source.map(str::to_owned),
+        source_kind,
+    }
+}
+
+#[test]
+fn classifies_only_verified_persistent_block_devices_as_alertable() {
+    for (source, file_system) in [
+        ("/dev/nvme0n1p2", "ext4"),
+        ("/dev/vda1", "xfs"),
+        ("/dev/mapper/fedora-root", "btrfs"),
+    ] {
+        assert!(
+            is_real_persistent_disk(&disk_metrics(
+                Some(source),
+                super::DiskSourceKind::BlockDevice,
+                Some(file_system),
+                "/data",
+                100,
+                5,
+            )),
+            "{source} ({file_system}) must alert"
+        );
+    }
+}
+
+#[test]
+fn classifier_rejects_virtual_bind_like_malformed_and_unknown_sources() {
+    for source in ["/dev/loop0", "/dev/zram0", "/dev/ram0", "/dev/fd/4"] {
+        assert!(
+            !is_real_persistent_disk(&disk_metrics(
+                Some(source),
+                super::DiskSourceKind::BlockDevice,
+                Some("ext4"),
+                "/data",
+                100,
+                5,
+            )),
+            "virtual {source} must not alert even with ext4"
+        );
+    }
+    for source in [Some("/workspace/bind"), Some("none"), Some("\0"), None] {
+        assert!(
+            !is_real_persistent_disk(&disk_metrics(
+                source,
+                super::DiskSourceKind::Unknown,
+                Some("xfs"),
+                "/data",
+                100,
+                5,
+            )),
+            "unknown or bind-like source must not alert"
+        );
+    }
+    assert!(!is_real_persistent_disk(&disk_metrics(
+        Some("/dev/nvme0n1p2"),
+        super::DiskSourceKind::Virtual,
+        Some("ext4"),
+        "/data",
+        100,
+        5,
+    )));
+    assert!(!is_real_persistent_disk(&disk_metrics(
+        Some("/dev/nvme0n1p2"),
+        super::DiskSourceKind::BlockDevice,
+        Some("mysteryfs"),
+        "/data",
+        100,
+        5,
+    )));
+    assert!(!is_real_persistent_disk(&disk_metrics(
+        Some("/dev/nvme0n1p2"),
+        super::DiskSourceKind::BlockDevice,
+        Some("ext4"),
+        "relative",
+        100,
+        5,
+    )));
+    assert!(!is_real_persistent_disk(&disk_metrics(
+        Some("/dev/nvme0n1p2"),
+        super::DiskSourceKind::BlockDevice,
+        Some("ext4"),
+        "/data",
+        0,
+        0,
+    )));
 }

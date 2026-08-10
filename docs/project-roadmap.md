@@ -38,6 +38,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - The runtime-activity implementation from `0ad51a5` was removed after it was implicated in a Codex terminal-notification regression.
 - Revisit this only as a separate PTY-lifecycle design: preserve raw terminal notification signals through shutdown/replacement, order persistence removal after reader drain, and add race coverage for an OSC notification emitted while a session is being replaced or removed.
 
+### Host Resource Monitor Restoration Alerts (2026-08-11)
+
+- **Phase 01 — [COMPLETED 2026-08-11 03:00:34 +07:00]**: monitor signal/keyed alert model accepted. Validation: 58 focused Rust tests, `cargo check` all targets, scoped `rustfmt`, and diff check passed. **Medium residual risk:** normalized host samples are not capped before `BTreeMap` allocation; fix before pending Phase 02. Phases 02–04 remain pending. [Plan](../plans/260811-0145-host-resource-monitor-restoration-alerts/plan.md).
+
 ### Linux Host Resource Monitoring and Gated Remediation (2026-08-08)
 
 - **Phases 01–03, 06 — [COMPLETED 2026-08-08–09]**: delivered the read-only monitoring threat model, bounded contracts/parsers, cached monitor/read APIs, sustained alerts, and in-app diagnosis. No host mutation is enabled.
