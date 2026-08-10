@@ -1,0 +1,6 @@
+Generated locally for Dam Hopper browser tests with FFmpeg 8.1.2.
+
+Command: ffmpeg -f lavfi -i color=c=black:s=160x90:r=24:d=1 -an -c:v libvpx -deadline good -cpu-used 8 -b:v 96k -crf 38 one-second-vp8.webm
+Content: one second of a solid black synthetic frame; no source media, audio, or third-party creative work is included.
+License: CC0-1.0 (project-generated test fixture).
+SHA-256: cb8bc427ca5623472663475e3a826b395dde162332452d429ccc0a238258a68c
