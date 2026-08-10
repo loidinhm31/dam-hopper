@@ -14,7 +14,7 @@ use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
 use super::windows_storage_component::validate_managed_component;
 use super::windows_storage_handle::{
-    create_relative_file, open_relative, open_relative_for_mutation,
+    create_relative_file, ntstatus_error, open_relative, open_relative_for_mutation,
 };
 
 const STORE_FILES: [&str; 3] = ["profiles.toml", "known-hosts.toml", "scope-meta.toml"];
@@ -100,7 +100,7 @@ pub(super) fn delete_handle(handle: &OwnedHandle) -> io::Result<()> {
         )
     };
     if result < 0 {
-        Err(io::Error::from_raw_os_error(result))
+        Err(ntstatus_error(result))
     } else {
         Ok(())
     }
@@ -138,7 +138,7 @@ fn rename_relative(
         )
     };
     if result < 0 {
-        Err(io::Error::from_raw_os_error(result))
+        Err(ntstatus_error(result))
     } else {
         Ok(())
     }
