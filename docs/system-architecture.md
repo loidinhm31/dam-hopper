@@ -25,7 +25,9 @@
 │  │  ├─ agent_store: Arc<AgentStoreService>                │
 │  │  ├─ event_sink: BroadcastEventSink                     │
 │  │  ├─ fs: FsSubsystem                                    │
+│  │  ├─ media_tickets: MediaTicketStore (shared lifecycle)  │
 │  │  ├─ video_stream_tickets: VideoStreamTicketStore       │
+│  │  ├─ image_stream_tickets: ImageStreamTicketStore       │
 │  │  ├─ ssh_creds: Arc<RwLock<Option<...>>>               │
 │  │  ├─ auth_token: Arc<String>                            │
 │  ├─ opaque_server_setup: Arc<ServerSetup<...>>            │
@@ -36,7 +38,8 @@
 │  │  ├─ /api/ports → Port detection list                   │
 │  │  ├─ /api/git/* → Clone/push/status/branch/root ops     │
 │  │  ├─ /api/fs/* → [conditional] List/read/stat (per-proj)│
-│  │  ├─ /api/fs/video/* → Ticket issuance/revocation (P1) │
+│  │  ├─ /api/fs/video/* → Ticket issuance/stream/revoke     │
+│  │  ├─ /api/fs/image/* → Preview ticket/stream/revoke     │
 │  │  ├─ /api/agent-store/* → Distribution/import           │
 │  │  ├─ /api/workspace/* → Config switching                │
 │  │  ├─ /api/usage/* → Codex OTel usage (opt-in)           │
@@ -870,6 +873,50 @@ Key invariants:
   and response stream over the same validated file.
 - File replacement or metadata drift invalidates the prior ticket/range sequence.
 - Unsupported containers/codecs fail visibly without falling back to a 1–3 GB blob read.
+
+### Explorer native image preview (Phase 03 release gate complete)
+
+Image preview uses the same bounded media-ticket core as video while keeping a
+separate public adapter and contract. The server exposes `POST|DELETE
+/api/fs/image/tickets` and `GET|HEAD /api/fs/image/stream/{ticket}`. Image
+issuance accepts only final, case-insensitive `png`, `jpg`, `jpeg`, `gif`, and
+`webp` extensions and always binds the capability to the fixed `preview`
+purpose. SVG, AVIF, BMP, TIFF, dotfiles, directories, symlink components, FIFOs,
+and traversal paths remain outside the preview surface.
+
+The browser flow is capability-only:
+
+```mermaid
+sequenceDiagram
+    participant E as Explorer and EditorTabs
+    participant I as ImagePreview
+    participant A as Authenticated image ticket API
+    participant S as Ticketed image stream
+    participant F as ProjectSandbox and file
+    E->>A: POST project and path with Bearer auth
+    A->>F: Resolve, regular-file check, MIME and version bind
+    A-->>E: Opaque preview ticket URL
+    E->>I: Mount one native <img>
+    I->>S: Native GET/HEAD capability request
+    S->>F: Revalidate sandbox path and file identity
+    S-->>I: Inline image bytes/range response
+    I->>A: Authenticated best-effort DELETE on cleanup
+```
+
+`ImagePreview` assigns the opaque URL directly to one native `<img>` and relies
+on browser decoding. It never calls `fsRead`, buffers a response, creates a
+`Blob`, creates an object URL, uses a canvas transform, or exposes a download
+action. Loading, ready, generic error, retry, stale-generation, profile-change,
+and unmount cleanup are explicit lifecycle states; cleanup detaches `src` before
+revoking the capability. The `alt` contract is `Image preview: {fileName}`.
+
+The editor assigns an `image` tier before binary/large classification, including
+large or binary-hinted allowlisted images. Open, hydration, save, force-overwrite,
+reload, and Git reconciliation paths treat image tabs as preview-only and never
+materialize bytes. Diff tabs retain their dedicated viewer and video routing
+continues to take precedence. The shared store keeps the 256-ticket capacity,
+idle/absolute expiry, generation invalidation, stale-file `410`, range/HEAD,
+revalidation, CORS, and private no-store response invariants used by video.
 
 ### git/
 

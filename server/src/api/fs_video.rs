@@ -5,19 +5,17 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 use crate::{
     error::AppError,
     fs::{
-        is_supported_video, VideoFileVersion, VideoTicketIssue, VideoTicketPurpose,
+        is_supported_video, MediaTicketKind, VideoTicketIssue, VideoTicketPurpose,
         VideoTicketRecord,
     },
     state::AppState,
 };
 
-use super::video_stream_response;
-use super::{error::ApiError, fs::resolve};
+use super::{error::ApiError, fs::resolve, media_stream_response};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -57,7 +55,13 @@ pub async fn issue_ticket(
         )));
     }
 
-    let metadata = open_regular_file(&canonical).await?;
+    let file = media_stream_response::open_regular_file(&canonical)
+        .await
+        .map_err(|_| ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)))?;
+    let metadata = file
+        .metadata()
+        .await
+        .map_err(|_| ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)))?;
 
     let filename = canonical
         .file_name()
@@ -72,7 +76,7 @@ pub async fn issue_ticket(
         purpose: request.purpose,
         project: request.project,
         project_relative_path: request.path.into(),
-        file: VideoFileVersion::from_metadata(canonical, &metadata)
+        file: media_stream_response::version_from_open_file(canonical, &file, &metadata)
             .map_err(|_| ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)))?,
         mime,
         filename,
@@ -101,46 +105,6 @@ pub async fn issue_ticket(
         .into_response())
 }
 
-async fn open_regular_file(canonical: &Path) -> Result<std::fs::Metadata, ApiError> {
-    let path_metadata = tokio::fs::symlink_metadata(canonical)
-        .await
-        .map_err(|_| ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)))?;
-    if !path_metadata.is_file() {
-        return Err(ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)));
-    }
-
-    #[cfg(unix)]
-    let file = {
-        use std::os::unix::fs::OpenOptionsExt;
-
-        let path = canonical.to_path_buf();
-        let file = tokio::task::spawn_blocking(move || {
-            std::fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
-                .open(path)
-        })
-        .await
-        .map_err(|_| ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)))?
-        .map_err(|_| ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)))?;
-        tokio::fs::File::from_std(file)
-    };
-
-    #[cfg(not(unix))]
-    let file = tokio::fs::File::open(canonical)
-        .await
-        .map_err(|_| ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)))?;
-
-    let metadata = file
-        .metadata()
-        .await
-        .map_err(|_| ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)))?;
-    if !metadata.is_file() {
-        return Err(ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)));
-    }
-    Ok(metadata)
-}
-
 pub async fn revoke_ticket(
     State(state): State<AppState>,
     Json(request): Json<RevokeVideoTicketRequest>,
@@ -156,7 +120,7 @@ pub async fn stream_ticket(
     method: Method,
     headers: HeaderMap,
 ) -> Response {
-    video_stream_response::respond(state, ticket, method, headers).await
+    media_stream_response::respond(state, ticket, MediaTicketKind::Video, method, headers).await
 }
 
 fn capacity_response() -> Response {

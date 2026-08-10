@@ -155,6 +155,10 @@ jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 # SIGTERM for graceful child process shutdown
 nix = { version = "0.29", features = ["signal", "process"] }
 
+[target.'cfg(windows)'.dependencies]
+# Open media paths without following a final Windows reparse point.
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # /proc/net/tcp polling for port detection (Linux only)
 procfs = { version = "0.17", default-features = false }
