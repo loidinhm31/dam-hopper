@@ -12,7 +12,8 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Linux Host Resource Monitoring and Gated Remediation (2026-08-08)
 
-- **Phase 01 Architecture + threat-model gate — [COMPLETED 2026-08-08 12:21 +07:00]**: read-only monitoring/action trust boundaries, abuse cases, helper enrollment proof, approval/IPC invariants, fixed-action constraints, and residual risks recorded. Phase 02 may begin.
+- **Phases 01–03, 06 — [COMPLETED 2026-08-08–09]**: delivered the read-only monitoring threat model, bounded contracts/parsers, cached monitor/read APIs, sustained alerts, and in-app diagnosis. No host mutation is enabled.
+- **Phase 07 packaging, validation, rollout/rollback — [COMPLETED 2026-08-10 18:23 +07:00]**: release owner accepted completion after local Linux packaging/soak, bounded fixture, Docker, and Chromium evidence. The still-unobserved Windows CI result, intended-canary-host profiling, staged monitor/in-app-alert canary, and rollback rehearsal are explicitly deferred follow-up work, not passed gates. [Plan](../plans/260808-0236-host-resource-monitoring-remediation/plan.md).
 - **Operational/security sign-offs remaining**: real-systemd-host caller/enrollment validation and security-owner acceptance of enrolled-server-compromise residual risk. Privileged helper/actions are not implemented or approved for rollout.
 
 ### Floating Terminal Key Controls (2026-08-06)
@@ -46,7 +47,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 - [x] Separate privacy-preserving telemetry SQLite store and migrations
 - [x] Bounded non-blocking writer with WAL and graceful shutdown
-- [x] UTC rollup/purge, project exclusion, delete-all, and retention controls *(historical terminal analytics; superseded by the Codex-only contract, which has no project exclusion)*
+- [x] UTC rollup/purge, project exclusion, delete-all, and retention controls _(historical terminal analytics; superseded by the Codex-only contract, which has no project exclusion)_
 - [x] DB/API privacy scan and read-only/corrupt store fault coverage
 
 **Phase 04: Aggregate API and Controls — [COMPLETED 2026-07-26; APPROVED WITH WARNINGS]**
@@ -61,11 +62,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [x] Loopback-only authenticated binary receiver with bounded decoding and retry-safe dedupe
 - [x] Field-level forward compatibility with partial/unavailable token coverage
 - [x] Explicit managed local exporter setup with exact ownership/conflict protection, atomic
-  `0600` writes, no bearer disclosure; Codex restart remains a separate user action
+      `0600` writes, no bearer disclosure; Codex restart remains a separate user action
 
 **Phase 06: Usage UI and Compact Navigation — [COMPLETED 2026-07-26; APPROVED]**
 
-- [x] Responsive aggregate dashboard, UTC filters, coverage state, pause/exclusion controls *(historical terminal analytics; superseded by the Codex-only contract and its Codex telemetry pause control)*
+- [x] Responsive aggregate dashboard, UTC filters, coverage state, pause/exclusion controls _(historical terminal analytics; superseded by the Codex-only contract and its Codex telemetry pause control)_
 - [x] Explicit all/range deletion confirmation and no-cost/no-productivity interpretation copy
 
 **Phase 07: Security, Fault, Performance, Documentation — [VALIDATED; REVIEW APPROVED 2026-07-26; PLATFORM CHECKS PENDING]**
