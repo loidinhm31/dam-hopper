@@ -242,7 +242,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 ### PR-009: Host Resource Monitoring (Current Delivery)
 
-**Status:** Monitoring implementation delivered through Phase 06; Phase 07 release validation remains. Re-authentication, mutation lifecycle/audit, privileged IPC, enrollment, and fixed host operations are deferred together and are not part of the current release.
+**Status:** Monitoring implementation delivered through Phase 06; Phase 07 local packaging, soak, and browser validation evidence is recorded, but release sign-off remains open. Re-authentication, mutation lifecycle/audit, privileged IPC, enrollment, and fixed host operations are deferred together and are not part of the current release.
 
 **Current Functional Requirements:**
 
@@ -260,6 +260,12 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - [x] Sustained alert classification, bounded incident history, and `host:alertChanged` delivery are implemented and tested.
 - [x] The top-nav diagnosis UI consumes cached snapshot/alert state and exposes no remediation control.
 - [ ] Phase 07 validates packaging, compatibility, graceful degradation, platform/browser matrices, soak budgets, documentation, rollout, and rollback.
+
+Phase 07 evidence confirms the monitoring-only/read-only boundary, explicit
+cgroup-v1 and non-Linux unsupported states, and pinned `linux/amd64` packaging.
+The no-tunnel shutdown result must not be generalized to active tunnel teardown.
+The remaining gates are a real non-Linux runtime result, staged canary,
+rollback rehearsal, and release-owner approval.
 
 **Accepted Monitoring Follow-ups:**
 

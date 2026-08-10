@@ -92,10 +92,17 @@ Build the container from the repository `Dockerfile`; its Rust builder is pinned
 to the ABI-compatible Bookworm toolchain and includes the server asset bundle.
 The web stage also copies the root TypeScript configuration required by the
 workspace build. Keep these inputs in the build context when producing a
-release image. Record the resulting image digest and deploy that immutable
-digest, rather than an unqualified mutable tag; retain the prior digest for
-rollback. The image must contain monitoring-only server/web assets and must
-not package deferred remediation helpers or action controls.
+release image. The Dockerfile pins its amd64 base image digests; record the
+resulting image digest and deploy that immutable digest, rather than an
+unqualified mutable tag. Retain the prior digest for rollback. The image must
+contain monitoring-only server/web assets and must not package deferred
+remediation helpers or action controls.
+
+Build the amd64 release image explicitly on multi-platform hosts:
+
+```bash
+docker build --platform linux/amd64 --tag dam-hopper-host-resource-monitoring:release .
+```
 
 Start with a canary host, observe source-availability states and alert rate for
 the monitor cadence, then broaden only after the cached endpoint latency and
@@ -116,6 +123,23 @@ and deadline counts. Compare the CPU and wall-time peaks with the configured
 deep-sampling interval and 150 ms process deadline, and keep retained RSS below
 the 5 MiB Phase 03 budget. This does not replace a real non-Linux CI run, staged
 canary, rollback rehearsal, or release-owner sign-off.
+
+The Phase 07 release check set is:
+
+```bash
+cargo fmt --manifest-path server/Cargo.toml -- --check
+cargo check --manifest-path server/Cargo.toml --features vendored
+cargo test --manifest-path server/Cargo.toml --features vendored
+pnpm --filter @dam-hopper/ui test
+pnpm --filter @dam-hopper/ui exec tsc -p tsconfig.json
+pnpm lint
+pnpm --filter @dam-hopper/ui build
+pnpm build:server
+docker build --platform linux/amd64 --tag dam-hopper-host-resource-monitoring:release .
+```
+
+The measured shutdown target is for no-tunnel servers only; active tunnel
+disposal retains its separate three-second child-process grace period.
 
 If deep collection regresses, roll back to the recorded prior image digest (or
 release binary) while retaining `GET /api/system/metrics`. Confirm the legacy
