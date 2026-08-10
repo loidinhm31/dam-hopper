@@ -27,7 +27,7 @@ pub struct AlertQuery {
 pub async fn get_alerts(
     State(state): State<AppState>,
     Query(query): Query<AlertQuery>,
-) -> Json<Vec<crate::system::AlertIncident>> {
+) -> Json<Vec<crate::system::alerts::HostResourceAlertIncident>> {
     Json(
         state
             .host_resource_monitor

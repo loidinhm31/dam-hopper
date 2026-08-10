@@ -278,9 +278,7 @@ must not add them as an accounting total. The existing `GET /api/system/metrics`
 response remains compatible and is served from the monitor's cached projection.
 
 The current UI is monitoring-only. It displays the snapshot, bounded alert
-history, and diagnostic evidence; it does not offer remediation controls. The
-`host:alertChanged` push event is accepted only when its bounded typed alert
-payload is valid, then invalidates the cached snapshot and alert queries. REST
+history, and diagnostic evidence; it does not offer remediation controls. REST
 responses remain authoritative after reconnect, missed events, profile changes,
 or malformed push data. If the deep snapshot is unavailable, the diagnosis
 popover retains CPU and disk from the compatible metrics endpoint and labels the
@@ -292,15 +290,43 @@ availability and scope rather than host-wide failure.
 
 Returns the latest bounded deep host snapshot. Sampling cadence and source roots
 are server-owned; incomplete cycles are represented as stale or degraded
-availability rather than fabricated values.
+availability rather than fabricated values. The legacy memory `alert` object is
+unchanged. The additive `currentAlerts` array contains active thermal or disk
+incidents and is always present on current servers, including as `[]` when none
+are active. Clients interoperating with an older server must tolerate an absent
+`currentAlerts` field and must not interpret its absence as recovery.
+
+A resource entry has `kind` (`temperature` or `disk`), `key`, `state`
+(`temperatureHigh` or `diskFull`), severity, incident/timing fields, scope,
+threshold, next action, and bounded evidence. Temperature evidence has source
+and Celsius value (with optional label); disk evidence has mount point and usage
+percentage (with optional name). `currentAlerts` is a bounded concurrent set,
+not a replacement for the legacy memory alert.
 
 #### GET /api/system/resources/v1/alerts
 
-Returns bounded host-level alert incidents, newest first. Optional `limit` is
-clamped by the server (default 50). Incidents include state, severity,
-timestamps, duration, scope, confidence, threshold, bounded evidence, and a
-next-action description. This endpoint reports evidence only and performs no
-remediation.
+Returns a bounded mixed history of legacy memory and thermal/disk incidents,
+newest first by `updatedAt`. Optional `limit` is clamped by the server (default
+50). Memory incidents retain their existing confidence/evidence contract;
+resource incidents use the resource shape above and include `resolvedAt` only
+after recovery. A zero `resolvedAt` is a valid recovery timestamp. This endpoint
+reports evidence only and performs no remediation.
+
+#### `host:alertChanged` transport event
+
+The existing event name and legacy memory payload remain compatible. An additive
+thermal/disk payload uses the resource shape above; recovery is represented by
+`resolvedAt`. The client accepts either payload only after strictly validating
+finite non-negative timestamps, allowed kind/state/severity,
+bounded required text, and the exact evidence fields for that kind. Invalid or
+unknown evidence is discarded without updating cached resource state.
+
+A valid resource event merges or replaces only its `incidentId` in the cached
+`currentAlerts`; an event with `resolvedAt` removes only that incident. The
+client then invalidates snapshot and history queries. An explicit
+`currentAlerts: []` from the authoritative snapshot clears retained resource
+incidents, while an omitted additive field preserves them for old-server
+compatibility until REST establishes current state.
 
 ### Deferred remediation backlog
 

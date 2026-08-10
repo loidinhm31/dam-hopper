@@ -44,11 +44,33 @@ describe("reinitializeTransport", () => {
 
     expect(destroy).toHaveBeenCalledOnce();
     expect(resetTransportListeners).toHaveBeenCalledOnce();
-    expect(WsTransport).toHaveBeenCalledWith("http://monitor.example");
+    expect(WsTransport).toHaveBeenCalledWith(
+      "http://monitor.example",
+      undefined,
+    );
     expect(reconfigureTransport).toHaveBeenCalledWith(nextTransport);
     expect(initTransportListeners).toHaveBeenCalledOnce();
     expect(initTransportListeners.mock.invocationCallOrder[0]).toBeGreaterThan(
       reconfigureTransport.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("forwards the active profile ID to the replacement transport", () => {
+    const nextTransport = { onEvent: vi.fn() };
+    getTransport.mockReturnValue({ destroy: vi.fn() });
+    WsTransport.mockImplementation(
+      class {
+        constructor() {
+          return nextTransport;
+        }
+      },
+    );
+
+    reinitializeTransport("http://monitor.example", "profile-a");
+
+    expect(WsTransport).toHaveBeenCalledWith(
+      "http://monitor.example",
+      "profile-a",
     );
   });
 });

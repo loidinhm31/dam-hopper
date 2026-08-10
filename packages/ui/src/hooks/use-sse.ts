@@ -13,6 +13,7 @@ import type {
   AlertSeverity,
   AlertState,
   HostResourceAlert,
+  HostResourceResourceAlert,
   HostResourceSnapshotV1,
 } from "../api/client.js";
 import type { ConnectionStatus } from "../components/atoms/ConnectionDot.js";
@@ -28,7 +29,7 @@ export interface IpcEvent {
 
 export interface HostResourceAlertChangedEvent extends IpcEvent {
   type: "host:alertChanged";
-  data: HostResourceAlert;
+  data: HostResourceAlert | HostResourceResourceAlert;
 }
 
 const ALERT_STATES = new Set<AlertState>([
@@ -48,6 +49,7 @@ const ALERT_CONFIDENCES = new Set(["low", "medium", "high"]);
 const ALERT_SCOPE = "host";
 const MAX_ALERT_TEXT_LENGTH = 256;
 const MAX_INCIDENT_ID_LENGTH = 64;
+const MAX_CURRENT_RESOURCE_ALERTS = 50;
 const IPC_STATUSES = new Set<IpcStatus>([
   "connected",
   "connecting",
@@ -104,6 +106,26 @@ export function invalidateHostResourceQueries(
   void qc.invalidateQueries({ queryKey: ["system", "resource-alerts"] });
 }
 
+export function applyHostResourceAlert(
+  snapshot: HostResourceSnapshotV1 | undefined,
+  alert: HostResourceAlert | HostResourceResourceAlert,
+): HostResourceSnapshotV1 | undefined {
+  if (!snapshot) return snapshot;
+  if ("kind" in alert) {
+    const currentAlerts = (snapshot.currentAlerts ?? []).filter(
+      (item) => item.incidentId !== alert.incidentId,
+    );
+    return {
+      ...snapshot,
+      currentAlerts:
+        alert.resolvedAt != null
+          ? currentAlerts
+          : [...currentAlerts, alert].slice(-MAX_CURRENT_RESOURCE_ALERTS),
+    };
+  }
+  return { ...snapshot, alert };
+}
+
 export function asHostResourceAlertChangedEvent(
   event: IpcEvent,
 ): HostResourceAlertChangedEvent | null {
@@ -136,13 +158,80 @@ export function asHostResourceAlertChangedEvent(
     hasValidOptionalPercent(alert.evidence.availablePercent) &&
     hasValidOptionalPercent(alert.evidence.reclaimablePercent) &&
     hasValidOptionalPercent(alert.evidence.psiSomeAvg10) &&
-    hasValidOptionalPercent(alert.evidence.psiFullAvg10)
+    hasValidOptionalPercent(alert.evidence.psiFullAvg10) &&
+    hasOnlyKeys(alert.evidence, [
+      "cgroupOomDelta",
+      "availablePercent",
+      "reclaimablePercent",
+      "psiSomeAvg10",
+      "psiFullAvg10",
+    ])
+    ? (event as HostResourceAlertChangedEvent)
+    : asHostResourceResourceAlertChangedEvent(event);
+}
+
+function asHostResourceResourceAlertChangedEvent(
+  event: IpcEvent,
+): HostResourceAlertChangedEvent | null {
+  if (event.type !== "host:alertChanged" || !isRecord(event.data)) return null;
+  const alert = event.data as Partial<HostResourceResourceAlert>;
+  const isTemperature = alert.kind === "temperature";
+  const isDisk = alert.kind === "disk";
+  const evidence = isRecord(alert.evidence) ? alert.evidence : null;
+  const validEvidence =
+    (isTemperature &&
+      hasOnlyKeys(evidence, [
+        "temperatureSource",
+        "temperatureLabel",
+        "temperatureCelsius",
+      ]) &&
+      isBoundedText(evidence.temperatureSource) &&
+      (evidence.temperatureLabel == null ||
+        isBoundedText(evidence.temperatureLabel)) &&
+      isFiniteNumber(evidence.temperatureCelsius)) ||
+    (isDisk &&
+      hasOnlyKeys(evidence, ["diskMountPoint", "diskName", "diskUsagePercent"]) &&
+      isBoundedText(evidence.diskMountPoint) &&
+      (evidence.diskName == null || isBoundedText(evidence.diskName)) &&
+      isNonNegativeFiniteNumber(evidence.diskUsagePercent) &&
+      evidence.diskUsagePercent <= 100);
+  return Number.isFinite(event.timestamp) &&
+    event.timestamp >= 0 &&
+    ((isTemperature && alert.state === "temperatureHigh") ||
+      (isDisk && alert.state === "diskFull")) &&
+    typeof alert.severity === "string" &&
+    ALERT_SEVERITIES.has(alert.severity as AlertSeverity) &&
+    isBoundedText(alert.key) &&
+    isBoundedText(alert.incidentId) &&
+    isNonNegativeFiniteNumber(alert.openedAt) &&
+    isNonNegativeFiniteNumber(alert.updatedAt) &&
+    isNonNegativeFiniteNumber(alert.durationSeconds) &&
+    isBoundedText(alert.scope) &&
+    isBoundedText(alert.threshold) &&
+    isBoundedText(alert.nextAction) &&
+    hasValidOptionalTimestamp(alert.resolvedAt) &&
+    validEvidence
     ? (event as HostResourceAlertChangedEvent)
     : null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(
+  value: unknown,
+  keys: readonly string[],
+): value is Record<string, unknown> {
+  return isRecord(value) && Object.keys(value).every((key) => keys.includes(key));
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 function isNonNegativeFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+  return isFiniteNumber(value) && value >= 0;
 }
 
 function isBoundedText(value: unknown): value is string {
@@ -302,8 +391,7 @@ export function useIpc(): { status: IpcStatus } {
         if (!alertEvent) return;
         qc.setQueryData<HostResourceSnapshotV1>(
           ["system", "resource-snapshot"],
-          (snapshot) =>
-            snapshot ? { ...snapshot, alert: alertEvent.data } : snapshot,
+          (snapshot) => applyHostResourceAlert(snapshot, alertEvent.data),
         );
         invalidateHostResourceQueries(qc);
       }),
