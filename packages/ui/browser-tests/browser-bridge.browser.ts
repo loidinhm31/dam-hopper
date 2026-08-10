@@ -41,8 +41,14 @@ describe("browser bridge in Chromium", () => {
         installBrowserBridge({ parentOrigin: ${JSON.stringify(window.location.origin)} });
         parent.postMessage({ type: "dam-hopper:fixture-ready" }, ${JSON.stringify(window.location.origin)});
       </script>`;
+    const firstFrameLoad = new Promise<void>((resolve) =>
+      frame.addEventListener("load", () => resolve(), { once: true }),
+    );
     document.body.append(frame);
-    await vi.waitFor(() => expect(bridgeLoaded).toBe(true));
+    await firstFrameLoad;
+    await vi.waitFor(() => expect(bridgeLoaded).toBe(true), {
+      timeout: 5_000,
+    });
     const source = frame.contentWindow!;
 
     source.postMessage(
@@ -60,9 +66,9 @@ describe("browser bridge in Chromium", () => {
       ).toBe(true),
     );
     await vi.waitFor(() =>
-      expect(received.some((event) => event.type === "dam-hopper:navigation")).toBe(
-        true,
-      ),
+      expect(
+        received.some((event) => event.type === "dam-hopper:navigation"),
+      ).toBe(true),
     );
     expect(
       received.find((event) => event.type === "dam-hopper:navigation"),
@@ -176,8 +182,14 @@ describe("browser bridge in Chromium", () => {
     nonce = "browser-nonce-after-navigation";
     requestIds.clear();
     requestIds.add("connect-after-navigation");
+    const navigationFrameLoad = new Promise<void>((resolve) =>
+      frame.addEventListener("load", () => resolve(), { once: true }),
+    );
     frame.srcdoc = frame.srcdoc;
-    await vi.waitFor(() => expect(bridgeLoaded).toBe(true));
+    await navigationFrameLoad;
+    await vi.waitFor(() => expect(bridgeLoaded).toBe(true), {
+      timeout: 5_000,
+    });
     frame.contentWindow!.postMessage(
       {
         version: BROWSER_BRIDGE_VERSION,
