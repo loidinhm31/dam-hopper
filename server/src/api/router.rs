@@ -20,8 +20,8 @@ use crate::state::AppState;
 
 use super::{
     agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
-    fs as fs_api, git, git_diff, port_forward as port_forward_api, settings, ssh, system, terminal,
-    tunnel, usage, usage_sessions, workspace, ws,
+    fs as fs_api, fs_video, git, git_diff, port_forward as port_forward_api, settings, ssh, system,
+    terminal, tunnel, usage, usage_sessions, workspace, ws,
 };
 
 /// Build the full Axum router with auth middleware, CORS, and all routes.
@@ -308,6 +308,10 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/fs/read", get(fs_api::read))
         .route("/api/fs/stat", get(fs_api::stat))
         .route("/api/fs/download", get(fs_api::download))
+        .route(
+            "/api/fs/video/tickets",
+            post(fs_video::issue_ticket).delete(fs_video::revoke_ticket),
+        )
         .route("/api/fs/language-files", get(fs_api::language_files))
         .route("/api/fs/search", get(fs_api::search))
         .route("/api/fs/search-paths", get(fs_api::search_paths))

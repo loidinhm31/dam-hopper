@@ -530,8 +530,10 @@ fn json_to_toml(v: &Value) -> Option<toml::Value> {
 }
 
 async fn reload_config(state: &AppState) -> Result<(), ApiError> {
+    let _workspace_context = state.workspace_context_guard.write().await;
     let config_path = state.config.read().await.config_path.clone();
     let new_cfg: DamHopperConfig = read_config(&config_path).map_err(ApiError::from_app)?;
+    state.video_stream_tickets.revoke_all();
     state.fs.reinit_sandbox(project_roots_from_config(&new_cfg));
     *state.config.write().await = new_cfg;
     Ok(())

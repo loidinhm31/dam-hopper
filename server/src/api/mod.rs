@@ -8,6 +8,7 @@ pub mod config;
 pub mod diagnostics;
 pub mod error;
 pub mod fs;
+pub mod fs_video;
 pub mod git;
 pub mod git_diff;
 pub mod port_forward;

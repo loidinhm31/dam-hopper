@@ -13,7 +13,7 @@ use crate::config::{DamHopperConfig, GlobalConfig};
 use crate::crypto::{DamHopperOpaqueSuite, OpaqueRegistrations};
 use crate::diagnostics::DiagnosticStore;
 use crate::error::AppError;
-use crate::fs::FsSubsystem;
+use crate::fs::{FsSubsystem, VideoStreamTicketStore};
 use crate::port_forward::PortForwardManager;
 use crate::pty::{BroadcastEventSink, PtySessionManager};
 use crate::ssh::SshCredStore;
@@ -57,6 +57,10 @@ pub struct AppState {
     /// Workspace-scoped filesystem subsystem (sandbox + watcher in Phase 02).
     /// Clone is cheap — Arc-backed.
     pub fs: FsSubsystem,
+    /// Memory-only, purpose-bound capabilities for browser video streaming.
+    pub video_stream_tickets: VideoStreamTicketStore,
+    /// Serializes sandbox replacement against video ticket issuance.
+    pub workspace_context_guard: Arc<RwLock<()>>,
     /// MongoDB Database, if configured
     pub db: Option<mongodb::Database>,
     /// Dev mode: skip authentication checks
@@ -181,6 +185,8 @@ impl AppState {
             jwt_secret: Arc::new(jwt_secret),
             ssh_creds: Arc::new(RwLock::new(None)),
             fs,
+            video_stream_tickets: VideoStreamTicketStore::new(),
+            workspace_context_guard: Arc::new(RwLock::new(())),
             db,
             no_auth,
             tunnel_manager,

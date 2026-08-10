@@ -14,9 +14,11 @@ use super::error::ApiError;
 pub async fn cache_clear(State(state): State<AppState>) -> impl IntoResponse {
     // In the Rust server there's no in-process cache beyond RwLock fields.
     // Re-reading config is the closest equivalent.
+    let _workspace_context = state.workspace_context_guard.write().await;
     let config_path = state.config.read().await.config_path.clone();
     match read_config(&config_path) {
         Ok(cfg) => {
+            state.video_stream_tickets.revoke_all();
             state.fs.reinit_sandbox(project_roots_from_config(&cfg));
             *state.config.write().await = cfg;
             Json(serde_json::json!({ "ok": true })).into_response()
