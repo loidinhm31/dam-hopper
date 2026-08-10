@@ -633,40 +633,77 @@ const THERMAL_ALERT_DURATION_MS: u64 = 300_000;
 const MAX_RESOURCE_TARGETS: usize = 50;
 const MAX_RESOURCE_TEXT_BYTES: usize = 128;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResourceAlertState {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResourceAlertState {
     TemperatureHigh,
     DiskFull,
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub(crate) struct ResourceAlertEvidence {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResourceAlertKind {
+    Temperature,
+    Disk,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceAlertEvidence {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature_celsius: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub disk_mount_point: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub disk_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub disk_usage_percent: Option<f64>,
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub(crate) struct ResourceAlertSummary {
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceAlertSummary {
+    pub kind: ResourceAlertKind,
+    pub key: String,
     pub state: ResourceAlertState,
+    pub severity: AlertSeverity,
     pub incident_id: String,
     pub opened_at: u64,
     pub updated_at: u64,
     pub duration_seconds: u64,
     pub scope: String,
     pub evidence: ResourceAlertEvidence,
+    pub threshold: String,
+    pub next_action: String,
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub(crate) struct ResourceAlertIncident {
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceAlertIncident {
+    #[serde(flatten)]
     pub summary: ResourceAlertSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_at: Option<u64>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(untagged)]
+pub enum HostResourceAlertIncident {
+    Memory(AlertIncident),
+    Resource(ResourceAlertIncident),
+}
+
+impl HostResourceAlertIncident {
+    pub(crate) fn updated_at(&self) -> u64 {
+        match self {
+            Self::Memory(alert) => alert.updated_at,
+            Self::Resource(alert) => alert.summary.updated_at,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -754,13 +791,23 @@ fn insert_target(
     key: String,
     target: ResourceAlertTarget,
 ) {
-    if targets.insert(key.clone(), target).is_some() {
+    if let Some(existing) = targets.get_mut(&key) {
         // Duplicate source/mount metadata is ambiguous. Reset it rather than
         // allowing either record to maintain an alert lifecycle.
-        if let Some(target) = targets.get_mut(&key) {
-            target.condition = false;
+        existing.condition = false;
+        return;
+    }
+
+    if let Some((largest_key, _)) = targets.last_key_value() {
+        if targets.len() >= MAX_RESOURCE_TARGETS {
+            if key.as_str() >= largest_key.as_str() {
+                return;
+            }
+            targets.pop_last();
         }
     }
+
+    targets.insert(key, target);
 }
 
 #[derive(Clone, Debug)]
@@ -828,7 +875,9 @@ impl ResourceAlertEngineState {
             };
             if let Some(mut summary) = lifecycle.active {
                 if let Some(target) = sample.targets.get(&key) {
-                    summary.evidence = target.evidence.clone();
+                    if has_complete_resource_evidence(&target.evidence) {
+                        summary.evidence = target.evidence.clone();
+                    }
                 }
                 summary.updated_at = sample.reported_at_ms;
                 summary.duration_seconds = lifecycle
@@ -870,14 +919,20 @@ impl ResourceAlertEngineState {
                 continue;
             }
 
+            let (kind, threshold, next_action) = resource_alert_metadata(target.state);
             let summary = ResourceAlertSummary {
+                kind,
+                key: key.clone(),
                 state: target.state,
+                severity: AlertSeverity::Critical,
                 incident_id: format!("host-resource-incident-{}", next.next_incident),
                 opened_at: sample.reported_at_ms,
                 updated_at: sample.reported_at_ms,
                 duration_seconds: 0,
                 scope: key.clone(),
                 evidence: target.evidence.clone(),
+                threshold,
+                next_action,
             };
             next.next_incident = next.next_incident.saturating_add(1);
             lifecycle.opened_at_ms = Some(now);
@@ -908,10 +963,40 @@ pub(crate) struct ResourceAlertTransition {
     pub(crate) incidents: Vec<ResourceAlertIncident>,
 }
 
+fn has_complete_resource_evidence(evidence: &ResourceAlertEvidence) -> bool {
+    match (
+        evidence.temperature_source.as_deref(),
+        evidence.temperature_celsius,
+        evidence.disk_mount_point.as_deref(),
+        evidence.disk_usage_percent,
+    ) {
+        (Some(_), Some(celsius), None, None) => celsius.is_finite(),
+        (None, None, Some(_), Some(usage_percent)) => {
+            usage_percent.is_finite() && (0.0..=100.0).contains(&usage_percent)
+        }
+        _ => false,
+    }
+}
+
 fn resource_entry_duration(target: &ResourceAlertTarget) -> u64 {
     match target.state {
         ResourceAlertState::TemperatureHigh => THERMAL_ALERT_DURATION_MS,
         ResourceAlertState::DiskFull => 0,
+    }
+}
+
+fn resource_alert_metadata(state: ResourceAlertState) -> (ResourceAlertKind, String, String) {
+    match state {
+        ResourceAlertState::TemperatureHigh => (
+            ResourceAlertKind::Temperature,
+            "celsius>60C for 5 minutes".into(),
+            "Inspect cooling and the affected workload.".into(),
+        ),
+        ResourceAlertState::DiskFull => (
+            ResourceAlertKind::Disk,
+            "usage>=95%".into(),
+            "Free space or expand the affected persistent disk.".into(),
+        ),
     }
 }
 
@@ -1340,6 +1425,10 @@ mod tests {
         );
         assert_eq!(transition.incidents.len(), 1);
         assert!(transition.incidents[0].resolved_at.is_some());
+        assert_eq!(
+            transition.incidents[0].summary.evidence.temperature_celsius,
+            Some(60.1)
+        );
         assert!(transition.active.is_empty());
     }
 
@@ -1386,6 +1475,24 @@ mod tests {
             .incidents
             .iter()
             .all(|incident| incident.resolved_at.is_some()));
+    }
+
+    #[test]
+    fn normalized_targets_are_capped_to_a_deterministic_prefix() {
+        let temperatures = (0..=MAX_RESOURCE_TARGETS)
+            .rev()
+            .map(|index| super::super::TemperatureMetrics {
+                label: format!("sensor {index}"),
+                celsius: 61.0,
+                source: format!("sensor{index:02}"),
+            })
+            .collect();
+        let sample = resource_sample(0, temperatures, Vec::new());
+
+        assert_eq!(sample.targets.len(), MAX_RESOURCE_TARGETS);
+        assert!(sample.targets.contains_key("temperature:sensor00"));
+        assert!(sample.targets.contains_key("temperature:sensor49"));
+        assert!(!sample.targets.contains_key("temperature:sensor50"));
     }
 
     #[test]

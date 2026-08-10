@@ -1,18 +1,30 @@
 import { useEffect } from "react";
 import { create } from "zustand";
-import type { HostResourceAlert } from "@/api/client.js";
+import type {
+  AlertSeverity,
+  HostResourceAlert,
+  HostResourceResourceAlert,
+} from "@/api/client.js";
 
 const MAX_PRESENTED_INCIDENTS = 50;
 
-type AlertVersion = Pick<
-  HostResourceAlert,
-  "incidentId" | "state" | "severity"
->;
+type PresentableAlert = HostResourceAlert | HostResourceResourceAlert;
+
+type AlertVersion = {
+  incidentId?: string | null;
+  resource: boolean;
+  state: string;
+  severity: AlertSeverity;
+};
 
 interface HostResourceAlertPresentationState {
   versions: AlertVersion[];
   unreadIds: string[];
-  recordAlert: (alert?: HostResourceAlert | null) => void;
+  recordAlert: (alert?: PresentableAlert | null) => void;
+  recordSnapshotAlerts: (
+    alert?: HostResourceAlert | null,
+    resourceAlerts?: HostResourceResourceAlert[],
+  ) => void;
   markRead: () => void;
   reset: () => void;
 }
@@ -29,6 +41,14 @@ export const useHostResourceAlertPresentationStore =
       const incidentId = alert?.incidentId;
       if (!alert || !incidentId) return;
       set((current) => {
+        if ("resolvedAt" in alert && alert.resolvedAt != null) {
+          return {
+            versions: current.versions.filter(
+              (version) => version.incidentId !== incidentId,
+            ),
+            unreadIds: current.unreadIds.filter((id) => id !== incidentId),
+          };
+        }
         const previous = current.versions.find(
           (version) => version.incidentId === incidentId,
         );
@@ -42,6 +62,7 @@ export const useHostResourceAlertPresentationStore =
           ),
           {
             incidentId,
+            resource: "kind" in alert,
             state: alert.state,
             severity: alert.severity,
           },
@@ -54,15 +75,67 @@ export const useHostResourceAlertPresentationStore =
         return { versions, unreadIds };
       });
     },
+    recordSnapshotAlerts: (alert, resourceAlerts) => {
+      set((current) => {
+        const nextAlerts = [
+          ...(alert ? [alert] : []),
+          ...(resourceAlerts ?? []),
+        ];
+        let versions = current.versions;
+        let unreadIds = current.unreadIds;
+
+        for (const nextAlert of nextAlerts) {
+          const incidentId = nextAlert.incidentId;
+          if (!incidentId) continue;
+          const resource = "kind" in nextAlert;
+          const previous = versions.find(
+            (version) => version.incidentId === incidentId,
+          );
+          const changed =
+            !previous ||
+            previous.state !== nextAlert.state ||
+            previous.severity !== nextAlert.severity;
+          versions = [
+            ...versions.filter((version) => version.incidentId !== incidentId),
+            {
+              incidentId,
+              resource,
+              state: nextAlert.state,
+              severity: nextAlert.severity,
+            },
+          ].slice(-MAX_PRESENTED_INCIDENTS);
+          if (changed && !unreadIds.includes(incidentId)) {
+            unreadIds = [...unreadIds, incidentId].slice(-MAX_PRESENTED_INCIDENTS);
+          }
+        }
+
+        // Undefined means an older server did not send the additive field.
+        // An explicit array is authoritative for resource incidents only.
+        if (resourceAlerts !== undefined) {
+          const activeIds = new Set(resourceAlerts.map((item) => item.incidentId));
+          const removedIds = versions
+            .filter((version) => version.resource && !activeIds.has(version.incidentId ?? ""))
+            .map((version) => version.incidentId)
+            .filter((id): id is string => id != null);
+          versions = versions.filter(
+            (version) => !version.resource || activeIds.has(version.incidentId ?? ""),
+          );
+          unreadIds = unreadIds.filter((id) => !removedIds.includes(id));
+        }
+
+        return { versions, unreadIds };
+      });
+    },
     markRead: () => set({ unreadIds: [] }),
     reset: () => set({ versions: [], unreadIds: [] }),
   }));
 
 export function useHostResourceAlertPresentation(
   alert?: HostResourceAlert | null,
+  resourceAlerts?: HostResourceResourceAlert[],
 ) {
-  const recordAlert = useHostResourceAlertPresentationStore(
-    (state) => state.recordAlert,
+  const recordSnapshotAlerts = useHostResourceAlertPresentationStore(
+    (state) => state.recordSnapshotAlerts,
   );
   const unreadCount = useHostResourceAlertPresentationStore(
     (state) => state.unreadIds.length,
@@ -72,8 +145,8 @@ export function useHostResourceAlertPresentation(
   );
 
   useEffect(() => {
-    recordAlert(alert);
-  }, [alert, recordAlert]);
+    recordSnapshotAlerts(alert, resourceAlerts);
+  }, [alert, resourceAlerts, recordSnapshotAlerts]);
 
   return { unreadCount, markRead };
 }
