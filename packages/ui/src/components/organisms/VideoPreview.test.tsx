@@ -1,0 +1,113 @@
+// @vitest-environment jsdom
+
+import * as React from "react";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const issueVideoTicket = vi.hoisted(() => vi.fn());
+const startVideoDownload = vi.hoisted(() => vi.fn());
+
+vi.mock("@/api/video-tickets.js", () => ({ issueVideoTicket }));
+vi.mock("@/lib/start-video-download.js", () => ({ startVideoDownload }));
+vi.mock("@/api/server-config.js", () => ({
+  getProfileChangeVersion: () => 0,
+  subscribeToProfileChanges: () => () => {},
+}));
+
+import { VideoPreview } from "./VideoPreview.js";
+
+(
+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
+
+let root: Root | null = null;
+
+beforeEach(() => {
+  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(
+    () => undefined,
+  );
+  vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(
+    () => undefined,
+  );
+});
+
+afterEach(() => {
+  act(() => root?.unmount());
+  root = null;
+  document.body.innerHTML = "";
+  vi.restoreAllMocks();
+  issueVideoTicket.mockReset();
+  startVideoDownload.mockReset();
+});
+
+async function mount() {
+  const container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  await act(async () => {
+    root?.render(
+      <VideoPreview
+        project="demo"
+        path="clips/demo.webm"
+        fileName="demo.webm"
+        mime="video/webm"
+      />,
+    );
+  });
+}
+
+describe("VideoPreview", () => {
+  it("attaches a playback ticket directly to one native, non-autoplay player", async () => {
+    const revoke = vi.fn().mockResolvedValue(undefined);
+    issueVideoTicket.mockResolvedValue({
+      purpose: "playback",
+      url: "https://api.test/api/fs/video/stream/playback-token",
+      expiresAt: 1,
+      revoke,
+    });
+
+    await mount();
+
+    const player = document.querySelector("video");
+    expect(player).toHaveProperty(
+      "src",
+      "https://api.test/api/fs/video/stream/playback-token",
+    );
+    expect(player?.getAttribute("preload")).toBe("metadata");
+    expect(player?.hasAttribute("controls")).toBe(true);
+    expect(player?.hasAttribute("autoplay")).toBe(false);
+    expect(player?.hasAttribute("playsinline")).toBe(true);
+    expect(issueVideoTicket).toHaveBeenCalledWith(
+      "demo",
+      "clips/demo.webm",
+      "playback",
+      expect.any(AbortSignal),
+    );
+
+    act(() => root?.unmount());
+    expect(revoke).toHaveBeenCalledOnce();
+    root = null;
+  });
+
+  it("starts a separate direct download without replacing playback", async () => {
+    issueVideoTicket.mockResolvedValue({
+      purpose: "playback",
+      url: "https://api.test/api/fs/video/stream/playback-token",
+      expiresAt: 1,
+      revoke: vi.fn(),
+    });
+    startVideoDownload.mockResolvedValue(undefined);
+    await mount();
+
+    const button = [...document.querySelectorAll("button")].find((candidate) =>
+      candidate.textContent?.includes("Download"),
+    );
+    await act(async () => button?.click());
+
+    expect(startVideoDownload).toHaveBeenCalledWith("demo", "clips/demo.webm");
+    expect(document.querySelector("video")?.getAttribute("src")).toContain(
+      "playback-token",
+    );
+  });
+});

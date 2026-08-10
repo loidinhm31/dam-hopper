@@ -14,8 +14,8 @@
 - Description: Route recognized Explorer videos to one native browser player and stream downloads through a separate temporary-anchor ticket without Blob buffering.
 - Priority: P2
 - Effort: 10h
-- Implementation status: Pending
-- Review status: Validation decisions incorporated; pending browser UX/accessibility review
+- Implementation status: Completed (2026-08-10)
+- Review status: Completed; browser UX/accessibility implementation and focused validation complete
 
 ## Key Insights
 
@@ -113,15 +113,15 @@ known large unsupported non-video -> fail before fetch/blob
 
 ## Todo list
 
-- [ ] Add exact extension/container classifier
-- [ ] Route video before binary/large in every editor path
-- [ ] Add purpose-aware profile-snapshot ticket client
-- [ ] Add shared temporary-anchor direct-download helper
-- [ ] Add VideoPreview lifecycle, native controls, stale guards, and fallback Download
-- [ ] Wire FileTree video Download to separate ticket
-- [ ] Preserve only safe small non-video Blob download
-- [ ] Fail known large unsupported non-video before Blob allocation
-- [ ] Keep URLs/tickets memory-only and v1 browser-host only
+- [x] Add exact extension/container classifier
+- [x] Route video before binary/large in every editor path
+- [x] Add purpose-aware profile-snapshot ticket client
+- [x] Add shared temporary-anchor direct-download helper
+- [x] Add VideoPreview lifecycle, native controls, stale guards, and fallback Download
+- [x] Wire FileTree video Download to separate ticket
+- [x] Preserve only safe small non-video Blob download
+- [x] Fail known large unsupported non-video before Blob allocation
+- [x] Keep URLs/tickets memory-only and v1 browser-host only
 
 ## Success Criteria
 

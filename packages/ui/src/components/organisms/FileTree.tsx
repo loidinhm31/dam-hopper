@@ -341,6 +341,7 @@ export function FileTree({
   const treeRef = useRef<TreeApi<FsArborNode> | undefined>(undefined);
   const handledRevealNonceRef = useRef<number | null>(null);
   const pendingRevealRef = useRef<FileTreeRevealRequest | null>(null);
+  const pendingDownloadsRef = useRef(new Set<string>());
   const liveTreeCommitVersionRef = useRef(0);
   const liveTreeCommitWaitersRef = useRef<Set<() => void>>(new Set());
 
@@ -481,8 +482,7 @@ export function FileTree({
     [visibleNodes],
   );
   const isRenderedLiveNode = useCallback(
-    (node: FsArborNode) =>
-      !isLanguageMode && renderedLiveTreeIds.has(node.id),
+    (node: FsArborNode) => !isLanguageMode && renderedLiveTreeIds.has(node.id),
     [isLanguageMode, renderedLiveTreeIds],
   );
   const gitIndex = useMemo(
@@ -673,9 +673,14 @@ export function FileTree({
 
   function handleDownload(node: FsArborNode) {
     if (!isRenderedLiveNode(node) || node.kind !== "file") return;
-    void ops.download(node.id).catch((error) => {
-      setOpError(error?.message ?? "Download failed");
-    });
+    if (pendingDownloadsRef.current.has(node.id)) return;
+    pendingDownloadsRef.current.add(node.id);
+    void ops
+      .download(node.id, node.size)
+      .catch((error) => {
+        setOpError(error?.message ?? "Download failed");
+      })
+      .finally(() => pendingDownloadsRef.current.delete(node.id));
   }
 
   function handleUploadHere(node: FsArborNode) {

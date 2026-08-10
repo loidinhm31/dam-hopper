@@ -766,11 +766,14 @@ pub struct PersistedSession {
 - Seeded/reinitialized from config projects on startup and workspace switch
 - Cheap clone pattern
 
-### Explorer video playback and download (Phase 2 complete; frontend integration deferred)
+### Explorer video playback and download (Phase 03 browser host complete)
 
 Phase 1 delivered the authenticated, purpose-bound ticket boundary. Phase 2 adds
 the capability-only stream endpoint; ticket issuance, revocation, and streaming
-are shipped. The browser `VideoPreview` integration remains deferred.
+are shipped. Phase 03 completes the browser-host `VideoPreview` integration.
+Browser routing recognizes only the final, case-insensitive extensions `mp4`,
+`m4v`, `webm`, `ogv`, `ogg`, and `mov` (an extension/MIME hint, not codec proof);
+diff tabs retain their dedicated viewer.
 
 The shipped server-side sequence is:
 
@@ -835,16 +838,17 @@ disposition, validator, and cache headers to allowed origins. Credentialed reque
 mirror the request origin when origins are unrestricted; configured origins remain
 an explicit allowlist.
 
-Deferred frontend integration will route recognized video
-extensions to `VideoPreview` before generic binary or large-text tiering. The
-player will request a fresh ticket on mount, use one
+The browser host routes recognized video extensions to `VideoPreview` before
+generic binary or large-text tiering. The player requests a fresh playback
+ticket on mount, uses one
 native `<video controls preload="metadata" playsInline>` element, and clears its
 source on tab switch or unmount. Download actions request a separate download
 ticket, then activate a temporary anchor so browser download handling consumes the
 stream directly without `fetch().blob()`. Playback and download can run concurrently
 and expire or revoke independently. Extension and MIME are routing hints only;
-codec failure becomes an actionable unsupported-media state. V1 targets the browser
-host; packaged Tauri playback/download and CSP verification are deferred. V1 does
+codec failure becomes an actionable unsupported-media state. Phase 03 targets the
+browser host; packaged Tauri playback/download and CSP verification remain
+deferred to Phase 04. V1 does
 not add thumbnails, custom controls, Media Source Extensions, HLS/DASH, codec probing,
 or transcoding.
 
