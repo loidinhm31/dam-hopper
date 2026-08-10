@@ -1,6 +1,6 @@
 use axum::{
-    extract::State,
-    http::{header, StatusCode},
+    extract::{Path as AxumPath, State},
+    http::{header, HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -16,6 +16,7 @@ use crate::{
     state::AppState,
 };
 
+use super::video_stream_response;
 use super::{error::ApiError, fs::resolve};
 
 #[derive(Deserialize)]
@@ -147,6 +148,15 @@ pub async fn revoke_ticket(
     let _workspace_context = state.workspace_context_guard.read().await;
     state.video_stream_tickets.revoke(&request.ticket);
     StatusCode::NO_CONTENT
+}
+
+pub async fn stream_ticket(
+    State(state): State<AppState>,
+    AxumPath(ticket): AxumPath<String>,
+    method: Method,
+    headers: HeaderMap,
+) -> Response {
+    video_stream_response::respond(state, ticket, method, headers).await
 }
 
 fn capacity_response() -> Response {

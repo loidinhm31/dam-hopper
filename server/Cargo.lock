@@ -701,6 +701,7 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac",
+ "httpdate",
  "ignore",
  "infer",
  "jsonwebtoken",

@@ -1,5 +1,9 @@
 use axum::http::{
-    header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE},
+    header::{
+        ACCEPT, ACCEPT_RANGES, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH,
+        CONTENT_RANGE, CONTENT_TYPE, COOKIE, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, IF_RANGE,
+        LAST_MODIFIED, RANGE,
+    },
     Method,
 };
 use axum::{
@@ -320,10 +324,17 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             auth::require_auth,
         ));
 
+    // Capability URL authorizes this media stream; it intentionally carries no cookie auth.
+    let video_stream = Router::new().route(
+        "/api/fs/video/stream/{ticket}",
+        get(fs_video::stream_ticket).head(fs_video::stream_ticket),
+    );
+
     Router::new()
         .merge(public)
         .merge(protected)
         .merge(ide_routes)
+        .merge(video_stream)
         .layer(cors)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
@@ -340,7 +351,25 @@ fn build_cors(allowed_origins: &[String]) -> CorsLayer {
         Method::OPTIONS,
         Method::HEAD,
     ];
-    let headers = [AUTHORIZATION, CONTENT_TYPE, ACCEPT, COOKIE];
+    let headers = [
+        AUTHORIZATION,
+        CONTENT_TYPE,
+        ACCEPT,
+        COOKIE,
+        RANGE,
+        IF_RANGE,
+        IF_NONE_MATCH,
+        IF_MODIFIED_SINCE,
+    ];
+    let exposed_headers = [
+        ACCEPT_RANGES,
+        CONTENT_RANGE,
+        CONTENT_LENGTH,
+        CONTENT_DISPOSITION,
+        ETAG,
+        LAST_MODIFIED,
+        CACHE_CONTROL,
+    ];
 
     if allowed_origins.is_empty() || allowed_origins.iter().any(|o| o == "*") {
         // Mirror the request Origin back — `*` is rejected by browsers when credentials are sent.
@@ -348,6 +377,7 @@ fn build_cors(allowed_origins: &[String]) -> CorsLayer {
             .allow_origin(AllowOrigin::mirror_request())
             .allow_methods(methods)
             .allow_headers(headers)
+            .expose_headers(exposed_headers)
             .allow_credentials(true)
     } else {
         let origins: Vec<axum::http::HeaderValue> = allowed_origins
@@ -358,6 +388,7 @@ fn build_cors(allowed_origins: &[String]) -> CorsLayer {
             .allow_origin(origins)
             .allow_methods(methods)
             .allow_headers(headers)
+            .expose_headers(exposed_headers)
             .allow_credentials(true)
     }
 }
