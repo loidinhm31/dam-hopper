@@ -87,11 +87,14 @@ pub struct BinaryResponse {
 // Helper: resolve + validate a project-relative path
 // ---------------------------------------------------------------------------
 
-async fn resolve(
+pub(super) async fn resolve(
     state: &AppState,
     project: &str,
     rel_path: &str,
 ) -> Result<std::path::PathBuf, AppError> {
+    if std::path::Path::new(rel_path).is_absolute() {
+        return Err(AppError::Fs(crate::fs::FsError::PathEscape));
+    }
     let project_abs = state.project_path(project).await?;
     let sandbox = state.fs.sandbox().map_err(AppError::Fs)?;
     let proposed = project_abs.join(rel_path);
