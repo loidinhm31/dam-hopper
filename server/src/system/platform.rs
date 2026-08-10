@@ -162,12 +162,14 @@ fn unsupported_snapshot(
 ) -> HostResourceSnapshotV1 {
     use super::{Availability, MemorySnapshot, MountContext};
     let sampled_at = source.now_ms();
-    HostResourceSnapshotV1::new(
+    let mut snapshot = HostResourceSnapshotV1::new(
         sampled_at,
         MemorySnapshot::empty_at(sampled_at),
         MountContext::for_workspace_at(workspace, sampled_at),
-    )
-    .with_deep_sections(
+    );
+    snapshot.memory.availability = Availability::unsupported(sampled_at);
+    snapshot.mount_context.availability = Availability::unsupported(sampled_at);
+    snapshot.with_deep_sections(
         Availability::unsupported(sampled_at),
         Availability::unsupported(sampled_at),
         Availability::unsupported(sampled_at),
@@ -317,5 +319,30 @@ mod tests {
             read_bounded_text(&missing),
             Err(ReadTextError::Io(std::io::ErrorKind::NotFound))
         );
+    }
+}
+
+#[cfg(all(test, not(target_os = "linux")))]
+mod non_linux_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn unsupported_snapshot_serializes_explicit_deep_capability() {
+        let snapshot =
+            collect_host_resource_snapshot(&SystemHostResourceSource::default(), Path::new("."));
+        let value = serde_json::to_value(snapshot).unwrap();
+
+        assert_eq!(
+            value["capabilities"]["linuxDeepMetrics"]["state"],
+            "unsupported"
+        );
+        assert_eq!(value["memory"]["availability"]["state"], "unsupported");
+        assert_eq!(value["processes"]["availability"]["state"], "unsupported");
+        assert_eq!(
+            value["mountContext"]["availability"]["state"],
+            "unsupported"
+        );
+        assert_eq!(value["cgroups"].as_array().map(Vec::len), Some(0));
     }
 }

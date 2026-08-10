@@ -2,7 +2,7 @@
 # vendored feature bundles libgit2 + openssl statically — no system libs needed at runtime
 # Keep the builder at or above the locked dependency MSRV (currently Rust 1.95
 # for sysinfo) so a fresh release build cannot select an unsupported toolchain.
-FROM rust:1.97.1-bookworm AS server-builder
+FROM rust:1.97.1-bookworm@sha256:e544a8ee0b93bb2ddc8c67a80606f040998eff3847e4deed988d0874559f52a8 AS server-builder
 
 WORKDIR /build
 
@@ -24,7 +24,7 @@ COPY server/assets ./assets
 RUN touch src/main.rs && cargo build --release --features vendored
 
 # Stage 2: Build web SPA
-FROM node:20-slim AS web-builder
+FROM node:20-slim@sha256:3d0f05455dea2c82e2f76e7e2543964c30f6b7d673fc1a83286736d44fe4c41c AS web-builder
 
 WORKDIR /build
 
@@ -46,9 +46,8 @@ COPY packages/shared ./packages/shared
 COPY packages/ui ./packages/ui
 RUN pnpm build
 
-# Stage 3: Runtime. Base tags are explicit but mutable; pin image digests before
-# publishing a release when byte-for-byte reproduction is required.
-FROM debian:bookworm-20250317-slim
+# Stage 3: Runtime. Base image digests are pinned for reproducible release builds.
+FROM debian:bookworm-20250317-slim@sha256:e9ac68ffde903b241342267a51cd74c5417414af652cb2e380c6ddcf522589bc
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
