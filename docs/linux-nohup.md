@@ -92,7 +92,10 @@ Build the container from the repository `Dockerfile`; its Rust builder is pinned
 to the ABI-compatible Bookworm toolchain and includes the server asset bundle.
 The web stage also copies the root TypeScript configuration required by the
 workspace build. Keep these inputs in the build context when producing a
-release image.
+release image. Record the resulting image digest and deploy that immutable
+digest, rather than an unqualified mutable tag; retain the prior digest for
+rollback. The image must contain monitoring-only server/web assets and must
+not package deferred remediation helpers or action controls.
 
 Start with a canary host, observe source-availability states and alert rate for
 the monitor cadence, then broaden only after the cached endpoint latency and
@@ -100,11 +103,12 @@ resource budget are acceptable. In containers, treat the reported data as that
 container's namespace view. Cgroup v1 and non-Linux deep metrics are expected
 to show unsupported rather than a fabricated zero.
 
-If deep collection regresses, roll back the release binary while retaining
-`GET /api/system/metrics`. Confirm the legacy endpoint remains authenticated
-and cached, the browser diagnosis shows its compatible basic-metrics fallback,
-and no alert subscription remains bound to the replaced server profile. Do not
-use rollback to enable any deferred remediation capability.
+If deep collection regresses, roll back to the recorded prior image digest (or
+release binary) while retaining `GET /api/system/metrics`. Confirm the legacy
+endpoint remains authenticated and cached, the browser diagnosis shows its
+compatible basic-metrics fallback, and no alert subscription remains bound to
+the replaced server profile. Do not use rollback to enable any deferred
+remediation capability.
 
 ## Uninstall
 
