@@ -16,8 +16,9 @@ use crate::{
     system::{
         alerts::{
             AlertEngineState, AlertEvidence, AlertIncident, AlertSample, AlertSeverity, AlertState,
-            AlertSummary, AlertThresholds, ResourceAlertEngineState, ResourceAlertIncident,
-            ResourceAlertSample, ResourceAlertSummary, ResourceAlertTransition,
+            AlertSummary, AlertThresholds, HostResourceAlertIncident, ResourceAlertEngineState,
+            ResourceAlertIncident, ResourceAlertSample, ResourceAlertSummary,
+            ResourceAlertTransition,
         },
         config::HostResourceMonitorConfig,
         platform::{
@@ -176,15 +177,24 @@ impl HostResourceMonitor {
         self.cache.read().await.legacy.clone()
     }
 
-    pub async fn alerts(&self, limit: usize) -> Vec<AlertIncident> {
+    pub async fn alerts(&self, limit: usize) -> Vec<HostResourceAlertIncident> {
         let cache = self.cache.read().await;
-        cache
+        let mut incidents = cache
             .incidents
             .iter()
-            .rev()
-            .take(limit.min(50))
             .cloned()
-            .collect()
+            .map(HostResourceAlertIncident::Memory)
+            .chain(
+                cache
+                    .resource_incidents
+                    .iter()
+                    .cloned()
+                    .map(HostResourceAlertIncident::Resource),
+            )
+            .collect::<Vec<_>>();
+        incidents.sort_by_key(|incident| std::cmp::Reverse(incident.updated_at()));
+        incidents.truncate(limit.min(50));
+        incidents
     }
 
     /// Applies server-owned cadence and threshold changes without creating a
@@ -371,7 +381,9 @@ impl HostResourceMonitor {
             &resource_sample,
             config.max_alert_incidents,
         );
+        let resource_events = resource_transition.incidents.clone();
         update_resource_alerts(&mut cache, resource_transition, config.max_alert_incidents);
+        snapshot.current_alerts = cache.resource_alerts.clone();
         if let Some((sample, transition)) = transition {
             cache.engine = transition.next;
             snapshot.alert = Some(transition.summary.clone());
@@ -394,12 +406,13 @@ impl HostResourceMonitor {
                 cache.incidents.pop_front();
             }
             cache.alert = transition.summary.clone();
-            // Resource alerts stay internal until Phase 02 defines their
-            // additive event payload. Preserve the existing memory event.
-            let should_emit = transition.change.is_some();
+            let should_emit_memory = transition.change.is_some();
             drop(cache);
-            if should_emit {
+            if should_emit_memory {
                 self.event_sink.send_host_alert_changed(&transition.summary);
+            }
+            for incident in &resource_events {
+                self.event_sink.send_host_resource_alert_changed(incident);
             }
             return;
         }
@@ -408,6 +421,10 @@ impl HostResourceMonitor {
         cache.legacy = legacy;
         while cache.incidents.len() > config.max_alert_incidents {
             cache.incidents.pop_front();
+        }
+        drop(cache);
+        for incident in &resource_events {
+            self.event_sink.send_host_resource_alert_changed(incident);
         }
     }
 
@@ -717,7 +734,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deadline_updates_advance_resource_lifecycle_without_emitting_memory_events() {
+    async fn deadline_updates_publish_resource_events_without_memory_payloads() {
         let root = Arc::new(RwLock::new(PathBuf::from("/tmp")));
         let (sink, _) = BroadcastEventSink::new(8);
         let mut host_alerts = sink.subscribe_host_alerts();
@@ -764,8 +781,11 @@ mod tests {
         );
         assert_eq!(cache.resource_incidents.len(), 1);
         drop(cache);
-        assert!(monitor.alerts(50).await.is_empty());
-        assert!(host_alerts.try_recv().is_err());
+        assert_eq!(monitor.alerts(50).await.len(), 1);
+        let event: serde_json::Value =
+            serde_json::from_str(&host_alerts.try_recv().unwrap()).unwrap();
+        assert_eq!(event["kind"], "host:alertChanged");
+        assert_eq!(event["payload"]["kind"], "temperature");
     }
 
     #[tokio::test]
