@@ -3,6 +3,8 @@ pub mod decrypt;
 pub mod enc_upload;
 pub mod error;
 pub mod event;
+pub mod image_ticket;
+pub(crate) mod media_ticket;
 pub mod mutate;
 pub mod ops;
 pub mod sandbox;
@@ -14,6 +16,13 @@ pub use decrypt::{decrypt_and_write, decrypt_blob, DecryptResult};
 pub use enc_upload::EncUploadState;
 pub use error::FsError;
 pub use event::FsEvent;
+pub(crate) use image_ticket::ImageTicketIssue;
+pub use image_ticket::{
+    image_mime, is_supported_image, ImageStreamTicketStore, ImageTicketPurpose, ImageTicketRecord,
+};
+pub(crate) use media_ticket::{
+    MediaFileVersion, MediaTicketKind, MediaTicketPurpose, MediaTicketRecord, MediaTicketStore,
+};
 pub use mutate::{assert_safe_mutation, create_dir, create_file, delete, move_path, rename};
 pub use ops::{
     atomic_persist_with_check, atomic_write_with_check, DirEntry, FileStat, SearchMatch,

@@ -1,17 +1,15 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
+use std::path::{Path, PathBuf};
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 
-pub const MAX_VIDEO_TICKETS: usize = 256;
-pub const VIDEO_TICKET_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
-pub const VIDEO_TICKET_ABSOLUTE_TTL: Duration = Duration::from_secs(8 * 60 * 60);
+use super::media_ticket::{
+    MediaFileVersion, MediaTicketIssue, MediaTicketKind, MediaTicketPurpose, MediaTicketRecord,
+    MediaTicketStore, MAX_MEDIA_TICKETS, MEDIA_TICKET_ABSOLUTE_TTL, MEDIA_TICKET_IDLE_TTL,
+};
+
+pub const MAX_VIDEO_TICKETS: usize = MAX_MEDIA_TICKETS;
+pub const VIDEO_TICKET_IDLE_TTL: std::time::Duration = MEDIA_TICKET_IDLE_TTL;
+pub const VIDEO_TICKET_ABSOLUTE_TTL: std::time::Duration = MEDIA_TICKET_ABSOLUTE_TTL;
 
 const VIDEO_EXTENSIONS: [&str; 6] = ["mp4", "m4v", "webm", "ogv", "ogg", "mov"];
 
@@ -32,38 +30,7 @@ pub fn is_supported_video(path: &Path) -> bool {
         })
 }
 
-#[derive(Clone)]
-pub struct VideoFileVersion {
-    pub canonical_path: PathBuf,
-    pub size: u64,
-    pub modified: SystemTime,
-    pub validator: String,
-    #[cfg(unix)]
-    pub device: u64,
-    #[cfg(unix)]
-    pub inode: u64,
-}
-
-impl VideoFileVersion {
-    pub fn from_metadata(
-        canonical_path: PathBuf,
-        metadata: &std::fs::Metadata,
-    ) -> std::io::Result<Self> {
-        #[cfg(unix)]
-        use std::os::unix::fs::MetadataExt;
-
-        Ok(Self {
-            canonical_path,
-            size: metadata.len(),
-            modified: metadata.modified()?,
-            validator: random_token(),
-            #[cfg(unix)]
-            device: metadata.dev(),
-            #[cfg(unix)]
-            inode: metadata.ino(),
-        })
-    }
-}
+pub type VideoFileVersion = MediaFileVersion;
 
 #[derive(Clone)]
 pub struct VideoTicketRecord {
@@ -90,36 +57,7 @@ pub(crate) enum VideoTicketIssue {
 
 #[derive(Clone)]
 pub struct VideoStreamTicketStore {
-    inner: Arc<Mutex<VideoTicketInner>>,
-    clock: Arc<dyn VideoTicketClock>,
-}
-
-struct VideoTicketInner {
-    tickets: HashMap<String, StoredVideoTicket>,
-    generation: u64,
-}
-
-struct StoredVideoTicket {
-    record: VideoTicketRecord,
-    idle_expires_at: Instant,
-    absolute_expires_at: Instant,
-}
-
-trait VideoTicketClock: Send + Sync {
-    fn now_instant(&self) -> Instant;
-    fn now_system(&self) -> SystemTime;
-}
-
-struct SystemVideoTicketClock;
-
-impl VideoTicketClock for SystemVideoTicketClock {
-    fn now_instant(&self) -> Instant {
-        Instant::now()
-    }
-
-    fn now_system(&self) -> SystemTime {
-        SystemTime::now()
-    }
+    media: MediaTicketStore,
 }
 
 impl Default for VideoStreamTicketStore {
@@ -130,24 +68,15 @@ impl Default for VideoStreamTicketStore {
 
 impl VideoStreamTicketStore {
     pub fn new() -> Self {
-        Self::with_clock(Arc::new(SystemVideoTicketClock))
+        Self::from_media(MediaTicketStore::new())
     }
 
-    fn with_clock(clock: Arc<dyn VideoTicketClock>) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(VideoTicketInner {
-                tickets: HashMap::new(),
-                generation: 0,
-            })),
-            clock,
-        }
+    pub(crate) fn from_media(media: MediaTicketStore) -> Self {
+        Self { media }
     }
 
     pub(crate) fn generation(&self) -> u64 {
-        self.inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .generation
+        self.media.generation()
     }
 
     pub(crate) fn issue(
@@ -155,231 +84,70 @@ impl VideoStreamTicketStore {
         expected_generation: u64,
         record: VideoTicketRecord,
     ) -> VideoTicketIssue {
-        let now = self.clock.now_instant();
-        let absolute_expires_at = now + VIDEO_TICKET_ABSOLUTE_TTL;
-        let idle_expires_at = now + VIDEO_TICKET_IDLE_TTL;
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if inner.generation != expected_generation {
-            return VideoTicketIssue::ContextChanged;
+        let purpose = record.purpose;
+        match self.media.issue(expected_generation, record.into_media()) {
+            MediaTicketIssue::Issued(lease) => VideoTicketIssue::Issued(VideoTicketLease {
+                ticket: lease.ticket,
+                expires_at_epoch_ms: lease.expires_at_epoch_ms,
+                purpose,
+            }),
+            MediaTicketIssue::Capacity => VideoTicketIssue::Capacity,
+            MediaTicketIssue::ContextChanged => VideoTicketIssue::ContextChanged,
         }
-        inner.tickets.retain(|_, ticket| !is_expired(ticket, now));
-        if inner.tickets.len() >= MAX_VIDEO_TICKETS {
-            return VideoTicketIssue::Capacity;
-        }
-
-        for _ in 0..4 {
-            let ticket = random_token();
-            if inner.tickets.contains_key(&ticket) {
-                continue;
-            }
-            inner.tickets.insert(
-                ticket.clone(),
-                StoredVideoTicket {
-                    record: record.clone(),
-                    idle_expires_at,
-                    absolute_expires_at,
-                },
-            );
-            return VideoTicketIssue::Issued(VideoTicketLease {
-                ticket,
-                expires_at_epoch_ms: epoch_ms(self.clock.now_system() + VIDEO_TICKET_IDLE_TTL),
-                purpose: record.purpose,
-            });
-        }
-        VideoTicketIssue::Capacity
     }
 
-    /// Unknown, expired, and revoked tickets all return `None`.
+    /// Unknown, expired, revoked, and non-video tickets all return `None`.
     pub fn lookup_and_touch(&self, ticket: &str) -> Option<VideoTicketRecord> {
-        let now = self.clock.now_instant();
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let stored = inner.tickets.get_mut(ticket)?;
-        if is_expired(stored, now) {
-            inner.tickets.remove(ticket);
-            return None;
-        }
-        stored.idle_expires_at =
-            std::cmp::min(now + VIDEO_TICKET_IDLE_TTL, stored.absolute_expires_at);
-        Some(stored.record.clone())
+        self.media
+            .lookup_and_touch(ticket, MediaTicketKind::Video)
+            .and_then(VideoTicketRecord::from_media)
     }
 
     pub fn revoke(&self, ticket: &str) {
-        self.inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .tickets
-            .remove(ticket);
+        self.media.revoke(ticket, MediaTicketKind::Video);
     }
 
     pub fn revoke_all(&self) {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        inner.tickets.clear();
-        inner.generation = inner.generation.wrapping_add(1);
-    }
-
-    #[cfg(test)]
-    fn live_count(&self) -> usize {
-        let now = self.clock.now_instant();
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        inner.tickets.retain(|_, ticket| !is_expired(ticket, now));
-        inner.tickets.len()
+        self.media.revoke_all();
     }
 }
 
-fn is_expired(ticket: &StoredVideoTicket, now: Instant) -> bool {
-    now >= ticket.idle_expires_at || now >= ticket.absolute_expires_at
-}
+impl VideoTicketRecord {
+    pub(crate) fn into_media(self) -> MediaTicketRecord {
+        MediaTicketRecord {
+            kind: MediaTicketKind::Video,
+            purpose: match self.purpose {
+                VideoTicketPurpose::Playback => MediaTicketPurpose::Playback,
+                VideoTicketPurpose::Download => MediaTicketPurpose::Download,
+            },
+            project: self.project,
+            project_relative_path: self.project_relative_path,
+            file: self.file,
+            mime: self.mime,
+            filename: self.filename,
+        }
+    }
 
-fn random_token() -> String {
-    let mut bytes = [0_u8; 32];
-    OsRng.fill_bytes(&mut bytes);
-    URL_SAFE_NO_PAD.encode(bytes)
-}
-
-fn epoch_ms(time: SystemTime) -> u128 {
-    time.duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
+    fn from_media(record: MediaTicketRecord) -> Option<Self> {
+        let purpose = match record.purpose {
+            MediaTicketPurpose::Playback => VideoTicketPurpose::Playback,
+            MediaTicketPurpose::Download => VideoTicketPurpose::Download,
+            MediaTicketPurpose::Preview => return None,
+        };
+        (record.kind == MediaTicketKind::Video).then_some(Self {
+            purpose,
+            project: record.project,
+            project_relative_path: record.project_relative_path,
+            file: record.file,
+            mime: record.mime,
+            filename: record.filename,
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use super::*;
-
-    struct TestClock {
-        instant: Mutex<Instant>,
-        system: Mutex<SystemTime>,
-    }
-
-    impl TestClock {
-        fn advance(&self, duration: Duration) {
-            *self.instant.lock().unwrap() += duration;
-            *self.system.lock().unwrap() += duration;
-        }
-    }
-
-    impl VideoTicketClock for TestClock {
-        fn now_instant(&self) -> Instant {
-            *self.instant.lock().unwrap()
-        }
-
-        fn now_system(&self) -> SystemTime {
-            *self.system.lock().unwrap()
-        }
-    }
-
-    fn record(purpose: VideoTicketPurpose) -> VideoTicketRecord {
-        let metadata = std::fs::metadata(env!("CARGO_MANIFEST_DIR")).unwrap();
-        VideoTicketRecord {
-            purpose,
-            project: "project".into(),
-            project_relative_path: PathBuf::from("clip.webm"),
-            file: VideoFileVersion::from_metadata(PathBuf::from("/private/clip.webm"), &metadata)
-                .unwrap(),
-            mime: "video/webm".into(),
-            filename: "clip.webm".into(),
-        }
-    }
-
-    fn store() -> (VideoStreamTicketStore, Arc<TestClock>) {
-        let clock = Arc::new(TestClock {
-            instant: Mutex::new(Instant::now()),
-            system: Mutex::new(UNIX_EPOCH + Duration::from_secs(1_000)),
-        });
-        (VideoStreamTicketStore::with_clock(clock.clone()), clock)
-    }
-
-    fn issue(store: &VideoStreamTicketStore, record: VideoTicketRecord) -> VideoTicketLease {
-        match store.issue(store.generation(), record) {
-            VideoTicketIssue::Issued(lease) => lease,
-            VideoTicketIssue::Capacity | VideoTicketIssue::ContextChanged => {
-                panic!("test ticket should be issued")
-            }
-        }
-    }
-
-    #[test]
-    fn purposes_have_independent_lifecycles() {
-        let (store, clock) = store();
-        let playback = issue(&store, record(VideoTicketPurpose::Playback));
-        let download = issue(&store, record(VideoTicketPurpose::Download));
-        store.revoke(&playback.ticket);
-
-        assert!(store.lookup_and_touch(&playback.ticket).is_none());
-        assert_eq!(
-            store.lookup_and_touch(&download.ticket).unwrap().purpose,
-            VideoTicketPurpose::Download
-        );
-        clock.advance(VIDEO_TICKET_IDLE_TTL);
-        assert!(store.lookup_and_touch(&download.ticket).is_none());
-    }
-
-    #[test]
-    fn unknown_expired_and_revoked_tickets_are_indistinguishable() {
-        let (store, clock) = store();
-        let revoked = issue(&store, record(VideoTicketPurpose::Playback));
-        let expired = issue(&store, record(VideoTicketPurpose::Download));
-        store.revoke(&revoked.ticket);
-        clock.advance(VIDEO_TICKET_IDLE_TTL);
-
-        assert!(store.lookup_and_touch("unknown-ticket").is_none());
-        assert!(store.lookup_and_touch(&revoked.ticket).is_none());
-        assert!(store.lookup_and_touch(&expired.ticket).is_none());
-    }
-
-    #[test]
-    fn capacity_prunes_expired_without_evicting_live_tickets() {
-        let (store, clock) = store();
-        for _ in 0..MAX_VIDEO_TICKETS {
-            issue(&store, record(VideoTicketPurpose::Playback));
-        }
-        assert!(matches!(
-            store.issue(store.generation(), record(VideoTicketPurpose::Playback)),
-            VideoTicketIssue::Capacity
-        ));
-        assert_eq!(store.live_count(), MAX_VIDEO_TICKETS);
-
-        clock.advance(VIDEO_TICKET_IDLE_TTL);
-        issue(&store, record(VideoTicketPurpose::Download));
-        assert_eq!(store.live_count(), 1);
-    }
-
-    #[test]
-    fn stale_issuance_cannot_survive_workspace_reinitialization() {
-        let (store, _) = store();
-        let old_generation = store.generation();
-        store.revoke_all();
-
-        assert!(matches!(
-            store.issue(old_generation, record(VideoTicketPurpose::Playback)),
-            VideoTicketIssue::ContextChanged
-        ));
-        assert_eq!(store.live_count(), 0);
-    }
-
-    #[test]
-    fn touches_never_extend_beyond_absolute_expiry() {
-        let (store, clock) = store();
-        let ticket = issue(&store, record(VideoTicketPurpose::Playback));
-        clock.advance(VIDEO_TICKET_IDLE_TTL - Duration::from_secs(1));
-        assert!(store.lookup_and_touch(&ticket.ticket).is_some());
-        clock.advance(VIDEO_TICKET_ABSOLUTE_TTL - VIDEO_TICKET_IDLE_TTL + Duration::from_secs(1));
-        assert!(store.lookup_and_touch(&ticket.ticket).is_none());
-    }
 
     #[test]
     fn allowlist_is_case_insensitive_and_closed() {
@@ -387,5 +155,104 @@ mod tests {
         assert!(is_supported_video(Path::new("clip.ogg")));
         assert!(!is_supported_video(Path::new("clip.avi")));
         assert!(!is_supported_video(Path::new("clip")));
+    }
+
+    #[test]
+    fn video_adapter_keeps_purpose_values_stable() {
+        let record = VideoTicketRecord {
+            purpose: VideoTicketPurpose::Download,
+            project: "project".into(),
+            project_relative_path: PathBuf::from("clip.webm"),
+            file: MediaFileVersion {
+                canonical_path: PathBuf::from("/private/clip.webm"),
+                size: 1,
+                modified: std::time::SystemTime::UNIX_EPOCH,
+                validator: "opaque".into(),
+                #[cfg(unix)]
+                device: 1,
+                #[cfg(unix)]
+                inode: 1,
+                #[cfg(windows)]
+                volume_serial: None,
+                #[cfg(windows)]
+                file_index: None,
+            },
+            mime: "video/webm".into(),
+            filename: "clip.webm".into(),
+        };
+        assert_eq!(
+            VideoTicketRecord::from_media(record.clone().into_media())
+                .unwrap()
+                .purpose,
+            VideoTicketPurpose::Download
+        );
+        let mut image_record = record.into_media();
+        image_record.kind = MediaTicketKind::Image;
+        assert!(VideoTicketRecord::from_media(image_record).is_none());
+    }
+
+    #[test]
+    fn video_adapter_preserves_issue_lookup_and_revoke_lifecycle() {
+        let store = VideoStreamTicketStore::from_media(MediaTicketStore::new());
+        let playback = match store.issue(
+            store.generation(),
+            VideoTicketRecord {
+                purpose: VideoTicketPurpose::Playback,
+                ..record(VideoTicketPurpose::Playback)
+            },
+        ) {
+            VideoTicketIssue::Issued(lease) => lease,
+            VideoTicketIssue::Capacity | VideoTicketIssue::ContextChanged => {
+                panic!("video ticket should be issued")
+            }
+        };
+        let download = match store.issue(
+            store.generation(),
+            VideoTicketRecord {
+                purpose: VideoTicketPurpose::Download,
+                ..record(VideoTicketPurpose::Download)
+            },
+        ) {
+            VideoTicketIssue::Issued(lease) => lease,
+            VideoTicketIssue::Capacity | VideoTicketIssue::ContextChanged => {
+                panic!("video ticket should be issued")
+            }
+        };
+
+        assert_eq!(
+            store.lookup_and_touch(&playback.ticket).unwrap().purpose,
+            VideoTicketPurpose::Playback
+        );
+        assert_eq!(
+            store.lookup_and_touch(&download.ticket).unwrap().purpose,
+            VideoTicketPurpose::Download
+        );
+        store.revoke(&playback.ticket);
+        assert!(store.lookup_and_touch(&playback.ticket).is_none());
+        assert!(store.lookup_and_touch(&download.ticket).is_some());
+    }
+
+    fn record(purpose: VideoTicketPurpose) -> VideoTicketRecord {
+        VideoTicketRecord {
+            purpose,
+            project: "project".into(),
+            project_relative_path: PathBuf::from("clip.webm"),
+            file: MediaFileVersion {
+                canonical_path: PathBuf::from("/private/clip.webm"),
+                size: 1,
+                modified: std::time::SystemTime::UNIX_EPOCH,
+                validator: "opaque".into(),
+                #[cfg(unix)]
+                device: 1,
+                #[cfg(unix)]
+                inode: 1,
+                #[cfg(windows)]
+                volume_serial: None,
+                #[cfg(windows)]
+                file_index: None,
+            },
+            mime: "video/webm".into(),
+            filename: "clip.webm".into(),
+        }
     }
 }

@@ -107,6 +107,29 @@ handled fail-closed by hiding the chip.
 - `file-decoration-icon.tsx` only renders the shared lookup result.
 - Git change rows can reuse the same lookup for file identity while keeping VCS badges separate.
 
+### Explorer Image Preview
+
+**Locations:** `packages/ui/src/components/organisms/ImagePreview.tsx`,
+`packages/ui/src/components/organisms/EditorTabs.tsx`,
+`packages/ui/src/api/image-tickets.ts`, and `packages/ui/src/lib/image-file.ts`
+
+The Explorer and editor route final, case-insensitive `png`, `jpg`, `jpeg`, `gif`,
+and `webp` files to the native image preview tier before generic binary or large
+file handling. SVG, AVIF, BMP, TIFF, dotfiles, diff tabs, and video tabs remain
+outside this route; the dedicated diff viewer and video preview keep precedence.
+
+`ImagePreview` issues a protected, preview-only capability and assigns its opaque
+stream URL directly to one native `<img>` with `alt="Image preview: {fileName}"`.
+It does not call `fsRead`, `Response.blob()`, `URL.createObjectURL`, canvas APIs,
+or a download action. Loading, ready, error, retry, stale-ticket, profile-change,
+and unmount cleanup are visible lifecycle states. Cleanup detaches the image
+source before best-effort authenticated ticket revocation.
+
+Editor open, hydration, save, force-overwrite, reload, and Git reconciliation
+preserve image tabs as preview-only. Legacy persisted image tabs are normalized
+before they can enter a text/binary read path, and status overlays report
+capability or stream failures without materializing image bytes.
+
 ## Terminal Agent Notifications
 
 **Locations:**

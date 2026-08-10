@@ -13,7 +13,7 @@ use crate::config::{DamHopperConfig, GlobalConfig};
 use crate::crypto::{DamHopperOpaqueSuite, OpaqueRegistrations};
 use crate::diagnostics::DiagnosticStore;
 use crate::error::AppError;
-use crate::fs::{FsSubsystem, VideoStreamTicketStore};
+use crate::fs::{FsSubsystem, ImageStreamTicketStore, MediaTicketStore, VideoStreamTicketStore};
 use crate::port_forward::PortForwardManager;
 use crate::pty::{BroadcastEventSink, PtySessionManager};
 use crate::ssh::SshCredStore;
@@ -57,8 +57,13 @@ pub struct AppState {
     /// Workspace-scoped filesystem subsystem (sandbox + watcher in Phase 02).
     /// Clone is cheap — Arc-backed.
     pub fs: FsSubsystem,
+    /// Shared memory-only media capability store. Image and video adapters use
+    /// this same generation and 256-ticket capacity.
+    pub media_tickets: MediaTicketStore,
     /// Memory-only, purpose-bound capabilities for browser video streaming.
     pub video_stream_tickets: VideoStreamTicketStore,
+    /// Memory-only, fixed-purpose capabilities for browser image previews.
+    pub image_stream_tickets: ImageStreamTicketStore,
     /// Serializes sandbox replacement against video ticket issuance.
     pub workspace_context_guard: Arc<RwLock<()>>,
     /// MongoDB Database, if configured
@@ -174,6 +179,10 @@ impl AppState {
         let browser_debug_artifacts = BrowserDebugArtifactManager::new()
             .map_err(|error| anyhow::anyhow!("browser debug artifacts unavailable: {error}"))?;
 
+        let media_tickets = MediaTicketStore::new();
+        let video_stream_tickets = VideoStreamTicketStore::from_media(media_tickets.clone());
+        let image_stream_tickets = ImageStreamTicketStore::from_media(media_tickets.clone());
+
         Ok(Self {
             workspace_dir: Arc::new(RwLock::new(workspace_dir)),
             config: Arc::new(RwLock::new(config)),
@@ -185,7 +194,9 @@ impl AppState {
             jwt_secret: Arc::new(jwt_secret),
             ssh_creds: Arc::new(RwLock::new(None)),
             fs,
-            video_stream_tickets: VideoStreamTicketStore::new(),
+            media_tickets,
+            video_stream_tickets,
+            image_stream_tickets,
             workspace_context_guard: Arc::new(RwLock::new(())),
             db,
             no_auth,

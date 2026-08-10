@@ -9,7 +9,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
-import { fileTier } from "@/lib/file-tier.js";
+import { fileTier, isPreviewOnlyFile } from "@/lib/file-tier.js";
 import type { FileTier as FT } from "@/lib/file-tier.js";
 import { isVideoFile } from "@/lib/video-file.js";
 import type { FsArborNode } from "@/api/fs-types.js";
@@ -188,7 +188,7 @@ export const useEditorStore = create<EditorState>()(
           content: "",
           savedContent: "",
           dirty: false,
-          loading: optimisticTier !== "video",
+          loading: !isPreviewOnlyFile(optimisticTier, node.name),
           saving: false,
           conflicted: false,
         };
@@ -200,7 +200,10 @@ export const useEditorStore = create<EditorState>()(
 
         // Video playback owns its native range requests; never materialize it via fsRead.
         // Large files remain handled by LargeFileViewer's bounded range reads.
-        if (optimisticTier === "video" || optimisticTier === "large") {
+        if (
+          isPreviewOnlyFile(optimisticTier, node.name) ||
+          optimisticTier === "large"
+        ) {
           set((s) => ({
             tabs: s.tabs.map((t) =>
               t.key === key ? { ...t, loading: false } : t,
@@ -362,8 +365,7 @@ export const useEditorStore = create<EditorState>()(
           !tab.dirty ||
           tab.tier === "binary" ||
           tab.tier === "large" ||
-          tab.tier === "video" ||
-          isVideoFile(tab.name)
+          isPreviewOnlyFile(tab.tier, tab.name)
         )
           return false;
 
@@ -433,7 +435,7 @@ export const useEditorStore = create<EditorState>()(
       // ---------------------------------------------------------------------------
       forceOverwrite: async (key: string) => {
         const tab = get().tabs.find((t) => t.key === key);
-        if (!tab || tab.tier === "video" || isVideoFile(tab.name)) return;
+        if (!tab || isPreviewOnlyFile(tab.tier, tab.name)) return;
 
         // Fetch current server mtime (0-byte range read just to get mtime)
         const stat = await transport().fsRead(tab.project, tab.path, {
@@ -499,17 +501,23 @@ export const useEditorStore = create<EditorState>()(
         const tab = get().tabs.find((t) => t.key === key);
         if (!tab) return;
 
-        if (tab.tier === "video" || isVideoFile(tab.name)) {
+        if (isPreviewOnlyFile(tab.tier, tab.name)) {
           set((s) => ({
             tabs: s.tabs.map((t) =>
               t.key === key
                 ? {
                     ...t,
-                    tier: "video",
+                    tier: isVideoFile(t.name) ? "video" : "image",
                     loading: false,
+                    saving: false,
                     conflicted: false,
                     dirty: false,
                     stale: false,
+                    hydrated: false,
+                    content: "",
+                    savedContent: "",
+                    binaryBase64: undefined,
+                    error: undefined,
                     previewRevision: (t.previewRevision ?? 0) + 1,
                   }
                 : t,
@@ -582,8 +590,16 @@ export const useEditorStore = create<EditorState>()(
             tab.tier !== "diff" &&
             affected.has(tab.path),
         );
-        const cleanTabs = tabs.filter((tab) => !tab.dirty);
-        const dirtyKeys = tabs.filter((tab) => tab.dirty).map((tab) => tab.key);
+        const previewTabs = tabs.filter((tab) =>
+          isPreviewOnlyFile(tab.tier, tab.name),
+        );
+        const editableTabs = tabs.filter(
+          (tab) => !isPreviewOnlyFile(tab.tier, tab.name),
+        );
+        const cleanTabs = editableTabs.filter((tab) => !tab.dirty);
+        const dirtyKeys = editableTabs
+          .filter((tab) => tab.dirty)
+          .map((tab) => tab.key);
 
         if (dirtyKeys.length > 0) {
           set((s) => ({
@@ -593,7 +609,7 @@ export const useEditorStore = create<EditorState>()(
           }));
         }
 
-        for (const tab of cleanTabs) {
+        for (const tab of [...previewTabs, ...cleanTabs]) {
           await get().reloadTab(tab.key);
         }
       },
@@ -602,8 +618,16 @@ export const useEditorStore = create<EditorState>()(
         const tabs = get().tabs.filter(
           (tab) => tab.project === project && tab.tier !== "diff",
         );
-        const cleanTabs = tabs.filter((tab) => !tab.dirty);
-        const dirtyKeys = tabs.filter((tab) => tab.dirty).map((tab) => tab.key);
+        const previewTabs = tabs.filter((tab) =>
+          isPreviewOnlyFile(tab.tier, tab.name),
+        );
+        const editableTabs = tabs.filter(
+          (tab) => !isPreviewOnlyFile(tab.tier, tab.name),
+        );
+        const cleanTabs = editableTabs.filter((tab) => !tab.dirty);
+        const dirtyKeys = editableTabs
+          .filter((tab) => tab.dirty)
+          .map((tab) => tab.key);
 
         if (dirtyKeys.length > 0) {
           set((s) => ({
@@ -613,7 +637,7 @@ export const useEditorStore = create<EditorState>()(
           }));
         }
 
-        for (const tab of cleanTabs) {
+        for (const tab of [...previewTabs, ...cleanTabs]) {
           await get().reloadTab(tab.key);
         }
       },
@@ -653,11 +677,24 @@ export const useEditorStore = create<EditorState>()(
         const tab = get().tabs.find((t) => t.key === key);
         if (!tab || !tab.hydrated || tab.loading) return;
 
-        if (tab.tier === "video" || isVideoFile(tab.name)) {
+        if (isPreviewOnlyFile(tab.tier, tab.name)) {
           set((s) => ({
             tabs: s.tabs.map((t) =>
               t.key === key
-                ? { ...t, tier: "video", loading: false, hydrated: false }
+                ? {
+                    ...t,
+                    tier: isVideoFile(t.name) ? "video" : "image",
+                    loading: false,
+                    hydrated: false,
+                    content: "",
+                    savedContent: "",
+                    binaryBase64: undefined,
+                    dirty: false,
+                    saving: false,
+                    conflicted: false,
+                    stale: false,
+                    error: undefined,
+                  }
                 : t,
             ),
           }));

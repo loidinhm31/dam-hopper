@@ -1371,6 +1371,61 @@ Response:
 }
 ```
 
+### Native Image Preview Capabilities
+
+Image preview is a protected, preview-only capability contract. It does not
+replace the general file-read API and does not provide image downloads.
+
+**POST /api/fs/image/tickets**
+
+Bearer authentication is required. The JSON body is:
+
+```json
+{ "project": "NAME", "path": "assets/cover.webp" }
+```
+
+Only final, case-insensitive `png`, `jpg`, `jpeg`, `gif`, and `webp` extensions
+are accepted. The server resolves the path inside the project sandbox, rejects
+traversal/symlink components and non-regular files, records the file
+identity/version, and returns a fixed-purpose capability:
+
+```json
+{
+  "ticket": "opaque-random-token",
+  "streamPath": "/api/fs/image/stream/opaque-random-token",
+  "expiresAt": 1800000000000,
+  "purpose": "preview"
+}
+```
+
+Success is `201 Created` with `Cache-Control: no-store`. Authentication failure
+is `401`; unsupported input is `400`; sandbox escape is `403`; missing or
+non-regular resources are `404`; and shared ticket capacity is `429` with
+`Retry-After: 1` and `code: IMAGE_TICKET_CAPACITY`. Response bodies do not
+include the project path, absolute filename, or bearer token.
+
+**DELETE /api/fs/image/tickets**
+
+Bearer authentication is required. Revoke with `{ "ticket": "opaque-token" }`.
+Revocation is idempotent and returns `204 No Content`; unknown or already
+revoked tickets do not reveal their prior state.
+
+**GET|HEAD /api/fs/image/stream/{ticket}**
+
+The URL contains only the opaque capability. The stream is inline and uses the
+MIME captured at issuance. `GET` returns `200` for the full representation or
+`206` for one valid byte range; malformed, multi-range, or unsatisfiable ranges
+return `416` with `Content-Range: bytes */size`. `HEAD` returns metadata with an
+empty body and ignores range selection. Unknown/revoked capabilities return
+`404`; a file identity/version change revokes the capability and returns `410`.
+
+Responses include `Accept-Ranges`, `Content-Length`, `Content-Type`, `ETag`,
+`Last-Modified`, and `Cache-Control: private, no-store`. Range, length,
+validator, disposition, and cache headers are exposed only through the existing
+configured CORS policy. Image disposition is always `inline`; no image ticket
+can be upgraded to video playback or download behavior. Workspace, config, and
+settings context changes invalidate shared image and video capabilities.
+
 **GET /api/fs/language-files?project=NAME**
 Scan the configured project root for supported language files. The endpoint is
 authenticated and project-scoped; it does not accept a caller-supplied root or
