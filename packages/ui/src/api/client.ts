@@ -264,11 +264,46 @@ export interface HostResourceAlert {
   nextAction: string;
 }
 
-export interface HostResourceAlertIncident extends HostResourceAlert {
+export interface MemoryHostResourceAlertIncident
+  extends HostResourceAlert {
   incidentId: string;
   openedAt: number;
   resolvedAt?: number | null;
 }
+
+export type ResourceAlertState = "temperatureHigh" | "diskFull";
+export type ResourceAlertKind = "temperature" | "disk";
+
+export interface HostResourceResourceAlertEvidence {
+  temperatureSource?: string;
+  temperatureLabel?: string;
+  temperatureCelsius?: number;
+  diskMountPoint?: string;
+  diskName?: string;
+  diskUsagePercent?: number;
+}
+
+/** Additive thermal/disk alert; memory alerts retain the legacy DTO above. */
+export interface HostResourceResourceAlert {
+  kind: ResourceAlertKind;
+  key: string;
+  state: ResourceAlertState;
+  severity: AlertSeverity;
+  incidentId: string;
+  openedAt: number;
+  updatedAt: number;
+  durationSeconds: number;
+  scope: string;
+  evidence: HostResourceResourceAlertEvidence;
+  threshold: string;
+  nextAction: string;
+  resolvedAt?: number;
+}
+
+/** Additive history response: legacy memory or thermal/disk incident. */
+export type HostResourceAlertIncident =
+  | MemoryHostResourceAlertIncident
+  | HostResourceResourceAlert;
 
 export interface MemoryPressure {
   some?:
@@ -361,6 +396,8 @@ export interface HostResourceSnapshotV1 {
     availability: Availability;
   };
   alert?: HostResourceAlert | null;
+  /** Additive concurrent thermal/disk incidents; the legacy alert is unchanged. */
+  currentAlerts?: HostResourceResourceAlert[];
   actionCapabilities: { availability: Availability };
 }
 

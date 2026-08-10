@@ -1739,12 +1739,19 @@ the in-app diagnosis UI. Phase 07 packages, validates, and rolls out only those
 observation surfaces. It must not enable, package, exercise, or claim support
 for host mutation.
 
-The top-nav host-resource popover presents the cached snapshot, bounded alert
-history, and diagnostic evidence, with no remediation controls. A
-`host:alertChanged` push event invalidates the cached read-only queries so the
-next render reflects authoritative REST projections; it is a refresh signal,
-not a mutation request. Deep Linux reads degrade per signal, while
-`GET /api/system/metrics` remains the compatibility fallback and rollback seam.
+The top-nav host-resource popover presents the cached snapshot, bounded mixed
+alert history, and diagnostic evidence, with no remediation controls. The
+legacy memory `alert` remains stable; the snapshot's additive `currentAlerts`
+array carries concurrent active thermal/disk incidents. A valid
+`host:alertChanged` event updates only its matching cached incident and
+invalidates the read-only queries; recovery (`resolvedAt`, including zero)
+removes only that incident. The browser rejects malformed or unexpected nested
+evidence before changing cache state. An explicit empty `currentAlerts` array
+clears resource presentation, while a missing field is retained for
+old-server compatibility rather than interpreted as recovery. REST projections
+remain authoritative after reconnect, missed events, or profile changes. Deep
+Linux reads degrade per signal, while `GET /api/system/metrics` remains the
+compatibility fallback and rollback seam.
 
 Re-authentication, mutation lifecycle/audit, local privileged IPC, enrollment,
 and fixed host operations are one future remediation backlog. Existing
@@ -1758,16 +1765,21 @@ it is not a dependency of Phase 07.
 ```
 Linux procfs / PSI / cgroup v2
   -> HostResourceMonitor (read-only, bounded, cached)
-  -> protected snapshot and alert APIs / host:alertChanged event
-  -> browser diagnostics UI
+  -> snapshot (`alert` + additive `currentAlerts`), mixed alert history,
+     and `host:alertChanged`
+  -> validated browser cache + diagnostics UI
 ```
 
 `HostResourceMonitor` has no dependency on `HostActionService`, helper IPC, or
 action configuration. Alert collection and delivery can only publish bounded,
-sanitized state. They cannot enqueue or execute an action. The existing
-`GET /api/system/metrics` remains a compatible basic-metrics endpoint; new
-resource APIs are versioned siblings. Phase 03 moves it to the shared monitor's
-cached projection without changing its response shape.
+sanitized state. The resource lifecycle emits one event per changed target, so
+concurrent disk and thermal incidents remain independent and recovery is
+per-target. Current and legacy payloads share the existing event channel; the
+client's strict discriminator/evidence validation preserves old payload support
+without trusting malformed additive data. The existing `GET /api/system/metrics`
+remains a compatible basic-metrics endpoint; new resource APIs are versioned
+siblings. Phase 03 moves it to the shared monitor's cached projection without
+changing its response shape.
 
 The release image is built explicitly for `linux/amd64` and uses pinned base
 image digests. Phase 07 evidence measures clean shutdown only for a server with

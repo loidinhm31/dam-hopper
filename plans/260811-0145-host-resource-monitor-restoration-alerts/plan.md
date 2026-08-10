@@ -28,7 +28,7 @@ Recommended: minimally display cached legacy data and extend monitor alerts. Rej
 | # | Phase | Depends on | File |
 |---|---|---|---|
 | 01 | Monitor signal/model — **completed 2026-08-11 03:00:34 +07:00** | none | [phase-01](./phase-01-monitor-alert-model.md) |
-| 02 | API/SSE/client contract — **pending** | 01 | [phase-02](./phase-02-api-sse-client-contract.md) |
+| 02 | API/SSE/client contract — **completed 2026-08-11 04:07:13 +07:00** | 01 | [phase-02](./phase-02-api-sse-client-contract.md) |
 | 03 | Accessible disclosure — **pending** | 02 | [phase-03](./phase-03-popover-disclosure.md) |
 | 04 | Tests/release gate — **pending** | 01–03 | [phase-04](./phase-04-tests-validation-docs.md) |
 
@@ -53,7 +53,7 @@ Recommended: minimally display cached legacy data and extend monitor alerts. Rej
 Real sensor rows and all disks are accessible on demand; each qualifying independent target gets a recoverable single incident with evidence; memory alerts, auth, legacy metrics, snapshot compatibility, strict event handling stay green.
 
 ## Risks
-Conservative Linux mount classification may need internal metadata; fail closed. A single `snapshot.alert` cannot describe concurrent targets, so add an additive current collection/projection. Key sensors by `source`, not colliding label. **Residual risk (medium): normalized host samples are not capped before `BTreeMap` allocation; fix this before Phase 02.**
+Conservative Linux mount classification may need internal metadata; fail closed. A single `snapshot.alert` cannot describe concurrent targets, so add an additive current collection/projection. Key sensors by `source`, not colliding label. **Resolved in Phase 02:** normalized samples now retain only the deterministic, bounded target prefix before `BTreeMap` growth.
 
 ## Unresolved questions
 None; policy, scope, UI default, and delivery channel approved.

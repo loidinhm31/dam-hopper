@@ -46,7 +46,7 @@ Add pure conservative disk classification before alert evaluation. Key targets a
 ## Risk Assessment
 `sysinfo` metadata varies by Linux host. Conservative deny/fail-closed logic can omit an uncertain disk but prevents a false host alert; fixtures must cover observed filesystem forms.
 
-**Residual risk (medium):** normalized host samples are not capped before `BTreeMap` allocation. This must be fixed before Phase 02.
+**Resolved in Phase 02:** normalized host samples retain only the deterministic, bounded target prefix before `BTreeMap` growth.
 
 ## Security Considerations
 Evidence includes only bounded source/label/mount and numeric readings; no commands, environment, credentials, arbitrary paths, or raw collection errors. Do not hold cache locks over filesystem work.

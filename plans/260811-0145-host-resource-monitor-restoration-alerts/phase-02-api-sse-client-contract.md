@@ -6,7 +6,7 @@
 ## Overview
 - **Date:** 2026-08-11
 - **Priority:** P1
-- **Status:** pending
+- **Status:** completed 2026-08-11 04:07:13 +07:00
 
 ## Key Insights
 Legacy GET already owns metric arrays; moving them into V1 is wrong. `snapshot.alert` is singular, whereas targets can coexist. Event data is untrusted and current validator accepts only known memory evidence.
@@ -30,10 +30,10 @@ Keep `alert` as deterministic highest-severity compatibility projection; add an 
 5. Test old/new events, cache updates, invalid rejection, reconnect, presentation dedupe/recovery.
 
 ## Todo list
-- [ ] Add DTO/evidence/current-alert extension.
-- [ ] Preserve REST auth/limit/legacy-array API assertions.
-- [ ] Retain event envelope and transition-only delivery.
-- [ ] Add strict client validation and presentation tests.
+- [x] Add DTO/evidence/current-alert extension.
+- [x] Preserve REST auth/limit/legacy-array API assertions.
+- [x] Retain event envelope and transition-only delivery.
+- [x] Add strict client validation and presentation tests.
 
 ## Success Criteria
 Authenticated clients receive all valid target incidents through current REST/SSE flow; old payloads remain valid; malformed payloads cannot poison query cache.

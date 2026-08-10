@@ -19,6 +19,7 @@ fn v1_snapshot_serializes_camel_case_contract() {
     let value = serde_json::to_value(snapshot).unwrap();
     assert_eq!(value["schemaVersion"], 1);
     assert_eq!(value["sampledAt"], 42);
+    assert_eq!(value["currentAlerts"], serde_json::json!([]));
     assert!(value.get("actionCapabilities").is_some());
 }
 

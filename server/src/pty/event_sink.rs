@@ -20,6 +20,12 @@ pub trait EventSink: Send + Sync + 'static {
     fn send_host_alert_changed(&self, alert: &crate::system::AlertSummary) {
         let _ = alert;
     }
+    fn send_host_resource_alert_changed(
+        &self,
+        incident: &crate::system::alerts::ResourceAlertIncident,
+    ) {
+        let _ = incident;
+    }
 
     /// Enhanced terminal exit with restart metadata.
     /// Optional fields are skipped if None (backward-compatible JSON).
@@ -54,6 +60,11 @@ impl EventSink for NoopEventSink {
     fn send_terminal_changed(&self) {}
     fn broadcast(&self, _event_type: &str, _payload: serde_json::Value) {}
     fn send_host_alert_changed(&self, _alert: &crate::system::AlertSummary) {}
+    fn send_host_resource_alert_changed(
+        &self,
+        _incident: &crate::system::alerts::ResourceAlertIncident,
+    ) {
+    }
 
     fn send_terminal_exit_enhanced(
         &self,
@@ -153,6 +164,15 @@ impl EventSink for BroadcastEventSink {
         let _ = self
             .host_alert_tx
             .send(json!({ "kind": "host:alertChanged", "payload": alert }).to_string());
+    }
+
+    fn send_host_resource_alert_changed(
+        &self,
+        incident: &crate::system::alerts::ResourceAlertIncident,
+    ) {
+        let _ = self
+            .host_alert_tx
+            .send(json!({ "kind": "host:alertChanged", "payload": incident }).to_string());
     }
 
     fn send_terminal_exit_enhanced(

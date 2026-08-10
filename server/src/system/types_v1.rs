@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::path::Path;
 use uuid::Uuid;
 
-use super::alerts::AlertSummary;
+use super::alerts::{AlertSummary, ResourceAlertSummary};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -268,6 +268,9 @@ pub struct HostResourceSnapshotV1 {
     pub processes: ProcessInventory,
     pub mount_context: MountContext,
     pub alert: Option<AlertSummary>,
+    /// Additive active thermal/disk incidents; legacy metrics remain separate.
+    /// Always serialized so an empty array clears stale client presentation.
+    pub current_alerts: Vec<ResourceAlertSummary>,
     pub action_capabilities: ActionCapabilities,
 }
 #[derive(Clone, Debug, Serialize)]
@@ -343,6 +346,7 @@ impl HostResourceSnapshotV1 {
             },
             mount_context,
             alert: None,
+            current_alerts: Vec::new(),
             action_capabilities: ActionCapabilities {
                 availability: Availability::unsupported(sampled_at),
             },

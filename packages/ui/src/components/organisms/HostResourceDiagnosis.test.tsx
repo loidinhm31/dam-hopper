@@ -71,6 +71,32 @@ describe("HostResourceDiagnosis", () => {
     expect(markup).not.toContain("password");
   });
 
+  it("renders a zero-timestamp resolved incident as resolved", () => {
+    const markup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={snapshot}
+        alerts={[
+          {
+            incidentId: "incident-1",
+            state: "limitedData",
+            severity: "warning",
+            openedAt: 0,
+            updatedAt: 0,
+            resolvedAt: 0,
+            durationSeconds: 30,
+            scope: "host",
+            confidence: "low",
+            threshold: "source unavailable",
+            evidence: { cgroupOomDelta: false },
+            nextAction: "Inspect source availability.",
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("resolved");
+  });
+
   it("does not represent unavailable cgroups as a real zero", () => {
     const markup = renderToStaticMarkup(
       <HostResourceDiagnosis
