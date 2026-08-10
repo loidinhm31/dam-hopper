@@ -110,6 +110,7 @@ or
 ```
 
 When switching:
+
 - The server reloads configuration from the specified path (or discovers `dam-hopper.toml` in the directory)
 - File API sandbox is reinitialized from the newly loaded project roots
 - All PTY sessions are disposed
@@ -213,8 +214,9 @@ settings to this release. Those remain deferred backlog, not configuration.
 The Phase 07 release evidence covers the packaged server in no-tunnel mode. Its
 measured graceful-shutdown budget applies only when no tunnel sessions are
 active; tunnel child-process disposal retains its separate three-second grace
-period. A staged canary, rollback rehearsal, and release-owner approval are
-still required before sign-off.
+period. The release owner approved Phase 07 completion with the still-unobserved
+Windows CI result, canary-host profiling, staged monitor/in-app-alert canary, and
+rollback rehearsal deferred as post-release work; none is passed evidence.
 
 ### Browser Debug Preview
 
@@ -285,21 +287,21 @@ server share a filesystem; remote/container agents need a future resource API.
 
 The global UI config includes terminal workspace/panel shortcuts, inline terminal suggestions, Codex terminal notification settings, and terminal project switching.
 
-| Field                               | Type     | Default                   | Notes |
-| ----------------------------------- | -------- | ------------------------- | ----- |
-| terminal_workspace_shortcut         | string   | `Mod+Shift+Backquote`     | Global IDE/terminal mode toggle shortcut |
-| git_panel_shortcut                  | string   | `Mod+Shift+KeyG`          | Toggle the Git panel in IDE or Terminal mode |
-| ports_panel_shortcut                | string   | `Mod+Shift+KeyP`          | Toggle the Ports panel in IDE or Terminal mode |
-| fleet_terminal_shortcut             | string   | `Mod+Shift+KeyM`          | Toggle the Fleet Terminal panel in IDE or Terminal mode |
-| terminal_suggestions_enabled         | bool     | `true`                    | Kill switch for automatic suggestions and lifecycle-driven history writes |
-| terminal_scroll_buttons_enabled     | bool     | `false`                   | Show the expandable floating terminal scroll control |
-| terminal_auto_switch_project_enabled | bool     | `true`                    | Switch the active project when selecting a project-assigned terminal |
-| terminal_codex_notifications_enabled | bool    | `false`                   | Master switch for Codex OSC 9 notifications and Codex TUI synchronization |
-| terminal_codex_notification_toast_enabled | bool | `true`                    | Persisted preference for transient in-app toasts; notification history remains independent |
-| terminal_codex_browser_notifications_enabled | bool | `true`                 | Persisted preference for native browser popups; browser permission remains runtime-only |
-| terminal_codex_notification_sound_enabled | bool | `true`                    | Persisted preference for the in-app chime |
-| terminal_codex_notification_sound_volume | u8   | `100`                     | In-app chime volume, from `0` to `100` |
-| terminal_codex_notification_sound_pattern | string | `"default"`             | One of `"default"`, `"soft"`, `"two-tone"`, or `"urgent"` |
+| Field                                        | Type   | Default               | Notes                                                                                      |
+| -------------------------------------------- | ------ | --------------------- | ------------------------------------------------------------------------------------------ |
+| terminal_workspace_shortcut                  | string | `Mod+Shift+Backquote` | Global IDE/terminal mode toggle shortcut                                                   |
+| git_panel_shortcut                           | string | `Mod+Shift+KeyG`      | Toggle the Git panel in IDE or Terminal mode                                               |
+| ports_panel_shortcut                         | string | `Mod+Shift+KeyP`      | Toggle the Ports panel in IDE or Terminal mode                                             |
+| fleet_terminal_shortcut                      | string | `Mod+Shift+KeyM`      | Toggle the Fleet Terminal panel in IDE or Terminal mode                                    |
+| terminal_suggestions_enabled                 | bool   | `true`                | Kill switch for automatic suggestions and lifecycle-driven history writes                  |
+| terminal_scroll_buttons_enabled              | bool   | `false`               | Show the expandable floating terminal scroll control                                       |
+| terminal_auto_switch_project_enabled         | bool   | `true`                | Switch the active project when selecting a project-assigned terminal                       |
+| terminal_codex_notifications_enabled         | bool   | `false`               | Master switch for Codex OSC 9 notifications and Codex TUI synchronization                  |
+| terminal_codex_notification_toast_enabled    | bool   | `true`                | Persisted preference for transient in-app toasts; notification history remains independent |
+| terminal_codex_browser_notifications_enabled | bool   | `true`                | Persisted preference for native browser popups; browser permission remains runtime-only    |
+| terminal_codex_notification_sound_enabled    | bool   | `true`                | Persisted preference for the in-app chime                                                  |
+| terminal_codex_notification_sound_volume     | u8     | `100`                 | In-app chime volume, from `0` to `100`                                                     |
+| terminal_codex_notification_sound_pattern    | string | `"default"`           | One of `"default"`, `"soft"`, `"two-tone"`, or `"urgent"`                                  |
 
 Example:
 
@@ -423,15 +425,15 @@ host = "127.0.0.1"
 port = 4811
 ```
 
-| Field | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `enabled` | bool | `false` | Master switch for telemetry collection and persistence |
-| `db_path` | string | `~/.config/dam-hopper/telemetry.db` | SQLite telemetry database path |
-| `detail_retention_days` | u16 | `90` | Detailed-event retention, from 1 to 3650 days |
-| `aggregate_retention_days` | u32 or omitted | omitted | Optional aggregate retention; when set, must be positive |
-| `collector.enabled` | bool | `false` | Enables the authenticated Codex OTLP/HTTP receiver |
-| `collector.host` | IP address | `127.0.0.1` | Must be a loopback address |
-| `collector.port` | u16 | `4811` | Must be non-zero |
+| Field                      | Type           | Default                             | Notes                                                    |
+| -------------------------- | -------------- | ----------------------------------- | -------------------------------------------------------- |
+| `enabled`                  | bool           | `false`                             | Master switch for telemetry collection and persistence   |
+| `db_path`                  | string         | `~/.config/dam-hopper/telemetry.db` | SQLite telemetry database path                           |
+| `detail_retention_days`    | u16            | `90`                                | Detailed-event retention, from 1 to 3650 days            |
+| `aggregate_retention_days` | u32 or omitted | omitted                             | Optional aggregate retention; when set, must be positive |
+| `collector.enabled`        | bool           | `false`                             | Enables the authenticated Codex OTLP/HTTP receiver       |
+| `collector.host`           | IP address     | `127.0.0.1`                         | Must be a loopback address                               |
+| `collector.port`           | u16            | `4811`                              | Must be non-zero                                         |
 
 TOML uses snake_case keys; the corresponding API representation uses camelCase (for example,
 `dbPath`, `detailRetentionDays`, and `aggregateRetentionDays`). The telemetry database is
@@ -660,25 +662,25 @@ Keys are stored in-memory per session (not persisted to disk).
 ## Manual Smoke Checklist
 
 1. Create `~/.config/dam-hopper/dam-hopper.toml` with at least two projects whose `projects[].path` values point at separate roots. On Windows, use different drives if available.
-Expected: `GET /api/workspace/status` reports the registry `configPath` and the expected `projectCount`.
+   Expected: `GET /api/workspace/status` reports the registry `configPath` and the expected `projectCount`.
 
 2. Start the server with `cargo run -- --config ~/.config/dam-hopper/dam-hopper.toml --port 4800`.
-Expected: startup succeeds without requiring a repo-local `dam-hopper.toml`.
+   Expected: startup succeeds without requiring a repo-local `dam-hopper.toml`.
 
 3. Browse and read files in each project, then create or edit a file inside each root.
-Expected: list/read/write operations work inside the selected project and do not bleed across roots.
+   Expected: list/read/write operations work inside the selected project and do not bleed across roots.
 
 4. Create a terminal session for each project without passing `cwd`.
-Expected: each terminal starts in the selected project root.
+   Expected: each terminal starts in the selected project root.
 
 5. Attempt a traversal or sibling-project read such as `/api/fs/read?project=alpha&path=../beta/owned.txt`.
-Expected: the server returns `403 FORBIDDEN`. Also verify rejection for a raw absolute path outside the configured root and for any symlink that resolves outside the selected project.
+   Expected: the server returns `403 FORBIDDEN`. Also verify rejection for a raw absolute path outside the configured root and for any symlink that resolves outside the selected project.
 
 6. On Windows, change one project path to a mixed-separator absolute path and, if supported in your environment, a `\\?\` verbatim path.
-Expected: the registry still loads, the project remains accessible, and TOML writes preserve absolute paths instead of forcing them relative.
+   Expected: the registry still loads, the project remains accessible, and TOML writes preserve absolute paths instead of forcing them relative.
 
 7. On Windows or in any environment with a reachable network share, add a temporary UNC-style project entry such as `path = "\\\\server\\share\\project"`.
-Expected: the registry either works for that project in your environment or fails in a clear, local way that you can document before rollout. Do not assume UNC behavior from Linux CI alone.
+   Expected: the registry either works for that project in your environment or fails in a clear, local way that you can document before rollout. Do not assume UNC behavior from Linux CI alone.
 
 ## Troubleshooting Configuration
 

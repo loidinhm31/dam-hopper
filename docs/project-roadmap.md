@@ -2,19 +2,6 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
-### Explorer Browser Video Playback and Direct Download (2026-08-10)
-
-- **Phase 01 — [COMPLETED 2026-08-10 11:51:39 +07:00]**: purpose-bound playback/download ticket issuance and lifecycle delivered: authenticated opaque capabilities, sandboxed resource/version binding, independent purpose isolation, deterministic 256-ticket capacity and 30-minute idle/8-hour absolute expiry, authenticated revoke, and workspace-change invalidation.
-- **Phase 02 — [COMPLETED 2026-08-10]**: shared bounded Range stream and inline/attachment response policy delivered with purpose-bound disposition and resource revalidation.
-- **Phase 03 — [COMPLETED 2026-08-10]**: Explorer browser playback/download UX delivered for the browser host without whole-file buffering or Blob allocation.
-- **Phase 04 — [COMPLETED 2026-08-10 15:25:44 +07:00]**: protocol, browser, and resource-safety release gates completed; browser-host scope validated. Caveats: `pnpm check` is blocked by missing `TAURI_SIGNING_PRIVATE_KEY`; final reviewer noted the stale-ticket Chromium assertion accepts any `DELETE`, approved by the user. Tauri support and performance tuning remain deferred follow-ups.
-
-### Explorer Native Image Preview (2026-08-10)
-
-- **Phase 01 — [COMPLETED 2026-08-10]**: shared media-ticket lifecycle, authenticated image ticket/stream APIs, sandbox and regular-file enforcement, closed raster allowlist, version invalidation, range/HEAD/CORS behavior, and security regressions delivered.
-- **Phase 02 — [COMPLETED 2026-08-10]**: image tier routing, preview-only editor lifecycle, legacy-tab normalization, native `<img>` UI states, and client tests delivered.
-- **Phase 03 — [COMPLETED 2026-08-10]**: shared-store/API regression coverage, authenticated Chromium lifecycle coverage, checked-in raster fixture, API/architecture/frontend documentation, and release gates completed. The browser harness validates client capability behavior; the Rust suite remains authoritative for backend security and stream semantics. Release caveat: `pnpm check` reached web/native builds and bundling but remains blocked because `TAURI_SIGNING_PRIVATE_KEY` is unset while a public key is configured; signing configuration was not changed.
-
 ## Status Overview
 
 - **Current Phase:** Session Model Delegation Audit complete (Phase 07 released 2026-08-01)
@@ -23,20 +10,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Next Milestone:** Product follow-ups: terminal commit status Phase 03 validation and release checks
 - **Current Feature:** Settings commit summary Phase 01 and terminal scroll-control redesign Phase 02 completed 2026-07-26; terminal commit status Phase 03 planned
 
-### Programming Language Navigation in Explorer (2026-08-10)
+### Linux Host Resource Monitoring and Gated Remediation (2026-08-08)
 
-- **Phase 03 — [COMPLETED 2026-08-10 00:36:17 +07:00]**: full-project Rust/JS-TS/Java navigation, manual scan states, navigation-only capability gating, selection cleanup, commit-gated reveal, and focused release validation completed.
-- Release caveats: temporary-file checks require a `TMPDIR` workaround for exhausted `/tmp` quota; `pnpm check` is blocked at native package validation by disk quota; broad browser coverage retains an unrelated terminal import failure.
-
-### Terminal Pinning and Runtime Contrast (2026-08-08)
-
-- **Phases 01–02 — [COMPLETED 2026-08-08]**: session-only terminal pin protection, shared Traditional/Runtime controls, Runtime contrast/framing, focused DOM coverage, and implementation review completed.
-- Manual Chromium contrast/reparent, PTY identity, resize/refit, and host/renderer checks remain documented follow-ups; no fresh validation commands were rerun during tracking update.
-
-### Deferred: terminal runtime activity (2026-08-09)
-
-- The runtime-activity implementation from `0ad51a5` was removed after it was implicated in a Codex terminal-notification regression.
-- Revisit this only as a separate PTY-lifecycle design: preserve raw terminal notification signals through shutdown/replacement, order persistence removal after reader drain, and add race coverage for an OSC notification emitted while a session is being replaced or removed.
+- **Phases 01–03, 06 — [COMPLETED 2026-08-08–09]**: delivered the read-only monitoring threat model, bounded contracts/parsers, cached monitor/read APIs, sustained alerts, and in-app diagnosis. No host mutation is enabled.
+- **Phase 07 packaging, validation, rollout/rollback — [COMPLETED 2026-08-10 18:23 +07:00]**: release owner accepted completion after local Linux packaging/soak, bounded fixture, Docker, and Chromium evidence. The still-unobserved Windows CI result, intended-canary-host profiling, staged monitor/in-app-alert canary, and rollback rehearsal are explicitly deferred follow-up work, not passed gates. [Plan](../plans/260808-0236-host-resource-monitoring-remediation/plan.md).
+- **Operational/security sign-offs remaining**: real-systemd-host caller/enrollment validation and security-owner acceptance of enrolled-server-compromise residual risk. Privileged helper/actions are not implemented or approved for rollout.
 
 ### Floating Terminal Key Controls (2026-08-06)
 
@@ -69,7 +47,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 - [x] Separate privacy-preserving telemetry SQLite store and migrations
 - [x] Bounded non-blocking writer with WAL and graceful shutdown
-- [x] UTC rollup/purge, project exclusion, delete-all, and retention controls *(historical terminal analytics; superseded by the Codex-only contract, which has no project exclusion)*
+- [x] UTC rollup/purge, project exclusion, delete-all, and retention controls _(historical terminal analytics; superseded by the Codex-only contract, which has no project exclusion)_
 - [x] DB/API privacy scan and read-only/corrupt store fault coverage
 
 **Phase 04: Aggregate API and Controls — [COMPLETED 2026-07-26; APPROVED WITH WARNINGS]**
@@ -84,11 +62,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - [x] Loopback-only authenticated binary receiver with bounded decoding and retry-safe dedupe
 - [x] Field-level forward compatibility with partial/unavailable token coverage
 - [x] Explicit managed local exporter setup with exact ownership/conflict protection, atomic
-  `0600` writes, no bearer disclosure; Codex restart remains a separate user action
+      `0600` writes, no bearer disclosure; Codex restart remains a separate user action
 
 **Phase 06: Usage UI and Compact Navigation — [COMPLETED 2026-07-26; APPROVED]**
 
-- [x] Responsive aggregate dashboard, UTC filters, coverage state, pause/exclusion controls *(historical terminal analytics; superseded by the Codex-only contract and its Codex telemetry pause control)*
+- [x] Responsive aggregate dashboard, UTC filters, coverage state, pause/exclusion controls _(historical terminal analytics; superseded by the Codex-only contract and its Codex telemetry pause control)_
 - [x] Explicit all/range deletion confirmation and no-cost/no-productivity interpretation copy
 
 **Phase 07: Security, Fault, Performance, Documentation — [VALIDATED; REVIEW APPROVED 2026-07-26; PLATFORM CHECKS PENDING]**
