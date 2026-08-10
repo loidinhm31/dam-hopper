@@ -1,4 +1,8 @@
-use super::{AvailabilityState, Confidence, HostResourceSnapshotV1};
+use std::collections::BTreeMap;
+
+use super::{
+    is_real_persistent_disk, AvailabilityState, Confidence, HostMetrics, HostResourceSnapshotV1,
+};
 
 const COOLDOWN_MS: u64 = 5 * 60 * 1_000;
 
@@ -624,6 +628,293 @@ fn evidence(sample: &AlertSample, oom_delta: bool) -> AlertEvidence {
     }
 }
 
+const THERMAL_ALERT_CELSIUS: f64 = 60.0;
+const THERMAL_ALERT_DURATION_MS: u64 = 300_000;
+const MAX_RESOURCE_TARGETS: usize = 50;
+const MAX_RESOURCE_TEXT_BYTES: usize = 128;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResourceAlertState {
+    TemperatureHigh,
+    DiskFull,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct ResourceAlertEvidence {
+    pub temperature_source: Option<String>,
+    pub temperature_label: Option<String>,
+    pub temperature_celsius: Option<f64>,
+    pub disk_mount_point: Option<String>,
+    pub disk_name: Option<String>,
+    pub disk_usage_percent: Option<f64>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct ResourceAlertSummary {
+    pub state: ResourceAlertState,
+    pub incident_id: String,
+    pub opened_at: u64,
+    pub updated_at: u64,
+    pub duration_seconds: u64,
+    pub scope: String,
+    pub evidence: ResourceAlertEvidence,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct ResourceAlertIncident {
+    pub summary: ResourceAlertSummary,
+    pub resolved_at: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+struct ResourceAlertTarget {
+    state: ResourceAlertState,
+    condition: bool,
+    evidence: ResourceAlertEvidence,
+}
+
+/// A normalized, cached legacy sample for target-specific resource alerts.
+/// This is intentionally crate-private until Phase 02 adds its DTO contract.
+#[derive(Clone, Debug)]
+pub(crate) struct ResourceAlertSample {
+    observed_at_ms: u64,
+    reported_at_ms: u64,
+    targets: BTreeMap<String, ResourceAlertTarget>,
+}
+
+impl ResourceAlertSample {
+    pub(crate) fn from_legacy(metrics: &HostMetrics, observed_at_ms: u64) -> Self {
+        let mut targets = BTreeMap::new();
+        for temperature in &metrics.temperatures {
+            let Some(source) = bounded_text(&temperature.source) else {
+                continue;
+            };
+            let celsius = temperature
+                .celsius
+                .is_finite()
+                .then_some(temperature.celsius);
+            insert_target(
+                &mut targets,
+                format!("temperature:{source}"),
+                ResourceAlertTarget {
+                    state: ResourceAlertState::TemperatureHigh,
+                    condition: celsius.is_some_and(|value| value > THERMAL_ALERT_CELSIUS),
+                    evidence: ResourceAlertEvidence {
+                        temperature_source: Some(source),
+                        temperature_label: bounded_text(&temperature.label),
+                        temperature_celsius: celsius,
+                        disk_mount_point: None,
+                        disk_name: None,
+                        disk_usage_percent: None,
+                    },
+                },
+            );
+        }
+        for disk in &metrics.disks {
+            let Some(mount_point) = bounded_text(&disk.mount_point) else {
+                continue;
+            };
+            let usage_percent = disk.usage_percent.is_finite().then_some(disk.usage_percent);
+            insert_target(
+                &mut targets,
+                format!("disk:{mount_point}"),
+                ResourceAlertTarget {
+                    state: ResourceAlertState::DiskFull,
+                    condition: is_real_persistent_disk(disk)
+                        && usage_percent.is_some_and(|value| value >= 95.0),
+                    evidence: ResourceAlertEvidence {
+                        temperature_source: None,
+                        temperature_label: None,
+                        temperature_celsius: None,
+                        disk_mount_point: Some(mount_point),
+                        disk_name: bounded_text(&disk.name),
+                        disk_usage_percent: usage_percent,
+                    },
+                },
+            );
+        }
+        Self {
+            observed_at_ms,
+            reported_at_ms: metrics.sampled_at,
+            targets,
+        }
+    }
+}
+
+fn bounded_text(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && value.len() <= MAX_RESOURCE_TEXT_BYTES).then(|| value.to_owned())
+}
+
+fn insert_target(
+    targets: &mut BTreeMap<String, ResourceAlertTarget>,
+    key: String,
+    target: ResourceAlertTarget,
+) {
+    if targets.insert(key.clone(), target).is_some() {
+        // Duplicate source/mount metadata is ambiguous. Reset it rather than
+        // allowing either record to maintain an alert lifecycle.
+        if let Some(target) = targets.get_mut(&key) {
+            target.condition = false;
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ResourceAlertLifecycle {
+    candidate_since_ms: u64,
+    active: Option<ResourceAlertSummary>,
+    opened_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ResourceAlertEngineState {
+    targets: BTreeMap<String, ResourceAlertLifecycle>,
+    last_observed_at_ms: u64,
+    next_incident: u64,
+}
+
+impl ResourceAlertEngineState {
+    pub(crate) fn healthy(now_ms: u64) -> Self {
+        Self {
+            targets: BTreeMap::new(),
+            last_observed_at_ms: now_ms,
+            next_incident: 1,
+        }
+    }
+
+    /// Retains the deterministic prefix used when bounded targets are admitted.
+    pub(crate) fn retain_targets(&mut self, max_targets: usize) {
+        let max_targets = max_targets.clamp(1, MAX_RESOURCE_TARGETS);
+        let discarded = self
+            .targets
+            .keys()
+            .skip(max_targets)
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in discarded {
+            self.targets.remove(&key);
+        }
+    }
+
+    pub(crate) fn advance(
+        previous: &Self,
+        sample: &ResourceAlertSample,
+        max_targets: usize,
+    ) -> ResourceAlertTransition {
+        let now = sample.observed_at_ms.max(previous.last_observed_at_ms);
+        let max_targets = max_targets.clamp(1, MAX_RESOURCE_TARGETS);
+        let mut next = previous.clone();
+        next.last_observed_at_ms = now;
+        let mut incidents = Vec::new();
+
+        let reset_keys = next
+            .targets
+            .keys()
+            .filter(|key| {
+                sample
+                    .targets
+                    .get(*key)
+                    .is_none_or(|target| !target.condition)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in reset_keys {
+            let Some(lifecycle) = next.targets.remove(&key) else {
+                continue;
+            };
+            if let Some(mut summary) = lifecycle.active {
+                if let Some(target) = sample.targets.get(&key) {
+                    summary.evidence = target.evidence.clone();
+                }
+                summary.updated_at = sample.reported_at_ms;
+                summary.duration_seconds = lifecycle
+                    .opened_at_ms
+                    .map(|opened| now.saturating_sub(opened) / 1_000)
+                    .unwrap_or(0);
+                incidents.push(ResourceAlertIncident {
+                    summary,
+                    resolved_at: Some(sample.reported_at_ms),
+                });
+            }
+        }
+
+        for (key, target) in &sample.targets {
+            if !target.condition {
+                continue;
+            }
+            if !next.targets.contains_key(key) && next.targets.len() >= max_targets {
+                continue;
+            }
+            let lifecycle = next
+                .targets
+                .entry(key.clone())
+                .or_insert(ResourceAlertLifecycle {
+                    candidate_since_ms: now,
+                    active: None,
+                    opened_at_ms: None,
+                });
+            if let Some(summary) = &mut lifecycle.active {
+                summary.updated_at = sample.reported_at_ms;
+                summary.duration_seconds = lifecycle
+                    .opened_at_ms
+                    .map(|opened| now.saturating_sub(opened) / 1_000)
+                    .unwrap_or(0);
+                summary.evidence = target.evidence.clone();
+                continue;
+            }
+            if now.saturating_sub(lifecycle.candidate_since_ms) < resource_entry_duration(target) {
+                continue;
+            }
+
+            let summary = ResourceAlertSummary {
+                state: target.state,
+                incident_id: format!("host-resource-incident-{}", next.next_incident),
+                opened_at: sample.reported_at_ms,
+                updated_at: sample.reported_at_ms,
+                duration_seconds: 0,
+                scope: key.clone(),
+                evidence: target.evidence.clone(),
+            };
+            next.next_incident = next.next_incident.saturating_add(1);
+            lifecycle.opened_at_ms = Some(now);
+            lifecycle.active = Some(summary.clone());
+            incidents.push(ResourceAlertIncident {
+                summary,
+                resolved_at: None,
+            });
+        }
+
+        let active = next
+            .targets
+            .values()
+            .filter_map(|lifecycle| lifecycle.active.clone())
+            .collect();
+        ResourceAlertTransition {
+            next,
+            active,
+            incidents,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ResourceAlertTransition {
+    pub(crate) next: ResourceAlertEngineState,
+    pub(crate) active: Vec<ResourceAlertSummary>,
+    pub(crate) incidents: Vec<ResourceAlertIncident>,
+}
+
+fn resource_entry_duration(target: &ResourceAlertTarget) -> u64 {
+    match target.state {
+        ResourceAlertState::TemperatureHigh => THERMAL_ALERT_DURATION_MS,
+        ResourceAlertState::DiskFull => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -828,5 +1119,307 @@ mod tests {
         );
 
         assert_eq!(transition.next.current, AlertState::OomRisk);
+    }
+
+    fn legacy_metrics(
+        sampled_at: u64,
+        temperatures: Vec<super::super::TemperatureMetrics>,
+        disks: Vec<super::super::DiskMetrics>,
+    ) -> HostMetrics {
+        HostMetrics {
+            sampled_at,
+            hostname: None,
+            os_name: None,
+            uptime_seconds: 0,
+            cpu: super::super::CpuMetrics {
+                usage_percent: 0.0,
+                logical_core_count: 0,
+                physical_core_count: None,
+                load_average: None,
+            },
+            memory: super::super::MemoryMetrics {
+                total_bytes: 0,
+                used_bytes: 0,
+                available_bytes: 0,
+                usage_percent: 0.0,
+            },
+            disk: super::super::DiskMetrics {
+                name: "workspace".into(),
+                mount_point: "/".into(),
+                total_bytes: 0,
+                available_bytes: 0,
+                used_bytes: 0,
+                usage_percent: 0.0,
+                file_system: None,
+                source: None,
+                source_kind: super::super::DiskSourceKind::Unknown,
+            },
+            disks,
+            temperatures,
+        }
+    }
+
+    fn disk(
+        mount_point: &str,
+        source: &str,
+        source_kind: super::super::DiskSourceKind,
+        file_system: &str,
+        usage_percent: f64,
+    ) -> super::super::DiskMetrics {
+        super::super::DiskMetrics {
+            name: "disk".into(),
+            mount_point: mount_point.into(),
+            total_bytes: 100,
+            available_bytes: 100 - usage_percent as u64,
+            used_bytes: usage_percent as u64,
+            usage_percent,
+            file_system: Some(file_system.into()),
+            source: Some(source.into()),
+            source_kind,
+        }
+    }
+
+    fn persistent_disk(
+        mount_point: &str,
+        file_system: &str,
+        usage_percent: f64,
+    ) -> super::super::DiskMetrics {
+        disk(
+            mount_point,
+            "/dev/nvme0n1p1",
+            super::super::DiskSourceKind::BlockDevice,
+            file_system,
+            usage_percent,
+        )
+    }
+
+    fn resource_sample(
+        at: u64,
+        temperatures: Vec<super::super::TemperatureMetrics>,
+        disks: Vec<super::super::DiskMetrics>,
+    ) -> ResourceAlertSample {
+        ResourceAlertSample::from_legacy(&legacy_metrics(at, temperatures, disks), at)
+    }
+
+    #[test]
+    fn thermal_alert_requires_exact_continuity_and_resets_before_recovery() {
+        let hot = || {
+            vec![super::super::TemperatureMetrics {
+                label: "package".into(),
+                celsius: 60.1,
+                source: "thermal_zone0".into(),
+            }]
+        };
+        let mut state = ResourceAlertEngineState::healthy(0);
+        state =
+            ResourceAlertEngineState::advance(&state, &resource_sample(0, hot(), Vec::new()), 50)
+                .next;
+        let transition = ResourceAlertEngineState::advance(
+            &state,
+            &resource_sample(299_999, hot(), Vec::new()),
+            50,
+        );
+        assert!(transition.incidents.is_empty());
+        state = transition.next;
+
+        let transition = ResourceAlertEngineState::advance(
+            &state,
+            &resource_sample(300_000, hot(), Vec::new()),
+            50,
+        );
+        assert_eq!(transition.incidents.len(), 1);
+        assert_eq!(
+            transition.active[0].state,
+            ResourceAlertState::TemperatureHigh
+        );
+        assert_eq!(transition.active[0].scope, "temperature:thermal_zone0");
+        state = transition.next;
+
+        let transition = ResourceAlertEngineState::advance(
+            &state,
+            &resource_sample(
+                300_001,
+                vec![super::super::TemperatureMetrics {
+                    label: "package".into(),
+                    celsius: 60.0,
+                    source: "thermal_zone0".into(),
+                }],
+                Vec::new(),
+            ),
+            50,
+        );
+        assert_eq!(transition.incidents.len(), 1);
+        assert!(transition.incidents[0].resolved_at.is_some());
+        state = transition.next;
+
+        state = ResourceAlertEngineState::advance(
+            &state,
+            &resource_sample(300_002, hot(), Vec::new()),
+            50,
+        )
+        .next;
+        let transition = ResourceAlertEngineState::advance(
+            &state,
+            &resource_sample(600_001, hot(), Vec::new()),
+            50,
+        );
+        assert!(transition.incidents.is_empty());
+        let transition = ResourceAlertEngineState::advance(
+            &transition.next,
+            &resource_sample(600_002, hot(), Vec::new()),
+            50,
+        );
+        assert_eq!(transition.incidents.len(), 1);
+        assert_ne!(
+            transition.incidents[0].summary.incident_id,
+            "host-resource-incident-1"
+        );
+    }
+
+    #[test]
+    fn unavailable_temperature_resets_active_and_pending_lifecycles() {
+        let hot = || {
+            vec![super::super::TemperatureMetrics {
+                label: "package".into(),
+                celsius: 60.1,
+                source: "thermal_zone0".into(),
+            }]
+        };
+        let mut state = ResourceAlertEngineState::healthy(0);
+        state =
+            ResourceAlertEngineState::advance(&state, &resource_sample(0, hot(), Vec::new()), 50)
+                .next;
+        state = ResourceAlertEngineState::advance(
+            &state,
+            &resource_sample(300_000, hot(), Vec::new()),
+            50,
+        )
+        .next;
+
+        let transition = ResourceAlertEngineState::advance(
+            &state,
+            &resource_sample(300_001, Vec::new(), Vec::new()),
+            50,
+        );
+        assert_eq!(transition.incidents.len(), 1);
+        assert!(transition.incidents[0].resolved_at.is_some());
+        state = transition.next;
+
+        state = ResourceAlertEngineState::advance(
+            &state,
+            &resource_sample(300_002, hot(), Vec::new()),
+            50,
+        )
+        .next;
+        let transition = ResourceAlertEngineState::advance(
+            &state,
+            &resource_sample(600_001, hot(), Vec::new()),
+            50,
+        );
+        assert!(transition.incidents.is_empty());
+        assert!(transition.active.is_empty());
+        state = ResourceAlertEngineState::advance(
+            &transition.next,
+            &resource_sample(600_002, hot(), Vec::new()),
+            50,
+        )
+        .next;
+
+        let transition = ResourceAlertEngineState::advance(
+            &state,
+            &resource_sample(
+                600_003,
+                vec![super::super::TemperatureMetrics {
+                    label: "package".into(),
+                    celsius: f64::NAN,
+                    source: "thermal_zone0".into(),
+                }],
+                Vec::new(),
+            ),
+            50,
+        );
+        assert_eq!(transition.incidents.len(), 1);
+        assert!(transition.incidents[0].resolved_at.is_some());
+        assert!(transition.active.is_empty());
+    }
+
+    #[test]
+    fn disk_targets_are_independent_and_virtual_filesystems_do_not_alert() {
+        let mut state = ResourceAlertEngineState::healthy(0);
+        let transition = ResourceAlertEngineState::advance(
+            &state,
+            &resource_sample(
+                0,
+                Vec::new(),
+                vec![
+                    persistent_disk("/data", "ext4", 95.0),
+                    persistent_disk("/backup", "xfs", 96.0),
+                    persistent_disk("/container", "overlay", 99.0),
+                    disk(
+                        "/loop",
+                        "/dev/loop0",
+                        super::super::DiskSourceKind::BlockDevice,
+                        "ext4",
+                        99.0,
+                    ),
+                ],
+            ),
+            50,
+        );
+        assert_eq!(transition.active.len(), 2);
+        assert_eq!(transition.incidents.len(), 2);
+        assert_eq!(
+            transition.active[0].evidence.disk_mount_point.as_deref(),
+            Some("/backup")
+        );
+        assert_eq!(transition.active[0].evidence.disk_usage_percent, Some(96.0));
+        state = transition.next;
+
+        let transition = ResourceAlertEngineState::advance(
+            &state,
+            &resource_sample(1, Vec::new(), vec![persistent_disk("/data", "ext4", 94.9)]),
+            50,
+        );
+        assert!(transition.active.is_empty());
+        assert_eq!(transition.incidents.len(), 2);
+        assert!(transition
+            .incidents
+            .iter()
+            .all(|incident| incident.resolved_at.is_some()));
+    }
+
+    #[test]
+    fn target_state_is_capped_and_repeated_samples_are_deduplicated() {
+        let mut state = ResourceAlertEngineState::healthy(0);
+        let transition = ResourceAlertEngineState::advance(
+            &state,
+            &resource_sample(
+                0,
+                Vec::new(),
+                vec![
+                    persistent_disk("/a", "ext4", 95.0),
+                    persistent_disk("/b", "ext4", 95.0),
+                ],
+            ),
+            1,
+        );
+        assert_eq!(transition.active.len(), 1);
+        assert_eq!(transition.incidents.len(), 1);
+        state = transition.next;
+
+        let transition = ResourceAlertEngineState::advance(
+            &state,
+            &resource_sample(1, Vec::new(), vec![persistent_disk("/a", "ext4", 95.0)]),
+            1,
+        );
+        assert!(transition.incidents.is_empty());
+        state = transition.next;
+        let transition = ResourceAlertEngineState::advance(
+            &state,
+            &resource_sample(2, Vec::new(), vec![persistent_disk("/b", "ext4", 95.0)]),
+            1,
+        );
+        assert_eq!(transition.incidents.len(), 2);
+        assert_eq!(transition.active.len(), 1);
     }
 }

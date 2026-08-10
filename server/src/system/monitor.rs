@@ -16,7 +16,8 @@ use crate::{
     system::{
         alerts::{
             AlertEngineState, AlertEvidence, AlertIncident, AlertSample, AlertSeverity, AlertState,
-            AlertSummary, AlertThresholds,
+            AlertSummary, AlertThresholds, ResourceAlertEngineState, ResourceAlertIncident,
+            ResourceAlertSample, ResourceAlertSummary, ResourceAlertTransition,
         },
         config::HostResourceMonitorConfig,
         platform::{
@@ -42,7 +43,10 @@ pub struct MonitorCache {
     pub aggregate: VecDeque<AggregateSample>,
     pub incidents: VecDeque<AlertIncident>,
     pub alert: AlertSummary,
+    resource_alerts: Vec<ResourceAlertSummary>,
+    resource_incidents: VecDeque<ResourceAlertIncident>,
     engine: AlertEngineState,
+    resource_engine: ResourceAlertEngineState,
 }
 
 #[derive(Clone)]
@@ -93,9 +97,12 @@ impl HostResourceMonitor {
                 aggregate: VecDeque::with_capacity(ring_capacity),
                 incidents: VecDeque::with_capacity(max_alert_incidents),
                 alert,
-                // The engine measures transition durations with elapsed time;
+                resource_alerts: Vec::new(),
+                resource_incidents: VecDeque::with_capacity(max_alert_incidents),
+                // The engines measure transition durations with elapsed time;
                 // wall time is only used in API/audit fields.
                 engine: AlertEngineState::healthy(0),
+                resource_engine: ResourceAlertEngineState::healthy(0),
             })),
             cancellation: CancellationToken::new(),
             task: Arc::new(Mutex::new(None)),
@@ -193,6 +200,7 @@ impl HostResourceMonitor {
         while cache.incidents.len() > config.max_alert_incidents {
             cache.incidents.pop_front();
         }
+        trim_resource_alert_retention(&mut cache, config.max_alert_incidents);
         drop(cache);
         self.config_changed.notify_one();
     }
@@ -240,7 +248,8 @@ impl HostResourceMonitor {
                     };
                     let sampled_at = self.source.now_ms();
                     let snapshot = self.deadline_snapshot(sampled_at, &workspace).await;
-                    self.update(snapshot, legacy, None).await;
+                    self.update(snapshot, legacy, None, elapsed_ms(self.started_at))
+                        .await;
                     next_delay = jittered_delay(&config);
                     continue;
                 }
@@ -294,7 +303,13 @@ impl HostResourceMonitor {
             let Some(legacy) = self.sample_legacy(&workspace).await else {
                 break;
             };
-            self.update(snapshot, legacy, observed_at_ms).await;
+            self.update(
+                snapshot,
+                legacy,
+                observed_at_ms,
+                elapsed_ms(self.started_at),
+            )
+            .await;
             next_delay = jittered_delay(&config);
         }
     }
@@ -304,6 +319,7 @@ impl HostResourceMonitor {
         mut snapshot: HostResourceSnapshotV1,
         legacy: HostMetrics,
         observed_at_ms: Option<u64>,
+        legacy_observed_at_ms: u64,
     ) {
         // Pair the config with a generation, then verify it after taking the
         // cache lock. This prevents an in-flight collection from publishing
@@ -347,6 +363,15 @@ impl HostResourceMonitor {
                 AlertEngineState::advance_with_thresholds(&cache.engine, &sample, &thresholds);
             (sample, transition)
         });
+        // Legacy collection succeeds independently of deep-snapshot deadlines,
+        // so resource lifecycle time advances on every successful legacy sample.
+        let resource_sample = ResourceAlertSample::from_legacy(&legacy, legacy_observed_at_ms);
+        let resource_transition = ResourceAlertEngineState::advance(
+            &cache.resource_engine,
+            &resource_sample,
+            config.max_alert_incidents,
+        );
+        update_resource_alerts(&mut cache, resource_transition, config.max_alert_incidents);
         if let Some((sample, transition)) = transition {
             cache.engine = transition.next;
             snapshot.alert = Some(transition.summary.clone());
@@ -364,11 +389,13 @@ impl HostResourceMonitor {
             }
             if let Some(incident) = transition.incident {
                 update_incident(&mut cache.incidents, incident);
-                while cache.incidents.len() > config.max_alert_incidents {
-                    cache.incidents.pop_front();
-                }
+            }
+            while cache.incidents.len() > config.max_alert_incidents {
+                cache.incidents.pop_front();
             }
             cache.alert = transition.summary.clone();
+            // Resource alerts stay internal until Phase 02 defines their
+            // additive event payload. Preserve the existing memory event.
             let should_emit = transition.change.is_some();
             drop(cache);
             if should_emit {
@@ -377,8 +404,11 @@ impl HostResourceMonitor {
             return;
         }
         snapshot.alert = Some(cache.alert.clone());
-        cache.latest = snapshot.clone();
+        cache.latest = snapshot;
         cache.legacy = legacy;
+        while cache.incidents.len() > config.max_alert_incidents {
+            cache.incidents.pop_front();
+        }
     }
 
     async fn sample_legacy(&self, workspace: &std::path::Path) -> Option<HostMetrics> {
@@ -465,6 +495,35 @@ fn update_incident(incidents: &mut VecDeque<AlertIncident>, updated: AlertIncide
     }
 }
 
+fn update_resource_alerts(
+    cache: &mut MonitorCache,
+    transition: ResourceAlertTransition,
+    maximum_history: usize,
+) {
+    cache.resource_engine = transition.next;
+    cache.resource_alerts = transition.active;
+    for incident in transition.incidents {
+        if let Some(existing) = cache
+            .resource_incidents
+            .iter_mut()
+            .find(|item| item.summary.incident_id == incident.summary.incident_id)
+        {
+            *existing = incident;
+        } else {
+            cache.resource_incidents.push_back(incident);
+        }
+    }
+    trim_resource_alert_retention(cache, maximum_history);
+}
+
+fn trim_resource_alert_retention(cache: &mut MonitorCache, maximum_history: usize) {
+    cache.resource_engine.retain_targets(maximum_history);
+    cache.resource_alerts.truncate(maximum_history);
+    while cache.resource_incidents.len() > maximum_history {
+        cache.resource_incidents.pop_front();
+    }
+}
+
 fn healthy_summary(now: u64) -> AlertSummary {
     AlertSummary {
         state: AlertState::Healthy,
@@ -540,6 +599,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reconfiguration_immediately_trims_private_resource_alert_retention() {
+        let root = Arc::new(RwLock::new(PathBuf::from("/tmp")));
+        let (sink, _) = BroadcastEventSink::new(8);
+        let monitor = HostResourceMonitor::system(root, sink, Default::default());
+        let mut legacy = monitor.legacy_metrics().await;
+        legacy.temperatures.clear();
+        legacy.disks = ["/a", "/b"]
+            .into_iter()
+            .map(|mount_point| crate::system::DiskMetrics {
+                name: "disk".into(),
+                mount_point: mount_point.into(),
+                total_bytes: 100,
+                available_bytes: 5,
+                used_bytes: 95,
+                usage_percent: 95.0,
+                file_system: Some("ext4".into()),
+                source: Some(format!("/dev{}", mount_point)),
+                source_kind: crate::system::DiskSourceKind::BlockDevice,
+            })
+            .collect();
+        legacy.sampled_at = 1;
+        monitor
+            .update(
+                HostResourceSnapshotV1::unavailable(1, PathBuf::from("/tmp").as_path()),
+                legacy.clone(),
+                None,
+                0,
+            )
+            .await;
+        {
+            let cache = monitor.cache.read().await;
+            assert_eq!(cache.resource_alerts.len(), 2);
+            assert_eq!(cache.resource_incidents.len(), 2);
+        }
+
+        monitor
+            .reconfigure(HostResourceMonitorConfig {
+                max_alert_incidents: 1,
+                ..Default::default()
+            })
+            .await;
+        {
+            let cache = monitor.cache.read().await;
+            assert_eq!(cache.resource_alerts.len(), 1);
+            assert_eq!(cache.resource_incidents.len(), 1);
+            assert_eq!(cache.resource_alerts[0].scope, "disk:/a");
+            assert_eq!(cache.resource_incidents[0].summary.scope, "disk:/b");
+        }
+
+        legacy.sampled_at = 2;
+        monitor
+            .update(
+                HostResourceSnapshotV1::unavailable(2, PathBuf::from("/tmp").as_path()),
+                legacy,
+                None,
+                1,
+            )
+            .await;
+        let cache = monitor.cache.read().await;
+        assert_eq!(cache.resource_alerts.len(), 1);
+        assert_eq!(cache.resource_incidents.len(), 1);
+        assert_eq!(cache.resource_alerts[0].scope, "disk:/a");
+    }
+
+    #[tokio::test]
     async fn monitor_uses_elapsed_time_for_sustained_alerts() {
         let root = Arc::new(RwLock::new(PathBuf::from("/tmp")));
         let (sink, _) = BroadcastEventSink::new(8);
@@ -589,6 +713,88 @@ mod tests {
         assert_eq!(
             snapshot.processes.availability.detail_code.as_deref(),
             Some("snapshotDeadlineExceeded")
+        );
+    }
+
+    #[tokio::test]
+    async fn deadline_updates_advance_resource_lifecycle_without_emitting_memory_events() {
+        let root = Arc::new(RwLock::new(PathBuf::from("/tmp")));
+        let (sink, _) = BroadcastEventSink::new(8);
+        let mut host_alerts = sink.subscribe_host_alerts();
+        let monitor = HostResourceMonitor::system(root, sink, Default::default());
+        let mut legacy = monitor.legacy_metrics().await;
+        legacy.disks.clear();
+        legacy.temperatures = vec![crate::system::TemperatureMetrics {
+            label: "package".into(),
+            celsius: 60.1,
+            source: "thermal_zone0".into(),
+        }];
+
+        legacy.sampled_at = 1;
+        monitor
+            .update(
+                HostResourceSnapshotV1::unavailable(1, PathBuf::from("/tmp").as_path()),
+                legacy.clone(),
+                None,
+                0,
+            )
+            .await;
+        legacy.sampled_at = 2;
+        monitor
+            .update(
+                HostResourceSnapshotV1::unavailable(2, PathBuf::from("/tmp").as_path()),
+                legacy,
+                None,
+                300_000,
+            )
+            .await;
+
+        let cache = monitor.cache.read().await;
+        assert_eq!(cache.resource_alerts.len(), 1);
+        assert_eq!(
+            cache.resource_alerts[0].state,
+            crate::system::alerts::ResourceAlertState::TemperatureHigh
+        );
+        assert_eq!(
+            cache.resource_alerts[0]
+                .evidence
+                .temperature_source
+                .as_deref(),
+            Some("thermal_zone0")
+        );
+        assert_eq!(cache.resource_incidents.len(), 1);
+        drop(cache);
+        assert!(monitor.alerts(50).await.is_empty());
+        assert!(host_alerts.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn resource_lifecycle_keeps_memory_alert_event_bytes_unchanged() {
+        let (sink, _) = BroadcastEventSink::new(1);
+        let mut receiver = sink.subscribe_host_alerts();
+        sink.send_host_alert_changed(&AlertSummary {
+            state: AlertState::MemoryPressure,
+            severity: AlertSeverity::Critical,
+            incident_id: Some("host-incident-1".into()),
+            opened_at: Some(1),
+            updated_at: 2,
+            duration_seconds: 1,
+            scope: "host".into(),
+            confidence: crate::system::Confidence::High,
+            threshold: "available<10%".into(),
+            evidence: AlertEvidence {
+                available_percent: Some(8.0),
+                reclaimable_percent: None,
+                psi_some_avg10: Some(12.0),
+                psi_full_avg10: None,
+                cgroup_oom_delta: false,
+            },
+            next_action: "Inspect top consumers".into(),
+        });
+
+        assert_eq!(
+            receiver.recv().await.unwrap(),
+            r#"{"kind":"host:alertChanged","payload":{"state":"memoryPressure","severity":"critical","incidentId":"host-incident-1","openedAt":1,"updatedAt":2,"durationSeconds":1,"scope":"host","confidence":"high","threshold":"available<10%","evidence":{"availablePercent":8.0,"reclaimablePercent":null,"psiSomeAvg10":12.0,"psiFullAvg10":null,"cgroupOomDelta":false},"nextAction":"Inspect top consumers"}}"#
         );
     }
 
