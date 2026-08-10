@@ -12,10 +12,29 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 mod windows_storage_component;
+mod windows_storage_directory;
 mod windows_storage_handle;
+mod windows_storage_identity;
+mod windows_storage_lock;
 
-use windows_storage_handle::{
-    open_relative, open_relative_for_traversal, validate_handle, SHARES, SYNCHRONIZE,
+use windows_storage_handle::{validate_handle, SHARES, SYNCHRONIZE};
+
+pub(crate) use windows_storage_directory::{
+    enumerate_directory, enumerate_directory_except, DirectoryEntry,
+};
+pub(crate) use windows_storage_handle::open_relative_for_traversal;
+pub(crate) use windows_storage_handle::{
+    create_new_relative_file, ntstatus_error, open_activity_lock_file,
+    open_exclusive_relative_file, open_or_create_relative_directory_no_delete,
+    open_or_create_scope_directory, open_relative, open_relative_directory_for_deletion_no_delete,
+    open_relative_directory_no_delete, open_relative_directory_shared, open_relative_for_mutation,
+    open_root_directory, open_scope_directory_existing, open_scope_operation_file,
+};
+pub(crate) use windows_storage_identity::{
+    delete_handle, file_identity, flush_handle, FileIdentity,
+};
+pub(crate) use windows_storage_lock::{
+    acquire_file_lock, acquire_file_lock_at, release_file_lock_at,
 };
 
 fn open_volume_root(path: &Path) -> io::Result<OwnedHandle> {
@@ -36,7 +55,7 @@ fn open_volume_root(path: &Path) -> io::Result<OwnedHandle> {
 /// Traversal handles are used only to reach that directory without following a
 /// reparse entry. Later operations stay relative to the returned handle, so
 /// they never need to reopen an ancestor by path.
-pub(super) fn open_root(path: &Path) -> io::Result<OwnedHandle> {
+pub(crate) fn open_root(path: &Path) -> io::Result<OwnedHandle> {
     let mut components = path.components();
     let volume_root = match components.next() {
         Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_)) => {
@@ -73,7 +92,7 @@ pub(super) fn open_root(path: &Path) -> io::Result<OwnedHandle> {
     let mut current = open_volume_root(Path::new(&volume_root))?;
     for (index, name) in names.iter().enumerate() {
         current = if index + 1 == names.len() {
-            open_relative(&current, name, true)?
+            open_root_directory(&current, name)?
         } else {
             open_relative_for_traversal(&current, name)?
         };
