@@ -766,14 +766,13 @@ pub struct PersistedSession {
 - Seeded/reinitialized from config projects on startup and workspace switch
 - Cheap clone pattern
 
-### Explorer video playback and download (Phase 1 complete; streaming Phase 2)
+### Explorer video playback and download (Phase 2 complete; frontend integration deferred)
 
-Phase 1 delivers the authenticated, purpose-bound ticket boundary for future
-Explorer playback and download. Ticket issuance and revocation are shipped;
-streaming remains Phase 2.
+Phase 1 delivered the authenticated, purpose-bound ticket boundary. Phase 2 adds
+the capability-only stream endpoint; ticket issuance, revocation, and streaming
+are shipped. The browser `VideoPreview` integration remains deferred.
 
-The following sequence is the Phase 2 target design; the stream API and browser
-integration are not shipped in Phase 1.
+The shipped server-side sequence is:
 
 ```mermaid
 sequenceDiagram
@@ -788,7 +787,7 @@ sequenceDiagram
     A-->>E: Opaque resource and purpose scoped URL
     alt Playback purpose
         E->>V: Open recognized video extension
-        V->>S: GET playback URL with Range
+        V->>S: GET playback URL with optional single Range/If-Range
         S-->>V: Inline 206 stream for play and seek
     else Download purpose
         E->>S: Navigate to download URL
@@ -811,21 +810,32 @@ absolute lifetime; lookup refreshes idle expiry without extending the absolute
 deadline. Workspace reinitialization and configuration changes revoke all tickets
 and advance the generation, preventing issuance across a changed context.
 
-Phase 2 — not shipped in Phase 1: `GET|HEAD /api/fs/video/stream/{ticket}` will be
-authorized by that scoped ticket, not by a long-lived credential in the URL. It
-will revalidate the resource before opening
-it. A no-range `GET` streams the representation as `200`; a valid single byte range
-returns `206`, exact `Content-Length`, and `Content-Range`; an unsatisfiable or
-multi-range request returns `416` with `Content-Range: bytes */size`. Responses set
-`Accept-Ranges: bytes`, media `Content-Type`, private cache policy, and stable
-metadata validators. Disposition comes only from the stored purpose: `inline` for
-playback or a sanitized RFC 5987 `attachment` filename for download. The client
-cannot upgrade a playback ticket into a download ticket. The handler uses checked
-range arithmetic, async seek, a bounded reader, and Hyper backpressure. Client
-disconnect drops the body and file without a detached producer. No filesystem or
-ticket-store lock is held while streaming.
+`GET|HEAD /api/fs/video/stream/{ticket}` is authorized by the scoped capability
+ticket, not by a long-lived credential in the URL. Every request revalidates the
+sandbox path and file identity (size, mtime, and platform identity) before opening
+the file; drift revokes the ticket and returns `410 Gone`. `GET` supports no range
+(`200`) or exactly one checked byte range (`206`, exact `Content-Length` and
+`Content-Range`). Unsatisfiable, malformed, or multi-range requests return `416`
+with `Content-Range: bytes */size`. `HEAD` returns representation metadata without
+reading the body and ignores range selection. `If-Range` is honored only when its
+single ETag or HTTP-date validator matches; otherwise the request safely falls back
+to the full `200` representation.
 
-Phase 2 — not shipped in Phase 1: the frontend will route recognized video
+Responses set `Accept-Ranges: bytes`, the detected media `Content-Type`, `ETag`,
+`Last-Modified`, and `Cache-Control: private, no-store`. Disposition comes only
+from the stored purpose: `inline` for playback or a sanitized RFC 5987 `attachment`
+filename for download. The client cannot upgrade a playback ticket into a download
+ticket. Bodies use an async reader bounded to 128 KiB with Hyper backpressure;
+client disconnect drops the body and file without a detached producer, and no
+filesystem or ticket-store lock is held while streaming.
+
+The configured CORS layer covers GET/HEAD and preflight headers needed for browser
+range playback (`Range`, `If-Range`, and validators), and exposes range, length,
+disposition, validator, and cache headers to allowed origins. Credentialed requests
+mirror the request origin when origins are unrestricted; configured origins remain
+an explicit allowlist.
+
+Deferred frontend integration will route recognized video
 extensions to `VideoPreview` before generic binary or large-text tiering. The
 player will request a fresh ticket on mount, use one
 native `<video controls preload="metadata" playsInline>` element, and clears its

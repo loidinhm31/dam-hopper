@@ -14,8 +14,8 @@
 - Description: Serve both ticket purposes through one exact GET/HEAD single-range implementation while fixing response disposition from immutable server policy.
 - Priority: P2
 - Effort: 11h
-- Implementation status: Pending
-- Review status: Validation decisions incorporated; pending protocol/security review
+- Implementation status: Completed — 2026-08-10
+- Review status: Approved — implementation and focused API validation complete; Phase 04 resource-safety gates remain pending
 
 ## Key Insights
 
@@ -107,14 +107,14 @@ GET|HEAD /api/fs/video/stream/{ticket}
 
 ## Todo list
 
-- [ ] Implement checked single-range parser
-- [ ] Implement strong validators and `If-Range`
-- [ ] Implement purpose-fixed inline/attachment header policy
-- [ ] Sanitize ASCII fallback and RFC 5987 UTF-8 filename
-- [ ] Revalidate sandbox, canonical identity, and open-handle version
-- [ ] Reuse one bounded reader for both purposes
-- [ ] Implement exact HEAD/200/206/416 matrix
-- [ ] Extend browser CORS allow/expose contract
+- [x] Implement checked single-range parser
+- [x] Implement strong validators and `If-Range`
+- [x] Implement purpose-fixed inline/attachment header policy
+- [x] Sanitize ASCII fallback and RFC 5987 UTF-8 filename
+- [x] Revalidate sandbox, canonical identity, and open-handle version
+- [x] Reuse one bounded reader for both purposes
+- [x] Implement exact HEAD/200/206/416 matrix
+- [x] Extend browser CORS allow/expose contract
 - [ ] Prove drop cancellation and no response-sized allocation
 
 ## Success Criteria
@@ -149,4 +149,4 @@ GET|HEAD /api/fs/video/stream/{ticket}
 
 ## Unresolved Questions
 
-- None.
+- Phase 04 must add the blocking cancellation, bounded-resource, and no-response-sized-allocation evidence; these are not claimed complete here.

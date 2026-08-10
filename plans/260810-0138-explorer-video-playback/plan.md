@@ -27,7 +27,7 @@ Explorer opens six recognized video containers in a native browser player and do
 | # | Phase | Status | Progress | Effort | Link |
 |---|---|---|---:|---:|---|
 | 1 | Purpose-bound ticket store and issuance | Completed | 100% | 7h | [phase-01](./phase-01-purpose-bound-ticket-store-and-issuance.md) |
-| 2 | Shared Range stream and response policy | Pending | 0% | 11h | [phase-02](./phase-02-shared-range-stream-and-response-policy.md) |
+| 2 | Shared Range stream and response policy | Completed | 100% | 11h | [phase-02](./phase-02-shared-range-stream-and-response-policy.md) |
 | 3 | Explorer browser playback and direct-download UX | Pending | 0% | 10h | [phase-03](./phase-03-explorer-browser-playback-and-direct-download-ux.md) |
 | 4 | Protocol, browser, and resource-safety gates | Pending | 0% | 10h | [phase-04](./phase-04-protocol-browser-and-resource-safety-gates.md) |
 
@@ -46,12 +46,13 @@ Explorer opens six recognized video containers in a native browser player and do
 
 ## Validation Summary
 
-**Revalidated:** 2026-08-10 — all seven decisions incorporated into overview and phases; Phase 1 implementation and validation complete; no pending validation revisions for this phase.
+**Revalidated:** 2026-08-10 — all seven decisions incorporated into overview and phases; Phases 1–2 implementation and focused validation complete; Phase 04 resource-safety/protocol gates remain pending.
 
 ## Action Items
 
 - [x] Implement Phase 01 purpose-bound ticket store and issuance.
-- [ ] Implement Phases 02–04 in order; Phase 03 may start UI-only classifier work after Phase 01 API shapes stabilize.
+- [x] Implement Phase 02 shared Range stream and response policy.
+- [ ] Implement Phases 03–04 in order; Phase 03 may start UI-only classifier work now that Phase 02 API shapes stabilize.
 - [ ] Keep Tauri support and performance tuning as separately justified follow-ups, not v1 release claims.
 
 ## Unresolved questions
