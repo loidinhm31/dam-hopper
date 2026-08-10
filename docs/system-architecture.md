@@ -766,11 +766,17 @@ pub struct PersistedSession {
 - Seeded/reinitialized from config projects on startup and workspace switch
 - Cheap clone pattern
 
-### Explorer video playback and download (Phase 03 browser host complete)
+### Explorer video playback and download (Phase 04 browser-host validation complete)
 
 Phase 1 delivered the authenticated, purpose-bound ticket boundary. Phase 2 adds
 the capability-only stream endpoint; ticket issuance, revocation, and streaming
-are shipped. Phase 03 completes the browser-host `VideoPreview` integration.
+are shipped. Phase 03 completes the browser-host `VideoPreview` integration. Phase
+04 validates it in a real Chromium host with a valid one-second VP8 WebM fixture,
+the real ticket client, and the native download helper. Independent browser-host
+checks verify playback purpose, download purpose, attachment disposition, absence
+of `Blob`/object-URL conversion, and stream-fetch behavior. Media lifecycle checks
+cover stale tickets, retry, cleanup, focus changes, and responsive layouts; the
+browser test suite is green.
 Browser routing recognizes only the final, case-insensitive extensions `mp4`,
 `m4v`, `webm`, `ogv`, `ogg`, and `mov` (an extension/MIME hint, not codec proof);
 diff tabs retain their dedicated viewer.
@@ -846,9 +852,10 @@ source on tab switch or unmount. Download actions request a separate download
 ticket, then activate a temporary anchor so browser download handling consumes the
 stream directly without `fetch().blob()`. Playback and download can run concurrently
 and expire or revoke independently. Extension and MIME are routing hints only;
-codec failure becomes an actionable unsupported-media state. Phase 03 targets the
-browser host; packaged Tauri playback/download and CSP verification remain
-deferred to Phase 04. V1 does
+codec failure becomes an actionable unsupported-media state. This validation is
+browser-host-only; it does not claim packaged Tauri playback/download or CSP
+verification. `pnpm check` cannot complete in the validation environment because
+Tauri signing-key configuration is unavailable. V1 does
 not add thumbnails, custom controls, Media Source Extensions, HLS/DASH, codec probing,
 or transcoding.
 

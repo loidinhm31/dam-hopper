@@ -31,6 +31,8 @@ describe("startVideoDownload", () => {
       "download",
     );
     expect(click).toHaveBeenCalledOnce();
+    expect(click.mock.instances[0]?.getAttribute("download")).toBeNull();
+    expect(click.mock.instances[0]?.href).toContain("/api/fs/video/stream/");
     expect(document.querySelector("a")).toBeNull();
     click.mockRestore();
   });

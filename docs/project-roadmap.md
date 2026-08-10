@@ -5,8 +5,9 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 ### Explorer Browser Video Playback and Direct Download (2026-08-10)
 
 - **Phase 01 — [COMPLETED 2026-08-10 11:51:39 +07:00]**: purpose-bound playback/download ticket issuance and lifecycle delivered: authenticated opaque capabilities, sandboxed resource/version binding, independent purpose isolation, deterministic 256-ticket capacity and 30-minute idle/8-hour absolute expiry, authenticated revoke, and workspace-change invalidation.
-- **Phase 02 — [PENDING/DEFERRED]**: shared bounded Range stream and inline/attachment response policy remain pending.
-- **Phases 03–04 — [PENDING]**: Explorer browser playback/download UX and protocol/browser/resource-safety release gates remain pending.
+- **Phase 02 — [COMPLETED 2026-08-10]**: shared bounded Range stream and inline/attachment response policy delivered with purpose-bound disposition and resource revalidation.
+- **Phase 03 — [COMPLETED 2026-08-10]**: Explorer browser playback/download UX delivered for the browser host without whole-file buffering or Blob allocation.
+- **Phase 04 — [COMPLETED 2026-08-10 15:25:44 +07:00]**: protocol, browser, and resource-safety release gates completed; browser-host scope validated. Caveats: `pnpm check` is blocked by missing `TAURI_SIGNING_PRIVATE_KEY`; final reviewer noted the stale-ticket Chromium assertion accepts any `DELETE`, approved by the user. Tauri support and performance tuning remain deferred follow-ups.
 
 ## Status Overview
 

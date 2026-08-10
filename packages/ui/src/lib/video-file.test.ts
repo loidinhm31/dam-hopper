@@ -23,6 +23,9 @@ describe("video file routing", () => {
   it("uses only the final extension and preserves non-video tiers", () => {
     expect(videoMimeType("clip.mp4.exe")).toBeUndefined();
     expect(videoMimeType("clip")).toBeUndefined();
+    expect(videoMimeType("recordings.mp4/clip.txt")).toBeUndefined();
+    expect(videoMimeType("recordings.mp4/clip.OGG")).toBe("video/ogg");
+    expect(videoMimeType(".mp4")).toBeUndefined();
     expect(fileTier("archive.zip", 1, true)).toBe("binary");
     expect(fileTier("large.txt", 6 * 1024 * 1024, false)).toBe("large");
   });
