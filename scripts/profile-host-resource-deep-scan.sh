@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Profiles only the deep host-resource collector in a single-purpose process.
 #
-# Usage: ./scripts/profile-host-resource-deep-scan.sh [iterations] [workspace]
+# Usage: bash scripts/profile-host-resource-deep-scan.sh [iterations] [workspace]
 # The JSON result includes per-collection CPU/wall peaks and retained RSS delta.
 
 set -euo pipefail
@@ -31,6 +31,6 @@ workspace="$(cd "$workspace_input" && pwd)"
 
 (
   cd "$repo_root/server"
-  cargo build --release --example host_resource_profile
+  cargo build --release --features vendored --example host_resource_profile
   exec target/release/examples/host_resource_profile "$iterations" "$workspace"
 )

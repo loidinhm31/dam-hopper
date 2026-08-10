@@ -285,6 +285,55 @@ mod tests {
     }
 
     #[test]
+    fn cgroup_v1_mount_is_explicitly_unsupported() {
+        let mountinfo = include_str!("../fixtures/linux/cgroup-v1/mountinfo.txt");
+        assert_eq!(discover_v2_mount(mountinfo), None);
+
+        let temp = tempfile::tempdir().unwrap();
+        let proc_root = temp.path().join("proc");
+        let cgroup_root = temp.path().join("cgroup");
+        std::fs::create_dir_all(proc_root.join("self")).unwrap();
+        std::fs::create_dir_all(&cgroup_root).unwrap();
+        std::fs::write(proc_root.join("self/mountinfo"), mountinfo).unwrap();
+
+        struct FixtureSource {
+            proc_root: PathBuf,
+            cgroup_root: PathBuf,
+        }
+        impl HostResourceSource for FixtureSource {
+            fn proc_root(&self) -> &Path {
+                &self.proc_root
+            }
+            fn sys_root(&self) -> &Path {
+                Path::new("/")
+            }
+            fn cgroup_root(&self) -> &Path {
+                &self.cgroup_root
+            }
+            fn now_ms(&self) -> u64 {
+                7
+            }
+        }
+
+        let cgroups = collect(
+            &FixtureSource {
+                proc_root,
+                cgroup_root,
+            },
+            7,
+        );
+        assert_eq!(cgroups.len(), 1);
+        assert_eq!(
+            cgroups[0].availability.state,
+            crate::system::AvailabilityState::Unsupported
+        );
+        assert_eq!(
+            cgroups[0].availability.detail_code.as_deref(),
+            Some("cgroupV2Unsupported")
+        );
+    }
+
+    #[test]
     fn rejects_invalid_membership_and_mount_roots() {
         assert_eq!(discover_membership("0::relative"), None);
         assert!(resolve_cgroup_path(Path::new("/tmp"), "/sys/fs/cgroup", "/ok").is_some());

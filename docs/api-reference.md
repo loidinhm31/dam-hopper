@@ -115,11 +115,8 @@ Bearer token required. JSON body is limited to 64 KiB and uses camelCase:
 {
   "terminalId": "pty-uuid",
   "selection": {
-    "version": 1,
-    "tag": "button",
-    "role": "button",
-    "accessibleName": "Save",
-    "text": "Save",
+    "version": 1, "tag": "button", "role": "button",
+    "accessibleName": "Save", "text": "Save",
     "attributes": { "data-testid": "save" },
     "locator": "button[data-testid=save]",
     "bounds": { "x": 10, "y": 20, "width": 80, "height": 32 }
@@ -264,6 +261,69 @@ Notes:
 - terminal tails can still contain sensitive local/dev output even after best-effort redaction; review before sharing the exported JSON
 - when `terminalIds` is provided, backend events with `sessionId` are scoped to those ids while global events remain included
 - **Phase 04:** `system` field contains host metrics sampled from the config directory (`~/.config/dam-hopper/` by default) for host-context only, not project sandboxes
+
+### Host resource snapshot and alerts
+
+Phase 03 exposes the read-only `HostResourceSnapshotV1` contract through
+protected routes. Snapshots use camelCase fields and section-level
+availability states (`available`, `unsupported`, `permissionDenied`,
+`temporarilyUnavailable`, or `stale`) with optional detail codes. Text reads are
+bounded by actual bytes (256 KiB per file); cgroup v2 PSI/limits and process
+inventory report explicit degradation plus bounded scan/deadline and issue
+counters. Cache attribution labels are descriptive and may overlap, so clients
+must not add them as an accounting total. The existing `GET /api/system/metrics`
+response remains compatible and is served from the monitor's cached projection.
+
+The current UI is monitoring-only. It displays the snapshot, bounded alert
+history, and diagnostic evidence; it does not offer remediation controls. The
+`host:alertChanged` push event is accepted only when its bounded typed alert
+payload is valid, then invalidates the cached snapshot and alert queries. REST
+responses remain authoritative after reconnect, missed events, profile changes,
+or malformed push data. If the deep snapshot is unavailable, the diagnosis
+popover retains CPU and disk from the compatible metrics endpoint and labels the
+deep data unavailable; it never fabricates a zero value. Cgroup v1 is reported
+as unsupported; constrained Linux and containers report per-section
+availability and scope rather than host-wide failure.
+
+#### GET /api/system/resources/v1/snapshot
+
+Returns the latest bounded deep host snapshot. Sampling cadence and source roots
+are server-owned; incomplete cycles are represented as stale or degraded
+availability rather than fabricated values.
+
+#### GET /api/system/resources/v1/alerts
+
+Returns bounded host-level alert incidents, newest first. Optional `limit` is
+clamped by the server (default 50). Incidents include state, severity,
+timestamps, duration, scope, confidence, threshold, bounded evidence, and a
+next-action description. This endpoint reports evidence only and performs no
+remediation.
+
+### Deferred remediation backlog
+
+Re-authentication, action lifecycle, privileged helper/IPC, enrollment, and
+host mutation are not part of this release and are intentionally not a current
+supported API surface. Some inert, fail-closed route scaffolding remains in the
+server for a future design, but it is not an enabled monitoring capability and
+is not documented as a client contract. A separate approved architecture and
+security gate is required before it can become active. This reference documents
+only the read-only monitoring routes above.
+
+Server tuning is configured in TOML under `[server.host_resources]` using
+snake_case keys: `light_sample_seconds` (5), `process_sample_seconds` (15),
+`pss_sample_seconds` (60), `jitter_millis` (250),
+`process_deadline_millis` (150), `snapshot_deadline_millis` (500),
+`ring_capacity` (144), `max_alert_incidents` (50),
+`reclaimable_cache_percent` (25), `available_warning_percent` (15),
+`available_critical_percent` (10), `available_oom_percent` (5),
+`psi_some_percent` (10), and `psi_full_percent` (1). Values are clamped to
+safe ranges at runtime.
+
+Phase 07 validation covered Rust format/check/tests, vendored server tests, UI
+unit/type/browser tests, lint, web/server builds, and a `linux/amd64` Docker
+build. The no-tunnel container shutdown measurement is not a claim about active
+tunnel teardown. A real non-Linux runtime result, staged canary, rollback
+rehearsal, and release-owner approval remain open release gates.
 
 ## Codex Usage Analytics
 
@@ -1268,8 +1328,8 @@ All functions in `packages/web/src/api/server-config.ts`.
 **Migration:**
 
 - `migrateToProfiles(): void` — (called in `App.tsx`) converts legacy single-server config to profile system on first app load
-  - restores a valid active profile when the stored selection is missing
-  - migrates the legacy URL, username, and token only when the legacy URL matches the destination profile
+  - if profiles already exist → no-op
+  - if legacy `damhopper_server_url` exists → creates "Default Server" profile and sets active
 
 ### Storage Breakdown
 
@@ -1277,11 +1337,8 @@ All functions in `packages/web/src/api/server-config.ts`.
 | ----------------------------- | -------------- | ----------------- | ---------------------- |
 | `damhopper_server_profiles`   | localStorage   | Shared (all tabs) | Survives browser close |
 | `damhopper_active_profile_id` | localStorage   | Shared (all tabs) | Survives browser close |
-| `damhopper_auth_token_<id>`   | localStorage   | Per-profile       | Survives browser close |
+| `damhopper_auth_token`        | sessionStorage | Per-tab           | Cleared on tab close   |
 | `damhopper_auth_username`     | sessionStorage | Per-tab           | Cleared on tab close   |
-
-Bearer tokens are persisted locally per profile to support Android/browser recreation. They are readable by JavaScript; deploy trusted HTTPS frontend assets and never store passwords.
-Changing a normalized profile URL clears its token and requires login again; trailing-slash-only formatting changes preserve it.
 
 **POST /api/git/:project/stage**
 Stage files for commit.
@@ -1371,92 +1428,6 @@ Response:
 }
 ```
 
-### Native Image Preview Capabilities
-
-Image preview is a protected, preview-only capability contract. It does not
-replace the general file-read API and does not provide image downloads.
-
-**POST /api/fs/image/tickets**
-
-Bearer authentication is required. The JSON body is:
-
-```json
-{ "project": "NAME", "path": "assets/cover.webp" }
-```
-
-Only final, case-insensitive `png`, `jpg`, `jpeg`, `gif`, and `webp` extensions
-are accepted. The server resolves the path inside the project sandbox, rejects
-traversal/symlink components and non-regular files, records the file
-identity/version, and returns a fixed-purpose capability:
-
-```json
-{
-  "ticket": "opaque-random-token",
-  "streamPath": "/api/fs/image/stream/opaque-random-token",
-  "expiresAt": 1800000000000,
-  "purpose": "preview"
-}
-```
-
-Success is `201 Created` with `Cache-Control: no-store`. Authentication failure
-is `401`; unsupported input is `400`; sandbox escape is `403`; missing or
-non-regular resources are `404`; and shared ticket capacity is `429` with
-`Retry-After: 1` and `code: IMAGE_TICKET_CAPACITY`. Response bodies do not
-include the project path, absolute filename, or bearer token.
-
-**DELETE /api/fs/image/tickets**
-
-Bearer authentication is required. Revoke with `{ "ticket": "opaque-token" }`.
-Revocation is idempotent and returns `204 No Content`; unknown or already
-revoked tickets do not reveal their prior state.
-
-**GET|HEAD /api/fs/image/stream/{ticket}**
-
-The URL contains only the opaque capability. The stream is inline and uses the
-MIME captured at issuance. `GET` returns `200` for the full representation or
-`206` for one valid byte range; malformed, multi-range, or unsatisfiable ranges
-return `416` with `Content-Range: bytes */size`. `HEAD` returns metadata with an
-empty body and ignores range selection. Unknown/revoked capabilities return
-`404`; a file identity/version change revokes the capability and returns `410`.
-
-Responses include `Accept-Ranges`, `Content-Length`, `Content-Type`, `ETag`,
-`Last-Modified`, and `Cache-Control: private, no-store`. Range, length,
-validator, disposition, and cache headers are exposed only through the existing
-configured CORS policy. Image disposition is always `inline`; no image ticket
-can be upgraded to video playback or download behavior. Workspace, config, and
-settings context changes invalidate shared image and video capabilities.
-
-**GET /api/fs/language-files?project=NAME**
-Scan the configured project root for supported language files. The endpoint is
-authenticated and project-scoped; it does not accept a caller-supplied root or
-scan limit. The walk honors Git ignore/global-ignore/repository-exclude rules,
-includes hidden paths, excludes `.git` metadata, and returns regular files only
-(symlinks are not followed or returned).
-
-Supported extensions are `.rs` (`rust`), `.js`, `.jsx`, `.ts`, and `.tsx`
-(`javascript-typescript`), plus `.java` (`java`), matched case-insensitively.
-Paths are relative to the project root and use forward slashes where the host
-platform requires normalization. Results are sorted by path and capped at
-20,000 files or 200,000 visited entries; `truncated` is true when either cap is
-reached.
-
-Response:
-
-```json
-{
-  "files": [
-    {
-      "path": "src/main.rs",
-      "size": 1024,
-      "mtime": 1712577600,
-      "language": "rust"
-    }
-  ],
-  "truncated": false,
-  "limit": 20000
-}
-```
-
 **Error Responses:**
 
 - 400: Invalid path (outside sandbox)
@@ -1518,7 +1489,6 @@ Request body:
 ```
 
 On switch:
-
 - Configuration is reloaded from the specified path
 - File API sandbox is reinitialized from project roots in the new config
 - All PTY sessions are disposed

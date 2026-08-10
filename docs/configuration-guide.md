@@ -210,6 +210,12 @@ they do not expose raw argv or environment values.
 Do not add re-authentication, action, helper, IPC, enrollment, or host-mutation
 settings to this release. Those remain deferred backlog, not configuration.
 
+The Phase 07 release evidence covers the packaged server in no-tunnel mode. Its
+measured graceful-shutdown budget applies only when no tunnel sessions are
+active; tunnel child-process disposal retains its separate three-second grace
+period. A staged canary, rollback rehearsal, and release-owner approval are
+still required before sign-off.
+
 ### Browser Debug Preview
 
 The Browser tool has no server configuration flag. It embeds the selected
