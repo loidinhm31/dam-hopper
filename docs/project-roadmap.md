@@ -38,6 +38,12 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - The runtime-activity implementation from `0ad51a5` was removed after it was implicated in a Codex terminal-notification regression.
 - Revisit this only as a separate PTY-lifecycle design: preserve raw terminal notification signals through shutdown/replacement, order persistence removal after reader drain, and add race coverage for an OSC notification emitted while a session is being replaced or removed.
 
+### Linux Host Resource Monitoring and Gated Remediation (2026-08-08)
+
+- **Phases 01–03, 06 — [COMPLETED 2026-08-08–09]**: delivered the read-only monitoring threat model, bounded contracts/parsers, cached monitor/read APIs, sustained alerts, and in-app diagnosis. No host mutation is enabled.
+- **Phase 07 packaging, validation, rollout/rollback — [COMPLETED 2026-08-10 18:23 +07:00]**: release owner accepted completion after local Linux packaging/soak, bounded fixture, Docker, and Chromium evidence. The still-unobserved Windows CI result, intended-canary-host profiling, staged monitor/in-app-alert canary, and rollback rehearsal are explicitly deferred follow-up work, not passed gates. [Plan](../plans/260808-0236-host-resource-monitoring-remediation/plan.md).
+- **Operational/security sign-offs remaining**: real-systemd-host caller/enrollment validation and security-owner acceptance of enrolled-server-compromise residual risk. Privileged helper/actions are not implemented or approved for rollout.
+
 ### Floating Terminal Key Controls (2026-08-06)
 
 - **Phase 01 — Implement and verify: [COMPLETED 2026-08-06 22:51 +07:00]**: floating Keys/Type controls delivered for active desktop/mobile terminal surfaces with split-session ownership preserved; 19/19 focused unit and 16/16 relevant Chromium checks passed, builds/lint/formatting/diff checks passed, review approved 9/10.
@@ -69,7 +75,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 - [x] Separate privacy-preserving telemetry SQLite store and migrations
 - [x] Bounded non-blocking writer with WAL and graceful shutdown
-- [x] UTC rollup/purge, project exclusion, delete-all, and retention controls *(historical terminal analytics; superseded by the Codex-only contract, which has no project exclusion)*
+- [x] UTC rollup/purge, project exclusion, delete-all, and retention controls _(historical terminal analytics; superseded by the Codex-only contract, which has no project exclusion)_
 - [x] DB/API privacy scan and read-only/corrupt store fault coverage
 
 **Phase 04: Aggregate API and Controls — [COMPLETED 2026-07-26; APPROVED WITH WARNINGS]**

@@ -265,6 +265,71 @@ Notes:
 - when `terminalIds` is provided, backend events with `sessionId` are scoped to those ids while global events remain included
 - **Phase 04:** `system` field contains host metrics sampled from the config directory (`~/.config/dam-hopper/` by default) for host-context only, not project sandboxes
 
+### Host resource snapshot and alerts
+
+Phase 03 exposes the read-only `HostResourceSnapshotV1` contract through
+protected routes. Snapshots use camelCase fields and section-level
+availability states (`available`, `unsupported`, `permissionDenied`,
+`temporarilyUnavailable`, or `stale`) with optional detail codes. Text reads are
+bounded by actual bytes (256 KiB per file); cgroup v2 PSI/limits and process
+inventory report explicit degradation plus bounded scan/deadline and issue
+counters. Cache attribution labels are descriptive and may overlap, so clients
+must not add them as an accounting total. The existing `GET /api/system/metrics`
+response remains compatible and is served from the monitor's cached projection.
+
+The current UI is monitoring-only. It displays the snapshot, bounded alert
+history, and diagnostic evidence; it does not offer remediation controls. The
+`host:alertChanged` push event is accepted only when its bounded typed alert
+payload is valid, then invalidates the cached snapshot and alert queries. REST
+responses remain authoritative after reconnect, missed events, profile changes,
+or malformed push data. If the deep snapshot is unavailable, the diagnosis
+popover retains CPU and disk from the compatible metrics endpoint and labels the
+deep data unavailable; it never fabricates a zero value. Cgroup v1 is reported
+as unsupported; constrained Linux and containers report per-section
+availability and scope rather than host-wide failure.
+
+#### GET /api/system/resources/v1/snapshot
+
+Returns the latest bounded deep host snapshot. Sampling cadence and source roots
+are server-owned; incomplete cycles are represented as stale or degraded
+availability rather than fabricated values.
+
+#### GET /api/system/resources/v1/alerts
+
+Returns bounded host-level alert incidents, newest first. Optional `limit` is
+clamped by the server (default 50). Incidents include state, severity,
+timestamps, duration, scope, confidence, threshold, bounded evidence, and a
+next-action description. This endpoint reports evidence only and performs no
+remediation.
+
+### Deferred remediation backlog
+
+Re-authentication, action lifecycle, privileged helper/IPC, enrollment, and
+host mutation are not part of this release and are intentionally not a current
+supported API surface. Some inert, fail-closed route scaffolding remains in the
+server for a future design, but it is not an enabled monitoring capability and
+is not documented as a client contract. A separate approved architecture and
+security gate is required before it can become active. This reference documents
+only the read-only monitoring routes above.
+
+Server tuning is configured in TOML under `[server.host_resources]` using
+snake_case keys: `light_sample_seconds` (5), `process_sample_seconds` (15),
+`pss_sample_seconds` (60), `jitter_millis` (250),
+`process_deadline_millis` (150), `snapshot_deadline_millis` (500),
+`ring_capacity` (144), `max_alert_incidents` (50),
+`reclaimable_cache_percent` (25), `available_warning_percent` (15),
+`available_critical_percent` (10), `available_oom_percent` (5),
+`psi_some_percent` (10), and `psi_full_percent` (1). Values are clamped to
+safe ranges at runtime.
+
+Phase 07 validation covered Rust format/check/tests, vendored server tests, UI
+unit/type/browser tests, lint, web/server builds, and a `linux/amd64` Docker
+build. The no-tunnel container shutdown measurement is not a claim about active
+tunnel teardown. The release owner approved Phase 07 completion with the
+still-unobserved Windows CI result, canary-host profiling, staged
+monitor/in-app-alert canary, and rollback rehearsal deferred as post-release
+work; none of those checks is passed evidence.
+
 ## Codex Usage Analytics
 
 Protected, aggregate-only analytics for the local Codex telemetry store. All routes require

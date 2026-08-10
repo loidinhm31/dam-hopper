@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 
+use crate::system::config::HostResourceMonitorConfig;
+
 // ──────────────────────────────────────────────
 // Project type
 // ──────────────────────────────────────────────
@@ -358,6 +360,8 @@ pub struct ServerConfig {
 
     #[serde(default)]
     pub telemetry: TelemetryConfig,
+    #[serde(default, alias = "host_resources")]
+    pub host_resources: HostResourceMonitorConfig,
 }
 
 impl Default for ServerConfig {
@@ -366,6 +370,7 @@ impl Default for ServerConfig {
             session_db_path: default_session_db_path(),
             session_buffer_ttl_hours: default_session_buffer_ttl_hours(),
             telemetry: TelemetryConfig::default(),
+            host_resources: HostResourceMonitorConfig::default(),
         }
     }
 }

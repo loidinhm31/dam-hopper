@@ -5,7 +5,10 @@
 import { getTransport, reconfigureTransport } from "./transport.js";
 import { IdleTransport } from "./idle-transport.js";
 import { WsTransport } from "./ws-transport.js";
-import { resetTransportListeners } from "@/hooks/use-sse.js";
+import {
+  initTransportListeners,
+  resetTransportListeners,
+} from "@/hooks/use-sse.js";
 
 /**
  * Reinitialize the transport with a new server URL.
@@ -27,7 +30,7 @@ export function reinitializeTransport(
     oldTransport.destroy();
   }
 
-  // 2. Reset all push event listeners so they can be re-registered with the new transport
+  // 2. Remove push listeners owned by the old transport.
   resetTransportListeners();
 
   // 3. Use an idle transport when no profile remains, so the old authenticated
@@ -36,6 +39,7 @@ export function reinitializeTransport(
     ? new WsTransport(newServerUrl, profileId)
     : new IdleTransport();
 
-  // 4. Install the new transport globally
+  // 4. Install the new transport and attach its push listeners immediately.
   reconfigureTransport(newTransport);
+  initTransportListeners();
 }

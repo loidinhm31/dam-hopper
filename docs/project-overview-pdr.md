@@ -240,6 +240,46 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Sensitive metadata is redacted before sink delivery unless local diagnostics explicitly disable it
 - ✓ Shared logger is used by the high-value UI surfaces noted above
 
+### PR-009: Host Resource Monitoring (Current Delivery)
+
+**Status:** Phase 07 completed on 2026-08-10 with release-owner approval after local packaging, soak, and browser validation. The still-unobserved Windows CI result, canary-host profiling, staged monitor/in-app-alert canary, and rollback rehearsal are owner-authorized deferred follow-up work, not passed gates. Re-authentication, mutation lifecycle/audit, privileged IPC, enrollment, and fixed host operations are deferred together and are not part of the current release.
+
+**Current Functional Requirements:**
+
+- Keep `HostResourceMonitor` read-only, bounded, startup-owned, and independent from every mutation subsystem.
+- Preserve the `GET /api/system/metrics` response shape from the monitor cache; expose immutable deep snapshots and bounded incident history through versioned protected read APIs.
+- Publish sanitized `host:alertChanged` refresh events; REST remains authoritative after reconnect, lag, or missed events.
+- Render in-app status, alert history, evidence, uncertainty, and static operator guidance without credentials or host-mutation controls.
+- Feature-detect Linux procfs, PSI, and cgroup v2 data. Return explicit unsupported/stale/partial states on constrained Linux, containers, and non-Linux hosts.
+
+**Current Acceptance Criteria:**
+
+- [x] `HostResourceSnapshotV1` uses bounded actual-byte reads, explicit degradation states, cgroup v2/PSI data, bounded process inventory, and non-overlapping cache attribution.
+- [x] One background monitor owns sampling, cached legacy/deep projections, alert state, and shutdown lifecycle independently of UI visibility.
+- [x] `GET /api/system/metrics` remains compatible; `/api/system/resources/v1/snapshot` and `/alerts` return cached read-only state.
+- [x] Sustained alert classification, bounded incident history, and `host:alertChanged` delivery are implemented and tested.
+- [x] The top-nav diagnosis UI consumes cached snapshot/alert state and exposes no remediation control.
+- [x] Phase 07 completed packaging, compatibility, graceful-degradation, platform/browser, soak-budget, and documentation validation; rollout follow-ups are explicitly deferred.
+
+Phase 07 evidence confirms the monitoring-only/read-only boundary, explicit
+cgroup-v1 and non-Linux unsupported states, and pinned `linux/amd64` packaging.
+The no-tunnel shutdown result must not be generalized to active tunnel teardown.
+The release owner approved completion with the still-unobserved Windows CI
+result, canary-host profiling, staged monitor/in-app-alert canary, and rollback
+rehearsal deferred as post-release work; none of those checks is passed release
+evidence.
+
+**Accepted Monitoring Follow-ups:**
+
+- Release gate: preserve alert subscriptions across profile switches; tighten event validation; keep legacy metrics visible when deep reads fail; cover profile/disconnect/reconnect behavior in Chromium.
+- Backlog polish: refine warning-badge severity semantics after release evidence and threshold tuning.
+
+**Deferred Remediation Backlog and Sign-off:**
+
+- Re-authentication/action lifecycle and privileged helper/IPC/enrollment remain one inactive backlog. They are not dependencies of monitoring Phase 07.
+- Preserve the deferred threat model in [system architecture](./system-architecture.md#deferred-remediation-design-fixed-v1-contract); do not treat it as shipped capability.
+- Before any future privileged implementation: reopen architecture/security review; define kernel/distro/systemd and pidfd policy; approve audit retention and any global cache operation; accept residual enrolled-server compromise risk.
+
 ## Non-Functional Requirements
 
 ### Performance

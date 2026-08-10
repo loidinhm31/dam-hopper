@@ -14,10 +14,11 @@ use crate::crypto::{DamHopperOpaqueSuite, OpaqueRegistrations};
 use crate::diagnostics::DiagnosticStore;
 use crate::error::AppError;
 use crate::fs::{FsSubsystem, ImageStreamTicketStore, MediaTicketStore, VideoStreamTicketStore};
+use crate::host_actions::HostActionService;
 use crate::port_forward::PortForwardManager;
 use crate::pty::{BroadcastEventSink, PtySessionManager};
 use crate::ssh::SshCredStore;
-use crate::system::HostMetricsSampler;
+use crate::system::HostResourceMonitor;
 use crate::telemetry::worker::TelemetryHandle;
 use crate::telemetry::{codex_otlp::CodexExporterManager, TelemetryRuntime};
 use crate::tunnel::TunnelSessionManager;
@@ -80,8 +81,11 @@ pub struct AppState {
     /// In-memory OPAQUE registration records (identifier → ServerRegistration).
     /// Lost on server restart — acceptable for encrypt-in-transit model.
     pub opaque_registrations: OpaqueRegistrations,
-    /// Host metrics sampler with retained sysinfo state for CPU deltas.
-    pub host_metrics: HostMetricsSampler,
+    /// Single background owner for host snapshots, alerts, and legacy metrics.
+    pub host_resource_monitor: HostResourceMonitor,
+    /// Memory-only intent/approval lifecycle. The only production executor is
+    /// deliberately unavailable until an enrolled helper exists in Phase 05.
+    pub host_actions: HostActionService,
     /// Backend diagnostics ring and JSONL persistence handle.
     pub diagnostics: DiagnosticStore,
     /// Short-lived browser selection bundles, isolated from workspace roots.
@@ -142,6 +146,18 @@ impl AppState {
         telemetry_runtime: TelemetryRuntime,
     ) -> anyhow::Result<Self> {
         pty_manager.set_diagnostics(diagnostics.clone());
+        let workspace_dir = Arc::new(RwLock::new(workspace_dir));
+        let host_resource_monitor = HostResourceMonitor::system(
+            Arc::clone(&workspace_dir),
+            event_sink.clone(),
+            config.server.host_resources.clone(),
+        );
+        let host_action_config_dir = config
+            .config_path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let host_actions = HostActionService::new(host_action_config_dir);
 
         // Production safety guards for no-auth mode
         if no_auth {
@@ -184,7 +200,7 @@ impl AppState {
         let image_stream_tickets = ImageStreamTicketStore::from_media(media_tickets.clone());
 
         Ok(Self {
-            workspace_dir: Arc::new(RwLock::new(workspace_dir)),
+            workspace_dir,
             config: Arc::new(RwLock::new(config)),
             global_config: Arc::new(RwLock::new(global_config)),
             pty_manager,
@@ -204,7 +220,8 @@ impl AppState {
             port_forward_manager,
             opaque_server_setup: Arc::new(opaque_server_setup),
             opaque_registrations: OpaqueRegistrations::default(),
-            host_metrics: HostMetricsSampler::new(),
+            host_resource_monitor,
+            host_actions,
             diagnostics,
             browser_debug_artifacts,
             telemetry: telemetry_runtime.handle_cell(),

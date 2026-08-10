@@ -1519,6 +1519,211 @@ Server bootstrap:
 - Router registration (ide_explorer routes conditional)
 - Port binding + graceful shutdown
 
+## Host resource monitoring (current delivery; remediation deferred)
+
+The current delivery boundary is monitoring-only. Phase 03 implements one
+shared cached monitor, the compatible legacy metrics projection, versioned
+read-only snapshot and alert APIs, and bounded alert events. Phase 06 implements
+the in-app diagnosis UI. Phase 07 packages, validates, and rolls out only those
+observation surfaces. It must not enable, package, exercise, or claim support
+for host mutation.
+
+The top-nav host-resource popover presents the cached snapshot, bounded alert
+history, and diagnostic evidence, with no remediation controls. A
+`host:alertChanged` push event invalidates the cached read-only queries so the
+next render reflects authoritative REST projections; it is a refresh signal,
+not a mutation request. Deep Linux reads degrade per signal, while
+`GET /api/system/metrics` remains the compatibility fallback and rollback seam.
+
+Re-authentication, mutation lifecycle/audit, local privileged IPC, enrollment,
+and fixed host operations are one future remediation backlog. Existing
+server-side lifecycle scaffolding, where present, is outside the current
+delivery and has no privileged executor. It must remain incapable of host
+mutation. The deferred threat model below is retained for a future design gate;
+it is not a dependency of Phase 07.
+
+### Data flow and trust boundary
+
+```
+Linux procfs / PSI / cgroup v2
+  -> HostResourceMonitor (read-only, bounded, cached)
+  -> protected snapshot and alert APIs / host:alertChanged event
+  -> browser diagnostics UI
+```
+
+`HostResourceMonitor` has no dependency on `HostActionService`, helper IPC, or
+action configuration. Alert collection and delivery can only publish bounded,
+sanitized state. They cannot enqueue or execute an action. The existing
+`GET /api/system/metrics` remains a compatible basic-metrics endpoint; new
+resource APIs are versioned siblings. Phase 03 moves it to the shared monitor's
+cached projection without changing its response shape.
+
+The release image is built explicitly for `linux/amd64` and uses pinned base
+image digests. Phase 07 evidence measures clean shutdown only for a server with
+no active tunnel sessions; active tunnel disposal has a separate three-second
+child-process grace period. The full release command set includes Rust
+format/check/tests, UI unit/type/browser tests, lint, web/server builds, and the
+Docker build. The release owner approved Phase 07 completion with the
+still-unobserved Windows CI result, canary-host profiling, staged
+monitor/in-app-alert canary, and rollback rehearsal deferred as post-release
+work. Those checks remain unexecuted and are not passed evidence.
+
+### Snapshot boundaries
+
+`HostResourceSnapshotV1` is serialized in camelCase and reports explicit
+availability for each deep section. Collection is read-only and uses startup-owned
+`/proc`, `/sys`, and cgroup roots; callers cannot provide alternate roots. Every
+text read is bounded by the actual stream at 256 KiB, and oversize, invalid UTF-8,
+permission, parse, and race failures degrade the relevant section instead of
+failing the snapshot.
+
+Linux deep metrics include memory PSI (`some`/`full`) and discovered unified cgroup
+v2 membership. Cgroup records report current usage, max/high limits (including
+unlimited markers), file cache, memory events, and cgroup PSI. Mount and
+membership validation runs before cgroup reads; unsupported or invalid layouts
+remain explicitly degraded.
+
+Process inventory is bounded to 4,096 scanned PIDs, 20 returned processes, and PSS
+reads for the top 5 by RSS, with a 100 ms deadline. The response includes scan,
+truncation, deadline, skipped, and issue counters for permission denied, invalid
+UTF-8, malformed, and disappeared process files. Process strings are capped at
+256 bytes.
+
+Cache attribution is descriptive rather than additive accounting. Labels identify
+system-file cache, cgroup-file cache, process-file RSS, mount-file mappings, or
+unattributed shared cache; clients must not sum overlapping labels. Each carries
+optional bytes, confidence, and collection method.
+
+### Deferred remediation design: fixed v1 contract
+
+This subsection and the remaining remediation subsections are backlog design,
+not current behavior or Phase 07 scope. Re-activation requires a new
+architecture/security gate and explicit product sign-off. Until then no
+privileged component is packaged or enrolled, and no mutation capability may be
+advertised as available.
+
+The deferred lifecycle must fail closed: approvals are consumed once;
+lifecycle outcomes are recorded in bounded local audit storage; and unavailable
+audit or execution state cannot be reported as success. It must perform no OS
+password, sudo/polkit/PTY escalation, generic command execution, or automatic
+remediation.
+
+- The only client-selectable value is a typed, allowlisted intent. The client
+  cannot supply a command, shell, executable path, signal number, process
+  group, raw PID, cache mode, or writable kernel path.
+- An approval binds the authenticated actor, canonical action digest, immutable
+  target identity, nonce, issued-at time, expiry, and single-use state. The
+  canonical target includes host PID namespace inode, mount namespace inode,
+  user namespace inode, boot ID, PID, process start ticks, UID, cgroup, and
+  bounded command identity where the action type needs a process target.
+- IPC is a versioned `AF_UNIX SOCK_SEQPACKET` enum protocol with one 8 KiB
+  request frame per connection. It uses close-on-exec descriptors, rejects
+  truncated/multiple frames and `SCM_RIGHTS`, and accepts no client-supplied
+  file descriptor. The helper enforces an issued-at window, request-ID
+  deduplication, fixed action-specific rate limits, and structured errors that
+  contain no credentials, approval material, raw command lines, or environment
+  values.
+- Process termination prefers a pidfd. A permitted fallback re-reads host
+  namespace inodes, boot ID, UID, start ticks, cgroup, and bounded command
+  identity immediately before a fixed `SIGTERM`. It never acts on PID 1 or a
+  process group; `SIGKILL` is a different, separately approved action.
+- The cache action is globally scoped and therefore exceptional: it always
+  calls `sync` first, then writes only the fixed value `3` to `drop_caches`.
+  It has a global warning, cooldown, before/after samples, helper-side policy,
+  and no client-selected cache value. It is not mount or workspace cleanup.
+- Actions are unavailable with `--no-auth`, without MongoDB-backed re-auth,
+  on non-Linux hosts, in Docker/nohup installs, or whenever enrollment, IPC,
+  policy, or target revalidation is unavailable.
+
+### Deferred remediation design: helper enrollment proof
+
+Enrollment requires a feature probe for both `SO_PEERPIDFD` and
+`SO_PASSPIDFD`; an unavailable or failing probe makes actions unavailable. The
+helper accepts a local IPC request only after all of the following checks
+succeed:
+
+1. It obtains the connected peer's pidfd atomically with `SO_PEERPIDFD` and
+   checks `SO_PEERCRED` against the configured enrolled server effective UID.
+   It does not call `pidfd_open()` on the numeric credential PID.
+2. It reads the expected unit's active `MainPID` from the local system manager
+   and compares it with the still-pinned peer pidfd identity. Sharing a unit
+   cgroup is insufficient: PTY, shell, and other descendant processes are
+   rejected.
+3. It enables `SO_PASSPIDFD` and requires the kernel-provided `SCM_PIDFD` on
+   the single request frame. That per-request pidfd must again identify the
+   enrolled service `MainPID`; this rejects a socket inherited across `fork` or
+   `exec`. `SCM_RIGHTS`, missing ancillary data, extra ancillary records, and
+   a second request frame are denied.
+4. The client creates its socket with `SOCK_CLOEXEC`; the helper accepts with
+   `accept4(..., SOCK_CLOEXEC)`, closes the connection after one receipt, and
+   never passes that descriptor to another process.
+5. The pinned per-request pidfd verifies the expected cgroup and executable
+   device/inode against the root-owned enrolled server identity.
+6. The helper executable, socket, unit, and policy identity have the expected
+   root ownership and non-writable modes.
+7. The request is a supported versioned action and satisfies the fixed v1
+   contract above.
+
+Failure at any point is an `unavailable` or `denied` result and causes no
+signal or kernel write. Same-user means the enrolled server's effective UID,
+not the browser account name. A remote browser is never a polkit agent and its
+password is never accepted or transported.
+
+### Deferred remediation design: host-namespace target proof
+
+The enrolled helper must run in the host PID, mount, and user namespaces. It
+opens and revalidates the target using its own host `/proc`, never a client
+provided proc root or namespace path. At approval and immediately before the
+fixed action, it compares the target's host PID/mount/user namespace inode
+identities, boot ID, PID, start ticks, UID, cgroup, and bounded command
+identity with the canonical target. It rejects absent, changed, non-host, or
+unreadable namespace evidence. This denies ambiguous nested-systemd and
+container targets rather than attempting a best-effort signal.
+
+### Deferred remediation threat model: abuse-case matrix
+
+| Asset or entry point        | Abuse                                        | Required control                                                                                          | Residual risk and test                                                                                        |
+| --------------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Browser JWT or cookie       | Stolen token or CSRF creates an action       | Protected route, fresh re-auth, Origin/Content-Type checks for cookie requests, one-shot bound approval   | A valid in-session actor can approve an allowed action; reject expired, reused, and mismatched approvals      |
+| Browser intent body         | Command, signal, PID-only, or path injection | Canonical typed action and server-resolved immutable target                                               | Future action enum defects remain possible; property-test rejected unknown fields                             |
+| Stale UI target             | PID reuse or changed cgroup/namespace        | Bind host namespace inodes, boot ID/start ticks/UID/cgroup/identity and re-read immediately before action | Process can exit between checks; return failed receipt without retrying another PID                           |
+| Approval or IPC frame       | Replay, oversized input, spoofed request     | Nonce and request-ID single use, 8 KiB cap, freshness window, helper dedupe                               | Bounded in-memory/durable dedupe retention; test replay and over-limit frames                                 |
+| Server process              | Compromise invokes helper                    | Helper peer proof, fixed enum, target checks, cooldown, local audit                                       | An enrolled server compromise can request an allowed action; security owner must accept this v1 residual risk |
+| Same-UID local process      | Connects directly to helper                  | `SO_PEERCRED` PID equals systemd `MainPID`, pinned pidfd/executable/cgroup, root-owned socket/policy      | System-manager proof may be unsupported; unsupported layouts remain read-only                                 |
+| Namespace or cgroup view    | Targets another host/container process       | Helper validates host PID/mount/user namespace inodes, boot ID, and target cgroup/UID; no PID-only action | Namespace layouts can be ambiguous; deny if identity proof is incomplete                                      |
+| Global cache drop           | Availability or I/O denial of service        | Fixed `sync` + `3`, explicit warning, cooldown, rate limit, audit                                         | The action is inherently global; use only in operator-approved enrollment                                     |
+| Helper or audit files       | Tampering or suppression                     | Root-owned binary/socket/policy; append-only bounded local audit where supported                          | Local root can tamper; include verification status in support checks                                          |
+| Monitor, alerts, or WS      | Automatic remediation or evidence leakage    | Negative dependency boundary, sanitized bounded events, REST snapshot authoritative                       | Broadcast loss is expected; test monitor cannot import action modules                                         |
+| Partial failure or shutdown | Half-completed action or unsafe retry        | Owned queue, cancellation, receipt state, no automatic retry                                              | Syscalls are not reversible; record outcome and require a new approval                                        |
+
+### Deferred remediation evidence: Phase 01 host feasibility
+
+The development host was checked read-only on 2026-08-08. It runs Fedora 44
+with Linux 7.1.5, systemd 259 as PID 1, unified cgroup v2 mounted at
+`/sys/fs/cgroup`, readable `/proc/meminfo` and memory PSI, and SELinux in
+enforcing mode. The current Codex process is an unprivileged user-session
+cgroup. No DamHopper systemd unit, helper binary, Unix socket, or root-owned
+policy exists on this host.
+
+This confirms only that the deferred systemd/cgroup/peer-credential design is
+feasible on that host; it does not prove enrollment or authorize implementation.
+Any future remediation phase must validate the actual installed unit, binary,
+socket, ownership, and peer identity before it reports capability. Current
+delivery remains monitoring-only.
+
+### Deferred remediation sign-off before privileged implementation
+
+- A security owner must accept the residual risk of a compromised enrolled
+  server requesting only the helper's fixed action set.
+- The support matrix must define the minimum kernel, distro, systemd, and pidfd
+  fallback policy. Unknown or unsupported layouts remain monitoring-only.
+- The operator must explicitly accept the retention target for the local action
+  audit and whether the global cache action is permitted at all.
+
+No privileged helper, auto-remediation, sudo/PTY escalation, generic command
+execution, or development bypass may enter a delivery phase before these
+decisions are recorded and the architecture gate is reopened.
+
 ## Data Flow: File List Request
 
 ```

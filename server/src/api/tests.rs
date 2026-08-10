@@ -6,7 +6,7 @@ use tower::ServiceExt;
 
 use crate::{
     agent_store::AgentStoreService,
-    api::build_router,
+    api::{build_router, router::build_router_with_web_dir},
     config::{
         DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo,
     },
@@ -332,6 +332,46 @@ async fn system_metrics_requires_auth() {
 }
 
 #[tokio::test]
+async fn host_action_capabilities_are_protected_and_fail_closed_without_reauth() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let unauthorized = get_without_auth(state.clone(), "/api/system/actions/v1/capabilities").await;
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let available = get(state, "/api/system/actions/v1/capabilities").await;
+    assert_eq!(available.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(available.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["available"], false);
+    assert_eq!(json["reason"], "reauthUnavailable");
+}
+
+#[tokio::test]
+async fn host_action_cookie_mutations_require_a_same_origin_json_request() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let router = build_router(state, vec![]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/system/actions/v1/intents")
+        .header("Content-Type", "application/json")
+        .header("Cookie", auth_cookie())
+        .body(Body::from(
+            serde_json::json!({
+                "action": {"kind": "dropCleanCaches"},
+                "sampleId": "sample"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn system_metrics_returns_sane_json() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
@@ -354,6 +394,99 @@ async fn system_metrics_returns_sane_json() {
     assert!(json["disk"]["usagePercent"].as_f64().unwrap() >= 0.0);
     assert!(json["disks"].as_array().is_some());
     assert!(json["temperatures"].as_array().is_some());
+}
+
+#[tokio::test]
+async fn legacy_metrics_remain_cached_when_deep_snapshot_is_unavailable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let snapshot = get(state.clone(), "/api/system/resources/v1/snapshot").await;
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    let snapshot = axum::body::to_bytes(snapshot.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let snapshot: serde_json::Value = serde_json::from_slice(&snapshot).unwrap();
+    assert_eq!(
+        snapshot["capabilities"]["linuxDeepMetrics"]["state"],
+        "temporarilyUnavailable"
+    );
+
+    let first = get(state.clone(), "/api/system/metrics").await;
+    let second = get(state, "/api/system/metrics").await;
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::OK);
+    let first = axum::body::to_bytes(first.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let second = axum::body::to_bytes(second.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let first: serde_json::Value = serde_json::from_slice(&first).unwrap();
+    let second: serde_json::Value = serde_json::from_slice(&second).unwrap();
+    assert_eq!(
+        first, second,
+        "legacy endpoint must project the monitor cache"
+    );
+    assert!(first["cpu"]["usagePercent"].is_number());
+    assert!(first["memory"]["availableBytes"].is_number());
+    assert!(first["disk"]["usagePercent"].is_number());
+}
+
+#[tokio::test]
+async fn package_router_serves_spa_without_masking_unknown_api_routes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let web_dir = tempfile::tempdir().unwrap();
+    std::fs::write(web_dir.path().join("index.html"), "<h1>DamHopper</h1>").unwrap();
+    let router = build_router_with_web_dir(make_state(&tmp), vec![], web_dir.path().into());
+
+    let index = router
+        .clone()
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(index.status(), StatusCode::OK);
+    let index = axum::body::to_bytes(index.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(index.as_ref(), b"<h1>DamHopper</h1>");
+
+    for path in ["/api", "/api/", "/api/not-a-real-route"] {
+        let api_miss = router
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(api_miss.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn resource_snapshot_and_alerts_are_protected_and_bounded() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let unauthorized = get_without_auth(state.clone(), "/api/system/resources/v1/snapshot").await;
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let snapshot = get(state.clone(), "/api/system/resources/v1/snapshot").await;
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(snapshot.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(body.len() <= 256 * 1024);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["schemaVersion"], 1);
+    assert!(json["alert"].is_object());
+    assert_eq!(json["alert"]["scope"], "host");
+
+    let alerts = get(state, "/api/system/resources/v1/alerts?limit=999").await;
+    assert_eq!(alerts.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(alerts.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json.as_array().is_some_and(|items| items.len() <= 50));
 }
 
 #[tokio::test]

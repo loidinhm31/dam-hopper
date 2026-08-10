@@ -24,3 +24,5 @@ pub use schema::{
     ServiceConfig, TelemetryCollectorConfig, TelemetryConfig, TerminalProfile, WorkspaceInfo,
     DEFAULT_RESTART_MAX_RETRIES,
 };
+
+pub use crate::system::config::HostResourceMonitorConfig;

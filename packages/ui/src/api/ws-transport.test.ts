@@ -183,6 +183,31 @@ describe("WsTransport explorer language scan endpoint", () => {
   });
 });
 
+describe("WsTransport host resource endpoints", () => {
+  it("maps the monitoring-only snapshot and bounded alert history routes", async () => {
+    installMockWebSocket();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ schemaVersion: 1 }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("system:resourceSnapshot");
+    await transport.invoke("system:resourceAlerts", { limit: 12 });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/system/resources/v1/snapshot",
+    );
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "http://localhost:4800/api/system/resources/v1/alerts?limit=12",
+    );
+    transport.destroy();
+  });
+});
+
 describe("WsTransport commit message endpoints", () => {
   it("loads and edits the full commit message with root scope", async () => {
     installMockWebSocket();

@@ -7,6 +7,7 @@ import {
   setActiveProfile,
   deleteProfile,
 } from "@/api/server-config.js";
+import { useHostResourceAlertPresentationStore } from "@/hooks/use-host-resource-alert-presentation.js";
 
 interface Props {
   open: boolean;
@@ -34,6 +35,7 @@ export function ServerProfilesDialog({
       return;
     }
     onSwitchProfile?.(profile);
+    useHostResourceAlertPresentationStore.getState().reset();
     onClose();
   }
 

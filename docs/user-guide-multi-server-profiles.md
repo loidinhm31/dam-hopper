@@ -50,6 +50,15 @@ You can then edit this profile or create new ones.
 3. **Confirm**: Profile becomes active immediately
    - If switching from a different server, the page may reload to fetch fresh data
 
+### Host-resource status after a profile switch
+
+The browser discards push listeners from the old server and attaches one set to
+the replacement transport. Host-resource snapshots and alert history are then
+refetched through REST, so a missed disconnect event cannot be treated as
+current state. If the new server cannot provide deep metrics, the popover labels
+that limitation and keeps compatible CPU/disk data when available. The popover
+is read-only; switching profiles never authorizes a host operation.
+
 ## Managing Profiles
 
 ### Edit a Profile

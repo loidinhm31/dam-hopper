@@ -290,6 +290,9 @@ async fn main() -> anyhow::Result<()> {
         telemetry_runtime.clone(),
     )?;
 
+    let host_resource_monitor_shutdown = state.host_resource_monitor.clone();
+    state.host_resource_monitor.start();
+
     let tunnel_manager_shutdown = state.tunnel_manager.clone();
     let browser_debug_artifacts_shutdown = state.browser_debug_artifacts.clone();
     let browser_debug_artifacts_sweeper = state.browser_debug_artifacts.clone();
@@ -334,10 +337,14 @@ async fn main() -> anyhow::Result<()> {
         let _ = tokio::signal::ctrl_c().await;
     };
 
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal)
-        .await?;
+    let serve_result = axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal)
+    .await;
 
+    host_resource_monitor_shutdown.shutdown().await;
     // Reap all tunnel children before exit — no orphaned cloudflared processes.
     tunnel_manager_shutdown.dispose_all().await;
     browser_debug_artifacts_shutdown.dispose_all().await;
@@ -354,6 +361,7 @@ async fn main() -> anyhow::Result<()> {
     }
     tracing::info!("Server shutdown complete");
 
+    serve_result?;
     Ok(())
 }
 
