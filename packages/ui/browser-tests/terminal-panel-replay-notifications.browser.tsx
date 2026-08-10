@@ -67,6 +67,8 @@ vi.mock("@/api/client.js", () => ({
   api: { workspace: { status: vi.fn().mockResolvedValue({}) } },
 }));
 vi.mock("@/api/transport.js", () => ({
+  getTransportGeneration: () => 0,
+  subscribeTransportChanges: () => () => {},
   getTransport: () => ({
     invoke: vi.fn().mockResolvedValue([{ id: "term-1", alive: true }]),
     terminalAttach: vi.fn(() => true),
@@ -86,7 +88,7 @@ vi.mock("@/api/transport.js", () => ({
 vi.mock("@/lib/terminal-registry.js", () => ({
   registerTerminal: () => ({}),
   removeTerminal: vi.fn(),
-  terminalRegistry: { get: () => undefined },
+  terminalRegistry: new Map(),
 }));
 vi.mock("@/lib/terminal-find-controller.js", () => ({
   TerminalFindController: class {

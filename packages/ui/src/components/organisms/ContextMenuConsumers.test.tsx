@@ -287,7 +287,10 @@ describe("migrated context-menu consumers", () => {
       ...document.querySelectorAll<HTMLElement>("[role=menuitem]"),
     ].find((item) => item.textContent === "Download");
     await act(async () => download?.click());
-    expect(fileTreeHarness.ops.download).toHaveBeenCalledWith("src/main.ts");
+    expect(fileTreeHarness.ops.download).toHaveBeenCalledWith(
+      "src/main.ts",
+      42,
+    );
   });
 
   it("opens and dismisses a virtual row menu from the keyboard", async () => {
