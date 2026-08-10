@@ -1,6 +1,21 @@
 import { Children, isValidElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { TerminalRuntimeNavigatorItem } from "./TerminalRuntimeNavigatorItem.js";
+import type { RuntimeSessionItem } from "@/lib/terminal-runtime-tree.js";
+
+function createSession(): RuntimeSessionItem {
+  return {
+    kind: "session",
+    id: "session:web",
+    groupId: "web",
+    sessionId: "web",
+    label: "web:bash",
+    project: "web",
+    command: "bash",
+    startedAt: 1,
+    ports: [],
+  };
+}
 
 function findElementByTitle(node: unknown, title: string): Record<string, unknown> | null {
   if (!isValidElement(node)) return null;
