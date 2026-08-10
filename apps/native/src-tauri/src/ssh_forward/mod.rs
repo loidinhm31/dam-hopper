@@ -5,6 +5,25 @@
 //! those commands reuse one label check without granting browser or mobile
 //! callers a fallback implementation.
 
+#[allow(dead_code)]
+pub(crate) mod error;
+#[allow(dead_code)]
+pub(crate) mod instance;
+#[allow(dead_code)]
+pub(crate) mod model;
+#[allow(dead_code)]
+pub(crate) mod profile;
+#[allow(dead_code)]
+pub(crate) mod scope_retention;
+
+#[cfg(windows)]
+#[allow(dead_code)]
+pub(crate) mod store;
+
+#[cfg(windows)]
+#[allow(dead_code)]
+mod windows_storage_probe;
+
 #[cfg(test)]
 const PERMISSION_MANIFEST: &str = include_str!("../../permissions/ssh-forward.toml");
 #[cfg(test)]
@@ -62,16 +81,15 @@ mod tests {
 
     #[test]
     fn mobile_has_no_ssh_forward_module() {
-        assert!(cfg!(desktop));
-        assert!(!cfg!(mobile));
+        const {
+            assert!(cfg!(desktop));
+            assert!(!cfg!(mobile));
+        }
     }
 }
 
 #[cfg(all(test, windows))]
 mod windows_agent_probe;
-
-#[cfg(all(test, windows))]
-mod windows_storage_probe;
 
 #[cfg(all(test, windows))]
 mod windows_atomic_probe;
