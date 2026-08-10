@@ -9,6 +9,12 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 03 — [COMPLETED 2026-08-10]**: Explorer browser playback/download UX delivered for the browser host without whole-file buffering or Blob allocation.
 - **Phase 04 — [COMPLETED 2026-08-10 15:25:44 +07:00]**: protocol, browser, and resource-safety release gates completed; browser-host scope validated. Caveats: `pnpm check` is blocked by missing `TAURI_SIGNING_PRIVATE_KEY`; final reviewer noted the stale-ticket Chromium assertion accepts any `DELETE`, approved by the user. Tauri support and performance tuning remain deferred follow-ups.
 
+### Explorer Native Image Preview (2026-08-10)
+
+- **Phase 01 — [COMPLETED 2026-08-10]**: shared media-ticket lifecycle, authenticated image ticket/stream APIs, sandbox and regular-file enforcement, closed raster allowlist, version invalidation, range/HEAD/CORS behavior, and security regressions delivered.
+- **Phase 02 — [COMPLETED 2026-08-10]**: image tier routing, preview-only editor lifecycle, legacy-tab normalization, native `<img>` UI states, and client tests delivered.
+- **Phase 03 — [COMPLETED 2026-08-10]**: shared-store/API regression coverage, authenticated Chromium lifecycle coverage, checked-in raster fixture, API/architecture/frontend documentation, and release gates completed. The browser harness validates client capability behavior; the Rust suite remains authoritative for backend security and stream semantics. Release caveat: `pnpm check` reached web/native builds and bundling but remains blocked because `TAURI_SIGNING_PRIVATE_KEY` is unset while a public key is configured; signing configuration was not changed.
+
 ## Status Overview
 
 - **Current Phase:** Session Model Delegation Audit complete (Phase 07 released 2026-08-01)
