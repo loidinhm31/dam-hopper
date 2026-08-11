@@ -1,9 +1,30 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { HostResourceSnapshotV1 } from "@/api/client.js";
+import type { HostMetrics, HostResourceSnapshotV1 } from "@/api/client.js";
 import { HostResourceDiagnosis } from "./HostResourceDiagnosis.js";
 
 const availability = { state: "available", sampledAt: 1 } as const;
+
+const legacyMetrics: HostMetrics = {
+  sampledAt: 1,
+  uptimeSeconds: 1,
+  cpu: { usagePercent: 42, logicalCoreCount: 4 },
+  memory: {
+    totalBytes: 1_024,
+    usedBytes: 512,
+    availableBytes: 512,
+    usagePercent: 50,
+  },
+  disk: {
+    name: "root",
+    mountPoint: "/",
+    totalBytes: 1_024,
+    availableBytes: 256,
+    usedBytes: 768,
+    usagePercent: 75,
+  },
+  temperatures: [],
+};
 
 const snapshot: HostResourceSnapshotV1 = {
   schemaVersion: 1,
@@ -56,6 +77,88 @@ const snapshot: HostResourceSnapshotV1 = {
 };
 
 describe("HostResourceDiagnosis", () => {
+  it("renders legacy temperatures and keeps storage collapsed by default", () => {
+    const markup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={snapshot}
+        alerts={[]}
+        legacyMetrics={{
+          ...legacyMetrics,
+          temperatures: [{ label: "Package", source: "pkg", celsius: 61 }],
+          disks: [
+            {
+              ...legacyMetrics.disk,
+              name: "workspace",
+              mountPoint: "/workspace",
+              usagePercent: 95,
+            },
+            {
+              ...legacyMetrics.disk,
+              name: "cache",
+              mountPoint: "/cache",
+              usagePercent: 10,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(markup).toContain("Package");
+    expect(markup).toContain("61°C");
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain("hidden");
+    expect(markup).toContain("/workspace");
+    expect(markup).toContain("/cache");
+  });
+
+  it("shows unavailable state for empty temperatures", () => {
+    const markup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={snapshot}
+        alerts={[]}
+        legacyMetrics={legacyMetrics}
+      />,
+    );
+
+    expect(markup).toContain("Temperature sensors unavailable");
+    expect(markup).not.toContain("0°C");
+  });
+
+  it("renders additive current resource evidence", () => {
+    const markup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          currentAlerts: [
+            {
+              kind: "disk",
+              key: "disk:/workspace",
+              state: "diskFull",
+              severity: "critical",
+              incidentId: "disk-1",
+              openedAt: 1,
+              updatedAt: 1,
+              durationSeconds: 30,
+              scope: "disk:/workspace",
+              evidence: {
+                diskName: "workspace",
+                diskMountPoint: "/workspace",
+                diskUsagePercent: 95,
+              },
+              threshold: "usage>=95%",
+              nextAction: "Free space.",
+            },
+          ],
+        }}
+        alerts={[]}
+      />,
+    );
+
+    expect(markup).toContain("Current resource incidents");
+    expect(markup).toContain("workspace · /workspace · 95% used");
+    expect(markup).toContain("Disk nearly full");
+  });
+
   it("keeps unavailable values explicit and exposes only read-only guidance", () => {
     const markup = renderToStaticMarkup(
       <HostResourceDiagnosis snapshot={snapshot} alerts={[]} />,
