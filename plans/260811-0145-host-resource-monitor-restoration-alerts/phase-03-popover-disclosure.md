@@ -6,7 +6,7 @@
 ## Overview
 - **Date:** 2026-08-11
 - **Priority:** P1
-- **Status:** pending
+- **Status:** completed 2026-08-11 07:18:58 +07:00
 
 ## Key Insights
 Popover already calls `useHostMetrics(open)`, but diagnosis shows only CPU/selected workspace disk. Existing accordion establishes the repository accessibility pattern. Empty temperatures mean unavailable—not 0°C/healthy.
@@ -31,10 +31,10 @@ Pass existing legacy metrics through current popover/diagnosis path, including d
 6. Test nominal, empty, narrow viewport, keyboard disclosure, all rows, close/focus.
 
 ## Todo list
-- [ ] Restore temperature section and unavailable state.
-- [ ] Add collapsed accessible all-disk disclosure.
-- [ ] Preserve workspace summary and open-only polling.
-- [ ] Add unit/browser accessibility and fallback coverage.
+- [x] Restore temperature section and unavailable state.
+- [x] Add collapsed accessible all-disk disclosure.
+- [x] Preserve workspace summary and open-only polling.
+- [x] Add unit/browser accessibility and fallback coverage.
 
 ## Success Criteria
 Popover accurately renders available values, never invents values, starts compact, reveals all disks by pointer/keyboard, and stays usable at 320px with no horizontal scroll.

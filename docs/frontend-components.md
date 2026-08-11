@@ -24,8 +24,8 @@ Shared runtime libraries:
 ## Host-resource alert presentation
 
 **Locations:** `packages/ui/src/components/organisms/HostResourcePopover.tsx`,
-`HostResourceDiagnosis.tsx`, `packages/ui/src/hooks/use-sse.ts`, and
-`use-host-resource-alert-presentation.ts`.
+`HostResourceDiagnosis.tsx`, `HostResourceDiagnosisRows.tsx`,
+`packages/ui/src/hooks/use-sse.ts`, and `use-host-resource-alert-presentation.ts`.
 
 The top-nav popover reads the legacy memory `alert` and additive `currentAlerts`
 from the authoritative snapshot, while the diagnosis panel renders the bounded,
@@ -41,6 +41,13 @@ snapshot and history, so REST corrects missed events, reconnects, and profile
 switches. A current server's explicit empty `currentAlerts` array clears
 resource presentation; an omitted field is treated as an older-server response
 and does not falsely clear an active incident.
+
+The diagnosis also keeps the legacy `HostMetrics` path for CPU and workspace-disk
+summary values, real temperature rows, and an explicit unavailable state when
+sensors are absent. Host storage is a local, default-collapsed disclosure that
+reveals every server-ordered disk with its name, mount, percentage, and used/total
+bytes; it does not add polling or persistence. Deep-snapshot failure uses the
+same legacy presentation so cached temperatures and disks remain visible.
 
 Opening the popover acknowledges the presentation count but does not dismiss an
 active resource incident. Known accepted UI caveat: after acknowledgement, a
