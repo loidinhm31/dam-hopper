@@ -30,7 +30,7 @@ Deliver VS Code-like definition, implementation, and reference navigation for Ru
 | # | Phase | Status | Effort | Link |
 |---|---|---:|---:|---|
 | 1 | Contract, trust, bundle, and Monaco compatibility gate | DONE — 2026-08-11 14:01:37 +07:00 | 12h | [phase-01](./phase-01-contract-and-monaco-compatibility-gate.md) |
-| 2 | Bundled registry, trust store, supervisor, and lifecycle | Pending | 36h | [phase-02](./phase-02-registry-supervisor-and-resource-lifecycle.md) |
+| 2 | Bundled registry, trust store, supervisor, and lifecycle | DONE — 2026-08-11 22:36:24 +07:00 | 36h | [phase-02](./phase-02-registry-supervisor-and-resource-lifecycle.md) |
 | 3 | Trust-aware semantic WebSocket, sync, and navigation | Pending | 24h | [phase-03](./phase-03-semantic-websocket-document-sync-navigation.md) |
 | 4 | Monaco providers, trust UX, and delayed prewarm | Pending | 24h | [phase-04](./phase-04-monaco-providers-and-navigation-ux.md) |
 | 5 | Rust + JS/TS release, bundle verification, and rollout gates | Pending | 28h | [phase-05](./phase-05-language-rollout-performance-release-gates.md) |

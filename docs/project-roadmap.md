@@ -30,8 +30,9 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Semantic Code Navigation via LSP (2026-08-11)
 
-- **Phase 02 — [COMPLETED WITH ISSUES 2026-08-11 17:32:46 +07:00; approved after three review cycles]**: delivered the release-owned bundle/descriptor foundation, persisted project trust and policy model, bounded registry/supervisor admission, session identity, crash backoff/quarantine, metrics, stdio framing, stderr drain, and lifecycle shutdown foundations. [Plan](../plans/260810-0145-semantic-code-navigation-lsp/phase-02-registry-supervisor-and-resource-lifecycle.md).
-- Approved follow-ups, still open: crash-before-registration slot leak; stale request/admission race during revocation/shutdown; missing actual bundle acquisition input; JS/TS descriptor identity problem; queued aggregate memory cap; incomplete LSP handshake. These are not fixed or release-closed by this status update.
+- **Phase 02 — [COMPLETED 2026-08-11 22:36:24 +07:00; remediation approved]**: delivered the release-owned bundle/descriptor foundation, persisted project trust and policy model, bounded registry/supervisor admission, session identity, crash backoff/quarantine, metrics, stdio framing, stderr drain, and lifecycle shutdown foundations. Approved remediation fixed lifecycle-generation/revocation fencing, bounded the `initialize` → matching response → `initialized` handshake, assigned distinct JS/TS IDs, fixed the bundle-root `--stdio` command, added queued-byte accounting, enforced 100 ms request-write timeout, and added 60 s idle sweep plus oldest-idle pressure eviction. [Plan](../plans/260810-0145-semantic-code-navigation-lsp/phase-02-registry-supervisor-and-resource-lifecycle.md).
+- Trust remains server-owned policy, not an OS sandbox: trusted enables only reviewed fixed initialization deltas; project/browser commands, args, plugins, and options remain rejected. Phase 3 owns authenticated semantic WebSocket, document sync/navigation, and transport revocation.
+- Phase 5 boundaries remain explicit: production bundle acquisition/public-key and signature verification, release updater/offline matrix gates, and Rust/JS/TS real-server qualification are not claimed complete by Phase 2.
 
 ### Terminal Pinning and Runtime Contrast (2026-08-08)
 

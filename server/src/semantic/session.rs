@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, Notify};
 
 use super::bundle::VerifiedBundle;
 use super::codec::{decode_frame, encode_frame, MAX_FRAME_BYTES};
@@ -20,9 +20,12 @@ use super::trust::InitializationPolicy;
 
 pub const MAX_INTERACTIVE_REQUESTS: usize = 2;
 pub const MAX_QUEUED_REQUESTS: usize = 32;
+pub const MAX_QUEUED_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_CAPABILITY_KEYS: usize = 128;
 const MAX_RESPONSE_QUEUE: usize = 16;
 const MAX_SNAPSHOT_BYTES: usize = 5 * 1024 * 1024;
+const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(2);
+const REQUEST_WRITE_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Clone)]
 pub struct CrashNotifier {
@@ -111,8 +114,12 @@ pub struct LspSession {
     language: SemanticLanguage,
     child: Arc<Mutex<Option<Child>>>,
     stdin: Arc<Mutex<ChildStdin>>,
+    /// Serializes dispatch with shutdown so revoked sessions cannot write
+    /// another request after the supervisor invalidates their policy.
+    dispatch_lock: Mutex<()>,
     scheduler: Mutex<RequestScheduler>,
     responses: Mutex<ResponseQueue>,
+    response_notify: Notify,
     snapshots: Mutex<SnapshotStore>,
     capabilities: Mutex<HashSet<String>>,
     crash_notifier: CrashNotifier,
@@ -172,8 +179,10 @@ impl LspSession {
             language: bundle.language(),
             child: Arc::new(Mutex::new(Some(child))),
             stdin: Arc::new(Mutex::new(stdin)),
+            dispatch_lock: Mutex::new(()),
             scheduler: Mutex::new(RequestScheduler::default()),
             responses: Mutex::new(ResponseQueue::default()),
+            response_notify: Notify::new(),
             snapshots: Mutex::new(SnapshotStore::default()),
             capabilities: Mutex::new(HashSet::new()),
             crash_notifier,
@@ -201,7 +210,47 @@ impl LspSession {
             .await
             .write_all(&frame)
             .await
+            .map_err(|_| SessionError::InitializationFailed)?;
+        let response = tokio::time::timeout(INITIALIZE_TIMEOUT, self.wait_for_response())
+            .await
+            .map_err(|_| SessionError::InitializationTimeout)??;
+        let result = response
+            .get("result")
+            .ok_or(SessionError::InitializationFailed)?;
+        self.negotiate_capabilities(result).await?;
+        let initialized = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "initialized",
+            "params": {}
+        });
+        let frame = encode_frame(&initialized).map_err(|_| SessionError::FrameTooLarge)?;
+        self.stdin
+            .lock()
+            .await
+            .write_all(&frame)
+            .await
             .map_err(|_| SessionError::InitializationFailed)
+    }
+
+    async fn wait_for_response(&self) -> Result<Value, SessionError> {
+        loop {
+            if self.state() == SessionState::Crashed {
+                return Err(SessionError::InitializationFailed);
+            }
+            let notified = self.response_notify.notified();
+            if let Some(value) = self.next_response().await {
+                if value.get("id") == Some(&Value::String("dam-hopper-initialize".into()))
+                    && value.get("jsonrpc") == Some(&Value::String("2.0".into()))
+                {
+                    if value.get("error").is_some() {
+                        return Err(SessionError::InitializationFailed);
+                    }
+                    return Ok(value);
+                }
+                continue;
+            }
+            notified.await;
+        }
     }
 
     pub fn state(&self) -> SessionState {
@@ -217,10 +266,15 @@ impl LspSession {
         now.saturating_sub(self.last_activity_ms.load(Ordering::Acquire)) >= grace_ms
     }
 
+    pub fn last_activity_ms(&self) -> u64 {
+        self.last_activity_ms.load(Ordering::Acquire)
+    }
+
     pub async fn try_admit(&self, request_id: &str) -> Result<RequestAdmission, SessionError> {
+        let _dispatch = self.dispatch_lock.lock().await;
         let admission = self.admit_request(request_id, Vec::new()).await?;
         if admission.queued {
-            let _ = self.cancel_request(request_id).await;
+            let _ = self.scheduler.lock().await.cancel(request_id);
             return Err(SessionError::QueueRequiresPayload);
         }
         Ok(admission)
@@ -248,14 +302,14 @@ impl LspSession {
         request_id: &str,
         value: &Value,
     ) -> Result<RequestAdmission, SessionError> {
+        let _dispatch = self.dispatch_lock.lock().await;
         let frame = encode_frame(value).map_err(|_| SessionError::FrameTooLarge)?;
         let admission = self.admit_request(request_id, frame.clone()).await?;
         if admission.queued {
             return Ok(admission);
         }
-        let write_result = self.stdin.lock().await.write_all(&frame).await;
-        if write_result.is_err() {
-            self.cancel_request(request_id).await;
+        if self.write_request_frame(&frame).await.is_err() {
+            self.cancel_request_inner(request_id).await;
             self.report_crash();
             return Err(SessionError::WriteFailed);
         }
@@ -263,17 +317,10 @@ impl LspSession {
     }
 
     pub async fn complete_request(&self, request_id: &str) -> bool {
+        let _dispatch = self.dispatch_lock.lock().await;
         let (completed, next) = self.scheduler.lock().await.complete(request_id);
         if let Some(next) = next {
-            if !next.frame.is_empty()
-                && self
-                    .stdin
-                    .lock()
-                    .await
-                    .write_all(&next.frame)
-                    .await
-                    .is_err()
-            {
+            if !next.frame.is_empty() && self.write_request_frame(&next.frame).await.is_err() {
                 self.report_crash();
             }
         }
@@ -281,6 +328,10 @@ impl LspSession {
     }
 
     pub async fn next_response(&self) -> Option<Value> {
+        let _dispatch = self.dispatch_lock.lock().await;
+        if self.state() == SessionState::Shutdown {
+            return None;
+        }
         let mut responses = self.responses.lock().await;
         let (value, bytes) = responses.items.pop_front()?;
         responses.bytes = responses.bytes.saturating_sub(bytes);
@@ -288,17 +339,23 @@ impl LspSession {
     }
 
     pub async fn cancel_request(&self, request_id: &str) -> bool {
+        let _dispatch = self.dispatch_lock.lock().await;
+        self.cancel_request_inner(request_id).await
+    }
+
+    async fn write_request_frame(&self, frame: &[u8]) -> Result<(), SessionError> {
+        tokio::time::timeout(REQUEST_WRITE_TIMEOUT, async {
+            self.stdin.lock().await.write_all(frame).await
+        })
+        .await
+        .map_err(|_| SessionError::WriteFailed)?
+        .map_err(|_| SessionError::WriteFailed)
+    }
+
+    async fn cancel_request_inner(&self, request_id: &str) -> bool {
         let (cancelled, next) = self.scheduler.lock().await.cancel(request_id);
         if let Some(next) = next {
-            if !next.frame.is_empty()
-                && self
-                    .stdin
-                    .lock()
-                    .await
-                    .write_all(&next.frame)
-                    .await
-                    .is_err()
-            {
+            if !next.frame.is_empty() && self.write_request_frame(&next.frame).await.is_err() {
                 self.report_crash();
             }
         }
@@ -377,12 +434,17 @@ impl LspSession {
     }
 
     pub async fn shutdown(&self) {
+        let _dispatch = self.dispatch_lock.lock().await;
         self.state
             .store(SessionState::Shutdown as u8, Ordering::Release);
+        let mut responses = self.responses.lock().await;
+        responses.items.clear();
+        responses.bytes = 0;
         self.terminate_process().await;
     }
 
     pub(crate) async fn cleanup_after_crash(&self) {
+        let _dispatch = self.dispatch_lock.lock().await;
         self.terminate_process().await;
     }
 
@@ -399,6 +461,7 @@ impl LspSession {
         }
         self.state
             .store(SessionState::Crashed as u8, Ordering::Release);
+        self.response_notify.notify_waiters();
         if !self.crash_reported.swap(true, Ordering::AcqRel) {
             self.crash_notifier.notify(&self.key);
         }
@@ -419,29 +482,23 @@ struct SnapshotStore {
 
 fn initialization_message(policy: InitializationPolicy, language: SemanticLanguage) -> Value {
     let options = policy.options();
-    let descriptor_settings = match language {
+    let initialization_options = match language {
         SemanticLanguage::Rust => serde_json::json!({
-            "rust-analyzer": {
-                "cargo": {
-                    "buildScripts": {"enable": options.allow_build_scripts}
-                },
-                "procMacro": {"enable": options.allow_build_tooling}
-            }
+            "cargo": {
+                "buildScripts": {"enable": options.allow_build_scripts}
+            },
+            "procMacro": {"enable": options.allow_build_tooling}
         }),
         SemanticLanguage::Typescript | SemanticLanguage::Javascript => serde_json::json!({
-            "typescript-language-server": {
-                "plugins": [],
-                "allowLocalPluginLoads": options.allow_workspace_plugins,
-                "disableAutomaticTypingAcquisition": true
-            }
+            "plugins": [],
+            "allowLocalPluginLoads": options.allow_workspace_plugins,
+            "disableAutomaticTypingAcquisition": true
         }),
         SemanticLanguage::Java => serde_json::json!({
-            "java": {
-                "configuration": {"updateBuildConfiguration": "disabled"},
-                "import": {
-                    "gradle": {"enabled": false},
-                    "maven": {"enabled": false}
-                }
+            "configuration": {"updateBuildConfiguration": "disabled"},
+            "import": {
+                "gradle": {"enabled": false},
+                "maven": {"enabled": false}
             }
         }),
     };
@@ -453,13 +510,11 @@ fn initialization_message(policy: InitializationPolicy, language: SemanticLangua
             "processId": Value::Null,
             "rootUri": Value::Null,
             "capabilities": {},
-            "initializationOptions": {
-                "damHopper": {
-                    "allowBuildScripts": options.allow_build_scripts,
-                    "allowWorkspacePlugins": options.allow_workspace_plugins,
-                    "allowBuildTooling": options.allow_build_tooling
-                },
-                "descriptorSettings": descriptor_settings
+            "initializationOptions": initialization_options,
+            "damHopperPolicy": {
+                "allowBuildScripts": options.allow_build_scripts,
+                "allowWorkspacePlugins": options.allow_workspace_plugins,
+                "allowBuildTooling": options.allow_build_tooling
             }
         }
     })
@@ -474,6 +529,7 @@ pub struct RequestAdmission {
 struct RequestScheduler {
     active: HashSet<String>,
     queued: VecDeque<QueuedRequest>,
+    queued_bytes: usize,
 }
 
 struct QueuedRequest {
@@ -499,6 +555,10 @@ impl RequestScheduler {
             self.active.insert(request_id.to_string());
             Ok(RequestAdmission { queued: false })
         } else if self.queued.len() < MAX_QUEUED_REQUESTS {
+            if self.queued_bytes.saturating_add(frame.len()) > MAX_QUEUED_REQUEST_BYTES {
+                return Err(SessionError::QueueMemoryFull);
+            }
+            self.queued_bytes = self.queued_bytes.saturating_add(frame.len());
             self.queued.push_back(QueuedRequest {
                 request_id: request_id.to_string(),
                 frame,
@@ -515,6 +575,7 @@ impl RequestScheduler {
         }
         let next = self.queued.pop_front();
         if let Some(next) = &next {
+            self.queued_bytes = self.queued_bytes.saturating_sub(next.frame.len());
             self.active.insert(next.request_id.clone());
         }
         (true, next)
@@ -524,14 +585,21 @@ impl RequestScheduler {
         if self.active.remove(request_id) {
             let next = self.queued.pop_front();
             if let Some(next) = &next {
+                self.queued_bytes = self.queued_bytes.saturating_sub(next.frame.len());
                 self.active.insert(next.request_id.clone());
             }
             return (true, next);
         }
-        let before = self.queued.len();
-        self.queued
-            .retain(|request| request.request_id != request_id);
-        (before != self.queued.len(), None)
+        let Some(index) = self
+            .queued
+            .iter()
+            .position(|request| request.request_id == request_id)
+        else {
+            return (false, None);
+        };
+        let removed = self.queued.remove(index).expect("queued index exists");
+        self.queued_bytes = self.queued_bytes.saturating_sub(removed.frame.len());
+        (true, None)
     }
 }
 
@@ -575,6 +643,7 @@ fn spawn_stdout_drain(session: &Arc<LspSession>, mut stdout: tokio::process::Chi
                         }
                         responses.bytes = responses.bytes.saturating_add(response_bytes);
                         responses.items.push_back((value, response_bytes));
+                        session.response_notify.notify_one();
                     }
                     Ok(None) => break,
                     Err(_) => {
@@ -652,6 +721,8 @@ pub enum SessionError {
     SpawnFailed,
     #[error("LSP process initialization failed")]
     InitializationFailed,
+    #[error("LSP initialize response timed out")]
+    InitializationTimeout,
     #[error("LSP session is not ready")]
     NotReady,
     #[error("request id is invalid")]
@@ -660,6 +731,8 @@ pub enum SessionError {
     DuplicateRequest,
     #[error("interactive request queue is full")]
     QueueFull,
+    #[error("interactive request queue memory cap reached")]
+    QueueMemoryFull,
     #[error("queued requests must be admitted through send_request")]
     QueueRequiresPayload,
     #[error("LSP frame exceeds the limit")]
@@ -681,18 +754,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initialization_policy_is_forwarded_to_the_release_process() {
+    fn initialization_policy_uses_fixed_trusted_deltas() {
         let restricted =
             initialization_message(InitializationPolicy::Restricted, SemanticLanguage::Rust);
         let trusted = initialization_message(InitializationPolicy::Trusted, SemanticLanguage::Rust);
         assert_eq!(
-            restricted["params"]["initializationOptions"]["damHopper"]["allowWorkspacePlugins"],
+            restricted["params"]["damHopperPolicy"]["allowWorkspacePlugins"],
             false
         );
         assert_eq!(
-            trusted["params"]["initializationOptions"]["damHopper"]["allowWorkspacePlugins"],
-            false
+            trusted["params"]["damHopperPolicy"]["allowWorkspacePlugins"],
+            true
         );
-        assert_eq!(restricted, trusted);
+        assert_ne!(restricted, trusted);
+        assert_eq!(
+            trusted["params"]["initializationOptions"]["cargo"]["buildScripts"]["enable"],
+            true
+        );
+        let typescript = initialization_message(
+            InitializationPolicy::Restricted,
+            SemanticLanguage::Typescript,
+        );
+        assert_eq!(
+            typescript["params"]["initializationOptions"]["plugins"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            typescript["params"]["initializationOptions"]["disableAutomaticTypingAcquisition"],
+            true
+        );
+    }
+
+    #[test]
+    fn queued_request_memory_is_released_on_completion_and_cancellation() {
+        let mut scheduler = RequestScheduler::default();
+        scheduler.active.insert("active-1".into());
+        scheduler.active.insert("active-2".into());
+        let frame = vec![0; MAX_QUEUED_REQUEST_BYTES / 2];
+        assert!(scheduler.admit("queued-1", frame.clone()).unwrap().queued);
+        assert!(scheduler.admit("queued-2", frame).unwrap().queued);
+        assert!(matches!(
+            scheduler.admit("queued-3", vec![0; 1]),
+            Err(SessionError::QueueMemoryFull)
+        ));
+        assert!(scheduler.cancel("queued-1").0);
+        assert!(scheduler.admit("queued-3", vec![0; 1]).unwrap().queued);
+        assert!(scheduler.complete("active-1").0);
+        assert!(scheduler.queued_bytes < MAX_QUEUED_REQUEST_BYTES);
     }
 }

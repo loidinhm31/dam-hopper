@@ -104,6 +104,22 @@ impl BundleResolver {
         }
     }
 
+    /// Load the server-owned release inputs from their fixed bundle root.
+    /// Missing inputs fail closed without probing another location.
+    pub fn from_signed_manifest_files(
+        root: impl Into<PathBuf>,
+        public_key: &[u8; 32],
+    ) -> Result<Self, BundleError> {
+        let root = root.into();
+        let bytes = std::fs::read(root.join("manifest.json"))
+            .map_err(|_| BundleError::BundleUnavailable)?;
+        let signature =
+            std::fs::read(root.join("manifest.sig")).map_err(|_| BundleError::BundleUnavailable)?;
+        let digest = std::fs::read_to_string(root.join("manifest.sha256"))
+            .map_err(|_| BundleError::BundleUnavailable)?;
+        Self::from_signed_manifest_bytes(root, &bytes, digest.trim(), &signature, public_key)
+    }
+
     /// Parse a release manifest and require a release-detached Ed25519
     /// signature plus the signed-file SHA-256 record. TOML is accepted only
     /// for local fixtures; shipped manifests are JSON.
@@ -147,7 +163,6 @@ impl BundleResolver {
         Ok(Self::new(root, manifest))
     }
 
-    #[cfg(test)]
     pub(crate) fn with_command_spec(
         mut self,
         descriptor_id: impl Into<String>,
@@ -493,6 +508,54 @@ mod tests {
                 &[0; 32]
             ),
             Err(BundleError::ManifestDigestMismatch)
+        ));
+    }
+
+    #[test]
+    fn resolver_loads_fixed_signed_manifest_files_without_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = br#"{
+            "schema_version": 1,
+            "descriptors": [{
+                "descriptor_id": "rust-analyzer",
+                "runtime_id": "native",
+                "language": "rust",
+                "version": "1.0.0",
+                "target": {"os": "linux", "architecture": "x86_64"},
+                "artifact": {
+                    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "license_id": "MIT",
+                    "sbom_component": "rust-analyzer",
+                    "compressed_size_bytes": 1,
+                    "uncompressed_size_bytes": 2
+                }
+            }]
+        }"#;
+        std::fs::write(dir.path().join("manifest.json"), raw).unwrap();
+        std::fs::write(dir.path().join("manifest.sig"), [0; 64]).unwrap();
+        std::fs::write(
+            dir.path().join("manifest.sha256"),
+            format!("{}\n", hex_digest(raw)),
+        )
+        .unwrap();
+        let signing_key = SigningKey::from_bytes(&[7; 32]);
+        std::fs::write(
+            dir.path().join("manifest.sig"),
+            signing_key.sign(raw).to_bytes(),
+        )
+        .unwrap();
+        assert!(BundleResolver::from_signed_manifest_files(
+            dir.path(),
+            signing_key.verifying_key().as_bytes(),
+        )
+        .is_ok());
+        std::fs::remove_file(dir.path().join("manifest.sig")).unwrap();
+        assert!(matches!(
+            BundleResolver::from_signed_manifest_files(
+                dir.path(),
+                signing_key.verifying_key().as_bytes(),
+            ),
+            Err(BundleError::BundleUnavailable)
         ));
     }
 

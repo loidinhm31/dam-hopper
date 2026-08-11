@@ -44,11 +44,12 @@ impl InitializationPolicy {
                 allow_build_tooling: false,
             },
             Self::Trusted => InitializationPolicyOptions {
-                allow_build_scripts: false,
-                // Trusted mode only permits reviewed server-owned deltas. It
-                // never enables project-controlled plugin loading.
-                allow_workspace_plugins: false,
-                allow_build_tooling: false,
+                // These are fixed, reviewed policy deltas. The client and
+                // project configuration still cannot provide commands, args,
+                // plugins, or initialization options.
+                allow_build_scripts: true,
+                allow_workspace_plugins: true,
+                allow_build_tooling: true,
             },
         }
     }

@@ -103,27 +103,72 @@ Phase 01 adds a client-side diagnostics ring for local troubleshooting. It is wr
 
 This phase does not expose a backend export endpoint yet.
 
-## Semantic Runtime Boundary (Phase 02; approved with issues)
+## Semantic Runtime Boundary (Phase 02; remediation approved)
 
-Phase 02 adds server-internal semantic runtime contracts only. It does not add a
-public semantic REST route or a documented semantic WebSocket message family;
-do not infer endpoints from the internal registry, supervisor, session, bundle,
-or trust types. The remaining client/server handshake, document lifecycle, and
-JavaScript/TypeScript adapter work is not complete.
+Phase 02 documents server-internal semantic runtime contracts only. There is no
+public semantic REST route or documented semantic WebSocket message family yet;
+do not infer endpoints from registry, supervisor, session, bundle, or trust
+Rust types. Phase 3 owns the authenticated semantic WebSocket, document sync,
+navigation, and transport-level revocation contract. Phase 4 owns Monaco provider
+and delayed-prewarm UX.
 
-The server selects only release-owned descriptors and starts a language-server
-process only after signed-manifest, target, checksum, executable, and policy
-validation. Signed bundles fail closed. Missing or invalid inputs expose a
-degraded/unavailable capability and do not fall back to a project-supplied
-command. Release packaging expects externally supplied signed bundle inputs; it
-does not create or sign semantic bundles.
+### Fixed bundle topology and fail-closed resolution
 
-Trust state (`restricted`, `trusted`, or `revoked`) is authoritative on the
-server and revision-bound. Elevation requires durable server-owned storage; an
-in-memory store cannot elevate or revoke trust. Restricted/trusted is policy for
-server-owned initialization, not an OS sandbox and not a promise of process or
-filesystem isolation. These are implementation boundaries, not client API
-guarantees.
+The server derives one release bundle root at
+`<server-executable-parent>/semantic-bundles`. It reads only `manifest.json`,
+`manifest.sig`, and `manifest.sha256` there. No host `PATH` search, project
+executable/config command, alternate-root fallback, shell, or download is used.
+Rust uses the fixed root-relative `rust-analyzer` entrypoint. TypeScript and
+JavaScript use distinct logical IDs, `typescript-language-server` and
+`javascript-language-server`, while both use the same server-owned Node runtime
+and fixed root-relative `typescript-language-server --stdio` command. Java
+(`eclipse-jdt-ls`) remains registered but disabled until Phase 6.
+
+The manifest is schema/metadata/target validated, its detached Ed25519 signature
+and recorded SHA-256 are checked, and the selected regular executable must be
+non-empty, executable, within the bundle root, within its declared size budget,
+and match its artifact SHA-256. Missing, malformed, wrong-target, unsigned,
+incorrectly hashed, or otherwise invalid input maps to unavailable/invalid and
+never spawns a child. Runtime verification applies when the release public key
+is supplied; production acquisition/staging, updater/offline matrix gates, and
+public-key/release qualification remain Phase 5 and are not claimed complete.
+
+### Child LSP limits and handshake
+
+The child is spawned directly without a shell, with project cwd and a cleared
+environment. Server sends JSON-RPC `initialize` (fixed policy, null root URI,
+empty client capabilities), accepts only the matching
+`dam-hopper-initialize` response within 2 seconds, validates at most 128
+capability keys, then sends `initialized`. Error, malformed, crash, or timeout
+fails closed and cleans up the child.
+
+Request admission allows 2 active and 32 queued interactive requests per
+session. Queued encoded frames have a 16 MiB aggregate byte cap; each LSP frame
+is capped at 8 MiB and each stdin write has a 100 ms timeout. Queue/byte/write
+failure is bounded degradation, not an unbounded wait. Sessions use descriptor
+fingerprint plus trust-policy revision in their key, so clients/projects/policies
+do not share document state accidentally.
+
+### Trust and lifecycle boundary
+
+Trust is server-authoritative (`restricted`, `trusted`, or `revoked`) and
+revision-bound. Elevation requires durable server-owned storage; an in-memory
+store stays restricted and cannot elevate/revoke. Restricted disables Rust build
+scripts/proc-macro tooling, TS/JS workspace plugins and automatic acquisition,
+and Java build imports. Trusted enables only reviewed fixed server policy deltas
+(build scripts, build tooling, workspace plugins); it still accepts no
+browser/project command, argument, plugin, or initialization option. This is not
+an OS process/filesystem sandbox.
+
+Admission uses a lifecycle generation fence. Revocation/trust transition and
+shutdown advance the generation, terminate affected children, clear pending
+prewarm/reservation state, and recheck generation/trust immediately before spawn
+and before registration. A session dispatch lock serializes request writes with
+shutdown; stale requests cannot write after revocation. A 60-second idle sweep
+removes sessions idle for 10 minutes, oldest first. Global pressure evicts one
+eligible idle session before retrying admission; per-client/project capacity is
+three and global capacity is `min(logical CPUs, 8)`. No client-facing API claim is
+made for these internal limits.
 
 ## Browser Debug Artifacts (Phase 2; Phase 6 hardened)
 

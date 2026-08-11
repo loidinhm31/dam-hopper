@@ -1000,7 +1000,7 @@ The first version is extension-based and limited to `.rs`, `.js`, `.jsx`, `.ts`,
 automatic rescans, persistent indexes, streaming progress, or caller-configurable
 language families.
 
-### Semantic code navigation (Phase 02 boundary; approved with issues)
+### Semantic code navigation (Phase 02 boundary; remediation approved)
 
 Semantic navigation is an editor capability separate from the Explorer language
 filter. Monaco exposes Go to Definition, Go to Implementation, Find References,
@@ -1008,8 +1008,10 @@ modifier-click, and keyboard/context-menu actions through registered language
 providers. A typed client adapter sends project-relative document and navigation
 messages over a dedicated authenticated WebSocket. The backend translates those
 messages to standard LSP JSON-RPC over stdio for an allowlisted language server.
-V1 targets `rust-analyzer`, `typescript-language-server`, and Eclipse JDT LS; the
-registry stays generic so later languages add descriptors rather than UI forks.
+The registry covers `rust-analyzer`, `typescript-language-server`, JavaScript's
+logical TypeScript server ID, and Eclipse JDT LS; Rust/JS/TS are enabled while
+Java remains capability-disabled until Phase 6. Later languages add descriptors,
+not UI forks.
 
 Phase 02 owns the semantic runtime boundary behind this contract. The server has
 a fixed, release-owned descriptor registry, a demand-driven supervisor, and
@@ -1022,21 +1024,66 @@ server-owned children. This is a runtime boundary, not a new browser transport
 surface: Phase 02 does not complete the semantic WebSocket handshake,
 document-sync messages, or JavaScript/TypeScript client adapter.
 
-The Phase 02 status is approved with issues. Signed bundles fail closed: a
-missing, malformed, unsigned, incorrectly hashed, invalid, unavailable, or
-incompatible bundle leaves the capability unavailable/invalid and no process is
-spawned. Release packaging expects externally supplied signed bundle inputs; the
-release job may stage a supplied platform bundle, but it does not build or sign
-one. Trust elevation also fails closed unless a durable server-owned trust store
-is available. In-memory state may remain restricted but cannot elevate or revoke
-trust.
+#### Fixed bundle and process topology
+
+`AppState` derives one bundle root from the release binary location:
+`<server-executable-parent>/semantic-bundles`. The resolver reads only
+`manifest.json`, `manifest.sig`, and `manifest.sha256` from that root. It never
+probes `PATH`, the project root, a project/config command, another root, or a
+download source. Rust resolves the root-relative `rust-analyzer` entrypoint.
+TypeScript and JavaScript have distinct logical descriptor IDs
+(`typescript-language-server` and `javascript-language-server`) but use the
+same server-owned Node runtime and fixed root-relative
+`typescript-language-server --stdio` command. Java's `eclipse-jdt-ls`
+descriptor is registered but disabled until Phase 6. Children use direct
+`Command` spawn (no shell), project cwd, and a cleared environment plus only
+server-owned policy state.
+
+The internal child handshake is bounded: send JSON-RPC `initialize` with the
+fixed policy, null root URI, and empty client capabilities; accept only the
+matching `dam-hopper-initialize` response within 2 seconds; validate the
+capability object (at most 128 safe keys); then send JSON-RPC `initialized`.
+Missing, malformed, error, crashed, or timed-out responses fail closed and the
+child is cleaned up. Request frames are capped at 8 MiB; only two interactive
+requests run at once, at most 32 wait, and queued frames consume at most 16 MiB
+aggregate. Every stdin frame write has a 100 ms timeout; timeout or write error
+marks the session crashed.
+
+The Phase 02 remediation is approved. Manifest schema, descriptor metadata,
+target, detached Ed25519 signature, manifest SHA-256 record, executable mode,
+regular-file/size, and artifact SHA-256 checks are fail-closed; a missing,
+malformed, unsigned, incorrectly hashed, invalid, unavailable, or incompatible
+input exposes unavailable/invalid capability and never spawns. The runtime
+verifies supplied signed inputs when the release public key is present. Release
+acquisition/staging, updater/offline matrix gates, and production artifact/public
+key qualification remain Phase 5 work; Phase 2 does not build or download
+bundles.
 
 Restricted/trusted policy is server-owned initialization policy, not an OS
-sandbox. Both policies keep browser/project initialization options out of the
-child; trusted mode permits only reviewed server-owned deltas. This boundary
-does not claim process isolation, filesystem isolation, or a general security
-sandbox. Lifecycle completion, the client/server handshake, and JS/TS protocol
-follow-ups remain incomplete and are not Phase 02 behavior.
+sandbox. Restricted disables Rust build scripts/proc-macro tooling, TS/JS
+workspace plugin loads and automatic acquisition, and Java build imports.
+Trusted enables only the reviewed fixed policy deltas (build scripts, build
+tooling, and workspace plugins); it still accepts no browser/project command,
+argument, plugin, or initialization option and does not claim process or
+filesystem isolation. Missing durable trust persistence remains restricted and
+cannot elevate. Revocation clears confirmation state, advances policy revision,
+and rejects new work.
+
+Admission uses a lifecycle generation fence. `ensure_session` captures the
+generation before async admission, then under the lifecycle gate rechecks
+shutdown, generation, and the current trust record immediately before spawn and
+again before registration. Trust transition/revocation and shutdown increment
+the generation; revocation also terminates affected sessions and clears pending
+prewarm/reservation state. A per-session dispatch lock serializes request writes
+with shutdown, so a stale request cannot write after revocation.
+
+A 60-second idle sweep removes sessions idle for the 10-minute grace period,
+oldest first. If the global `min(logical CPUs, 8)` slot limit is pressured, the
+supervisor evicts one eligible idle session and retries admission; otherwise it
+returns the bounded global-limit state. Per-client/project capacity remains
+three sessions. Phase 3 owns the authenticated semantic WebSocket, document
+sync/navigation, and transport-level revocation contract; those are not Phase 2
+behavior.
 
 Phase 01 froze Gate B, the shared virtualized-results surface. Results are
 metadata-only and bounded to 500 targets; selecting a target may load that one
@@ -1075,18 +1122,20 @@ sequenceDiagram
 ```
 
 The supervisor reuses one process per authenticated client, configured project,
-and server descriptor. Opening the first supported Monaco model may prewarm that
-server, but no workspace-wide language scan or server fan-out occurs. Interactive
-requests have bounded queues and deadlines. Every response is bound to
-`requestId`, the exact `documentVersion`, and the server's `policyRevision`;
-the browser drops responses that no longer match its active revision.
-Cancellation carries the request ID and document version, propagates to
-`$/cancelRequest`, and produces an explicit cancelled/stale outcome. Late
-responses cannot overwrite a newer document or trust-policy revision.
-After an inactivity grace period, warm processes become LRU eviction candidates
-even if tabs remain open. A later request restarts the process and replays current
-open document snapshots. Per-client and global process limits prevent a workspace
-with many languages from starting every server at once.
+descriptor fingerprint, and trust-policy revision. Opening the first supported
+Monaco model may issue one prewarm only after 750 ms of stable active-tab dwell;
+no workspace-wide language scan or server fan-out occurs. Interactive requests
+have bounded queues and deadlines; queued memory is accounted by encoded frame
+bytes, not only request count. Every response is bound to `requestId`, the exact
+`documentVersion`, and the server's `policyRevision`; the browser drops
+responses that no longer match its active revision. Cancellation carries the
+request ID and document version, propagates to `$/cancelRequest`, and produces an
+explicit cancelled/stale outcome. Late responses cannot overwrite a newer
+document or trust-policy revision. The 10-minute idle sweep and pressure
+admission path above provide oldest-first LRU eviction even if tabs remain open.
+A later request restarts the process and replays current open document snapshots.
+Per-client and global process limits prevent a workspace with many languages from
+starting every server at once.
 
 The browser never selects an executable, arguments, root URI, or absolute path.
 Server descriptors are built in or loaded only from trusted global configuration;

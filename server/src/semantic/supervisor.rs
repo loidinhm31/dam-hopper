@@ -2,9 +2,9 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 
@@ -34,6 +34,7 @@ pub struct SemanticSupervisor {
     enabled: bool,
     crash_notifier: CrashNotifier,
     shutting_down: Arc<AtomicBool>,
+    lifecycle_generation: Arc<AtomicU64>,
     lifecycle_gate: Arc<Mutex<()>>,
 }
 
@@ -80,6 +81,7 @@ impl SemanticSupervisor {
         let quarantined = Arc::new(Mutex::new(HashMap::new()));
         let backoff_until = Arc::new(Mutex::new(HashMap::new()));
         let sessions = Arc::new(Mutex::new(HashMap::<SessionKey, SessionEntry>::new()));
+        let lifecycle_gate = Arc::new(Mutex::new(()));
         let metrics = Arc::new(SemanticMetrics::default());
         let event_notifier = crash_notifier.clone();
         let event_history = Arc::clone(&crash_history);
@@ -87,9 +89,11 @@ impl SemanticSupervisor {
         let event_backoff = Arc::clone(&backoff_until);
         let event_metrics = Arc::clone(&metrics);
         let event_sessions = Arc::clone(&sessions);
+        let event_lifecycle_gate = Arc::clone(&lifecycle_gate);
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
                 while let Some(key) = crash_events.recv().await {
+                    let _lifecycle = event_lifecycle_gate.lock().await;
                     let decision = record_crash_state(
                         &key,
                         now_ms(),
@@ -113,7 +117,7 @@ impl SemanticSupervisor {
                 }
             });
         }
-        Self {
+        let supervisor = Self {
             registry: Arc::new(registry),
             trust_store,
             sessions,
@@ -127,8 +131,28 @@ impl SemanticSupervisor {
             enabled,
             crash_notifier,
             shutting_down: Arc::new(AtomicBool::new(false)),
-            lifecycle_gate: Arc::new(Mutex::new(())),
-        }
+            lifecycle_generation: Arc::new(AtomicU64::new(0)),
+            lifecycle_gate,
+        };
+        supervisor.spawn_idle_sweeper();
+        supervisor
+    }
+
+    fn spawn_idle_sweeper(&self) {
+        let supervisor = self.clone();
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        handle.spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                if supervisor.shutting_down.load(Ordering::Acquire) {
+                    return;
+                }
+                supervisor.evict_idle(now_ms()).await;
+            }
+        });
     }
 
     pub fn registry(&self) -> Arc<SemanticRegistry> {
@@ -184,6 +208,7 @@ impl SemanticSupervisor {
         if self.shutting_down.load(Ordering::Acquire) {
             return Err(SupervisorError::ShuttingDown);
         }
+        let lifecycle_generation = self.lifecycle_generation.load(Ordering::Acquire);
         key.validate()?;
         let project_root = project_root
             .canonicalize()
@@ -244,8 +269,14 @@ impl SemanticSupervisor {
         let global_slot = match self.global_slots.clone().try_acquire_owned() {
             Ok(slot) => slot,
             Err(_) => {
-                self.release_session(&key).await;
-                return Err(SupervisorError::GlobalLimit);
+                self.evict_one_idle(now_ms()).await;
+                match self.global_slots.clone().try_acquire_owned() {
+                    Ok(slot) => slot,
+                    Err(_) => {
+                        self.release_session(&key).await;
+                        return Err(SupervisorError::GlobalLimit);
+                    }
+                }
             }
         };
         let bundle = match self.registry.resolve(language) {
@@ -267,9 +298,29 @@ impl SemanticSupervisor {
             }
         };
         let _lifecycle = self.lifecycle_gate.lock().await;
-        if self.shutting_down.load(Ordering::Acquire) {
+        if self.shutting_down.load(Ordering::Acquire)
+            || self.lifecycle_generation.load(Ordering::Acquire) != lifecycle_generation
+        {
             self.release_session(&key).await;
-            return Err(SupervisorError::ShuttingDown);
+            return Err(if self.shutting_down.load(Ordering::Acquire) {
+                SupervisorError::ShuttingDown
+            } else {
+                SupervisorError::LifecycleChanged
+            });
+        }
+        let current_record = self
+            .trust_store
+            .record(&key.project_id, &project_root)
+            .map_err(SupervisorError::Trust)?;
+        if current_record.policy_revision != key.trust_policy_revision
+            || current_record.trust != trust
+        {
+            self.release_session(&key).await;
+            return Err(if current_record.trust == SemanticTrust::Revoked {
+                SupervisorError::ProjectRevoked
+            } else {
+                SupervisorError::TrustPolicyChanged
+            });
         }
         let session = LspSession::start(
             key.clone(),
@@ -286,30 +337,23 @@ impl SemanticSupervisor {
                 return Err(error.into());
             }
         };
-        let current_record = match self.trust_store.record(&key.project_id, &project_root) {
-            Ok(record) => record,
-            Err(error) => {
-                self.release_session(&key).await;
-                session.shutdown().await;
-                return Err(error.into());
-            }
-        };
-        if current_record.policy_revision != key.trust_policy_revision
-            || current_record.trust != trust
-        {
+        if session.state() != SessionState::Ready || self.crash_notifier.is_pending(&key) {
             self.release_session(&key).await;
-            session.shutdown().await;
-            return Err(if current_record.trust == SemanticTrust::Revoked {
-                SupervisorError::ProjectRevoked
-            } else {
-                SupervisorError::TrustPolicyChanged
-            });
+            session.cleanup_after_crash().await;
+            return Err(SupervisorError::Session(SessionError::NotReady));
         }
         self.release_session(&key).await;
         let mut sessions = self.sessions.lock().await;
+        if session.state() != SessionState::Ready || self.crash_notifier.is_pending(&key) {
+            drop(sessions);
+            session.cleanup_after_crash().await;
+            return Err(SupervisorError::Session(SessionError::NotReady));
+        }
         if let Some(entry) = sessions.get(&key) {
+            let existing = Arc::clone(&entry.session);
+            drop(sessions);
             session.shutdown().await;
-            return Ok(Arc::clone(&entry.session));
+            return Ok(existing);
         }
         sessions.insert(
             key,
@@ -358,15 +402,27 @@ impl SemanticSupervisor {
     }
 
     pub async fn evict_idle(&self, now_ms: u64) -> usize {
+        self.evict_idle_limit(now_ms, None).await
+    }
+
+    async fn evict_one_idle(&self, now_ms: u64) -> usize {
+        self.evict_idle_limit(now_ms, Some(1)).await
+    }
+
+    async fn evict_idle_limit(&self, now_ms: u64, limit: Option<usize>) -> usize {
         let mut removed = Vec::new();
         {
             let mut sessions = self.sessions.lock().await;
-            let keys: Vec<_> = sessions
+            let mut keys: Vec<_> = sessions
                 .iter()
                 .filter(|(_, entry)| entry.session.is_idle(now_ms, IDLE_GRACE_MS))
-                .map(|(key, _)| key.clone())
+                .map(|(key, entry)| (key.clone(), entry.session.last_activity_ms()))
                 .collect();
-            for key in keys {
+            keys.sort_by_key(|(_, last_activity)| *last_activity);
+            if let Some(limit) = limit {
+                keys.truncate(limit);
+            }
+            for (key, _) in keys {
                 if let Some(entry) = sessions.remove(&key) {
                     removed.push(entry);
                 }
@@ -408,6 +464,7 @@ impl SemanticSupervisor {
         audit_reason: &str,
     ) -> Result<TrustRecord, SupervisorError> {
         let _lifecycle = self.lifecycle_gate.lock().await;
+        self.lifecycle_generation.fetch_add(1, Ordering::AcqRel);
         let record = self
             .trust_store
             .transition(request, project_root, audit_reason)?;
@@ -423,6 +480,7 @@ impl SemanticSupervisor {
         audit_reason: &str,
     ) -> Result<TrustRecord, SupervisorError> {
         let _lifecycle = self.lifecycle_gate.lock().await;
+        self.lifecycle_generation.fetch_add(1, Ordering::AcqRel);
         let record = self
             .trust_store
             .revoke(project_id, project_root, audit_reason)?;
@@ -440,6 +498,14 @@ impl SemanticSupervisor {
         for entry in entries {
             entry.session.shutdown().await;
         }
+        self.pending_prewarm
+            .lock()
+            .await
+            .retain(|key| key.project_id != project_id);
+        self.pending_sessions
+            .lock()
+            .await
+            .retain(|(_, pending_project), _| pending_project != project_id);
         Ok(record)
     }
 
@@ -483,6 +549,7 @@ impl SemanticSupervisor {
 
     pub async fn shutdown(&self) {
         let _lifecycle = self.lifecycle_gate.lock().await;
+        self.lifecycle_generation.fetch_add(1, Ordering::AcqRel);
         self.shutting_down.store(true, Ordering::Release);
         let entries: Vec<_> = self
             .sessions
@@ -588,6 +655,8 @@ pub enum SupervisorError {
     Backoff { retry_after_ms: u64 },
     #[error("semantic supervisor is shutting down")]
     ShuttingDown,
+    #[error("semantic lifecycle changed before admission")]
+    LifecycleChanged,
     #[error("prewarm dwell has not elapsed")]
     DwellNotSatisfied,
 }
@@ -608,17 +677,30 @@ mod tests {
     };
 
     #[cfg(unix)]
+    fn write_lsp_fixture(path: &std::path::Path, lifetime_seconds: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let body = r#"{"jsonrpc":"2.0","id":"dam-hopper-initialize","result":{"capabilities":{}}}"#;
+        let script = format!(
+            "#!/bin/sh\nprintf 'Content-Length: {}\\r\\n\\r\\n{}'\n/bin/sleep {}\n",
+            body.len(),
+            body,
+            lifetime_seconds
+        );
+        std::fs::write(path, script).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn prewarm_requires_exact_dwell_and_reuses_one_process() {
         use sha2::Digest;
-        use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("project");
         std::fs::create_dir(&project).unwrap();
         let executable = dir.path().join("rust-analyzer");
-        std::fs::copy("/bin/sh", &executable).unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        write_lsp_fixture(&executable, "10");
         let bytes = std::fs::read(&executable).unwrap();
         let digest = hex::encode(sha2::Sha256::digest(bytes));
         let manifest = BundleManifest {
@@ -689,6 +771,7 @@ mod tests {
             true
         );
         assert_eq!(supervisor.metrics().sessions_reused, 1);
+        assert_eq!(supervisor.evict_idle(now_ms() + IDLE_GRACE_MS).await, 1);
         supervisor.shutdown().await;
     }
 
@@ -696,14 +779,12 @@ mod tests {
     #[tokio::test]
     async fn child_exit_is_observed_as_a_crash() {
         use sha2::Digest;
-        use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("project");
         std::fs::create_dir(&project).unwrap();
         let executable = dir.path().join("rust-analyzer");
-        std::fs::write(&executable, "#!/bin/sh\n/bin/sleep 0.1\n").unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        write_lsp_fixture(&executable, "0.1");
         let digest = hex::encode(sha2::Sha256::digest(std::fs::read(&executable).unwrap()));
         let resolver = BundleResolver::new(
             dir.path(),

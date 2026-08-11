@@ -282,6 +282,53 @@ evidence.
 - Preserve the deferred threat model in [system architecture](./system-architecture.md#deferred-remediation-design-fixed-v1-contract); do not treat it as shipped capability.
 - Before any future privileged implementation: reopen architecture/security review; define kernel/distro/systemd and pidfd policy; approve audit retention and any global cache operation; accept residual enrolled-server compromise risk.
 
+### PR-010: Semantic Code Navigation LSP Runtime (Phase 2 remediation)
+
+**Status:** Phase 2 remediation approved 2026-08-11; backend runtime only. Phase 3
+owns the authenticated semantic WebSocket/document contract; Phase 5 owns
+production artifact acquisition and Rust/JS/TS release qualification.
+
+**Functional Requirements:**
+
+- Resolve only server-owned bundles below `<server-executable-parent>/semantic-bundles`.
+  Never probe host PATH, project/config commands, alternate roots, shells, or
+  downloads.
+- Verify manifest schema/target, Ed25519 signature, manifest SHA-256, executable
+  mode/root containment/size, and artifact SHA-256 before spawn; missing or bad
+  inputs fail closed.
+- Keep distinct JS/TS logical descriptor IDs while using the fixed
+  `typescript-language-server --stdio` bundle-root command. Keep Java disabled
+  until Phase 6.
+- Complete bounded child `initialize`/matching response/`initialized` handshake;
+  cap two active and 32 queued requests, 16 MiB queued-frame bytes, 8 MiB frames,
+  and 100 ms stdin writes.
+- Default project trust to restricted. Persist server-owned trust when available;
+  use policy revision in session identity, fence revocation/shutdown admission,
+  and clear affected pending/session state.
+- Sweep 10-minute idle sessions every 60 seconds and evict oldest eligible idle
+  work under global slot pressure.
+
+**Acceptance Criteria:**
+
+- [x] Fixed descriptor/process topology has no project or PATH executable input.
+- [x] Manifest, signature/digest, target, executable, size, and artifact checksum
+      failures expose unavailable/invalid state and spawn no child.
+- [x] Handshake, queue-byte accounting, write timeout, generation fence, revocation
+      teardown, idle sweep, and pressure eviction are bounded.
+- [x] Trusted policy exposes only reviewed server-owned initialization deltas; it
+      is not an OS process/filesystem sandbox.
+- [ ] Phase 3 WebSocket/document/navigation transport remains out of this phase.
+- [ ] Phase 5 acquisition/updater/offline matrix and real-server qualification remain
+      release gates.
+
+**Technical Constraints:**
+
+- Rust `Command` direct spawn, project cwd, cleared environment, and no shell.
+- `SessionKey = (client, project, descriptor fingerprint, trust-policy revision)`.
+- Global capacity `min(logical CPUs, 8)`; per-client/project capacity three.
+- Browser-visible contracts must not expose host paths, checksums, bundle locations,
+  command/args, stderr, or raw LSP payloads.
+
 ## Non-Functional Requirements
 
 ### Performance

@@ -89,6 +89,41 @@ let result = async_op(&sandbox_root).await;  // safe
 - Arc<T> (includes PtySessionManager, FsSubsystem, AgentStoreService)
 - Pass clones into async tasks
 
+### Semantic LSP runtime standards (Phase 2)
+
+Keep semantic process execution server-owned and fail-closed:
+
+- Derive one bundle root from the release binary parent (`semantic-bundles`). Read
+  only `manifest.json`, `manifest.sig`, and `manifest.sha256`; never probe PATH,
+  project commands, alternate roots, shells, or downloads.
+- Registry IDs are fixed. Rust uses root-relative `rust-analyzer`; JS and TS use
+  distinct logical IDs but the same fixed root-relative
+  `typescript-language-server --stdio` command and Node runtime. Java is
+  registered but disabled until Phase 6.
+- Verify manifest schema/target, Ed25519 signature, manifest SHA-256, executable
+  mode, regular-file/size/root containment, and artifact SHA-256 before spawn.
+  Missing or invalid input returns unavailable/invalid; never fall back.
+- Spawn direct command with project cwd and cleared environment. Trusted policy is
+  not a sandbox: it only enables reviewed server-owned build scripts, build
+  tooling, and workspace plugins. Browser/project commands, args, plugins, and
+  initialization options remain rejected. Missing durable trust storage stays
+  restricted.
+- Complete child LSP startup as `initialize` (2 s timeout, fixed policy, null
+  root URI, empty client capabilities), matching response/capability validation
+  (max 128 keys), then `initialized`. Cleanup on error, crash, or timeout.
+- Bound encoded LSP frames to 8 MiB; allow 2 active and 32 queued requests with a
+  16 MiB aggregate queued-frame byte cap. Every stdin write has a 100 ms timeout.
+  Account and release queued bytes on completion/cancellation.
+- Use `SessionKey = (client, project, descriptor fingerprint, trust-policy
+  revision)`. A lifecycle generation fence rechecks shutdown, generation, and
+  current trust under one gate before spawn and before registration; revocation
+  terminates affected sessions and clears pending intents/reservations. A session
+  dispatch lock serializes writes with shutdown.
+- Run a 60 s idle sweep for 10-minute idle sessions, oldest first. Under global
+  slot pressure, evict one eligible idle session then retry. Keep 3 sessions per
+  client/project and `min(logical CPUs, 8)` globally. No workspace scan or process
+  start from Explorer churn; prewarm needs 750 ms stable active-tab dwell.
+
 ### Testing
 
 Integration tests use real filesystems via `tempfile` crate:

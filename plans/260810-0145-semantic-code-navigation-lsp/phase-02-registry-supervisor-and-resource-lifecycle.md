@@ -9,7 +9,7 @@
 ## Overview
 
 - Priority: P1
-- Status: completed with issues — approved 2026-08-11 17:32:46 +07:00 after three review cycles
+- Status: DONE — 2026-08-11 22:36:24 +07:00 (Asia/Ho_Chi_Minh); remediation approved
 - Effort: 36h
 - Add verified release-owned bundle resolution, persisted per-project trust, controlled stdio LSP sessions, and bounded lifecycle controls without exposing semantic navigation yet.
 
@@ -27,19 +27,16 @@
 - Rust, JS/TS, and Java remain generic descriptors; Java is feature-disabled until Phase 6.
 - Start only on explicit navigation or accepted 750 ms prewarm. Deduplicate identical prewarm keys; churn causes no process or filesystem scan.
 
-## Delivered foundation (2026-08-11)
+## Delivered foundation and approved remediation (2026-08-11)
 
 - Release-owned bundle manifest/resolution foundation, descriptor registry, trust-store persistence, restricted/trusted policy model, session-key identity, bounded supervisor admission, crash backoff/quarantine, metrics, stdio session framing, stderr draining, and shutdown/idle lifecycle foundations delivered.
-- Final review approved with issues after three review cycles. Approval covers the delivered foundations only; it does not close the lifecycle follow-ups below.
+- Approved remediation closed lifecycle admission fencing, bounded the initialize handshake, assigned distinct JS/TS descriptor IDs, fixed the bundle-root `--stdio` command, added queued-byte accounting, enforced write timeout, and added idle scheduling.
+- Remediation approval closes the prior lifecycle findings for this phase. It does not move production artifact acquisition/public-key verification or real-server qualification into Phase 2.
 
-## Approved-with-issues follow-ups
+## Explicit Phase 5 boundaries
 
-- Fix crash-before-registration slot leak.
-- Close stale request/admission race during revocation or shutdown.
-- Supply and validate the actual bundle acquisition input; current foundation does not claim complete acquisition behavior.
-- Resolve JS/TS descriptor identity problem.
-- Enforce the queued aggregate memory cap.
-- Complete the LSP handshake.
+- Phase 5 remains the owner of production bundle acquisition and public-key/signature verification, including release-owned matrix artifacts, updater/rollback, offline/empty-PATH, and corrupted/missing/wrong-platform gates.
+- Phase 5 also remains the owner of Rust/JS/TS real-server qualification, packaged browser flows, and performance/resource SLO evidence. Phase 2 completion does not claim those release gates passed.
 
 ## Architecture
 
@@ -63,13 +60,13 @@
 
 ## Todo list
 
-- [ ] Bundle resolver accepts only verified release artifacts.
-- [ ] No host PATH, project executable, download, or mutable executable config exists.
-- [ ] Trust persists and revocation tears down mismatched sessions.
-- [ ] Churn never starts a process or scan.
-- [ ] Codec/supervisor caps, backoff, LRU, and shutdown pass.
+- [x] Bundle resolver foundation is descriptor/platform bounded and fail-closed; production acquisition/public-key verification remains Phase 5.
+- [x] No host PATH, project executable, download, or mutable executable config exists.
+- [x] Trust persists and revocation tears down mismatched sessions.
+- [x] Churn never starts a process or scan.
+- [x] Codec/supervisor caps, backoff, LRU, admission fencing, bounded initialize, queued-byte accounting, write timeout, idle scheduling, and shutdown pass.
 
-The unchecked items above remain release follow-ups. In particular, the approved review does not claim the six lifecycle issues listed in **Approved-with-issues follow-ups** are fixed.
+Phase 2 implementation items are closed at the foundation/remediation scope. Production acquisition, public-key verification, and real-server qualification remain explicitly assigned to Phase 5 above.
 
 ## Success Criteria
 
@@ -90,3 +87,8 @@ The unchecked items above remain release follow-ups. In particular, the approved
 ## Next steps
 
 - Phase 3 exposes sanitized availability/trust state and enforces revocation over authenticated transport.
+- Phase 5 separately owns production acquisition/public-key verification and Rust/JS/TS real-server qualification.
+
+## Completion
+
+Phase 02 is DONE as of 2026-08-11 22:36:24 +07:00 (Asia/Ho_Chi_Minh). Approved remediation closed the lifecycle findings without widening Phase 2 into production acquisition or real-server release qualification.

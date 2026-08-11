@@ -261,34 +261,21 @@ fn build_semantic_supervisor(enabled: bool) -> Arc<SemanticSupervisor> {
     let resolver = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|parent| parent.join("semantic-bundles")))
-        .map(|bundle_root| {
-            let manifest = bundle_root.join("manifest.json");
-            let signature = bundle_root.join("manifest.sig");
-            let digest = bundle_root.join("manifest.sha256");
-            match (
-                std::fs::read(&manifest),
-                std::fs::read(&signature),
-                std::fs::read_to_string(&digest),
-                semantic_bundle_public_key(),
-            ) {
-                (Ok(bytes), Ok(signature), Ok(digest), Some(public_key)) => {
-                    BundleResolver::from_signed_manifest_bytes(
-                        &bundle_root,
-                        &bytes,
-                        digest.trim(),
-                        &signature,
-                        &public_key,
-                    )
-                    .unwrap_or_else(|error| {
-                        tracing::warn!(error = %error, "Semantic bundle manifest verification failed");
-                        empty_semantic_bundle_resolver(&bundle_root)
-                    })
-                }
-                _ => empty_semantic_bundle_resolver(&bundle_root),
-            }
+        .map(|bundle_root| match semantic_bundle_public_key() {
+            Some(public_key) => BundleResolver::from_signed_manifest_files(
+                &bundle_root,
+                &public_key,
+            )
+            .unwrap_or_else(|error| {
+                tracing::warn!(error = %error, "Semantic bundle manifest verification failed");
+                empty_semantic_bundle_resolver(&bundle_root)
+            }),
+            None => empty_semantic_bundle_resolver(&bundle_root),
         })
         .unwrap_or_else(|| {
-            tracing::warn!("Semantic bundle root is unavailable; semantic capability remains unavailable");
+            tracing::warn!(
+                "Semantic bundle root is unavailable; semantic capability remains unavailable"
+            );
             empty_semantic_bundle_resolver(PathBuf::new())
         });
     let trust_store = semantic_trust_store();
