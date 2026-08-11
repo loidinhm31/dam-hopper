@@ -27,8 +27,9 @@ use crate::state::AppState;
 
 use super::{
     agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
-    fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, port_forward as port_forward_api, settings,
-    ssh, system, terminal, tunnel, usage, usage_sessions, workspace, ws,
+    fs as fs_api, fs_image, fs_video, git, git_diff, host_actions,
+    port_forward as port_forward_api, settings, ssh, system, terminal, tunnel, usage,
+    usage_sessions, workspace, ws,
 };
 
 /// Build the full Axum router with auth middleware, CORS, and all routes.

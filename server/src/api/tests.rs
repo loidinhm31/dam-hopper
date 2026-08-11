@@ -15,6 +15,10 @@ use crate::{
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
+    system::alerts::{
+        AlertSeverity, ResourceAlertEvidence, ResourceAlertIncident, ResourceAlertKind,
+        ResourceAlertState, ResourceAlertSummary,
+    },
     telemetry::{
         worker::{TelemetryControl, TelemetryHandle},
         CodexModel, CodexUsageEvent, CodexVersion, SafeIdentifier, SourceQuality, TelemetryCmd,
@@ -104,6 +108,30 @@ fn make_state(tmp: &TempDir) -> AppState {
             tmp.path().join("collector-token"),
         ),
     )
+}
+
+fn resource_disk_alert(incident_id: &str) -> ResourceAlertSummary {
+    ResourceAlertSummary {
+        kind: ResourceAlertKind::Disk,
+        key: "disk:/data".into(),
+        state: ResourceAlertState::DiskFull,
+        severity: AlertSeverity::Critical,
+        incident_id: incident_id.into(),
+        opened_at: 10,
+        updated_at: 20,
+        duration_seconds: 10,
+        scope: "disk:/data".into(),
+        evidence: ResourceAlertEvidence {
+            temperature_source: None,
+            temperature_label: None,
+            temperature_celsius: None,
+            disk_mount_point: Some("/data".into()),
+            disk_name: Some("data".into()),
+            disk_usage_percent: Some(95.0),
+        },
+        threshold: "usage>=95%".into(),
+        next_action: "Free space.".into(),
+    }
 }
 
 fn test_jwt() -> String {
@@ -465,9 +493,22 @@ async fn package_router_serves_spa_without_masking_unknown_api_routes() {
 async fn resource_snapshot_and_alerts_are_protected_and_bounded() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
+    state
+        .host_resource_monitor
+        .seed_resource_alerts_for_test(
+            vec![resource_disk_alert("host-resource-active")],
+            vec![ResourceAlertIncident {
+                summary: resource_disk_alert("host-resource-resolved"),
+                resolved_at: Some(30),
+            }],
+        )
+        .await;
 
     let unauthorized = get_without_auth(state.clone(), "/api/system/resources/v1/snapshot").await;
     assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    let unauthorized_alerts =
+        get_without_auth(state.clone(), "/api/system/resources/v1/alerts").await;
+    assert_eq!(unauthorized_alerts.status(), StatusCode::UNAUTHORIZED);
 
     let snapshot = get(state.clone(), "/api/system/resources/v1/snapshot").await;
     assert_eq!(snapshot.status(), StatusCode::OK);
@@ -479,6 +520,31 @@ async fn resource_snapshot_and_alerts_are_protected_and_bounded() {
     assert_eq!(json["schemaVersion"], 1);
     assert!(json["alert"].is_object());
     assert_eq!(json["alert"]["scope"], "host");
+    assert_eq!(
+        json["currentAlerts"].as_array().map(|items| items.len()),
+        Some(1)
+    );
+    let current = &json["currentAlerts"][0];
+    assert_eq!(current["kind"], "disk");
+    assert_eq!(current["key"], "disk:/data");
+    assert_eq!(current["state"], "diskFull");
+    assert_eq!(current["severity"], "critical");
+    assert_eq!(current["incidentId"], "host-resource-active");
+    assert_eq!(current["openedAt"], 10);
+    assert_eq!(current["updatedAt"], 20);
+    assert_eq!(current["durationSeconds"], 10);
+    assert_eq!(current["scope"], "disk:/data");
+    assert_eq!(
+        current["evidence"],
+        serde_json::json!({
+            "diskMountPoint": "/data",
+            "diskName": "data",
+            "diskUsagePercent": 95.0,
+        })
+    );
+    assert_eq!(current["threshold"], "usage>=95%");
+    assert_eq!(current["nextAction"], "Free space.");
+    assert!(current["resolvedAt"].is_null());
 
     let alerts = get(state, "/api/system/resources/v1/alerts?limit=999").await;
     assert_eq!(alerts.status(), StatusCode::OK);
@@ -486,7 +552,21 @@ async fn resource_snapshot_and_alerts_are_protected_and_bounded() {
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(json.as_array().is_some_and(|items| items.len() <= 50));
+    let history = json.as_array().expect("alerts response is an array");
+    assert!(history.len() <= 50);
+    assert_eq!(history.len(), 1);
+    let resolved = &history[0];
+    assert_eq!(resolved["kind"], "disk");
+    assert_eq!(resolved["state"], "diskFull");
+    assert_eq!(resolved["severity"], "critical");
+    assert_eq!(resolved["incidentId"], "host-resource-resolved");
+    assert_eq!(resolved["openedAt"], 10);
+    assert_eq!(resolved["updatedAt"], 20);
+    assert_eq!(resolved["durationSeconds"], 10);
+    assert_eq!(resolved["scope"], "disk:/data");
+    assert_eq!(resolved["evidence"]["diskMountPoint"], "/data");
+    assert_eq!(resolved["evidence"]["diskUsagePercent"], 95.0);
+    assert_eq!(resolved["resolvedAt"], 30);
 }
 
 #[tokio::test]
