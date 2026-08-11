@@ -14,6 +14,7 @@ use std::{
     },
 };
 
+use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -544,17 +545,32 @@ impl TrustedHost {
             || !self.algorithm.bytes().all(|byte| {
                 byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@' | b'+')
             })
-            || !self.fingerprint.starts_with("SHA256:")
-            || self.fingerprint.len() != SHA256_FINGERPRINT_LENGTH
-            || !self.fingerprint["SHA256:".len()..]
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/'))
+            || !is_canonical_sha256_fingerprint(&self.fingerprint)
         {
             Err(invalid_data("invalid_trust"))
         } else {
             Ok(())
         }
     }
+}
+
+/// Accept exactly the unpadded Base64 spelling of a 32-byte SHA-256 digest.
+/// Decoding and re-encoding rejects alternative trailing-bit encodings.
+fn is_canonical_sha256_fingerprint(fingerprint: &str) -> bool {
+    let Some(encoded) = fingerprint.strip_prefix("SHA256:") else {
+        return false;
+    };
+    if fingerprint.len() != SHA256_FINGERPRINT_LENGTH
+        || !encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/'))
+    {
+        return false;
+    }
+    let Ok(decoded) = STANDARD_NO_PAD.decode(encoded) else {
+        return false;
+    };
+    decoded.len() == 32 && STANDARD_NO_PAD.encode(decoded) == encoded
 }
 
 impl StoredProfile {
@@ -2175,7 +2191,7 @@ mod tests {
             .is_err());
         fs::write(&release, b"release").unwrap();
         wait_for_file(&finished, &mut child);
-        assert!(child.wait().unwrap().success());
+        assert!(wait_for_exit(&mut child).success());
         assert!(store
             .purge_scope_if_deleted(SCOPE, &available_absent())
             .unwrap());
@@ -2206,7 +2222,7 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(started.exists());
-        assert!(child.wait().unwrap().success());
+        assert!(wait_for_exit(&mut child).success());
         assert!(fs::read_to_string(&result).unwrap().starts_with("blocked"));
         drop(file_lock);
         let started_after_release = fixture.root.join("lock-probe-started-after-release");
@@ -2222,7 +2238,7 @@ mod tests {
             .env("DAM_HOPPER_LOCK_PROBE_RESULT", &result_after_release)
             .spawn()
             .unwrap();
-        assert!(child.wait().unwrap().success());
+        assert!(wait_for_exit(&mut child).success());
         assert_eq!(fs::read_to_string(result_after_release).unwrap(), "opened");
     }
 
@@ -2345,7 +2361,7 @@ mod tests {
         fs::write(&release, b"release").unwrap();
         wait_for_file(&final_result, &mut child);
         assert_eq!(fs::read_to_string(final_result).unwrap(), "success");
-        assert!(child.wait().unwrap().success());
+        assert!(wait_for_exit(&mut child).success());
     }
 
     fn wait_for_file(path: &std::path::Path, child: &mut std::process::Child) {
@@ -2360,6 +2376,17 @@ mod tests {
         }
         let _ = child.kill();
         panic!("timed out waiting for {:?}", path);
+    }
+
+    fn wait_for_exit(child: &mut std::process::Child) -> std::process::ExitStatus {
+        for _ in 0..200 {
+            if let Some(status) = child.try_wait().unwrap() {
+                return status;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let _ = child.kill();
+        panic!("timed out waiting for process probe to exit");
     }
 
     #[test]
@@ -2446,10 +2473,9 @@ mod tests {
                     fixture.scope_dir().join(PROFILES_FILE),
                     fixture.root.join("late-hard-link.toml"),
                 );
-                match link_result {
-                    Ok(()) => assert!(read_handle(&handle).is_err()),
-                    // The strict mutation share fence rejected the late link.
-                    Err(_) => {}
+                // The strict mutation share fence may reject the late link.
+                if let Ok(()) = link_result {
+                    assert!(read_handle(&handle).is_err());
                 }
                 Ok(())
             })
@@ -2649,7 +2675,20 @@ mod tests {
         trust.entries.push(entry.clone());
         assert!(trust.validate(SCOPE).is_ok());
 
+        trust.entries[0].fingerprint = "SHA256://////////////////////////////////////////8".into();
+        assert!(trust.validate(SCOPE).is_ok());
+        trust.entries[0] = entry.clone();
+
         trust.entries[0].ssh_host = "Bastion.example".into();
+        assert!(trust.validate(SCOPE).is_err());
+        trust.entries[0] = entry.clone();
+        trust.entries[0].fingerprint = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB".into();
+        assert!(trust.validate(SCOPE).is_err());
+        trust.entries[0].fingerprint.pop();
+        assert!(trust.validate(SCOPE).is_err());
+        trust.entries[0] = entry.clone();
+        let last = trust.entries[0].fingerprint.len() - 1;
+        trust.entries[0].fingerprint.replace_range(last.., "-");
         assert!(trust.validate(SCOPE).is_err());
         trust.entries[0] = entry.clone();
         trust.entries.push(entry.clone());
@@ -2889,6 +2928,80 @@ mod tests {
         assert!(!restarted
             .purge_scope_if_deleted(SCOPE, &available_absent())
             .unwrap());
+    }
+
+    #[test]
+    fn real_process_crash_recovers_replacement_and_makes_purge_idempotent() {
+        let fixture = Fixture::new();
+        let reached = fixture.root.join("crash-recovery-reached");
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ssh_forward::store::tests::crash_recovery_process_probe",
+                "--nocapture",
+            ])
+            .env("DAM_HOPPER_CRASH_RECOVERY_ROOT", &fixture.root)
+            .env("DAM_HOPPER_CRASH_RECOVERY_REACHED", &reached)
+            .spawn()
+            .unwrap();
+        wait_for_file(&reached, &mut child);
+        let status = wait_for_exit(&mut child);
+        assert_eq!(
+            status.code(),
+            Some(0xDEAD),
+            "crash probe did not reach forced termination"
+        );
+
+        let restarted = SshForwardStore::open(&fixture.root).unwrap();
+        let recovered = restarted.existing_scope(SCOPE).unwrap();
+        assert_eq!(
+            recovered.load_profiles().unwrap().profiles_revision,
+            WireCounter::parse("1").unwrap()
+        );
+        drop(recovered);
+        assert!(restarted
+            .purge_scope_if_deleted(SCOPE, &available_absent())
+            .unwrap());
+        assert!(!restarted
+            .purge_scope_if_deleted(SCOPE, &available_absent())
+            .unwrap());
+        assert!(restarted.enumerate_scopes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn crash_recovery_process_probe() {
+        let Ok(root) = std::env::var("DAM_HOPPER_CRASH_RECOVERY_ROOT") else {
+            return;
+        };
+        let store = SshForwardStore::open(std::path::Path::new(&root)).unwrap();
+        let scope = store.scope(SCOPE).unwrap();
+        scope
+            .replace_profiles(WireCounter::ZERO, StoredProfiles::empty(SCOPE))
+            .unwrap();
+        let replacement = toml::to_string(&StoredProfiles::empty(SCOPE)).unwrap();
+        assert!(scope
+            .with_directory(|directory| write_file_with_fault(
+                directory,
+                PROFILES_FILE,
+                &replacement,
+                Some(ReplacementFault::AfterBackup),
+            ))
+            .is_err());
+        fs::write(
+            std::env::var("DAM_HOPPER_CRASH_RECOVERY_REACHED").unwrap(),
+            b"replacement_backed_up",
+        )
+        .unwrap();
+
+        // SAFETY: the pseudo-handle always refers to this child process. A
+        // forced termination proves recovery does not rely on Rust drops.
+        let terminated = unsafe {
+            windows_sys::Win32::System::Threading::TerminateProcess(
+                windows_sys::Win32::System::Threading::GetCurrentProcess(),
+                0xDEAD,
+            )
+        };
+        assert_eq!(terminated, 0, "TerminateProcess unexpectedly returned");
     }
 
     #[test]

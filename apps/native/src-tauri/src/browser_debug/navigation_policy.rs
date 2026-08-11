@@ -33,7 +33,7 @@ impl NavigationPolicy {
         for raw_origin in tunnel_origins {
             let url = Url::parse(raw_origin.as_ref().trim())
                 .map_err(|_| "invalid tunnel origin".to_string())?;
-            if url.username().is_empty() == false
+            if !url.username().is_empty()
                 || url.password().is_some()
                 || url.scheme() != "https"
                 || url.host_str().is_none()
@@ -51,7 +51,7 @@ impl NavigationPolicy {
     }
 
     pub fn check(&self, url: &Url) -> NavigationDecision {
-        if url.username().is_empty() == false || url.password().is_some() {
+        if !url.username().is_empty() || url.password().is_some() {
             return NavigationDecision::Reject(NavigationRejection::Credentials);
         }
         if url.scheme() != "http" && url.scheme() != "https" {
@@ -87,7 +87,7 @@ impl NavigationPolicy {
 
 pub fn parse_target_url(raw: &str) -> Result<Url, String> {
     let url = Url::parse(raw.trim()).map_err(|_| "invalid target URL".to_string())?;
-    if url.username().is_empty() == false || url.password().is_some() {
+    if !url.username().is_empty() || url.password().is_some() {
         return Err("target URLs cannot contain credentials".into());
     }
     Ok(url)
