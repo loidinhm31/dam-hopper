@@ -1000,7 +1000,7 @@ The first version is extension-based and limited to `.rs`, `.js`, `.jsx`, `.ts`,
 automatic rescans, persistent indexes, streaming progress, or caller-configurable
 language families.
 
-### Semantic code navigation (planned)
+### Semantic code navigation (Phase 01 contract frozen)
 
 Semantic navigation is an editor capability separate from the Explorer language
 filter. Monaco exposes Go to Definition, Go to Implementation, Find References,
@@ -1010,6 +1010,16 @@ messages over a dedicated authenticated WebSocket. The backend translates those
 messages to standard LSP JSON-RPC over stdio for an allowlisted language server.
 V1 targets `rust-analyzer`, `typescript-language-server`, and Eclipse JDT LS; the
 registry stays generic so later languages add descriptors rather than UI forks.
+
+Phase 01 froze Gate B, the shared virtualized-results surface. Results are
+metadata-only and bounded to 500 targets; selecting a target may load that one
+document, but the results surface does not create Monaco models for unopened
+targets. This is the supported browser-safe path because standalone Monaco's
+public API does not provide a supported resolver for native multi-location peek
+or arbitrary unopened cross-file targets. Monaco standalone action execution
+for that native UI remains unavailable under this documented public-API
+limitation; the shared results surface is the compatibility boundary, not a
+private Monaco API workaround.
 
 DamHopper does not embed a VS Code workbench or general extension host for this
 feature. VS Code language extensions ultimately use the same language-server
@@ -1040,8 +1050,12 @@ sequenceDiagram
 The supervisor reuses one process per authenticated client, configured project,
 and server descriptor. Opening the first supported Monaco model may prewarm that
 server, but no workspace-wide language scan or server fan-out occurs. Interactive
-requests have bounded queues and deadlines; superseded requests propagate
-`$/cancelRequest`, and late responses are discarded by document/request version.
+requests have bounded queues and deadlines. Every response is bound to
+`requestId`, the exact `documentVersion`, and the server's `policyRevision`;
+the browser drops responses that no longer match its active revision.
+Cancellation carries the request ID and document version, propagates to
+`$/cancelRequest`, and produces an explicit cancelled/stale outcome. Late
+responses cannot overwrite a newer document or trust-policy revision.
 After an inactivity grace period, warm processes become LRU eviction candidates
 even if tabs remain open. A later request restarts the process and replays current
 open document snapshots. Per-client and global process limits prevent a workspace
@@ -1049,15 +1063,38 @@ with many languages from starting every server at once.
 
 The browser never selects an executable, arguments, root URI, or absolute path.
 Server descriptors are built in or loaded only from trusted global configuration;
-commands are spawned without a shell and with a sanitized environment. Every
-incoming project/path is resolved through `ProjectSandbox`. LSP `file://` URIs and
-host paths stay behind the backend adapter, which returns only normalized
-project-relative targets and bounded display metadata.
+commands are spawned without a shell and with a sanitized environment. Release
+bundle availability is derived from a signed/verified server manifest and
+exposes only stable descriptor/language IDs and safe states such as `ready`,
+`bundleUnavailable`, `bundleInvalid`, `unsupportedCapability`, or `restricted`;
+it never exposes a host path, executable, checksum, command, stderr, or fallback
+resolver to the browser. Every incoming project/path is resolved through
+`ProjectSandbox`. LSP `file://` URIs and host paths stay behind the backend
+adapter, which returns only normalized project-relative targets and bounded
+display metadata.
+
+Trust is server-authoritative (`restricted`, `trusted`, or `revoked`) and
+independently revisioned. A client may request only a server-issued confirmation
+transition; navigation traffic cannot carry executable paths, initialization
+options, policy selection, or arbitrary consent text. Revocation advances the
+policy revision and invalidates affected work.
+
+Responses use private backend wire DTOs and a bounded serializer. The writer
+validates the typed response before serialization and rejects payloads over the
+semantic response byte cap; internal Rust response enums are never serialized
+directly. Browser-visible payloads are limited to safe URI/range, label,
+availability, and revision-bound status fields.
 
 Key invariants:
 
+- Gate B is the frozen shared virtualized-results branch: at most 500 bounded
+  metadata targets are returned, and only the selected target is opened in
+  Monaco.
 - Semantic navigation starts on supported editor demand; Explorer scans and
   filesystem events never start a language server.
+- Delayed prewarm is advisory and exact: one supported, hydrated, active tab
+  may issue one intent after 750 ms of stable project/language/tab identity;
+  tab churn, scans, and explicit navigation do not start prewarm work.
 - One language-server failure degrades only that project/language and never blocks
   file editing, terminal I/O, saving, or other WebSocket traffic.
 - Unsaved Monaco content is synchronized by version and is never persisted by the

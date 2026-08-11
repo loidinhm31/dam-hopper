@@ -12,6 +12,7 @@ pub mod host_actions;
 pub mod persistence;
 pub mod port_forward;
 pub mod pty;
+pub mod semantic;
 pub mod ssh;
 pub mod state;
 pub mod system;

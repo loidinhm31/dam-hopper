@@ -40,6 +40,8 @@ interface MonacoHostProps {
   onEditorReady?: (
     editor: monacoNs.editor.IStandaloneCodeEditor | null,
   ) => void;
+  /** Test-only seam for pinned-Monaco compatibility gates. */
+  onMonacoReady?: (monaco: typeof monacoNs) => void;
   lineChanges?: GitLineChange[];
   onGitIndicatorClick?: () => void;
 }
@@ -65,6 +67,7 @@ export function MonacoHost({
   onSave,
   onViewStateChange,
   onEditorReady,
+  onMonacoReady,
   lineChanges,
   onGitIndicatorClick,
 }: MonacoHostProps) {
@@ -134,6 +137,7 @@ export function MonacoHost({
       });
 
       onEditorReady?.(editor);
+      onMonacoReady?.(monaco);
 
       // Persist view state on blur
       editor.onDidBlurEditorWidget(() => {
