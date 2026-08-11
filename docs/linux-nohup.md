@@ -16,6 +16,21 @@ Copy the binary to `~/.config/dam-hopper/bin/` and restart the background proces
 pnpm server:restart
 ```
 
+### Semantic bundle release inputs (Phase 02)
+
+Semantic runtime capability is fail-closed. A nohup deployment must receive the
+externally supplied, release-signed bundle package expected by the server; the
+server does not build, sign, download, or accept a project-selected executable.
+If the signed manifest, signature, digest, target, or executable checks fail, the
+semantic capability remains unavailable.
+
+Trust elevation requires a durable server-owned trust-store path. Keep that path
+in the protected DamHopper configuration area and preserve it across binary
+restarts; deployments without durable storage remain restricted. Restricted and
+trusted are server policy modes, not an OS sandbox. The Phase 02 lifecycle,
+client/server handshake, and JS/TS follow-ups are incomplete, so this setup does
+not imply a usable semantic browser transport or Phase 03 behavior.
+
 Equivalent direct command:
 
 ```bash

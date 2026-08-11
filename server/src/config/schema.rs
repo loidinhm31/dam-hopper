@@ -160,6 +160,7 @@ impl Default for AgentStoreConfig {
 /// Raw representation used during TOML deserialization.
 /// Paths are relative strings; resolved into `ProjectConfig` after parsing.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectConfigRaw {
     pub name: String,
     pub path: String,
@@ -232,6 +233,7 @@ fn default_root() -> String {
 // ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct FeaturesConfig {}
 
 // ──────────────────────────────────────────────
@@ -257,6 +259,21 @@ fn default_telemetry_collector_host() -> String {
 }
 fn default_telemetry_collector_port() -> u16 {
     4811
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SemanticNavigationConfig {
+    /// Phase 02 only controls backend readiness. Transport exposure is added
+    /// by the later semantic WebSocket phase.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+impl Default for SemanticNavigationConfig {
+    fn default() -> Self {
+        Self { enabled: false }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -345,7 +362,7 @@ impl TelemetryConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServerConfig {
     /// Database file path (default: ~/.config/dam-hopper/sessions.db)
     #[serde(default = "default_session_db_path", alias = "session_db_path")]
@@ -360,6 +377,8 @@ pub struct ServerConfig {
 
     #[serde(default)]
     pub telemetry: TelemetryConfig,
+    #[serde(default)]
+    pub semantic: SemanticNavigationConfig,
     #[serde(default, alias = "host_resources")]
     pub host_resources: HostResourceMonitorConfig,
 }
@@ -370,6 +389,7 @@ impl Default for ServerConfig {
             session_db_path: default_session_db_path(),
             session_buffer_ttl_hours: default_session_buffer_ttl_hours(),
             telemetry: TelemetryConfig::default(),
+            semantic: SemanticNavigationConfig::default(),
             host_resources: HostResourceMonitorConfig::default(),
         }
     }
@@ -380,6 +400,7 @@ impl Default for ServerConfig {
 // ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DamHopperConfigRaw {
     pub workspace: WorkspaceInfo,
     pub agent_store: Option<AgentStoreConfig>,

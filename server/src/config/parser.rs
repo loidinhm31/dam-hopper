@@ -340,6 +340,14 @@ fn server_to_toml(server: &super::schema::ServerConfig) -> toml::Value {
         table.insert("collector".to_string(), Value::Table(collector));
         config.insert("telemetry".to_string(), Value::Table(table));
     }
+    if server.semantic != Default::default() {
+        let mut semantic = toml::map::Map::new();
+        semantic.insert(
+            "enabled".to_string(),
+            Value::Boolean(server.semantic.enabled),
+        );
+        config.insert("semantic".to_string(), Value::Table(semantic));
+    }
     if server.host_resources != Default::default() {
         let resources = &server.host_resources;
         let mut table = toml::map::Map::new();

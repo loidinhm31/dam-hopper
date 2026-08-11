@@ -17,6 +17,11 @@ use crate::fs::{FsSubsystem, ImageStreamTicketStore, MediaTicketStore, VideoStre
 use crate::host_actions::HostActionService;
 use crate::port_forward::PortForwardManager;
 use crate::pty::{BroadcastEventSink, PtySessionManager};
+use crate::semantic::bundle::BundleResolver;
+use crate::semantic::bundle_manifest::BundleManifest;
+use crate::semantic::registry::SemanticRegistry;
+use crate::semantic::supervisor::SemanticSupervisor;
+use crate::semantic::trust::ProjectTrustStore;
 use crate::ssh::SshCredStore;
 use crate::system::HostResourceMonitor;
 use crate::telemetry::worker::TelemetryHandle;
@@ -100,6 +105,9 @@ pub struct AppState {
     pub codex_exporter: CodexExporterManager,
     /// Serializes telemetry queries, deletion, retention, and collector changes.
     pub telemetry_coordinator: Arc<tokio::sync::Mutex<()>>,
+    /// Backend-owned semantic registry and process supervisor. Transport is
+    /// intentionally wired by the later semantic WebSocket phase.
+    pub semantic_supervisor: Arc<SemanticSupervisor>,
 }
 
 impl AppState {
@@ -195,6 +203,8 @@ impl AppState {
         let browser_debug_artifacts = BrowserDebugArtifactManager::new()
             .map_err(|error| anyhow::anyhow!("browser debug artifacts unavailable: {error}"))?;
 
+        let semantic_supervisor = build_semantic_supervisor(config.server.semantic.enabled);
+
         let media_tickets = MediaTicketStore::new();
         let video_stream_tickets = VideoStreamTicketStore::from_media(media_tickets.clone());
         let image_stream_tickets = ImageStreamTicketStore::from_media(media_tickets.clone());
@@ -229,6 +239,7 @@ impl AppState {
             codex_exporter: CodexExporterManager::default_paths()
                 .map_err(|error| anyhow::anyhow!("Codex exporter manager unavailable: {error}"))?,
             telemetry_coordinator: Arc::new(tokio::sync::Mutex::new(())),
+            semantic_supervisor,
         })
     }
 
@@ -244,6 +255,88 @@ impl AppState {
             .write()
             .expect("telemetry state lock poisoned") = telemetry;
     }
+}
+
+fn build_semantic_supervisor(enabled: bool) -> Arc<SemanticSupervisor> {
+    let resolver = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join("semantic-bundles")))
+        .map(|bundle_root| {
+            let manifest = bundle_root.join("manifest.json");
+            let signature = bundle_root.join("manifest.sig");
+            let digest = bundle_root.join("manifest.sha256");
+            match (
+                std::fs::read(&manifest),
+                std::fs::read(&signature),
+                std::fs::read_to_string(&digest),
+                semantic_bundle_public_key(),
+            ) {
+                (Ok(bytes), Ok(signature), Ok(digest), Some(public_key)) => {
+                    BundleResolver::from_signed_manifest_bytes(
+                        &bundle_root,
+                        &bytes,
+                        digest.trim(),
+                        &signature,
+                        &public_key,
+                    )
+                    .unwrap_or_else(|error| {
+                        tracing::warn!(error = %error, "Semantic bundle manifest verification failed");
+                        empty_semantic_bundle_resolver(&bundle_root)
+                    })
+                }
+                _ => empty_semantic_bundle_resolver(&bundle_root),
+            }
+        })
+        .unwrap_or_else(|| {
+            tracing::warn!("Semantic bundle root is unavailable; semantic capability remains unavailable");
+            empty_semantic_bundle_resolver(PathBuf::new())
+        });
+    let trust_store = semantic_trust_store();
+    let logical_cpus = std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get())
+        .unwrap_or(1);
+    Arc::new(SemanticSupervisor::new(
+        SemanticRegistry::new(resolver),
+        trust_store,
+        logical_cpus,
+        enabled,
+    ))
+}
+
+fn empty_semantic_bundle_resolver(root: impl Into<PathBuf>) -> BundleResolver {
+    BundleResolver::new(
+        root,
+        BundleManifest {
+            descriptors: vec![],
+        },
+    )
+}
+
+fn semantic_trust_store() -> ProjectTrustStore {
+    let trust_path = dirs::config_dir()
+        .or_else(|| dirs::home_dir().map(|home| home.join(".config")))
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|path| path.parent().map(PathBuf::from))
+        })
+        .map(|config_dir| config_dir.join("dam-hopper").join("semantic-trust.json"));
+    match trust_path {
+        Some(path) => ProjectTrustStore::open(path).unwrap_or_else(|error| {
+            tracing::warn!(error = %error, "Semantic trust persistence unavailable; remaining restricted");
+            ProjectTrustStore::in_memory()
+        }),
+        None => {
+            tracing::warn!("Semantic trust persistence has no server-owned path; remaining restricted");
+            ProjectTrustStore::in_memory()
+        }
+    }
+}
+
+fn semantic_bundle_public_key() -> Option<[u8; 32]> {
+    let encoded = option_env!("DAM_HOPPER_SEMANTIC_BUNDLE_PUBLIC_KEY")?;
+    let bytes = hex::decode(encoded).ok()?;
+    bytes.try_into().ok()
 }
 
 pub fn project_roots_from_config(config: &DamHopperConfig) -> Vec<(String, StdPathBuf)> {

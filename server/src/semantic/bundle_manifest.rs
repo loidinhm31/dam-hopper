@@ -25,7 +25,7 @@ impl BundleManifest {
         }
         let mut descriptor_ids = HashSet::with_capacity(self.descriptors.len());
         for descriptor in &self.descriptors {
-            if !descriptor_ids.insert(&descriptor.descriptor_id) {
+            if !descriptor_ids.insert((&descriptor.descriptor_id, descriptor.target)) {
                 return Err(BundleManifestError::DuplicateDescriptor);
             }
             descriptor.validate()?;
@@ -51,7 +51,10 @@ impl BundleDescriptor {
             return Err(BundleManifestError::InvalidMetadata);
         }
         for value in [&self.descriptor_id, &self.runtime_id, &self.version] {
-            if value.trim().is_empty() || value.len() > 256 {
+            if value.trim().is_empty()
+                || value.len() > 256
+                || validate_opaque_id(value, "bundle_metadata").is_err()
+            {
                 return Err(BundleManifestError::InvalidMetadata);
             }
         }
@@ -59,14 +62,14 @@ impl BundleDescriptor {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct BundleTarget {
     pub os: BundleOs,
     pub architecture: BundleArchitecture,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum BundleOs {
     Linux,
@@ -74,7 +77,7 @@ pub enum BundleOs {
     Windows,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum BundleArchitecture {
     X86_64,
@@ -129,7 +132,7 @@ pub enum PublicBundleState {
     BundleInvalid,
 }
 
-#[derive(Debug, Error, Eq, PartialEq)]
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum BundleManifestError {
     #[error("bundle manifest has no descriptors")]
     EmptyManifest,
@@ -214,6 +217,13 @@ mod tests {
             duplicate.validate(),
             Err(BundleManifestError::DuplicateDescriptor)
         );
+        let mut alternate_target = valid_descriptor("rust");
+        alternate_target.target.architecture = BundleArchitecture::Aarch64;
+        assert!(BundleManifest {
+            descriptors: vec![valid_descriptor("rust"), alternate_target],
+        }
+        .validate()
+        .is_ok());
         let too_many = BundleManifest {
             descriptors: (0..=MAX_BUNDLE_DESCRIPTORS)
                 .map(|index| valid_descriptor(&format!("rust-{index}")))

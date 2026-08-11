@@ -704,6 +704,19 @@ fn restart_policy_defaults_when_missing() {
 }
 
 #[test]
+fn semantic_config_rejects_project_runtime_escape_hatches() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        "[workspace]\nname = \"w\"\n\n[server.semantic]\nexecutable = \"/bin/sh\"\n",
+    )
+    .unwrap();
+    let error = read_config(&config_path).unwrap_err();
+    assert!(error.to_string().contains("Invalid TOML"));
+}
+
+#[test]
 fn restart_policy_on_failure_and_custom_retries() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("dam-hopper.toml");
@@ -895,6 +908,7 @@ fn global_config_writes_snake_case_ui_and_server_keys() {
             session_db_path: "/tmp/sessions.db".to_string(),
             session_buffer_ttl_hours: 12,
             telemetry: crate::config::TelemetryConfig::default(),
+            semantic: crate::config::SemanticNavigationConfig::default(),
             host_resources: crate::config::HostResourceMonitorConfig::default(),
         },
     };

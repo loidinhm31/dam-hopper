@@ -102,3 +102,49 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           args: --bundles ${{ matrix.platform.bundles }}
+
+  build-server:
+    name: Build server and signed semantic bundle package (${{ matrix.platform.name }})
+    needs: build-desktop
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            source: linux-x86_64
+          - name: windows-x86_64
+            os: windows-latest
+            source: windows-x86_64
+    runs-on: ${{ matrix.platform.os }}
+    env:
+      # The binary only trusts bundles signed by this release public key. If
+      # no bundle input is supplied, the semantic capability stays unavailable.
+      DAM_HOPPER_SEMANTIC_BUNDLE_PUBLIC_KEY: ${{ secrets.DAM_HOPPER_SEMANTIC_BUNDLE_PUBLIC_KEY }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build server
+        run: cd server && cargo build --release --features vendored
+
+      - name: Stage signed semantic bundle when supplied
+        if: hashFiles(format('release/semantic-bundles/{0}/manifest.json', matrix.platform.source)) != ''
+        shell: bash
+        run: |
+          BIN_PATH="$(find server -type f -name 'dam-hopper-server*' -path '*/release/*' -print -quit)"
+          test -n "$BIN_PATH"
+          bash scripts/prepare-semantic-bundle-release.sh "release/semantic-bundles/${{ matrix.platform.source }}" "$(dirname "$BIN_PATH")/semantic-bundles"
+
+      - name: Upload server release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: dam-hopper-server-${{ matrix.platform.name }}
+          path: |
+            server/**/release/dam-hopper-server*
+            server/**/release/semantic-bundles
+          if-no-files-found: error
+          retention-days: 14

@@ -28,6 +28,32 @@ impl SemanticTrust {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InitializationPolicyOptions {
+    pub allow_build_scripts: bool,
+    pub allow_workspace_plugins: bool,
+    pub allow_build_tooling: bool,
+}
+
+impl InitializationPolicy {
+    pub const fn options(self) -> InitializationPolicyOptions {
+        match self {
+            Self::Restricted => InitializationPolicyOptions {
+                allow_build_scripts: false,
+                allow_workspace_plugins: false,
+                allow_build_tooling: false,
+            },
+            Self::Trusted => InitializationPolicyOptions {
+                allow_build_scripts: false,
+                // Trusted mode only permits reviewed server-owned deltas. It
+                // never enables project-controlled plugin loading.
+                allow_workspace_plugins: false,
+                allow_build_tooling: false,
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SemanticTrustState {
@@ -78,7 +104,7 @@ pub struct TrustConfirmationChallenge {
 }
 
 impl TrustConfirmationChallenge {
-    pub fn issue(
+    pub(crate) fn issue(
         project_id: String,
         challenge: String,
         policy_revision: u64,
@@ -97,12 +123,16 @@ impl TrustConfirmationChallenge {
         })
     }
 
-    pub fn is_expired(&self, now_ms: u64) -> bool {
+    pub(crate) fn is_expired(&self, now_ms: u64) -> bool {
         now_ms >= self.challenge.expires_at
     }
 
+    pub fn public_challenge(&self) -> SemanticTrustChallenge {
+        self.challenge.clone()
+    }
+
     /// The owning authenticated-project store calls this while holding its lock.
-    pub fn consume(
+    pub(crate) fn consume(
         &mut self,
         request: &SemanticTrustTransitionRequest,
         current_policy_revision: u64,
@@ -128,6 +158,8 @@ impl TrustConfirmationChallenge {
         Ok(request.desired_trust)
     }
 }
+
+pub use super::trust_store::{ProjectTrustStore, TrustRecord, TrustStoreError};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

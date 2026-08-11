@@ -1000,7 +1000,7 @@ The first version is extension-based and limited to `.rs`, `.js`, `.jsx`, `.ts`,
 automatic rescans, persistent indexes, streaming progress, or caller-configurable
 language families.
 
-### Semantic code navigation (Phase 01 contract frozen)
+### Semantic code navigation (Phase 02 boundary; approved with issues)
 
 Semantic navigation is an editor capability separate from the Explorer language
 filter. Monaco exposes Go to Definition, Go to Implementation, Find References,
@@ -1010,6 +1010,33 @@ messages over a dedicated authenticated WebSocket. The backend translates those
 messages to standard LSP JSON-RPC over stdio for an allowlisted language server.
 V1 targets `rust-analyzer`, `typescript-language-server`, and Eclipse JDT LS; the
 registry stays generic so later languages add descriptors rather than UI forks.
+
+Phase 02 owns the semantic runtime boundary behind this contract. The server has
+a fixed, release-owned descriptor registry, a demand-driven supervisor, and
+bounded per-client/project/descriptor sessions. A session starts an allowlisted
+bundle only after server-side descriptor, target, manifest, checksum, executable,
+and policy checks pass; it initializes the child over stdio and can replay the
+currently open document snapshots after restart. Idle sessions are eviction
+candidates, crashes are isolated and back off/quarantine, and shutdown closes
+server-owned children. This is a runtime boundary, not a new browser transport
+surface: Phase 02 does not complete the semantic WebSocket handshake,
+document-sync messages, or JavaScript/TypeScript client adapter.
+
+The Phase 02 status is approved with issues. Signed bundles fail closed: a
+missing, malformed, unsigned, incorrectly hashed, invalid, unavailable, or
+incompatible bundle leaves the capability unavailable/invalid and no process is
+spawned. Release packaging expects externally supplied signed bundle inputs; the
+release job may stage a supplied platform bundle, but it does not build or sign
+one. Trust elevation also fails closed unless a durable server-owned trust store
+is available. In-memory state may remain restricted but cannot elevate or revoke
+trust.
+
+Restricted/trusted policy is server-owned initialization policy, not an OS
+sandbox. Both policies keep browser/project initialization options out of the
+child; trusted mode permits only reviewed server-owned deltas. This boundary
+does not claim process isolation, filesystem isolation, or a general security
+sandbox. Lifecycle completion, the client/server handshake, and JS/TS protocol
+follow-ups remain incomplete and are not Phase 02 behavior.
 
 Phase 01 froze Gate B, the shared virtualized-results surface. Results are
 metadata-only and bounded to 500 targets; selecting a target may load that one

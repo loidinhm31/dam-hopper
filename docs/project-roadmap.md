@@ -28,6 +28,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 03 — [COMPLETED 2026-08-10 00:36:17 +07:00]**: full-project Rust/JS-TS/Java navigation, manual scan states, navigation-only capability gating, selection cleanup, commit-gated reveal, and focused release validation completed.
 - Release caveats: temporary-file checks require a `TMPDIR` workaround for exhausted `/tmp` quota; `pnpm check` is blocked at native package validation by disk quota; broad browser coverage retains an unrelated terminal import failure.
 
+### Semantic Code Navigation via LSP (2026-08-11)
+
+- **Phase 02 — [COMPLETED WITH ISSUES 2026-08-11 17:32:46 +07:00; approved after three review cycles]**: delivered the release-owned bundle/descriptor foundation, persisted project trust and policy model, bounded registry/supervisor admission, session identity, crash backoff/quarantine, metrics, stdio framing, stderr drain, and lifecycle shutdown foundations. [Plan](../plans/260810-0145-semantic-code-navigation-lsp/phase-02-registry-supervisor-and-resource-lifecycle.md).
+- Approved follow-ups, still open: crash-before-registration slot leak; stale request/admission race during revocation/shutdown; missing actual bundle acquisition input; JS/TS descriptor identity problem; queued aggregate memory cap; incomplete LSP handshake. These are not fixed or release-closed by this status update.
+
 ### Terminal Pinning and Runtime Contrast (2026-08-08)
 
 - **Phases 01–02 — [COMPLETED 2026-08-08]**: session-only terminal pin protection, shared Traditional/Runtime controls, Runtime contrast/framing, focused DOM coverage, and implementation review completed.

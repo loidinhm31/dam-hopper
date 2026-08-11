@@ -103,6 +103,28 @@ Phase 01 adds a client-side diagnostics ring for local troubleshooting. It is wr
 
 This phase does not expose a backend export endpoint yet.
 
+## Semantic Runtime Boundary (Phase 02; approved with issues)
+
+Phase 02 adds server-internal semantic runtime contracts only. It does not add a
+public semantic REST route or a documented semantic WebSocket message family;
+do not infer endpoints from the internal registry, supervisor, session, bundle,
+or trust types. The remaining client/server handshake, document lifecycle, and
+JavaScript/TypeScript adapter work is not complete.
+
+The server selects only release-owned descriptors and starts a language-server
+process only after signed-manifest, target, checksum, executable, and policy
+validation. Signed bundles fail closed. Missing or invalid inputs expose a
+degraded/unavailable capability and do not fall back to a project-supplied
+command. Release packaging expects externally supplied signed bundle inputs; it
+does not create or sign semantic bundles.
+
+Trust state (`restricted`, `trusted`, or `revoked`) is authoritative on the
+server and revision-bound. Elevation requires durable server-owned storage; an
+in-memory store cannot elevate or revoke trust. Restricted/trusted is policy for
+server-owned initialization, not an OS sandbox and not a promise of process or
+filesystem isolation. These are implementation boundaries, not client API
+guarantees.
+
 ## Browser Debug Artifacts (Phase 2; Phase 6 hardened)
 
 Authenticated, ephemeral storage for a browser-debug selection and optional screenshot. Artifacts are scoped to a live PTY terminal; no read or list endpoint exists.

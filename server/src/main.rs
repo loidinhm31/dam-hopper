@@ -310,6 +310,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(proc_poll_loop(port_forward_manager));
 
     let telemetry_shutdown = state.telemetry_runtime.clone();
+    let semantic_shutdown = state.semantic_supervisor.clone();
     let router = build_router(state, allowed_origins);
 
     // ── Serve ─────────────────────────────────────────────────────────────────
@@ -349,6 +350,7 @@ async fn main() -> anyhow::Result<()> {
     tunnel_manager_shutdown.dispose_all().await;
     browser_debug_artifacts_shutdown.dispose_all().await;
     telemetry_shutdown.shutdown().await;
+    semantic_shutdown.shutdown().await;
 
     // Graceful shutdown: snapshot live PTY buffers, ask the worker to flush, then wait.
     pty_manager.snapshot_live_buffers();
