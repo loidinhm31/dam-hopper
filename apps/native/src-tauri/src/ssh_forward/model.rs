@@ -76,6 +76,10 @@ impl<'de> Deserialize<'de> for WireCounter {
 pub(crate) struct UtcTimestamp(OffsetDateTime);
 
 impl UtcTimestamp {
+    pub(crate) fn now() -> Self {
+        Self(OffsetDateTime::now_utc())
+    }
+
     pub(crate) fn parse(value: &str) -> Result<Self, WireScalarError> {
         if !is_utc_millis_shape(value) {
             return Err(WireScalarError::InvalidTimestamp);
@@ -99,6 +103,13 @@ impl UtcTimestamp {
     pub(crate) fn checked_add_days(self, days: i64) -> Result<Self, WireScalarError> {
         self.0
             .checked_add(time::Duration::days(days))
+            .map(Self)
+            .ok_or(WireScalarError::InvalidTimestamp)
+    }
+
+    pub(crate) fn checked_add_seconds(self, seconds: i64) -> Result<Self, WireScalarError> {
+        self.0
+            .checked_add(time::Duration::seconds(seconds))
             .map(Self)
             .ok_or(WireScalarError::InvalidTimestamp)
     }
@@ -206,6 +217,7 @@ pub(crate) struct SshForwardRuntime {
 pub(crate) struct HostKeyChallenge {
     pub(crate) challenge_id: String,
     pub(crate) profile_id: String,
+    pub(crate) scope_id: String,
     pub(crate) generation: WireCounter,
     pub(crate) ssh_host: String,
     pub(crate) ssh_port: u16,
