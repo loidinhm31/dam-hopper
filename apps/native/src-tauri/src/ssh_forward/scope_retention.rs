@@ -1,15 +1,33 @@
 //! Pure scope quarantine decisions; file mutations stay in the contained store.
 
 use super::{model::UtcTimestamp, profile::validate_uuid_v4};
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 
 const ORPHAN_RETENTION_DAYS: i64 = 30;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum KnownScopesInput {
     Available { ids: Vec<String> },
     Unavailable,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "status", rename_all = "camelCase", deny_unknown_fields)]
+enum KnownScopesInputWire {
+    Available { ids: Vec<String> },
+    Unavailable,
+}
+
+impl<'de> Deserialize<'de> for KnownScopesInput {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = match KnownScopesInputWire::deserialize(deserializer)? {
+            KnownScopesInputWire::Available { ids } => Self::Available { ids },
+            KnownScopesInputWire::Unavailable => Self::Unavailable,
+        };
+        validate_known_scopes(&value).map_err(|_| D::Error::custom("invalid_known_scopes"))?;
+        Ok(value)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -137,6 +155,14 @@ mod tests {
         assert!(serde_json::from_str::<KnownScopesInput>(
             r#"{"status":"available","ids":[],"extra":true}"#
         )
+        .is_err());
+        let ids = std::iter::repeat(format!("\"{SCOPE}\""))
+            .take(257)
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(serde_json::from_str::<KnownScopesInput>(&format!(
+            r#"{{"status":"available","ids":[{ids}]}}"#
+        ))
         .is_err());
     }
 
