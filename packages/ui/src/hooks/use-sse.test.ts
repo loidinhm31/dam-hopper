@@ -59,6 +59,31 @@ function validTemperatureAlertEvent() {
   };
 }
 
+function validDiskAlertEvent() {
+  return {
+    type: "host:alertChanged" as const,
+    timestamp: 1,
+    data: {
+      kind: "disk",
+      key: "disk:/data",
+      state: "diskFull",
+      severity: "critical",
+      incidentId: "host-resource-incident-2",
+      openedAt: 1,
+      updatedAt: 1,
+      durationSeconds: 0,
+      scope: "disk:/data",
+      threshold: "usage>=95%",
+      nextAction: "Free space.",
+      evidence: {
+        diskMountPoint: "/data",
+        diskName: "data",
+        diskUsagePercent: 95,
+      },
+    },
+  };
+}
+
 function eventTransport() {
   const callbacks = new Map<string, (data: unknown) => void>();
   const statusCallbacks = new Set<(status: string) => void>();
@@ -201,6 +226,41 @@ describe("asHostResourceAlertChangedEvent", () => {
         asHostResourceAlertChangedEvent({ ...validTemperatureAlertEvent(), data }),
       ).toBeNull();
     }
+  });
+
+  it("accepts a complete additive disk event", () => {
+    expect(asHostResourceAlertChangedEvent(validDiskAlertEvent())).not.toBeNull();
+  });
+
+  it.each([
+    ["unexpected evidence key", { unexpected: "untrusted" }],
+    ["negative usage", { diskUsagePercent: -1 }],
+    ["over-cap usage", { diskUsagePercent: 101 }],
+    ["non-finite usage", { diskUsagePercent: Number.NaN }],
+    ["invalid disk name", { diskName: 1 }],
+    ["empty disk name", { diskName: "" }],
+  ])("rejects disk evidence with %s", (_reason, invalidEvidence) => {
+    expect(
+      asHostResourceAlertChangedEvent({
+        ...validDiskAlertEvent(),
+        data: {
+          ...validDiskAlertEvent().data,
+          evidence: { ...validDiskAlertEvent().data.evidence, ...invalidEvidence },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects disk evidence with missing mount", () => {
+    expect(
+      asHostResourceAlertChangedEvent({
+        ...validDiskAlertEvent(),
+        data: {
+          ...validDiskAlertEvent().data,
+          evidence: { diskName: "data", diskUsagePercent: 95 },
+        },
+      }),
+    ).toBeNull();
   });
 
   it("rejects malformed or out-of-scope data before it can refresh resource state", () => {

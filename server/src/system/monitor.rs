@@ -197,6 +197,18 @@ impl HostResourceMonitor {
         incidents
     }
 
+    #[cfg(test)]
+    pub(crate) async fn seed_resource_alerts_for_test(
+        &self,
+        current: Vec<ResourceAlertSummary>,
+        history: Vec<ResourceAlertIncident>,
+    ) {
+        let mut cache = self.cache.write().await;
+        cache.latest.current_alerts = current.clone();
+        cache.resource_alerts = current;
+        cache.resource_incidents = history.into_iter().collect();
+    }
+
     /// Applies server-owned cadence and threshold changes without creating a
     /// second monitor. The current sample remains valid until the next tick.
     pub async fn reconfigure(&self, config: HostResourceMonitorConfig) {

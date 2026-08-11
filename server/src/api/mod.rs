@@ -12,6 +12,7 @@ pub mod fs_image;
 pub mod fs_video;
 pub mod git;
 pub mod git_diff;
+pub mod host_actions;
 mod http_byte_range;
 mod media_stream_headers;
 mod media_stream_response;
