@@ -1,10 +1,16 @@
-use std::fs;
+use std::{fs, io};
 
 use super::{
     backup_current, delete_handle, managed_store_files, purge_file, quarantine_scope, read_managed,
     recover_backup, replace_staged, write_staged,
 };
-use crate::ssh_forward::windows_storage_probe::{open_relative, open_root};
+use crate::ssh_forward::windows_storage_probe::{
+    create_new_relative_file, open_relative, open_root,
+};
+use std::{
+    sync::{Arc, Barrier},
+    thread,
+};
 
 struct Fixture {
     root: std::path::PathBuf,
@@ -166,4 +172,38 @@ fn oversized_managed_file_is_rejected_before_parsing() {
     let root = open_root(&fixture.root).unwrap();
     let scope = open_relative(&root, "scope", true).unwrap();
     assert!(read_managed(&scope, "profiles.toml").is_err());
+}
+
+#[test]
+fn concurrent_staging_create_has_exactly_one_owner() {
+    let fixture = Fixture::new();
+    fixture.create_scope();
+    let root = open_root(&fixture.root).unwrap();
+    let scope = open_relative(&root, "scope", true).unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let staging_name = "profiles.toml.tmp-00000000-0000-4000-8000-000000000000";
+
+    let workers = (0..2)
+        .map(|_| {
+            let scope = scope.try_clone().unwrap();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                create_new_relative_file(&scope, staging_name)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let outcomes = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect::<Vec<io::Result<_>>>();
+    assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 1);
+    let errors = outcomes
+        .into_iter()
+        .filter_map(Result::err)
+        .collect::<Vec<_>>();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].kind(), io::ErrorKind::AlreadyExists);
+    assert!(fixture.root.join("scope").join(staging_name).is_file());
 }
