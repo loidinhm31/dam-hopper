@@ -36,14 +36,18 @@ pub(crate) fn enumerate_directory(parent: &OwnedHandle) -> io::Result<Vec<Direct
     enumerate_directory_except(parent, &[])
 }
 
-/// Enumerates children while leaving known coordination entries unopened.
-/// This is needed when the caller already retains a lock or child directory
-/// handle whose share mode intentionally excludes mutation opens.
-pub(crate) fn enumerate_directory_except(
+/// Enumerates at most max_entries children while treating an unsafe child
+/// as an inventory miss rather than poisoning the entire scan. The strict
+/// store enumerator above remains fail-closed for persistence recovery.
+pub(crate) fn enumerate_directory_tolerant(
     parent: &OwnedHandle,
-    ignored_names: &[&str],
+    max_entries: usize,
 ) -> io::Result<Vec<DirectoryEntry>> {
+    if max_entries == 0 {
+        return Ok(Vec::new());
+    }
     let mut entries = Vec::new();
+    let mut inspected = 0usize;
     let mut restart_scan = true;
 
     loop {
@@ -73,7 +77,70 @@ pub(crate) fn enumerate_directory_except(
         }
 
         let used = status.Information.min(buffer.len());
-        parse_entries(parent, &buffer[..used], &mut entries, ignored_names)?;
+        if parse_entries(
+            parent,
+            &buffer[..used],
+            &mut entries,
+            &[],
+            true,
+            &mut inspected,
+            max_entries,
+        )? {
+            return Ok(entries);
+        }
+        if used == 0 {
+            return Ok(entries);
+        }
+    }
+}
+
+/// Enumerates children while leaving known coordination entries unopened.
+/// This is needed when the caller already retains a lock or child directory
+/// handle whose share mode intentionally excludes mutation opens.
+pub(crate) fn enumerate_directory_except(
+    parent: &OwnedHandle,
+    ignored_names: &[&str],
+) -> io::Result<Vec<DirectoryEntry>> {
+    let mut entries = Vec::new();
+    let mut inspected = 0usize;
+    let mut restart_scan = true;
+
+    loop {
+        let mut buffer = vec![0u8; BUFFER_SIZE];
+        let mut status = IO_STATUS_BLOCK::default();
+        let result = unsafe {
+            NtQueryDirectoryFile(
+                parent.as_raw_handle() as HANDLE,
+                std::ptr::null_mut(),
+                None,
+                std::ptr::null(),
+                &mut status,
+                buffer.as_mut_ptr().cast(),
+                buffer.len() as u32,
+                FileDirectoryInformation,
+                false,
+                std::ptr::null(),
+                restart_scan,
+            )
+        };
+        restart_scan = false;
+        if result == STATUS_NO_MORE_FILES {
+            return Ok(entries);
+        }
+        if result < 0 && result != STATUS_BUFFER_OVERFLOW {
+            return Err(ntstatus_error(result));
+        }
+
+        let used = status.Information.min(buffer.len());
+        let _ = parse_entries(
+            parent,
+            &buffer[..used],
+            &mut entries,
+            ignored_names,
+            false,
+            &mut inspected,
+            usize::MAX,
+        )?;
         if used == 0 {
             return Ok(entries);
         }
@@ -85,7 +152,10 @@ fn parse_entries(
     buffer: &[u8],
     entries: &mut Vec<DirectoryEntry>,
     ignored_names: &[&str],
-) -> io::Result<()> {
+    tolerant: bool,
+    inspected: &mut usize,
+    max_entries: usize,
+) -> io::Result<bool> {
     let name_offset = offset_of!(FILE_DIRECTORY_INFORMATION, FileName);
     let mut offset = 0usize;
     while offset < buffer.len() {
@@ -113,11 +183,28 @@ fn parse_entries(
         )
         .map_err(|_| invalid_directory())?;
         if name != "." && name != ".." && !ignored_names.iter().any(|ignored| *ignored == name) {
+            if tolerant {
+                if *inspected >= max_entries {
+                    return Ok(true);
+                }
+                *inspected += 1;
+            }
             let is_directory = attributes & FILE_ATTRIBUTE_DIRECTORY != 0;
             let handle = if is_directory {
-                open_relative_directory_no_delete(parent, &name)?
+                open_relative_directory_no_delete(parent, &name)
             } else {
-                open_relative_for_mutation(parent, &name)?
+                open_relative_for_mutation(parent, &name)
+            };
+            let handle = match handle {
+                Ok(handle) => handle,
+                Err(_error) if tolerant => {
+                    if next == 0 {
+                        break;
+                    }
+                    offset = offset.checked_add(next).ok_or_else(invalid_directory)?;
+                    continue;
+                }
+                Err(error) => return Err(error),
             };
             entries.push(DirectoryEntry {
                 name,
@@ -130,7 +217,7 @@ fn parse_entries(
         }
         offset = offset.checked_add(next).ok_or_else(invalid_directory)?;
     }
-    Ok(())
+    Ok(false)
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> io::Result<u32> {

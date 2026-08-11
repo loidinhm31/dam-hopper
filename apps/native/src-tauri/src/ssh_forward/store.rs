@@ -14,7 +14,11 @@ use std::{
     },
 };
 
-use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
+use base64::{
+    engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
+    Engine as _,
+};
+use russh::keys::HashAlg;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -50,6 +54,9 @@ const META_FILE: &str = "scope-meta.toml";
 const ACTIVITY_LOCK_FILE: &str = "scope-activity.lock";
 const SCOPE_FENCE_FILE: &str = "scope-operation.lock";
 const LOCK_FILE: &str = "ssh-forward.lock";
+const RUNTIME_LOCK_FILE: &str = "ssh-forward-runtime.lock";
+const TRUST_BACKUPS_DIRECTORY: &str = "trust-backups";
+const TRUST_QUARANTINE_DIRECTORY: &str = "trust-quarantine";
 const SCHEMA_VERSION: u8 = 1;
 const MAX_PROFILES: usize = 64;
 const MAX_TRUSTED_ALGORITHMS_PER_ENDPOINT: usize = 8;
@@ -97,6 +104,20 @@ impl Drop for ScopeActivityLease {
     }
 }
 
+/// Feature-wide runtime lease. The live manager holds this for the lifetime
+/// of its forwarding runtime; stopped-app maintenance takes it exclusively.
+pub(crate) struct FeatureRuntimeLease {
+    handle: OwnedHandle,
+    offset: i64,
+    root: OwnedHandle,
+}
+
+impl Drop for FeatureRuntimeLease {
+    fn drop(&mut self) {
+        release_file_lock_at(&self.handle, self.offset);
+    }
+}
+
 struct ScopeOperationFence {
     handle: OwnedHandle,
 }
@@ -120,10 +141,10 @@ pub(crate) struct StoredProfiles {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct StoredTrust {
-    schema_version: u8,
-    scope_id: String,
-    trust_revision: WireCounter,
-    entries: Vec<TrustedHost>,
+    pub(crate) schema_version: u8,
+    pub(crate) scope_id: String,
+    pub(crate) trust_revision: WireCounter,
+    pub(crate) entries: Vec<TrustedHost>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -138,10 +159,14 @@ pub(crate) struct StoredScopeMeta {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct TrustedHost {
-    ssh_host: String,
-    ssh_port: u16,
-    algorithm: String,
-    fingerprint: String,
+    pub(crate) ssh_host: String,
+    pub(crate) ssh_port: u16,
+    pub(crate) algorithm: String,
+    pub(crate) fingerprint: String,
+    /// Canonical SSH wire key, base64 encoded without padding. Optional keeps
+    /// phase-02 documents readable; new approvals always persist it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) public_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -246,8 +271,46 @@ impl SshForwardStore {
             store.ensure_current()?;
             recover_identity_artifacts(&store.root)?;
             recover_storage_artifacts(&store.scopes)?;
+            recover_trust_repair_artifacts(&store.root)?;
         }
         Ok(store)
+    }
+
+    /// Acquires the cross-process runtime lease used by the live manager and
+    /// stopped-app maintenance mode. Phase 04 should retain this guard for
+    /// the full manager runtime, not just for individual store operations.
+    pub(crate) fn acquire_feature_runtime_lease(&self) -> io::Result<FeatureRuntimeLease> {
+        self.ensure_current()?;
+        let handle = open_exclusive_relative_file(&self.root, RUNTIME_LOCK_FILE)?;
+        let offset = 0;
+        let guard =
+            acquire_file_lock_at(&handle, offset).map_err(|_| invalid_data("runtime_active"))?;
+        std::mem::forget(guard);
+        Ok(FeatureRuntimeLease {
+            handle,
+            offset,
+            root: self.root.try_clone()?,
+        })
+    }
+
+    /// Acquires the feature lease before opening the typed store. Maintenance
+    /// mode uses this entry point so store recovery cannot run while the live
+    /// runtime owns the feature.
+    pub(crate) fn acquire_feature_runtime_lease_at(
+        app_config_dir: &Path,
+    ) -> io::Result<FeatureRuntimeLease> {
+        let app_config = open_root(app_config_dir)?;
+        let root = open_or_create_relative_directory_no_delete(&app_config, STORE_ROOT)?;
+        let handle = open_exclusive_relative_file(&root, RUNTIME_LOCK_FILE)?;
+        let offset = 0;
+        let guard =
+            acquire_file_lock_at(&handle, offset).map_err(|_| invalid_data("runtime_active"))?;
+        std::mem::forget(guard);
+        Ok(FeatureRuntimeLease {
+            handle,
+            offset,
+            root,
+        })
     }
 
     pub(crate) fn scope(&self, scope_id: &str) -> io::Result<ScopeStore> {
@@ -479,6 +542,13 @@ impl StoredTrust {
             entries: vec![],
         }
     }
+
+    pub(crate) fn endpoint_records(&self, host: &str, port: u16) -> Vec<&TrustedHost> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.ssh_host == host && entry.ssh_port == port)
+            .collect()
+    }
     fn validate(&self, scope_id: &str) -> io::Result<()> {
         validate_document_header(self.schema_version, &self.scope_id, scope_id)?;
         let mut algorithms = HashSet::new();
@@ -537,20 +607,82 @@ impl StoredScopeMeta {
 }
 
 impl TrustedHost {
+    pub(crate) fn new(
+        ssh_host: String,
+        ssh_port: u16,
+        algorithm: String,
+        fingerprint: String,
+        public_key: Option<String>,
+    ) -> Self {
+        Self {
+            ssh_host,
+            ssh_port,
+            algorithm,
+            fingerprint,
+            public_key,
+        }
+    }
+
+    pub(crate) fn public_key_bytes(&self) -> io::Result<Option<Vec<u8>>> {
+        self.public_key
+            .as_deref()
+            .map(|value| {
+                STANDARD_NO_PAD
+                    .decode(value)
+                    .map_err(|_| invalid_data("invalid_trust_key"))
+            })
+            .transpose()
+    }
+
     fn validate(&self) -> io::Result<()> {
+        let invalid_public_key = self.public_key.as_deref().is_some_and(|value| {
+            if value.is_empty()
+                || value.len() > 16 * 1024
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+            {
+                return true;
+            }
+            let Ok(decoded) = STANDARD_NO_PAD.decode(value) else {
+                return true;
+            };
+            if STANDARD_NO_PAD.encode(&decoded) != value {
+                return true;
+            }
+            let Ok(parsed) = russh::keys::parse_public_key_base64(&STANDARD.encode(decoded)) else {
+                return true;
+            };
+            parsed.algorithm().to_string() != self.algorithm
+                || parsed.fingerprint(HashAlg::Sha256).to_string() != self.fingerprint
+        });
         if validate_canonical_ssh_host(&self.ssh_host).is_err()
             || self.ssh_port == 0
             || self.algorithm.is_empty()
             || self.algorithm.len() > 128
+            || !super::known_hosts::is_supported_algorithm(&self.algorithm)
             || !self.algorithm.bytes().all(|byte| {
                 byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@' | b'+')
             })
             || !is_canonical_sha256_fingerprint(&self.fingerprint)
+            || invalid_public_key
         {
             Err(invalid_data("invalid_trust"))
         } else {
             Ok(())
         }
+    }
+
+    pub(crate) fn endpoint(&self) -> (&str, u16) {
+        (&self.ssh_host, self.ssh_port)
+    }
+
+    pub(crate) fn algorithm(&self) -> &str {
+        &self.algorithm
+    }
+
+    pub(crate) fn fingerprint(&self) -> &str {
+        &self.fingerprint
     }
 }
 
@@ -715,6 +847,112 @@ impl ScopeStore {
         if current.trust_revision != expected {
             return Err(invalid_data("trust_revision_conflict"));
         }
+        next.trust_revision = current
+            .trust_revision
+            .increment()
+            .map_err(|_| invalid_data("counter_exhausted"))?;
+        next.validate(&self.scope_id)?;
+        self.write_typed(TRUST_FILE, &next)?;
+        Ok(next)
+    }
+
+    /// Stopped-app trust repair. The caller supplies only a canonical
+    /// endpoint; every file operation remains relative to retained handles.
+    pub(crate) fn repair_remove_endpoint(
+        &self,
+        host: &str,
+        port: u16,
+        now: UtcTimestamp,
+    ) -> io::Result<StoredTrust> {
+        if validate_canonical_ssh_host(host).is_err() || port == 0 {
+            return Err(invalid_data("invalid_repair_endpoint"));
+        }
+        self.ensure_live()?;
+        let _gate = lock(&self.write_gate)?;
+        let _file_lock = acquire_file_lock(&self.lock_file)?;
+        let _activity = self.acquire_activity_lock_locked()?;
+        let _fence = self.acquire_scope_operation_fence()?;
+        self.ensure_current()?;
+        let current = self.load_trust_unlocked()?;
+        let contents = toml::to_string(&current).map_err(|_| invalid_data("store_serialize"))?;
+        let backup_id = backup_id(&contents, now)?;
+        let backup_root =
+            open_or_create_relative_directory_no_delete(&self.root, TRUST_BACKUPS_DIRECTORY)?;
+        let backups = open_or_create_relative_directory_no_delete(&backup_root, &self.storage_key)?;
+        write_file(&backups, &format!("{backup_id}.toml"), &contents)?;
+        let removed = current
+            .entries
+            .iter()
+            .filter(|entry| entry.ssh_host == host && entry.ssh_port == port)
+            .cloned()
+            .collect::<Vec<_>>();
+        if !removed.is_empty() {
+            let quarantine_root = open_or_create_relative_directory_no_delete(
+                &self.root,
+                TRUST_QUARANTINE_DIRECTORY,
+            )?;
+            let quarantine =
+                open_or_create_relative_directory_no_delete(&quarantine_root, &self.storage_key)?;
+            let quarantine_doc = StoredTrust {
+                entries: removed,
+                ..current.clone()
+            };
+            let quarantine_text =
+                toml::to_string(&quarantine_doc).map_err(|_| invalid_data("store_serialize"))?;
+            write_file(
+                &quarantine,
+                &format!(
+                    "{}-{}.toml",
+                    repair_timestamp(now)?,
+                    endpoint_hash(host, port)
+                ),
+                &quarantine_text,
+            )?;
+        }
+
+        let mut next = current;
+        next.entries
+            .retain(|entry| !(entry.ssh_host == host && entry.ssh_port == port));
+        next.trust_revision = next
+            .trust_revision
+            .increment()
+            .map_err(|_| invalid_data("counter_exhausted"))?;
+        next.validate(&self.scope_id)?;
+        self.write_typed(TRUST_FILE, &next)?;
+        Ok(next)
+    }
+
+    pub(crate) fn repair_restore_backup(
+        &self,
+        backup_id: &str,
+        expected_revision: WireCounter,
+    ) -> io::Result<StoredTrust> {
+        if !is_backup_id(backup_id) {
+            return Err(invalid_data("invalid_backup_id"));
+        }
+        self.ensure_live()?;
+        let _gate = lock(&self.write_gate)?;
+        let _file_lock = acquire_file_lock(&self.lock_file)?;
+        let _activity = self.acquire_activity_lock_locked()?;
+        let _fence = self.acquire_scope_operation_fence()?;
+        self.ensure_current()?;
+        let backup_root = open_relative_directory_no_delete(&self.root, TRUST_BACKUPS_DIRECTORY)?;
+        let backups = open_relative_directory_no_delete(&backup_root, &self.storage_key)?;
+        let backup = {
+            let bytes = read_file(&backups, &format!("{backup_id}.toml"))?;
+            let text =
+                String::from_utf8(bytes.clone()).map_err(|_| invalid_data("store_not_utf8"))?;
+            verify_backup_checksum(backup_id, &bytes)?;
+            let value = toml::from_str::<StoredTrust>(&text)
+                .map_err(|_| invalid_data("invalid_store_toml"))?;
+            value.validate(&self.scope_id)?;
+            value
+        };
+        let current = self.load_trust_unlocked()?;
+        if current.trust_revision != expected_revision {
+            return Err(invalid_data("trust_revision_conflict"));
+        }
+        let mut next = backup;
         next.trust_revision = current
             .trust_revision
             .increment()
@@ -1075,6 +1313,54 @@ pub(crate) fn scope_storage_key(scope_id: &str) -> io::Result<String> {
     Ok(format!("{:x}", digest.finalize()))
 }
 
+fn backup_id(contents: &str, now: UtcTimestamp) -> io::Result<String> {
+    let mut digest = Sha256::new();
+    digest.update(contents.as_bytes());
+    let timestamp = repair_timestamp(now)?;
+    Ok(format!("{timestamp}-{:x}", digest.finalize()))
+}
+
+fn repair_timestamp(now: UtcTimestamp) -> io::Result<String> {
+    now.format()
+        .map_err(|_| invalid_data("invalid_backup_timestamp"))
+        .map(|value| value.replace(['-', ':', '.', 'T', 'Z'], ""))
+}
+
+fn endpoint_hash(host: &str, port: u16) -> String {
+    let mut digest = Sha256::new();
+    digest.update(host.as_bytes());
+    digest.update([0]);
+    digest.update(port.to_string().as_bytes());
+    format!("{:x}", digest.finalize())
+}
+
+fn is_backup_id(value: &str) -> bool {
+    is_timestamp_hash_id(value)
+}
+
+fn is_timestamp_hash_id(value: &str) -> bool {
+    let Some((timestamp, digest)) = value.rsplit_once('-') else {
+        return false;
+    };
+    timestamp.len() == 17
+        && timestamp.bytes().all(|byte| byte.is_ascii_digit())
+        && digest.len() == 64
+        && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn verify_backup_checksum(backup_id: &str, contents: &[u8]) -> io::Result<()> {
+    let Some(expected) = backup_id.rsplit_once('-').map(|(_, digest)| digest) else {
+        return Err(invalid_data("invalid_backup_id"));
+    };
+    let mut digest = Sha256::new();
+    digest.update(contents);
+    if format!("{:x}", digest.finalize()) == expected {
+        Ok(())
+    } else {
+        Err(invalid_data("backup_checksum_mismatch"))
+    }
+}
+
 fn validate_document_header(version: u8, embedded: &str, expected: &str) -> io::Result<()> {
     if version == SCHEMA_VERSION && embedded == expected {
         validate_uuid_v4(embedded).map_err(invalid_scope)
@@ -1424,8 +1710,15 @@ fn read_named_typed_handle<T: for<'de> Deserialize<'de>>(
 }
 
 fn recover_identity_artifacts(root: &OwnedHandle) -> io::Result<()> {
-    let entries =
-        enumerate_directory_except(root, &[SCOPES_DIRECTORY, LOCK_FILE, ACTIVITY_LOCK_FILE])?;
+    let entries = enumerate_directory_except(
+        root,
+        &[
+            SCOPES_DIRECTORY,
+            LOCK_FILE,
+            ACTIVITY_LOCK_FILE,
+            RUNTIME_LOCK_FILE,
+        ],
+    )?;
     let changed = recover_document_artifacts(root, &entries, IDENTITY_FILE, None, true)?;
     if changed {
         flush_handle(root)?;
@@ -1455,6 +1748,95 @@ fn recover_storage_artifacts(scopes: &OwnedHandle) -> io::Result<()> {
         flush_handle(scopes)?;
     }
     Ok(())
+}
+
+fn recover_trust_repair_artifacts(root: &OwnedHandle) -> io::Result<()> {
+    for (directory_name, verify_checksum) in [
+        (TRUST_BACKUPS_DIRECTORY, true),
+        (TRUST_QUARANTINE_DIRECTORY, false),
+    ] {
+        let parent = match open_relative_directory_no_delete(root, directory_name) {
+            Ok(parent) => parent,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        for scope in enumerate_directory(&parent)? {
+            if !scope.is_directory || !is_scope_storage_key(&scope.name) {
+                return Err(invalid_data("unexpected_trust_repair_scope"));
+            }
+            recover_trust_repair_scope(&scope.handle, &scope.name, verify_checksum)?;
+        }
+    }
+    Ok(())
+}
+
+fn recover_trust_repair_scope(
+    scope: &OwnedHandle,
+    storage_key: &str,
+    verify_checksum: bool,
+) -> io::Result<()> {
+    let initial_entries = enumerate_directory(scope)?;
+    let mut bases = Vec::new();
+    for entry in initial_entries {
+        if entry.is_directory {
+            return Err(invalid_data("unexpected_trust_repair_entry"));
+        }
+        let base = trust_repair_base_name(&entry.name)?;
+        if !bases.iter().any(|known| known == &base) {
+            bases.push(base);
+        }
+    }
+
+    let mut changed = false;
+    for base in &bases {
+        let entries = enumerate_directory(scope)?;
+        changed |= recover_document_artifacts(scope, &entries, base, None, false)?;
+    }
+    if changed {
+        flush_handle(scope)?;
+    }
+
+    for entry in enumerate_directory(scope)? {
+        if entry.is_directory {
+            return Err(invalid_data("unexpected_trust_repair_entry"));
+        }
+        let id = entry
+            .name
+            .strip_suffix(".toml")
+            .ok_or_else(|| invalid_data("invalid_trust_repair_name"))?;
+        if !is_timestamp_hash_id(id) {
+            return Err(invalid_data("invalid_trust_repair_name"));
+        }
+        let bytes = read_handle(&entry.handle)?;
+        if verify_checksum {
+            verify_backup_checksum(id, &bytes)?;
+        }
+        let text = String::from_utf8(bytes).map_err(|_| invalid_data("store_not_utf8"))?;
+        let value =
+            toml::from_str::<StoredTrust>(&text).map_err(|_| invalid_data("invalid_store_toml"))?;
+        value.validate(&value.scope_id)?;
+        if scope_storage_key(&value.scope_id)? != storage_key {
+            return Err(invalid_data("trust_repair_scope_mismatch"));
+        }
+    }
+    Ok(())
+}
+
+fn trust_repair_base_name(name: &str) -> io::Result<String> {
+    if let Some(id) = name.strip_suffix(".toml") {
+        if is_timestamp_hash_id(id) {
+            return Ok(name.into());
+        }
+    }
+    for marker in [".tmp-", ".backup-", ".commit-"] {
+        let Some((base, suffix)) = name.split_once(marker) else {
+            continue;
+        };
+        if is_uuid_suffix(suffix) && base.strip_suffix(".toml").is_some_and(is_timestamp_hash_id) {
+            return Ok(base.into());
+        }
+    }
+    Err(invalid_data("invalid_trust_repair_name"))
 }
 
 fn recover_tombstone(
@@ -1893,6 +2275,10 @@ fn rename_to(
 
 #[cfg(test)]
 mod tests {
+    use base64::{
+        engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
+        Engine as _,
+    };
     use std::{
         fs,
         io::Write,
@@ -1904,13 +2290,14 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        acquire_file_lock, create_new_relative_file, delete_handle, file_identity, flush_handle,
-        identity_toml, open_relative_for_mutation, open_scope_operation_file, read_handle,
-        rename_to, restore_destination, scope_storage_key, write_file_with_fault, PurgeFault,
-        ReplacementFault, ReplacementMarker, SshForwardStore, StoredAuth, StoredProfile,
-        StoredProfiles, StoredTrust, TrustedHost, IDENTITY_FILE,
+        acquire_file_lock, backup_id, create_new_relative_file, delete_handle, endpoint_hash,
+        file_identity, flush_handle, identity_toml, open_or_create_relative_directory_no_delete,
+        open_relative_for_mutation, open_scope_operation_file, read_handle, rename_to,
+        repair_timestamp, restore_destination, scope_storage_key, write_file_with_fault,
+        PurgeFault, ReplacementFault, ReplacementMarker, SshForwardStore, StoredAuth,
+        StoredProfile, StoredProfiles, StoredTrust, TrustedHost, IDENTITY_FILE,
         MAX_TRUSTED_ALGORITHMS_PER_ENDPOINT, META_FILE, PROFILES_FILE, SCOPE_FENCE_FILE,
-        TRUST_FILE,
+        TRUST_BACKUPS_DIRECTORY, TRUST_FILE, TRUST_QUARANTINE_DIRECTORY,
     };
     use crate::ssh_forward::{
         model::{UtcTimestamp, WireCounter},
@@ -2670,6 +3057,7 @@ mod tests {
             ssh_port: 22,
             algorithm: "ssh-ed25519".into(),
             fingerprint: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+            public_key: None,
         };
         let mut trust = StoredTrust::empty(SCOPE);
         trust.entries.push(entry.clone());
@@ -2702,6 +3090,176 @@ mod tests {
             });
         }
         assert!(trust.validate(SCOPE).is_err());
+    }
+
+    #[test]
+    fn persisted_trust_key_matches_algorithm_and_fingerprint() {
+        let algorithm = b"ssh-ed25519";
+        let mut public_key = Vec::with_capacity(4 + algorithm.len() + 4 + 32);
+        public_key.extend_from_slice(&(algorithm.len() as u32).to_be_bytes());
+        public_key.extend_from_slice(algorithm);
+        public_key.extend_from_slice(&32u32.to_be_bytes());
+        public_key.extend(std::iter::repeat_n(1, 32));
+        let parsed = russh::keys::parse_public_key_base64(&STANDARD.encode(&public_key)).unwrap();
+        let entry = TrustedHost::new(
+            "bastion.example".into(),
+            22,
+            "ssh-ed25519".into(),
+            parsed.fingerprint(russh::keys::HashAlg::Sha256).to_string(),
+            Some(STANDARD_NO_PAD.encode(&public_key)),
+        );
+        let mut trust = StoredTrust::empty(SCOPE);
+        trust.entries.push(entry);
+        assert!(trust.validate(SCOPE).is_ok());
+        trust.entries[0].algorithm = "ecdsa-sha2-nistp256".into();
+        assert!(trust.validate(SCOPE).is_err());
+    }
+
+    #[test]
+    fn trust_repair_keeps_root_scoped_backup_and_quarantine_recoverable() {
+        let fixture = Fixture::new();
+        let store = SshForwardStore::open(&fixture.root).unwrap();
+        let scope = store.scope(SCOPE).unwrap();
+        let entry = TrustedHost {
+            ssh_host: "bastion.example".into(),
+            ssh_port: 22,
+            algorithm: "ssh-ed25519".into(),
+            fingerprint: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+            public_key: None,
+        };
+        let mut initial = StoredTrust::empty(SCOPE);
+        initial.entries.push(entry);
+        scope.replace_trust(WireCounter::ZERO, initial).unwrap();
+
+        let repaired = scope
+            .repair_remove_endpoint("bastion.example", 22, timestamp("2026-08-11T00:00:00.000Z"))
+            .unwrap();
+        let storage_key = scope_storage_key(SCOPE).unwrap();
+        let backup_dir = fixture
+            .root
+            .join("ssh-forward")
+            .join(TRUST_BACKUPS_DIRECTORY)
+            .join(&storage_key);
+        let quarantine_dir = fixture
+            .root
+            .join("ssh-forward")
+            .join(TRUST_QUARANTINE_DIRECTORY)
+            .join(&storage_key);
+        let backup_id = fs::read_dir(&backup_dir)
+            .unwrap()
+            .map(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .trim_end_matches(".toml")
+                    .to_owned()
+            })
+            .next()
+            .unwrap();
+
+        assert!(!fixture.scope_dir().join(TRUST_BACKUPS_DIRECTORY).exists());
+        assert!(backup_dir.join(format!("{backup_id}.toml")).exists());
+        assert_eq!(fs::read_dir(&quarantine_dir).unwrap().count(), 1);
+        assert!(repaired.entries.is_empty());
+
+        let restored = scope
+            .repair_restore_backup(&backup_id, repaired.trust_revision)
+            .unwrap();
+        assert_eq!(restored.entries.len(), 1);
+        assert_eq!(restored.trust_revision.to_string(), "3");
+        drop(scope);
+        drop(store);
+        assert!(SshForwardStore::open(&fixture.root).is_ok());
+    }
+
+    #[test]
+    fn trust_repair_recovery_finishes_interrupted_root_replacements() {
+        let fixture = Fixture::new();
+        let store = SshForwardStore::open(&fixture.root).unwrap();
+        let scope = store.scope(SCOPE).unwrap();
+        let mut trust = StoredTrust::empty(SCOPE);
+        trust.entries.push(TrustedHost {
+            ssh_host: "bastion.example".into(),
+            ssh_port: 22,
+            algorithm: "ssh-ed25519".into(),
+            fingerprint: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+            public_key: None,
+        });
+        scope
+            .replace_trust(WireCounter::ZERO, trust.clone())
+            .unwrap();
+        let contents = toml::to_string(&trust).unwrap();
+        let now = timestamp("2026-08-11T00:00:00.000Z");
+        let backup_name = format!("{}.toml", backup_id(&contents, now).unwrap());
+        let quarantine_name = format!(
+            "{}-{}.toml",
+            repair_timestamp(now).unwrap(),
+            endpoint_hash("bastion.example", 22)
+        );
+
+        let backup_root =
+            open_or_create_relative_directory_no_delete(&store.root, TRUST_BACKUPS_DIRECTORY)
+                .unwrap();
+        let backup_scope =
+            open_or_create_relative_directory_no_delete(&backup_root, &scope.storage_key).unwrap();
+        write_file_with_fault(&backup_scope, &backup_name, &contents, None).unwrap();
+        write_file_with_fault(
+            &backup_scope,
+            &backup_name,
+            &contents,
+            Some(ReplacementFault::AfterBackup),
+        )
+        .unwrap_err();
+
+        let quarantine_root =
+            open_or_create_relative_directory_no_delete(&store.root, TRUST_QUARANTINE_DIRECTORY)
+                .unwrap();
+        let quarantine_scope =
+            open_or_create_relative_directory_no_delete(&quarantine_root, &scope.storage_key)
+                .unwrap();
+        let quarantine = StoredTrust {
+            entries: trust.entries.clone(),
+            ..trust
+        };
+        write_file_with_fault(
+            &quarantine_scope,
+            &quarantine_name,
+            &toml::to_string(&quarantine).unwrap(),
+            None,
+        )
+        .unwrap();
+        write_file_with_fault(
+            &quarantine_scope,
+            &quarantine_name,
+            &toml::to_string(&quarantine).unwrap(),
+            Some(ReplacementFault::AfterBackup),
+        )
+        .unwrap_err();
+        drop(scope);
+        drop(store);
+
+        assert!(SshForwardStore::open(&fixture.root).is_ok());
+    }
+
+    #[test]
+    fn feature_runtime_lease_is_exclusive() {
+        let fixture = Fixture::new();
+        let store = SshForwardStore::open(&fixture.root).unwrap();
+        let lease = store.acquire_feature_runtime_lease().unwrap();
+        assert!(store.acquire_feature_runtime_lease().is_err());
+        drop(lease);
+        assert!(store.acquire_feature_runtime_lease().is_ok());
+    }
+
+    #[test]
+    fn store_open_succeeds_while_runtime_lease_is_held() {
+        let fixture = Fixture::new();
+        let lease = SshForwardStore::acquire_feature_runtime_lease_at(&fixture.root).unwrap();
+        let store = SshForwardStore::open(&fixture.root).unwrap();
+        assert!(store.scope(SCOPE).is_ok());
+        drop(store);
+        drop(lease);
     }
 
     #[test]

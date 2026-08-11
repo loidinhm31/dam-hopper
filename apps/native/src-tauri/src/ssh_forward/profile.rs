@@ -239,6 +239,37 @@ pub(crate) fn validate_canonical_ssh_host(value: &str) -> Result<(), ProfileVali
     }
 }
 
+/// Canonicalize the only SSH endpoint host forms supported by v1.
+///
+/// This intentionally does not perform IDNA conversion: Unicode, brackets,
+/// IPv6, wildcard, and control characters are rejected instead of silently
+/// changing the endpoint that receives trust decisions.
+pub(crate) fn canonicalize_ssh_host(value: &str) -> Result<String, ProfileValidationError> {
+    let trimmed = value.trim_matches(|character: char| character.is_ascii_whitespace());
+    if trimmed.is_empty() || !trimmed.is_ascii() || trimmed.chars().any(char::is_control) {
+        return Err(ProfileValidationError::InvalidSshHost);
+    }
+
+    if trimmed
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || byte == b'.')
+    {
+        let ip = trimmed
+            .parse::<Ipv4Addr>()
+            .map_err(|_| ProfileValidationError::InvalidSshHost)?;
+        let canonical = ip.to_string();
+        if canonical == trimmed {
+            return Ok(canonical);
+        }
+        return Err(ProfileValidationError::InvalidSshHost);
+    }
+
+    let without_trailing_dots = trimmed.trim_end_matches('.');
+    let canonical = without_trailing_dots.to_ascii_lowercase();
+    validate_canonical_ssh_host(&canonical)?;
+    Ok(canonical)
+}
+
 fn validate_port(port: u16) -> Result<(), ProfileValidationError> {
     if port == 0 {
         Err(ProfileValidationError::InvalidPort)
@@ -249,7 +280,9 @@ fn validate_port(port: u16) -> Result<(), ProfileValidationError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{LoopbackHost, ReconnectPolicy, SshForwardAuth, SshForwardProfile};
+    use super::{
+        canonicalize_ssh_host, LoopbackHost, ReconnectPolicy, SshForwardAuth, SshForwardProfile,
+    };
     use crate::ssh_forward::model::UtcTimestamp;
 
     fn profile() -> SshForwardProfile {
@@ -306,6 +339,27 @@ mod tests {
         let mut invalid_deserialized = serde_json::to_value(profile()).unwrap();
         invalid_deserialized["targetPort"] = serde_json::json!(0);
         assert!(serde_json::from_value::<SshForwardProfile>(invalid_deserialized).is_err());
+    }
+
+    #[test]
+    fn endpoint_canonicalization_is_ascii_and_endpoint_first() {
+        assert_eq!(
+            canonicalize_ssh_host("  Example.COM... ").unwrap(),
+            "example.com"
+        );
+        assert_eq!(canonicalize_ssh_host(" 127.0.0.1 ").unwrap(), "127.0.0.1");
+        for host in [
+            "",
+            "...",
+            "127.0.0.01",
+            "[::1]",
+            "example..com",
+            "*.example.com",
+            "éxample.com",
+            "example.com\0",
+        ] {
+            assert!(canonicalize_ssh_host(host).is_err(), "accepted {host:?}");
+        }
     }
 
     #[test]
