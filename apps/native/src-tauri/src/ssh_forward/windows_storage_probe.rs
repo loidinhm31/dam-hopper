@@ -20,7 +20,7 @@ mod windows_storage_lock;
 use windows_storage_handle::{validate_handle, SHARES, SYNCHRONIZE};
 
 pub(crate) use windows_storage_directory::{
-    enumerate_directory, enumerate_directory_except, DirectoryEntry,
+    enumerate_directory, enumerate_directory_except, enumerate_directory_tolerant, DirectoryEntry,
 };
 pub(crate) use windows_storage_handle::open_relative_for_traversal;
 pub(crate) use windows_storage_handle::{
