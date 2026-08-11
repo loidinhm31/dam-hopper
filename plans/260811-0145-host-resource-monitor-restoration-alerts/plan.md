@@ -29,7 +29,7 @@ Recommended: minimally display cached legacy data and extend monitor alerts. Rej
 |---|---|---|---|
 | 01 | Monitor signal/model — **completed 2026-08-11 03:00:34 +07:00** | none | [phase-01](./phase-01-monitor-alert-model.md) |
 | 02 | API/SSE/client contract — **completed 2026-08-11 04:07:13 +07:00** | 01 | [phase-02](./phase-02-api-sse-client-contract.md) |
-| 03 | Accessible disclosure — **pending** | 02 | [phase-03](./phase-03-popover-disclosure.md) |
+| 03 | Accessible disclosure — **completed 2026-08-11 07:18:58 +07:00** | 02 | [phase-03](./phase-03-popover-disclosure.md) |
 | 04 | Tests/release gate — **pending** | 01–03 | [phase-04](./phase-04-tests-validation-docs.md) |
 
 ## Exact implementation order

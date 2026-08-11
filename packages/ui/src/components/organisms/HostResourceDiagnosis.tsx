@@ -14,8 +14,8 @@ import { formatPercent } from "@/lib/host-metrics-format.js";
 import { cn } from "@/lib/utils.js";
 import {
   HostResourceInfoRow,
+  HostResourceLegacyMetrics,
   HostResourceMetric,
-  HostResourceSummaryCell,
 } from "./HostResourceDiagnosisRows.js";
 
 interface Props {
@@ -130,18 +130,7 @@ export function HostResourceDiagnosis({
         availability={pressure.memory.availability}
       />
 
-      {legacyMetrics && (
-        <section className="grid grid-cols-2 gap-2 text-[10px]">
-          <HostResourceSummaryCell
-            label="CPU"
-            value={formatPercent(legacyMetrics.cpu.usagePercent)}
-          />
-          <HostResourceSummaryCell
-            label="Disk"
-            value={formatPercent(legacyMetrics.disk.usagePercent)}
-          />
-        </section>
-      )}
+      {legacyMetrics && <HostResourceLegacyMetrics metrics={legacyMetrics} />}
 
       <section className="space-y-1.5 border-t border-[var(--color-border)] pt-3 text-[10px]">
         <p className="font-bold uppercase tracking-widest text-[var(--color-text-muted)]">
@@ -221,6 +210,34 @@ export function HostResourceDiagnosis({
         </section>
       )}
 
+      {snapshot.currentAlerts && snapshot.currentAlerts.length > 0 && (
+        <section
+          aria-label="Current resource incidents"
+          className="space-y-1.5 border-t border-[var(--color-border)] pt-3"
+        >
+          <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-muted)]">
+            Current resource incidents
+          </p>
+          <ul className="space-y-1.5">
+            {snapshot.currentAlerts.slice(0, 5).map((incident) => (
+              <li key={incident.incidentId} className="space-y-0.5 text-[10px]">
+                <p
+                  className={cn(
+                    "font-medium",
+                    severityClass(incident.severity),
+                  )}
+                >
+                  {formatAlertState(incident.state)} · {incident.scope}
+                </p>
+                <p className="text-[var(--color-text-muted)]">
+                  Evidence: {formatResourceEvidence(incident)}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {alerts.length > 0 && (
         <section className="space-y-1.5 border-t border-[var(--color-border)] pt-3">
           <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-muted)]">
@@ -261,6 +278,23 @@ function percentage(
   return part != null && total != null && total > 0
     ? (part / total) * 100
     : undefined;
+}
+
+function formatResourceEvidence(
+  incident: NonNullable<HostResourceSnapshotV1["currentAlerts"]>[number],
+): string {
+  if (incident.kind === "temperature") {
+    const source = incident.evidence.temperatureSource ?? "source unavailable";
+    const value = Number.isFinite(incident.evidence.temperatureCelsius)
+      ? `${Math.round(incident.evidence.temperatureCelsius ?? 0)}°C`
+      : "unavailable";
+    return `${incident.evidence.temperatureLabel ?? source} · ${value}`;
+  }
+  const mount = incident.evidence.diskMountPoint ?? "mount unavailable";
+  const percent = Number.isFinite(incident.evidence.diskUsagePercent)
+    ? `${Math.round(incident.evidence.diskUsagePercent ?? 0)}% used`
+    : "usage unavailable";
+  return `${incident.evidence.diskName ?? mount} · ${mount} · ${percent}`;
 }
 
 function formatPsi(some?: number | null, full?: number | null): string {
