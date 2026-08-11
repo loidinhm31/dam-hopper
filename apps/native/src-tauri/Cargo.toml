@@ -24,9 +24,10 @@ toml = "=0.8.2"
 uuid = { version = "=1.23.1", features = ["serde", "v4"] }
 
 [target.'cfg(windows)'.dependencies]
+base64 = "=0.22.1"
 webview2-com = "=0.38.2"
 windows = { version = "0.61", features = ["Win32_Foundation"] }
-windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO"] }
+windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading"] }
 russh = { version = "=0.62.5", default-features = false, features = ["ring"] }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 

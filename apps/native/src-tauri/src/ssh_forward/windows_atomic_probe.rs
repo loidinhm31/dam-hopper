@@ -60,6 +60,7 @@ fn same_directory_replace_is_atomic_and_lock_is_exclusive() {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .share_mode(0)
         .open(&lock_path)
         .unwrap();

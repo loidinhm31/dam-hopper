@@ -47,10 +47,9 @@ pub fn parse_relay(raw: &str) -> Result<RelayMessage, &'static str> {
     let kind = bounded_string(object.get("kind"), 64).ok_or("invalid_kind")?;
     let origin = bounded_string(object.get("origin"), MAX_URL_LENGTH).ok_or("invalid_origin")?;
     let payload = object.get("payload").cloned().ok_or("missing_payload")?;
-    if serde_json::to_vec(&payload)
+    if !serde_json::to_vec(&payload)
         .map(|bytes| bytes.len() <= MAX_PAYLOAD_BYTES)
         .unwrap_or(false)
-        == false
     {
         return Err("payload_too_large");
     }
