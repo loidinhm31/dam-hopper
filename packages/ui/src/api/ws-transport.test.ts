@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "./client.js";
 import { WsTransport } from "./ws-transport.js";
+import { setActiveProfile, setAuthToken } from "./server-config.js";
 
 class MockWebSocket {
   static OPEN = 1;
@@ -160,6 +161,53 @@ describe("WsTransport usage setup endpoints", () => {
   });
 });
 
+describe("WsTransport explorer language scan endpoint", () => {
+  it("maps a project name to the protected language-files route", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ files: [], truncated: false, limit: 20_000 }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("fs:languageFiles", { project: "demo project" });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/fs/language-files?project=demo+project",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "GET" });
+    transport.destroy();
+  });
+});
+
+describe("WsTransport host resource endpoints", () => {
+  it("maps the monitoring-only snapshot and bounded alert history routes", async () => {
+    installMockWebSocket();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ schemaVersion: 1 }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("system:resourceSnapshot");
+    await transport.invoke("system:resourceAlerts", { limit: 12 });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/system/resources/v1/snapshot",
+    );
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "http://localhost:4800/api/system/resources/v1/alerts?limit=12",
+    );
+    transport.destroy();
+  });
+});
+
 describe("WsTransport commit message endpoints", () => {
   it("loads and edits the full commit message with root scope", async () => {
     installMockWebSocket();
@@ -245,6 +293,48 @@ describe("WsTransport typed API errors", () => {
       }),
     ).rejects.toThrow("Unsupported usage setup field: terminalCorrelationEnabled");
     expect(fetchMock).not.toHaveBeenCalled();
+    transport.destroy();
+  });
+});
+
+describe("WsTransport profile credentials", () => {
+  it("keeps the URL and token bound to its captured profile", async () => {
+    installMockWebSocket();
+    const createStorage = () => {
+      const values = new Map<string, string>();
+      return {
+        get length() {
+          return values.size;
+        },
+        clear: () => values.clear(),
+        getItem: (key: string) => values.get(key) ?? null,
+        key: (index: number) => Array.from(values.keys())[index] ?? null,
+        removeItem: (key: string) => values.delete(key),
+        setItem: (key: string, value: string) => values.set(key, value),
+      } as Storage;
+    };
+    vi.stubGlobal("localStorage", createStorage());
+    vi.stubGlobal("sessionStorage", createStorage());
+    setAuthToken("token-a", "profile-a");
+    const transport = new WsTransport("http://a.test", "profile-a");
+    setActiveProfile("profile-b");
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => "application/json" },
+      json: async () => ({ ok: true }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await transport.invoke("workspace:status");
+
+    expect(sockets[0].url).toContain("token-a");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://a.test/api/workspace/status",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer token-a" },
+      }),
+    );
     transport.destroy();
   });
 });

@@ -8,8 +8,14 @@ pub mod config;
 pub mod diagnostics;
 pub mod error;
 pub mod fs;
+pub mod fs_image;
+pub mod fs_video;
 pub mod git;
 pub mod git_diff;
+mod http_byte_range;
+mod media_stream_headers;
+mod media_stream_response;
+pub mod host_actions;
 pub mod port_forward;
 pub mod router;
 pub mod settings;
@@ -19,6 +25,12 @@ pub mod terminal;
 pub mod tunnel;
 pub mod usage;
 pub mod usage_sessions;
+// Keep the pre-extraction modules available for compatibility with existing
+// module-local tests; the routes use the shared media adapters above.
+#[allow(dead_code)]
+mod video_stream_headers;
+#[allow(dead_code)]
+mod video_stream_response;
 pub mod workspace;
 pub mod ws;
 pub mod ws_protocol;

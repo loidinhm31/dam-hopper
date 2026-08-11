@@ -1,6 +1,21 @@
 import { Children, isValidElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { TerminalRuntimeNavigatorItem } from "./TerminalRuntimeNavigatorItem.js";
+import type { RuntimeSessionItem } from "@/lib/terminal-runtime-tree.js";
+
+function createSession(): RuntimeSessionItem {
+  return {
+    kind: "session",
+    id: "session:web",
+    groupId: "web",
+    sessionId: "web",
+    label: "web:bash",
+    project: "web",
+    command: "bash",
+    startedAt: 1,
+    ports: [],
+  };
+}
 
 function findElementByTitle(node: unknown, title: string): Record<string, unknown> | null {
   if (!isValidElement(node)) return null;
@@ -17,16 +32,22 @@ function findElementByTitle(node: unknown, title: string): Record<string, unknow
   return null;
 }
 
-function findElementByClass(node: unknown, className: string): Record<string, unknown> | null {
+function findElementByClassFragment(
+  node: unknown,
+  classFragment: string,
+): Record<string, unknown> | null {
   if (!isValidElement(node)) return null;
   if (typeof node.type === "function") {
-    return findElementByClass(node.type(node.props), className);
+    return findElementByClassFragment(node.type(node.props), classFragment);
   }
-  if ((node.props as { className?: string }).className === className) {
+  const className = (node.props as { className?: unknown }).className;
+  if (typeof className === "string" && className.includes(classFragment)) {
     return node.props as Record<string, unknown>;
   }
-  for (const child of Children.toArray((node.props as { children?: unknown }).children)) {
-    const match = findElementByClass(child, className);
+  for (const child of Children.toArray(
+    (node.props as { children?: unknown }).children,
+  )) {
+    const match = findElementByClassFragment(child, classFragment);
     if (match) return match;
   }
   return null;
@@ -68,6 +89,119 @@ describe("TerminalRuntimeNavigatorItem", () => {
     expect(onCloseSession).toHaveBeenCalledWith("web");
   });
 
+  it("uses a native selection button without making the leaf a nested button", () => {
+    const onSelectSession = vi.fn();
+    const tree = TerminalRuntimeNavigatorItem({
+      activeSessionId: "web",
+      dragState: null,
+      item: createSession(),
+      onSelectSession,
+      onMoveItem: () => {},
+      onSetDragState: () => {},
+      onStartTunnel: async () => {},
+      onStopTunnel: async () => {},
+    });
+    const selectionProps = findElementByTitle(tree, "web");
+    const leafProps = findElementByClassFragment(
+      tree,
+      "rounded-sm px-1.5 py-1 outline-none",
+    );
+
+    expect(selectionProps).toMatchObject({
+      type: "button",
+      "aria-current": "page",
+    });
+    expect(selectionProps?.onKeyDown).toBeUndefined();
+    expect(leafProps?.role).toBeUndefined();
+    expect(leafProps?.tabIndex).toBeUndefined();
+
+    (selectionProps?.onClick as (event: { stopPropagation: () => void }) => void)?.({
+      stopPropagation: vi.fn(),
+    });
+    expect(onSelectSession).toHaveBeenCalledWith("web");
+  });
+
+  it("selects the session when clicking noninteractive row content", () => {
+    const onSelectSession = vi.fn();
+    const tree = TerminalRuntimeNavigatorItem({
+      activeSessionId: null,
+      dragState: null,
+      item: {
+        ...createSession(),
+        ports: [
+          {
+            port: 3000,
+            project: "web",
+            state: "listening",
+            sessionId: "web",
+          },
+        ],
+      },
+      onSelectSession,
+      onMoveItem: () => {},
+      onSetDragState: () => {},
+      onStartTunnel: async () => {},
+      onStopTunnel: async () => {},
+    });
+    const leafProps = findElementByClassFragment(
+      tree,
+      "rounded-sm px-1.5 py-1 outline-none",
+    );
+
+    expect(leafProps?.role).toBeUndefined();
+    (leafProps?.onClick as () => void)?.();
+
+    expect(onSelectSession).toHaveBeenCalledWith("web");
+  });
+
+  it("routes pinning and omits close for a pinned Runtime leaf", () => {
+    const onToggleTabPin = vi.fn();
+    const tree = TerminalRuntimeNavigatorItem({
+      activeSessionId: "worker",
+      dragState: null,
+      item: {
+        kind: "service-group",
+        id: "services:web",
+        groupId: "web",
+        label: "Running ports",
+        startedAt: 1,
+        sessions: [
+          {
+            kind: "session",
+            id: "session:worker",
+            groupId: "web",
+            sessionId: "worker",
+            label: "web:worker",
+            project: "web",
+            command: "worker",
+            startedAt: 1,
+            ports: [],
+            isPinned: true,
+          },
+        ],
+      },
+      onToggleTabPin,
+      onMoveItem: () => {},
+      onSetDragState: () => {},
+      onStartTunnel: async () => {},
+      onStopTunnel: async () => {},
+    });
+    const unpinProps = findElementByTitle(
+      tree,
+      "Unpin terminal (allows closing)",
+    );
+
+    expect(unpinProps).not.toBeNull();
+    expect(unpinProps?.["aria-pressed"]).toBe(true);
+    expect(
+      findElementByTitle(tree, "Close terminal (terminates process)"),
+    ).toBeNull();
+    (unpinProps?.onClick as (event: { stopPropagation: () => void }) => void)?.({
+      stopPropagation: vi.fn(),
+    });
+    expect(onToggleTabPin).toHaveBeenCalledWith("worker");
+  });
+
   it("routes a session title context menu to that session", () => {
     const onOpenDiagnosticsMenu = vi.fn();
     const tree = TerminalRuntimeNavigatorItem({
@@ -90,10 +224,7 @@ describe("TerminalRuntimeNavigatorItem", () => {
       onStartTunnel: async () => {},
       onStopTunnel: async () => {},
     });
-    const labelProps = findElementByClass(
-      tree,
-      "flex min-w-0 flex-1 items-center gap-2 text-left",
-    );
+    const labelProps = findElementByTitle(tree, "web");
     const preventDefault = vi.fn();
     const stopPropagation = vi.fn();
 
@@ -139,10 +270,7 @@ describe("TerminalRuntimeNavigatorItem", () => {
       onStartTunnel: async () => {},
       onStopTunnel: async () => {},
     });
-    const labelProps = findElementByClass(
-      tree,
-      "flex min-w-0 flex-1 items-center gap-2 text-left",
-    );
+    const labelProps = findElementByTitle(tree, "worker");
 
     (labelProps?.onContextMenu as (event: {
       clientX: number;

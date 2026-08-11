@@ -9,8 +9,9 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
-import { fileTier } from "@/lib/file-tier.js";
+import { fileTier, isPreviewOnlyFile } from "@/lib/file-tier.js";
 import type { FileTier as FT } from "@/lib/file-tier.js";
+import { isVideoFile } from "@/lib/video-file.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 export type FileTier = FT | "diff";
 
@@ -46,6 +47,8 @@ export interface Tab {
   diffPath?: string;
   /** Whether the tab metadata was restored but content still needs to be loaded from server. */
   hydrated?: boolean;
+  /** Session-only counter used to remount a clean video preview after external changes. */
+  previewRevision?: number;
 }
 
 interface EditorState {
@@ -172,7 +175,7 @@ export const useEditorStore = create<EditorState>()(
         }
 
         // Optimistic tier guess from FsArborNode (no isBinary from tree)
-        const optimisticTier = fileTier(node.size, false);
+        const optimisticTier = fileTier(node.name, node.size, false);
 
         const placeholder: Tab = {
           key,
@@ -185,7 +188,7 @@ export const useEditorStore = create<EditorState>()(
           content: "",
           savedContent: "",
           dirty: false,
-          loading: true,
+          loading: !isPreviewOnlyFile(optimisticTier, node.name),
           saving: false,
           conflicted: false,
         };
@@ -195,8 +198,12 @@ export const useEditorStore = create<EditorState>()(
           activeKeys: { ...s.activeKeys, [project]: key },
         }));
 
-        // Skip network fetch for large files — LargeFileViewer handles chunked range reads.
-        if (optimisticTier === "large") {
+        // Video playback owns its native range requests; never materialize it via fsRead.
+        // Large files remain handled by LargeFileViewer's bounded range reads.
+        if (
+          isPreviewOnlyFile(optimisticTier, node.name) ||
+          optimisticTier === "large"
+        ) {
           set((s) => ({
             tabs: s.tabs.map((t) =>
               t.key === key ? { ...t, loading: false } : t,
@@ -249,7 +256,7 @@ export const useEditorStore = create<EditorState>()(
             return;
           }
 
-          const tier = fileTier(result.size, result.binary);
+          const tier = fileTier(node.name, result.size, result.binary);
           const decoded = result.binary ? "" : b64ToUtf8(result.content);
           const binaryBase64 = result.binary ? result.content : undefined;
 
@@ -357,7 +364,8 @@ export const useEditorStore = create<EditorState>()(
           tab.saving ||
           !tab.dirty ||
           tab.tier === "binary" ||
-          tab.tier === "large"
+          tab.tier === "large" ||
+          isPreviewOnlyFile(tab.tier, tab.name)
         )
           return false;
 
@@ -386,7 +394,7 @@ export const useEditorStore = create<EditorState>()(
                       mtime: result.newMtime,
                     }
                   : t,
-                ),
+              ),
             }));
             return true;
           } else if (!result.ok && result.conflict) {
@@ -427,7 +435,7 @@ export const useEditorStore = create<EditorState>()(
       // ---------------------------------------------------------------------------
       forceOverwrite: async (key: string) => {
         const tab = get().tabs.find((t) => t.key === key);
-        if (!tab) return;
+        if (!tab || isPreviewOnlyFile(tab.tier, tab.name)) return;
 
         // Fetch current server mtime (0-byte range read just to get mtime)
         const stat = await transport().fsRead(tab.project, tab.path, {
@@ -493,6 +501,31 @@ export const useEditorStore = create<EditorState>()(
         const tab = get().tabs.find((t) => t.key === key);
         if (!tab) return;
 
+        if (isPreviewOnlyFile(tab.tier, tab.name)) {
+          set((s) => ({
+            tabs: s.tabs.map((t) =>
+              t.key === key
+                ? {
+                    ...t,
+                    tier: isVideoFile(t.name) ? "video" : "image",
+                    loading: false,
+                    saving: false,
+                    conflicted: false,
+                    dirty: false,
+                    stale: false,
+                    hydrated: false,
+                    content: "",
+                    savedContent: "",
+                    binaryBase64: undefined,
+                    error: undefined,
+                    previewRevision: (t.previewRevision ?? 0) + 1,
+                  }
+                : t,
+            ),
+          }));
+          return;
+        }
+
         set((s) => ({
           tabs: s.tabs.map((t) =>
             t.key === key ? { ...t, loading: true, conflicted: false } : t,
@@ -557,8 +590,16 @@ export const useEditorStore = create<EditorState>()(
             tab.tier !== "diff" &&
             affected.has(tab.path),
         );
-        const cleanTabs = tabs.filter((tab) => !tab.dirty);
-        const dirtyKeys = tabs.filter((tab) => tab.dirty).map((tab) => tab.key);
+        const previewTabs = tabs.filter((tab) =>
+          isPreviewOnlyFile(tab.tier, tab.name),
+        );
+        const editableTabs = tabs.filter(
+          (tab) => !isPreviewOnlyFile(tab.tier, tab.name),
+        );
+        const cleanTabs = editableTabs.filter((tab) => !tab.dirty);
+        const dirtyKeys = editableTabs
+          .filter((tab) => tab.dirty)
+          .map((tab) => tab.key);
 
         if (dirtyKeys.length > 0) {
           set((s) => ({
@@ -568,7 +609,7 @@ export const useEditorStore = create<EditorState>()(
           }));
         }
 
-        for (const tab of cleanTabs) {
+        for (const tab of [...previewTabs, ...cleanTabs]) {
           await get().reloadTab(tab.key);
         }
       },
@@ -577,8 +618,16 @@ export const useEditorStore = create<EditorState>()(
         const tabs = get().tabs.filter(
           (tab) => tab.project === project && tab.tier !== "diff",
         );
-        const cleanTabs = tabs.filter((tab) => !tab.dirty);
-        const dirtyKeys = tabs.filter((tab) => tab.dirty).map((tab) => tab.key);
+        const previewTabs = tabs.filter((tab) =>
+          isPreviewOnlyFile(tab.tier, tab.name),
+        );
+        const editableTabs = tabs.filter(
+          (tab) => !isPreviewOnlyFile(tab.tier, tab.name),
+        );
+        const cleanTabs = editableTabs.filter((tab) => !tab.dirty);
+        const dirtyKeys = editableTabs
+          .filter((tab) => tab.dirty)
+          .map((tab) => tab.key);
 
         if (dirtyKeys.length > 0) {
           set((s) => ({
@@ -588,7 +637,7 @@ export const useEditorStore = create<EditorState>()(
           }));
         }
 
-        for (const tab of cleanTabs) {
+        for (const tab of [...previewTabs, ...cleanTabs]) {
           await get().reloadTab(tab.key);
         }
       },
@@ -627,6 +676,30 @@ export const useEditorStore = create<EditorState>()(
       loadContent: async (key: string) => {
         const tab = get().tabs.find((t) => t.key === key);
         if (!tab || !tab.hydrated || tab.loading) return;
+
+        if (isPreviewOnlyFile(tab.tier, tab.name)) {
+          set((s) => ({
+            tabs: s.tabs.map((t) =>
+              t.key === key
+                ? {
+                    ...t,
+                    tier: isVideoFile(t.name) ? "video" : "image",
+                    loading: false,
+                    hydrated: false,
+                    content: "",
+                    savedContent: "",
+                    binaryBase64: undefined,
+                    dirty: false,
+                    saving: false,
+                    conflicted: false,
+                    stale: false,
+                    error: undefined,
+                  }
+                : t,
+            ),
+          }));
+          return;
+        }
 
         set((s) => ({
           tabs: s.tabs.map((t) =>
@@ -680,7 +753,7 @@ export const useEditorStore = create<EditorState>()(
             return;
           }
 
-          const tier = fileTier(result.size, result.binary);
+          const tier = fileTier(tab.name, result.size, result.binary);
           const decoded = result.binary ? "" : b64ToUtf8(result.content);
           const binaryBase64 = result.binary ? result.content : undefined;
 

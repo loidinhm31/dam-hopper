@@ -1,0 +1,4 @@
+Name:	server-worker
+Uid:	1001	1001	1001	1001
+VmRSS:	1024 kB
+RssFile:	256 kB

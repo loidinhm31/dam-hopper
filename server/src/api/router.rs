@@ -1,16 +1,23 @@
+use std::path::PathBuf;
+
 use axum::http::{
-    header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE},
-    Method,
+    header::{
+        ACCEPT, ACCEPT_RANGES, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH,
+        CONTENT_RANGE, CONTENT_TYPE, COOKIE, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, IF_RANGE,
+        LAST_MODIFIED, RANGE,
+    },
+    Method, StatusCode,
 };
 use axum::{
     extract::DefaultBodyLimit,
     middleware,
-    routing::{delete, get, patch, post, put},
+    routing::{any, delete, get, patch, post, put},
     Router,
 };
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     limit::RequestBodyLimitLayer,
+    services::{ServeDir, ServeFile},
 };
 
 /// 10 MB — generous for config/settings payloads, blocks accidental multi-GB uploads.
@@ -20,12 +27,20 @@ use crate::state::AppState;
 
 use super::{
     agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
-    fs as fs_api, git, git_diff, port_forward as port_forward_api, settings, ssh, system, terminal,
-    tunnel, usage, usage_sessions, workspace, ws,
+    fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, port_forward as port_forward_api, settings,
+    ssh, system, terminal, tunnel, usage, usage_sessions, workspace, ws,
 };
 
 /// Build the full Axum router with auth middleware, CORS, and all routes.
 pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
+    build_router_with_web_dir(state, allowed_origins, static_web_dir())
+}
+
+pub(crate) fn build_router_with_web_dir(
+    state: AppState,
+    allowed_origins: Vec<String>,
+    web_dir: PathBuf,
+) -> Router {
     let cors = build_cors(&allowed_origins);
 
     // Public routes — no auth required
@@ -218,6 +233,39 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/ports", get(port_forward_api::list_ports))
         // Host system metrics
         .route("/api/system/metrics", get(system::get_metrics))
+        .route(
+            "/api/system/resources/v1/snapshot",
+            get(system::get_snapshot),
+        )
+        .route("/api/system/resources/v1/alerts", get(system::get_alerts))
+        // Deferred host-action scaffolding stays fail-closed and out of Phase 07 scope.
+        .route(
+            "/api/system/actions/v1/capabilities",
+            get(host_actions::capabilities),
+        )
+        .route(
+            "/api/system/actions/v1/intents",
+            post(host_actions::create_intent)
+                .layer(RequestBodyLimitLayer::new(8 * 1024))
+                .route_layer(middleware::from_fn(host_actions::require_action_request)),
+        )
+        .route(
+            "/api/system/actions/v1/intents/{id}/approve",
+            post(host_actions::approve_intent)
+                .layer(RequestBodyLimitLayer::new(8 * 1024))
+                .route_layer(middleware::from_fn(host_actions::require_action_request)),
+        )
+        .route(
+            "/api/system/actions/v1/executions",
+            post(host_actions::create_execution)
+                .layer(RequestBodyLimitLayer::new(8 * 1024))
+                .route_layer(middleware::from_fn(host_actions::require_action_request)),
+        )
+        .route(
+            "/api/system/actions/v1/executions/{id}",
+            get(host_actions::get_execution),
+        )
+        .route("/api/system/actions/v1/audit", get(host_actions::get_audit))
         // Diagnostics
         .route(
             "/api/diagnostics/export",
@@ -308,6 +356,15 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/api/fs/read", get(fs_api::read))
         .route("/api/fs/stat", get(fs_api::stat))
         .route("/api/fs/download", get(fs_api::download))
+        .route(
+            "/api/fs/video/tickets",
+            post(fs_video::issue_ticket).delete(fs_video::revoke_ticket),
+        )
+        .route(
+            "/api/fs/image/tickets",
+            post(fs_image::issue_ticket).delete(fs_image::revoke_ticket),
+        )
+        .route("/api/fs/language-files", get(fs_api::language_files))
         .route("/api/fs/search", get(fs_api::search))
         .route("/api/fs/search-paths", get(fs_api::search_paths))
         .route_layer(middleware::from_fn_with_state(
@@ -315,13 +372,38 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             auth::require_auth,
         ));
 
+    // Capability URL authorizes this media stream; it intentionally carries no cookie auth.
+    let video_stream = Router::new().route(
+        "/api/fs/video/stream/{ticket}",
+        get(fs_video::stream_ticket).head(fs_video::stream_ticket),
+    );
+    let image_stream = Router::new().route(
+        "/api/fs/image/stream/{ticket}",
+        get(fs_image::stream_ticket).head(fs_image::stream_ticket),
+    );
+
     Router::new()
         .merge(public)
         .merge(protected)
         .merge(ide_routes)
+        .merge(video_stream)
+        .merge(image_stream)
+        // Preserve API 404 semantics; the SPA fallback is only for browser paths.
+        .route("/api", any(|| async { StatusCode::NOT_FOUND }))
+        .route("/api/", any(|| async { StatusCode::NOT_FOUND }))
+        .route("/api/{*path}", any(|| async { StatusCode::NOT_FOUND }))
+        .fallback_service(
+            ServeDir::new(&web_dir).not_found_service(ServeFile::new(web_dir.join("index.html"))),
+        )
         .layer(cors)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
+}
+
+fn static_web_dir() -> PathBuf {
+    std::env::var_os("DAM_HOPPER_WEB_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/opt/dam-hopper/web"))
 }
 
 fn build_cors(allowed_origins: &[String]) -> CorsLayer {
@@ -335,7 +417,25 @@ fn build_cors(allowed_origins: &[String]) -> CorsLayer {
         Method::OPTIONS,
         Method::HEAD,
     ];
-    let headers = [AUTHORIZATION, CONTENT_TYPE, ACCEPT, COOKIE];
+    let headers = [
+        AUTHORIZATION,
+        CONTENT_TYPE,
+        ACCEPT,
+        COOKIE,
+        RANGE,
+        IF_RANGE,
+        IF_NONE_MATCH,
+        IF_MODIFIED_SINCE,
+    ];
+    let exposed_headers = [
+        ACCEPT_RANGES,
+        CONTENT_RANGE,
+        CONTENT_LENGTH,
+        CONTENT_DISPOSITION,
+        ETAG,
+        LAST_MODIFIED,
+        CACHE_CONTROL,
+    ];
 
     if allowed_origins.is_empty() || allowed_origins.iter().any(|o| o == "*") {
         // Mirror the request Origin back — `*` is rejected by browsers when credentials are sent.
@@ -343,6 +443,7 @@ fn build_cors(allowed_origins: &[String]) -> CorsLayer {
             .allow_origin(AllowOrigin::mirror_request())
             .allow_methods(methods)
             .allow_headers(headers)
+            .expose_headers(exposed_headers)
             .allow_credentials(true)
     } else {
         let origins: Vec<axum::http::HeaderValue> = allowed_origins
@@ -353,6 +454,7 @@ fn build_cors(allowed_origins: &[String]) -> CorsLayer {
             .allow_origin(origins)
             .allow_methods(methods)
             .allow_headers(headers)
+            .expose_headers(exposed_headers)
             .allow_credentials(true)
     }
 }

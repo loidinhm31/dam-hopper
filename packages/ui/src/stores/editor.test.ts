@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fsRead = vi.fn();
+const fsWriteFile = vi.fn();
 
 vi.mock("@/api/transport.js", () => ({
-  getTransport: () => ({ fsRead }),
+  getTransport: () => ({ fsRead, fsWriteFile }),
 }));
 
 import { useEditorStore, type Tab } from "./editor.js";
@@ -88,6 +89,7 @@ describe("editor store Git mutation reconciliation", () => {
   beforeEach(() => {
     resetEditorStore();
     fsRead.mockReset();
+    fsWriteFile.mockReset();
   });
   afterEach(resetEditorStore);
 
@@ -170,5 +172,132 @@ describe("editor store Git mutation reconciliation", () => {
     expect(tabs.find((tab) => tab.key === otherProjectTab.key)?.content).toBe(
       "",
     );
+  });
+});
+
+describe("editor store video guards", () => {
+  beforeEach(() => {
+    resetEditorStore();
+    fsRead.mockReset();
+    fsWriteFile.mockReset();
+  });
+  afterEach(resetEditorStore);
+
+  it("opens a recognized video without fsRead and marks it ready immediately", async () => {
+    await useEditorStore.getState().open("alpha", {
+      id: "clips/demo.WEBM",
+      name: "demo.WEBM",
+      kind: "file",
+      size: 3 * 1024 * 1024 * 1024,
+      mtime: 1,
+      isSymlink: false,
+      children: null,
+    });
+
+    const tab = useEditorStore.getState().tabs[0];
+    expect(tab.tier).toBe("video");
+    expect(tab.loading).toBe(false);
+    expect(fsRead).not.toHaveBeenCalled();
+  });
+
+  it("never reads or writes hydrated/reconciled video tabs", async () => {
+    const tab = {
+      ...makeTab("alpha", "clips/demo.mp4"),
+      name: "demo.mp4",
+      // Mirrors a persisted tab created before the video tier existed.
+      tier: "large" as const,
+      hydrated: true,
+      dirty: true,
+    };
+    useEditorStore.setState({ tabs: [tab], activeKeys: { alpha: tab.key } });
+
+    await useEditorStore.getState().loadContent(tab.key);
+    await useEditorStore.getState().save(tab.key);
+    await useEditorStore.getState().forceOverwrite(tab.key);
+    await useEditorStore.getState().reconcileGitProjectFiles("alpha");
+
+    expect(fsRead).not.toHaveBeenCalled();
+    expect(fsWriteFile).not.toHaveBeenCalled();
+    expect(useEditorStore.getState().tabs[0]).toMatchObject({
+      tier: "video",
+      hydrated: false,
+      previewRevision: 1,
+    });
+  });
+
+  it("opens a large image without fsRead and marks it ready immediately", async () => {
+    await useEditorStore.getState().open("alpha", {
+      id: "images/preview.WEBP",
+      name: "preview.WEBP",
+      kind: "file",
+      size: 3 * 1024 * 1024 * 1024,
+      mtime: 1,
+      isSymlink: false,
+      children: null,
+    });
+
+    const tab = useEditorStore.getState().tabs[0];
+    expect(tab.tier).toBe("image");
+    expect(tab.loading).toBe(false);
+    expect(fsRead).not.toHaveBeenCalled();
+  });
+
+  it("never reads or writes hydrated/reconciled image tabs", async () => {
+    const tab = {
+      ...makeTab("alpha", "images/preview.png"),
+      name: "preview.png",
+      // Mirrors a persisted tab created before the image tier existed.
+      tier: "large" as const,
+      hydrated: true,
+      dirty: true,
+    };
+    useEditorStore.setState({ tabs: [tab], activeKeys: { alpha: tab.key } });
+
+    await useEditorStore.getState().loadContent(tab.key);
+    await useEditorStore.getState().save(tab.key);
+    await useEditorStore.getState().forceOverwrite(tab.key);
+    useEditorStore.setState((state) => ({
+      tabs: state.tabs.map((candidate) =>
+        candidate.key === tab.key ? { ...candidate, dirty: false } : candidate,
+      ),
+    }));
+    await useEditorStore.getState().reconcileGitProjectFiles("alpha");
+
+    expect(fsRead).not.toHaveBeenCalled();
+    expect(fsWriteFile).not.toHaveBeenCalled();
+    expect(useEditorStore.getState().tabs[0]).toMatchObject({
+      tier: "image",
+      hydrated: false,
+      previewRevision: 1,
+    });
+  });
+
+  it("normalizes dirty preview tabs during Git reconciliation", async () => {
+    const tab = {
+      ...makeTab("alpha", "images/preview.png"),
+      name: "preview.png",
+      tier: "image" as const,
+      dirty: true,
+      saving: true,
+      conflicted: true,
+      stale: true,
+    };
+    useEditorStore.setState({ tabs: [tab], activeKeys: { alpha: tab.key } });
+
+    await useEditorStore
+      .getState()
+      .reconcileGitMutationFiles("alpha", [tab.path]);
+
+    expect(fsRead).not.toHaveBeenCalled();
+    expect(fsWriteFile).not.toHaveBeenCalled();
+    expect(useEditorStore.getState().tabs[0]).toMatchObject({
+      tier: "image",
+      dirty: false,
+      saving: false,
+      conflicted: false,
+      stale: false,
+      hydrated: false,
+      previewRevision: 1,
+    });
   });
 });

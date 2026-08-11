@@ -18,6 +18,7 @@ export interface TerminalAutoAttachInput {
   freeTerminalIndexMap: Map<string, number>;
   ignoredSessionIds?: Set<string>;
   pendingSessionIds?: Set<string>;
+  pinnedSessionIds?: Set<string>;
 }
 
 export interface TerminalAutoAttachState {
@@ -82,12 +83,14 @@ function tabForSession(
   session: SessionInfo,
   profileSessionIds: Set<string>,
   freeTerminalIndexMap: Map<string, number>,
+  isPinned = false,
 ): TabEntry {
   return {
     sessionId: session.id,
     label: sessionTabLabel(session, freeTerminalIndexMap),
     session,
     isSaveable: isAdHocProjectTerminal(session.id, profileSessionIds),
+    isPinned,
   };
 }
 
@@ -109,6 +112,7 @@ export function deriveTerminalAutoAttachState({
   freeTerminalIndexMap,
   ignoredSessionIds = new Set<string>(),
   pendingSessionIds = new Set<string>(),
+  pinnedSessionIds = new Set<string>(),
 }: TerminalAutoAttachInput): TerminalAutoAttachState {
   const liveSessions = sessions
     .filter(
@@ -139,12 +143,19 @@ export function deriveTerminalAutoAttachState({
         return {
           ...tab,
           ...tabForSession(session, profileSessionIds, freeTerminalIndexMap),
+          // An explicit unpin wins, but a pre-snapshot tab can hydrate a stored pin.
+          isPinned: tab.isPinned ?? pinnedSessionIds.has(session.id),
         };
       }),
     ...liveSessions
       .filter((session) => !existingTabIds.has(session.id))
       .map((session) =>
-        tabForSession(session, profileSessionIds, freeTerminalIndexMap),
+        tabForSession(
+          session,
+          profileSessionIds,
+          freeTerminalIndexMap,
+          pinnedSessionIds.has(session.id),
+        ),
       ),
   ];
 

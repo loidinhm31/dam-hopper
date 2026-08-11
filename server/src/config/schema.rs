@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 
+use crate::system::config::HostResourceMonitorConfig;
+
 // ──────────────────────────────────────────────
 // Project type
 // ──────────────────────────────────────────────
@@ -358,6 +360,8 @@ pub struct ServerConfig {
 
     #[serde(default)]
     pub telemetry: TelemetryConfig,
+    #[serde(default, alias = "host_resources")]
+    pub host_resources: HostResourceMonitorConfig,
 }
 
 impl Default for ServerConfig {
@@ -366,6 +370,7 @@ impl Default for ServerConfig {
             session_db_path: default_session_db_path(),
             session_buffer_ttl_hours: default_session_buffer_ttl_hours(),
             telemetry: TelemetryConfig::default(),
+            host_resources: HostResourceMonitorConfig::default(),
         }
     }
 }
@@ -476,6 +481,16 @@ pub enum TerminalCodexNotificationSoundPattern {
     Urgent,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExplorerLanguageFilter {
+    #[default]
+    All,
+    Rust,
+    JavascriptTypescript,
+    Java,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiConfig {
@@ -574,6 +589,12 @@ pub struct UiConfig {
     #[serde(default, alias = "explorer_show_hidden", alias = "explorerShowHidden")]
     pub explorer_show_hidden: bool,
     #[serde(
+        default,
+        alias = "explorer_language_filter",
+        alias = "explorerLanguageFilter"
+    )]
+    pub explorer_language_filter: ExplorerLanguageFilter,
+    #[serde(
         default = "default_true",
         alias = "mobile_custom_keyboard_enabled",
         alias = "mobileCustomKeyboardEnabled"
@@ -660,6 +681,7 @@ impl Default for UiConfig {
             terminal_codex_notification_sound_pattern:
                 TerminalCodexNotificationSoundPattern::default(),
             explorer_show_hidden: false,
+            explorer_language_filter: ExplorerLanguageFilter::default(),
             mobile_custom_keyboard_enabled: true,
             mobile_custom_keyboard_font_size: default_mobile_custom_keyboard_font_size(),
             mobile_custom_keyboard_padding: default_mobile_custom_keyboard_padding(),

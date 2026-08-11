@@ -19,7 +19,7 @@ import {
 } from "./client.js";
 import { logger } from "@dam-hopper/shared/logger";
 import {
-  buildAuthHeaders,
+  getActiveProfileId,
   getAuthToken,
   getServerUrl,
 } from "./server-config.js";
@@ -160,20 +160,8 @@ function usageRequestData(
   return record;
 }
 
-const USAGE_SUMMARY_KEYS = new Set([
-  "from",
-  "to",
-  "window",
-  "bucket",
-  "model",
-]);
-const USAGE_SESSION_KEYS = new Set([
-  "from",
-  "to",
-  "model",
-  "limit",
-  "cursor",
-]);
+const USAGE_SUMMARY_KEYS = new Set(["from", "to", "window", "bucket", "model"]);
+const USAGE_SESSION_KEYS = new Set(["from", "to", "model", "limit", "cursor"]);
 const USAGE_SETTINGS_KEYS = new Set([
   "enabled",
   "paused",
@@ -460,6 +448,11 @@ function channelToEndpoint(
       const d = data as { project: string; path: string };
       const params = new URLSearchParams({ project: d.project, path: d.path });
       return { method: "GET", url: `/api/fs/list?${params}` };
+    }
+    case "fs:languageFiles": {
+      const d = data as { project: string };
+      const params = new URLSearchParams({ project: d.project });
+      return { method: "GET", url: `/api/fs/language-files?${params}` };
     }
     case "fs:search": {
       const d = data as {
@@ -862,6 +855,15 @@ function channelToEndpoint(
     // System
     case "system:metrics":
       return { method: "GET", url: "/api/system/metrics" };
+    case "system:resourceSnapshot":
+      return { method: "GET", url: "/api/system/resources/v1/snapshot" };
+    case "system:resourceAlerts": {
+      const limit = (data as { limit?: number } | undefined)?.limit ?? 20;
+      return {
+        method: "GET",
+        url: `/api/system/resources/v1/alerts?limit=${encodeURIComponent(String(limit))}`,
+      };
+    }
 
     // Usage analytics (REST only; never sent to the terminal WebSocket).
     case "usage:summary": {
@@ -891,7 +893,11 @@ function channelToEndpoint(
       };
     }
     case "usage:session": {
-      const d = usageRequestData(data, USAGE_DETAIL_KEYS, "usage session detail");
+      const d = usageRequestData(
+        data,
+        USAGE_DETAIL_KEYS,
+        "usage session detail",
+      );
       if (typeof d.id !== "string" || d.id.length === 0) {
         throw new Error("Invalid usage session detail payload");
       }
@@ -979,6 +985,8 @@ export class WsTransport implements Transport {
   private closed = false;
   /** Aggregated message-kind counters for diagnostics (Phase 03). */
   private messageKindCounts = new Map<string, number>();
+  /** Token bound to this transport's URL/profile for its entire lifetime. */
+  private readonly authToken: string | null;
 
   private wsStatus: WsStatus = "connecting";
   private statusListeners = new Set<(status: WsStatus) => void>();
@@ -1187,8 +1195,17 @@ export class WsTransport implements Transport {
     }
   >();
 
-  constructor(private readonly baseUrl: string = getServerUrl()) {
+  constructor(
+    private readonly baseUrl: string = getServerUrl(),
+    private readonly profileId: string | undefined = getActiveProfileId() ??
+      undefined,
+  ) {
+    this.authToken = getAuthToken(this.profileId);
     this.connect();
+  }
+
+  private buildAuthHeaders(): Record<string, string> {
+    return this.authToken ? { Authorization: `Bearer ${this.authToken}` } : {};
   }
 
   private messageKindCountsSnapshot(): Record<string, number> {
@@ -1334,9 +1351,8 @@ export class WsTransport implements Transport {
       host = location.host;
     }
 
-    const token = getAuthToken();
-    const wsUrl = token
-      ? `${wsProto}//${host}/ws?token=${encodeURIComponent(token)}`
+    const wsUrl = this.authToken
+      ? `${wsProto}//${host}/ws?token=${encodeURIComponent(this.authToken)}`
       : `${wsProto}//${host}/ws`;
 
     const ws = new WebSocket(wsUrl);
@@ -1829,7 +1845,7 @@ export class WsTransport implements Transport {
       : relativeUrl;
 
     const headers: Record<string, string> = {
-      ...buildAuthHeaders(),
+      ...this.buildAuthHeaders(),
     };
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";
@@ -1889,7 +1905,10 @@ export class WsTransport implements Transport {
       `${this.baseUrl}/api/browser-debug/artifacts/${encodeURIComponent(artifactId)}/png`,
       {
         method: "PUT",
-        headers: { ...buildAuthHeaders(), "Content-Type": "image/png" },
+        headers: {
+          ...this.buildAuthHeaders(),
+          "Content-Type": "image/png",
+        },
         credentials: "include",
         body: png,
       },

@@ -3,8 +3,16 @@ import { logger } from "@dam-hopper/shared/logger";
 import { getTransport } from "@/api/transport.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import type { FsOpResult } from "@/api/fs-types.js";
-import { getServerUrl, getAuthToken } from "@/api/server-config.js";
+import {
+  getActiveProfile,
+  getAuthToken,
+  getServerUrl,
+} from "@/api/server-config.js";
 import { invalidateGitFileOperation } from "@/api/queries.js";
+import { isVideoFile } from "@/lib/video-file.js";
+import { startVideoDownload } from "@/lib/start-video-download.js";
+
+const MAX_BLOB_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 
 /**
  * Wraps transport.fsOp with query cache invalidation after each mutation.
@@ -83,19 +91,32 @@ export function useFsOps(project: string, subscribedPath: string) {
     return result;
   }
 
-  async function download(path: string): Promise<void> {
+  async function download(path: string, size?: number): Promise<void> {
+    if (isVideoFile(path)) {
+      await startVideoDownload(project, path);
+      return;
+    }
+    if (!Number.isFinite(size) || size === undefined) {
+      throw new Error("Cannot safely download a file with unknown size.");
+    }
+    if (size > MAX_BLOB_DOWNLOAD_BYTES) {
+      throw new Error(
+        "This file is too large for browser download. Use an external client.",
+      );
+    }
     const params = new URLSearchParams({ project, path });
-    const token = getAuthToken();
+    const profile = getActiveProfile();
+    const serverUrl = profile?.url ?? getServerUrl();
+    const token = getAuthToken(profile?.id);
     const headers: HeadersInit = {};
     if (token) {
       headers.Authorization = `Bearer ${token}`;
     }
 
     try {
-      const response = await fetch(
-        `${getServerUrl()}/api/fs/download?${params}`,
-        { headers },
-      );
+      const response = await fetch(`${serverUrl}/api/fs/download?${params}`, {
+        headers,
+      });
       if (!response.ok) {
         throw new Error(`Download failed: ${response.statusText}`);
       }

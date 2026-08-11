@@ -9,6 +9,8 @@ interface Props {
   /** Current directory for dropped files (relative path from project root). */
   currentDir: string;
   progress: UploadProgress | null;
+  /** Navigation-only projections must not accept filesystem drops. */
+  disabled?: boolean;
   className?: string;
 }
 
@@ -21,15 +23,20 @@ export function UploadDropzone({
   onDrop,
   currentDir,
   progress,
+  disabled = false,
   className,
 }: Props) {
   const [dragging, setDragging] = useState(false);
 
-  const handleDragOver = useCallback((e: DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
-    setDragging(true);
-  }, []);
+  const handleDragOver = useCallback(
+    (e: DragEvent) => {
+      if (disabled) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      setDragging(true);
+    },
+    [disabled],
+  );
 
   const handleDragLeave = useCallback(() => {
     setDragging(false);
@@ -37,12 +44,13 @@ export function UploadDropzone({
 
   const handleDrop = useCallback(
     (e: DragEvent) => {
+      if (disabled) return;
       e.preventDefault();
       setDragging(false);
       const files = Array.from(e.dataTransfer.files);
       if (files.length > 0) onDrop(currentDir, files);
     },
-    [currentDir, onDrop],
+    [currentDir, disabled, onDrop],
   );
 
   return (

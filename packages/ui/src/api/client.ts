@@ -1,6 +1,11 @@
 // Transport-agnostic API client — delegates through the active Transport singleton.
 import { getTransport } from "./transport.js";
-import type { FsListResponse, HealthResponse } from "./fs-types.js";
+import type {
+  ExplorerLanguageFilter,
+  FsListResponse,
+  HealthResponse,
+  LanguageFilesResponse,
+} from "./fs-types.js";
 import type { CommandHistoryEntry } from "@/lib/command-history.js";
 
 export class ApiRequestError extends Error {
@@ -209,6 +214,154 @@ export interface DiskMetrics {
   availableBytes: number;
   usedBytes: number;
   usagePercent: number;
+}
+
+// ── Host resource monitoring ────────────────────────────────────────────────
+
+export type AvailabilityState =
+  | "available"
+  | "unsupported"
+  | "permissionDenied"
+  | "temporarilyUnavailable"
+  | "stale";
+
+export interface Availability {
+  state: AvailabilityState;
+  sampledAt: number;
+  detailCode?: string | null;
+}
+
+export type AlertState =
+  | "healthy"
+  | "reclaimableCacheHigh"
+  | "elevatedNoPressure"
+  | "memoryPressure"
+  | "oomRisk"
+  | "limitedData";
+
+export type AlertSeverity = "info" | "warning" | "critical";
+export type Confidence = "low" | "medium" | "high";
+
+export interface HostResourceAlertEvidence {
+  availablePercent?: number | null;
+  reclaimablePercent?: number | null;
+  psiSomeAvg10?: number | null;
+  psiFullAvg10?: number | null;
+  cgroupOomDelta: boolean;
+}
+
+export interface HostResourceAlert {
+  state: AlertState;
+  severity: AlertSeverity;
+  incidentId?: string | null;
+  openedAt?: number | null;
+  updatedAt: number;
+  durationSeconds: number;
+  scope: string;
+  confidence: Confidence;
+  threshold: string;
+  evidence: HostResourceAlertEvidence;
+  nextAction: string;
+}
+
+export interface HostResourceAlertIncident extends HostResourceAlert {
+  incidentId: string;
+  openedAt: number;
+  resolvedAt?: number | null;
+}
+
+export interface MemoryPressure {
+  some?:
+    | { avg10: number; avg60: number; avg300: number; totalMicros: number }
+    | null;
+  full?:
+    | { avg10: number; avg60: number; avg300: number; totalMicros: number }
+    | null;
+  availability: Availability;
+}
+
+export interface CacheAttribution {
+  label:
+    | "systemFileCache"
+    | "cgroupFileCache"
+    | "processFileRss"
+    | "mountFileMappings"
+    | "unattributedSharedCache";
+  bytes?: number | null;
+  confidence: Confidence;
+  method: string;
+}
+
+export interface HostResourceSnapshotV1 {
+  schemaVersion: 1;
+  sampleId: string;
+  sampledAt: number;
+  host: {
+    bootId?: string | null;
+    hostname?: string | null;
+    osName?: string | null;
+  };
+  capabilities: { linuxDeepMetrics: Availability };
+  memory: {
+    totalBytes?: number | null;
+    availableBytes?: number | null;
+    anonBytes?: number | null;
+    fileCacheBytes?: number | null;
+    reclaimableSlabBytes?: number | null;
+    swapUsedBytes?: number | null;
+    availability: Availability;
+  };
+  pressure: {
+    memory: MemoryPressure;
+  };
+  cgroups: Array<{
+    path: string;
+    namespace: string;
+    currentBytes?: number | null;
+    maxBytes?: number | null;
+    maxUnlimited: boolean;
+    highBytes?: number | null;
+    highUnlimited: boolean;
+    fileCacheBytes?: number | null;
+    events: Array<[string, number]>;
+    pressure: MemoryPressure;
+    availability: Availability;
+  }>;
+  processes: {
+    processes: Array<{
+      pid: number;
+      startTicks?: number | null;
+      uid?: number | null;
+      name: string;
+      commandSummary?: string | null;
+      rssBytes?: number | null;
+      anonRssBytes?: number | null;
+      fileRssBytes?: number | null;
+      shmemRssBytes?: number | null;
+      pssBytes?: number | null;
+      availability: Availability;
+    }>;
+    scannedCount: number;
+    truncated: boolean;
+    deadlineExceeded: boolean;
+    skippedCount: number;
+    permissionDeniedCount: number;
+    invalidUtf8Count: number;
+    malformedCount: number;
+    disappearedCount: number;
+    availability: Availability;
+  };
+  mountContext: {
+    mountPoint: string;
+    fsType?: string | null;
+    freeBytes?: number | null;
+    activeMappedPaths: string[];
+    activeMappedPathsAvailability: Availability;
+    cacheAttribution: CacheAttribution;
+    availability: Availability;
+  };
+  alert?: HostResourceAlert | null;
+  actionCapabilities: { availability: Availability };
 }
 
 export interface DiagnosticExportRequest {
@@ -605,6 +758,7 @@ export interface UiConfig {
   terminalCommitStatusEnabled?: boolean;
   terminalScrollStep?: number;
   explorerShowHidden?: boolean;
+  explorerLanguageFilter?: ExplorerLanguageFilter;
   mobileCustomKeyboardEnabled?: boolean;
   mobileCustomKeyboardFontSize?: number;
   mobileCustomKeyboardPadding?: number;
@@ -1293,6 +1447,15 @@ export const api = {
   },
   system: {
     metrics: () => getTransport().invoke<HostMetrics>("system:metrics"),
+    resourceSnapshot: () =>
+      getTransport().invoke<HostResourceSnapshotV1>("system:resourceSnapshot"),
+    resourceAlerts: (limit = 20) =>
+      getTransport().invoke<HostResourceAlertIncident[]>(
+        "system:resourceAlerts",
+        {
+          limit,
+        },
+      ),
   },
   usage: {
     summary: (query: UsageSummaryQuery = {}) =>
@@ -1320,6 +1483,10 @@ export const api = {
   fs: {
     list: (project: string, path: string) =>
       getTransport().invoke<FsListResponse>("fs:list", { project, path }),
+    languageFiles: (project: string) =>
+      getTransport().invoke<LanguageFilesResponse>("fs:languageFiles", {
+        project,
+      }),
   },
   tunnels: {
     list: () => getTransport().invoke<TunnelInfo[]>("tunnel:list"),

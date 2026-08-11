@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { X, Plus, Server, Check, Trash2, Edit2 } from "lucide-react";
 import type { ServerProfile } from "@/api/server-config.js";
 import {
@@ -8,13 +7,13 @@ import {
   setActiveProfile,
   deleteProfile,
 } from "@/api/server-config.js";
-import { reinitializeTransport } from "@/api/transport-utils.js";
+import { useHostResourceAlertPresentationStore } from "@/hooks/use-host-resource-alert-presentation.js";
 
 interface Props {
   open: boolean;
   onClose: () => void;
   onEditProfile: (profile: ServerProfile | null) => void;
-  onSwitchProfile: (profile: ServerProfile) => void;
+  onSwitchProfile?: (profile: ServerProfile) => void;
 }
 
 export function ServerProfilesDialog({
@@ -24,7 +23,6 @@ export function ServerProfilesDialog({
   onSwitchProfile,
 }: Props) {
   const [, refreshProfiles] = useState(0);
-  const queryClient = useQueryClient();
 
   if (!open) return null;
 
@@ -32,21 +30,21 @@ export function ServerProfilesDialog({
   const activeId = getActiveProfileId();
 
   function handleSwitch(profile: ServerProfile) {
-    setActiveProfile(profile.id);
-    onSwitchProfile(profile);
+    if (!setActiveProfile(profile.id)) {
+      alert("Unable to switch server profiles in this browser");
+      return;
+    }
+    onSwitchProfile?.(profile);
+    useHostResourceAlertPresentationStore.getState().reset();
     onClose();
-
-    // Reinitialize transport with new server URL (without page reload)
-    reinitializeTransport(profile.url);
-
-    // Invalidate all queries to refetch data from the new server
-    void queryClient.invalidateQueries();
-    void queryClient.resetQueries();
   }
 
   function handleDelete(id: string) {
     if (!confirm("Delete this server profile?")) return;
-    deleteProfile(id);
+    if (!deleteProfile(id)) {
+      alert("Unable to delete the profile safely in this browser");
+      return;
+    }
     refreshProfiles((version) => version + 1);
   }
 

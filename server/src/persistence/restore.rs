@@ -155,6 +155,7 @@ mod tests {
                 session_db_path: "test.db".to_string(),
                 session_buffer_ttl_hours: 24,
                 telemetry: crate::config::TelemetryConfig::default(),
+                host_resources: crate::config::HostResourceMonitorConfig::default(),
             },
             projects: vec![ProjectConfig {
                 name: "test-project".to_string(),

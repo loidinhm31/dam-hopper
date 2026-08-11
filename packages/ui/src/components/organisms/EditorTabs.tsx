@@ -15,10 +15,15 @@ import { useEditorStore } from "@/stores/editor.js";
 import { EditorTab } from "@/components/molecules/EditorTab.js";
 import { LargeFileViewer } from "@/components/organisms/LargeFileViewer.js";
 import { BinaryPreview } from "@/components/organisms/BinaryPreview.js";
+import { VideoPreview } from "@/components/organisms/VideoPreview.js";
+import { ImagePreview } from "@/components/organisms/ImagePreview.js";
 import { DiffViewer } from "@/components/organisms/DiffViewer.js";
 import { ConflictDialog } from "@/components/organisms/ConflictDialog.js";
 import { EditorStatusBar } from "@/components/organisms/EditorStatusBar.js";
 import { mimeToLanguage } from "@/lib/mime-to-language.js";
+import { isPreviewOnlyFile } from "@/lib/file-tier.js";
+import { imageMimeType, isImagePreviewCandidate } from "@/lib/image-file.js";
+import { isVideoPreviewCandidate, videoMimeType } from "@/lib/video-file.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useEncryptedWrite } from "@/hooks/use-encrypted-write.js";
 import { LockToggle } from "@/components/atoms/LockToggle.js";
@@ -91,6 +96,7 @@ export function EditorTabs({ project }: { project: string | null }) {
         return;
       }
       if (!tab) return;
+      if (isPreviewOnlyFile(tab.tier, tab.name)) return;
       if (!tab.path) return save(key);
 
       // If a session is already cached the AES key is live — no passphrase needed
@@ -136,6 +142,15 @@ export function EditorTabs({ project }: { project: string | null }) {
   const projectTabs = project ? tabs.filter((t) => t.project === project) : [];
   const activeKey = project ? activeKeys[project] : null;
   const activeTab = projectTabs.find((t) => t.key === activeKey) ?? null;
+  // Older persisted tabs predate the video tier. Route by the closed extension
+  // contract before any viewer can mount and trigger a legacy fsRead.
+  const activeIsVideo = Boolean(
+    activeTab && isVideoPreviewCandidate(activeTab.tier, activeTab.name),
+  );
+  const activeIsImage = Boolean(
+    activeTab && isImagePreviewCandidate(activeTab.tier, activeTab.name),
+  );
+  const activeIsPreviewOnly = activeIsVideo || activeIsImage;
   const gitIndex = buildGitFileStateIndex(gitDiff?.entries);
   const activeGitState =
     activeTab && activeTab.tier !== "diff"
@@ -247,7 +262,23 @@ export function EditorTabs({ project }: { project: string | null }) {
       {/* Editor area + status bar */}
       <div className="flex-1 overflow-hidden flex flex-col min-h-0">
         <div className="flex-1 overflow-hidden relative">
-          {activeTab === null ? (
+          {activeIsVideo && activeTab ? (
+            <VideoPreview
+              key={`${activeTab.key}:${activeTab.previewRevision ?? 0}`}
+              project={activeTab.project}
+              path={activeTab.path}
+              fileName={activeTab.name}
+              mime={activeTab.mime ?? videoMimeType(activeTab.name)}
+            />
+          ) : activeIsImage && activeTab ? (
+            <ImagePreview
+              key={`${activeTab.key}:${activeTab.previewRevision ?? 0}`}
+              project={activeTab.project}
+              path={activeTab.path}
+              fileName={activeTab.name}
+              mime={activeTab.mime ?? imageMimeType(activeTab.name)}
+            />
+          ) : activeTab === null ? (
             <div className="h-full flex items-center justify-center text-xs text-[var(--color-text-muted)]">
               No file open
             </div>
@@ -335,14 +366,14 @@ export function EditorTabs({ project }: { project: string | null }) {
           )}
 
           {/* Saving overlay */}
-          {activeTab?.saving && (
+          {activeTab?.saving && !activeIsPreviewOnly && (
             <div className="absolute top-2 right-3 flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)]">
               <Loader2 className="h-3 w-3 animate-spin" />
               Saving…
             </div>
           )}
 
-          {activeTab?.stale && activeTab.dirty && (
+          {!activeIsPreviewOnly && activeTab?.stale && activeTab.dirty && (
             <div className="absolute bottom-2 left-3 right-3 flex items-center justify-between gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[10px] text-amber-300 shadow-lg">
               <span className="truncate">
                 File changed on disk while this tab has unsaved edits.
@@ -371,6 +402,7 @@ export function EditorTabs({ project }: { project: string | null }) {
         {activeTab &&
           activeTab.tier !== "binary" &&
           activeTab.tier !== "large" &&
+          !activeIsPreviewOnly &&
           !/\.mdx?$/i.test(activeTab.name) && (
             <EditorStatusBar
               editor={activeEditor}
@@ -382,7 +414,7 @@ export function EditorTabs({ project }: { project: string | null }) {
       </div>
 
       {/* Conflict dialog */}
-      {activeTab && (
+      {activeTab && !activeIsPreviewOnly && (
         <ConflictDialog
           open={activeTab.conflicted}
           fileName={activeTab.name}

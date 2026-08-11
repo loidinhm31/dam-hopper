@@ -6,7 +6,7 @@ use tower::ServiceExt;
 
 use crate::{
     agent_store::AgentStoreService,
-    api::build_router,
+    api::{build_router, router::build_router_with_web_dir},
     config::{
         DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo,
     },
@@ -332,6 +332,46 @@ async fn system_metrics_requires_auth() {
 }
 
 #[tokio::test]
+async fn host_action_capabilities_are_protected_and_fail_closed_without_reauth() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let unauthorized = get_without_auth(state.clone(), "/api/system/actions/v1/capabilities").await;
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let available = get(state, "/api/system/actions/v1/capabilities").await;
+    assert_eq!(available.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(available.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["available"], false);
+    assert_eq!(json["reason"], "reauthUnavailable");
+}
+
+#[tokio::test]
+async fn host_action_cookie_mutations_require_a_same_origin_json_request() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let router = build_router(state, vec![]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/system/actions/v1/intents")
+        .header("Content-Type", "application/json")
+        .header("Cookie", auth_cookie())
+        .body(Body::from(
+            serde_json::json!({
+                "action": {"kind": "dropCleanCaches"},
+                "sampleId": "sample"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn system_metrics_returns_sane_json() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
@@ -354,6 +394,99 @@ async fn system_metrics_returns_sane_json() {
     assert!(json["disk"]["usagePercent"].as_f64().unwrap() >= 0.0);
     assert!(json["disks"].as_array().is_some());
     assert!(json["temperatures"].as_array().is_some());
+}
+
+#[tokio::test]
+async fn legacy_metrics_remain_cached_when_deep_snapshot_is_unavailable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let snapshot = get(state.clone(), "/api/system/resources/v1/snapshot").await;
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    let snapshot = axum::body::to_bytes(snapshot.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let snapshot: serde_json::Value = serde_json::from_slice(&snapshot).unwrap();
+    assert_eq!(
+        snapshot["capabilities"]["linuxDeepMetrics"]["state"],
+        "temporarilyUnavailable"
+    );
+
+    let first = get(state.clone(), "/api/system/metrics").await;
+    let second = get(state, "/api/system/metrics").await;
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::OK);
+    let first = axum::body::to_bytes(first.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let second = axum::body::to_bytes(second.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let first: serde_json::Value = serde_json::from_slice(&first).unwrap();
+    let second: serde_json::Value = serde_json::from_slice(&second).unwrap();
+    assert_eq!(
+        first, second,
+        "legacy endpoint must project the monitor cache"
+    );
+    assert!(first["cpu"]["usagePercent"].is_number());
+    assert!(first["memory"]["availableBytes"].is_number());
+    assert!(first["disk"]["usagePercent"].is_number());
+}
+
+#[tokio::test]
+async fn package_router_serves_spa_without_masking_unknown_api_routes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let web_dir = tempfile::tempdir().unwrap();
+    std::fs::write(web_dir.path().join("index.html"), "<h1>DamHopper</h1>").unwrap();
+    let router = build_router_with_web_dir(make_state(&tmp), vec![], web_dir.path().into());
+
+    let index = router
+        .clone()
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(index.status(), StatusCode::OK);
+    let index = axum::body::to_bytes(index.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(index.as_ref(), b"<h1>DamHopper</h1>");
+
+    for path in ["/api", "/api/", "/api/not-a-real-route"] {
+        let api_miss = router
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(api_miss.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn resource_snapshot_and_alerts_are_protected_and_bounded() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let unauthorized = get_without_auth(state.clone(), "/api/system/resources/v1/snapshot").await;
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let snapshot = get(state.clone(), "/api/system/resources/v1/snapshot").await;
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(snapshot.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(body.len() <= 256 * 1024);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["schemaVersion"], 1);
+    assert!(json["alert"].is_object());
+    assert_eq!(json["alert"]["scope"], "host");
+
+    let alerts = get(state, "/api/system/resources/v1/alerts?limit=999").await;
+    assert_eq!(alerts.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(alerts.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json.as_array().is_some_and(|items| items.len() <= 50));
 }
 
 #[tokio::test]
@@ -1493,6 +1626,57 @@ async fn fs_rest_validates_against_selected_project_root() {
     assert_eq!(missing_resp.status(), StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn language_files_returns_normalized_contract_and_enforces_project_boundary() {
+    let registry_tmp = tempfile::tempdir().unwrap();
+    let projects_tmp = tempfile::tempdir().unwrap();
+    let alpha = projects_tmp.path().join("alpha");
+    let beta = projects_tmp.path().join("beta");
+    std::fs::create_dir_all(alpha.join("src")).unwrap();
+    std::fs::create_dir_all(&beta).unwrap();
+    std::fs::write(alpha.join("src/main.RS"), "fn main() {}\n").unwrap();
+    std::fs::write(alpha.join("notes.txt"), "not source\n").unwrap();
+
+    let state = make_state_with_project_roots(
+        &registry_tmp,
+        vec![("alpha", alpha.as_path()), ("beta", beta.as_path())],
+    );
+
+    let response = get(state.clone(), "/api/fs/language-files?project=alpha").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["limit"], crate::fs::ops::MAX_LANGUAGE_SCAN_FILES);
+    assert_eq!(json["truncated"], false);
+    assert_eq!(json["files"].as_array().unwrap().len(), 1);
+    assert_eq!(json["files"][0]["path"], "src/main.RS");
+    assert_eq!(json["files"][0]["language"], "rust");
+    assert!(json["files"][0]["size"].is_u64());
+    assert!(json["files"][0]["mtime"].is_i64());
+    assert!(!bytes
+        .windows(alpha.to_string_lossy().len())
+        .any(|window| { window == alpha.to_string_lossy().as_bytes() }));
+
+    let empty = get(state.clone(), "/api/fs/language-files?project=beta").await;
+    assert_eq!(empty.status(), StatusCode::OK);
+    let empty_json: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(empty.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(empty_json["files"], serde_json::json!([]));
+
+    let missing = get(state.clone(), "/api/fs/language-files?project=missing").await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    let malformed = get(state.clone(), "/api/fs/language-files").await;
+    assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+    let unauthenticated = get_without_auth(state, "/api/fs/language-files?project=alpha").await;
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+}
+
 fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
     let mut project = test_project_config(&workspace_dir);
@@ -2568,10 +2752,7 @@ async fn usage_settings_retry_collector_failure_restores_previous_runtime_and_co
     )
     .await;
     assert_eq!(retry.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        state.config.read().await.server.telemetry,
-        previous_config
-    );
+    assert_eq!(state.config.read().await.server.telemetry, previous_config);
     assert_eq!(
         std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap(),
         previous_file
@@ -2710,6 +2891,19 @@ fn merge_global_ui_config_rejects_invalid_notification_sound_pattern() {
         Some(crate::config::schema::UiConfig::default()),
         &serde_json::json!({
             "terminalCodexNotificationSoundPattern": "bell",
+        }),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+}
+
+#[test]
+fn merge_global_ui_config_rejects_invalid_explorer_language_filter() {
+    let err = crate::api::config::merge_global_ui_config(
+        Some(crate::config::schema::UiConfig::default()),
+        &serde_json::json!({
+            "explorerLanguageFilter": "python",
         }),
     )
     .unwrap_err();
@@ -3497,4 +3691,924 @@ async fn git_delete_branch_blocks_checked_out_branch() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["ok"], false);
     assert_eq!(json["blockedReason"], "checked-out-branch");
+}
+
+// ---------------------------------------------------------------------------
+// Purpose-bound video ticket API
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn video_tickets_are_opaque_purpose_bound_and_independently_revocable() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("clip.WEBM"),
+        b"not media, only metadata is needed",
+    )
+    .unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let playback = post_json(
+        state.clone(),
+        "/api/fs/video/tickets",
+        serde_json::json!({
+            "project": "test-project",
+            "path": "clip.WEBM",
+            "purpose": "playback"
+        }),
+    )
+    .await;
+    assert_eq!(playback.status(), StatusCode::CREATED);
+    assert_eq!(playback.headers()["cache-control"], "no-store");
+    let playback: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(playback.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let playback_ticket = playback["ticket"].as_str().unwrap().to_owned();
+    assert_eq!(playback["purpose"], "playback");
+    assert_eq!(
+        playback["streamPath"],
+        format!("/api/fs/video/stream/{playback_ticket}")
+    );
+    assert!(!playback.to_string().contains("test-project"));
+    assert!(!playback.to_string().contains("clip.WEBM"));
+
+    let download = post_json(
+        state.clone(),
+        "/api/fs/video/tickets",
+        serde_json::json!({
+            "project": "test-project",
+            "path": "clip.WEBM",
+            "purpose": "download"
+        }),
+    )
+    .await;
+    assert_eq!(download.status(), StatusCode::CREATED);
+    let download: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(download.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let download_ticket = download["ticket"].as_str().unwrap();
+    assert_ne!(playback_ticket, download_ticket);
+    assert_eq!(
+        state
+            .video_stream_tickets
+            .lookup_and_touch(download_ticket)
+            .unwrap()
+            .purpose,
+        crate::fs::VideoTicketPurpose::Download
+    );
+
+    let revoked = delete_json(
+        state.clone(),
+        "/api/fs/video/tickets",
+        serde_json::json!({ "ticket": playback_ticket }),
+    )
+    .await;
+    assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
+    assert!(state
+        .video_stream_tickets
+        .lookup_and_touch(&playback_ticket)
+        .is_none());
+    assert!(state
+        .video_stream_tickets
+        .lookup_and_touch(download_ticket)
+        .is_some());
+
+    let revoked_again = delete_json(
+        state,
+        "/api/fs/video/tickets",
+        serde_json::json!({ "ticket": playback_ticket }),
+    )
+    .await;
+    assert_eq!(revoked_again.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn video_ticket_issuance_requires_auth_and_rejects_non_video_or_unsafe_paths() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("document.txt"), "text").unwrap();
+    std::fs::create_dir(tmp.path().join("folder.mov")).unwrap();
+    let state = make_state_with_project(&tmp);
+    let body = serde_json::json!({
+        "project": "test-project",
+        "path": "document.txt",
+        "purpose": "playback"
+    });
+
+    assert_eq!(
+        post_json_without_auth(state.clone(), "/api/fs/video/tickets", body.clone())
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        post_json(state.clone(), "/api/fs/video/tickets", body)
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        post_json(
+            state.clone(),
+            "/api/fs/video/tickets",
+            serde_json::json!({
+                "project": "test-project",
+                "path": "folder.mov",
+                "purpose": "download"
+            }),
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        post_json(
+            state.clone(),
+            "/api/fs/video/tickets",
+            serde_json::json!({
+                "project": "test-project",
+                "path": "../escape.webm",
+                "purpose": "playback"
+            }),
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        post_json(
+            state,
+            "/api/fs/video/tickets",
+            serde_json::json!({
+                "project": "test-project",
+                "path": "document.txt",
+                "purpose": "preview"
+            }),
+        )
+        .await
+        .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+}
+
+#[tokio::test]
+async fn video_ticket_capacity_returns_retryable_structured_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let video = tmp.path().join("clip.webm");
+    std::fs::write(&video, b"metadata-only").unwrap();
+    let state = make_state_with_project(&tmp);
+    let canonical = std::fs::canonicalize(&video).unwrap();
+    let metadata = std::fs::metadata(&canonical).unwrap();
+
+    for _ in 0..crate::fs::video_ticket::MAX_VIDEO_TICKETS {
+        let record = crate::fs::VideoTicketRecord {
+            purpose: crate::fs::VideoTicketPurpose::Playback,
+            project: "test-project".into(),
+            project_relative_path: "clip.webm".into(),
+            file: crate::fs::VideoFileVersion::from_metadata(canonical.clone(), &metadata).unwrap(),
+            mime: "video/webm".into(),
+            filename: "clip.webm".into(),
+        };
+        assert!(matches!(
+            state
+                .video_stream_tickets
+                .issue(state.video_stream_tickets.generation(), record),
+            crate::fs::video_ticket::VideoTicketIssue::Issued(_)
+        ));
+    }
+
+    let response = post_json(
+        state,
+        "/api/fs/video/tickets",
+        serde_json::json!({
+            "project": "test-project",
+            "path": "clip.webm",
+            "purpose": "download"
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers()["retry-after"], "1");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "VIDEO_TICKET_CAPACITY");
+}
+
+#[tokio::test]
+async fn workspace_reinitialization_revokes_every_media_ticket() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"metadata-only").unwrap();
+    std::fs::write(tmp.path().join("cover.png"), b"metadata-only").unwrap();
+    let state = make_state_with_project(&tmp);
+    let issued = post_json(
+        state.clone(),
+        "/api/fs/video/tickets",
+        serde_json::json!({
+            "project": "test-project",
+            "path": "clip.webm",
+            "purpose": "playback"
+        }),
+    )
+    .await;
+    let issued: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(issued.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let ticket = issued["ticket"].as_str().unwrap().to_owned();
+    let image_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
+
+    let reinitialized = super::workspace::init_workspace(
+        axum::extract::State(state.clone()),
+        axum::Json(super::workspace::PathBody {
+            path: tmp.path().display().to_string(),
+        }),
+    )
+    .await;
+    assert!(reinitialized.is_ok());
+
+    assert!(state
+        .video_stream_tickets
+        .lookup_and_touch(&ticket)
+        .is_none());
+    assert!(state
+        .image_stream_tickets
+        .lookup_and_touch(&image_ticket)
+        .is_none());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn video_ticket_issuance_rejects_fifo_before_opening_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fifo = tmp.path().join("trap.mp4");
+    let status = Command::new("mkfifo").arg(&fifo).status().unwrap();
+    assert!(status.success());
+    let state = make_state_with_project(&tmp);
+
+    let response = post_json(
+        state,
+        "/api/fs/video/tickets",
+        serde_json::json!({
+            "project": "test-project",
+            "path": "trap.mp4",
+            "purpose": "playback"
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+async fn issue_video_stream_ticket(state: AppState, path: &str, purpose: &str) -> String {
+    let response = post_json(
+        state,
+        "/api/fs/video/tickets",
+        serde_json::json!({
+            "project": "test-project",
+            "path": path,
+            "purpose": purpose,
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice::<serde_json::Value>(&body).unwrap()["ticket"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn stream_video(
+    state: AppState,
+    ticket: &str,
+    method: &str,
+    headers: &[(&str, &str)],
+) -> axum::response::Response {
+    let router = build_router(state, vec![]);
+    let mut request = Request::builder()
+        .method(method)
+        .uri(format!("/api/fs/video/stream/{ticket}"))
+        .body(Body::empty())
+        .unwrap();
+    for (name, value) in headers {
+        request.headers_mut().append(
+            name.parse::<axum::http::HeaderName>().unwrap(),
+            value.parse().unwrap(),
+        );
+    }
+    router.oneshot(request).await.unwrap()
+}
+
+#[tokio::test]
+async fn video_stream_uses_one_range_core_for_inline_and_attachment_purposes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let filename = "clip space.webm";
+    std::fs::write(tmp.path().join(filename), b"0123456789").unwrap();
+    let state = make_state_with_project(&tmp);
+    let playback = issue_video_stream_ticket(state.clone(), filename, "playback").await;
+    let download = issue_video_stream_ticket(state.clone(), filename, "download").await;
+
+    let (playback, download) = tokio::join!(
+        stream_video(state.clone(), &playback, "GET", &[("range", "bytes=2-4")]),
+        stream_video(state, &download, "GET", &[("range", "bytes=2-4")]),
+    );
+    assert_eq!(playback.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(playback.headers()["content-range"], "bytes 2-4/10");
+    assert_eq!(playback.headers()["content-length"], "3");
+    assert_eq!(playback.headers()["content-disposition"], "inline");
+    assert_eq!(
+        axum::body::to_bytes(playback.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+        "234"
+    );
+    assert_eq!(download.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        download.headers()["content-disposition"],
+        "attachment; filename=\"clip_space.webm\"; filename*=UTF-8''clip%20space.webm"
+    );
+    assert_eq!(
+        axum::body::to_bytes(download.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+        "234"
+    );
+}
+
+#[tokio::test]
+async fn video_stream_head_ignores_range_and_if_range_mismatch_falls_back_to_full_body() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"0123456789").unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+
+    let head = stream_video(
+        state.clone(),
+        &ticket,
+        "HEAD",
+        &[("range", "bytes=2-4"), ("if-range", "not-a-validator")],
+    )
+    .await;
+    assert_eq!(head.status(), StatusCode::OK);
+    assert_eq!(head.headers()["content-length"], "10");
+    assert!(head.headers().get("content-range").is_none());
+    assert_eq!(
+        axum::body::to_bytes(head.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
+
+    let full = stream_video(
+        state,
+        &ticket,
+        "GET",
+        &[("range", "bytes=2-4"), ("if-range", "not-a-validator")],
+    )
+    .await;
+    assert_eq!(full.status(), StatusCode::OK);
+    assert_eq!(full.headers()["content-length"], "10");
+    assert_eq!(
+        axum::body::to_bytes(full.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+        "0123456789"
+    );
+}
+
+#[tokio::test]
+async fn video_stream_serves_zero_byte_files_but_rejects_zero_byte_ranges() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::File::create(tmp.path().join("empty.webm")).unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_video_stream_ticket(state.clone(), "empty.webm", "playback").await;
+
+    let full = stream_video(state.clone(), &ticket, "GET", &[]).await;
+    assert_eq!(full.status(), StatusCode::OK);
+    assert_eq!(full.headers()["content-length"], "0");
+    assert!(axum::body::to_bytes(full.into_body(), 1)
+        .await
+        .unwrap()
+        .is_empty());
+
+    let range = stream_video(state, &ticket, "GET", &[("range", "bytes=0-0")]).await;
+    assert_eq!(range.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(range.headers()["content-range"], "bytes */0");
+}
+
+#[tokio::test]
+async fn video_stream_rejects_invalid_ranges_without_disclosing_filename_or_type() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"0123456789").unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "download").await;
+
+    for headers in [
+        vec![("range", "bytes=-0")],
+        vec![("range", "bytes=0-1,2-3")],
+        vec![("range", "bytes=0-1"), ("range", "bytes=2-3")],
+    ] {
+        let response = stream_video(state.clone(), &ticket, "GET", &headers).await;
+        assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        assert_eq!(response.headers()["content-length"], "0");
+        assert_eq!(response.headers()["content-range"], "bytes */10");
+        assert!(response.headers().get("content-type").is_none());
+        assert!(response.headers().get("content-disposition").is_none());
+    }
+}
+
+#[tokio::test]
+async fn video_stream_revokes_stale_files_and_handles_sparse_ranges_without_full_buffering() {
+    let tmp = tempfile::tempdir().unwrap();
+    let stale = tmp.path().join("stale.webm");
+    std::fs::write(&stale, b"old").unwrap();
+    let state = make_state_with_project(&tmp);
+    let stale_ticket = issue_video_stream_ticket(state.clone(), "stale.webm", "playback").await;
+    std::fs::write(stale, b"replacement").unwrap();
+    let stale = stream_video(state.clone(), &stale_ticket, "GET", &[]).await;
+    assert_eq!(stale.status(), StatusCode::GONE);
+    for name in [
+        axum::http::header::ACCEPT_RANGES,
+        axum::http::header::CONTENT_TYPE,
+        axum::http::header::CONTENT_RANGE,
+        axum::http::header::CONTENT_DISPOSITION,
+        axum::http::header::ETAG,
+        axum::http::header::LAST_MODIFIED,
+        axum::http::header::CACHE_CONTROL,
+    ] {
+        assert!(stale.headers().get(name).is_none());
+    }
+    assert_eq!(stale.headers()[axum::http::header::CONTENT_LENGTH], "0");
+    assert!(axum::body::to_bytes(stale.into_body(), 1)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        stream_video(state.clone(), &stale_ticket, "GET", &[])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let sparse_size = 3_u64 * 1024 * 1024 * 1024;
+    let sparse = tmp.path().join("large.webm");
+    std::fs::File::create(&sparse)
+        .unwrap()
+        .set_len(sparse_size)
+        .unwrap();
+    let sparse_ticket = issue_video_stream_ticket(state.clone(), "large.webm", "playback").await;
+    let response = stream_video(
+        state,
+        &sparse_ticket,
+        "GET",
+        &[("range", "bytes=3221225471-3221225471")],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(response.headers()["content-length"], "1");
+    let bytes = axum::body::to_bytes(response.into_body(), 2).await.unwrap();
+    assert_eq!(bytes.as_ref(), &[0]);
+}
+
+#[tokio::test]
+async fn video_stream_is_capability_authorized_and_exposes_media_headers_to_browsers() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"x").unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+    let response = stream_video(
+        state.clone(),
+        &ticket,
+        "GET",
+        &[("origin", "https://browser.example")],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers()["access-control-expose-headers"]
+        .to_str()
+        .unwrap()
+        .contains("content-range"));
+    assert_eq!(
+        stream_video(state, "unknown", "GET", &[]).await.status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Capability-bound image preview API
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn image_tickets_use_a_closed_allowlist_and_fixed_preview_contract() {
+    let tmp = tempfile::tempdir().unwrap();
+    for extension in ["png", "JPG", "jpeg", "gif", "WEBP"] {
+        std::fs::write(
+            tmp.path().join(format!("preview.{extension}")),
+            b"image bytes",
+        )
+        .unwrap();
+    }
+    let state = make_state_with_project(&tmp);
+
+    for extension in ["png", "JPG", "jpeg", "gif", "WEBP"] {
+        let path = format!("preview.{extension}");
+        let response = post_json(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "project": "test-project", "path": path.clone() }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let ticket = json["ticket"].as_str().unwrap();
+        assert_eq!(json["purpose"], "preview");
+        assert_eq!(json["streamPath"], format!("/api/fs/image/stream/{ticket}"));
+        assert!(!json.to_string().contains("test-project"));
+        assert!(!json.to_string().contains(&path));
+    }
+}
+
+#[tokio::test]
+async fn image_ticket_capacity_is_shared_and_has_image_specific_error_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("preview.png"), b"image bytes").unwrap();
+    let state = make_state_with_project(&tmp);
+    for _ in 0..crate::fs::image_ticket::MAX_IMAGE_TICKETS {
+        let response = post_json(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "project": "test-project", "path": "preview.png" }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    let response = post_json(
+        state,
+        "/api/fs/image/tickets",
+        serde_json::json!({ "project": "test-project", "path": "preview.png" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers()["retry-after"], "1");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "IMAGE_TICKET_CAPACITY");
+    assert_eq!(json["error"], "image ticket capacity reached");
+}
+
+#[tokio::test]
+async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("document.svg"), b"svg").unwrap();
+    std::fs::write(tmp.path().join("document.avif"), b"avif").unwrap();
+    std::fs::create_dir(tmp.path().join("folder.png")).unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let body = serde_json::json!({ "project": "test-project", "path": "document.svg" });
+    assert_eq!(
+        post_json_without_auth(state.clone(), "/api/fs/image/tickets", body.clone())
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    for path in ["document.svg", "document.avif", "folder.png"] {
+        let response = post_json(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "project": "test-project", "path": path }),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            if path == "folder.png" {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_REQUEST
+            }
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains(path));
+    }
+    let traversal = post_json(
+        state,
+        "/api/fs/image/tickets",
+        serde_json::json!({ "project": "test-project", "path": "../outside.png" }),
+    )
+    .await;
+    assert_eq!(traversal.status(), StatusCode::FORBIDDEN);
+    assert!(!String::from_utf8_lossy(
+        &axum::body::to_bytes(traversal.into_body(), usize::MAX)
+            .await
+            .unwrap()
+    )
+    .contains("outside.png"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn image_ticket_issuance_rejects_symlinks_and_fifos() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("real.png"), b"png").unwrap();
+    std::os::unix::fs::symlink(tmp.path().join("real.png"), tmp.path().join("link.png")).unwrap();
+    let real_dir = tmp.path().join("real-dir");
+    std::fs::create_dir(&real_dir).unwrap();
+    std::fs::write(real_dir.join("nested.png"), b"png").unwrap();
+    std::os::unix::fs::symlink(&real_dir, tmp.path().join("link-dir")).unwrap();
+    let fifo = tmp.path().join("trap.gif");
+    assert!(Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap()
+        .success());
+    let state = make_state_with_project(&tmp);
+
+    for path in ["link.png", "link-dir/nested.png", "trap.gif"] {
+        let response = post_json(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "project": "test-project", "path": path }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+}
+
+async fn issue_image_stream_ticket(state: AppState, path: &str) -> String {
+    let response = post_json(
+        state,
+        "/api/fs/image/tickets",
+        serde_json::json!({ "project": "test-project", "path": path }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice::<serde_json::Value>(&body).unwrap()["ticket"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn stream_image(
+    state: AppState,
+    ticket: &str,
+    method: &str,
+    headers: &[(&str, &str)],
+) -> axum::response::Response {
+    let router = build_router(state, vec![]);
+    let mut request = Request::builder()
+        .method(method)
+        .uri(format!("/api/fs/image/stream/{ticket}"))
+        .body(Body::empty())
+        .unwrap();
+    for (name, value) in headers {
+        request.headers_mut().append(
+            name.parse::<axum::http::HeaderName>().unwrap(),
+            value.parse().unwrap(),
+        );
+    }
+    router.oneshot(request).await.unwrap()
+}
+
+#[tokio::test]
+async fn image_stream_is_inline_mime_typed_rangeable_and_capability_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("cover.WEBP"), b"0123456789").unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_image_stream_ticket(state.clone(), "cover.WEBP").await;
+
+    let response = stream_image(
+        state.clone(),
+        &ticket,
+        "GET",
+        &[
+            ("range", "bytes=2-4"),
+            ("origin", "https://browser.example"),
+        ],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(response.headers()["content-type"], "image/webp");
+    assert_eq!(response.headers()["content-disposition"], "inline");
+    assert_eq!(response.headers()["cache-control"], "private, no-store");
+    assert_eq!(response.headers()["content-range"], "bytes 2-4/10");
+    assert!(response.headers()["access-control-expose-headers"]
+        .to_str()
+        .unwrap()
+        .contains("content-range"));
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+        "234"
+    );
+
+    let head = stream_image(
+        state.clone(),
+        &ticket,
+        "HEAD",
+        &[("range", "bytes=2-4"), ("if-range", "not-a-validator")],
+    )
+    .await;
+    assert_eq!(head.status(), StatusCode::OK);
+    assert_eq!(head.headers()["content-length"], "10");
+    assert!(head.headers().get("content-range").is_none());
+    assert!(axum::body::to_bytes(head.into_body(), usize::MAX)
+        .await
+        .unwrap()
+        .is_empty());
+
+    let invalid = stream_image(state, &ticket, "GET", &[("range", "bytes=0-1,2-3")]).await;
+    assert_eq!(invalid.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    assert!(invalid.headers().get("content-type").is_none());
+    assert!(invalid.headers().get("content-disposition").is_none());
+}
+
+#[tokio::test]
+async fn image_stream_rejects_video_kind_revokes_and_fails_closed_on_stale_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("cover.png"), b"png").unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"webm").unwrap();
+    let state = make_state_with_project(&tmp);
+    let image_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    let video_ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+
+    assert_eq!(
+        stream_image(state.clone(), &video_ticket, "GET", &[])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        stream_video(state.clone(), &image_ticket, "GET", &[])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        delete_json(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "ticket": video_ticket.clone() }),
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        stream_video(state.clone(), &video_ticket, "GET", &[])
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        delete_json(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "ticket": image_ticket.clone() }),
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        delete_json(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "ticket": image_ticket.clone() }),
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        stream_image(state.clone(), &image_ticket, "GET", &[])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let stale_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    std::fs::write(tmp.path().join("cover.png"), b"replacement image").unwrap();
+    let stale = stream_image(state.clone(), &stale_ticket, "GET", &[]).await;
+    assert_eq!(stale.status(), StatusCode::GONE);
+    assert_eq!(
+        stream_image(state, &stale_ticket, "GET", &[])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn image_revoke_requires_auth_and_context_reload_revokes_both_media_kinds() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("cover.png"), b"png").unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"webm").unwrap();
+    let state = make_state_with_project(&tmp);
+    let image_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    let video_ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+
+    assert_eq!(
+        post_json_without_auth(
+            state.clone(),
+            "/api/fs/image/tickets",
+            serde_json::json!({ "project": "test-project", "path": "cover.png" }),
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let revoke_without_auth = Request::builder()
+        .method("DELETE")
+        .uri("/api/fs/image/tickets")
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "ticket": image_ticket }).to_string(),
+        ))
+        .unwrap();
+    let response = build_router(state.clone(), vec![])
+        .oneshot(revoke_without_auth)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    state.media_tickets.revoke_all();
+    assert!(state
+        .image_stream_tickets
+        .lookup_and_touch(&image_ticket)
+        .is_none());
+    assert!(state
+        .video_stream_tickets
+        .lookup_and_touch(&video_ticket)
+        .is_none());
+}
+
+#[tokio::test]
+async fn config_and_settings_reload_revoke_shared_media_tickets() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("cover.png"), b"png").unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"webm").unwrap();
+    let state = make_state_with_project(&tmp);
+
+    let config_image = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    let config_video = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+    let config_response = put_json(
+        state.clone(),
+        "/api/config",
+        serde_json::json!({
+            "workspace": { "name": "reloaded", "root": "." },
+            "projects": [{ "name": "test-project", "path": ".", "type": "custom" }]
+        }),
+    )
+    .await;
+    assert_eq!(config_response.status(), StatusCode::OK);
+    assert!(state
+        .image_stream_tickets
+        .lookup_and_touch(&config_image)
+        .is_none());
+    assert!(state
+        .video_stream_tickets
+        .lookup_and_touch(&config_video)
+        .is_none());
+
+    let settings_image = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    let settings_video = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+    let settings_response = post_json(
+        state.clone(),
+        "/api/settings/cache-clear",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(settings_response.status(), StatusCode::OK);
+    assert!(state
+        .image_stream_tickets
+        .lookup_and_touch(&settings_image)
+        .is_none());
+    assert!(state
+        .video_stream_tickets
+        .lookup_and_touch(&settings_video)
+        .is_none());
 }

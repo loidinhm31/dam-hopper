@@ -107,6 +107,29 @@ handled fail-closed by hiding the chip.
 - `file-decoration-icon.tsx` only renders the shared lookup result.
 - Git change rows can reuse the same lookup for file identity while keeping VCS badges separate.
 
+### Explorer Image Preview
+
+**Locations:** `packages/ui/src/components/organisms/ImagePreview.tsx`,
+`packages/ui/src/components/organisms/EditorTabs.tsx`,
+`packages/ui/src/api/image-tickets.ts`, and `packages/ui/src/lib/image-file.ts`
+
+The Explorer and editor route final, case-insensitive `png`, `jpg`, `jpeg`, `gif`,
+and `webp` files to the native image preview tier before generic binary or large
+file handling. SVG, AVIF, BMP, TIFF, dotfiles, diff tabs, and video tabs remain
+outside this route; the dedicated diff viewer and video preview keep precedence.
+
+`ImagePreview` issues a protected, preview-only capability and assigns its opaque
+stream URL directly to one native `<img>` with `alt="Image preview: {fileName}"`.
+It does not call `fsRead`, `Response.blob()`, `URL.createObjectURL`, canvas APIs,
+or a download action. Loading, ready, error, retry, stale-ticket, profile-change,
+and unmount cleanup are visible lifecycle states. Cleanup detaches the image
+source before best-effort authenticated ticket revocation.
+
+Editor open, hydration, save, force-overwrite, reload, and Git reconciliation
+preserve image tabs as preview-only. Legacy persisted image tabs are normalized
+before they can enter a text/binary read path, and status overlays report
+capability or stream failures without materializing image bytes.
+
 ## Terminal Agent Notifications
 
 **Locations:**
@@ -459,6 +482,7 @@ interface TerminalPanelProps {
 - `TabBar` exposes insertion droppables before the first tab, between tabs, and after the last tab for reorder and cross-pane insertion.
 - `PaneContainer` renders labeled five-zone docking previews only while dragging, keeping pointer interference off the live terminal during normal input.
 - Re-dropping onto the same pane center only changes active tab focus; invalid self-edge splits are ignored.
+- Terminal pin/unpin is browser-tab state shared by the IDE tab bar and Runtime navigator. Pinned live sessions survive a page reload through versioned IDs-only `sessionStorage` (`dam-hopper:terminal-pins:v1`), but never leave the browser tab or reach the server. Unpinning and explicit terminal removal clear the stored ID; stale IDs are removed after a successful terminal-session refresh. Pinned sessions hide their close action and cannot be closed until unpinned. IDE and Runtime terminal output use the theme background, with Runtime output adding an inset border and focus ring for clearer contrast.
 - Terminal layout persistence remains in localStorage under `dam-hopper:terminal-layout`.
 
 **Runtime verification notes:**
@@ -612,6 +636,22 @@ interface TerminalPanelProps {
 **Purpose:** Reuses shared file decorations in Git-aware file rows so file identity stays consistent across the explorer and Git views. The Explorer header area also hosts `GitBranchControl` so users can switch or create branches without leaving the file browser.
 
 **Terminal mode:** The floating Files panel defaults to its Explorer left-pane tab each time it opens and adds a sibling Changes tab. Closing it unmounts its content, so it reopens in Explorer rather than retaining a prior Changes selection. Explorer continues to render `FileTree` with its Git status badges; Changes reuses `ChangedFilesList` for local stage/unstage, discard, commit, and diff-opening actions. The separate floating Git panel remains the surface for branch, history, and remote operations.
+
+### Explorer language filter
+
+**Locations:** `packages/ui/src/components/organisms/FileTree.tsx`, `packages/ui/src/hooks/use-fs-subscription.ts`, `packages/ui/src/api/queries.ts`, and `packages/ui/src/lib/explorer-language-scan.ts`
+
+**Behavior:**
+
+- `All` uses the existing live, lazy filesystem tree. `Rust`, `JS/TS`, and `Java`
+  project the bounded scan result into a complete, navigation-only synthetic
+  hierarchy; these rows are not live filesystem nodes and file mutations are
+  disabled while a language filter is active.
+- Scanning is explicit through `Scan`/`Rescan`; hydrating the persisted filter, changing projects, or receiving filesystem events never starts a request automatically. The typed QueryClient entry is keyed by `['explorer-language-scan', project]` and stores the result, generation, stale flag, and last completed timestamp in memory only.
+- A filesystem event increments the project generation and marks an existing scan stale without refetching. If an event arrives during a scan, the response remains usable but stays stale. Failed rescans preserve the previous result; workspace changes remove all language-scan entries, and query-client reset/reload clears them naturally. Each successfully committed result increments `resultVersion`, including same-generation rescans, so the synthetic tree remounts from the committed snapshot.
+- The selected `explorerLanguageFilter` is persisted through the global UI settings path, defaulting to `all`. Scan results, stale state, timestamps, and expanded scan-tree folders are not persisted.
+- Scan presentation exposes the last completed time, stale warning, in-progress rescan status, truncation warning, and scan errors; a filter with no result prompts for `Scan`, while an empty committed result reports no matching files.
+- Revealing an active file safely switches a filtered view back to `All`, then waits for the live tree's committed lazy-child render before opening parents, selecting, and scrolling. A reveal is marked handled only after success and its request nonce makes retries independently triggerable.
 
 ### GitPage
 

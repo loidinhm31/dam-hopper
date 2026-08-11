@@ -41,6 +41,7 @@ interface ActiveTerminalRuntimeDisplayProps {
   onNewProjectTerminal?: (projectName: string) => void;
   onNewFreeTerminal?: () => void;
   onSelectTab?: (sessionId: string) => void;
+  onToggleTabPin?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
@@ -103,6 +104,7 @@ export function ActiveTerminalRuntimeDisplay({
   onNewProjectTerminal,
   onNewFreeTerminal,
   onSelectTab,
+  onToggleTabPin,
   onCloseSession,
   onOpenDiagnosticsMenu,
   onOpenTunnelInBrowser,
@@ -222,6 +224,7 @@ export function ActiveTerminalRuntimeDisplay({
               disableReorder
               groups={groups}
               onCloseSession={onCloseSession}
+              onToggleTabPin={onToggleTabPin}
               onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
               onMoveGroup={ordering.moveGroup}
               onMoveItem={ordering.moveItem}
@@ -251,6 +254,7 @@ export function ActiveTerminalRuntimeDisplay({
         groups={groups}
         width={navigatorWidth}
         onCloseSession={onCloseSession}
+        onToggleTabPin={onToggleTabPin}
         onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
         onMoveGroup={ordering.moveGroup}
         onMoveItem={ordering.moveItem}

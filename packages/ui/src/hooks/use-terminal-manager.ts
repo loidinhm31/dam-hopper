@@ -15,6 +15,13 @@ import {
   parseTerminalSessionId,
 } from "@/lib/terminal-auto-attach.js";
 import { upsertMountedSession } from "@/lib/terminal-mounted-sessions.js";
+import { isTerminalTabClosable } from "@/lib/terminal-tab-state.js";
+import {
+  loadPinnedTerminalIds,
+  retainPinnedTerminalIds,
+  savePinnedTerminalIds,
+  setPinnedTerminalId,
+} from "@/lib/terminal-pin-persistence.js";
 import {
   selectTerminal,
   syncTerminalProject,
@@ -84,6 +91,7 @@ export interface TerminalManagerActions {
   handleAddShell: (projectName: string) => void;
   handleLaunchShell: (projectName: string) => void;
   handleSelectTab: (sessionId: string) => void;
+  handleToggleTabPin: (sessionId: string) => void;
   handleCloseTab: (sessionId: string) => void;
   handleKillTerminal: (sessionId: string) => void;
   handleRemoveFreeTerminal: (sessionId: string) => void;
@@ -184,7 +192,8 @@ function sameOpenTabs(a: TabEntry[], b: TabEntry[]) {
         tab.sessionId === other.sessionId &&
         tab.label === other.label &&
         tab.session === other.session &&
-        tab.isSaveable === other.isSaveable
+        tab.isSaveable === other.isSaveable &&
+        tab.isPinned === other.isPinned
       );
     })
   );
@@ -216,7 +225,8 @@ export function useTerminalManager(
 ) {
   const qc = useQueryClient();
   const { tree, freeTerminals, isLoading } = useTerminalTree();
-  const { data: sessions = [] } = useTerminalSessions();
+  const { data: sessions = [], isSuccess: hasTerminalSessionSnapshot } =
+    useTerminalSessions();
   const { data: projects = [] } = useProjects();
 
   const [selection, setSelection] = useState<SelectionState>(null);
@@ -228,8 +238,23 @@ export function useTerminalManager(
   const [freeTerminalSavePrompt, setFreeTerminalSavePrompt] =
     useState<FreeTerminalSavePromptState | null>(null);
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>(null);
+  const [initialPinnedTerminalIds] = useState(() => loadPinnedTerminalIds());
   const suppressedAutoAttachIdsRef = useRef<Set<string>>(new Set());
   const pendingAutoAttachIdsRef = useRef<Set<string>>(new Set());
+  const pinnedTerminalIdsRef = useRef(initialPinnedTerminalIds);
+  const pinStateBySessionIdRef = useRef<Map<string, boolean>>(new Map());
+
+  const forgetPinnedTerminalIds = useCallback(
+    (sessionIds: Iterable<string>) => {
+      let changed = false;
+      for (const sessionId of sessionIds) {
+        pinStateBySessionIdRef.current.delete(sessionId);
+        changed = pinnedTerminalIdsRef.current.delete(sessionId) || changed;
+      }
+      if (changed) savePinnedTerminalIds(pinnedTerminalIdsRef.current);
+    },
+    [],
+  );
 
   const sessionMap = useMemo(
     () =>
@@ -288,6 +313,7 @@ export function useTerminalManager(
 
     setOpenTabs((prev) => {
       if (prev.some((t) => t.sessionId === sessionId)) return prev;
+      pinStateBySessionIdRef.current.set(sessionId, false);
       return [
         ...prev,
         {
@@ -312,7 +338,9 @@ export function useTerminalManager(
 
     for (const sessionId of sessionIds) {
       pendingAutoAttachIdsRef.current.delete(sessionId);
+      suppressedAutoAttachIdsRef.current.add(sessionId);
     }
+    forgetPinnedTerminalIds(sessionIds);
 
     setOpenTabs((prev) => {
       const remaining = prev.filter((t) => !sessionIds.includes(t.sessionId));
@@ -387,10 +415,21 @@ export function useTerminalManager(
       freeTerminalIndexMap,
       ignoredSessionIds: suppressedAutoAttachIdsRef.current,
       pendingSessionIds: pendingAutoAttachIdsRef.current,
+      pinnedSessionIds: hasTerminalSessionSnapshot
+        ? pinnedTerminalIdsRef.current
+        : new Set(),
     });
     const attachedLiveSessionIds = new Set(
       next.openTabs.map((tab) => tab.sessionId),
     );
+    for (const sessionId of pinStateBySessionIdRef.current.keys()) {
+      if (!attachedLiveSessionIds.has(sessionId)) {
+        pinStateBySessionIdRef.current.delete(sessionId);
+      }
+    }
+    for (const tab of next.openTabs) {
+      pinStateBySessionIdRef.current.set(tab.sessionId, tab.isPinned === true);
+    }
 
     if (!sameOpenTabs(openTabs, next.openTabs)) {
       setOpenTabs(next.openTabs);
@@ -414,6 +453,25 @@ export function useTerminalManager(
       }
       return prev?.type === "terminal" ? null : prev;
     });
+
+    if (hasTerminalSessionSnapshot) {
+      const activeOrPendingIds = new Set(
+        sessions
+          .filter((session) => session.alive)
+          .map((session) => session.id),
+      );
+      for (const sessionId of pendingAutoAttachIdsRef.current) {
+        activeOrPendingIds.add(sessionId);
+      }
+      const nextPinnedIds = retainPinnedTerminalIds(
+        pinnedTerminalIdsRef.current,
+        activeOrPendingIds,
+      );
+      if (nextPinnedIds.size !== pinnedTerminalIdsRef.current.size) {
+        pinnedTerminalIdsRef.current = nextPinnedIds;
+        savePinnedTerminalIds(nextPinnedIds);
+      }
+    }
   }, [
     sessions,
     sessionMap,
@@ -422,6 +480,8 @@ export function useTerminalManager(
     activeTab,
     profileSessionIds,
     freeTerminalIndexMap,
+    hasTerminalSessionSnapshot,
+    forgetPinnedTerminalIds,
   ]);
 
   function handleSelectProject(name: string) {
@@ -848,9 +908,34 @@ export function useTerminalManager(
     });
   }
 
+  function handleToggleTabPin(sessionId: string) {
+    const tab = openTabs.find((entry) => entry.sessionId === sessionId);
+    if (!tab) return;
+
+    const isPinned =
+      pinStateBySessionIdRef.current.get(sessionId) ?? tab.isPinned === true;
+    const nextIsPinned = !isPinned;
+    pinStateBySessionIdRef.current.set(sessionId, nextIsPinned);
+    const nextPinnedIds = setPinnedTerminalId(
+      pinnedTerminalIdsRef.current,
+      sessionId,
+      nextIsPinned,
+    );
+    pinnedTerminalIdsRef.current = nextPinnedIds;
+    savePinnedTerminalIds(nextPinnedIds);
+
+    setOpenTabs((prev) => {
+      return prev.map((tab) =>
+        tab.sessionId === sessionId ? { ...tab, isPinned: nextIsPinned } : tab,
+      );
+    });
+  }
+
   function handleCloseTab(sessionId: string) {
+    if (!isTerminalTabClosable(openTabs, sessionId)) return;
     suppressedAutoAttachIdsRef.current.add(sessionId);
     pendingAutoAttachIdsRef.current.delete(sessionId);
+    forgetPinnedTerminalIds([sessionId]);
     // Terminate the terminal session when the tab is closed
     handleKillTerminal(sessionId);
 
@@ -874,10 +959,10 @@ export function useTerminalManager(
   }
 
   function handleRemoveFreeTerminal(sessionId: string) {
+    removeSessionsFromUi([sessionId]);
     void api.terminal.remove(sessionId).then(() => {
       void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
     });
-    handleCloseTab(sessionId);
   }
 
   function handleOpenFreeTerminalSavePrompt(sessionId: string) {
@@ -929,16 +1014,17 @@ export function useTerminalManager(
   const handleSessionExit = useCallback(
     (sessionId: string) => {
       pendingAutoAttachIdsRef.current.delete(sessionId);
+      forgetPinnedTerminalIds([sessionId]);
       void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
       setOpenTabs((prev) =>
         prev.map((t) =>
           t.sessionId === sessionId
-            ? { ...t, session: sessionMap.get(sessionId) }
+            ? { ...t, isPinned: false, session: sessionMap.get(sessionId) }
             : t,
         ),
       );
     },
-    [qc, sessionMap],
+    [forgetPinnedTerminalIds, qc, sessionMap],
   );
 
   const tabsWithLiveSession: TabEntry[] = openTabs.map((t) => {
@@ -950,6 +1036,7 @@ export function useTerminalManager(
       label,
       session: sessionMap.get(t.sessionId) ?? t.session,
       isSaveable: isAdHoc,
+      isPinned: t.isPinned,
     };
   });
 
@@ -994,6 +1081,7 @@ export function useTerminalManager(
       handleAddShell,
       handleLaunchShell,
       handleSelectTab,
+      handleToggleTabPin,
       handleCloseTab,
       handleKillTerminal,
       handleRemoveFreeTerminal,

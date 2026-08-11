@@ -3,8 +3,12 @@
  */
 
 import { getTransport, reconfigureTransport } from "./transport.js";
+import { IdleTransport } from "./idle-transport.js";
 import { WsTransport } from "./ws-transport.js";
-import { resetTransportListeners } from "@/hooks/use-sse.js";
+import {
+  initTransportListeners,
+  resetTransportListeners,
+} from "@/hooks/use-sse.js";
 
 /**
  * Reinitialize the transport with a new server URL.
@@ -12,7 +16,10 @@ import { resetTransportListeners } from "@/hooks/use-sse.js";
  *
  * @param newServerUrl - The new server URL to connect to
  */
-export function reinitializeTransport(newServerUrl: string): void {
+export function reinitializeTransport(
+  newServerUrl?: string,
+  profileId?: string,
+): void {
   // 1. Get the current transport and destroy it (closes WebSocket, cleans up listeners)
   const oldTransport = getTransport();
   if (
@@ -23,12 +30,16 @@ export function reinitializeTransport(newServerUrl: string): void {
     oldTransport.destroy();
   }
 
-  // 2. Reset all push event listeners so they can be re-registered with the new transport
+  // 2. Remove push listeners owned by the old transport.
   resetTransportListeners();
 
-  // 3. Create a new transport instance with the new server URL
-  const newTransport = new WsTransport(newServerUrl);
+  // 3. Use an idle transport when no profile remains, so the old authenticated
+  // transport cannot reconnect after the last profile is deleted.
+  const newTransport = newServerUrl
+    ? new WsTransport(newServerUrl, profileId)
+    : new IdleTransport();
 
-  // 4. Install the new transport globally
+  // 4. Install the new transport and attach its push listeners immediately.
   reconfigureTransport(newTransport);
+  initTransportListeners();
 }

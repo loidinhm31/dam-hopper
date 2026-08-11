@@ -25,6 +25,9 @@
 │  │  ├─ agent_store: Arc<AgentStoreService>                │
 │  │  ├─ event_sink: BroadcastEventSink                     │
 │  │  ├─ fs: FsSubsystem                                    │
+│  │  ├─ media_tickets: MediaTicketStore (shared lifecycle)  │
+│  │  ├─ video_stream_tickets: VideoStreamTicketStore       │
+│  │  ├─ image_stream_tickets: ImageStreamTicketStore       │
 │  │  ├─ ssh_creds: Arc<RwLock<Option<...>>>               │
 │  │  ├─ auth_token: Arc<String>                            │
 │  ├─ opaque_server_setup: Arc<ServerSetup<...>>            │
@@ -35,6 +38,8 @@
 │  │  ├─ /api/ports → Port detection list                   │
 │  │  ├─ /api/git/* → Clone/push/status/branch/root ops     │
 │  │  ├─ /api/fs/* → [conditional] List/read/stat (per-proj)│
+│  │  ├─ /api/fs/video/* → Ticket issuance/stream/revoke     │
+│  │  ├─ /api/fs/image/* → Preview ticket/stream/revoke     │
 │  │  ├─ /api/agent-store/* → Distribution/import           │
 │  │  ├─ /api/workspace/* → Config switching                │
 │  │  ├─ /api/usage/* → Codex OTel usage (opt-in)           │
@@ -50,6 +55,49 @@
 │     └─ Broadcast channels (PTY output, git progress)      │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### Host resource monitoring and remediation (planned)
+
+Host resources remains a host-context feature, not a project-sandbox feature. The
+existing `HostMetricsSampler` will evolve into one shared `HostResourceMonitor`
+owned by `AppState`. It periodically reads available Linux procfs, PSI, cgroup,
+process, and mount signals, keeps a bounded in-memory sample/alert window, and
+serves both the protected snapshot API and background alert events. The UI must
+not create a second sampler for each open popover.
+
+The monitor is descriptive and degrades per signal:
+
+- `/proc/meminfo`, PSI, cgroup v2, process RSS/PSS, and mount observations are
+  parsed directly; shell utilities are not part of the observation path.
+- Missing files, unsupported kernels, namespaces, and permission failures become
+  explicit availability states, not whole-request failures.
+- `MemAvailable` and sustained PSI are primary alert inputs. Cache/slab/anon,
+  swap, process, cgroup, and mount values explain the state; high cache alone is
+  not an incident.
+- Exact page-cache bytes for an arbitrary mount are not promised. Mount identity,
+  filesystem/access context, and any estimate carry an uncertainty label.
+
+Privileged actions use a separate host-local fixed-action helper. The DamHopper
+server never accepts an arbitrary command, shell string, executable path, or host
+password from the browser. The helper is reachable only through restricted local
+IPC and accepts typed operations such as `drop-clean-caches` and
+`terminate-same-user-pid`. Every request requires fresh single-use DamHopper
+re-authentication plus explicit confirmation, then the helper revalidates target
+identity and records a sanitized audit event.
+
+The v1 action boundary is intentionally narrow:
+
+- cache dropping is an explicit diagnostic operation with before/after samples;
+- process control is same-user graceful `SIGTERM` only, with PID start-time and
+  UID revalidation;
+- root-owned/other-user processes are visible but not killable;
+- no automatic cache dropping, process killing, service/container control, or
+  generic root shell is allowed.
+
+The helper may integrate with polkit when a host authentication agent exists, but
+headless/remote hosts must use an explicit host enrollment path and fail closed
+when the helper is unavailable. This preserves the distinction between web-app
+authentication and OS privilege.
 
 ## Module Breakdown
 
@@ -562,7 +610,7 @@ permissions to `core:default`.
 
 **Frontend host:**
 
-- `apps/native/src/main.tsx` mirrors `apps/web/src/main.tsx`: configures the shared logger, initializes `WsTransport(getNativeServerUrl())` when an active profile exists, otherwise installs an idle transport for the setup screen, creates the TanStack Query client, and mounts `DamHopperApp`.
+- `apps/native/src/main.tsx` mirrors `apps/web/src/main.tsx`: configures the shared logger, initializes `WsTransport(getNativeServerUrl(), activeProfile.id)` when an active profile exists, otherwise installs an idle transport for the setup screen, creates the TanStack Query client, and mounts `DamHopperApp`.
 - `apps/native/vite.config.ts` uses Tauri's fixed dev port `1420`, strict port mode, `TAURI_DEV_HOST` HMR support on port `1421`, and ignores `src-tauri` in Vite file watching.
 - The shared `ServerProfileGuard` still controls startup. If no server profile exists, the native host installs an idle transport and opens the server setup dialog instead of relying on the packaged webview's same-origin URL.
 
@@ -721,6 +769,155 @@ pub struct PersistedSession {
 - Seeded/reinitialized from config projects on startup and workspace switch
 - Cheap clone pattern
 
+### Explorer video playback and download (Phase 04 browser-host validation complete)
+
+Phase 1 delivered the authenticated, purpose-bound ticket boundary. Phase 2 adds
+the capability-only stream endpoint; ticket issuance, revocation, and streaming
+are shipped. Phase 03 completes the browser-host `VideoPreview` integration. Phase
+04 validates it in a real Chromium host with a valid one-second VP8 WebM fixture,
+the real ticket client, and the native download helper. Independent browser-host
+checks verify playback purpose, download purpose, attachment disposition, absence
+of `Blob`/object-URL conversion, and stream-fetch behavior. Media lifecycle checks
+cover stale tickets, retry, cleanup, focus changes, and responsive layouts; the
+browser test suite is green.
+Browser routing recognizes only the final, case-insensitive extensions `mp4`,
+`m4v`, `webm`, `ogv`, `ogg`, and `mov` (an extension/MIME hint, not codec proof);
+diff tabs retain their dedicated viewer.
+
+The shipped server-side sequence is:
+
+```mermaid
+sequenceDiagram
+    participant E as Explorer and EditorTabs
+    participant V as VideoPreview
+    participant A as Authenticated ticket API
+    participant S as Ticketed stream API
+    participant F as ProjectSandbox and file
+    E->>A: POST project, path, and purpose with Bearer auth
+    A->>F: Resolve sandbox path and stat regular file
+    F-->>A: Canonical resource metadata
+    A-->>E: Opaque resource and purpose scoped URL
+    alt Playback purpose
+        E->>V: Open recognized video extension
+        V->>S: GET playback URL with optional single Range/If-Range
+        S-->>V: Inline 206 stream for play and seek
+    else Download purpose
+        E->>S: Navigate to download URL
+        S-->>E: Attachment stream handled by browser
+    end
+    S->>F: Revalidate ticket, sandbox path, and metadata
+    F-->>S: Seekable bounded file reader
+```
+
+`POST /api/fs/video/tickets` stays behind normal authentication. It accepts only
+a configured project, project-relative path, and closed `playback | download`
+purpose. It resolves through the existing `ProjectSandbox`, verifies a regular
+video candidate, and returns a random opaque ticket URL. `DELETE
+/api/fs/video/tickets` revokes a ticket idempotently. The in-memory ticket store is
+capped at 256 live tickets, prunes expired entries before admission, and binds each
+ticket to one canonical project resource, one immutable purpose, and issuance
+metadata. Tickets are never persisted into editor state, browser storage,
+diagnostics, or logs. They use a 30-minute idle expiry capped by an eight-hour
+absolute lifetime; lookup refreshes idle expiry without extending the absolute
+deadline. Workspace reinitialization and configuration changes revoke all tickets
+and advance the generation, preventing issuance across a changed context.
+
+`GET|HEAD /api/fs/video/stream/{ticket}` is authorized by the scoped capability
+ticket, not by a long-lived credential in the URL. Every request revalidates the
+sandbox path and file identity (size, mtime, and platform identity) before opening
+the file; drift revokes the ticket and returns `410 Gone`. `GET` supports no range
+(`200`) or exactly one checked byte range (`206`, exact `Content-Length` and
+`Content-Range`). Unsatisfiable, malformed, or multi-range requests return `416`
+with `Content-Range: bytes */size`. `HEAD` returns representation metadata without
+reading the body and ignores range selection. `If-Range` is honored only when its
+single ETag or HTTP-date validator matches; otherwise the request safely falls back
+to the full `200` representation.
+
+Responses set `Accept-Ranges: bytes`, the detected media `Content-Type`, `ETag`,
+`Last-Modified`, and `Cache-Control: private, no-store`. Disposition comes only
+from the stored purpose: `inline` for playback or a sanitized RFC 5987 `attachment`
+filename for download. The client cannot upgrade a playback ticket into a download
+ticket. Bodies use an async reader bounded to 128 KiB with Hyper backpressure;
+client disconnect drops the body and file without a detached producer, and no
+filesystem or ticket-store lock is held while streaming.
+
+The configured CORS layer covers GET/HEAD and preflight headers needed for browser
+range playback (`Range`, `If-Range`, and validators), and exposes range, length,
+disposition, validator, and cache headers to allowed origins. Credentialed requests
+mirror the request origin when origins are unrestricted; configured origins remain
+an explicit allowlist.
+
+The browser host routes recognized video extensions to `VideoPreview` before
+generic binary or large-text tiering. The player requests a fresh playback
+ticket on mount, uses one
+native `<video controls preload="metadata" playsInline>` element, and clears its
+source on tab switch or unmount. Download actions request a separate download
+ticket, then activate a temporary anchor so browser download handling consumes the
+stream directly without `fetch().blob()`. Playback and download can run concurrently
+and expire or revoke independently. Extension and MIME are routing hints only;
+codec failure becomes an actionable unsupported-media state. This validation is
+browser-host-only; it does not claim packaged Tauri playback/download or CSP
+verification. `pnpm check` cannot complete in the validation environment because
+Tauri signing-key configuration is unavailable. V1 does
+not add thumbnails, custom controls, Media Source Extensions, HLS/DASH, codec probing,
+or transcoding.
+
+Key invariants:
+
+- Workspace sandbox and authentication checks happen before any file bytes leave.
+- Browser URLs never contain the profile JWT, username, absolute path, or raw file content.
+- Memory remains proportional to stream chunk size and active streams, never file size.
+- One ticket selects one resource and one purpose; it cannot enumerate projects,
+  change paths, or switch between inline and attachment behavior.
+- Playback never depends on download completion; each action owns a separate ticket
+  and response stream over the same validated file.
+- File replacement or metadata drift invalidates the prior ticket/range sequence.
+- Unsupported containers/codecs fail visibly without falling back to a 1–3 GB blob read.
+
+### Explorer native image preview (Phase 03 release gate complete)
+
+Image preview uses the same bounded media-ticket core as video while keeping a
+separate public adapter and contract. The server exposes `POST|DELETE
+/api/fs/image/tickets` and `GET|HEAD /api/fs/image/stream/{ticket}`. Image
+issuance accepts only final, case-insensitive `png`, `jpg`, `jpeg`, `gif`, and
+`webp` extensions and always binds the capability to the fixed `preview`
+purpose. SVG, AVIF, BMP, TIFF, dotfiles, directories, symlink components, FIFOs,
+and traversal paths remain outside the preview surface.
+
+The browser flow is capability-only:
+
+```mermaid
+sequenceDiagram
+    participant E as Explorer and EditorTabs
+    participant I as ImagePreview
+    participant A as Authenticated image ticket API
+    participant S as Ticketed image stream
+    participant F as ProjectSandbox and file
+    E->>A: POST project and path with Bearer auth
+    A->>F: Resolve, regular-file check, MIME and version bind
+    A-->>E: Opaque preview ticket URL
+    E->>I: Mount one native <img>
+    I->>S: Native GET/HEAD capability request
+    S->>F: Revalidate sandbox path and file identity
+    S-->>I: Inline image bytes/range response
+    I->>A: Authenticated best-effort DELETE on cleanup
+```
+
+`ImagePreview` assigns the opaque URL directly to one native `<img>` and relies
+on browser decoding. It never calls `fsRead`, buffers a response, creates a
+`Blob`, creates an object URL, uses a canvas transform, or exposes a download
+action. Loading, ready, generic error, retry, stale-generation, profile-change,
+and unmount cleanup are explicit lifecycle states; cleanup detaches `src` before
+revoking the capability. The `alt` contract is `Image preview: {fileName}`.
+
+The editor assigns an `image` tier before binary/large classification, including
+large or binary-hinted allowlisted images. Open, hydration, save, force-overwrite,
+reload, and Git reconciliation paths treat image tabs as preview-only and never
+materialize bytes. Diff tabs retain their dedicated viewer and video routing
+continues to take precedence. The shared store keeps the 256-ticket capacity,
+idle/absolute expiry, generation invalidation, stale-file `410`, range/HEAD,
+revalidation, CORS, and private no-store response invariants used by video.
+
 ### git/
 
 Git operations and repository discovery helpers.
@@ -763,6 +960,114 @@ other child-local paths.
 - Registry returns safe defaults for unknown files, no throw path.
 - UI components should consume the shared helpers instead of re-implementing filename parsing.
 
+### Explorer language filter (Phase 02 shipped)
+
+The Explorer language filter uses a user-triggered, project-root scan rather than
+recursively expanding the lazy filesystem tree. An authenticated one-shot endpoint
+resolves the selected project through the existing filesystem sandbox, walks regular
+files with the shared `ignore::WalkBuilder` policy, and returns bounded project-relative
+metadata for Rust, combined JavaScript/TypeScript, and Java files.
+
+- The scan honors Git ignore sources, includes hidden paths so the existing
+  `explorerShowHidden` preference can control presentation, excludes symlinks, does
+  not follow directory links, and returns normalized relative paths only.
+- Results are capped and expose `truncated`; they are stored only in the typed TanStack
+  Query project cache `['explorer-language-scan', project]`, whose metadata includes the
+  result, generation, stale flag, and last completed scan timestamp. `Scan`/`Rescan` is
+  always explicit. Filesystem events increment the project generation and mark the cached
+  result stale without triggering a background scan. A response finishing after such an
+  event remains usable but stale; a failed rescan preserves the prior result. Workspace
+  changes remove all language-scan cache entries.
+- The selected `All | Rust | JS/TS | Java` filter is a global UI preference persisted
+  through the existing global-config/settings path. Scan results, stale state, and
+  expanded scan-tree folders are not persisted.
+- The Explorer consumes the cache to build a complete, sorted, navigation-only
+  synthetic hierarchy for the selected language. `All` remains the live lazy
+  filesystem tree; synthetic rows are not mutation targets, so create, rename,
+  delete, upload, and related filesystem actions are disabled while filtered.
+- The header presents explicit `Scan`/`Rescan` controls and reports last-scan,
+  stale, in-progress, truncation, error, and empty-result states. Committed
+  results carry a monotonic `resultVersion` (including same-generation rescans)
+  so rendering follows the latest committed snapshot rather than an obsolete
+  tree projection.
+- Reveal/selection requests switch a filtered view to `All` when necessary, then
+  wait for the live tree's committed render after each lazy-child load before
+  opening ancestors and focusing the target. Completion is recorded only after
+  successful reveal, and a request nonce permits a later retry.
+
+The first version is extension-based and limited to `.rs`, `.js`, `.jsx`, `.ts`,
+`.tsx`, and `.java`. It does not provide parser/LSP semantics, symbols/references,
+automatic rescans, persistent indexes, streaming progress, or caller-configurable
+language families.
+
+### Semantic code navigation (planned)
+
+Semantic navigation is an editor capability separate from the Explorer language
+filter. Monaco exposes Go to Definition, Go to Implementation, Find References,
+modifier-click, and keyboard/context-menu actions through registered language
+providers. A typed client adapter sends project-relative document and navigation
+messages over a dedicated authenticated WebSocket. The backend translates those
+messages to standard LSP JSON-RPC over stdio for an allowlisted language server.
+V1 targets `rust-analyzer`, `typescript-language-server`, and Eclipse JDT LS; the
+registry stays generic so later languages add descriptors rather than UI forks.
+
+DamHopper does not embed a VS Code workbench or general extension host for this
+feature. VS Code language extensions ultimately use the same language-server
+processes, while an extension host would add incompatible contribution APIs,
+Node/browser runtime assumptions, marketplace installation, and a broader code
+execution boundary. A real extension host remains a separate future product
+decision, not a prerequisite for semantic navigation.
+
+```mermaid
+sequenceDiagram
+    participant M as Monaco provider
+    participant C as Semantic client
+    participant W as Authenticated semantic WS
+    participant R as LSP registry and supervisor
+    participant L as Allowlisted language server
+    M->>C: Open model with project-relative path and version
+    C->>W: document/open or incremental document/change
+    W->>R: Resolve project, language, and server descriptor
+    R->>L: Lazy start, initialize, and replay open documents
+    M->>C: Definition, implementation, or references request
+    C->>W: Navigation request with cancellation token
+    W->>L: Standard LSP request over stdio
+    L-->>W: Locations plus progress or capability state
+    W-->>C: Bounded project-relative targets
+    C-->>M: Jump directly or show a multi-target result list
+```
+
+The supervisor reuses one process per authenticated client, configured project,
+and server descriptor. Opening the first supported Monaco model may prewarm that
+server, but no workspace-wide language scan or server fan-out occurs. Interactive
+requests have bounded queues and deadlines; superseded requests propagate
+`$/cancelRequest`, and late responses are discarded by document/request version.
+After an inactivity grace period, warm processes become LRU eviction candidates
+even if tabs remain open. A later request restarts the process and replays current
+open document snapshots. Per-client and global process limits prevent a workspace
+with many languages from starting every server at once.
+
+The browser never selects an executable, arguments, root URI, or absolute path.
+Server descriptors are built in or loaded only from trusted global configuration;
+commands are spawned without a shell and with a sanitized environment. Every
+incoming project/path is resolved through `ProjectSandbox`. LSP `file://` URIs and
+host paths stay behind the backend adapter, which returns only normalized
+project-relative targets and bounded display metadata.
+
+Key invariants:
+
+- Semantic navigation starts on supported editor demand; Explorer scans and
+  filesystem events never start a language server.
+- One language-server failure degrades only that project/language and never blocks
+  file editing, terminal I/O, saving, or other WebSocket traffic.
+- Unsaved Monaco content is synchronized by version and is never persisted by the
+  semantic transport; reconnect/restart replays only currently open documents.
+- Warm navigation latency, cold-start/indexing time, queue wait, cancellation,
+  process RSS/CPU, crashes, and evictions are measured without logging source text
+  or absolute paths.
+- Missing binaries and unsupported capabilities produce explicit setup/degraded
+  states; the server never downloads or executes a project-supplied language tool.
+
 ### Multi-Server Profile Management (Phase 2)
 
 **Client-side only** — no backend involvement. React component integration:
@@ -782,15 +1087,16 @@ other child-local paths.
 **Integration in shared UI and host bootstraps:**
 
 - `DamHopperApp` calls `migrateToProfiles()` at startup to convert legacy config
-- Browser host initializes `WsTransport(getServerUrl())`
-- Native host initializes `WsTransport(getNativeServerUrl())` when an active profile exists, otherwise installs `IdleTransport`
+- Browser host initializes `WsTransport(getServerUrl(), activeProfile.id)`
+- Native host initializes `WsTransport(getNativeServerUrl(), activeProfile.id)` when an active profile exists, otherwise installs `IdleTransport`
 - Sidebar triggers profile switcher dialog and the setup flow remains profile-driven in both hosts
 
 **Data Persistence:**
 
 - Profiles: localStorage (survives browser close, shared across tabs)
 - Active profile ID: localStorage (survives browser close, shared across tabs)
-- Auth token: sessionStorage (cleared on tab close, isolated per tab) — password never stored
+- Auth token: localStorage, keyed by profile ID (survives browser close; bearer token is readable by JavaScript) — password never stored
+- Profile changes emit a reactive revision so tabs rebind auth state and transport; changing a normalized backend URL clears that profile token and requires login again
 
 ### SSH Credential Persistence (Phase 02)
 
@@ -1413,6 +1719,211 @@ Server bootstrap:
 - `AppState` construction
 - Router registration (ide_explorer routes conditional)
 - Port binding + graceful shutdown
+
+## Host resource monitoring (current delivery; remediation deferred)
+
+The current delivery boundary is monitoring-only. Phase 03 implements one
+shared cached monitor, the compatible legacy metrics projection, versioned
+read-only snapshot and alert APIs, and bounded alert events. Phase 06 implements
+the in-app diagnosis UI. Phase 07 packages, validates, and rolls out only those
+observation surfaces. It must not enable, package, exercise, or claim support
+for host mutation.
+
+The top-nav host-resource popover presents the cached snapshot, bounded alert
+history, and diagnostic evidence, with no remediation controls. A
+`host:alertChanged` push event invalidates the cached read-only queries so the
+next render reflects authoritative REST projections; it is a refresh signal,
+not a mutation request. Deep Linux reads degrade per signal, while
+`GET /api/system/metrics` remains the compatibility fallback and rollback seam.
+
+Re-authentication, mutation lifecycle/audit, local privileged IPC, enrollment,
+and fixed host operations are one future remediation backlog. Existing
+server-side lifecycle scaffolding, where present, is outside the current
+delivery and has no privileged executor. It must remain incapable of host
+mutation. The deferred threat model below is retained for a future design gate;
+it is not a dependency of Phase 07.
+
+### Data flow and trust boundary
+
+```
+Linux procfs / PSI / cgroup v2
+  -> HostResourceMonitor (read-only, bounded, cached)
+  -> protected snapshot and alert APIs / host:alertChanged event
+  -> browser diagnostics UI
+```
+
+`HostResourceMonitor` has no dependency on `HostActionService`, helper IPC, or
+action configuration. Alert collection and delivery can only publish bounded,
+sanitized state. They cannot enqueue or execute an action. The existing
+`GET /api/system/metrics` remains a compatible basic-metrics endpoint; new
+resource APIs are versioned siblings. Phase 03 moves it to the shared monitor's
+cached projection without changing its response shape.
+
+The release image is built explicitly for `linux/amd64` and uses pinned base
+image digests. Phase 07 evidence measures clean shutdown only for a server with
+no active tunnel sessions; active tunnel disposal has a separate three-second
+child-process grace period. The full release command set includes Rust
+format/check/tests, UI unit/type/browser tests, lint, web/server builds, and the
+Docker build. The release owner approved Phase 07 completion with the
+still-unobserved Windows CI result, canary-host profiling, staged
+monitor/in-app-alert canary, and rollback rehearsal deferred as post-release
+work. Those checks remain unexecuted and are not passed evidence.
+
+### Snapshot boundaries
+
+`HostResourceSnapshotV1` is serialized in camelCase and reports explicit
+availability for each deep section. Collection is read-only and uses startup-owned
+`/proc`, `/sys`, and cgroup roots; callers cannot provide alternate roots. Every
+text read is bounded by the actual stream at 256 KiB, and oversize, invalid UTF-8,
+permission, parse, and race failures degrade the relevant section instead of
+failing the snapshot.
+
+Linux deep metrics include memory PSI (`some`/`full`) and discovered unified cgroup
+v2 membership. Cgroup records report current usage, max/high limits (including
+unlimited markers), file cache, memory events, and cgroup PSI. Mount and
+membership validation runs before cgroup reads; unsupported or invalid layouts
+remain explicitly degraded.
+
+Process inventory is bounded to 4,096 scanned PIDs, 20 returned processes, and PSS
+reads for the top 5 by RSS, with a 100 ms deadline. The response includes scan,
+truncation, deadline, skipped, and issue counters for permission denied, invalid
+UTF-8, malformed, and disappeared process files. Process strings are capped at
+256 bytes.
+
+Cache attribution is descriptive rather than additive accounting. Labels identify
+system-file cache, cgroup-file cache, process-file RSS, mount-file mappings, or
+unattributed shared cache; clients must not sum overlapping labels. Each carries
+optional bytes, confidence, and collection method.
+
+### Deferred remediation design: fixed v1 contract
+
+This subsection and the remaining remediation subsections are backlog design,
+not current behavior or Phase 07 scope. Re-activation requires a new
+architecture/security gate and explicit product sign-off. Until then no
+privileged component is packaged or enrolled, and no mutation capability may be
+advertised as available.
+
+The deferred lifecycle must fail closed: approvals are consumed once;
+lifecycle outcomes are recorded in bounded local audit storage; and unavailable
+audit or execution state cannot be reported as success. It must perform no OS
+password, sudo/polkit/PTY escalation, generic command execution, or automatic
+remediation.
+
+- The only client-selectable value is a typed, allowlisted intent. The client
+  cannot supply a command, shell, executable path, signal number, process
+  group, raw PID, cache mode, or writable kernel path.
+- An approval binds the authenticated actor, canonical action digest, immutable
+  target identity, nonce, issued-at time, expiry, and single-use state. The
+  canonical target includes host PID namespace inode, mount namespace inode,
+  user namespace inode, boot ID, PID, process start ticks, UID, cgroup, and
+  bounded command identity where the action type needs a process target.
+- IPC is a versioned `AF_UNIX SOCK_SEQPACKET` enum protocol with one 8 KiB
+  request frame per connection. It uses close-on-exec descriptors, rejects
+  truncated/multiple frames and `SCM_RIGHTS`, and accepts no client-supplied
+  file descriptor. The helper enforces an issued-at window, request-ID
+  deduplication, fixed action-specific rate limits, and structured errors that
+  contain no credentials, approval material, raw command lines, or environment
+  values.
+- Process termination prefers a pidfd. A permitted fallback re-reads host
+  namespace inodes, boot ID, UID, start ticks, cgroup, and bounded command
+  identity immediately before a fixed `SIGTERM`. It never acts on PID 1 or a
+  process group; `SIGKILL` is a different, separately approved action.
+- The cache action is globally scoped and therefore exceptional: it always
+  calls `sync` first, then writes only the fixed value `3` to `drop_caches`.
+  It has a global warning, cooldown, before/after samples, helper-side policy,
+  and no client-selected cache value. It is not mount or workspace cleanup.
+- Actions are unavailable with `--no-auth`, without MongoDB-backed re-auth,
+  on non-Linux hosts, in Docker/nohup installs, or whenever enrollment, IPC,
+  policy, or target revalidation is unavailable.
+
+### Deferred remediation design: helper enrollment proof
+
+Enrollment requires a feature probe for both `SO_PEERPIDFD` and
+`SO_PASSPIDFD`; an unavailable or failing probe makes actions unavailable. The
+helper accepts a local IPC request only after all of the following checks
+succeed:
+
+1. It obtains the connected peer's pidfd atomically with `SO_PEERPIDFD` and
+   checks `SO_PEERCRED` against the configured enrolled server effective UID.
+   It does not call `pidfd_open()` on the numeric credential PID.
+2. It reads the expected unit's active `MainPID` from the local system manager
+   and compares it with the still-pinned peer pidfd identity. Sharing a unit
+   cgroup is insufficient: PTY, shell, and other descendant processes are
+   rejected.
+3. It enables `SO_PASSPIDFD` and requires the kernel-provided `SCM_PIDFD` on
+   the single request frame. That per-request pidfd must again identify the
+   enrolled service `MainPID`; this rejects a socket inherited across `fork` or
+   `exec`. `SCM_RIGHTS`, missing ancillary data, extra ancillary records, and
+   a second request frame are denied.
+4. The client creates its socket with `SOCK_CLOEXEC`; the helper accepts with
+   `accept4(..., SOCK_CLOEXEC)`, closes the connection after one receipt, and
+   never passes that descriptor to another process.
+5. The pinned per-request pidfd verifies the expected cgroup and executable
+   device/inode against the root-owned enrolled server identity.
+6. The helper executable, socket, unit, and policy identity have the expected
+   root ownership and non-writable modes.
+7. The request is a supported versioned action and satisfies the fixed v1
+   contract above.
+
+Failure at any point is an `unavailable` or `denied` result and causes no
+signal or kernel write. Same-user means the enrolled server's effective UID,
+not the browser account name. A remote browser is never a polkit agent and its
+password is never accepted or transported.
+
+### Deferred remediation design: host-namespace target proof
+
+The enrolled helper must run in the host PID, mount, and user namespaces. It
+opens and revalidates the target using its own host `/proc`, never a client
+provided proc root or namespace path. At approval and immediately before the
+fixed action, it compares the target's host PID/mount/user namespace inode
+identities, boot ID, PID, start ticks, UID, cgroup, and bounded command
+identity with the canonical target. It rejects absent, changed, non-host, or
+unreadable namespace evidence. This denies ambiguous nested-systemd and
+container targets rather than attempting a best-effort signal.
+
+### Deferred remediation threat model: abuse-case matrix
+
+| Asset or entry point        | Abuse                                        | Required control                                                                                          | Residual risk and test                                                                                        |
+| --------------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Browser JWT or cookie       | Stolen token or CSRF creates an action       | Protected route, fresh re-auth, Origin/Content-Type checks for cookie requests, one-shot bound approval   | A valid in-session actor can approve an allowed action; reject expired, reused, and mismatched approvals      |
+| Browser intent body         | Command, signal, PID-only, or path injection | Canonical typed action and server-resolved immutable target                                               | Future action enum defects remain possible; property-test rejected unknown fields                             |
+| Stale UI target             | PID reuse or changed cgroup/namespace        | Bind host namespace inodes, boot ID/start ticks/UID/cgroup/identity and re-read immediately before action | Process can exit between checks; return failed receipt without retrying another PID                           |
+| Approval or IPC frame       | Replay, oversized input, spoofed request     | Nonce and request-ID single use, 8 KiB cap, freshness window, helper dedupe                               | Bounded in-memory/durable dedupe retention; test replay and over-limit frames                                 |
+| Server process              | Compromise invokes helper                    | Helper peer proof, fixed enum, target checks, cooldown, local audit                                       | An enrolled server compromise can request an allowed action; security owner must accept this v1 residual risk |
+| Same-UID local process      | Connects directly to helper                  | `SO_PEERCRED` PID equals systemd `MainPID`, pinned pidfd/executable/cgroup, root-owned socket/policy      | System-manager proof may be unsupported; unsupported layouts remain read-only                                 |
+| Namespace or cgroup view    | Targets another host/container process       | Helper validates host PID/mount/user namespace inodes, boot ID, and target cgroup/UID; no PID-only action | Namespace layouts can be ambiguous; deny if identity proof is incomplete                                      |
+| Global cache drop           | Availability or I/O denial of service        | Fixed `sync` + `3`, explicit warning, cooldown, rate limit, audit                                         | The action is inherently global; use only in operator-approved enrollment                                     |
+| Helper or audit files       | Tampering or suppression                     | Root-owned binary/socket/policy; append-only bounded local audit where supported                          | Local root can tamper; include verification status in support checks                                          |
+| Monitor, alerts, or WS      | Automatic remediation or evidence leakage    | Negative dependency boundary, sanitized bounded events, REST snapshot authoritative                       | Broadcast loss is expected; test monitor cannot import action modules                                         |
+| Partial failure or shutdown | Half-completed action or unsafe retry        | Owned queue, cancellation, receipt state, no automatic retry                                              | Syscalls are not reversible; record outcome and require a new approval                                        |
+
+### Deferred remediation evidence: Phase 01 host feasibility
+
+The development host was checked read-only on 2026-08-08. It runs Fedora 44
+with Linux 7.1.5, systemd 259 as PID 1, unified cgroup v2 mounted at
+`/sys/fs/cgroup`, readable `/proc/meminfo` and memory PSI, and SELinux in
+enforcing mode. The current Codex process is an unprivileged user-session
+cgroup. No DamHopper systemd unit, helper binary, Unix socket, or root-owned
+policy exists on this host.
+
+This confirms only that the deferred systemd/cgroup/peer-credential design is
+feasible on that host; it does not prove enrollment or authorize implementation.
+Any future remediation phase must validate the actual installed unit, binary,
+socket, ownership, and peer identity before it reports capability. Current
+delivery remains monitoring-only.
+
+### Deferred remediation sign-off before privileged implementation
+
+- A security owner must accept the residual risk of a compromised enrolled
+  server requesting only the helper's fixed action set.
+- The support matrix must define the minimum kernel, distro, systemd, and pidfd
+  fallback policy. Unknown or unsupported layouts remain monitoring-only.
+- The operator must explicitly accept the retention target for the local action
+  audit and whether the global cache action is permitted at all.
+
+No privileged helper, auto-remediation, sudo/PTY escalation, generic command
+execution, or development bypass may enter a delivery phase before these
+decisions are recorded and the architecture gate is reopened.
 
 ## Data Flow: File List Request
 

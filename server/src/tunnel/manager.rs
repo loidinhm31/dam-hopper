@@ -223,13 +223,17 @@ impl TunnelSessionManager {
             .drain()
             .filter_map(|(_, h)| h.stop_tx)
             .collect();
+        let has_stoppable_sessions = !stop_txes.is_empty();
 
         for tx in stop_txes {
             let _ = tx.send(());
         }
 
-        // Allow background tasks 3s to complete graceful shutdown before exiting
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        // Fresh servers have no child processes to reap; do not spend the
+        // shutdown grace period waiting for work that was never started.
+        if has_stoppable_sessions {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
 
         self.sessions.write().await.clear();
     }

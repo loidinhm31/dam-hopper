@@ -55,6 +55,7 @@ import { useSettingsStore } from "@/stores/settings.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useTerminalSuggestions } from "@/hooks/use-terminal-suggestions.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
+import { useTransportGeneration } from "@/hooks/use-transport-generation.js";
 import { TerminalFindBar } from "@/components/atoms/TerminalFindBar.js";
 import { TerminalSuggestionGhost } from "@/components/atoms/TerminalSuggestionGhost.js";
 import { TerminalHistoryList } from "@/components/organisms/TerminalHistoryList.js";
@@ -87,26 +88,26 @@ interface TerminalPanelProps {
 }
 
 const DARK_THEME = {
-  background: "#0f172a",
-  foreground: "#f1f5f9",
-  cursor: "#3b82f6",
-  selectionBackground: "#334155",
-  black: "#0f172a",
-  red: "#dc2626",
-  green: "#10b981",
-  yellow: "#facc15",
-  blue: "#3b82f6",
-  magenta: "#a855f7",
-  cyan: "#06b6d4",
-  white: "#f1f5f9",
-  brightBlack: "#334155",
-  brightRed: "#f87171",
-  brightGreen: "#34d399",
-  brightYellow: "#fde047",
-  brightBlue: "#60a5fa",
-  brightMagenta: "#c084fc",
-  brightCyan: "#22d3ee",
-  brightWhite: "#ffffff",
+  background: "#0D1117",
+  foreground: "#F8FAFC",
+  cursor: "#60A5FA",
+  selectionBackground: "#475569",
+  black: "#94A3B8",
+  red: "#F87171",
+  green: "#34D399",
+  yellow: "#FACC15",
+  blue: "#60A5FA",
+  magenta: "#C084FC",
+  cyan: "#22D3EE",
+  white: "#E2E8F0",
+  brightBlack: "#CBD5E1",
+  brightRed: "#FCA5A5",
+  brightGreen: "#6EE7B7",
+  brightYellow: "#FDE047",
+  brightBlue: "#93C5FD",
+  brightMagenta: "#D8B4FE",
+  brightCyan: "#67E8F9",
+  brightWhite: "#FFFFFF",
 };
 
 const EMPTY_FIND_SNAPSHOT: TerminalFindSnapshot = {
@@ -131,6 +132,7 @@ export function TerminalPanel({
   webglEnabled = false,
   className,
 }: TerminalPanelProps) {
+  const transportGeneration = useTransportGeneration();
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
   const shouldSuppressNativeKeyboard =
@@ -659,7 +661,7 @@ export function TerminalPanel({
       term.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // intentionally run once per mount — use key prop to force remount
+  }, [transportGeneration]);
 
   useEffect(() => {
     const term = termRef.current;

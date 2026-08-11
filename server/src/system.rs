@@ -1,3 +1,12 @@
+pub mod alerts;
+pub mod config;
+pub mod monitor;
+pub use alerts::{
+    AlertChange, AlertEngine, AlertEngineState, AlertEvidence, AlertIncident, AlertSample,
+    AlertSeverity, AlertState, AlertSummary, AlertThresholds,
+};
+pub use monitor::HostResourceMonitor;
+
 use std::{
     ffi::OsStr,
     fs,
@@ -12,6 +21,12 @@ mod types;
 pub use types::{
     CpuMetrics, DiskMetrics, HostMetrics, LoadAverageMetrics, MemoryMetrics, TemperatureMetrics,
 };
+pub mod platform;
+mod types_v1;
+pub use types_v1::*;
+
+#[cfg(target_os = "linux")]
+mod linux;
 
 const THERMAL_ZONE_ROOT: &str = "/sys/class/thermal";
 

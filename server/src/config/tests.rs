@@ -9,8 +9,8 @@ use super::{
     presets::{get_effective_command, get_preset},
     resolve::{resolve_startup_config, ConfigResolutionInput, ConfigSource},
     schema::{
-        CommandKind, GlobalConfig, KnownWorkspace, ProjectType, RestartPolicy,
-        TerminalCodexNotificationSoundPattern, UiConfig,
+        CommandKind, ExplorerLanguageFilter, GlobalConfig, KnownWorkspace, ProjectType,
+        RestartPolicy, TerminalCodexNotificationSoundPattern, UiConfig,
     },
 };
 
@@ -70,6 +70,35 @@ type = "cargo"
     assert!(cfg.projects[0].path.starts_with('/'));
     assert!(!cfg.server.telemetry.enabled);
     assert_eq!(cfg.server.telemetry.detail_retention_days, 90);
+}
+
+#[test]
+fn host_resource_monitor_config_uses_snake_case_and_roundtrips() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[workspace]
+name = "resources"
+
+[server.host_resources]
+light_sample_seconds = 7
+process_deadline_millis = 150
+max_alert_incidents = 12
+"#,
+    )
+    .unwrap();
+
+    let config = read_config(&config_path).unwrap();
+    assert_eq!(config.server.host_resources.light_sample_seconds, 7);
+    assert_eq!(config.server.host_resources.process_deadline_millis, 150);
+    assert_eq!(config.server.host_resources.max_alert_incidents, 12);
+
+    write_config(&config_path, &config).unwrap();
+    let written = std::fs::read_to_string(&config_path).unwrap();
+    assert!(written.contains("light_sample_seconds = 7"));
+    assert!(!written.contains("lightSampleSeconds"));
 }
 
 #[test]
@@ -866,6 +895,7 @@ fn global_config_writes_snake_case_ui_and_server_keys() {
             session_db_path: "/tmp/sessions.db".to_string(),
             session_buffer_ttl_hours: 12,
             telemetry: crate::config::TelemetryConfig::default(),
+            host_resources: crate::config::HostResourceMonitorConfig::default(),
         },
     };
 
@@ -1252,6 +1282,7 @@ fn ui_config_defaults() {
         ui.terminal_codex_notification_sound_pattern,
         TerminalCodexNotificationSoundPattern::Default
     );
+    assert_eq!(ui.explorer_language_filter, ExplorerLanguageFilter::All);
     assert!(ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 11);
     assert_eq!(ui.mobile_custom_keyboard_padding, 6);
@@ -1288,6 +1319,7 @@ fn ui_config_serde_roundtrip() {
             terminal_codex_notification_sound_pattern:
                 TerminalCodexNotificationSoundPattern::TwoTone,
             explorer_show_hidden: false,
+            explorer_language_filter: ExplorerLanguageFilter::JavascriptTypescript,
             mobile_custom_keyboard_enabled: false,
             mobile_custom_keyboard_font_size: 13,
             mobile_custom_keyboard_padding: 8,
@@ -1317,6 +1349,10 @@ fn ui_config_serde_roundtrip() {
         json["terminalCodexNotificationSoundPattern"],
         serde_json::json!("two-tone")
     );
+    assert_eq!(
+        json["explorerLanguageFilter"],
+        serde_json::json!("javascript-typescript")
+    );
     assert!(json
         .get("terminal_codex_notification_sound_pattern")
         .is_none());
@@ -1330,6 +1366,8 @@ fn ui_config_serde_roundtrip() {
     assert!(!written.contains("terminalCommitStatusEnabled"));
     assert!(written.contains("terminal_auto_switch_project_enabled = true"));
     assert!(!written.contains("terminalAutoSwitchProjectEnabled"));
+    assert!(written.contains("explorer_language_filter = \"javascript-typescript\""));
+    assert!(!written.contains("explorerLanguageFilter"));
     let loaded = read_global_config_at(&cfg_path).unwrap().unwrap();
     let ui = loaded.ui.unwrap();
     assert_eq!(ui.system_font_size, 16);
@@ -1352,6 +1390,10 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(
         ui.terminal_codex_notification_sound_pattern,
         TerminalCodexNotificationSoundPattern::TwoTone
+    );
+    assert_eq!(
+        ui.explorer_language_filter,
+        ExplorerLanguageFilter::JavascriptTypescript
     );
     assert!(!ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 13);
@@ -1508,6 +1550,29 @@ fn ui_config_serde_aliases_terminal_auto_switch_project() {
     let toml: GlobalConfig =
         toml::from_str("[ui]\nterminal_auto_switch_project_enabled = false\n").unwrap();
     assert!(!toml.ui.unwrap().terminal_auto_switch_project_enabled);
+}
+
+#[test]
+fn ui_config_serde_aliases_explorer_language_filter() {
+    for key in ["explorer_language_filter", "explorerLanguageFilter"] {
+        let toml = format!("[ui]\n{key} = \"java\"\n");
+        let loaded: GlobalConfig = toml::from_str(&toml).unwrap();
+        assert_eq!(
+            loaded.ui.unwrap().explorer_language_filter,
+            ExplorerLanguageFilter::Java
+        );
+    }
+
+    let json = serde_json::from_value::<UiConfig>(serde_json::json!({
+        "explorerLanguageFilter": "rust"
+    }))
+    .unwrap();
+    assert_eq!(json.explorer_language_filter, ExplorerLanguageFilter::Rust);
+
+    let invalid = serde_json::from_value::<UiConfig>(serde_json::json!({
+        "explorerLanguageFilter": "python"
+    }));
+    assert!(invalid.is_err());
 }
 
 #[test]

@@ -3,6 +3,8 @@ import {
   Cloud,
   ExternalLink,
   PanelRightOpen,
+  Pin,
+  PinOff,
   Radio,
   Terminal as TerminalIcon,
   X,
@@ -28,6 +30,7 @@ interface Props {
     | null;
   item: RuntimeTreeItem;
   onSelectSession?: (sessionId: string) => void;
+  onToggleTabPin?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   onMoveItem: (groupId: string, draggedId: string, targetId: string) => void;
@@ -121,6 +124,7 @@ function RuntimeSessionLeaf({
   active,
   session,
   onSelectSession,
+  onToggleTabPin,
   onCloseSession,
   onOpenDiagnosticsMenu,
   onStartTunnel,
@@ -131,6 +135,7 @@ function RuntimeSessionLeaf({
   active: boolean;
   session: RuntimeSessionItem;
   onSelectSession?: (sessionId: string) => void;
+  onToggleTabPin?: (sessionId: string) => void;
   onCloseSession?: (sessionId: string) => void;
   onOpenDiagnosticsMenu?: TerminalDiagnosticsMenuHandler;
   onStartTunnel: (port: number, label: string) => Promise<void>;
@@ -138,36 +143,33 @@ function RuntimeSessionLeaf({
   onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
   touchOptimized?: boolean;
 }) {
+  const statusClass =
+    session.alive === false
+      ? "bg-[var(--color-warning)]"
+      : "bg-[var(--color-success)]";
+
   return (
     <div
-      role="button"
-      tabIndex={0}
-      title={session.cwd ? `cwd: ${session.cwd}` : session.sessionId}
       onClick={() => onSelectSession?.(session.sessionId)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onSelectSession?.(session.sessionId);
-        }
-      }}
       className={cn(
-        "cursor-pointer rounded-sm px-1.5 py-1 outline-none",
-        "focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]/60",
+        "rounded-sm px-1.5 py-1 outline-none",
+        "focus-within:ring-1 focus-within:ring-[var(--color-primary)]/60",
         touchOptimized && "min-h-11 py-2 text-sm",
-        active ? "bg-[var(--color-primary)]/10 text-[var(--color-text)]" : "",
+        active
+          ? "bg-[var(--color-primary)]/15 text-[var(--color-text)] ring-1 ring-inset ring-[var(--color-primary)]/45"
+          : "",
       )}
     >
       <div className="flex items-center gap-2">
-        <span
-          className={cn(
-            "h-1.5 w-1.5 shrink-0 rounded-full",
-            session.alive === false
-              ? "bg-[var(--color-warning)]"
-              : "bg-[var(--color-success)]",
-          )}
-        />
-        <div
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        <button
+          type="button"
+          aria-current={active ? "page" : undefined}
+          title={session.cwd ? `cwd: ${session.cwd}` : session.sessionId}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelectSession?.(session.sessionId);
+          }}
+          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]/60"
           onContextMenu={(event) =>
             openTerminalDiagnosticsContextMenu(
               event,
@@ -176,20 +178,54 @@ function RuntimeSessionLeaf({
             )
           }
         >
+          <span
+            className={cn("h-1.5 w-1.5 shrink-0 rounded-full", statusClass)}
+          />
           <TerminalIcon className="h-3.5 w-3.5 shrink-0" />
           <span className="min-w-0 truncate font-mono">{session.label}</span>
-        </div>
+        </button>
         <button
           type="button"
-          title="Close terminal (terminates process)"
+          aria-label={session.isPinned ? "Unpin terminal" : "Pin terminal"}
+          aria-pressed={session.isPinned === true}
+          title={
+            session.isPinned
+              ? "Unpin terminal (allows closing)"
+              : "Pin terminal (prevents closing)"
+          }
           onClick={(event) => {
             event.stopPropagation();
-            onCloseSession?.(session.sessionId);
+            onToggleTabPin?.(session.sessionId);
           }}
-          className="rounded-sm p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+          onKeyDown={(event) => event.stopPropagation()}
+          className={cn(
+            "rounded-sm p-1 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]",
+            session.isPinned
+              ? "bg-[var(--color-primary)]/20 text-[var(--color-primary)]"
+              : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
+          )}
         >
-          <X className="h-3 w-3" />
+          {session.isPinned ? (
+            <PinOff className="h-3 w-3" />
+          ) : (
+            <Pin className="h-3 w-3" />
+          )}
         </button>
+        {!session.isPinned ? (
+          <button
+            type="button"
+            aria-label="Close terminal"
+            title="Close terminal (terminates process)"
+            onClick={(event) => {
+              event.stopPropagation();
+              onCloseSession?.(session.sessionId);
+            }}
+            onKeyDown={(event) => event.stopPropagation()}
+            className="rounded-sm p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        ) : null}
       </div>
       {session.ports.length > 0 ? (
         <div className="mt-1 flex flex-wrap gap-1 pl-5">
@@ -214,6 +250,7 @@ export function TerminalRuntimeNavigatorItem({
   dragState,
   item,
   onSelectSession,
+  onToggleTabPin,
   onCloseSession,
   onOpenDiagnosticsMenu,
   onMoveItem,
@@ -279,6 +316,7 @@ export function TerminalRuntimeNavigatorItem({
           active={item.sessionId === activeSessionId}
           session={item}
           onSelectSession={onSelectSession}
+          onToggleTabPin={onToggleTabPin}
           onCloseSession={onCloseSession}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           onStartTunnel={onStartTunnel}
@@ -304,6 +342,7 @@ export function TerminalRuntimeNavigatorItem({
                 active={session.sessionId === activeSessionId}
                 session={session}
                 onSelectSession={onSelectSession}
+                onToggleTabPin={onToggleTabPin}
                 onCloseSession={onCloseSession}
                 onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
                 onStartTunnel={onStartTunnel}

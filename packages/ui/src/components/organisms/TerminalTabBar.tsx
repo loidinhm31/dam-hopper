@@ -7,6 +7,8 @@ import type { SessionInfo } from "@/api/client.js";
 export interface TabEntry {
   sessionId: string;
   label: string;
+  /** Browser-tab UI state; never sent to the server. */
+  isPinned?: boolean;
   session?: SessionInfo;
   /** Whether this terminal session can be saved as a new profile */
   isSaveable?: boolean;

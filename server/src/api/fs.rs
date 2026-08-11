@@ -49,6 +49,11 @@ pub struct PathSearchResponse {
     pub truncated: bool,
 }
 
+#[derive(Deserialize)]
+pub struct LanguageFilesParams {
+    pub project: String,
+}
+
 // ---------------------------------------------------------------------------
 // Shared param / response types
 // ---------------------------------------------------------------------------
@@ -82,11 +87,14 @@ pub struct BinaryResponse {
 // Helper: resolve + validate a project-relative path
 // ---------------------------------------------------------------------------
 
-async fn resolve(
+pub(super) async fn resolve(
     state: &AppState,
     project: &str,
     rel_path: &str,
 ) -> Result<std::path::PathBuf, AppError> {
+    if std::path::Path::new(rel_path).is_absolute() {
+        return Err(AppError::Fs(crate::fs::FsError::PathEscape));
+    }
     let project_abs = state.project_path(project).await?;
     let sandbox = state.fs.sandbox().map_err(AppError::Fs)?;
     let proposed = project_abs.join(rel_path);
@@ -161,6 +169,23 @@ pub async fn stat(
         .map_err(ApiError::from)?;
     let file_stat = ops::stat(&canonical).await.map_err(AppError::Fs)?;
     Ok(Json(file_stat))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/fs/language-files?project=NAME
+// ---------------------------------------------------------------------------
+
+pub async fn language_files(
+    State(state): State<AppState>,
+    Query(params): Query<LanguageFilesParams>,
+) -> Result<Json<ops::LanguageScanResult>, ApiError> {
+    let root = resolve(&state, &params.project, "")
+        .await
+        .map_err(ApiError::from)?;
+    let result = ops::scan_language_files(&root)
+        .await
+        .map_err(AppError::Fs)?;
+    Ok(Json(result))
 }
 
 // ---------------------------------------------------------------------------
