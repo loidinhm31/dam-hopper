@@ -154,7 +154,7 @@ impl BrowserDebugController {
             return Err("target URL is not an approved loopback or tunnel origin".into());
         }
         validate_bounds(&input.bounds)?;
-        let storage = ProfileStorage::resolve(&main.app_handle(), &input.profile_id)?;
+        let storage = ProfileStorage::resolve(main.app_handle(), &input.profile_id)?;
         let active = ActiveBrowser {
             profile_id: input.profile_id.clone(),
             session_id: random_id("browser-debug-session")?,

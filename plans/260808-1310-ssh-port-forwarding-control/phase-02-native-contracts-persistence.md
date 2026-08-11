@@ -13,7 +13,7 @@
 ## Overview
 
 - **Priority:** P1
-- **Status:** In progress — final review/remediation accepted (6/10); residual validation risks remain
+- **Status:** Complete — final review/remediation accepted 2026-08-11; staging-file race, decoded-fingerprint canonicality, and real process crash/restart/recovery plus idempotent purge proofs closed
 - **Effort:** 12h
 - **Description:** Freeze decimal-string IPC counters, client/activation ordering identities, profile/runtime DTOs, independent stores, stable desktop identity, and deterministic orphan-scope retention/purge.
 
@@ -170,15 +170,17 @@ One Rust model module feeds persistence, manager, commands, TypeScript fixtures,
 
 ## Todo list
 
-- [ ] Decimal counter and UTC timestamp fixtures pass Rust/TypeScript parity.
-- [ ] Overflow fails closed for every counter class.
-- [ ] Numeric 9/10 and 99/100 counter boundaries never use lexical ordering.
-- [ ] Stable desktop/process/client identity semantics pass restart/reload tests.
-- [ ] Independent revisions and atomic stores pass.
-- [ ] Target and bind hosts are fixed `127.0.0.1`.
-- [ ] 30-day quarantine and available/unavailable semantics pass.
-- [ ] Explicit inactive scope purge passes and cannot touch active scope.
-- [ ] No protected server/query/WS source changes.
+- [x] Decimal counter and UTC timestamp fixtures pass Rust/TypeScript parity.
+- [x] Overflow fails closed for every counter class.
+- [x] Numeric 9/10 and 99/100 counter boundaries never use lexical ordering.
+- [x] Stable desktop/process/client identity semantics pass restart/reload tests.
+- [x] Independent revisions and atomic stores pass.
+- [x] Target and bind hosts are fixed `127.0.0.1`.
+- [x] 30-day quarantine and available/unavailable semantics pass.
+- [x] Explicit inactive scope purge passes and cannot touch active scope.
+- [x] No protected server/query/WS source changes.
+- [x] Staging-file race coverage and decoded-fingerprint canonicality proofs pass.
+- [x] Real process crash/restart/recovery and idempotent purge proofs pass.
 
 ## Success Criteria
 
@@ -209,10 +211,10 @@ One Rust model module feeds persistence, manager, commands, TypeScript fixtures,
 
 - Phase 03 consumes these exact wire/scalar/store contracts.
 - Phase 04 implements manager-authoritative activation admission using the identity/token tuple.
-- Close the approved residual risks before marking Phase 02 complete: deterministic staging-file race coverage, decoded-fingerprint canonicality validation, and a real process-crash/restart proof covering replacement recovery and restart-idempotent purge.
+- Phase 02 residual proofs are closed; retain deferred Windows automated/package runtime evidence and cross-platform expansion evidence as release gates.
 
 ### Unresolved Questions
 
 - Final desktop instance reset UX remains implementation documentation; silent reset is prohibited.
 - Thirty-day orphan retention is accepted here as conservative v1 policy and should be revisited only with product data-retention requirements.
-- The final review did not authorize completion; implementation remains in progress pending the three residual proofs above.
+- Final review authorized Phase 02 completion on 2026-08-11. Windows agent/runtime and cross-platform release evidence remain unresolved deferred gates.
