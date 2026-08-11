@@ -194,6 +194,11 @@ It resets lifecycle trust on a terminal attach/replay, invalid marker or transit
 alternate-buffer entry, and a new PTY incarnation. No lifecycle event establishes
 trust for unsupported shells.
 
+Known limitations remain: the staging-file replacement race is not yet proven closed; decoded SSH
+fingerprints still need an explicit canonicality proof; and true process-crash/restart evidence
+(including cleanup and listener behavior) is still pending. These are release evidence gaps, not
+claims that the safeguards above are complete.
+
 ```mermaid
 stateDiagram-v2
   [*] --> Unverified
@@ -1126,16 +1131,14 @@ SSH passphrases are session-only by default. Save-for-later uses the host OS cre
 - If keyring support is unavailable, save-for-later falls back to session-only use with an error.
 - The frontend retry hook performs only one automatic retry after a successful key load and does not keep a long-lived success cache, so later SSH auth failures can reopen the prompt instead of being masked by stale session state.
 
-### SSH port-forwarding control (Phase 01 feasibility gate; limited GO)
+### SSH port-forwarding control (Phase 02; implemented safeguards, limited GO)
 
 Phase 01 feasibility passed for Windows ACLs, SSH-agent access, and the
-no-follow/contained-handle primitives. Phase 02 contracts may continue, but
-the forwarding manager and runtime remain planned, not implemented. A durable
-native store remains blocked until production evidence proves deterministic
-per-operation race/fault handling and durable replacement. Linux, macOS, and
-iOS remain deferred; see the Phase 01 native dependency/platform gate report.
+no-follow/contained-handle primitives. Phase 02 contracts now include the
+forwarding manager/runtime safeguards below. Linux, macOS, and iOS remain
+deferred; see the Phase 01 native dependency/platform gate report.
 
-When implemented, SSH forwarding will be a native desktop capability. The shared React UI talks to a host interface; only
+The planned SSH forwarding implementation is a native desktop capability. The shared React UI talks to a host interface; only
 `apps/native` supplies a Tauri-backed implementation. Rust code in `apps/native/src-tauri` owns the
 SSH protocol, desktop loopback listeners, profile/trust/meta persistence, host trust, credentials,
 activation ordering, scope purge, lifecycle, and shutdown. The Axum server has no forwarding CRUD
@@ -1199,10 +1202,11 @@ Native state separates durable intent from live resources:
 - `NativeSshForwardRuntime`: profile ID, scope ID, generation, state, desktop bind address,
   timestamps, retry count, channel count, and stable redacted error code. It is memory-only.
 - Profile, known-host, and scope-meta files live under Tauri `app_config_dir`, partitioned by a hash
-  of the active server-profile UUID. Writes are serialized/atomically replaced; Unix files use mode
-  `0600`; Windows/macOS behavior needs native proof. Observed `ServerProfile` deletion deactivates
-  then calls inactive `purge_scope`. Unobserved absent scopes quarantine 30 continuous days;
-  unavailable browser storage never advances aging; active/staged scopes never purge.
+  of the active server-profile UUID. Mutations share one strict manager/runtime lock and are
+  serialized/atomically replaced; Unix files use mode `0600`. Observed `ServerProfile` deletion
+  deactivates then calls inactive `purge_scope`. For a known scope, unavailable browser storage is
+  a no-write condition: it does not advance aging, create metadata, or purge. Unobserved absent
+  scopes quarantine 30 continuous days; active/staged scopes never purge.
 - The app-config root, scope directories, and every profile/trust/meta read, temp write, atomic
   replace, backup, quarantine, tombstone, and purge use retained no-follow/reparse-safe contained
   directory handles. Link/reparse/hard-link/component swaps fail closed; validated paths are never
@@ -1222,11 +1226,16 @@ Encrypted key files must already be unlocked in the SSH agent; passphrases never
 not stored by DamHopper. There is no path picker, keychain, password, or subprocess fallback.
 
 Host trust lookup is endpoint-first. SSH host is canonical safe ASCII DNS (lowercase, trailing dots
-removed) or canonical IPv4 plus port. An endpoint with no records produces one bounded unknown-key
-challenge. Approval must echo the exact canonical algorithm and `SHA256:` fingerprint; Rust persists
-the held full key and requires an explicit later Start. A trusted endpoint accepts only exact
-pre-recorded algorithm/full-key pairs (up to eight algorithms). Same algorithm/new key or an
-unrecorded algorithm at an existing endpoint hard-fails without an approval shortcut.
+removed) or canonical IPv4 plus port; validation is applied before lookup and mutation. An endpoint
+with no records produces one bounded unknown-key challenge. Approval must echo the exact canonical
+algorithm and `SHA256:` fingerprint; Rust persists the held full key and requires an explicit later
+Start. A trusted endpoint accepts only unique exact pre-recorded algorithm/full-key pairs, with a
+hard cap of eight algorithms. Same algorithm/new key or an unrecorded algorithm at an existing
+endpoint hard-fails without an approval shortcut.
+
+Every profile/trust/meta operation revalidates the retained contained handle and scope identity
+before use; handles are not replaced by path-based reopen. The desktop identity cache is scoped to
+the current native process/session and is never treated as durable trust or cross-process identity.
 
 Changed-key/algorithm remediation is stopped-app only. The trust file is
 `<Tauri app_config_dir>/ssh-forward/scopes/<sha256(scope UUID)>/known-hosts.toml`; the root is resolved
