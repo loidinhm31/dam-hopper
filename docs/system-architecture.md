@@ -194,10 +194,11 @@ It resets lifecycle trust on a terminal attach/replay, invalid marker or transit
 alternate-buffer entry, and a new PTY incarnation. No lifecycle event establishes
 trust for unsupported shells.
 
-Known limitations remain: the staging-file replacement race is not yet proven closed; decoded SSH
-fingerprints still need an explicit canonicality proof; and true process-crash/restart evidence
-(including cleanup and listener behavior) is still pending. These are release evidence gaps, not
-claims that the safeguards above are complete.
+Phase 02 storage hardening now includes deterministic exclusive staging-file replacement race
+validation, canonical decoded SHA-256 fingerprint validation, and forced-process crash/restart
+replacement recovery with idempotent purge. Phase 03+ delivery and release evidence remains
+pending; Linux, macOS, iOS, and Windows-agent/platform support remain deferred. These proofs do
+not claim v1 release readiness or that all safeguards above are complete.
 
 ```mermaid
 stateDiagram-v2

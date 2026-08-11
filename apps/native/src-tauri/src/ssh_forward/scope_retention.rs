@@ -156,8 +156,7 @@ mod tests {
             r#"{"status":"available","ids":[],"extra":true}"#
         )
         .is_err());
-        let ids = std::iter::repeat(format!("\"{SCOPE}\""))
-            .take(257)
+        let ids = std::iter::repeat_n(format!("\"{SCOPE}\""), 257)
             .collect::<Vec<_>>()
             .join(",");
         assert!(serde_json::from_str::<KnownScopesInput>(&format!(

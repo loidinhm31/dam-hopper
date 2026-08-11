@@ -34,7 +34,7 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 | # | Phase | Status | Progress | Effort | Link |
 |---|---|---|---:|---:|---|
 | 1 | Windows dependency, ACL, and platform feasibility gates | Complete | 100% | 10h | [Phase 01](./phase-01-dependency-platform-gates.md) |
-| 2 | Contracts, persistence, scope retention | In progress — contract/store validation and remediation complete; remaining approved risks are staging-file race, decoded-fingerprint canonicality, and real process-crash/restart proof | 70% | 12h | [Phase 02](./phase-02-native-contracts-persistence.md) |
+| 2 | Contracts, persistence, scope retention | Complete | 100% | 12h | [Phase 02](./phase-02-native-contracts-persistence.md) |
 | 3 | SSH transport, authentication, trust, errors | Pending | 0% | 14h | [Phase 03](./phase-03-ssh-transport-trust.md) |
 | 4 | Manager ordering, lifecycle, IPC, shutdown | Pending | 0% | 16h | [Phase 04](./phase-04-native-manager-tauri-ipc.md) |
 | 5 | Browser-safe host and ordered adapter | Pending | 0% | 10h | [Phase 05](./phase-05-host-context-native-adapter.md) |
@@ -61,7 +61,7 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 
 **2026-08-10 — Phase 01 limited GO:** Windows dependency, ACL, identity-listing/signing, and platform primitive feasibility is complete. Windows OpenSSH named-pipe signing passed with a disposable Ed25519 identity; retained-handle probes cover junction, hard-link, ancestor-junction, atomic-replace, locking, and name-swap denial. Phase 02 contract design may proceed. Durable-store implementation remains blocked pending production deterministic per-operation race/fault coverage and durable replacement proof. Linux/macOS/iOS evidence remains deferred.
 
-**2026-08-11 — Phase 02 final review/remediation:** Contract and persistence validation/remediation is accepted for continued implementation (6/10 review), including wire DTO/scalar rules, typed TOML documents, exclusive staging, feature locking, retained-handle checks, tombstone purge behavior, and deterministic coverage. Phase 02 is not complete. Approved residual risks: staging-file race coverage, decoded fingerprint canonicality, and real process-crash/restart proof (including recovery and idempotent purge).
+**2026-08-11 — Phase 02 complete:** Final review/remediation closed the staging-file race, decoded-fingerprint canonicality, and real process crash/restart/recovery proofs, including idempotent purge proofs. Contract and persistence validation is accepted for continued implementation. Windows automated/package runtime evidence and cross-platform (Linux/macOS/iOS) evidence remain deferred; no release/platform work is claimed complete.
 
 - Phase 02 must retain the approved `russh`/`ring` and Windows OpenSSH named-pipe choices until a separate security review changes them.
 - Named release/security/product owners and protected runtime-evidence environment must be configured.
