@@ -13,7 +13,7 @@
 ## Overview
 
 - **Priority:** P1
-- **Status:** In progress — review remediation underway (5/10 re-review; not approved)
+- **Status:** In progress — final review/remediation accepted (6/10); residual validation risks remain
 - **Effort:** 12h
 - **Description:** Freeze decimal-string IPC counters, client/activation ordering identities, profile/runtime DTOs, independent stores, stable desktop identity, and deterministic orphan-scope retention/purge.
 
@@ -209,8 +209,10 @@ One Rust model module feeds persistence, manager, commands, TypeScript fixtures,
 
 - Phase 03 consumes these exact wire/scalar/store contracts.
 - Phase 04 implements manager-authoritative activation admission using the identity/token tuple.
+- Close the approved residual risks before marking Phase 02 complete: deterministic staging-file race coverage, decoded-fingerprint canonicality validation, and a real process-crash/restart proof covering replacement recovery and restart-idempotent purge.
 
 ### Unresolved Questions
 
 - Final desktop instance reset UX remains implementation documentation; silent reset is prohibited.
 - Thirty-day orphan retention is accepted here as conservative v1 policy and should be revisited only with product data-retention requirements.
+- The final review did not authorize completion; implementation remains in progress pending the three residual proofs above.

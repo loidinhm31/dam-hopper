@@ -29,6 +29,7 @@ pub(crate) use windows_storage_handle::{
     open_or_create_scope_directory, open_relative, open_relative_directory_for_deletion_no_delete,
     open_relative_directory_no_delete, open_relative_directory_shared, open_relative_for_mutation,
     open_root_directory, open_scope_directory_existing, open_scope_operation_file,
+    validate_retained_handle,
 };
 pub(crate) use windows_storage_identity::{
     delete_handle, file_identity, flush_handle, FileIdentity,

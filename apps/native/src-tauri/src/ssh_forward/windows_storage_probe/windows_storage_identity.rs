@@ -19,9 +19,11 @@ use windows_sys::{
     },
 };
 
-use super::windows_storage_handle::ntstatus_error;
+use super::windows_storage_handle::{
+    ntstatus_error, validate_retained_handle, validate_retained_handle_any,
+};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct FileIdentity {
     pub(crate) volume_serial_number: u32,
     pub(crate) file_index: u64,
@@ -49,6 +51,7 @@ impl FileIdentity {
 }
 
 pub(crate) fn file_identity(handle: &OwnedHandle) -> io::Result<FileIdentity> {
+    validate_retained_handle_any(handle)?;
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
     if unsafe { GetFileInformationByHandle(handle.as_raw_handle() as HANDLE, &mut info) } == 0 {
         return Err(io::Error::last_os_error());
@@ -86,6 +89,7 @@ pub(crate) fn flush_handle(handle: &OwnedHandle) -> io::Result<()> {
 }
 
 pub(crate) fn delete_handle(handle: &OwnedHandle) -> io::Result<()> {
+    validate_retained_handle(handle, false)?;
     let mut status = IO_STATUS_BLOCK::default();
     let mut disposition = FILE_DISPOSITION_INFORMATION { DeleteFile: true };
     let result = unsafe {
