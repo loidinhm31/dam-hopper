@@ -292,6 +292,21 @@ describe("host resource monitoring in Chromium", () => {
     expect(storageElement?.getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("keeps an unavailable temperature sensor state explicit", async () => {
+    legacyMetricsResult = {
+      data: { ...legacyMetrics, temperatures: [] },
+    };
+    await act(async () => root.render(<HostResourcePopover />));
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Host resources: Memory pressure"]',
+    );
+    await act(async () => trigger?.click());
+
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
+    expect(dialog?.textContent).toContain("Temperature sensors unavailable");
+    expect(dialog?.textContent).not.toContain("0°C");
+  });
+
   it("keeps the read-only dialog inside a mobile viewport and restores trigger focus", async () => {
     await page.viewport(320, 700);
     await act(async () => root.render(<HostResourcePopover />));

@@ -6,7 +6,7 @@
 ## Overview
 - **Date:** 2026-08-11
 - **Priority:** P1
-- **Status:** pending
+- **Status:** completed — 2026-08-11 09:15:59 +07:00
 
 ## Key Insights
 Rust pure tests establish policy and API tests establish serialization/auth; browser fixtures cannot prove real Linux thermal availability. Validation must preserve unrelated worktree changes and avoid broad suite cost unless proportional.
@@ -31,12 +31,12 @@ Layer verification: pure lifecycle/classifier → monitor/API auth/cache/schema 
 6. Inspect docs/diff/status/staged names; do not touch unrelated changes.
 
 ## Todo list
-- [ ] Complete Rust unit/monitor/API coverage.
-- [ ] Complete UI unit/SSE/presentation coverage.
-- [ ] Complete browser disclosure/accessibility coverage.
-- [ ] Run proportional validation and record results.
-- [ ] Update applicable existing docs only.
-- [ ] Review scope, secrets, staged files, unrelated changes.
+- [x] Complete Rust unit/monitor/API coverage.
+- [x] Complete UI unit/SSE/presentation coverage.
+- [x] Complete browser disclosure/accessibility coverage.
+- [x] Run proportional validation and record results.
+- [x] Update applicable existing docs only.
+- [x] Review scope, secrets, staged files, unrelated changes.
 
 ## Success Criteria
 Focused gates pass and reviewer can trace every incident to validated evidence; compatibility, auth, recovery, accessibility, caps, and no polling scope expansion are proven.
@@ -48,4 +48,4 @@ Linux mount classification is platform-dependent; retain conservative fixtures/f
 Confirm resource routes remain authenticated, no evidence/logs leak secrets, nested SSE payloads fail closed, no CORS/permission expansion, and no new persistence/dependency/deploy work.
 
 ## Next steps
-Implementation handoff only after reviewers verify changed files, targeted evidence, residual risks, and no unintended staged files.
+Completed: Phase 04 approved; plan handoff closed. Preserve residual Linux hardware verification as a follow-up, not a release blocker.
