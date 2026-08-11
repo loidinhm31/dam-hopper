@@ -68,6 +68,7 @@
     "hostKeyChallenge": {
       "challengeId": "7f6b9e8e-5df2-4b1f-9de6-b2c2d2abf1cb",
       "profileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+      "scopeId": "c1f5890a-55d7-46ca-949b-0d63972f0a68",
       "generation": "100",
       "sshHost": "bastion.example",
       "sshPort": 22,
@@ -123,6 +124,7 @@
         {
           "challengeId": "7f6b9e8e-5df2-4b1f-9de6-b2c2d2abf1cb",
           "profileId": "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
+          "scopeId": "c1f5890a-55d7-46ca-949b-0d63972f0a68",
           "generation": "100",
           "sshHost": "bastion.example",
           "sshPort": 22,

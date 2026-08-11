@@ -5,16 +5,28 @@
 //! those commands reuse one label check without granting browser or mobile
 //! callers a fallback implementation.
 
+#[cfg(windows)]
+#[allow(dead_code)]
+pub(crate) mod credentials;
 #[allow(dead_code)]
 pub(crate) mod error;
 #[allow(dead_code)]
 pub(crate) mod instance;
+#[cfg(windows)]
+#[allow(dead_code)]
+pub(crate) mod known_hosts;
 #[allow(dead_code)]
 pub(crate) mod model;
 #[allow(dead_code)]
 pub(crate) mod profile;
 #[allow(dead_code)]
 pub(crate) mod scope_retention;
+#[cfg(windows)]
+#[allow(dead_code)]
+pub(crate) mod ssh_client;
+#[cfg(windows)]
+#[allow(dead_code)]
+pub(crate) mod trust_repair;
 
 #[cfg(windows)]
 #[allow(dead_code)]

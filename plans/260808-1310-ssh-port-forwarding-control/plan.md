@@ -35,7 +35,7 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 |---|---|---|---:|---:|---|
 | 1 | Windows dependency, ACL, and platform feasibility gates | Complete | 100% | 10h | [Phase 01](./phase-01-dependency-platform-gates.md) |
 | 2 | Contracts, persistence, scope retention | Complete | 100% | 12h | [Phase 02](./phase-02-native-contracts-persistence.md) |
-| 3 | SSH transport, authentication, trust, errors | Pending | 0% | 14h | [Phase 03](./phase-03-ssh-transport-trust.md) |
+| 3 | SSH transport, authentication, trust, errors | Complete | 100% | 14h | [Phase 03](./phase-03-ssh-transport-trust.md) |
 | 4 | Manager ordering, lifecycle, IPC, shutdown | Pending | 0% | 16h | [Phase 04](./phase-04-native-manager-tauri-ipc.md) |
 | 5 | Browser-safe host and ordered adapter | Pending | 0% | 10h | [Phase 05](./phase-05-host-context-native-adapter.md) |
 | 6 | Desktop-only control surface | Pending | 0% | 10h | [Phase 06](./phase-06-desktop-control-surface.md) |
@@ -62,6 +62,8 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 **2026-08-10 — Phase 01 limited GO:** Windows dependency, ACL, identity-listing/signing, and platform primitive feasibility is complete. Windows OpenSSH named-pipe signing passed with a disposable Ed25519 identity; retained-handle probes cover junction, hard-link, ancestor-junction, atomic-replace, locking, and name-swap denial. Phase 02 contract design may proceed. Durable-store implementation remains blocked pending production deterministic per-operation race/fault coverage and durable replacement proof. Linux/macOS/iOS evidence remains deferred.
 
 **2026-08-11 — Phase 02 complete:** Final review/remediation closed the staging-file race, decoded-fingerprint canonicality, and real process crash/restart/recovery proofs, including idempotent purge proofs. Contract and persistence validation is accepted for continued implementation. Windows automated/package runtime evidence and cross-platform (Linux/macOS/iOS) evidence remain deferred; no release/platform work is claimed complete.
+
+**2026-08-11 — Phase 03 approved:** SSH transport, authentication, endpoint-first host trust, scoped approval challenges, redacted errors, bounded credentials, aggregate timeouts, and Windows-safe trust recovery passed validation and security review. Phase 04 manager/IPC lifecycle work remains pending.
 
 - Phase 02 must retain the approved `russh`/`ring` and Windows OpenSSH named-pipe choices until a separate security review changes them.
 - Named release/security/product owners and protected runtime-evidence environment must be configured.
