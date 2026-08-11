@@ -77,6 +77,23 @@ pub(super) fn validate_handle(handle: HANDLE, directory: bool) -> io::Result<()>
     Ok(())
 }
 
+/// Rechecks a retained managed handle immediately before an operation. This
+/// catches post-open reparse or hard-link changes without reopening by path.
+pub(crate) fn validate_retained_handle(handle: &OwnedHandle, directory: bool) -> io::Result<()> {
+    validate_handle(handle.as_raw_handle() as HANDLE, directory)
+}
+
+pub(crate) fn validate_retained_handle_any(handle: &OwnedHandle) -> io::Result<()> {
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(handle.as_raw_handle() as HANDLE, &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    validate_handle(
+        handle.as_raw_handle() as HANDLE,
+        info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0,
+    )
+}
+
 fn open_relative_with_access(
     parent: &OwnedHandle,
     name: &str,
@@ -352,13 +369,17 @@ pub(crate) fn open_relative_for_mutation(
     parent: &OwnedHandle,
     name: &str,
 ) -> io::Result<OwnedHandle> {
-    open_relative_with_access(
+    // Hold an operation handle that permits only concurrent reads. A new
+    // writer, delete, reparse, or hard-link operation must wait until the
+    // retained-handle mutation completes.
+    open_relative_with_access_and_shares(
         parent,
         name,
         false,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE | SYNCHRONIZE,
         FILE_OPEN,
         true,
+        FILE_SHARE_READ,
     )
 }
 
