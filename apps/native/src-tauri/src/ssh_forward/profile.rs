@@ -1,6 +1,6 @@
 //! Durable forwarding-profile wire contract and input validation.
 
-use std::fmt;
+use std::{fmt, net::Ipv4Addr};
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
@@ -108,7 +108,7 @@ impl SshForwardProfile {
         validate_uuid_v4(&self.id)?;
         validate_uuid_v4(&self.scope_id)?;
         validate_scalar(&self.name, MAX_PROFILE_SCALARS)?;
-        validate_ssh_host(&self.ssh_host)?;
+        validate_canonical_ssh_host(&self.ssh_host)?;
         validate_scalar(&self.ssh_user, MAX_PROFILE_SCALARS)?;
         validate_port(self.ssh_port)?;
         validate_port(self.local_port)?;
@@ -209,12 +209,29 @@ fn validate_safe_ascii(value: &str, limit: usize) -> Result<(), ProfileValidatio
     }
 }
 
-fn validate_ssh_host(value: &str) -> Result<(), ProfileValidationError> {
-    if value.is_empty()
-        || value.len() > MAX_SSH_HOST
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+pub(crate) fn validate_canonical_ssh_host(value: &str) -> Result<(), ProfileValidationError> {
+    if value.is_empty() || value.len() > MAX_SSH_HOST {
+        return Err(ProfileValidationError::InvalidSshHost);
+    }
+    if let Ok(ip) = value.parse::<Ipv4Addr>() {
+        return (ip.to_string() == value)
+            .then_some(())
+            .ok_or(ProfileValidationError::InvalidSshHost);
+    }
+    if value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || byte == b'.')
+        || value != value.to_ascii_lowercase()
+        || value.ends_with('.')
+        || value.split('.').any(|label| {
+            label.is_empty()
+                || label.len() > 63
+                || !label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                || label.starts_with('-')
+                || label.ends_with('-')
+        })
     {
         Err(ProfileValidationError::InvalidSshHost)
     } else {
@@ -280,6 +297,12 @@ mod tests {
         let mut malformed = serde_json::to_value(profile()).unwrap();
         malformed["id"] = serde_json::json!("00000000-0000-4000-0000-000000000000");
         assert!(serde_json::from_value::<SshForwardProfile>(malformed).is_err());
+        let mut noncanonical = serde_json::to_value(profile()).unwrap();
+        noncanonical["sshHost"] = serde_json::json!("Bastion.example.");
+        assert!(serde_json::from_value::<SshForwardProfile>(noncanonical).is_err());
+        let mut ambiguous_ipv4 = serde_json::to_value(profile()).unwrap();
+        ambiguous_ipv4["sshHost"] = serde_json::json!("127.0.0.01");
+        assert!(serde_json::from_value::<SshForwardProfile>(ambiguous_ipv4).is_err());
         let mut invalid_deserialized = serde_json::to_value(profile()).unwrap();
         invalid_deserialized["targetPort"] = serde_json::json!(0);
         assert!(serde_json::from_value::<SshForwardProfile>(invalid_deserialized).is_err());

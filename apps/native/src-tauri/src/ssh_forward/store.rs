@@ -4,12 +4,13 @@
 //! leaves the last committed document intact; raw bytes never cross this API.
 
 use std::{
+    collections::{HashMap, HashSet},
     io,
     os::windows::io::OwnedHandle,
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
     },
 };
 
@@ -19,7 +20,10 @@ use uuid::Uuid;
 
 use super::{
     model::{UtcTimestamp, WireCounter},
-    profile::{validate_uuid_v4, LoopbackHost, ReconnectPolicy, SshForwardAuth, SshForwardProfile},
+    profile::{
+        validate_canonical_ssh_host, validate_uuid_v4, LoopbackHost, ReconnectPolicy,
+        SshForwardAuth, SshForwardProfile,
+    },
     scope_retention::{
         is_purge_eligible, reconcile, validate_known_scopes, KnownScopesInput, Reconciliation,
         ScopeMeta,
@@ -32,7 +36,7 @@ use super::{
         open_relative_directory_for_deletion_no_delete, open_relative_directory_no_delete,
         open_relative_directory_shared, open_relative_for_mutation, open_root,
         open_scope_directory_existing, open_scope_operation_file, release_file_lock_at,
-        DirectoryEntry, FileIdentity,
+        validate_retained_handle, DirectoryEntry, FileIdentity,
     },
 };
 
@@ -47,6 +51,10 @@ const SCOPE_FENCE_FILE: &str = "scope-operation.lock";
 const LOCK_FILE: &str = "ssh-forward.lock";
 const SCHEMA_VERSION: u8 = 1;
 const MAX_PROFILES: usize = 64;
+const MAX_TRUSTED_ALGORITHMS_PER_ENDPOINT: usize = 8;
+const SHA256_FINGERPRINT_LENGTH: usize = "SHA256:".len() + 43;
+
+static PROCESS_DESKTOP_IDENTITIES: OnceLock<Mutex<HashMap<FileIdentity, String>>> = OnceLock::new();
 
 pub(crate) struct SshForwardStore {
     app_config: Arc<OwnedHandle>,
@@ -56,6 +64,7 @@ pub(crate) struct SshForwardStore {
     scopes_identity: FileIdentity,
     lock_file: Arc<OwnedHandle>,
     write_gate: Arc<Mutex<()>>,
+    desktop_instance_id: Mutex<Option<String>>,
 }
 pub(crate) struct ScopeStore {
     app_config: Arc<OwnedHandle>,
@@ -228,6 +237,7 @@ impl SshForwardStore {
             scopes_identity,
             lock_file,
             write_gate: Arc::new(Mutex::new(())),
+            desktop_instance_id: Mutex::new(None),
         };
         {
             let _gate = lock(&store.write_gate)?;
@@ -362,11 +372,27 @@ impl SshForwardStore {
     }
 
     pub(crate) fn load_or_create_desktop_instance(&self) -> io::Result<String> {
+        let process_cache = PROCESS_DESKTOP_IDENTITIES.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Some(identity) = process_cache
+            .lock()
+            .map_err(|_| io::Error::other("desktop_instance_process_cache_poisoned"))?
+            .get(&self.root_identity)
+            .cloned()
+        {
+            return Ok(identity);
+        }
+        let mut cached = self
+            .desktop_instance_id
+            .lock()
+            .map_err(|_| io::Error::other("desktop_instance_cache_poisoned"))?;
+        if let Some(identity) = cached.as_ref() {
+            return Ok(identity.clone());
+        }
         let _gate = lock(&self.write_gate)?;
         let _file_lock = acquire_file_lock(&self.lock_file)?;
         self.ensure_current()?;
         recover_identity_artifacts(&self.root)?;
-        match read_file(&self.root, IDENTITY_FILE) {
+        let identity = match read_file(&self.root, IDENTITY_FILE) {
             Ok(contents) => parse_identity(&contents),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let identity = Uuid::new_v4().to_string();
@@ -374,7 +400,13 @@ impl SshForwardStore {
                 Ok(identity)
             }
             Err(error) => Err(error),
-        }
+        }?;
+        *cached = Some(identity.clone());
+        process_cache
+            .lock()
+            .map_err(|_| io::Error::other("desktop_instance_process_cache_poisoned"))?
+            .insert(self.root_identity, identity.clone());
+        Ok(identity)
     }
 
     fn make_scope(
@@ -425,9 +457,15 @@ impl StoredProfiles {
         if self.profiles.len() > MAX_PROFILES {
             return Err(invalid_data("profile_limit"));
         }
-        self.profiles
-            .iter()
-            .try_for_each(|profile| profile.validate(scope_id))
+        let mut ids = HashSet::new();
+        self.profiles.iter().try_for_each(|profile| {
+            profile.validate(scope_id)?;
+            if ids.insert(profile.id.as_str()) {
+                Ok(())
+            } else {
+                Err(invalid_data("duplicate_profile_id"))
+            }
+        })
     }
 }
 
@@ -442,7 +480,26 @@ impl StoredTrust {
     }
     fn validate(&self, scope_id: &str) -> io::Result<()> {
         validate_document_header(self.schema_version, &self.scope_id, scope_id)?;
-        self.entries.iter().try_for_each(TrustedHost::validate)
+        let mut algorithms = HashSet::new();
+        let mut endpoint_counts = HashMap::new();
+        self.entries.iter().try_for_each(|entry| {
+            entry.validate()?;
+            let endpoint = (entry.ssh_host.as_str(), entry.ssh_port);
+            let count = endpoint_counts.entry(endpoint).or_insert(0usize);
+            *count += 1;
+            if *count > MAX_TRUSTED_ALGORITHMS_PER_ENDPOINT {
+                return Err(invalid_data("trust_algorithm_limit"));
+            }
+            if algorithms.insert((
+                entry.ssh_host.as_str(),
+                entry.ssh_port,
+                entry.algorithm.as_str(),
+            )) {
+                Ok(())
+            } else {
+                Err(invalid_data("duplicate_trust_algorithm"))
+            }
+        })
     }
 }
 
@@ -480,13 +537,18 @@ impl StoredScopeMeta {
 
 impl TrustedHost {
     fn validate(&self) -> io::Result<()> {
-        if self.ssh_host.is_empty()
-            || self.ssh_host.len() > 253
+        if validate_canonical_ssh_host(&self.ssh_host).is_err()
             || self.ssh_port == 0
             || self.algorithm.is_empty()
             || self.algorithm.len() > 128
-            || self.fingerprint.is_empty()
-            || self.fingerprint.len() > 256
+            || !self.algorithm.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@' | b'+')
+            })
+            || !self.fingerprint.starts_with("SHA256:")
+            || self.fingerprint.len() != SHA256_FINGERPRINT_LENGTH
+            || !self.fingerprint["SHA256:".len()..]
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/'))
         {
             Err(invalid_data("invalid_trust"))
         } else {
@@ -654,8 +716,12 @@ impl ScopeStore {
         self.ensure_live()?;
         let _gate = lock(&self.write_gate)?;
         let _file_lock = acquire_file_lock(&self.lock_file)?;
-        let fence = self.acquire_scope_operation_fence()?;
         self.ensure_current()?;
+        validate_known_scopes(known).map_err(|_| invalid_data("invalid_known_scopes"))?;
+        if matches!(known, KnownScopesInput::Unavailable) {
+            return Ok(Reconciliation::Unchanged);
+        }
+        let fence = self.acquire_scope_operation_fence()?;
         self.load_profiles_unlocked()?;
         self.load_trust_unlocked()?;
         let mut stored = match self.load_meta_unlocked() {
@@ -934,6 +1000,7 @@ impl ScopeStore {
             .lock()
             .map_err(|_| io::Error::other("scope_directory_poisoned"))?;
         let directory = guard.as_ref().ok_or_else(|| invalid_data("scope_gone"))?;
+        validate_retained_handle(directory, true)?;
         operation(directory)
     }
 
@@ -972,6 +1039,8 @@ fn ensure_store_handles(
     root_identity: FileIdentity,
     scopes_identity: FileIdentity,
 ) -> io::Result<()> {
+    validate_retained_handle(app_config, true)?;
+    validate_retained_handle(root, true)?;
     let current_root = open_relative_directory_no_delete(app_config, STORE_ROOT)?;
     if file_identity(&current_root)? != root_identity {
         return Err(invalid_data("store_root_handle_stale"));
@@ -1015,10 +1084,12 @@ fn read_file(parent: &OwnedHandle, name: &str) -> io::Result<Vec<u8>> {
 
 fn read_handle(handle: &OwnedHandle) -> io::Result<Vec<u8>> {
     use std::io::Read;
+    validate_retained_handle(handle, false)?;
     let mut contents = Vec::new();
     std::fs::File::from(handle.try_clone()?)
         .take(1024 * 1024 + 1)
         .read_to_end(&mut contents)?;
+    validate_retained_handle(handle, false)?;
     if contents.len() > 1024 * 1024 {
         Err(invalid_data("store_file_too_large"))
     } else {
@@ -1719,6 +1790,7 @@ fn delete_directory(directory: &OwnedHandle) -> io::Result<()> {
         },
         Win32::{Foundation::HANDLE, System::IO::IO_STATUS_BLOCK},
     };
+    validate_retained_handle(directory, true)?;
     let mut status = IO_STATUS_BLOCK::default();
     let mut disposition = FILE_DISPOSITION_INFORMATION { DeleteFile: true };
     let result = unsafe {
@@ -1762,6 +1834,9 @@ fn rename_to(
     name: &str,
     replace: bool,
 ) -> io::Result<()> {
+    // Revalidate the retained source immediately before rename so a post-open
+    // reparse or hard-link change fails closed without a path reopen.
+    let _ = file_identity(source)?;
     use std::{
         mem::{size_of, MaybeUninit},
         os::windows::io::AsRawHandle,
@@ -1814,14 +1889,17 @@ mod tests {
 
     use super::{
         acquire_file_lock, create_new_relative_file, delete_handle, file_identity, flush_handle,
-        identity_toml, open_relative_for_mutation, open_scope_operation_file, rename_to,
-        restore_destination, scope_storage_key, write_file_with_fault, PurgeFault,
-        ReplacementFault, ReplacementMarker, SshForwardStore, StoredAuth, StoredProfiles,
-        StoredTrust, IDENTITY_FILE, META_FILE, PROFILES_FILE, SCOPE_FENCE_FILE, TRUST_FILE,
+        identity_toml, open_relative_for_mutation, open_scope_operation_file, read_handle,
+        rename_to, restore_destination, scope_storage_key, write_file_with_fault, PurgeFault,
+        ReplacementFault, ReplacementMarker, SshForwardStore, StoredAuth, StoredProfile,
+        StoredProfiles, StoredTrust, TrustedHost, IDENTITY_FILE,
+        MAX_TRUSTED_ALGORITHMS_PER_ENDPOINT, META_FILE, PROFILES_FILE, SCOPE_FENCE_FILE,
+        TRUST_FILE,
     };
     use crate::ssh_forward::{
         model::{UtcTimestamp, WireCounter},
-        scope_retention::KnownScopesInput,
+        profile::{LoopbackHost, ReconnectPolicy},
+        scope_retention::{KnownScopesInput, Reconciliation},
     };
 
     const SCOPE: &str = "c1f5890a-55d7-46ca-949b-0d63972f0a68";
@@ -2354,6 +2432,31 @@ mod tests {
     }
 
     #[test]
+    fn retained_file_operation_rechecks_hard_link_count_before_reading() {
+        let fixture = Fixture::new();
+        let store = SshForwardStore::open(&fixture.root).unwrap();
+        let scope = store.scope(SCOPE).unwrap();
+        scope
+            .replace_profiles(WireCounter::ZERO, StoredProfiles::empty(SCOPE))
+            .unwrap();
+        scope
+            .with_directory(|directory| {
+                let handle = open_relative_for_mutation(directory, PROFILES_FILE)?;
+                let link_result = fs::hard_link(
+                    fixture.scope_dir().join(PROFILES_FILE),
+                    fixture.root.join("late-hard-link.toml"),
+                );
+                match link_result {
+                    Ok(()) => assert!(read_handle(&handle).is_err()),
+                    // The strict mutation share fence rejected the late link.
+                    Err(_) => {}
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
     fn failed_tombstone_delete_stays_quarantined_for_recovery() {
         let fixture = Fixture::new();
         let store = SshForwardStore::open(&fixture.root).unwrap();
@@ -2518,15 +2621,91 @@ mod tests {
     }
 
     #[test]
-    fn deleted_desktop_identity_is_regenerated_for_an_intentional_reset() {
+    fn desktop_identity_is_cached_for_the_live_process_and_resets_after_restart() {
         let fixture = Fixture::new();
         let store = SshForwardStore::open(&fixture.root).unwrap();
         let original = store.load_or_create_desktop_instance().unwrap();
         fs::remove_file(fixture.root.join("ssh-forward").join(IDENTITY_FILE)).unwrap();
 
-        let regenerated = store.load_or_create_desktop_instance().unwrap();
-        assert_ne!(original, regenerated);
-        assert!(Uuid::parse_str(&regenerated).is_ok());
+        assert_eq!(store.load_or_create_desktop_instance().unwrap(), original);
+        drop(store);
+
+        let second_store = SshForwardStore::open(&fixture.root).unwrap();
+        assert_eq!(
+            second_store.load_or_create_desktop_instance().unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn trust_records_require_canonical_unique_bounded_endpoint_algorithms() {
+        let entry = TrustedHost {
+            ssh_host: "bastion.example".into(),
+            ssh_port: 22,
+            algorithm: "ssh-ed25519".into(),
+            fingerprint: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+        };
+        let mut trust = StoredTrust::empty(SCOPE);
+        trust.entries.push(entry.clone());
+        assert!(trust.validate(SCOPE).is_ok());
+
+        trust.entries[0].ssh_host = "Bastion.example".into();
+        assert!(trust.validate(SCOPE).is_err());
+        trust.entries[0] = entry.clone();
+        trust.entries.push(entry.clone());
+        assert!(trust.validate(SCOPE).is_err());
+
+        trust.entries.clear();
+        for index in 0..=MAX_TRUSTED_ALGORITHMS_PER_ENDPOINT {
+            trust.entries.push(TrustedHost {
+                algorithm: format!("ssh-test-{index}"),
+                ..entry.clone()
+            });
+        }
+        assert!(trust.validate(SCOPE).is_err());
+    }
+
+    #[test]
+    fn stored_profiles_reject_duplicate_profile_ids() {
+        let profile = StoredProfile {
+            id: "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96".into(),
+            scope_id: SCOPE.into(),
+            name: "metrics".into(),
+            ssh_host: "bastion.example".into(),
+            ssh_port: 22,
+            ssh_user: "operator".into(),
+            auth: StoredAuth::Agent,
+            local_port: 15432,
+            target_host: LoopbackHost,
+            target_port: 5432,
+            auto_start: false,
+            reconnect: ReconnectPolicy {
+                enabled: false,
+                max_attempts: 0,
+            },
+            created_at: timestamp("2026-01-01T00:00:00.000Z"),
+            updated_at: timestamp("2026-01-01T00:00:00.000Z"),
+        };
+        let mut profiles = StoredProfiles::empty(SCOPE);
+        profiles.profiles = vec![profile.clone(), profile];
+        assert!(profiles.validate(SCOPE).is_err());
+    }
+
+    #[test]
+    fn unavailable_scope_reconciliation_does_not_create_metadata() {
+        let fixture = Fixture::new();
+        let store = SshForwardStore::open(&fixture.root).unwrap();
+        let scope = store.scope(SCOPE).unwrap();
+        assert_eq!(
+            scope
+                .reconcile_known_scope(
+                    &KnownScopesInput::Unavailable,
+                    timestamp("2026-01-01T00:00:00.000Z")
+                )
+                .unwrap(),
+            Reconciliation::Unchanged
+        );
+        assert!(!fixture.scope_dir().join(META_FILE).exists());
     }
 
     #[test]

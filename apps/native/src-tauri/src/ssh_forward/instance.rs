@@ -1,16 +1,38 @@
 //! Memory-only manager and client identity allocation.
 
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
 use super::{error::SshForwardErrorCode, model::WireCounter, profile::validate_uuid_v4};
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct DesktopClientContext {
     pub(crate) desktop_instance_id: String,
     pub(crate) manager_session_id: String,
     pub(crate) client_epoch: WireCounter,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DesktopClientContextWire {
+    desktop_instance_id: String,
+    manager_session_id: String,
+    client_epoch: WireCounter,
+}
+
+impl<'de> Deserialize<'de> for DesktopClientContext {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = DesktopClientContextWire::deserialize(deserializer)?;
+        validate_uuid_v4(&value.desktop_instance_id)
+            .and_then(|_| validate_uuid_v4(&value.manager_session_id))
+            .map_err(|_| D::Error::custom("invalid_desktop_client_context"))?;
+        Ok(Self {
+            desktop_instance_id: value.desktop_instance_id,
+            manager_session_id: value.manager_session_id,
+            client_epoch: value.client_epoch,
+        })
+    }
 }
 
 pub(crate) struct ClientEpochIssuer {
@@ -76,5 +98,13 @@ mod tests {
         );
         assert_eq!(first_client.client_epoch.to_string(), "1");
         assert_eq!(second_client.client_epoch.to_string(), "1");
+    }
+
+    #[test]
+    fn desktop_client_context_rejects_non_v4_identity_fields() {
+        assert!(serde_json::from_str::<super::DesktopClientContext>(
+            r#"{"desktopInstanceId":"invalid","managerSessionId":"e1634e77-b0b5-4b21-bd2f-462c9e3b7a96","clientEpoch":"1"}"#
+        )
+        .is_err());
     }
 }
