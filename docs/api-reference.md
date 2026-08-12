@@ -103,14 +103,46 @@ Phase 01 adds a client-side diagnostics ring for local troubleshooting. It is wr
 
 This phase does not expose a backend export endpoint yet.
 
-## Semantic Runtime Boundary (Phase 02; remediation approved)
+## Semantic Runtime and WebSocket (Phase 3)
 
-Phase 02 documents server-internal semantic runtime contracts only. There is no
-public semantic REST route or documented semantic WebSocket message family yet;
-do not infer endpoints from registry, supervisor, session, bundle, or trust
-Rust types. Phase 3 owns the authenticated semantic WebSocket, document sync,
-navigation, and transport-level revocation contract. Phase 4 owns Monaco provider
-and delayed-prewarm UX.
+`GET /ws/semantic` is the authenticated semantic transport. Authentication is
+performed before message admission; the browser cannot select an executable,
+command, root URI, or absolute path. Protocol version 1 uses typed `kind`
+messages and bounded payloads.
+
+Client messages:
+
+| Kind | Required data | Purpose |
+| --- | --- | --- |
+| `semantic:project` | `profileId`, `projectId` | Select the project. |
+| `semantic:document_open` | `uri`, `documentVersion`, `text` | Open a complete document snapshot. |
+| `semantic:document_change` | `uri`, `documentVersion`, `text` | Replace a snapshot at a newer version. |
+| `semantic:document_close` | `uri`, `documentVersion` | Stop tracking a document. |
+| `semantic:navigate` | `requestId`, `documentVersion`, `operation`, `uri`, `position` | Request definition, implementation, or references. |
+| `semantic:cancel` | `requestId`, `documentVersion` | Cancel matching navigation. |
+| `semantic:resync` | `projectId` | Replay open document versions. |
+
+The server sends handshake, project/status/progress, document acknowledgements,
+replay, bounded navigation results, trust changes, and safe error/close events.
+Navigation responses are bound to request ID, exact document version, project,
+and policy revision.
+
+Document sync uses full snapshots rather than text deltas. Accepted text is
+bounded to 5 MiB and versioned monotonically; unsaved text remains connection
+scoped. Navigation cancellation propagates best-effort to LSP
+`$/cancelRequest`, while stale, late, cancelled, or policy-invalid results are
+fenced from output. Trust transitions/revocation, workspace replacement, and
+shutdown invalidate affected work and sessions. Paths and LSP locations are
+resolved through the project sandbox and exposed only as project-relative
+identities. Monaco provider/prewarm UX and release qualification remain later
+phase boundaries.
+
+### Semantic runtime internals
+
+Phase 2 covers the server-internal registry, supervisor, signed bundle
+resolution, and bounded language-server runtime. Do not infer public endpoints
+from internal Rust types; the WebSocket above is the documented browser
+transport.
 
 ### Fixed bundle topology and fail-closed resolution
 

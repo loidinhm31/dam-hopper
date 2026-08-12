@@ -93,6 +93,27 @@ fn validated_claims(provided: &str, secret: &str) -> Option<Claims> {
     .map(|token| token.claims)
 }
 
+/// Authenticate a WebSocket before upgrade and return only the safe actor identity.
+/// Browsers cannot set Authorization headers on native WebSocket constructors, so
+/// the existing cookie/query-token policy is intentionally shared by `/ws` and
+/// `/ws/semantic`.
+pub(crate) fn websocket_actor(
+    no_auth: bool,
+    token: Option<String>,
+    jwt_secret: &str,
+) -> Option<AuthenticatedActor> {
+    if no_auth {
+        return Some(AuthenticatedActor {
+            subject: "dev-user".into(),
+        });
+    }
+    token
+        .and_then(|value| validated_claims(&value, jwt_secret))
+        .map(|claims| AuthenticatedActor {
+            subject: claims.sub,
+        })
+}
+
 /// Generate JWT token for a given subject (username) with 30-day expiration.
 ///
 /// Returns `Ok(token)` on success, or `Err` if encoding fails.

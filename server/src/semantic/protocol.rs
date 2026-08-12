@@ -9,6 +9,17 @@ pub const MAX_LABEL_BYTES: usize = 512;
 pub const MAX_REASON_BYTES: usize = 512;
 pub const MAX_SEQUENCE: u64 = 9_007_199_254_740_991;
 
+pub use super::transport_errors::SemanticTransportError;
+pub use super::transport_messages::{
+    SemanticCloseReason, SemanticDocumentReplay, SemanticServerMessage, SemanticStatusState,
+    SemanticTransportErrorCode, SemanticTrustEventReason,
+};
+pub use super::transport_parser::parse_client_message;
+pub use super::transport_protocol::{
+    SemanticClientMessage, MAX_OPEN_DOCUMENTS, MAX_SEMANTIC_WS_MESSAGE_BYTES,
+    SEMANTIC_PROTOCOL_VERSION,
+};
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SemanticUri {
@@ -41,7 +52,7 @@ impl SemanticUri {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SemanticLanguage {
     Rust,
@@ -163,11 +174,13 @@ pub enum DescriptorAvailabilityReason {
     RuntimeCrashed,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SemanticDescriptorAvailability {
     pub descriptor_id: String,
     pub language: SemanticLanguage,
     pub state: DescriptorAvailabilityState,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<DescriptorAvailabilityReason>,
 }
 
@@ -252,6 +265,18 @@ mod tests {
             path: path.into(),
             language: SemanticLanguage::Rust,
         }
+    }
+
+    #[test]
+    fn ready_availability_omits_empty_reason_on_wire() {
+        let availability = SemanticDescriptorAvailability {
+            descriptor_id: "rust-analyzer".into(),
+            language: SemanticLanguage::Rust,
+            state: DescriptorAvailabilityState::Ready,
+            reason: None,
+        };
+        let json = serde_json::to_value(availability).unwrap();
+        assert!(json.get("reason").is_none());
     }
 
     #[test]

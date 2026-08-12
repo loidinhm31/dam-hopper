@@ -253,6 +253,7 @@ pub async fn update_settings(
     Json(patch): Json<SettingsPatch>,
 ) -> Result<impl IntoResponse, ApiError> {
     let _coordination = state.telemetry_coordinator.lock().await;
+    let _workspace_context = state.workspace_context_guard.write().await;
     let mut config = state.config.read().await.clone();
     {
         let telemetry = &mut config.server.telemetry;
@@ -363,6 +364,7 @@ pub async fn update_settings(
             .await;
         return Err(ApiError::from_app(error));
     }
+    state.semantic_supervisor.invalidate_workspace().await;
     state
         .host_resource_monitor
         .reconfigure(config.server.host_resources.clone())

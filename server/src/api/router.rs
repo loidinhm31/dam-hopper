@@ -28,8 +28,8 @@ use crate::state::AppState;
 use super::{
     agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
     fs as fs_api, fs_image, fs_video, git, git_diff, host_actions,
-    port_forward as port_forward_api, settings, ssh, system, terminal, tunnel, usage,
-    usage_sessions, workspace, ws,
+    port_forward as port_forward_api, semantic_trust, semantic_ws, settings, ssh, system, terminal,
+    tunnel, usage, usage_sessions, workspace, ws,
 };
 
 /// Build the full Axum router with auth middleware, CORS, and all routes.
@@ -51,7 +51,8 @@ pub(crate) fn build_router_with_web_dir(
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/status", get(auth::status))
-        .route("/ws", get(ws::ws_handler));
+        .route("/ws", get(ws::ws_handler))
+        .route("/ws/semantic", get(semantic_ws::ws_handler));
 
     // Protected routes — auth middleware checks damhopper-auth cookie
     let protected = Router::new()
@@ -80,6 +81,23 @@ pub(crate) fn build_router_with_web_dir(
         .route(
             "/api/projects/{name}/status",
             get(config::get_project_status),
+        )
+        // Semantic trust — transport stays on /ws/semantic; mutations are protected HTTP.
+        .route(
+            "/api/semantic/trust/{project_id}",
+            get(semantic_trust::status),
+        )
+        .route(
+            "/api/semantic/trust/{project_id}/challenge",
+            post(semantic_trust::challenge),
+        )
+        .route(
+            "/api/semantic/trust/{project_id}/transition",
+            post(semantic_trust::transition),
+        )
+        .route(
+            "/api/semantic/trust/{project_id}/revoke",
+            post(semantic_trust::revoke),
         )
         // Config
         .route("/api/config", get(config::get_config))

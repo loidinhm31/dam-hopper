@@ -1000,14 +1000,16 @@ The first version is extension-based and limited to `.rs`, `.js`, `.jsx`, `.ts`,
 automatic rescans, persistent indexes, streaming progress, or caller-configurable
 language families.
 
-### Semantic code navigation (Phase 02 boundary; remediation approved)
+### Semantic code navigation (Phase 3 transport complete)
 
 Semantic navigation is an editor capability separate from the Explorer language
 filter. Monaco exposes Go to Definition, Go to Implementation, Find References,
 modifier-click, and keyboard/context-menu actions through registered language
 providers. A typed client adapter sends project-relative document and navigation
-messages over a dedicated authenticated WebSocket. The backend translates those
-messages to standard LSP JSON-RPC over stdio for an allowlisted language server.
+messages over a dedicated authenticated WebSocket. Phase 3 provides full-snapshot
+document synchronization/replay, cancellation, and bounded navigation. The
+backend translates those messages to standard LSP JSON-RPC over stdio for an
+allowlisted language server.
 The registry covers `rust-analyzer`, `typescript-language-server`, JavaScript's
 logical TypeScript server ID, and Eclipse JDT LS; Rust/JS/TS are enabled while
 Java remains capability-disabled until Phase 6. Later languages add descriptors,
@@ -1020,9 +1022,10 @@ bundle only after server-side descriptor, target, manifest, checksum, executable
 and policy checks pass; it initializes the child over stdio and can replay the
 currently open document snapshots after restart. Idle sessions are eviction
 candidates, crashes are isolated and back off/quarantine, and shutdown closes
-server-owned children. This is a runtime boundary, not a new browser transport
-surface: Phase 02 does not complete the semantic WebSocket handshake,
-document-sync messages, or JavaScript/TypeScript client adapter.
+server-owned children. Phase 3 completes the browser transport boundary: authenticated handshake,
+project-relative full-snapshot sync/replay, cancellation-aware navigation, and
+trust/workspace lifecycle fencing. Monaco provider UX, prewarm presentation,
+release qualification, and Java enablement remain later phases.
 
 #### Fixed bundle and process topology
 
@@ -1081,9 +1084,9 @@ A 60-second idle sweep removes sessions idle for the 10-minute grace period,
 oldest first. If the global `min(logical CPUs, 8)` slot limit is pressured, the
 supervisor evicts one eligible idle session and retries admission; otherwise it
 returns the bounded global-limit state. Per-client/project capacity remains
-three sessions. Phase 3 owns the authenticated semantic WebSocket, document
-sync/navigation, and transport-level revocation contract; those are not Phase 2
-behavior.
+three sessions. Phase 3 owns the authenticated semantic WebSocket, full-snapshot document
+sync/navigation, cancellation, replay, and transport-level trust/lifecycle
+fencing.
 
 Phase 01 froze Gate B, the shared virtualized-results surface. Results are
 metadata-only and bounded to 500 targets; selecting a target may load that one
@@ -1137,7 +1140,9 @@ A later request restarts the process and replays current open document snapshots
 Per-client and global process limits prevent a workspace with many languages from
 starting every server at once.
 
-The browser never selects an executable, arguments, root URI, or absolute path.
+Authentication is required before semantic messages are admitted. The browser
+never selects an executable, arguments, root URI, or absolute path. Profile,
+project, and path identities are checked server-side.
 Server descriptors are built in or loaded only from trusted global configuration;
 commands are spawned without a shell and with a sanitized environment. Release
 bundle availability is derived from a signed/verified server manifest and

@@ -5,6 +5,7 @@
 //! manifest, target, checksum, size, and executable-mode checks pass.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
@@ -18,6 +19,9 @@ use super::bundle_manifest::{
 };
 
 pub const RELEASE_MANIFEST_SCHEMA_VERSION: u16 = 1;
+const MAX_MANIFEST_BYTES: usize = 2 * 1024 * 1024;
+const MAX_SIGNATURE_BYTES: usize = 4096;
+const MAX_DIGEST_BYTES: usize = 256;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BundleCommandSpec {
@@ -111,12 +115,13 @@ impl BundleResolver {
         public_key: &[u8; 32],
     ) -> Result<Self, BundleError> {
         let root = root.into();
-        let bytes = std::fs::read(root.join("manifest.json"))
-            .map_err(|_| BundleError::BundleUnavailable)?;
-        let signature =
-            std::fs::read(root.join("manifest.sig")).map_err(|_| BundleError::BundleUnavailable)?;
-        let digest = std::fs::read_to_string(root.join("manifest.sha256"))
-            .map_err(|_| BundleError::BundleUnavailable)?;
+        let bytes = read_bounded_file(&root.join("manifest.json"), MAX_MANIFEST_BYTES)?;
+        let signature = read_bounded_file(&root.join("manifest.sig"), MAX_SIGNATURE_BYTES)?;
+        let digest = String::from_utf8(read_bounded_file(
+            &root.join("manifest.sha256"),
+            MAX_DIGEST_BYTES,
+        )?)
+        .map_err(|_| BundleError::BundleUnavailable)?;
         Self::from_signed_manifest_bytes(root, &bytes, digest.trim(), &signature, public_key)
     }
 
@@ -170,6 +175,23 @@ impl BundleResolver {
     ) -> Self {
         self.commands.insert(descriptor_id.into(), spec);
         self
+    }
+
+    /// Build an isolated resolver for integration fixtures; production startup
+    /// always uses signed release manifest inputs instead.
+    #[doc(hidden)]
+    pub fn for_test(root: impl Into<PathBuf>, manifest: BundleManifest) -> Self {
+        Self::new(root, manifest)
+    }
+
+    /// Attach a fixed fixture command without widening workspace configuration.
+    #[doc(hidden)]
+    pub fn with_test_command_spec(
+        self,
+        descriptor_id: impl Into<String>,
+        spec: BundleCommandSpec,
+    ) -> Self {
+        self.with_command_spec(descriptor_id, spec)
     }
 
     pub fn descriptor_fingerprint(
@@ -346,6 +368,18 @@ const fn current_architecture() -> BundleArchitecture {
 struct ReleaseManifestFile {
     schema_version: u16,
     descriptors: Vec<BundleDescriptor>,
+}
+
+fn read_bounded_file(path: &Path, limit: usize) -> Result<Vec<u8>, BundleError> {
+    let file = std::fs::File::open(path).map_err(|_| BundleError::BundleUnavailable)?;
+    let mut bytes = Vec::with_capacity(limit.min(64 * 1024));
+    file.take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| BundleError::BundleUnavailable)?;
+    if bytes.len() > limit {
+        return Err(BundleError::BundleUnavailable);
+    }
+    Ok(bytes)
 }
 
 fn validate_relative_entrypoint(value: &str) -> Result<(), BundleError> {

@@ -18,6 +18,7 @@ pub async fn cache_clear(State(state): State<AppState>) -> impl IntoResponse {
     let config_path = state.config.read().await.config_path.clone();
     match read_config(&config_path) {
         Ok(cfg) => {
+            state.semantic_supervisor.invalidate_workspace().await;
             state.media_tickets.revoke_all();
             state.fs.reinit_sandbox(project_roots_from_config(&cfg));
             state
@@ -40,8 +41,9 @@ pub async fn cache_clear(State(state): State<AppState>) -> impl IntoResponse {
 // ---------------------------------------------------------------------------
 
 pub async fn reset(State(state): State<AppState>) -> impl IntoResponse {
-    // Stop all PTY sessions — equivalent to workspace reset
+    // Stop all PTY and semantic sessions — equivalent to workspace reset
     state.pty_manager.dispose();
+    state.semantic_supervisor.invalidate_workspace().await;
     Json(serde_json::json!({ "ok": true })).into_response()
 }
 

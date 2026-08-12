@@ -10,6 +10,8 @@ use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{mpsc, Mutex, Notify};
+use tokio::task::JoinHandle;
+use url::Url;
 
 use super::bundle::VerifiedBundle;
 use super::codec::{decode_frame, encode_frame, MAX_FRAME_BYTES};
@@ -71,6 +73,7 @@ impl CrashNotifier {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct SessionKey {
     pub client_id: String,
+    pub profile_id: String,
     pub project_id: String,
     pub descriptor_fingerprint: String,
     pub trust_policy_revision: u64,
@@ -79,9 +82,11 @@ pub struct SessionKey {
 impl SessionKey {
     pub fn validate(&self) -> Result<(), SessionError> {
         if self.client_id.is_empty()
+            || self.profile_id.is_empty()
             || self.project_id.is_empty()
             || self.descriptor_fingerprint.is_empty()
             || self.client_id.len() > 128
+            || self.profile_id.len() > 128
             || self.project_id.len() > 128
             || self.descriptor_fingerprint.len() > 256
             || self.trust_policy_revision > MAX_SEQUENCE
@@ -95,6 +100,7 @@ impl SessionKey {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DocumentSnapshot {
     pub uri: SemanticUri,
+    pub resolved_path: PathBuf,
     pub version: u64,
     pub text: Vec<u8>,
 }
@@ -112,12 +118,15 @@ pub struct LspSession {
     pub key: SessionKey,
     pub policy: InitializationPolicy,
     language: SemanticLanguage,
+    project_root: PathBuf,
     child: Arc<Mutex<Option<Child>>>,
     stdin: Arc<Mutex<ChildStdin>>,
     /// Serializes dispatch with shutdown so revoked sessions cannot write
     /// another request after the supervisor invalidates their policy.
     dispatch_lock: Mutex<()>,
     scheduler: Mutex<RequestScheduler>,
+    response_gate: Mutex<()>,
+    request_sequence: AtomicU64,
     responses: Mutex<ResponseQueue>,
     response_notify: Notify,
     snapshots: Mutex<SnapshotStore>,
@@ -126,6 +135,8 @@ pub struct LspSession {
     crash_reported: AtomicBool,
     last_activity_ms: AtomicU64,
     state: AtomicU8,
+    stdout_task: Mutex<Option<JoinHandle<()>>>,
+    child_monitor_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl LspSession {
@@ -143,7 +154,7 @@ impl LspSession {
         let mut command = Command::new(bundle.program());
         command
             .args(bundle.args())
-            .current_dir(project_root)
+            .current_dir(&project_root)
             .env_clear()
             .env(
                 "DAM_HOPPER_SEMANTIC_POLICY",
@@ -177,10 +188,13 @@ impl LspSession {
             key,
             policy,
             language: bundle.language(),
+            project_root,
             child: Arc::new(Mutex::new(Some(child))),
             stdin: Arc::new(Mutex::new(stdin)),
             dispatch_lock: Mutex::new(()),
             scheduler: Mutex::new(RequestScheduler::default()),
+            response_gate: Mutex::new(()),
+            request_sequence: AtomicU64::new(1),
             responses: Mutex::new(ResponseQueue::default()),
             response_notify: Notify::new(),
             snapshots: Mutex::new(SnapshotStore::default()),
@@ -189,9 +203,13 @@ impl LspSession {
             crash_reported: AtomicBool::new(false),
             last_activity_ms: AtomicU64::new(now_ms()),
             state: AtomicU8::new(SessionState::Starting as u8),
+            stdout_task: Mutex::new(None),
+            child_monitor_task: Mutex::new(None),
         });
-        spawn_stdout_drain(&session, stdout);
-        spawn_child_monitor(&session);
+        let stdout_task = spawn_stdout_drain(&session, stdout);
+        *session.stdout_task.lock().await = Some(stdout_task);
+        let child_monitor_task = spawn_child_monitor(&session);
+        *session.child_monitor_task.lock().await = Some(child_monitor_task);
         if let Err(error) = session.initialize().await {
             session.shutdown().await;
             return Err(error);
@@ -205,10 +223,7 @@ impl LspSession {
     async fn initialize(&self) -> Result<(), SessionError> {
         let initialize = initialization_message(self.policy, self.language);
         let frame = encode_frame(&initialize).map_err(|_| SessionError::FrameTooLarge)?;
-        self.stdin
-            .lock()
-            .await
-            .write_all(&frame)
+        self.write_request_frame(&frame)
             .await
             .map_err(|_| SessionError::InitializationFailed)?;
         let response = tokio::time::timeout(INITIALIZE_TIMEOUT, self.wait_for_response())
@@ -224,20 +239,19 @@ impl LspSession {
             "params": {}
         });
         let frame = encode_frame(&initialized).map_err(|_| SessionError::FrameTooLarge)?;
-        self.stdin
-            .lock()
-            .await
-            .write_all(&frame)
+        self.write_request_frame(&frame)
             .await
             .map_err(|_| SessionError::InitializationFailed)
     }
 
     async fn wait_for_response(&self) -> Result<Value, SessionError> {
         loop {
+            let notified = self.response_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if self.state() == SessionState::Crashed {
                 return Err(SessionError::InitializationFailed);
             }
-            let notified = self.response_notify.notified();
             if let Some(value) = self.next_response().await {
                 if value.get("id") == Some(&Value::String("dam-hopper-initialize".into()))
                     && value.get("jsonrpc") == Some(&Value::String("2.0".into()))
@@ -353,7 +367,18 @@ impl LspSession {
     }
 
     async fn cancel_request_inner(&self, request_id: &str) -> bool {
+        let was_active = self.scheduler.lock().await.active.contains(request_id);
         let (cancelled, next) = self.scheduler.lock().await.cancel(request_id);
+        if was_active {
+            let cancel = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "$/cancelRequest",
+                "params": {"id": request_id}
+            });
+            if self.write_notification_locked(&cancel).await.is_err() {
+                self.report_crash();
+            }
+        }
         if let Some(next) = next {
             if !next.frame.is_empty() && self.write_request_frame(&next.frame).await.is_err() {
                 self.report_crash();
@@ -365,30 +390,41 @@ impl LspSession {
     pub async fn sync_document(
         &self,
         uri: SemanticUri,
+        resolved_path: PathBuf,
         version: u64,
         text: Vec<u8>,
     ) -> Result<(), SessionError> {
+        let text = String::from_utf8(text).map_err(|_| SessionError::InvalidDocument)?;
+        let _dispatch = self.dispatch_lock.lock().await;
         if self.state() != SessionState::Ready {
             return Err(SessionError::NotReady);
+        }
+        if uri.profile_id != self.key.profile_id
+            || uri.project_id != self.key.project_id
+            || uri.language != self.language
+        {
+            return Err(SessionError::InvalidDocument);
         }
         uri.validate().map_err(|_| SessionError::InvalidDocument)?;
         if version > MAX_SEQUENCE || text.len() > MAX_DOCUMENT_BYTES as usize {
             return Err(SessionError::DocumentLimitExceeded);
         }
-        let key = uri.path.clone();
-        let mut snapshots = self.snapshots.lock().await;
-        if snapshots
-            .items
-            .get(&key)
-            .is_some_and(|old| old.version >= version)
+        let key = snapshot_key(&uri);
+        let old = {
+            let snapshots = self.snapshots.lock().await;
+            snapshots.items.get(&key).cloned()
+        };
+        if old
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.version >= version)
         {
             return Err(SessionError::StaleDocument);
         }
-        let old_bytes = snapshots
-            .items
-            .get(&key)
+        let old_bytes = old
+            .as_ref()
             .map(|snapshot| snapshot.text.len())
             .unwrap_or_default();
+        let snapshots = self.snapshots.lock().await;
         let next_bytes = snapshots
             .bytes
             .saturating_sub(old_bytes)
@@ -396,16 +432,181 @@ impl LspSession {
         if next_bytes > MAX_SNAPSHOT_BYTES {
             return Err(SessionError::DocumentLimitExceeded);
         }
-        snapshots
-            .items
-            .insert(key, DocumentSnapshot { uri, version, text });
+        let resolved_path = self.canonical_document_path(&resolved_path)?;
+        if old
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.resolved_path != resolved_path)
+        {
+            return Err(SessionError::StaleDocument);
+        }
+        let internal_uri = self.internal_uri(&resolved_path)?;
+        let snapshot_text = text.clone();
+        let message = if old.is_some() {
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/didChange",
+                "params": {
+                    "textDocument": {"uri": internal_uri, "version": version},
+                    "contentChanges": [{"text": text}]
+                }
+            })
+        } else {
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/didOpen",
+                "params": {
+                    "textDocument": {
+                        "uri": internal_uri,
+                        "languageId": language_id(self.language),
+                        "version": version,
+                        "text": text
+                    }
+                }
+            })
+        };
+        drop(snapshots);
+        self.write_notification_locked(&message).await?;
+        let mut snapshots = self.snapshots.lock().await;
+        snapshots.items.insert(
+            key,
+            DocumentSnapshot {
+                uri,
+                resolved_path,
+                version,
+                text: snapshot_text.into_bytes(),
+            },
+        );
         snapshots.bytes = next_bytes;
         self.last_activity_ms.store(now_ms(), Ordering::Release);
         Ok(())
     }
 
-    pub async fn snapshot(&self, path: &str) -> Option<DocumentSnapshot> {
-        self.snapshots.lock().await.items.get(path).cloned()
+    pub async fn close_document(&self, uri: SemanticUri, version: u64) -> Result<(), SessionError> {
+        let _dispatch = self.dispatch_lock.lock().await;
+        if self.state() != SessionState::Ready {
+            return Err(SessionError::NotReady);
+        }
+        if uri.profile_id != self.key.profile_id
+            || uri.project_id != self.key.project_id
+            || uri.language != self.language
+        {
+            return Err(SessionError::InvalidDocument);
+        }
+        uri.validate().map_err(|_| SessionError::InvalidDocument)?;
+        let key = snapshot_key(&uri);
+        let snapshot = {
+            let snapshots = self.snapshots.lock().await;
+            if snapshots
+                .items
+                .get(&key)
+                .is_some_and(|old| old.version > version)
+            {
+                return Err(SessionError::StaleDocument);
+            }
+            snapshots.items.get(&key).cloned()
+        };
+        if let Some(snapshot) = snapshot {
+            let resolved_path = self.canonical_document_path(&snapshot.resolved_path)?;
+            let message = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/didClose",
+                "params": {"textDocument": {"uri": self.internal_uri(&resolved_path)?}}
+            });
+            self.write_notification_locked(&message).await?;
+            let mut snapshots = self.snapshots.lock().await;
+            if let Some(old) = snapshots.items.remove(&key) {
+                snapshots.bytes = snapshots.bytes.saturating_sub(old.text.len());
+            }
+        }
+        self.last_activity_ms.store(now_ms(), Ordering::Release);
+        Ok(())
+    }
+
+    pub async fn request(
+        &self,
+        request_id: &str,
+        value: &Value,
+        deadline: Duration,
+    ) -> Result<Value, SessionError> {
+        let _response_gate = self.response_gate.lock().await;
+        self.send_request(request_id, value).await?;
+        match tokio::time::timeout(deadline, self.wait_for_request_response(request_id)).await {
+            Ok(result) => {
+                self.complete_request(request_id).await;
+                result
+            }
+            Err(_) => {
+                self.cancel_request(request_id).await;
+                Err(SessionError::RequestTimeout)
+            }
+        }
+    }
+
+    async fn wait_for_request_response(&self, request_id: &str) -> Result<Value, SessionError> {
+        loop {
+            let notified = self.response_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if matches!(self.state(), SessionState::Crashed | SessionState::Shutdown) {
+                return Err(SessionError::NotReady);
+            }
+            if let Some(value) = self.next_response().await {
+                if value.get("id") == Some(&Value::String(request_id.to_owned())) {
+                    return Ok(value);
+                }
+                continue;
+            }
+            notified.await;
+        }
+    }
+
+    fn canonical_document_path(&self, path: &std::path::Path) -> Result<PathBuf, SessionError> {
+        let canonical = match std::fs::canonicalize(path) {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let parent = path.parent().ok_or(SessionError::InvalidDocument)?;
+                let name = path.file_name().ok_or(SessionError::InvalidDocument)?;
+                parent
+                    .canonicalize()
+                    .map_err(|_| SessionError::InvalidDocument)?
+                    .join(name)
+            }
+            Err(_) => return Err(SessionError::InvalidDocument),
+        };
+        if !canonical.starts_with(&self.project_root) {
+            return Err(SessionError::InvalidDocument);
+        }
+        match std::fs::metadata(&canonical) {
+            Ok(metadata) if metadata.is_file() => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(_) | Err(_) => return Err(SessionError::InvalidDocument),
+        }
+        Ok(canonical)
+    }
+
+    fn internal_uri(&self, path: &std::path::Path) -> Result<String, SessionError> {
+        Url::from_file_path(path)
+            .map(|value| value.to_string())
+            .map_err(|_| SessionError::InvalidDocument)
+    }
+
+    async fn write_notification_locked(&self, value: &Value) -> Result<(), SessionError> {
+        let frame = encode_frame(value).map_err(|_| SessionError::FrameTooLarge)?;
+        self.write_request_frame(&frame).await
+    }
+
+    pub fn next_request_id(&self) -> String {
+        let sequence = self.request_sequence.fetch_add(1, Ordering::Relaxed);
+        format!("dh-{}-{}", self.key.client_id, sequence)
+    }
+
+    pub async fn snapshot(&self, uri: &SemanticUri) -> Option<DocumentSnapshot> {
+        self.snapshots
+            .lock()
+            .await
+            .items
+            .get(&snapshot_key(uri))
+            .cloned()
     }
 
     pub async fn negotiate_capabilities(&self, value: &Value) -> Result<(), SessionError> {
@@ -437,21 +638,36 @@ impl LspSession {
         let _dispatch = self.dispatch_lock.lock().await;
         self.state
             .store(SessionState::Shutdown as u8, Ordering::Release);
+        self.response_notify.notify_waiters();
         let mut responses = self.responses.lock().await;
         responses.items.clear();
         responses.bytes = 0;
+        drop(responses);
         self.terminate_process().await;
+        self.abort_io_tasks().await;
     }
 
     pub(crate) async fn cleanup_after_crash(&self) {
         let _dispatch = self.dispatch_lock.lock().await;
         self.terminate_process().await;
+        self.abort_io_tasks().await;
     }
 
     async fn terminate_process(&self) {
         if let Some(mut child) = self.child.lock().await.take() {
             let _ = child.kill().await;
             let _ = child.wait().await;
+        }
+    }
+
+    async fn abort_io_tasks(&self) {
+        if let Some(task) = self.stdout_task.lock().await.take() {
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(task) = self.child_monitor_task.lock().await.take() {
+            task.abort();
+            let _ = task.await;
         }
     }
 
@@ -474,10 +690,36 @@ struct ResponseQueue {
     bytes: usize,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct SnapshotKey {
+    profile_id: String,
+    project_id: String,
+    path: String,
+    language: SemanticLanguage,
+}
+
 #[derive(Default)]
 struct SnapshotStore {
-    items: HashMap<String, DocumentSnapshot>,
+    items: HashMap<SnapshotKey, DocumentSnapshot>,
     bytes: usize,
+}
+
+fn snapshot_key(uri: &SemanticUri) -> SnapshotKey {
+    SnapshotKey {
+        profile_id: uri.profile_id.clone(),
+        project_id: uri.project_id.clone(),
+        path: uri.path.clone(),
+        language: uri.language,
+    }
+}
+
+fn language_id(language: SemanticLanguage) -> &'static str {
+    match language {
+        SemanticLanguage::Rust => "rust",
+        SemanticLanguage::Typescript => "typescript",
+        SemanticLanguage::Javascript => "javascript",
+        SemanticLanguage::Java => "java",
+    }
 }
 
 fn initialization_message(policy: InitializationPolicy, language: SemanticLanguage) -> Value {
@@ -603,7 +845,10 @@ impl RequestScheduler {
     }
 }
 
-fn spawn_stdout_drain(session: &Arc<LspSession>, mut stdout: tokio::process::ChildStdout) {
+fn spawn_stdout_drain(
+    session: &Arc<LspSession>,
+    mut stdout: tokio::process::ChildStdout,
+) -> JoinHandle<()> {
     let weak = Arc::downgrade(session);
     tokio::spawn(async move {
         let mut buffer = Vec::with_capacity(MAX_FRAME_BYTES.min(64 * 1024));
@@ -661,7 +906,7 @@ fn spawn_stdout_drain(session: &Arc<LspSession>, mut stdout: tokio::process::Chi
                 return;
             }
         }
-    });
+    })
 }
 
 fn spawn_stderr_drain(mut stderr: tokio::process::ChildStderr) {
@@ -677,7 +922,7 @@ fn spawn_stderr_drain(mut stderr: tokio::process::ChildStderr) {
     });
 }
 
-fn spawn_child_monitor(session: &Arc<LspSession>) {
+fn spawn_child_monitor(session: &Arc<LspSession>) -> JoinHandle<()> {
     let weak = Arc::downgrade(session);
     tokio::spawn(async move {
         loop {
@@ -701,7 +946,7 @@ fn spawn_child_monitor(session: &Arc<LspSession>) {
             drop(session);
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-    });
+    })
 }
 
 fn now_ms() -> u64 {
@@ -729,6 +974,8 @@ pub enum SessionError {
     InvalidRequestId,
     #[error("request is already active or queued")]
     DuplicateRequest,
+    #[error("LSP request timed out")]
+    RequestTimeout,
     #[error("interactive request queue is full")]
     QueueFull,
     #[error("interactive request queue memory cap reached")]

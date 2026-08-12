@@ -100,10 +100,7 @@ pub async fn ws_handler(
 }
 
 fn websocket_auth_ok(no_auth: bool, token: Option<String>, jwt_secret: &str) -> bool {
-    no_auth
-        || token
-            .map(|value| crate::api::auth::validate_jwt(&value, jwt_secret))
-            .unwrap_or(false)
+    crate::api::auth::websocket_actor(no_auth, token, jwt_secret).is_some()
 }
 
 // ---------------------------------------------------------------------------

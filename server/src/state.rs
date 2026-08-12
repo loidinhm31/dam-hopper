@@ -249,6 +249,14 @@ impl AppState {
         self
     }
 
+    /// Replace the semantic runtime for isolated integration fixtures.
+    /// Production construction remains server-owned through `AppState::new`.
+    #[doc(hidden)]
+    pub fn with_semantic_supervisor(mut self, supervisor: Arc<SemanticSupervisor>) -> Self {
+        self.semantic_supervisor = supervisor;
+        self
+    }
+
     pub fn set_telemetry(&self, telemetry: TelemetryHandle) {
         *self
             .telemetry

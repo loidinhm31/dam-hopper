@@ -68,6 +68,7 @@ portable-pty = "0.8"
 # Async broadcast channel for PTY event fan-out
 tokio-stream = { version = "0.1", features = ["sync"] }
 httpdate = "1"
+url = "2"
 
 # Path utilities
 pathdiff = "0.2"

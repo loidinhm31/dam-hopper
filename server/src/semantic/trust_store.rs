@@ -35,7 +35,7 @@ struct TrustStoreInner {
     challenges: HashMap<String, TrustConfirmationChallenge>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrustRecord {
     pub project_id: String,
     pub canonical_project: String,
@@ -255,7 +255,10 @@ impl ProjectTrustStore {
             .as_deref()
             .expect("checked durable trust path above");
         if let Err(error) = persist_records(path, &guard.records) {
-            guard.records.insert(key, current);
+            guard.records.insert(key.clone(), current);
+            if let Some(challenge) = guard.challenges.get_mut(&key) {
+                challenge.restore_after_persistence_failure();
+            }
             return Err(error);
         }
         Ok(to_public_record(&next))
@@ -314,13 +317,16 @@ impl ProjectTrustStore {
             audit_reason: audit_reason.to_string(),
         };
         guard.records.insert(key.clone(), next.clone());
-        guard.challenges.remove(&key);
+        let previous_challenge = guard.challenges.remove(&key);
         let path = self
             .path
             .as_deref()
             .expect("checked durable trust path above");
         if let Err(error) = persist_records(path, &guard.records) {
-            guard.records.insert(key, current);
+            guard.records.insert(key.clone(), current);
+            if let Some(challenge) = previous_challenge {
+                guard.challenges.insert(key, challenge);
+            }
             return Err(error);
         }
         Ok(to_public_record(&next))

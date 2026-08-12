@@ -132,6 +132,10 @@ impl TrustConfirmationChallenge {
         self.challenge.clone()
     }
 
+    pub(crate) fn restore_after_persistence_failure(&mut self) {
+        self.consumed = false;
+    }
+
     /// The owning authenticated-project store calls this while holding its lock.
     pub(crate) fn consume(
         &mut self,

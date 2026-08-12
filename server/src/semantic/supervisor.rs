@@ -1,17 +1,25 @@
 //! Demand-driven, bounded semantic process registry.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::runtime::Handle;
+use tokio::sync::{broadcast, Mutex, OwnedSemaphorePermit, RwLock, Semaphore};
 
 use super::metrics::{SemanticMetrics, SemanticMetricsSnapshot};
+use super::protocol::{
+    DescriptorAvailabilityReason, DescriptorAvailabilityState, SemanticDescriptorAvailability,
+    SemanticLanguage,
+};
 use super::registry::{RegistryError, SemanticRegistry};
 use super::session::{CrashNotifier, LspSession, SessionError, SessionKey, SessionState};
-use super::trust::{ProjectTrustStore, SemanticTrust, SemanticTrustTransitionRequest, TrustRecord};
+use super::trust::{
+    ProjectTrustStore, SemanticTrust, SemanticTrustChallenge, SemanticTrustState,
+    SemanticTrustTransitionRequest, TrustRecord,
+};
 
 pub const PREWARM_DWELL_MS: u64 = 750;
 pub const IDLE_GRACE_MS: u64 = 10 * 60 * 1000;
@@ -24,8 +32,8 @@ pub struct SemanticSupervisor {
     registry: Arc<SemanticRegistry>,
     trust_store: ProjectTrustStore,
     sessions: Arc<Mutex<HashMap<SessionKey, SessionEntry>>>,
-    pending_sessions: Arc<Mutex<HashMap<(String, String), usize>>>,
-    pending_prewarm: Arc<Mutex<HashSet<PrewarmKey>>>,
+    pending_sessions: PendingSessions,
+    pending_prewarm: PendingPrewarm,
     crash_history: Arc<Mutex<HashMap<SessionKey, VecDeque<u64>>>>,
     quarantined: Arc<Mutex<HashMap<SessionKey, u64>>>,
     backoff_until: Arc<Mutex<HashMap<SessionKey, u64>>>,
@@ -35,7 +43,10 @@ pub struct SemanticSupervisor {
     crash_notifier: CrashNotifier,
     shutting_down: Arc<AtomicBool>,
     lifecycle_generation: Arc<AtomicU64>,
-    lifecycle_gate: Arc<Mutex<()>>,
+    workspace_epoch: Arc<AtomicU64>,
+    next_reservation: Arc<AtomicU64>,
+    lifecycle_gate: Arc<RwLock<()>>,
+    events: broadcast::Sender<SemanticSupervisorEvent>,
 }
 
 struct SessionEntry {
@@ -43,9 +54,116 @@ struct SessionEntry {
     _global_slot: OwnedSemaphorePermit,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SemanticSessionFence {
+    pub lifecycle_generation: u64,
+    pub workspace_epoch: u64,
+}
+
+#[derive(Default)]
+struct SessionAdmission {
+    expected_generation: Option<u64>,
+    expected_workspace_epoch: Option<u64>,
+    prewarm_cancel: Option<Arc<AtomicBool>>,
+    client_closed: Option<Arc<AtomicBool>>,
+}
+
+type PendingSessions = Arc<Mutex<HashMap<u64, PendingSession>>>;
+type PendingPrewarm = Arc<Mutex<HashMap<PrewarmKey, PrewarmReservation>>>;
+
+struct PrewarmReservation {
+    token: u64,
+    cancelled: Arc<AtomicBool>,
+}
+
+struct PendingSession {
+    client_id: String,
+    project_id: String,
+    key: SessionKey,
+}
+
+struct SessionReservationGuard {
+    pending: PendingSessions,
+    token: u64,
+}
+
+impl Drop for SessionReservationGuard {
+    fn drop(&mut self) {
+        let pending = Arc::clone(&self.pending);
+        let token = self.token;
+        if let Ok(mut pending_guard) = pending.try_lock() {
+            pending_guard.remove(&token);
+            return;
+        }
+        let Ok(handle) = Handle::try_current() else {
+            return;
+        };
+        handle.spawn(async move {
+            pending.lock().await.remove(&token);
+        });
+    }
+}
+
+struct PrewarmReservationGuard {
+    pending: PendingPrewarm,
+    key: PrewarmKey,
+    token: u64,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl Drop for PrewarmReservationGuard {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+        let pending = Arc::clone(&self.pending);
+        let key = self.key.clone();
+        let token = self.token;
+        if let Ok(mut pending_guard) = pending.try_lock() {
+            if pending_guard
+                .get(&key)
+                .is_some_and(|reservation| reservation.token == token)
+            {
+                pending_guard.remove(&key);
+            }
+            return;
+        }
+        let Ok(handle) = Handle::try_current() else {
+            return;
+        };
+        handle.spawn(async move {
+            let mut pending = pending.lock().await;
+            if pending
+                .get(&key)
+                .is_some_and(|reservation| reservation.token == token)
+            {
+                pending.remove(&key);
+            }
+        });
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum SemanticSupervisorEvent {
+    TrustChanged {
+        generation: u64,
+        workspace_epoch: u64,
+        project_id: String,
+        trust: SemanticTrust,
+        policy_revision: u64,
+        revoked: bool,
+    },
+    WorkspaceChanged {
+        generation: u64,
+        workspace_epoch: u64,
+    },
+    Shutdown {
+        generation: u64,
+    },
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct PrewarmKey {
     pub client_id: String,
+    pub profile_id: String,
     pub project_id: String,
     pub descriptor_fingerprint: String,
     pub trust_policy_revision: u64,
@@ -59,6 +177,8 @@ pub struct PrewarmIntent {
     pub project_root: PathBuf,
     pub trust: SemanticTrust,
     pub stable_for_ms: u64,
+    pub workspace_generation: u64,
+    pub workspace_epoch: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -81,8 +201,9 @@ impl SemanticSupervisor {
         let quarantined = Arc::new(Mutex::new(HashMap::new()));
         let backoff_until = Arc::new(Mutex::new(HashMap::new()));
         let sessions = Arc::new(Mutex::new(HashMap::<SessionKey, SessionEntry>::new()));
-        let lifecycle_gate = Arc::new(Mutex::new(()));
+        let lifecycle_gate = Arc::new(RwLock::new(()));
         let metrics = Arc::new(SemanticMetrics::default());
+        let (events, _) = broadcast::channel(128);
         let event_notifier = crash_notifier.clone();
         let event_history = Arc::clone(&crash_history);
         let event_quarantined = Arc::clone(&quarantined);
@@ -93,7 +214,7 @@ impl SemanticSupervisor {
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
                 while let Some(key) = crash_events.recv().await {
-                    let _lifecycle = event_lifecycle_gate.lock().await;
+                    let _lifecycle = event_lifecycle_gate.write().await;
                     let decision = record_crash_state(
                         &key,
                         now_ms(),
@@ -122,7 +243,7 @@ impl SemanticSupervisor {
             trust_store,
             sessions,
             pending_sessions: Arc::new(Mutex::new(HashMap::new())),
-            pending_prewarm: Arc::new(Mutex::new(HashSet::new())),
+            pending_prewarm: Arc::new(Mutex::new(HashMap::new())),
             crash_history,
             quarantined,
             backoff_until,
@@ -132,7 +253,10 @@ impl SemanticSupervisor {
             crash_notifier,
             shutting_down: Arc::new(AtomicBool::new(false)),
             lifecycle_generation: Arc::new(AtomicU64::new(0)),
+            workspace_epoch: Arc::new(AtomicU64::new(0)),
+            next_reservation: Arc::new(AtomicU64::new(1)),
             lifecycle_gate,
+            events,
         };
         supervisor.spawn_idle_sweeper();
         supervisor
@@ -159,7 +283,69 @@ impl SemanticSupervisor {
         Arc::clone(&self.registry)
     }
 
-    async fn reserve_session(&self, key: &SessionKey) -> Result<(), SupervisorError> {
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn availability(&self, language: SemanticLanguage) -> SemanticDescriptorAvailability {
+        let mut availability = self.registry.availability(language);
+        if !self.enabled {
+            availability.state = DescriptorAvailabilityState::UnsupportedCapability;
+            availability.reason = Some(DescriptorAvailabilityReason::CapabilityUnsupported);
+        }
+        availability
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<SemanticSupervisorEvent> {
+        self.events.subscribe()
+    }
+
+    /// Monotonic fence for workspace and semantic lifecycle replacements.
+    pub fn lifecycle_generation(&self) -> u64 {
+        self.lifecycle_generation.load(Ordering::Acquire)
+    }
+
+    pub fn is_lifecycle_current(&self, generation: u64) -> bool {
+        self.lifecycle_generation() == generation
+    }
+
+    pub fn workspace_epoch(&self) -> u64 {
+        self.workspace_epoch.load(Ordering::Acquire)
+    }
+
+    pub fn is_workspace_current(&self, epoch: u64) -> bool {
+        self.workspace_epoch() == epoch
+    }
+
+    pub async fn lifecycle_read(&self) -> tokio::sync::OwnedRwLockReadGuard<()> {
+        Arc::clone(&self.lifecycle_gate).read_owned().await
+    }
+
+    pub fn trust_state(
+        &self,
+        project_id: &str,
+        project_root: &std::path::Path,
+    ) -> Result<SemanticTrustState, SupervisorError> {
+        self.trust_store
+            .state(project_id, project_root)
+            .map_err(SupervisorError::Trust)
+    }
+
+    pub fn issue_trust_challenge(
+        &self,
+        project_id: &str,
+        project_root: &std::path::Path,
+    ) -> Result<SemanticTrustChallenge, SupervisorError> {
+        self.trust_store
+            .issue_challenge(
+                project_id,
+                project_root,
+                super::trust_store::DEFAULT_CHALLENGE_TTL_MS,
+            )
+            .map_err(SupervisorError::Trust)
+    }
+
+    async fn reserve_session(&self, key: &SessionKey) -> Result<u64, SupervisorError> {
         let mut pending = self.pending_sessions.lock().await;
         let sessions = self.sessions.lock().await;
         let existing = sessions
@@ -168,30 +354,59 @@ impl SemanticSupervisor {
                 existing.client_id == key.client_id && existing.project_id == key.project_id
             })
             .count();
+        if pending.values().any(|reservation| reservation.key == *key) {
+            return Err(SupervisorError::SessionPending);
+        }
         let waiting = pending
-            .get(&(key.client_id.clone(), key.project_id.clone()))
-            .copied()
-            .unwrap_or_default();
+            .values()
+            .filter(|reservation| {
+                reservation.client_id == key.client_id && reservation.project_id == key.project_id
+            })
+            .count();
         if existing + waiting >= MAX_SESSIONS_PER_CLIENT_PROJECT {
             self.metrics
                 .requests_rejected
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Err(SupervisorError::ClientProjectLimit);
         }
-        *pending
-            .entry((key.client_id.clone(), key.project_id.clone()))
-            .or_default() += 1;
-        Ok(())
+        let token = self.next_reservation.fetch_add(1, Ordering::Relaxed);
+        pending.insert(
+            token,
+            PendingSession {
+                client_id: key.client_id.clone(),
+                project_id: key.project_id.clone(),
+                key: key.clone(),
+            },
+        );
+        Ok(token)
     }
 
-    async fn release_session(&self, key: &SessionKey) {
-        let mut pending = self.pending_sessions.lock().await;
-        let reservation_key = (key.client_id.clone(), key.project_id.clone());
-        if let Some(count) = pending.get_mut(&reservation_key) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                pending.remove(&reservation_key);
+    async fn release_session(&self, token: u64) {
+        self.pending_sessions.lock().await.remove(&token);
+    }
+
+    pub async fn existing_session(&self, key: &SessionKey) -> Option<Arc<LspSession>> {
+        self.sessions
+            .lock()
+            .await
+            .get(key)
+            .map(|entry| Arc::clone(&entry.session))
+    }
+
+    pub async fn release_session_if(&self, key: &SessionKey, session: &Arc<LspSession>) {
+        let entry = {
+            let mut sessions = self.sessions.lock().await;
+            if sessions
+                .get(key)
+                .is_some_and(|entry| Arc::ptr_eq(&entry.session, session))
+            {
+                sessions.remove(key)
+            } else {
+                None
             }
+        };
+        if let Some(entry) = entry {
+            entry.session.shutdown().await;
         }
     }
 
@@ -202,6 +417,54 @@ impl SemanticSupervisor {
         project_root: PathBuf,
         trust: SemanticTrust,
     ) -> Result<Arc<LspSession>, SupervisorError> {
+        self.ensure_session_at_generation(
+            key,
+            language,
+            project_root,
+            trust,
+            SessionAdmission::default(),
+        )
+        .await
+    }
+
+    pub async fn ensure_session_for_client(
+        &self,
+        key: SessionKey,
+        language: super::protocol::SemanticLanguage,
+        project_root: PathBuf,
+        trust: SemanticTrust,
+        client_closed: Arc<AtomicBool>,
+        fence: SemanticSessionFence,
+    ) -> Result<Arc<LspSession>, SupervisorError> {
+        self.ensure_session_at_generation(
+            key,
+            language,
+            project_root,
+            trust,
+            SessionAdmission {
+                expected_generation: Some(fence.lifecycle_generation),
+                expected_workspace_epoch: Some(fence.workspace_epoch),
+                client_closed: Some(client_closed),
+                ..SessionAdmission::default()
+            },
+        )
+        .await
+    }
+
+    async fn ensure_session_at_generation(
+        &self,
+        key: SessionKey,
+        language: super::protocol::SemanticLanguage,
+        project_root: PathBuf,
+        trust: SemanticTrust,
+        admission: SessionAdmission,
+    ) -> Result<Arc<LspSession>, SupervisorError> {
+        let SessionAdmission {
+            expected_generation,
+            expected_workspace_epoch,
+            prewarm_cancel,
+            client_closed,
+        } = admission;
         if !self.enabled {
             return Err(SupervisorError::Disabled);
         }
@@ -209,6 +472,17 @@ impl SemanticSupervisor {
             return Err(SupervisorError::ShuttingDown);
         }
         let lifecycle_generation = self.lifecycle_generation.load(Ordering::Acquire);
+        if expected_generation.is_some_and(|expected| expected != lifecycle_generation)
+            || expected_workspace_epoch.is_some_and(|expected| expected != self.workspace_epoch())
+            || prewarm_cancel
+                .as_ref()
+                .is_some_and(|cancel| cancel.load(Ordering::Acquire))
+            || client_closed
+                .as_ref()
+                .is_some_and(|closed| closed.load(Ordering::Acquire))
+        {
+            return Err(SupervisorError::LifecycleChanged);
+        }
         key.validate()?;
         let project_root = project_root
             .canonicalize()
@@ -265,7 +539,11 @@ impl SemanticSupervisor {
                 retry_after_ms: decision.delay_ms.unwrap_or(50),
             });
         }
-        self.reserve_session(&key).await?;
+        let reservation = self.reserve_session(&key).await?;
+        let _reservation_guard = SessionReservationGuard {
+            pending: Arc::clone(&self.pending_sessions),
+            token: reservation,
+        };
         let global_slot = match self.global_slots.clone().try_acquire_owned() {
             Ok(slot) => slot,
             Err(_) => {
@@ -273,7 +551,7 @@ impl SemanticSupervisor {
                 match self.global_slots.clone().try_acquire_owned() {
                     Ok(slot) => slot,
                     Err(_) => {
-                        self.release_session(&key).await;
+                        self.release_session(reservation).await;
                         return Err(SupervisorError::GlobalLimit);
                     }
                 }
@@ -282,7 +560,7 @@ impl SemanticSupervisor {
         let bundle = match self.registry.resolve(language) {
             Ok(bundle) => bundle,
             Err(error) => {
-                self.release_session(&key).await;
+                self.release_session(reservation).await;
                 return Err(error.into());
             }
         };
@@ -293,29 +571,39 @@ impl SemanticSupervisor {
         let policy = match policy {
             Ok(descriptor) => descriptor.policy_for(trust),
             Err(error) => {
-                self.release_session(&key).await;
+                self.release_session(reservation).await;
                 return Err(error);
             }
         };
-        let _lifecycle = self.lifecycle_gate.lock().await;
+        let _lifecycle = self.lifecycle_gate.write().await;
         if self.shutting_down.load(Ordering::Acquire)
             || self.lifecycle_generation.load(Ordering::Acquire) != lifecycle_generation
+            || expected_workspace_epoch.is_some_and(|expected| expected != self.workspace_epoch())
+            || prewarm_cancel
+                .as_ref()
+                .is_some_and(|cancel| cancel.load(Ordering::Acquire))
+            || client_closed
+                .as_ref()
+                .is_some_and(|closed| closed.load(Ordering::Acquire))
         {
-            self.release_session(&key).await;
+            self.release_session(reservation).await;
             return Err(if self.shutting_down.load(Ordering::Acquire) {
                 SupervisorError::ShuttingDown
             } else {
                 SupervisorError::LifecycleChanged
             });
         }
-        let current_record = self
-            .trust_store
-            .record(&key.project_id, &project_root)
-            .map_err(SupervisorError::Trust)?;
+        let current_record = match self.trust_store.record(&key.project_id, &project_root) {
+            Ok(record) => record,
+            Err(error) => {
+                self.release_session(reservation).await;
+                return Err(SupervisorError::Trust(error));
+            }
+        };
         if current_record.policy_revision != key.trust_policy_revision
             || current_record.trust != trust
         {
-            self.release_session(&key).await;
+            self.release_session(reservation).await;
             return Err(if current_record.trust == SemanticTrust::Revoked {
                 SupervisorError::ProjectRevoked
             } else {
@@ -333,25 +621,66 @@ impl SemanticSupervisor {
         let session = match session {
             Ok(session) => session,
             Err(error) => {
-                self.release_session(&key).await;
+                self.release_session(reservation).await;
                 return Err(error.into());
             }
         };
-        if session.state() != SessionState::Ready || self.crash_notifier.is_pending(&key) {
-            self.release_session(&key).await;
+        if session.state() != SessionState::Ready
+            || self.crash_notifier.is_pending(&key)
+            || prewarm_cancel
+                .as_ref()
+                .is_some_and(|cancel| cancel.load(Ordering::Acquire))
+            || client_closed
+                .as_ref()
+                .is_some_and(|closed| closed.load(Ordering::Acquire))
+        {
+            self.release_session(reservation).await;
             session.cleanup_after_crash().await;
-            return Err(SupervisorError::Session(SessionError::NotReady));
+            return Err(
+                if prewarm_cancel
+                    .as_ref()
+                    .is_some_and(|cancel| cancel.load(Ordering::Acquire))
+                {
+                    SupervisorError::LifecycleChanged
+                } else {
+                    SupervisorError::Session(SessionError::NotReady)
+                },
+            );
         }
-        self.release_session(&key).await;
+        let mut pending_sessions = self.pending_sessions.lock().await;
+        if !pending_sessions.contains_key(&reservation)
+            || prewarm_cancel
+                .as_ref()
+                .is_some_and(|cancel| cancel.load(Ordering::Acquire))
+            || client_closed
+                .as_ref()
+                .is_some_and(|closed| closed.load(Ordering::Acquire))
+        {
+            drop(pending_sessions);
+            session.cleanup_after_crash().await;
+            return Err(SupervisorError::LifecycleChanged);
+        }
         let mut sessions = self.sessions.lock().await;
-        if session.state() != SessionState::Ready || self.crash_notifier.is_pending(&key) {
+        if session.state() != SessionState::Ready
+            || self.crash_notifier.is_pending(&key)
+            || prewarm_cancel
+                .as_ref()
+                .is_some_and(|cancel| cancel.load(Ordering::Acquire))
+            || client_closed
+                .as_ref()
+                .is_some_and(|closed| closed.load(Ordering::Acquire))
+        {
             drop(sessions);
+            pending_sessions.remove(&reservation);
+            drop(pending_sessions);
             session.cleanup_after_crash().await;
             return Err(SupervisorError::Session(SessionError::NotReady));
         }
         if let Some(entry) = sessions.get(&key) {
             let existing = Arc::clone(&entry.session);
+            pending_sessions.remove(&reservation);
             drop(sessions);
+            drop(pending_sessions);
             session.shutdown().await;
             return Ok(existing);
         }
@@ -362,6 +691,9 @@ impl SemanticSupervisor {
                 _global_slot: global_slot,
             },
         );
+        pending_sessions.remove(&reservation);
+        drop(sessions);
+        drop(pending_sessions);
         self.metrics
             .sessions_started
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -379,15 +711,31 @@ impl SemanticSupervisor {
             return Err(SupervisorError::DwellNotSatisfied);
         }
         let key = intent.key.clone();
+        let token = self.next_reservation.fetch_add(1, Ordering::Relaxed);
+        let prewarm_cancel = Arc::new(AtomicBool::new(false));
         let mut pending = self.pending_prewarm.lock().await;
-        if !pending.insert(key.clone()) {
+        if pending.contains_key(&key) {
             return Ok(PrewarmOutcome::AlreadyPending);
         }
+        pending.insert(
+            key.clone(),
+            PrewarmReservation {
+                token,
+                cancelled: Arc::clone(&prewarm_cancel),
+            },
+        );
         drop(pending);
+        let _reservation_guard = PrewarmReservationGuard {
+            pending: Arc::clone(&self.pending_prewarm),
+            key: key.clone(),
+            token,
+            cancelled: Arc::clone(&prewarm_cancel),
+        };
         let result = self
-            .ensure_session(
+            .ensure_session_at_generation(
                 SessionKey {
                     client_id: key.client_id.clone(),
+                    profile_id: key.profile_id.clone(),
                     project_id: key.project_id.clone(),
                     descriptor_fingerprint: key.descriptor_fingerprint.clone(),
                     trust_policy_revision: key.trust_policy_revision,
@@ -395,9 +743,21 @@ impl SemanticSupervisor {
                 intent.language,
                 intent.project_root,
                 intent.trust,
+                SessionAdmission {
+                    expected_generation: Some(intent.workspace_generation),
+                    expected_workspace_epoch: Some(intent.workspace_epoch),
+                    prewarm_cancel: Some(Arc::clone(&prewarm_cancel)),
+                    ..SessionAdmission::default()
+                },
             )
             .await;
-        self.pending_prewarm.lock().await.remove(&key);
+        let mut pending = self.pending_prewarm.lock().await;
+        if pending
+            .get(&key)
+            .is_some_and(|reservation| reservation.token == token)
+        {
+            pending.remove(&key);
+        }
         result.map(|_| PrewarmOutcome::Started)
     }
 
@@ -455,6 +815,79 @@ impl SemanticSupervisor {
         for entry in entries {
             entry.session.shutdown().await;
         }
+        self.pending_prewarm
+            .lock()
+            .await
+            .retain(|key, reservation| {
+                let keep =
+                    key.project_id != project_id || key.trust_policy_revision == current_revision;
+                if !keep {
+                    reservation.cancelled.store(true, Ordering::Release);
+                }
+                keep
+            });
+        self.pending_sessions
+            .lock()
+            .await
+            .retain(|_, reservation| reservation.project_id != project_id);
+    }
+
+    pub async fn release_client(&self, client_id: &str) {
+        let mut pending_prewarm = self.pending_prewarm.lock().await;
+        pending_prewarm.retain(|key, reservation| {
+            let keep = key.client_id != client_id;
+            if !keep {
+                reservation.cancelled.store(true, Ordering::Release);
+            }
+            keep
+        });
+        drop(pending_prewarm);
+        self.pending_sessions
+            .lock()
+            .await
+            .retain(|_, reservation| reservation.client_id != client_id);
+        let entries: Vec<_> = {
+            let mut sessions = self.sessions.lock().await;
+            let keys: Vec<_> = sessions
+                .keys()
+                .filter(|key| key.client_id == client_id)
+                .cloned()
+                .collect();
+            keys.into_iter()
+                .filter_map(|key| sessions.remove(&key))
+                .collect()
+        };
+        for entry in entries {
+            entry.session.shutdown().await;
+        }
+    }
+
+    /// Close every semantic session before a new workspace sandbox is admitted.
+    pub async fn invalidate_workspace(&self) {
+        let _lifecycle = self.lifecycle_gate.write().await;
+        let generation = self.lifecycle_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let workspace_epoch = self.workspace_epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        let entries: Vec<_> = self
+            .sessions
+            .lock()
+            .await
+            .drain()
+            .map(|(_, entry)| entry)
+            .collect();
+        for entry in entries {
+            entry.session.shutdown().await;
+        }
+        let mut pending_prewarm = self.pending_prewarm.lock().await;
+        for reservation in pending_prewarm.values() {
+            reservation.cancelled.store(true, Ordering::Release);
+        }
+        pending_prewarm.clear();
+        drop(pending_prewarm);
+        self.pending_sessions.lock().await.clear();
+        let _ = self.events.send(SemanticSupervisorEvent::WorkspaceChanged {
+            generation,
+            workspace_epoch,
+        });
     }
 
     pub async fn transition_trust(
@@ -462,14 +895,26 @@ impl SemanticSupervisor {
         request: &SemanticTrustTransitionRequest,
         project_root: &std::path::Path,
         audit_reason: &str,
+        expected_workspace_epoch: u64,
     ) -> Result<TrustRecord, SupervisorError> {
-        let _lifecycle = self.lifecycle_gate.lock().await;
-        self.lifecycle_generation.fetch_add(1, Ordering::AcqRel);
+        let _lifecycle = self.lifecycle_gate.write().await;
+        if self.workspace_epoch() != expected_workspace_epoch {
+            return Err(SupervisorError::LifecycleChanged);
+        }
         let record = self
             .trust_store
             .transition(request, project_root, audit_reason)?;
+        self.lifecycle_generation.fetch_add(1, Ordering::AcqRel);
         self.invalidate_policy(&record.project_id, record.policy_revision)
             .await;
+        let _ = self.events.send(SemanticSupervisorEvent::TrustChanged {
+            generation: self.lifecycle_generation(),
+            workspace_epoch: self.workspace_epoch(),
+            project_id: record.project_id.clone(),
+            trust: record.trust,
+            policy_revision: record.policy_revision,
+            revoked: false,
+        });
         Ok(record)
     }
 
@@ -478,12 +923,16 @@ impl SemanticSupervisor {
         project_id: &str,
         project_root: &std::path::Path,
         audit_reason: &str,
+        expected_workspace_epoch: u64,
     ) -> Result<TrustRecord, SupervisorError> {
-        let _lifecycle = self.lifecycle_gate.lock().await;
-        self.lifecycle_generation.fetch_add(1, Ordering::AcqRel);
+        let _lifecycle = self.lifecycle_gate.write().await;
+        if self.workspace_epoch() != expected_workspace_epoch {
+            return Err(SupervisorError::LifecycleChanged);
+        }
         let record = self
             .trust_store
             .revoke(project_id, project_root, audit_reason)?;
+        self.lifecycle_generation.fetch_add(1, Ordering::AcqRel);
         let entries: Vec<_> = {
             let mut sessions = self.sessions.lock().await;
             let keys: Vec<_> = sessions
@@ -501,11 +950,25 @@ impl SemanticSupervisor {
         self.pending_prewarm
             .lock()
             .await
-            .retain(|key| key.project_id != project_id);
+            .retain(|key, reservation| {
+                let keep = key.project_id != project_id;
+                if !keep {
+                    reservation.cancelled.store(true, Ordering::Release);
+                }
+                keep
+            });
         self.pending_sessions
             .lock()
             .await
-            .retain(|(_, pending_project), _| pending_project != project_id);
+            .retain(|_, reservation| reservation.project_id != project_id);
+        let _ = self.events.send(SemanticSupervisorEvent::TrustChanged {
+            generation: self.lifecycle_generation(),
+            workspace_epoch: self.workspace_epoch(),
+            project_id: record.project_id.clone(),
+            trust: record.trust,
+            policy_revision: record.policy_revision,
+            revoked: true,
+        });
         Ok(record)
     }
 
@@ -548,7 +1011,7 @@ impl SemanticSupervisor {
     }
 
     pub async fn shutdown(&self) {
-        let _lifecycle = self.lifecycle_gate.lock().await;
+        let _lifecycle = self.lifecycle_gate.write().await;
         self.lifecycle_generation.fetch_add(1, Ordering::AcqRel);
         self.shutting_down.store(true, Ordering::Release);
         let entries: Vec<_> = self
@@ -561,10 +1024,18 @@ impl SemanticSupervisor {
         for entry in entries {
             entry.session.shutdown().await;
         }
-        self.pending_prewarm.lock().await.clear();
+        let mut pending_prewarm = self.pending_prewarm.lock().await;
+        for reservation in pending_prewarm.values() {
+            reservation.cancelled.store(true, Ordering::Release);
+        }
+        pending_prewarm.clear();
+        drop(pending_prewarm);
         self.pending_sessions.lock().await.clear();
         self.quarantined.lock().await.clear();
         self.backoff_until.lock().await.clear();
+        let _ = self.events.send(SemanticSupervisorEvent::Shutdown {
+            generation: self.lifecycle_generation(),
+        });
     }
 
     pub fn metrics(&self) -> SemanticMetricsSnapshot {
@@ -645,6 +1116,8 @@ pub enum SupervisorError {
     Disabled,
     #[error("semantic descriptor fingerprint is stale")]
     DescriptorFingerprintMismatch,
+    #[error("semantic session admission is already pending")]
+    SessionPending,
     #[error("semantic client/project session cap reached")]
     ClientProjectLimit,
     #[error("semantic global session cap reached")]
@@ -734,6 +1207,7 @@ mod tests {
         let supervisor = SemanticSupervisor::new(registry, store, 1, true);
         let key = PrewarmKey {
             client_id: "client".into(),
+            profile_id: "profile".into(),
             project_id: "project".into(),
             descriptor_fingerprint: descriptor_fingerprint.clone(),
             trust_policy_revision: 0,
@@ -745,6 +1219,8 @@ mod tests {
             project_root: project.clone(),
             trust: SemanticTrust::Restricted,
             stable_for_ms,
+            workspace_generation: supervisor.lifecycle_generation(),
+            workspace_epoch: supervisor.workspace_epoch(),
         };
         assert!(matches!(
             supervisor.request_prewarm(intent(749)).await,
@@ -753,23 +1229,21 @@ mod tests {
         let warm = supervisor.request_prewarm(intent(PREWARM_DWELL_MS)).await;
         assert!(matches!(warm, Ok(PrewarmOutcome::Started)), "{warm:?}");
         assert_eq!(supervisor.metrics().sessions_started, 1);
-        assert_eq!(
-            supervisor
-                .ensure_session(
-                    SessionKey {
-                        client_id: "client".into(),
-                        project_id: "project".into(),
-                        descriptor_fingerprint,
-                        trust_policy_revision: 0,
-                    },
-                    super::super::protocol::SemanticLanguage::Rust,
-                    project,
-                    SemanticTrust::Restricted,
-                )
-                .await
-                .is_ok(),
-            true
-        );
+        assert!(supervisor
+            .ensure_session(
+                SessionKey {
+                    client_id: "client".into(),
+                    profile_id: "profile".into(),
+                    project_id: "project".into(),
+                    descriptor_fingerprint,
+                    trust_policy_revision: 0,
+                },
+                super::super::protocol::SemanticLanguage::Rust,
+                project,
+                SemanticTrust::Restricted,
+            )
+            .await
+            .is_ok());
         assert_eq!(supervisor.metrics().sessions_reused, 1);
         assert_eq!(supervisor.evict_idle(now_ms() + IDLE_GRACE_MS).await, 1);
         supervisor.shutdown().await;
@@ -826,6 +1300,7 @@ mod tests {
             .ensure_session(
                 SessionKey {
                     client_id: "client".into(),
+                    profile_id: "profile".into(),
                     project_id: "project".into(),
                     descriptor_fingerprint: fingerprint,
                     trust_policy_revision: 0,
@@ -840,6 +1315,7 @@ mod tests {
         assert_eq!(session.state(), SessionState::Crashed);
         let retry_key = SessionKey {
             client_id: "client".into(),
+            profile_id: "profile".into(),
             project_id: "project".into(),
             descriptor_fingerprint: supervisor
                 .registry()
@@ -878,6 +1354,7 @@ mod tests {
         );
         let key = SessionKey {
             client_id: "c".into(),
+            profile_id: "profile".into(),
             project_id: "p".into(),
             descriptor_fingerprint: "d".into(),
             trust_policy_revision: 0,

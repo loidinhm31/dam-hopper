@@ -17,3 +17,8 @@ server/.fuse_hidden*
 .gemini
 packages/ui/.vitest-attachments/
 packages/ui/browser-tests/__screenshots__/
+.pi-subagents
+.codegraph/
+.mcp.json
+.worktree/
+GEMINI.md
