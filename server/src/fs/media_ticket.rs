@@ -8,7 +8,16 @@ use std::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand::{rngs::OsRng, RngCore};
 
+use super::media_session::{
+    MediaSessionBinding, MediaSessionDigest, MediaSessionLease, MediaSessionToken,
+    MEDIA_SESSION_ABSOLUTE_TTL, MEDIA_SESSION_IDLE_TTL,
+};
+
 pub(crate) const MAX_MEDIA_TICKETS: usize = 256;
+pub(crate) const MAX_MEDIA_TICKETS_PER_ACTOR: usize = 128;
+pub(crate) const MAX_MEDIA_TICKETS_PER_SESSION: usize = 64;
+pub(crate) const MAX_MEDIA_SESSIONS: usize = 256;
+pub(crate) const MAX_MEDIA_SESSIONS_PER_ACTOR: usize = 8;
 pub(crate) const MEDIA_TICKET_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
 pub(crate) const MEDIA_TICKET_ABSOLUTE_TTL: Duration = Duration::from_secs(8 * 60 * 60);
 
@@ -89,6 +98,11 @@ pub(crate) enum MediaTicketIssue {
     ContextChanged,
 }
 
+pub(crate) enum MediaSessionIssue {
+    Issued(MediaSessionLease),
+    Capacity,
+}
+
 #[derive(Clone)]
 pub struct MediaTicketStore {
     inner: Arc<Mutex<MediaTicketInner>>,
@@ -97,11 +111,19 @@ pub struct MediaTicketStore {
 
 struct MediaTicketInner {
     tickets: HashMap<String, StoredMediaTicket>,
+    sessions: HashMap<MediaSessionDigest, StoredMediaSession>,
     generation: u64,
 }
 
 struct StoredMediaTicket {
     record: MediaTicketRecord,
+    binding: Option<MediaSessionBinding>,
+    idle_expires_at: Instant,
+    absolute_expires_at: Instant,
+}
+
+struct StoredMediaSession {
+    actor_subject: String,
     idle_expires_at: Instant,
     absolute_expires_at: Instant,
 }
@@ -138,6 +160,7 @@ impl MediaTicketStore {
         Self {
             inner: Arc::new(Mutex::new(MediaTicketInner {
                 tickets: HashMap::new(),
+                sessions: HashMap::new(),
                 generation: 0,
             })),
             clock,
@@ -151,10 +174,100 @@ impl MediaTicketStore {
             .generation
     }
 
+    /// Creates a session or safely reuses the supplied cookie for the same actor.
+    pub(crate) fn establish_session(
+        &self,
+        actor_subject: &str,
+        existing: Option<MediaSessionToken>,
+    ) -> MediaSessionIssue {
+        let now = self.clock.now_instant();
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prune_expired(&mut inner, now);
+
+        if let Some(token) = existing {
+            let digest = token.digest();
+            if let Some((stored_digest, session)) = inner
+                .sessions
+                .iter_mut()
+                .find(|(stored_digest, _)| stored_digest.matches(&digest))
+            {
+                if session.actor_subject == actor_subject {
+                    session.idle_expires_at =
+                        std::cmp::min(now + MEDIA_SESSION_IDLE_TTL, session.absolute_expires_at);
+                    return MediaSessionIssue::Issued(MediaSessionLease {
+                        token,
+                        binding: MediaSessionBinding {
+                            actor_subject: actor_subject.to_owned(),
+                            session_digest: *stored_digest,
+                        },
+                    });
+                }
+            }
+        }
+
+        if inner.sessions.len() >= MAX_MEDIA_SESSIONS
+            || count_sessions_for_actor(&inner, actor_subject) >= MAX_MEDIA_SESSIONS_PER_ACTOR
+        {
+            return MediaSessionIssue::Capacity;
+        }
+
+        for _ in 0..4 {
+            let token = MediaSessionToken::new();
+            let digest = token.digest();
+            if inner.sessions.contains_key(&digest) {
+                continue;
+            }
+            let absolute_expires_at = now + MEDIA_SESSION_ABSOLUTE_TTL;
+            inner.sessions.insert(
+                digest,
+                StoredMediaSession {
+                    actor_subject: actor_subject.to_owned(),
+                    idle_expires_at: now + MEDIA_SESSION_IDLE_TTL,
+                    absolute_expires_at,
+                },
+            );
+            return MediaSessionIssue::Issued(MediaSessionLease {
+                token,
+                binding: MediaSessionBinding {
+                    actor_subject: actor_subject.to_owned(),
+                    session_digest: digest,
+                },
+            });
+        }
+        MediaSessionIssue::Capacity
+    }
+
+    /// Issues a legacy ticket. Phase 02 replaces this with `issue_for_session`.
     pub(crate) fn issue(
         &self,
         expected_generation: u64,
         record: MediaTicketRecord,
+    ) -> MediaTicketIssue {
+        self.issue_inner(expected_generation, record, None)
+    }
+
+    /// Atomically admits a ticket bound to a live session owned by `actor_subject`.
+    pub(crate) fn issue_for_session(
+        &self,
+        expected_generation: u64,
+        actor_subject: &str,
+        session: &MediaSessionLease,
+        record: MediaTicketRecord,
+    ) -> MediaTicketIssue {
+        if session.binding.actor_subject != actor_subject {
+            return MediaTicketIssue::ContextChanged;
+        }
+        self.issue_inner(expected_generation, record, Some(&session.binding))
+    }
+
+    fn issue_inner(
+        &self,
+        expected_generation: u64,
+        record: MediaTicketRecord,
+        binding: Option<&MediaSessionBinding>,
     ) -> MediaTicketIssue {
         let now = self.clock.now_instant();
         let absolute_expires_at = now + MEDIA_TICKET_ABSOLUTE_TTL;
@@ -163,11 +276,11 @@ impl MediaTicketStore {
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prune_expired(&mut inner, now);
         if inner.generation != expected_generation {
             return MediaTicketIssue::ContextChanged;
         }
-        inner.tickets.retain(|_, ticket| !is_expired(ticket, now));
-        if inner.tickets.len() >= MAX_MEDIA_TICKETS {
+        if inner.tickets.len() >= MAX_MEDIA_TICKETS || !binding_is_admissible(&inner, binding) {
             return MediaTicketIssue::Capacity;
         }
 
@@ -180,6 +293,7 @@ impl MediaTicketStore {
                 ticket.clone(),
                 StoredMediaTicket {
                     record: record.clone(),
+                    binding: binding.cloned(),
                     idle_expires_at,
                     absolute_expires_at,
                 },
@@ -198,19 +312,47 @@ impl MediaTicketStore {
         ticket: &str,
         expected_kind: MediaTicketKind,
     ) -> Option<MediaTicketRecord> {
+        self.lookup_inner(ticket, expected_kind, None)
+    }
+
+    /// Phase 02 stream admission: requires the matching live media-session cookie.
+    pub(crate) fn lookup_and_touch_for_session(
+        &self,
+        ticket: &str,
+        expected_kind: MediaTicketKind,
+        token: &MediaSessionToken,
+    ) -> Option<MediaTicketRecord> {
+        self.lookup_inner(ticket, expected_kind, Some(token))
+    }
+
+    fn lookup_inner(
+        &self,
+        ticket: &str,
+        expected_kind: MediaTicketKind,
+        token: Option<&MediaSessionToken>,
+    ) -> Option<MediaTicketRecord> {
         let now = self.clock.now_instant();
         let mut inner = self
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prune_expired(&mut inner, now);
+        let stored = inner.tickets.get(ticket)?;
+        let binding = stored.binding.clone();
+        if stored.record.kind != expected_kind
+            || !session_matches(binding.as_ref(), token, &inner.sessions)
+        {
+            return None;
+        }
+        if let Some(binding) = binding {
+            let session = inner
+                .sessions
+                .get_mut(&binding.session_digest)
+                .expect("validated binding must reference a live session");
+            session.idle_expires_at =
+                std::cmp::min(now + MEDIA_SESSION_IDLE_TTL, session.absolute_expires_at);
+        }
         let stored = inner.tickets.get_mut(ticket)?;
-        if stored.record.kind != expected_kind {
-            return None;
-        }
-        if is_expired(stored, now) {
-            inner.tickets.remove(ticket);
-            return None;
-        }
         stored.idle_expires_at =
             std::cmp::min(now + MEDIA_TICKET_IDLE_TTL, stored.absolute_expires_at);
         Some(stored.record.clone())
@@ -230,12 +372,36 @@ impl MediaTicketStore {
         }
     }
 
+    /// Revokes one session and every ticket bound to it.
+    pub(crate) fn revoke_session(&self, token: &MediaSessionToken) {
+        let digest = token.digest();
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let removed = inner
+            .sessions
+            .keys()
+            .find(|stored_digest| stored_digest.matches(&digest))
+            .copied();
+        if let Some(digest) = removed {
+            inner.sessions.remove(&digest);
+            inner.tickets.retain(|_, ticket| {
+                ticket
+                    .binding
+                    .as_ref()
+                    .is_none_or(|binding| binding.session_digest != digest)
+            });
+        }
+    }
+
     pub(crate) fn revoke_all(&self) {
         let mut inner = self
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         inner.tickets.clear();
+        inner.sessions.clear();
         inner.generation = inner.generation.wrapping_add(1);
     }
 
@@ -246,13 +412,96 @@ impl MediaTicketStore {
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        inner.tickets.retain(|_, ticket| !is_expired(ticket, now));
+        prune_expired(&mut inner, now);
         inner.tickets.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn live_session_count(&self) -> usize {
+        let now = self.clock.now_instant();
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prune_expired(&mut inner, now);
+        inner.sessions.len()
     }
 }
 
-fn is_expired(ticket: &StoredMediaTicket, now: Instant) -> bool {
+fn binding_is_admissible(inner: &MediaTicketInner, binding: Option<&MediaSessionBinding>) -> bool {
+    let Some(binding) = binding else {
+        return true;
+    };
+    let session = inner
+        .sessions
+        .iter()
+        .find(|(digest, _)| digest.matches(&binding.session_digest))
+        .map(|(_, session)| session);
+    if session.is_none_or(|session| session.actor_subject != binding.actor_subject) {
+        return false;
+    }
+    let actor_tickets = inner.tickets.values().filter(|ticket| {
+        ticket
+            .binding
+            .as_ref()
+            .is_some_and(|ticket_binding| ticket_binding.actor_subject == binding.actor_subject)
+    });
+    actor_tickets.count() < MAX_MEDIA_TICKETS_PER_ACTOR
+        && inner
+            .tickets
+            .values()
+            .filter(|ticket| {
+                ticket.binding.as_ref().is_some_and(|ticket_binding| {
+                    ticket_binding.session_digest == binding.session_digest
+                })
+            })
+            .count()
+            < MAX_MEDIA_TICKETS_PER_SESSION
+}
+
+fn session_matches(
+    binding: Option<&MediaSessionBinding>,
+    token: Option<&MediaSessionToken>,
+    sessions: &HashMap<MediaSessionDigest, StoredMediaSession>,
+) -> bool {
+    let (Some(binding), Some(token)) = (binding, token) else {
+        return binding.is_none() && token.is_none();
+    };
+    let digest = token.digest();
+    sessions.iter().any(|(stored_digest, session)| {
+        stored_digest.matches(&digest)
+            && stored_digest.matches(&binding.session_digest)
+            && session.actor_subject == binding.actor_subject
+    })
+}
+
+fn count_sessions_for_actor(inner: &MediaTicketInner, actor_subject: &str) -> usize {
+    inner
+        .sessions
+        .values()
+        .filter(|session| session.actor_subject == actor_subject)
+        .count()
+}
+
+fn prune_expired(inner: &mut MediaTicketInner, now: Instant) {
+    inner
+        .sessions
+        .retain(|_, session| !session_expired(session, now));
+    inner.tickets.retain(|_, ticket| {
+        !ticket_expired(ticket, now)
+            && ticket
+                .binding
+                .as_ref()
+                .is_none_or(|binding| inner.sessions.contains_key(&binding.session_digest))
+    });
+}
+
+fn ticket_expired(ticket: &StoredMediaTicket, now: Instant) -> bool {
     now >= ticket.idle_expires_at || now >= ticket.absolute_expires_at
+}
+
+fn session_expired(session: &StoredMediaSession, now: Instant) -> bool {
+    now >= session.idle_expires_at || now >= session.absolute_expires_at
 }
 
 pub(crate) fn random_token() -> String {
@@ -299,10 +548,7 @@ mod tests {
         let metadata = std::fs::metadata(env!("CARGO_MANIFEST_DIR")).unwrap();
         MediaTicketRecord {
             kind,
-            purpose: match kind {
-                MediaTicketKind::Video => MediaTicketPurpose::Playback,
-                MediaTicketKind::Image => MediaTicketPurpose::Preview,
-            },
+            purpose: MediaTicketPurpose::Playback,
             project: "project".into(),
             project_relative_path: PathBuf::from("media.bin"),
             file: MediaFileVersion::from_metadata(PathBuf::from("/private/media.bin"), &metadata)
@@ -323,14 +569,12 @@ mod tests {
     fn issue(store: &MediaTicketStore, record: MediaTicketRecord) -> String {
         match store.issue(store.generation(), record) {
             MediaTicketIssue::Issued(lease) => lease.ticket,
-            MediaTicketIssue::Capacity | MediaTicketIssue::ContextChanged => {
-                panic!("test ticket should be issued")
-            }
+            MediaTicketIssue::Capacity | MediaTicketIssue::ContextChanged => panic!("issue failed"),
         }
     }
 
     #[test]
-    fn lifecycle_is_idle_absolute_and_generation_bound() {
+    fn legacy_tickets_remain_idle_absolute_and_generation_bound() {
         let (store, clock) = store();
         let ticket = issue(&store, record(MediaTicketKind::Video));
         clock.advance(MEDIA_TICKET_IDLE_TTL - Duration::from_secs(1));
@@ -342,58 +586,206 @@ mod tests {
             .lookup_and_touch(&ticket, MediaTicketKind::Video)
             .is_none());
 
-        let old_generation = store.generation();
+        let generation = store.generation();
         store.revoke_all();
         assert!(matches!(
-            store.issue(old_generation, record(MediaTicketKind::Image)),
+            store.issue(generation, record(MediaTicketKind::Image)),
             MediaTicketIssue::ContextChanged
         ));
     }
 
     #[test]
-    fn capacity_prunes_expired_without_evicting_live_tickets() {
+    fn session_expiry_prunes_its_tickets_without_live_eviction() {
         let (store, clock) = store();
-        for _ in 0..MAX_MEDIA_TICKETS {
-            issue(&store, record(MediaTicketKind::Video));
+        let session = match store.establish_session("actor", None) {
+            MediaSessionIssue::Issued(lease) => lease,
+            MediaSessionIssue::Capacity => panic!("session issue failed"),
+        };
+        let ticket = match store.issue_for_session(
+            store.generation(),
+            "actor",
+            &session,
+            record(MediaTicketKind::Video),
+        ) {
+            MediaTicketIssue::Issued(lease) => lease.ticket,
+            _ => panic!("ticket issue failed"),
+        };
+        clock.advance(MEDIA_SESSION_IDLE_TTL);
+        assert_eq!(store.live_session_count(), 0);
+        assert_eq!(store.live_count(), 0);
+        assert!(store
+            .lookup_and_touch_for_session(&ticket, MediaTicketKind::Video, &session.token)
+            .is_none());
+    }
+
+    #[test]
+    fn bound_lookup_refreshes_session_idle_but_not_its_absolute_deadline() {
+        let (store, clock) = store();
+        let session = match store.establish_session("actor", None) {
+            MediaSessionIssue::Issued(lease) => lease,
+            _ => panic!("session issue failed"),
+        };
+        let ticket = match store.issue_for_session(
+            store.generation(),
+            "actor",
+            &session,
+            record(MediaTicketKind::Video),
+        ) {
+            MediaTicketIssue::Issued(lease) => lease.ticket,
+            _ => panic!("ticket issue failed"),
+        };
+        clock.advance(MEDIA_SESSION_IDLE_TTL - Duration::from_secs(1));
+        assert!(store
+            .lookup_and_touch_for_session(&ticket, MediaTicketKind::Video, &session.token)
+            .is_some());
+        clock.advance(Duration::from_secs(2));
+        assert!(store
+            .lookup_and_touch_for_session(&ticket, MediaTicketKind::Video, &session.token)
+            .is_some());
+        clock.advance(MEDIA_SESSION_ABSOLUTE_TTL - MEDIA_SESSION_IDLE_TTL);
+        assert!(store
+            .lookup_and_touch_for_session(&ticket, MediaTicketKind::Video, &session.token)
+            .is_none());
+    }
+
+    #[test]
+    fn session_and_ticket_caps_prune_before_admission() {
+        let (store, clock) = store();
+        for _ in 0..MAX_MEDIA_SESSIONS_PER_ACTOR {
+            assert!(matches!(
+                store.establish_session("actor", None),
+                MediaSessionIssue::Issued(_)
+            ));
         }
         assert!(matches!(
-            store.issue(store.generation(), record(MediaTicketKind::Image)),
+            store.establish_session("actor", None),
+            MediaSessionIssue::Capacity
+        ));
+        clock.advance(MEDIA_SESSION_IDLE_TTL);
+        assert!(matches!(
+            store.establish_session("actor", None),
+            MediaSessionIssue::Issued(_)
+        ));
+    }
+
+    #[test]
+    fn global_session_cap_is_enforced_without_evicting_live_sessions() {
+        let (store, clock) = store();
+        for actor in 0..MAX_MEDIA_SESSIONS {
+            assert!(matches!(
+                store.establish_session(&format!("actor-{actor}"), None),
+                MediaSessionIssue::Issued(_)
+            ));
+        }
+        assert!(matches!(
+            store.establish_session("extra", None),
+            MediaSessionIssue::Capacity
+        ));
+        clock.advance(MEDIA_SESSION_IDLE_TTL);
+        assert!(matches!(
+            store.establish_session("extra", None),
+            MediaSessionIssue::Issued(_)
+        ));
+    }
+
+    #[test]
+    fn per_session_ticket_cap_does_not_evict_live_tickets() {
+        let (store, _) = store();
+        let session = match store.establish_session("actor", None) {
+            MediaSessionIssue::Issued(lease) => lease,
+            _ => panic!("session issue failed"),
+        };
+        for _ in 0..MAX_MEDIA_TICKETS_PER_SESSION {
+            assert!(matches!(
+                store.issue_for_session(
+                    store.generation(),
+                    "actor",
+                    &session,
+                    record(MediaTicketKind::Video)
+                ),
+                MediaTicketIssue::Issued(_)
+            ));
+        }
+        assert!(matches!(
+            store.issue_for_session(
+                store.generation(),
+                "actor",
+                &session,
+                record(MediaTicketKind::Video)
+            ),
             MediaTicketIssue::Capacity
         ));
-        clock.advance(MEDIA_TICKET_IDLE_TTL);
-        issue(&store, record(MediaTicketKind::Image));
-        assert_eq!(store.live_count(), 1);
+        assert_eq!(store.live_count(), MAX_MEDIA_TICKETS_PER_SESSION);
     }
 
     #[test]
-    fn kind_isolation_keeps_image_and_video_capabilities_separate() {
+    fn per_actor_ticket_cap_is_enforced_across_sessions() {
         let (store, _) = store();
-        let image = issue(&store, record(MediaTicketKind::Image));
-        assert!(store
-            .lookup_and_touch(&image, MediaTicketKind::Video)
-            .is_none());
-        assert!(store
-            .lookup_and_touch(&image, MediaTicketKind::Image)
-            .is_some());
+        let first = match store.establish_session("actor", None) {
+            MediaSessionIssue::Issued(lease) => lease,
+            _ => panic!("session issue failed"),
+        };
+        let second = match store.establish_session("actor", None) {
+            MediaSessionIssue::Issued(lease) => lease,
+            _ => panic!("session issue failed"),
+        };
+        for session in [&first, &second] {
+            for _ in 0..MAX_MEDIA_TICKETS_PER_SESSION {
+                assert!(matches!(
+                    store.issue_for_session(
+                        store.generation(),
+                        "actor",
+                        session,
+                        record(MediaTicketKind::Video)
+                    ),
+                    MediaTicketIssue::Issued(_)
+                ));
+            }
+        }
+        let third = match store.establish_session("actor", None) {
+            MediaSessionIssue::Issued(lease) => lease,
+            _ => panic!("session issue failed"),
+        };
+        assert!(matches!(
+            store.issue_for_session(
+                store.generation(),
+                "actor",
+                &third,
+                record(MediaTicketKind::Video)
+            ),
+            MediaTicketIssue::Capacity
+        ));
     }
 
     #[test]
-    fn tokens_are_unique_and_revoke_is_kind_scoped() {
+    fn bound_tickets_require_matching_session_and_revoke_with_it() {
         let (store, _) = store();
-        let video = issue(&store, record(MediaTicketKind::Video));
-        let image = issue(&store, record(MediaTicketKind::Image));
-        assert_ne!(video, image);
-
-        store.revoke(&video, MediaTicketKind::Image);
+        let first = match store.establish_session("actor", None) {
+            MediaSessionIssue::Issued(lease) => lease,
+            _ => panic!("session issue failed"),
+        };
+        let second = match store.establish_session("actor", None) {
+            MediaSessionIssue::Issued(lease) => lease,
+            _ => panic!("session issue failed"),
+        };
+        let ticket = match store.issue_for_session(
+            store.generation(),
+            "actor",
+            &first,
+            record(MediaTicketKind::Video),
+        ) {
+            MediaTicketIssue::Issued(lease) => lease.ticket,
+            _ => panic!("ticket issue failed"),
+        };
         assert!(store
-            .lookup_and_touch(&video, MediaTicketKind::Video)
-            .is_some());
-        store.revoke(&video, MediaTicketKind::Video);
-        assert!(store
-            .lookup_and_touch(&video, MediaTicketKind::Video)
+            .lookup_and_touch_for_session(&ticket, MediaTicketKind::Video, &second.token)
             .is_none());
         assert!(store
-            .lookup_and_touch(&image, MediaTicketKind::Image)
+            .lookup_and_touch_for_session(&ticket, MediaTicketKind::Video, &first.token)
             .is_some());
+        store.revoke_session(&first.token);
+        assert!(store
+            .lookup_and_touch_for_session(&ticket, MediaTicketKind::Video, &first.token)
+            .is_none());
     }
 }

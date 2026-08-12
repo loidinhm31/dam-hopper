@@ -4,6 +4,10 @@ pub mod enc_upload;
 pub mod error;
 pub mod event;
 pub mod image_ticket;
+// Phase 01 establishes these crate-private primitives; Phase 02 consumes them in handlers.
+#[allow(dead_code)]
+pub(crate) mod media_session;
+#[allow(dead_code)]
 pub(crate) mod media_ticket;
 pub mod mutate;
 pub mod ops;

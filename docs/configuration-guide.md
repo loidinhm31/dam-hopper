@@ -575,21 +575,24 @@ curl -H "Authorization: Bearer $(cat ~/.config/dam-hopper/server-token)" \
 
 ```bash
 cd server
-cargo run -- --config /path/to/dam-hopper.toml --port 4800
+cargo run -- --config /path/to/dam-hopper.toml --port 4800 \
+  --host 127.0.0.1 --cors-origins "https://localhost:5173"
 # Or omit --config to use ~/.config/dam-hopper/dam-hopper.toml
 ```
 
 ### With Logging
 
 ```bash
-RUST_LOG=dam_hopper=debug cargo run -- --config /path/to/dam-hopper.toml
+RUST_LOG=dam_hopper=debug cargo run -- --config /path/to/dam-hopper.toml \
+  --host 127.0.0.1 --cors-origins "https://localhost:5173"
 ```
 
 ### Release Build
 
 ```bash
 cargo build --release
-./target/release/dam-hopper-server --config /path/to/dam-hopper.toml --port 4800
+./target/release/dam-hopper-server --config /path/to/dam-hopper.toml --port 4800 \
+  --host 127.0.0.1 --cors-origins "https://localhost:5173"
 ```
 
 ### Nohup Background Server
@@ -606,7 +609,8 @@ Edit `~/.config/dam-hopper/server.conf` to set:
 - `DAM_HOPPER_CONFIG`
 - `DAM_HOPPER_HOST`
 - `DAM_HOPPER_PORT`
-- `DAM_HOPPER_CORS_ORIGINS` (if needed)
+- `DAM_HOPPER_CORS_ORIGINS` (required for authenticated browser deployments)
+- `DAM_HOPPER_TRUSTED_TLS_PROXY=1` (required for authenticated non-loopback binds behind a TLS proxy)
 - `DAM_HOPPER_WORKSPACE` (legacy directory-discovery override, optional)
 
 Runtime files:
@@ -617,33 +621,32 @@ Runtime files:
 
 ## Cross-Origin Resource Sharing (CORS)
 
-If `--cors-origins` is omitted, the server mirrors the request `Origin` and
-allows credentials. That keeps local browser and native development flexible,
-but production deployments should usually pass an explicit allowlist.
-
-Override with `--cors-origins`:
-
-```bash
-cargo run -- \
-  --config /path/to/dam-hopper.toml \
-  --cors-origins "https://example.com" \
-  --cors-origins "http://localhost:3000"
-```
-
-For native Tauri clients, also allow the native dev and packaged webview origins
-used by your target platform. Typical entries are:
+Authenticated browser deployments require a comma-separated exact HTTPS
+allowlist via `--cors-origins` (or `DAM_HOPPER_CORS_ORIGINS`). Empty, wildcard,
+malformed, duplicate, HTTP, path, query, user-info, and fragment origins reject
+startup. The server returns credentialed CORS headers only for listed origins;
+it never reflects arbitrary origins.
 
 ```bash
 cargo run -- \
   --config /path/to/dam-hopper.toml \
-  --cors-origins "http://localhost:1420" \
-  --cors-origins "tauri://localhost" \
-  --cors-origins "http://tauri.localhost" \
-  --cors-origins "https://tauri.localhost"
+  --cors-origins "https://app.example,https://admin.example" \
+  --host 0.0.0.0 \
+  --trusted-tls-proxy
 ```
 
-Use only the origins you actually ship. Native remains a remote client; it still
-connects through saved server profiles and does not embed the DamHopper backend.
+The server listener is HTTP. An authenticated non-loopback bind requires the
+explicit `--trusted-tls-proxy` declaration: the operator must terminate HTTPS
+at a trusted reverse proxy. This is required for Secure, partitioned media
+cookies. The flag is an operator assertion, not network isolation: bind port
+4800 to loopback when the proxy is local, or firewall it so only the trusted
+proxy can reach it. Never publish the backend HTTP port directly. No-auth
+development defaults to `https://localhost:5173`; local HTTP is unsupported for
+media-cookie flows. Tauri qualification is a later phase.
+
+Use only origins and proxy topology you actually operate. Native remains a
+remote client; it still connects through saved server profiles and does not
+embed the DamHopper backend.
 
 ## SSH Key Management
 
@@ -664,7 +667,7 @@ Keys are stored in-memory per session (not persisted to disk).
 1. Create `~/.config/dam-hopper/dam-hopper.toml` with at least two projects whose `projects[].path` values point at separate roots. On Windows, use different drives if available.
    Expected: `GET /api/workspace/status` reports the registry `configPath` and the expected `projectCount`.
 
-2. Start the server with `cargo run -- --config ~/.config/dam-hopper/dam-hopper.toml --port 4800`.
+2. Start the loopback server with `cargo run -- --config ~/.config/dam-hopper/dam-hopper.toml --port 4800 --host 127.0.0.1 --cors-origins "https://localhost:5173"`.
    Expected: startup succeeds without requiring a repo-local `dam-hopper.toml`.
 
 3. Browse and read files in each project, then create or edit a file inside each root.
