@@ -2,9 +2,13 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::media_ticket::{
-    MediaFileVersion, MediaTicketIssue, MediaTicketKind, MediaTicketPurpose, MediaTicketRecord,
-    MediaTicketStore, MAX_MEDIA_TICKETS, MEDIA_TICKET_ABSOLUTE_TTL, MEDIA_TICKET_IDLE_TTL,
+use super::{
+    media_session::MediaSessionToken,
+    media_ticket::{
+        MediaFileVersion, MediaTicketBoundIssue, MediaTicketIssue, MediaTicketKind,
+        MediaTicketPurpose, MediaTicketRecord, MediaTicketStore, MAX_MEDIA_TICKETS,
+        MEDIA_TICKET_ABSOLUTE_TTL, MEDIA_TICKET_IDLE_TTL,
+    },
 };
 
 pub const MAX_VIDEO_TICKETS: usize = MAX_MEDIA_TICKETS;
@@ -79,6 +83,33 @@ impl VideoStreamTicketStore {
         self.media.generation()
     }
 
+    pub(crate) fn issue_bound(
+        &self,
+        expected_generation: u64,
+        actor_subject: &str,
+        existing: Option<MediaSessionToken>,
+        record: VideoTicketRecord,
+    ) -> Result<(VideoTicketLease, super::media_session::MediaSessionLease), VideoTicketIssue> {
+        let purpose = record.purpose;
+        match self.media.issue_bound(
+            expected_generation,
+            actor_subject,
+            existing,
+            record.into_media(),
+        ) {
+            MediaTicketBoundIssue::Issued(lease) => Ok((
+                VideoTicketLease {
+                    ticket: lease.ticket.ticket,
+                    expires_at_epoch_ms: lease.ticket.expires_at_epoch_ms,
+                    purpose,
+                },
+                lease.session,
+            )),
+            MediaTicketBoundIssue::Capacity => Err(VideoTicketIssue::Capacity),
+            MediaTicketBoundIssue::ContextChanged => Err(VideoTicketIssue::ContextChanged),
+        }
+    }
+
     pub(crate) fn issue(
         &self,
         expected_generation: u64,
@@ -101,6 +132,35 @@ impl VideoStreamTicketStore {
         self.media
             .lookup_and_touch(ticket, MediaTicketKind::Video)
             .and_then(VideoTicketRecord::from_media)
+    }
+
+    pub(crate) fn authorize_bound(
+        &self,
+        ticket: &str,
+        token: &MediaSessionToken,
+    ) -> Option<super::media_ticket::MediaTicketAuthorization> {
+        self.media
+            .authorize_bound(ticket, MediaTicketKind::Video, token)
+    }
+
+    pub(crate) fn finalize_bound_and_touch(
+        &self,
+        ticket: &str,
+        token: &MediaSessionToken,
+        authorization: &super::media_ticket::MediaTicketAuthorization,
+    ) -> bool {
+        self.media
+            .finalize_bound_and_touch(ticket, MediaTicketKind::Video, token, authorization)
+    }
+
+    pub(crate) fn revoke_bound(
+        &self,
+        ticket: &str,
+        actor_subject: &str,
+        token: &MediaSessionToken,
+    ) {
+        self.media
+            .revoke_bound(ticket, MediaTicketKind::Video, actor_subject, token);
     }
 
     pub fn revoke(&self, ticket: &str) {
