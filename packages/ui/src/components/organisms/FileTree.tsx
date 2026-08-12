@@ -248,6 +248,29 @@ const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
                 gitStatusClassName(gitState),
               )}
               title={`Open diff: ${gitStateTitle(gitState)}`}
+              onPointerDown={(event) => {
+                if (
+                  event.pointerType === "touch" ||
+                  event.pointerType === "pen"
+                ) {
+                  event.stopPropagation();
+                }
+              }}
+              onContextMenu={(event) => {
+                const nativeEvent = event.nativeEvent as MouseEvent & {
+                  pointerType?: string;
+                };
+                const isNonMouseContextMenu =
+                  nativeEvent.pointerType !== undefined &&
+                  nativeEvent.pointerType !== "mouse";
+                const isLegacyNonRightButton =
+                  nativeEvent.pointerType === undefined &&
+                  nativeEvent.button !== 2;
+                if (isNonMouseContextMenu || isLegacyNonRightButton) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }
+              }}
               onClick={(event) => {
                 event.stopPropagation();
                 onOpenDiff?.(gitState);
