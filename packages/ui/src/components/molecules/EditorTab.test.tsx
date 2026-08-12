@@ -16,6 +16,7 @@ describe("EditorTab", () => {
     );
 
     expect(markup).toContain("text-sky-400");
+    expect(markup).toContain('tabindex="-1"');
     expect(markup).toContain("Close Dockerfile.dev");
   });
 
@@ -31,6 +32,7 @@ describe("EditorTab", () => {
     );
 
     expect(markup).toContain("text-indigo-300");
+    expect(markup).toContain('tabindex="0"');
     expect(markup).toContain("Unsaved changes");
   });
 
