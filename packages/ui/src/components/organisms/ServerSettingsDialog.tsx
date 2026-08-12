@@ -37,6 +37,27 @@ interface Props {
 
 type TestState = "idle" | "testing" | "ok" | "fail";
 
+async function revokeMediaSession(
+  serverUrl: string,
+  token: string,
+): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(`${serverUrl}/api/fs/media-session`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+      credentials: "include",
+      signal: controller.signal,
+    });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function ServerSettingsDialog({
   open,
   onClose,
@@ -189,7 +210,7 @@ export function ServerSettingsDialog({
     }
   }
 
-  function handleSave() {
+  async function handleSave() {
     if (isAndroidChromeNativeInputSuppressed) return;
     if (!urlSchemeValid) return;
 
@@ -208,6 +229,11 @@ export function ServerSettingsDialog({
       const previousProfileToken = profile?.id
         ? getAuthToken(profile.id)
         : null;
+      const shouldRevokePreviousProfileSession = Boolean(
+        profile &&
+        previousProfileToken &&
+        (urlChanged || previousProfileToken !== t),
+      );
       const restoreProfileState = (profileId: string): boolean => {
         const profilesRestored = saveProfiles(previousProfiles);
         const activeProfileRestored = previousActiveProfileId
@@ -228,17 +254,23 @@ export function ServerSettingsDialog({
       };
 
       let tokenClearedForUrlChange = false;
-      if (profile && urlChanged) {
-        if (!clearAuthToken(profile.id)) {
-          restoreProfileState(profile.id);
+      const clearPreviousProfileToken = async () => {
+        if (shouldRevokePreviousProfileSession) {
+          // Persist profile changes first: local persistence failure must not
+          // revoke a still-active remote media session.
+          void (await revokeMediaSession(profile!.url, previousProfileToken!));
+        }
+        if (!clearAuthToken(profile!.id)) {
+          restoreProfileState(profile!.id);
           setTestState("fail");
           setTestError(
             "Unable to clear the old login token; server URL was not changed",
           );
-          return;
+          return false;
         }
         tokenClearedForUrlChange = true;
-      }
+        return true;
+      };
 
       let savedProfile: ServerProfile;
       if (profile) {
@@ -282,7 +314,13 @@ export function ServerSettingsDialog({
 
       // Never carry a token across a backend URL change. A newly tested token
       // for the replacement URL may be stored instead.
+      if (profile && urlChanged && !(await clearPreviousProfileToken())) {
+        return;
+      }
       if (!tokenClearedForUrlChange && (tokenMustBeCleared || !t)) {
+        if (shouldRevokePreviousProfileSession) {
+          void (await revokeMediaSession(profile!.url, previousProfileToken!));
+        }
         if (!clearAuthToken(savedProfile.id)) {
           const restored = restoreProfileState(savedProfile.id);
           setTestState("fail");
@@ -293,6 +331,9 @@ export function ServerSettingsDialog({
           );
           return;
         }
+      }
+      if (t && !tokenMustBeCleared && shouldRevokePreviousProfileSession) {
+        void (await revokeMediaSession(profile!.url, previousProfileToken!));
       }
       if (t && !tokenMustBeCleared && !setAuthToken(t, savedProfile.id)) {
         const restored = restoreProfileState(savedProfile.id);
@@ -322,6 +363,9 @@ export function ServerSettingsDialog({
 
       const activeProfileId = getActiveProfileId() ?? undefined;
       const previousLegacyToken = getAuthToken(activeProfileId);
+      const shouldRevokePreviousLegacySession = Boolean(
+        previousLegacyToken && (urlChanged || previousLegacyToken !== t),
+      );
       const previousUrlWasExplicit = hasServerUrl();
       const restoreLegacyState = (): boolean => {
         const urlRestored = previousUrlWasExplicit
@@ -333,17 +377,26 @@ export function ServerSettingsDialog({
         return urlRestored && tokenRestored;
       };
       let tokenClearedForUrlChange = false;
-      if (urlChanged) {
+      const clearPreviousLegacyToken = async () => {
+        if (shouldRevokePreviousLegacySession) {
+          // Persist the replacement URL first so failed local storage does not
+          // revoke a session whose credentials are restored locally.
+          void (await revokeMediaSession(
+            initialUrl || getServerUrl(),
+            previousLegacyToken!,
+          ));
+        }
         if (!clearAuthToken(activeProfileId)) {
           restoreLegacyState();
           setTestState("fail");
           setTestError(
             "Unable to clear the old login token; server URL was not changed",
           );
-          return;
+          return false;
         }
         tokenClearedForUrlChange = true;
-      }
+        return true;
+      };
       const urlPersisted = isSameOrigin
         ? clearServerUrl()
         : setServerUrl(normalized);
@@ -355,6 +408,9 @@ export function ServerSettingsDialog({
             ? "Unable to persist the server URL in this browser"
             : "Unable to persist the server URL and restore the old login",
         );
+        return;
+      }
+      if (urlChanged && !(await clearPreviousLegacyToken())) {
         return;
       }
       if (
@@ -370,6 +426,12 @@ export function ServerSettingsDialog({
             : "Unable to clear the login token and restore the previous state",
         );
         return;
+      }
+      if (t && !tokenMustBeCleared && shouldRevokePreviousLegacySession) {
+        void (await revokeMediaSession(
+          initialUrl || getServerUrl(),
+          previousLegacyToken!,
+        ));
       }
       if (t && !tokenMustBeCleared && !setAuthToken(t, activeProfileId)) {
         const restored = restoreLegacyState();
@@ -417,12 +479,18 @@ export function ServerSettingsDialog({
       (profile === undefined ? (getActiveProfileId() ?? undefined) : undefined);
     const targetServerUrl = storedProfile?.url ?? getServerUrl();
     const targetToken = getAuthToken(targetProfileId);
+    if (targetToken) {
+      // Local logout must complete even when the old server is unreachable; its
+      // bounded media-session TTL remains the cleanup fallback.
+      void (await revokeMediaSession(targetServerUrl, targetToken));
+    }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
     try {
       await fetch(`${targetServerUrl}/api/auth/logout`, {
         method: "POST",
         headers: targetToken ? { Authorization: `Bearer ${targetToken}` } : {},
+        credentials: "include",
         signal: controller.signal,
       });
     } catch {
