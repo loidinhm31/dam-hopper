@@ -7,8 +7,16 @@
  * - MonacoHost / MarkdownHost are lazy-loaded (dynamic import) to keep the main chunk clean.
  * - ConflictDialog is shown when save returns a conflict.
  */
-import { lazy, Suspense, useState, useEffect, useCallback } from "react";
+import {
+  lazy,
+  Suspense,
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+} from "react";
 import type * as monacoNs from "monaco-editor";
+import type { SemanticNavigationTarget } from "@dam-hopper/shared";
 import { FileCode, Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEditorStore } from "@/stores/editor.js";
@@ -26,6 +34,11 @@ import { imageMimeType, isImagePreviewCandidate } from "@/lib/image-file.js";
 import { isVideoPreviewCandidate, videoMimeType } from "@/lib/video-file.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useEncryptedWrite } from "@/hooks/use-encrypted-write.js";
+import { useSemanticNavigation } from "@/contexts/SemanticNavigationContext.js";
+import { NavigationResultsPanel } from "@/components/organisms/NavigationResultsPanel.js";
+import { SemanticNavigationEditorBridge } from "@/components/organisms/SemanticNavigationEditorBridge.js";
+import { SemanticTrustDialog } from "@/components/organisms/SemanticTrustDialog.js";
+import { useNavigationResultsStore } from "@/stores/navigation-results.js";
 import { LockToggle } from "@/components/atoms/LockToggle.js";
 import { ContextMenu } from "@/components/ui/ContextMenu.js";
 import {
@@ -80,9 +93,17 @@ export function EditorTabs({ project }: { project: string | null }) {
     getSession,
   } = useEncryptMode();
   const encryptedWrite = useEncryptedWrite();
-
+  const semantic = useSemanticNavigation();
   const [activeEditor, setActiveEditor] =
     useState<monacoNs.editor.IStandaloneCodeEditor | null>(null);
+  const [activeMonaco, setActiveMonaco] = useState<typeof monacoNs | null>(
+    null,
+  );
+  const pendingSemanticReveal = useRef<{
+    tabKey: string;
+    line: number;
+    character: number;
+  } | null>(null);
   const { data: gitDiff } = useGitDiff(project ?? "", "*");
 
   const handleSave = useCallback(
@@ -179,12 +200,61 @@ export function EditorTabs({ project }: { project: string | null }) {
       activeGitState.rootRelativePath,
     );
   };
-  // Auto-hydrate active tab if content is not loaded
+  // Auto-hydrate persisted tab metadata before rendering/syncing its content.
   useEffect(() => {
-    if (activeTab?.hydrated && !activeTab.loading) {
+    if (
+      activeTab &&
+      !activeTab.hydrated &&
+      !activeTab.loading &&
+      activeTab.tier !== "large" &&
+      activeTab.tier !== "binary" &&
+      !isPreviewOnlyFile(activeTab.tier, activeTab.name)
+    ) {
       void loadContent(activeTab.key);
     }
-  }, [activeTab?.key, activeTab?.hydrated, activeTab?.loading, loadContent]);
+  }, [activeTab, loadContent]);
+
+  useEffect(() => {
+    const reveal = pendingSemanticReveal.current;
+    if (
+      !reveal ||
+      !activeEditor ||
+      !activeTab ||
+      activeTab.key !== reveal.tabKey
+    )
+      return;
+    if (activeTab.loading) return;
+    if (activeTab.error) {
+      pendingSemanticReveal.current = null;
+      return;
+    }
+    const position = {
+      lineNumber: Math.max(1, reveal.line + 1),
+      column: Math.max(1, reveal.character + 1),
+    };
+    activeEditor.setPosition(position);
+    activeEditor.revealPositionInCenter(position);
+    pendingSemanticReveal.current = null;
+  }, [activeEditor, activeTab]);
+
+  const openSemanticTarget = useCallback((target: SemanticNavigationTarget) => {
+    const fileName = target.uri.path.split("/").pop() ?? target.uri.path;
+    pendingSemanticReveal.current = {
+      tabKey: `${target.uri.projectId}::${target.uri.path}`,
+      line: target.range.start.line,
+      character: target.range.start.character,
+    };
+    void useEditorStore.getState().open(target.uri.projectId, {
+      id: target.uri.path,
+      name: fileName,
+      kind: "file",
+      size: 0,
+      mtime: 0,
+      isSymlink: false,
+      children: null,
+    });
+    useNavigationResultsStore.getState().clear();
+  }, []);
 
   if (!project || projectTabs.length === 0) {
     return (
@@ -349,6 +419,7 @@ export function EditorTabs({ project }: { project: string | null }) {
               }
             >
               <MonacoHost
+                key={activeTab.key}
                 tabKey={activeTab.key}
                 path={activeTab.path}
                 content={activeTab.content}
@@ -359,12 +430,30 @@ export function EditorTabs({ project }: { project: string | null }) {
                 onSave={() => void handleSave(activeTab.key)}
                 onViewStateChange={(vs) => saveViewState(activeTab.key, vs)}
                 onEditorReady={setActiveEditor}
+                onMonacoReady={setActiveMonaco}
                 lineChanges={activeLineChanges}
                 onGitIndicatorClick={openActiveDiff}
               />
             </Suspense>
           )}
 
+          <SemanticNavigationEditorBridge
+            editor={activeEditor}
+            monaco={activeMonaco}
+            project={project}
+          />
+          {project && semantic.trust && semantic.trustApi && (
+            <div className="absolute top-2 left-3 z-10 flex items-center gap-2 rounded bg-[var(--color-surface)]/90 px-2 py-1 shadow">
+              <SemanticTrustDialog
+                projectId={project}
+                state={semantic.trust}
+                api={semantic.trustApi}
+                availability={semantic.availability}
+                onChanged={semantic.acceptTrustState}
+              />
+            </div>
+          )}
+          <NavigationResultsPanel onOpen={openSemanticTarget} />
           {/* Saving overlay */}
           {activeTab?.saving && !activeIsPreviewOnly && (
             <div className="absolute top-2 right-3 flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)]">

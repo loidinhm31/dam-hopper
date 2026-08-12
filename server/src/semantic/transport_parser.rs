@@ -17,6 +17,14 @@ struct ProjectMessage {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PrewarmMessage {
+    project_id: String,
+    language: super::protocol::SemanticLanguage,
+    tab_generation: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DocumentMessage {
     uri: SemanticUri,
     document_version: u64,
@@ -64,6 +72,15 @@ pub fn parse_client_message(raw: &str) -> Result<SemanticClientMessage, Semantic
             SemanticClientMessage::Project {
                 profile_id: message.profile_id,
                 project_id: message.project_id,
+            }
+        }
+        "semantic:prewarm" => {
+            let value = parse_fields(&object, &["projectId", "language", "tabGeneration"])?;
+            let message: PrewarmMessage = from_object(value)?;
+            SemanticClientMessage::Prewarm {
+                project_id: message.project_id,
+                language: message.language,
+                tab_generation: message.tab_generation,
             }
         }
         "semantic:document_open" => {

@@ -14,7 +14,19 @@ export const MAX_SEMANTIC_OPEN_DOCUMENTS = 256;
 export type SemanticClientMessage =
   | { kind: "semantic:project"; profileId: string; projectId: string }
   | {
-      kind: "semantic:document_open" | "semantic:document_change";
+      kind: "semantic:prewarm";
+      projectId: string;
+      language: SemanticUri["language"];
+      tabGeneration: number;
+    }
+  | {
+      kind: "semantic:document_open";
+      uri: SemanticUri;
+      documentVersion: number;
+      text: string;
+    }
+  | {
+      kind: "semantic:document_change";
       uri: SemanticUri;
       documentVersion: number;
       text: string;
@@ -72,12 +84,14 @@ export type SemanticServerMessage =
       kind: "semantic:handshake";
       protocolVersion: number;
       sessionEpoch: number;
+      workspaceGeneration: number;
       availability: SemanticDescriptorAvailability[];
       trust: SemanticTrustState[];
     }
   | {
       kind: "semantic:project";
       projectId: string;
+      workspaceGeneration: number;
       trust: SemanticTrustState;
       availability: SemanticDescriptorAvailability[];
     }

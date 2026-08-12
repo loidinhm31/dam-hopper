@@ -1027,6 +1027,34 @@ project-relative full-snapshot sync/replay, cancellation-aware navigation, and
 trust/workspace lifecycle fencing. Monaco provider UX, prewarm presentation,
 release qualification, and Java enablement remain later phases.
 
+#### Phase 4 editor navigation and prewarm UX
+
+Phase 4 connects the authenticated semantic transport to Monaco without coupling
+semantic availability to file editing or terminal I/O. Providers and editor
+actions are registered through Monaco's public provider, action, and mouse APIs;
+the bridge disposes registrations when the active model, project, profile, or
+capability changes. F12, Ctrl/Cmd+F12, Shift+F12, and modifier-click create
+revision-bound requests. Navigation results use the frozen Gate B virtualized
+metadata surface: up to 500 safe relative targets are retained in the browser,
+and only an explicitly selected target is opened and revealed. Unavailable,
+restricted, crashed, or revoked states explain the limitation and do not expose
+host paths, commands, raw LSP values, or bundle details.
+
+The browser keeps full snapshots for hydrated open tabs in a document controller,
+coalesces edits for 50 ms, flushes the active snapshot before navigation, and
+replays unsent/current snapshots after a project acknowledgement. The dedicated
+transport fences document, resync, prewarm, navigation, and cancellation traffic
+behind the selected project acknowledgement and buffers/coalesces messages across
+reconnects. Server responses remain bound to request ID, document version, and
+trust policy revision; local cancellation clears loading state and forwards a
+best-effort cancellation when possible.
+
+Delayed prewarm is advisory and key-scoped. A supported, active, hydrated tab
+must remain stable for exactly 750 ms before one intent is sent; tab generation,
+project, profile, language, workspace generation, trust revision, reconnect, and
+policy changes cancel or fence the intent. Explicit navigation can bypass the
+dwell, but explorer scans and tab churn do not initiate prewarm.
+
 #### Fixed bundle and process topology
 
 `AppState` derives one bundle root from the release binary location:

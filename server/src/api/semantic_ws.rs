@@ -61,8 +61,8 @@ pub async fn ws_handler(
         .on_upgrade(move |socket| handle_socket(socket, state, actor.subject))
 }
 
-async fn handle_socket(socket: WebSocket, state: AppState, _actor_subject: String) {
-    let connection = SemanticConnection::new();
+async fn handle_socket(socket: WebSocket, state: AppState, actor_subject: String) {
+    let connection = SemanticConnection::new(actor_subject);
     let (ws_tx, mut ws_rx) = socket.split();
     let (out_tx, mut out_rx) = mpsc::channel::<String>(OUTBOUND_CAPACITY);
     let writer = tokio::spawn(async move {
@@ -133,6 +133,21 @@ async fn handle_socket(socket: WebSocket, state: AppState, _actor_subject: Strin
                 project_id,
             } => {
                 handle_project(&state, &connection, profile_id, project_id, &out_tx).await;
+            }
+            SemanticClientMessage::Prewarm {
+                project_id,
+                language,
+                tab_generation,
+            } => {
+                handle_prewarm(
+                    &state,
+                    &connection,
+                    project_id,
+                    language,
+                    tab_generation,
+                    &out_tx,
+                )
+                .await;
             }
             SemanticClientMessage::DocumentOpen {
                 uri,
@@ -207,7 +222,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, _actor_subject: Strin
     }
     state
         .semantic_supervisor
-        .release_client(&connection.client_id)
+        .release_client(&connection.session_client_id())
         .await;
     drop(out_tx);
     let _ = writer.await;
@@ -250,6 +265,7 @@ async fn build_handshake(
     SemanticServerMessage::Handshake {
         protocol_version: SEMANTIC_PROTOCOL_VERSION,
         session_epoch: connection.session_epoch(),
+        workspace_generation: state.semantic_supervisor.lifecycle_generation(),
         availability,
         trust,
     }
@@ -310,7 +326,7 @@ async fn handle_project(
     {
         state
             .semantic_supervisor
-            .release_client(&connection.client_id)
+            .release_client(&connection.session_client_id())
             .await;
         connection
             .select_project(
@@ -338,6 +354,7 @@ async fn handle_project(
     if let Ok(json) = crate::semantic::transport_messages::serialize_server_message(
         &SemanticServerMessage::Project {
             project_id,
+            workspace_generation: context.workspace_generation,
             trust,
             availability,
         },
@@ -345,6 +362,90 @@ async fn handle_project(
         let _ = connection
             .try_send_if_selection_current(&context, out_tx, json)
             .await;
+    }
+}
+
+async fn handle_prewarm(
+    state: &AppState,
+    connection: &SemanticConnection,
+    project_id: String,
+    language: SemanticLanguage,
+    tab_generation: u64,
+    out_tx: &mpsc::Sender<String>,
+) {
+    let _workspace_context = state.workspace_context_guard.read().await;
+    let Some(context) = connection.current_context().await else {
+        return;
+    };
+    if context.project_id != project_id || context.trust.trust == SemanticTrust::Revoked {
+        let _ = send_message(
+            out_tx,
+            transport_error(SemanticTransportErrorCode::ProjectMismatch),
+        )
+        .await;
+        return;
+    }
+    if !state
+        .semantic_supervisor
+        .is_lifecycle_current(context.workspace_generation)
+        || !connection.selection_is_current(&context).await
+    {
+        let _ = send_message(
+            out_tx,
+            transport_error(SemanticTransportErrorCode::PolicyChanged),
+        )
+        .await;
+        return;
+    }
+    let Ok(sandbox) = state.fs.sandbox() else {
+        return;
+    };
+    let Some(project_root) = sandbox.project_root(&project_id) else {
+        return;
+    };
+    let Some(descriptor_fingerprint) = state
+        .semantic_supervisor
+        .registry()
+        .descriptor_fingerprint(language)
+    else {
+        return;
+    };
+    let result = state
+        .semantic_supervisor
+        .request_prewarm(crate::semantic::supervisor::PrewarmIntent {
+            key: crate::semantic::supervisor::PrewarmKey {
+                client_id: connection.session_client_id(),
+                profile_id: context.profile_id.clone(),
+                project_id: project_id.clone(),
+                descriptor_fingerprint,
+                trust_policy_revision: context.trust.policy_revision,
+                tab_generation,
+            },
+            language,
+            project_root,
+            trust: context.trust.trust,
+            stable_for_ms: crate::semantic::supervisor::PREWARM_DWELL_MS,
+            workspace_generation: context.workspace_generation,
+            workspace_epoch: context.workspace_epoch,
+        })
+        .await;
+    if !state
+        .semantic_supervisor
+        .is_lifecycle_current(context.workspace_generation)
+        || !connection.selection_is_current(&context).await
+    {
+        return;
+    }
+    if result.is_err() {
+        let _ = send_message(
+            out_tx,
+            SemanticServerMessage::Status {
+                project_id,
+                state: SemanticStatusState::Unavailable,
+                policy_revision: context.trust.policy_revision,
+            },
+        )
+        .await;
     }
 }
 

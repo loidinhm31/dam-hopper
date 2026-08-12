@@ -199,7 +199,9 @@ async fn semantic_ws_syncs_unsaved_documents_and_returns_safe_navigation() {
         ))
         .await
         .unwrap();
-    assert_eq!(next_json(&mut socket).await["kind"], "semantic:project");
+    let project_message = next_json(&mut socket).await;
+    assert_eq!(project_message["kind"], "semantic:project");
+    assert!(project_message["workspaceGeneration"].is_number());
 
     let uri = json!({
         "profileId":"profile",
@@ -330,7 +332,9 @@ async fn semantic_trust_routes_persist_and_revoke_without_host_fields() {
         ))
         .await
         .unwrap();
-    assert_eq!(next_json(&mut socket).await["kind"], "semantic:project");
+    let project_message = next_json(&mut socket).await;
+    assert_eq!(project_message["kind"], "semantic:project");
+    assert!(project_message["workspaceGeneration"].is_number());
     socket
         .send(Message::Text(
             json!({

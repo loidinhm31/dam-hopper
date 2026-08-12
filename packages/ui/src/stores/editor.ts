@@ -13,6 +13,7 @@ import { fileTier, isPreviewOnlyFile } from "@/lib/file-tier.js";
 import type { FileTier as FT } from "@/lib/file-tier.js";
 import { isVideoFile } from "@/lib/video-file.js";
 import type { FsArborNode } from "@/api/fs-types.js";
+import { semanticLanguageForFile } from "@/lib/semantic-language.js";
 export type FileTier = FT | "diff";
 
 export interface Tab {
@@ -45,10 +46,14 @@ export interface Tab {
   commitHash?: string;
   gitRootId?: string;
   diffPath?: string;
-  /** Whether the tab metadata was restored but content still needs to be loaded from server. */
+  /** Whether editable text content has been loaded and is safe to sync semantically. */
   hydrated?: boolean;
   /** Session-only counter used to remount a clean video preview after external changes. */
   previewRevision?: number;
+  /** Monotonic semantic snapshot version for this editor document. */
+  semanticVersion?: number;
+  /** Changes whenever a tab is reopened for prewarm cancellation fencing. */
+  tabGeneration?: number;
 }
 
 interface EditorState {
@@ -71,6 +76,18 @@ interface EditorState {
   closeAll: (project: string) => void;
   setActive: (project: string, key: string | null) => void;
   setContent: (key: string, content: string) => void;
+  getSemanticDocuments: (
+    project: string,
+    profileId: string,
+  ) => Array<{
+    profileId: string;
+    projectId: string;
+    path: string;
+    language: "rust" | "typescript" | "javascript" | "java";
+    text: string;
+    tabGeneration: number;
+    hydrated: boolean;
+  }>;
   save: (key: string) => Promise<boolean>;
   forceOverwrite: (key: string) => Promise<void>;
   reloadTab: (key: string) => Promise<void>;
@@ -154,6 +171,8 @@ export const useEditorStore = create<EditorState>()(
           commitHash,
           gitRootId,
           diffPath,
+          semanticVersion: 0,
+          tabGeneration: 1,
         };
 
         set((s) => ({
@@ -189,8 +208,11 @@ export const useEditorStore = create<EditorState>()(
           savedContent: "",
           dirty: false,
           loading: !isPreviewOnlyFile(optimisticTier, node.name),
+          hydrated: false,
           saving: false,
           conflicted: false,
+          semanticVersion: 0,
+          tabGeneration: 1,
         };
 
         set((s) => ({
@@ -273,6 +295,9 @@ export const useEditorStore = create<EditorState>()(
                     content: decoded,
                     savedContent: decoded,
                     binaryBase64,
+                    hydrated: tier === "normal" || tier === "degraded",
+                    semanticVersion: (t.semanticVersion ?? 0) + 1,
+                    tabGeneration: t.tabGeneration ?? 1,
                   }
                 : t,
             ),
@@ -348,7 +373,16 @@ export const useEditorStore = create<EditorState>()(
         set((s) => ({
           tabs: s.tabs.map((t) =>
             t.key === key
-              ? { ...t, content, dirty: content !== t.savedContent }
+              ? {
+                  ...t,
+                  content,
+                  dirty: content !== t.savedContent,
+                  semanticVersion:
+                    content === t.content
+                      ? (t.semanticVersion ?? 0)
+                      : (t.semanticVersion ?? 0) + 1,
+                  tabGeneration: t.tabGeneration ?? 1,
+                }
               : t,
           ),
         }));
@@ -553,6 +587,14 @@ export const useEditorStore = create<EditorState>()(
                     savedContent: decoded,
                     mtime: result.mtime,
                     dirty: false,
+                    semanticVersion: (t.semanticVersion ?? 0) + 1,
+                    tabGeneration: (t.tabGeneration ?? 0) + 1,
+                    hydrated:
+                      !result.binary &&
+                      (fileTier(t.name, result.size, result.binary) ===
+                        "normal" ||
+                        fileTier(t.name, result.size, result.binary) ===
+                          "degraded"),
                     stale: false,
                     binaryBase64: result.binary ? result.content : undefined,
                   }
@@ -673,11 +715,42 @@ export const useEditorStore = create<EditorState>()(
         return tabs.find((t) => t.key === activeKey) ?? null;
       },
 
+      getSemanticDocuments: (project: string, profileId: string) =>
+        get()
+          .tabs.filter(
+            (tab) =>
+              tab.project === project &&
+              tab.tier !== "binary" &&
+              tab.tier !== "large" &&
+              tab.tier !== "diff" &&
+              !isPreviewOnlyFile(tab.tier, tab.name) &&
+              Boolean(tab.path) &&
+              !tab.error,
+          )
+          .flatMap((tab) => {
+            const language = semanticLanguageForFile(tab.mime, tab.path);
+            if (!language) return [];
+            return [
+              {
+                profileId,
+                projectId: project,
+                path: tab.path,
+                language,
+                text: tab.content,
+                tabGeneration: tab.tabGeneration ?? 1,
+                hydrated: tab.hydrated === true && !tab.loading,
+              },
+            ];
+          }),
+
       loadContent: async (key: string) => {
         const tab = get().tabs.find((t) => t.key === key);
-        if (!tab || !tab.hydrated || tab.loading) return;
+        if (!tab || tab.loading) return;
+        const previewOnly = isPreviewOnlyFile(tab.tier, tab.name);
+        if (tab.hydrated && !previewOnly && typeof tab.content === "string")
+          return;
 
-        if (isPreviewOnlyFile(tab.tier, tab.name)) {
+        if (previewOnly) {
           set((s) => ({
             tabs: s.tabs.map((t) =>
               t.key === key
@@ -770,7 +843,9 @@ export const useEditorStore = create<EditorState>()(
                     content: decoded,
                     savedContent: decoded,
                     binaryBase64,
-                    hydrated: false,
+                    hydrated: tier === "normal" || tier === "degraded",
+                    semanticVersion: (t.semanticVersion ?? 0) + 1,
+                    tabGeneration: (t.tabGeneration ?? 0) + 1,
                   }
                 : t,
             ),
@@ -807,7 +882,7 @@ export const useEditorStore = create<EditorState>()(
           additions: t.additions,
           deletions: t.deletions,
           commitHash: t.commitHash,
-          hydrated: true,
+          hydrated: false,
           loading: false,
           dirty: false,
           saving: false,

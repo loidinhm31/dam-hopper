@@ -47,7 +47,7 @@ pub(crate) async fn active_session(
         .registry()
         .descriptor_fingerprint(language)?;
     let key = SessionKey {
-        client_id: connection.client_id.clone(),
+        client_id: connection.session_client_id(),
         profile_id: context.profile_id,
         project_id: context.project_id,
         descriptor_fingerprint: fingerprint,
@@ -284,7 +284,7 @@ async fn execute_with_document(
         return base(SemanticNavigationErrorCode::InternalUnavailable);
     };
     let key = SessionKey {
-        client_id: connection.client_id.clone(),
+        client_id: connection.session_client_id(),
         profile_id: context.profile_id.clone(),
         project_id: context.project_id.clone(),
         descriptor_fingerprint: fingerprint,

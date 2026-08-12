@@ -16,6 +16,11 @@ pub enum SemanticClientMessage {
         profile_id: String,
         project_id: String,
     },
+    Prewarm {
+        project_id: String,
+        language: super::protocol::SemanticLanguage,
+        tab_generation: u64,
+    },
     DocumentOpen {
         uri: SemanticUri,
         document_version: u64,
@@ -46,6 +51,14 @@ impl SemanticClientMessage {
             } => {
                 validate_opaque_id(profile_id, "profile_id")?;
                 validate_opaque_id(project_id, "project_id")?;
+            }
+            Self::Prewarm {
+                project_id,
+                language: _,
+                tab_generation,
+            } => {
+                validate_opaque_id(project_id, "project_id")?;
+                validate_version(*tab_generation)?;
             }
             Self::DocumentOpen {
                 uri,

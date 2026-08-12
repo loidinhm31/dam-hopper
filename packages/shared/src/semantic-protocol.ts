@@ -158,7 +158,10 @@ export interface SemanticTrustTransitionRequest {
 /** Local-only event; a semantic transport may receive it after the dwell. */
 export interface PrewarmIntent {
   profileId: string;
+  /** Local workspace label retained for churn grouping; never a host path. */
   workspaceId: string;
+  /** Server-authoritative lifecycle generation used to fence replacements. */
+  workspaceGeneration: number;
   projectId: string;
   language: SemanticLanguage;
   tabGeneration: number;

@@ -39,6 +39,19 @@ export function parseSemanticClientMessage(
         profileId: opaqueId(input.profileId, "profileId"),
         projectId: opaqueId(input.projectId, "projectId"),
       };
+    case "semantic:prewarm":
+      assertKeys(input, ["kind", "projectId", "language", "tabGeneration"]);
+      return {
+        kind,
+        projectId: opaqueId(input.projectId, "projectId"),
+        language: parseSemanticProtocolUri({
+          profileId: "profile",
+          projectId: "project",
+          path: "file",
+          language: input.language,
+        }).language,
+        tabGeneration: sequence(input.tabGeneration, "tabGeneration"),
+      };
     case "semantic:document_open":
     case "semantic:document_change": {
       assertKeys(input, ["kind", "uri", "documentVersion", "text"]);
@@ -118,6 +131,7 @@ export function parseSemanticServerMessage(
       "kind",
       "protocolVersion",
       "sessionEpoch",
+      "workspaceGeneration",
       "availability",
       "trust",
     ]);
@@ -128,15 +142,29 @@ export function parseSemanticServerMessage(
       kind,
       protocolVersion: input.protocolVersion,
       sessionEpoch: sequence(input.sessionEpoch, "sessionEpoch"),
+      workspaceGeneration: sequence(
+        input.workspaceGeneration,
+        "workspaceGeneration",
+      ),
       availability: availabilityList(input.availability),
       trust: trustList(input.trust),
     };
   }
   if (kind === "semantic:project") {
-    assertKeys(input, ["kind", "projectId", "trust", "availability"]);
+    assertKeys(input, [
+      "kind",
+      "projectId",
+      "workspaceGeneration",
+      "trust",
+      "availability",
+    ]);
     return {
       kind,
       projectId: opaqueId(input.projectId, "projectId"),
+      workspaceGeneration: sequence(
+        input.workspaceGeneration,
+        "workspaceGeneration",
+      ),
       trust: parseSemanticProtocolTrustState(input.trust),
       availability: availabilityList(input.availability),
     };

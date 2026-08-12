@@ -43,6 +43,7 @@ export function selectVirtualTarget(
 export class PrewarmIntentHarness {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private key: string | null = null;
+  private emittedKeys = new Set<string>();
 
   schedule(
     intent: PrewarmIntent,
@@ -60,7 +61,10 @@ export class PrewarmIntentHarness {
     const key = prewarmKey(intent);
     this.key = key;
     this.timer = setTimeout(() => {
-      if (this.key === key) emit(intent);
+      if (this.key === key && !this.emittedKeys.has(key)) {
+        emit(intent);
+        this.emittedKeys.add(key);
+      }
       this.timer = null;
     }, PREWARM_DWELL_MS);
   }
@@ -73,7 +77,16 @@ export class PrewarmIntentHarness {
 
   navigate(intent: PrewarmIntent, emit: (intent: PrewarmIntent) => void): void {
     this.cancel();
-    emit(intent);
+    const key = prewarmKey(intent);
+    if (!this.emittedKeys.has(key)) {
+      emit(intent);
+      this.emittedKeys.add(key);
+    }
+  }
+
+  reset(): void {
+    this.cancel();
+    this.emittedKeys.clear();
   }
 }
 
@@ -81,6 +94,7 @@ function prewarmKey(intent: PrewarmIntent): string {
   return JSON.stringify([
     intent.profileId,
     intent.workspaceId,
+    intent.workspaceGeneration,
     intent.projectId,
     intent.language,
     intent.tabGeneration,

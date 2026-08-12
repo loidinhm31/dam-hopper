@@ -18,6 +18,7 @@ const MAX_TOTAL_DOCUMENT_BYTES: usize = 32 * 1024 * 1024;
 #[derive(Clone)]
 pub(crate) struct SemanticConnection {
     pub(crate) client_id: String,
+    pub(crate) actor_subject: String,
     session_epoch: u64,
     inner: Arc<Mutex<ConnectionInner>>,
     closed: Arc<AtomicBool>,
@@ -96,9 +97,10 @@ impl RequestCancellation {
 }
 
 impl SemanticConnection {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(actor_subject: impl Into<String>) -> Self {
         Self {
             client_id: Uuid::new_v4().simple().to_string(),
+            actor_subject: actor_subject.into(),
             session_epoch: Uuid::new_v4().as_u128() as u64,
             inner: Arc::new(Mutex::new(ConnectionInner {
                 epoch: 1,
@@ -114,6 +116,10 @@ impl SemanticConnection {
             })),
             closed: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub(crate) fn session_client_id(&self) -> String {
+        format!("{}:{}", self.actor_subject, self.client_id)
     }
 
     pub(crate) fn client_close_flag(&self) -> Arc<AtomicBool> {
@@ -632,7 +638,7 @@ mod tests {
 
     #[tokio::test]
     async fn document_versions_are_monotonic_per_connection() {
-        let connection = SemanticConnection::new();
+        let connection = SemanticConnection::new("test-actor");
         connection
             .select_project(
                 "profile".into(),
@@ -684,7 +690,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_requires_the_matching_document_version() {
-        let connection = SemanticConnection::new();
+        let connection = SemanticConnection::new("test-actor");
         let cancel = Arc::new(RequestCancellation::default());
         assert!(
             connection
@@ -699,7 +705,7 @@ mod tests {
 
     #[tokio::test]
     async fn trust_invalidation_preserves_the_workspace_epoch() {
-        let connection = SemanticConnection::new();
+        let connection = SemanticConnection::new("test-actor");
         connection
             .select_project(
                 "profile".into(),
@@ -735,7 +741,7 @@ mod tests {
 
     #[tokio::test]
     async fn batch_output_does_not_enqueue_a_partial_prefix() {
-        let connection = SemanticConnection::new();
+        let connection = SemanticConnection::new("test-actor");
         connection
             .select_project(
                 "profile".into(),

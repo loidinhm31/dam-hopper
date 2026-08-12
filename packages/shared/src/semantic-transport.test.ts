@@ -61,12 +61,44 @@ describe("semantic transport", () => {
     });
   });
 
+  it("parses prewarm intent and rejects progress as a navigation response", () => {
+    expect(
+      parseSemanticClientMessage({
+        kind: "semantic:prewarm",
+        projectId: "project",
+        language: "rust",
+        tabGeneration: 1,
+      }),
+    ).toMatchObject({ kind: "semantic:prewarm", tabGeneration: 1 });
+    expect(() =>
+      parseSemanticServerMessage({
+        kind: "semantic:progress",
+        requestId: "request",
+        documentVersion: 1,
+        policyRevision: 0,
+        state: "starting",
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts revocation trust events", () => {
+    expect(
+      parseSemanticServerMessage({
+        kind: "semantic:trust_changed",
+        projectId: "project",
+        trust: { ...trust, trust: "revoked", canTransition: false },
+        reason: "revoked",
+      }),
+    ).toMatchObject({ kind: "semantic:trust_changed", reason: "revoked" });
+  });
+
   it("parses sanitized handshake and navigation responses", () => {
     expect(
       parseSemanticServerMessage({
         kind: "semantic:handshake",
         protocolVersion: 1,
         sessionEpoch: 1,
+        workspaceGeneration: 1,
         availability: [availability],
         trust: [trust],
       }),

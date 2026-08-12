@@ -65,12 +65,14 @@ pub enum SemanticServerMessage {
     Handshake {
         protocol_version: u16,
         session_epoch: u64,
+        workspace_generation: u64,
         availability: Vec<SemanticDescriptorAvailability>,
         trust: Vec<SemanticTrustState>,
     },
     #[serde(rename = "semantic:project")]
     Project {
         project_id: String,
+        workspace_generation: u64,
         trust: SemanticTrustState,
         availability: Vec<SemanticDescriptorAvailability>,
     },

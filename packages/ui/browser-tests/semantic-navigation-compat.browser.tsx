@@ -308,6 +308,7 @@ describe("semantic navigation public Monaco compatibility", () => {
     const base = {
       profileId: "profile",
       workspaceId: "workspace",
+      workspaceGeneration: 1,
       projectId: "project",
       language: "rust" as const,
       tabGeneration: 1,
@@ -333,6 +334,9 @@ describe("semantic navigation public Monaco compatibility", () => {
     expect(intent).toHaveBeenCalledTimes(1);
     controller.navigate(base, intent);
     expect(intent).toHaveBeenCalledTimes(2);
+    controller.reset();
+    controller.navigate(base, intent);
+    expect(intent).toHaveBeenCalledTimes(3);
     vi.useRealTimers();
   });
 });

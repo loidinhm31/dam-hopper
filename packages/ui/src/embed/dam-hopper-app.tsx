@@ -38,6 +38,7 @@ import { useWorkspaceStore } from "@/stores/workspace.js";
 import { matchesNewTerminalShortcut } from "@/lib/shortcuts.js";
 import { normalizeRouterBasename } from "@/lib/router-basename.js";
 import { recordClientRoute } from "@/lib/diagnostics-client.js";
+import { SemanticNavigationProvider } from "@/contexts/SemanticNavigationContext.js";
 export {
   BrowserDebugHostProvider,
   useBrowserDebugHost,
@@ -367,77 +368,79 @@ export function DamHopperApp() {
           <ServerProfileGuard>
             <AuthGuard>
               <WorkspaceGuard>
-                <Routes>
-                  <Route
-                    path="/"
-                    element={
-                      <ErrorBoundary>
-                        <Suspense fallback={LOADING_FALLBACK}>
-                          <DashboardPage />
-                        </Suspense>
-                      </ErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/workspace"
-                    element={
-                      <ErrorBoundary>
-                        <Suspense fallback={LOADING_FALLBACK}>
-                          <WorkspacePage />
-                        </Suspense>
-                      </ErrorBoundary>
-                    }
-                  />
-                  {/* Backward-compat redirects — preserve search params for deep-links */}
-                  <Route
-                    path="/terminals"
-                    element={<LegacyRedirect to="/workspace" />}
-                  />
-                  <Route
-                    path="/ide"
-                    element={<LegacyRedirect to="/workspace" />}
-                  />
-                  <Route
-                    path="/git"
-                    element={
-                      <ErrorBoundary>
-                        <Suspense fallback={LOADING_FALLBACK}>
-                          <GitPage />
-                        </Suspense>
-                      </ErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/settings"
-                    element={
-                      <ErrorBoundary>
-                        <Suspense fallback={LOADING_FALLBACK}>
-                          <SettingsPage />
-                        </Suspense>
-                      </ErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/agent-store"
-                    element={
-                      <ErrorBoundary>
-                        <Suspense fallback={LOADING_FALLBACK}>
-                          <AgentStorePage />
-                        </Suspense>
-                      </ErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/usage"
-                    element={
-                      <ErrorBoundary>
-                        <Suspense fallback={LOADING_FALLBACK}>
-                          <UsagePage />
-                        </Suspense>
-                      </ErrorBoundary>
-                    }
-                  />
-                </Routes>
+                <SemanticNavigationProvider>
+                  <Routes>
+                    <Route
+                      path="/"
+                      element={
+                        <ErrorBoundary>
+                          <Suspense fallback={LOADING_FALLBACK}>
+                            <DashboardPage />
+                          </Suspense>
+                        </ErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/workspace"
+                      element={
+                        <ErrorBoundary>
+                          <Suspense fallback={LOADING_FALLBACK}>
+                            <WorkspacePage />
+                          </Suspense>
+                        </ErrorBoundary>
+                      }
+                    />
+                    {/* Backward-compat redirects — preserve search params for deep-links */}
+                    <Route
+                      path="/terminals"
+                      element={<LegacyRedirect to="/workspace" />}
+                    />
+                    <Route
+                      path="/ide"
+                      element={<LegacyRedirect to="/workspace" />}
+                    />
+                    <Route
+                      path="/git"
+                      element={
+                        <ErrorBoundary>
+                          <Suspense fallback={LOADING_FALLBACK}>
+                            <GitPage />
+                          </Suspense>
+                        </ErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/settings"
+                      element={
+                        <ErrorBoundary>
+                          <Suspense fallback={LOADING_FALLBACK}>
+                            <SettingsPage />
+                          </Suspense>
+                        </ErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/agent-store"
+                      element={
+                        <ErrorBoundary>
+                          <Suspense fallback={LOADING_FALLBACK}>
+                            <AgentStorePage />
+                          </Suspense>
+                        </ErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/usage"
+                      element={
+                        <ErrorBoundary>
+                          <Suspense fallback={LOADING_FALLBACK}>
+                            <UsagePage />
+                          </Suspense>
+                        </ErrorBoundary>
+                      }
+                    />
+                  </Routes>
+                </SemanticNavigationProvider>
               </WorkspaceGuard>
             </AuthGuard>
           </ServerProfileGuard>
