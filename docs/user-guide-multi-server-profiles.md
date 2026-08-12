@@ -108,6 +108,7 @@ Profile selection and profile tokens are therefore shared by tabs in the same br
 
 - **Passwords are never stored** locally. Only the username for display purposes.
 - **Auth tokens** (Bearer tokens) are stored in localStorage under a profile-specific key so Android/browser recreation does not discard the login. Tokens are readable by JavaScript; use trusted HTTPS deployments and do not store passwords.
+- **Server URL or token changes** attempt remote media-session revocation during the credential transition; logout does so before normal logout. The request is bounded to five seconds, so local cleanup proceeds if the server is unreachable and its old matching cookie/tickets can remain usable until the 30-minute idle timeout (eight-hour absolute maximum). If remote revocation succeeds but local token persistence or removal fails, the remote session remains revoked intentionally; restore or retain the local login if needed, then reissue media before streaming.
 - **Server URL changes** clear the profile token and require login again. Equivalent formatting changes, such as trailing slashes, do not clear it.
 - **URLs are stored in plain text** in localStorage. Keep your browser secure.
 - **No data sent to server** for profile management — entirely client-side.
