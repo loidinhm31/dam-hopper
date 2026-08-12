@@ -2,6 +2,11 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Touch Long-Press Right-Click (2026-08-12)
+
+- **Phases 01–03 — [COMPLETED 2026-08-12; review approved 8.5/10]**: preserved Radix's single 700 ms touch/pen trigger contract and existing Explorer row/editor-tab menus; added focused hold, targeting, cancellation, nested-control, marker/suppression, mouse/keyboard, focus, portal, dismissal, and native-fallback deduplication coverage. Focused browser **17/17**, full UI unit **992/992**, and serial full browser **120/120** passed.
+- ⚠️ Parallel browser runs retain a known unrelated image/video readiness flake (**117–119/120** in reported runs; isolated media and serial runs pass). Physical Android Chrome/iOS Safari native long-press/callout validation remains follow-up. `coverage-v8` was unavailable because the plugin is not installed; no coverage percentage is claimed.
+
 ### Explorer Browser Video Playback and Direct Download (2026-08-10)
 
 - **Phase 01 — [COMPLETED 2026-08-10 11:51:39 +07:00]**: purpose-bound playback/download ticket issuance and lifecycle delivered: authenticated opaque capabilities, sandboxed resource/version binding, independent purpose isolation, deterministic 256-ticket capacity and 30-minute idle/8-hour absolute expiry, authenticated revoke, and workspace-change invalidation.
@@ -337,7 +342,8 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **2026-07-18:** Completed context-menu trigger refactor Phase 03: consumer integration and browser regression coverage.
   - ✅ Verified production `FileTree` / Arborist lifecycle coverage, production `GitBranchControl` / `SelectItem` handoff coverage, and shared context-menu dynamic positioning behavior.
   - ✅ Focused tests/build validation passed for the targeted consumer and browser checks.
-  - ⚠️ Touch long-press not run; environment is headless Linux and cannot validate the gesture deterministically.
+  - ✅ Added focused Chromium coverage for Radix touch-held Explorer rows and editor tabs, including marker/ref flow, one-open/native-fallback deduplication, held-target actions, cancellation, and nested-control protection.
+  - ⚠️ Browser pointer sequences are synthetic app-level evidence; physical Android Chrome and iOS Safari checks remain required because native long-press/context-menu ordering and callouts differ.
 
 - **2026-07-18:** Completed context-menu trigger refactor Phase 02: Git branch Select handoff.
   - ✅ Restored the local-branch right-click handoff without changing Select value or checkout behavior.
