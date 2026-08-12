@@ -27,7 +27,7 @@ use crate::state::AppState;
 
 use super::{
     agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
-    fs as fs_api, fs_image, fs_video, git, git_diff, host_actions,
+    fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, media_session,
     port_forward as port_forward_api, settings, ssh, system, terminal, tunnel, usage,
     usage_sessions, workspace, ws,
 };
@@ -365,6 +365,10 @@ pub(crate) fn build_router_with_web_dir(
             "/api/fs/image/tickets",
             post(fs_image::issue_ticket).delete(fs_image::revoke_ticket),
         )
+        .route(
+            "/api/fs/media-session",
+            delete(media_session::revoke_current_session),
+        )
         .route("/api/fs/language-files", get(fs_api::language_files))
         .route("/api/fs/search", get(fs_api::search))
         .route("/api/fs/search-paths", get(fs_api::search_paths))
@@ -373,7 +377,7 @@ pub(crate) fn build_router_with_web_dir(
             auth::require_auth,
         ));
 
-    // Capability URL authorizes this media stream; it intentionally carries no cookie auth.
+    // Streams remain outside bearer middleware; the bound media-session cookie authorizes them.
     let video_stream = Router::new().route(
         "/api/fs/video/stream/{ticket}",
         get(fs_video::stream_ticket).head(fs_video::stream_ticket),
