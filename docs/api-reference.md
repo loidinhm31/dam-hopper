@@ -277,30 +277,6 @@ counters. Cache attribution labels are descriptive and may overlap, so clients
 must not add them as an accounting total. The existing `GET /api/system/metrics`
 response remains compatible and is served from the monitor's cached projection.
 
-The snapshot also includes an additive `battery` object with `count`, nullable
-`capacityPercent`, nullable `status`, nullable `remainingEnergyWh`, nullable
-`instantaneousPowerW`, and `availability`. Current servers always serialize this
-section; clients must still treat the top-level field as optional for old-server
-compatibility. A missing measurement is serialized as `null`, never as a
-fabricated zero. Status values are `charging`, `discharging`, `full`,
-`notCharging`, `unknown`, or `mixed`; raw sysfs status strings are not exposed.
-
-On Linux, only `/sys/class/power_supply` entries whose `type` is exactly
-`Battery` are counted. `energy_now` and `power_now` are read directly in sysfs
-micro-units and converted to remaining energy in Wh and instantaneous power in
-W respectively. Charge, current, and voltage are never used to infer either
-value. For one battery, capacity uses its direct `capacity` percentage. For
-multiple batteries, each energy or power total is emitted only when every
-classified battery provides that direct field; capacity uses the ratio of
-complete summed `energy_now`/`energy_full` pairs and never averages percentages.
-
-Malformed or unrecognized fields are omitted/null and mark battery availability
-`temporarilyUnavailable` with a bounded detail code. Missing optional
-attributes can leave the section available with only the measurements the host
-reported. A missing power-supply tree or a tree with no classified batteries is
-`unsupported`; permission and stale conditions remain explicit. Older clients
-can ignore this additive object.
-
 The current UI is monitoring-only. It displays the snapshot, bounded alert
 history, and diagnostic evidence; it does not offer remediation controls. REST
 responses remain authoritative after reconnect, missed events, profile changes,
@@ -1383,8 +1359,8 @@ All functions in `packages/web/src/api/server-config.ts`.
 **Migration:**
 
 - `migrateToProfiles(): void` — (called in `App.tsx`) converts legacy single-server config to profile system on first app load
-  - if profiles already exist → no-op
-  - if legacy `damhopper_server_url` exists → creates "Default Server" profile and sets active
+  - restores a valid active profile when the stored selection is missing
+  - migrates the legacy URL, username, and token only when the legacy URL matches the destination profile
 
 ### Storage Breakdown
 
@@ -1392,8 +1368,11 @@ All functions in `packages/web/src/api/server-config.ts`.
 | ----------------------------- | -------------- | ----------------- | ---------------------- |
 | `damhopper_server_profiles`   | localStorage   | Shared (all tabs) | Survives browser close |
 | `damhopper_active_profile_id` | localStorage   | Shared (all tabs) | Survives browser close |
-| `damhopper_auth_token`        | sessionStorage | Per-tab           | Cleared on tab close   |
+| `damhopper_auth_token_<id>`   | localStorage   | Per-profile       | Survives browser close |
 | `damhopper_auth_username`     | sessionStorage | Per-tab           | Cleared on tab close   |
+
+Bearer tokens are persisted locally per profile to support Android/browser recreation. They are readable by JavaScript; deploy trusted HTTPS frontend assets and never store passwords.
+Changing a normalized profile URL clears its token and requires login again; trailing-slash-only formatting changes preserve it.
 
 **POST /api/git/:project/stage**
 Stage files for commit.
@@ -1480,6 +1459,169 @@ Response:
   "mtime": 1712577600,
   "mime": "text/typescript",
   "isBinary": false
+}
+```
+
+### Session-Bound Media Capabilities
+
+Video playback/download and image preview use opaque ticket URLs **and** a
+server-issued media-session cookie. Ticket issue requests require Bearer
+authentication and set `damhopper-media-session`; stream requests remain
+outside Bearer middleware so native browser media elements can load them, but
+must present the matching cookie. A ticket and cookie from different sessions,
+or a missing, expired, revoked, or malformed cookie, return the same `404 Not
+Found` response. Do not treat a ticket URL as a standalone credential or put a
+Bearer token in a media URL.
+
+The cookie is `HttpOnly`, `Secure`, `SameSite=None`, `Partitioned`, and scoped
+to `Path=/api/fs`. Each successful image or video issuance creates or reuses
+that actor's media session, returns the opaque ticket response, and sets or
+refreshes this cookie. Ticket and session idle lifetime is 30 minutes and the
+absolute lifetime is eight hours. Successful issuance and fully validated stream
+responses can refresh idle lifetime but never the absolute deadline. Shared
+limits are 256 tickets, 128 tickets per actor, 64 tickets per media session, 256
+sessions, and 8 sessions per actor. Context changes, expiry, and explicit
+revocation remove affected tickets.
+
+**DELETE /api/fs/media-session**
+
+Bearer authentication is required. Send credentials so the browser includes the
+media cookie:
+
+```http
+DELETE /api/fs/media-session
+Authorization: Bearer {token}
+```
+
+The endpoint returns `204 No Content`, clears the media cookie, and revokes the
+presented session's tickets only when the session belongs to the authenticated
+actor. It is safe to call when no usable media cookie exists; no ticket or
+session state is disclosed.
+
+The UI uses this endpoint during profile credential replacement and before
+logout. Remote revocation is bounded to five seconds; an unreachable server does
+not block local cleanup/logout, so the old cookie and tickets can remain usable
+until their 30-minute idle or eight-hour absolute expiry. Conversely, if remote
+revocation succeeds but local token persistence or removal then fails, the UI
+intentionally does **not** recreate the remote session. Any restored or retained
+local credential must issue fresh media tickets (and a new media session) before
+streaming again.
+
+### Native Image Preview Capabilities
+
+Image preview is a protected, preview-only session-bound capability contract. It
+does not replace the general file-read API and does not provide image downloads.
+
+**POST /api/fs/image/tickets**
+
+Bearer authentication is required. The JSON body is:
+
+```json
+{ "project": "NAME", "path": "assets/cover.webp" }
+```
+
+Only final, case-insensitive `png`, `jpg`, `jpeg`, `gif`, and `webp` extensions
+are accepted. The server resolves the path inside the project sandbox, rejects
+traversal/symlink components and non-regular files, records the file
+identity/version, and returns a fixed-purpose capability:
+
+```json
+{
+  "ticket": "opaque-random-token",
+  "streamPath": "/api/fs/image/stream/opaque-random-token",
+  "expiresAt": 1800000000000,
+  "purpose": "preview",
+  "authorizationMode": "session-cookie-v1"
+}
+```
+
+Success is `201 Created` with `Cache-Control: no-store` and a `Set-Cookie`
+header for the created or reused media session. Authentication failure is `401`;
+unsupported input is `400`; sandbox escape is `403`; missing or
+non-regular resources are `404`; and shared ticket capacity is `429` with
+`Retry-After: 1` and `code: IMAGE_TICKET_CAPACITY`. Response bodies do not
+include the project path, absolute filename, or bearer token.
+
+**DELETE /api/fs/image/tickets**
+
+Bearer authentication is required. Revoke with `{ "ticket": "opaque-token" }`
+and include credentials so the matching media-session cookie is sent. The server
+removes the ticket only when that cookie's session and the authenticated actor
+match its binding. Revocation is idempotent and returns `204 No Content`; missing,
+foreign, unknown, or already revoked tickets do not reveal their prior state.
+
+**GET|HEAD /api/fs/image/stream/{ticket}**
+
+The URL contains only the opaque capability; the matching media-session cookie
+is also required. The stream is inline and uses the MIME captured at issuance.
+`GET` returns `200` for the full representation or
+`206` for one valid byte range; malformed, multi-range, or unsatisfiable ranges
+return `416` with `Content-Range: bytes */size`. `HEAD` returns metadata with an
+empty body and ignores range selection. Unknown/revoked capabilities return
+`404`; a file identity/version change revokes the capability and returns `410`.
+
+Responses include `Accept-Ranges`, `Content-Length`, `Content-Type`, `ETag`,
+`Last-Modified`, and `Cache-Control: private, no-store`. Range, length,
+validator, disposition, and cache headers are exposed only through the existing
+configured CORS policy. Image disposition is always `inline`; no image ticket
+can be upgraded to video playback or download behavior. Workspace, config, and
+settings context changes invalidate shared image and video capabilities.
+
+### Video Playback and Download Capabilities
+
+**POST /api/fs/video/tickets** requires Bearer authentication and accepts:
+
+```json
+{ "project": "NAME", "path": "media/clip.webm", "purpose": "playback" }
+```
+
+`purpose` is the closed `playback | download` enum. A successful `201 Created`
+response has the same `ticket`, `streamPath`, `expiresAt`, and
+`authorizationMode: "session-cookie-v1"` fields as image issuance, plus the
+selected `purpose`, and sets or refreshes the media-session cookie. The server
+accepts final, case-insensitive `mp4`, `m4v`, `webm`, `ogv`, `ogg`, and `mov`
+extensions after sandbox and regular-file validation. Capacity returns `429`
+with `Retry-After: 1` and `code: VIDEO_TICKET_CAPACITY`.
+
+**DELETE /api/fs/video/tickets** requires Bearer authentication and JSON
+`{ "ticket": "opaque-token" }`; include credentials so the matching
+media-session cookie is sent. It removes only a ticket bound to the presented
+actor and media session, returns `204 No Content`, and does not reveal whether
+the ticket was valid.
+
+**GET|HEAD /api/fs/video/stream/{ticket}** requires the matching media-session
+cookie, not a Bearer header. It supports the same range, validator, revalidation,
+private no-store, and indistinguishable `404` behavior as image streams.
+Playback uses inline disposition; download uses a sanitized attachment filename.
+
+**GET /api/fs/language-files?project=NAME**
+Scan the configured project root for supported language files. The endpoint is
+authenticated and project-scoped; it does not accept a caller-supplied root or
+scan limit. The walk honors Git ignore/global-ignore/repository-exclude rules,
+includes hidden paths, excludes `.git` metadata, and returns regular files only
+(symlinks are not followed or returned).
+
+Supported extensions are `.rs` (`rust`), `.js`, `.jsx`, `.ts`, and `.tsx`
+(`javascript-typescript`), plus `.java` (`java`), matched case-insensitively.
+Paths are relative to the project root and use forward slashes where the host
+platform requires normalization. Results are sorted by path and capped at
+20,000 files or 200,000 visited entries; `truncated` is true when either cap is
+reached.
+
+Response:
+
+```json
+{
+  "files": [
+    {
+      "path": "src/main.rs",
+      "size": 1024,
+      "mtime": 1712577600,
+      "language": "rust"
+    }
+  ],
+  "truncated": false,
+  "limit": 20000
 }
 ```
 
