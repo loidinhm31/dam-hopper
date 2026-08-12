@@ -50,6 +50,7 @@ export const EditorTab = forwardRef<HTMLDivElement, EditorTabProps>(
         ref={ref}
         role="tab"
         aria-selected={active}
+        tabIndex={active ? 0 : -1}
         className={cn(
           "flex items-center gap-1.5 px-3 py-1 text-xs cursor-pointer select-none shrink-0",
           "border-r border-[var(--color-border)] transition-colors",
@@ -76,6 +77,25 @@ export const EditorTab = forwardRef<HTMLDivElement, EditorTabProps>(
               gitStatusClassName(gitState),
             )}
             title={`Open diff: ${gitStateTitle(gitState)}`}
+            onPointerDown={(event) => {
+              if (event.pointerType === "touch" || event.pointerType === "pen") {
+                event.stopPropagation();
+              }
+            }}
+            onContextMenu={(event) => {
+              const nativeEvent = event.nativeEvent as MouseEvent & {
+                pointerType?: string;
+              };
+              const isNonMouseContextMenu =
+                nativeEvent.pointerType !== undefined &&
+                nativeEvent.pointerType !== "mouse";
+              const isLegacyNonRightButton =
+                nativeEvent.pointerType === undefined && nativeEvent.button !== 2;
+              if (isNonMouseContextMenu || isLegacyNonRightButton) {
+                event.preventDefault();
+                event.stopPropagation();
+              }
+            }}
             onClick={(event) => {
               event.stopPropagation();
               onGitIndicatorClick?.();
@@ -91,6 +111,25 @@ export const EditorTab = forwardRef<HTMLDivElement, EditorTabProps>(
             "ml-0.5 rounded-sm p-0.5 shrink-0 transition-colors",
             "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)]",
           )}
+          onPointerDown={(event) => {
+            if (event.pointerType === "touch" || event.pointerType === "pen") {
+              event.stopPropagation();
+            }
+          }}
+          onContextMenu={(event) => {
+            const nativeEvent = event.nativeEvent as MouseEvent & {
+              pointerType?: string;
+            };
+            const isNonMouseContextMenu =
+              nativeEvent.pointerType !== undefined &&
+              nativeEvent.pointerType !== "mouse";
+            const isLegacyNonRightButton =
+              nativeEvent.pointerType === undefined && nativeEvent.button !== 2;
+            if (isNonMouseContextMenu || isLegacyNonRightButton) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }}
           onClick={(e) => {
             e.stopPropagation();
             onClose();
