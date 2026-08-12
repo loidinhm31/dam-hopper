@@ -96,8 +96,7 @@ pub(crate) struct MediaTicketLease {
 #[derive(Clone)]
 pub(crate) struct MediaTicketAuthorization {
     pub record: MediaTicketRecord,
-    ticket_revision: u64,
-    session_revision: u64,
+    ticket_incarnation: u64,
     binding: MediaSessionBinding,
 }
 
@@ -133,19 +132,19 @@ struct MediaTicketInner {
     tickets: HashMap<String, StoredMediaTicket>,
     sessions: HashMap<MediaSessionDigest, StoredMediaSession>,
     generation: u64,
+    next_ticket_incarnation: u64,
 }
 
 struct StoredMediaTicket {
     record: MediaTicketRecord,
     binding: Option<MediaSessionBinding>,
-    revision: u64,
+    incarnation: u64,
     idle_expires_at: Instant,
     absolute_expires_at: Instant,
 }
 
 struct StoredMediaSession {
     actor_subject: String,
-    revision: u64,
     idle_expires_at: Instant,
     absolute_expires_at: Instant,
 }
@@ -184,6 +183,7 @@ impl MediaTicketStore {
                 tickets: HashMap::new(),
                 sessions: HashMap::new(),
                 generation: 0,
+                next_ticket_incarnation: 0,
             })),
             clock,
         }
@@ -219,7 +219,6 @@ impl MediaTicketStore {
                 if session.actor_subject == actor_subject {
                     session.idle_expires_at =
                         std::cmp::min(now + MEDIA_SESSION_IDLE_TTL, session.absolute_expires_at);
-                    session.revision = session.revision.wrapping_add(1);
                     return MediaSessionIssue::Issued(MediaSessionLease {
                         token,
                         binding: MediaSessionBinding {
@@ -248,7 +247,6 @@ impl MediaTicketStore {
                 digest,
                 StoredMediaSession {
                     actor_subject: actor_subject.to_owned(),
-                    revision: 0,
                     idle_expires_at: now + MEDIA_SESSION_IDLE_TTL,
                     absolute_expires_at,
                 },
@@ -286,23 +284,37 @@ impl MediaTicketStore {
             let digest = token.digest();
             inner
                 .sessions
-                .iter_mut()
+                .iter()
                 .find(|(stored_digest, stored)| {
                     stored_digest.matches(&digest) && stored.actor_subject == actor_subject
                 })
-                .map(|(stored_digest, stored)| {
-                    stored.idle_expires_at =
-                        std::cmp::min(now + MEDIA_SESSION_IDLE_TTL, stored.absolute_expires_at);
-                    MediaSessionLease {
-                        token,
-                        binding: MediaSessionBinding {
-                            actor_subject: actor_subject.to_owned(),
-                            session_digest: *stored_digest,
-                        },
-                    }
+                .map(|(stored_digest, _)| MediaSessionLease {
+                    token,
+                    binding: MediaSessionBinding {
+                        actor_subject: actor_subject.to_owned(),
+                        session_digest: *stored_digest,
+                    },
                 })
         });
+        let session_digest = reusable
+            .as_ref()
+            .map(|session| session.binding.session_digest);
+        if !tickets_are_admissible(&inner, actor_subject, session_digest) {
+            return MediaTicketBoundIssue::Capacity;
+        }
+        let Some(ticket) = (0..4)
+            .map(|_| random_token())
+            .find(|ticket| !inner.tickets.contains_key(ticket))
+        else {
+            return MediaTicketBoundIssue::Capacity;
+        };
         let session = if let Some(session) = reusable {
+            let stored = inner
+                .sessions
+                .get_mut(&session.binding.session_digest)
+                .expect("reusable session remains live while locked");
+            stored.idle_expires_at =
+                std::cmp::min(now + MEDIA_SESSION_IDLE_TTL, stored.absolute_expires_at);
             session
         } else {
             if inner.sessions.len() >= MAX_MEDIA_SESSIONS
@@ -310,16 +322,20 @@ impl MediaTicketStore {
             {
                 return MediaTicketBoundIssue::Capacity;
             }
-            let token = MediaSessionToken::new();
-            let digest = token.digest();
-            if inner.sessions.contains_key(&digest) {
+            let Some((token, digest)) = (0..4)
+                .map(|_| {
+                    let token = MediaSessionToken::new();
+                    let digest = token.digest();
+                    (token, digest)
+                })
+                .find(|(_, digest)| !inner.sessions.contains_key(digest))
+            else {
                 return MediaTicketBoundIssue::Capacity;
-            }
+            };
             inner.sessions.insert(
                 digest,
                 StoredMediaSession {
                     actor_subject: actor_subject.to_owned(),
-                    revision: 0,
                     idle_expires_at: now + MEDIA_SESSION_IDLE_TTL,
                     absolute_expires_at: now + MEDIA_SESSION_ABSOLUTE_TTL,
                 },
@@ -332,21 +348,13 @@ impl MediaTicketStore {
                 },
             }
         };
-        if inner.tickets.len() >= MAX_MEDIA_TICKETS
-            || !binding_is_admissible(&inner, Some(&session.binding))
-        {
-            return MediaTicketBoundIssue::Capacity;
-        }
-        let ticket = random_token();
-        if inner.tickets.contains_key(&ticket) {
-            return MediaTicketBoundIssue::Capacity;
-        }
+        let incarnation = next_ticket_incarnation(&mut inner);
         inner.tickets.insert(
             ticket.clone(),
             StoredMediaTicket {
                 record,
                 binding: Some(session.binding.clone()),
-                revision: 0,
+                incarnation,
                 idle_expires_at: now + MEDIA_TICKET_IDLE_TTL,
                 absolute_expires_at: now + MEDIA_TICKET_ABSOLUTE_TTL,
             },
@@ -409,12 +417,13 @@ impl MediaTicketStore {
             if inner.tickets.contains_key(&ticket) {
                 continue;
             }
+            let incarnation = next_ticket_incarnation(&mut inner);
             inner.tickets.insert(
                 ticket.clone(),
                 StoredMediaTicket {
                     record: record.clone(),
                     binding: binding.cloned(),
-                    revision: 0,
+                    incarnation,
                     idle_expires_at,
                     absolute_expires_at,
                 },
@@ -447,16 +456,14 @@ impl MediaTicketStore {
         {
             return None;
         }
-        let session_revision = inner.sessions.get(&binding.session_digest)?.revision;
         Some(MediaTicketAuthorization {
             record: stored.record.clone(),
-            ticket_revision: stored.revision,
-            session_revision,
+            ticket_incarnation: stored.incarnation,
             binding,
         })
     }
 
-    /// Rechecks the exact authorized revisions then extends both idle TTLs.
+    /// Rechecks the live bound ticket/session after async validation, then extends idle TTLs.
     pub(crate) fn finalize_bound_and_touch(
         &self,
         ticket: &str,
@@ -474,16 +481,13 @@ impl MediaTicketStore {
             return false;
         };
         if stored.record.kind != expected_kind
-            || stored.revision != authorization.ticket_revision
+            || stored.incarnation != authorization.ticket_incarnation
             || stored.binding.as_ref() != Some(&authorization.binding)
             || !session_matches(stored.binding.as_ref(), Some(token), &inner.sessions)
+            || !inner
+                .sessions
+                .contains_key(&authorization.binding.session_digest)
         {
-            return false;
-        }
-        let Some(session) = inner.sessions.get(&authorization.binding.session_digest) else {
-            return false;
-        };
-        if session.revision != authorization.session_revision {
             return false;
         }
         let session = inner
@@ -492,11 +496,9 @@ impl MediaTicketStore {
             .expect("checked live session");
         session.idle_expires_at =
             std::cmp::min(now + MEDIA_SESSION_IDLE_TTL, session.absolute_expires_at);
-        session.revision = session.revision.wrapping_add(1);
         let stored = inner.tickets.get_mut(ticket).expect("checked live ticket");
         stored.idle_expires_at =
             std::cmp::min(now + MEDIA_TICKET_IDLE_TTL, stored.absolute_expires_at);
-        stored.revision = stored.revision.wrapping_add(1);
         true
     }
 
@@ -545,12 +547,10 @@ impl MediaTicketStore {
                 .expect("validated binding must reference a live session");
             session.idle_expires_at =
                 std::cmp::min(now + MEDIA_SESSION_IDLE_TTL, session.absolute_expires_at);
-            session.revision = session.revision.wrapping_add(1);
         }
         let stored = inner.tickets.get_mut(ticket)?;
         stored.idle_expires_at =
             std::cmp::min(now + MEDIA_TICKET_IDLE_TTL, stored.absolute_expires_at);
-        stored.revision = stored.revision.wrapping_add(1);
         Some(stored.record.clone())
     }
 
@@ -687,23 +687,45 @@ fn binding_is_admissible(inner: &MediaTicketInner, binding: Option<&MediaSession
     if session.is_none_or(|session| session.actor_subject != binding.actor_subject) {
         return false;
     }
-    let actor_tickets = inner.tickets.values().filter(|ticket| {
-        ticket
-            .binding
-            .as_ref()
-            .is_some_and(|ticket_binding| ticket_binding.actor_subject == binding.actor_subject)
-    });
-    actor_tickets.count() < MAX_MEDIA_TICKETS_PER_ACTOR
+    tickets_are_admissible(inner, &binding.actor_subject, Some(binding.session_digest))
+}
+
+fn next_ticket_incarnation(inner: &mut MediaTicketInner) -> u64 {
+    let incarnation = inner.next_ticket_incarnation;
+    inner.next_ticket_incarnation = inner.next_ticket_incarnation.wrapping_add(1);
+    incarnation
+}
+
+fn tickets_are_admissible(
+    inner: &MediaTicketInner,
+    actor_subject: &str,
+    session_digest: Option<MediaSessionDigest>,
+) -> bool {
+    inner.tickets.len() < MAX_MEDIA_TICKETS
         && inner
             .tickets
             .values()
             .filter(|ticket| {
-                ticket.binding.as_ref().is_some_and(|ticket_binding| {
-                    ticket_binding.session_digest == binding.session_digest
-                })
+                ticket
+                    .binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.actor_subject == actor_subject)
             })
             .count()
-            < MAX_MEDIA_TICKETS_PER_SESSION
+            < MAX_MEDIA_TICKETS_PER_ACTOR
+        && session_digest.is_none_or(|session_digest| {
+            inner
+                .tickets
+                .values()
+                .filter(|ticket| {
+                    ticket
+                        .binding
+                        .as_ref()
+                        .is_some_and(|binding| binding.session_digest == session_digest)
+                })
+                .count()
+                < MAX_MEDIA_TICKETS_PER_SESSION
+        })
 }
 
 fn session_matches(
@@ -1001,6 +1023,162 @@ mod tests {
                 record(MediaTicketKind::Video)
             ),
             MediaTicketIssue::Capacity
+        ));
+    }
+
+    #[test]
+    fn rejected_bound_authorization_does_not_touch_session_or_ticket_ttl() {
+        let (store, clock) = store();
+        let issued = match store.issue_bound(
+            store.generation(),
+            "actor",
+            None,
+            record(MediaTicketKind::Video),
+        ) {
+            MediaTicketBoundIssue::Issued(lease) => lease,
+            _ => panic!("bound ticket should be issued"),
+        };
+        let foreign = match store.establish_session("actor", None) {
+            MediaSessionIssue::Issued(lease) => lease,
+            _ => panic!("foreign session should be issued"),
+        };
+        clock.advance(MEDIA_SESSION_IDLE_TTL - Duration::from_secs(1));
+
+        assert!(store
+            .authorize_bound(
+                &issued.ticket.ticket,
+                MediaTicketKind::Video,
+                &foreign.token,
+            )
+            .is_none());
+        clock.advance(Duration::from_secs(1));
+        assert_eq!(store.live_session_count(), 0);
+        assert_eq!(store.live_count(), 0);
+    }
+
+    #[test]
+    fn bound_issue_capacity_does_not_create_a_session() {
+        let (store, _) = store();
+        for _ in 0..MAX_MEDIA_TICKETS {
+            issue(&store, record(MediaTicketKind::Video));
+        }
+
+        assert!(matches!(
+            store.issue_bound(
+                store.generation(),
+                "actor",
+                None,
+                record(MediaTicketKind::Image)
+            ),
+            MediaTicketBoundIssue::Capacity
+        ));
+        assert_eq!(store.live_session_count(), 0);
+    }
+
+    #[test]
+    fn bound_issue_capacity_does_not_refresh_a_reused_session() {
+        let (store, clock) = store();
+        let session = match store.establish_session("actor", None) {
+            MediaSessionIssue::Issued(lease) => lease,
+            _ => panic!("session should be issued"),
+        };
+        for _ in 0..MAX_MEDIA_TICKETS_PER_SESSION {
+            assert!(matches!(
+                store.issue_for_session(
+                    store.generation(),
+                    "actor",
+                    &session,
+                    record(MediaTicketKind::Video),
+                ),
+                MediaTicketIssue::Issued(_)
+            ));
+        }
+        clock.advance(MEDIA_SESSION_IDLE_TTL - Duration::from_secs(1));
+
+        assert!(matches!(
+            store.issue_bound(
+                store.generation(),
+                "actor",
+                Some(session.token.clone()),
+                record(MediaTicketKind::Image),
+            ),
+            MediaTicketBoundIssue::Capacity
+        ));
+        clock.advance(Duration::from_secs(1));
+        assert_eq!(store.live_session_count(), 0);
+    }
+
+    #[test]
+    fn bound_finalization_rejects_a_replaced_ticket_incarnation() {
+        let (store, _) = store();
+        let issued = match store.issue_bound(
+            store.generation(),
+            "actor",
+            None,
+            record(MediaTicketKind::Video),
+        ) {
+            MediaTicketBoundIssue::Issued(lease) => lease,
+            _ => panic!("bound ticket should be issued"),
+        };
+        let authorization = store
+            .authorize_bound(
+                &issued.ticket.ticket,
+                MediaTicketKind::Video,
+                &issued.session.token,
+            )
+            .expect("authorization should succeed");
+        {
+            let mut inner = store.inner.lock().unwrap();
+            let ticket = inner.tickets.get_mut(&issued.ticket.ticket).unwrap();
+            ticket.incarnation = ticket.incarnation.wrapping_add(1);
+        }
+
+        assert!(!store.finalize_bound_and_touch(
+            &issued.ticket.ticket,
+            MediaTicketKind::Video,
+            &issued.session.token,
+            &authorization,
+        ));
+    }
+
+    #[test]
+    fn concurrent_bound_finalization_allows_each_authorized_request() {
+        let (store, _) = store();
+        let issued = match store.issue_bound(
+            store.generation(),
+            "actor",
+            None,
+            record(MediaTicketKind::Video),
+        ) {
+            MediaTicketBoundIssue::Issued(lease) => lease,
+            _ => panic!("bound ticket should be issued"),
+        };
+        let first = store
+            .authorize_bound(
+                &issued.ticket.ticket,
+                MediaTicketKind::Video,
+                &issued.session.token,
+            )
+            .expect("first authorization should succeed");
+        let second = store
+            .authorize_bound(
+                &issued.ticket.ticket,
+                MediaTicketKind::Video,
+                &issued.session.token,
+            )
+            .expect("second authorization should succeed");
+
+        assert!(store.finalize_bound_and_touch(
+            &issued.ticket.ticket,
+            MediaTicketKind::Video,
+            &issued.session.token,
+            &first,
+        ));
+        assert!(store.finalize_bound_and_touch(
+            &issued.ticket.ticket,
+            MediaTicketKind::Video,
+            &issued.session.token,
+            &second,
         ));
     }
 

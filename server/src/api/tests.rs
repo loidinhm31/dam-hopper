@@ -4098,6 +4098,75 @@ async fn stream_video(
 }
 
 #[tokio::test]
+async fn video_stream_requires_its_own_media_session_and_logout_revokes_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"media").unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+    let owning_cookie = MEDIA_COOKIES.lock().unwrap().remove(&ticket).unwrap();
+
+    for method in ["GET", "HEAD"] {
+        let response = stream_video(state.clone(), &ticket, method, &[]).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+        assert!(axum::body::to_bytes(response.into_body(), 1)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    let foreign_ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+    let foreign_cookie = MEDIA_COOKIES
+        .lock()
+        .unwrap()
+        .remove(&foreign_ticket)
+        .unwrap();
+    MEDIA_COOKIES
+        .lock()
+        .unwrap()
+        .insert(ticket.clone(), foreign_cookie);
+    assert_eq!(
+        stream_video(state.clone(), &ticket, "GET", &[])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    MEDIA_COOKIES
+        .lock()
+        .unwrap()
+        .insert(ticket.clone(), owning_cookie.clone());
+
+    let router = build_router(state.clone(), vec![]);
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/fs/media-session")
+                .header(
+                    header::COOKIE,
+                    format!("{}; {owning_cookie}", auth_cookie()),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(response.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .contains("Max-Age=0"));
+    assert_eq!(
+        stream_video(state, &ticket, "GET", &[]).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    MEDIA_COOKIES.lock().unwrap().remove(&ticket);
+}
+
+#[tokio::test]
 async fn video_stream_uses_one_range_core_for_inline_and_attachment_purposes() {
     let tmp = tempfile::tempdir().unwrap();
     let filename = "clip space.webm";
@@ -4528,6 +4597,75 @@ async fn stream_image(
             .insert(header::COOKIE, cookie.parse().unwrap());
     }
     router.oneshot(request).await.unwrap()
+}
+
+#[tokio::test]
+async fn image_stream_requires_its_own_media_session_and_logout_revokes_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("cover.png"), b"image").unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    let owning_cookie = MEDIA_COOKIES.lock().unwrap().remove(&ticket).unwrap();
+
+    for method in ["GET", "HEAD"] {
+        let response = stream_image(state.clone(), &ticket, method, &[]).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+    }
+
+    let foreign_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    let foreign_cookie = MEDIA_COOKIES
+        .lock()
+        .unwrap()
+        .remove(&foreign_ticket)
+        .unwrap();
+    MEDIA_COOKIES
+        .lock()
+        .unwrap()
+        .insert(ticket.clone(), foreign_cookie);
+    assert_eq!(
+        stream_image(state.clone(), &ticket, "GET", &[])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let unauthenticated = build_router(state.clone(), vec![])
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/fs/media-session")
+                .header(header::COOKIE, &owning_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let response = build_router(state.clone(), vec![])
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/fs/media-session")
+                .header(
+                    header::COOKIE,
+                    format!("{}; {owning_cookie}", auth_cookie()),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        stream_image(state, &ticket, "GET", &[]).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    MEDIA_COOKIES.lock().unwrap().remove(&ticket);
 }
 
 #[tokio::test]
