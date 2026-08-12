@@ -2189,7 +2189,7 @@ Test boundary: JSDOM wrapper and consumer tests verify the shared contract, port
 - Symbolic links are allowed but validated
 - Binary file detection prevents accidental text parsing
 
-**CORS:** Configurable via `--cors-origins` flag.
+**CORS:** Authenticated browser deployments require exact HTTPS origins through `--cors-origins`; empty, wildcard, HTTP, malformed, and ambiguous origins reject startup. Responses allow credentials only for listed origins and include `Vary: Origin`. Non-loopback authenticated binds require `--trusted-tls-proxy`, declaring trusted HTTPS termination before the HTTP listener; this is required for Secure partitioned media cookies. The declaration does not isolate the HTTP listener: operators must bind it to loopback or restrict it so only that proxy can reach it.
 
 ## Feature Gating: IDE Explorer
 
