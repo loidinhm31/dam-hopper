@@ -92,8 +92,28 @@ pub(crate) struct MediaTicketLease {
     pub expires_at_epoch_ms: u128,
 }
 
+/// Authorization snapshot that must be finalized after async file validation.
+#[derive(Clone)]
+pub(crate) struct MediaTicketAuthorization {
+    pub record: MediaTicketRecord,
+    ticket_revision: u64,
+    session_revision: u64,
+    binding: MediaSessionBinding,
+}
+
+pub(crate) struct MediaTicketBoundLease {
+    pub ticket: MediaTicketLease,
+    pub session: MediaSessionLease,
+}
+
 pub(crate) enum MediaTicketIssue {
     Issued(MediaTicketLease),
+    Capacity,
+    ContextChanged,
+}
+
+pub(crate) enum MediaTicketBoundIssue {
+    Issued(MediaTicketBoundLease),
     Capacity,
     ContextChanged,
 }
@@ -118,12 +138,14 @@ struct MediaTicketInner {
 struct StoredMediaTicket {
     record: MediaTicketRecord,
     binding: Option<MediaSessionBinding>,
+    revision: u64,
     idle_expires_at: Instant,
     absolute_expires_at: Instant,
 }
 
 struct StoredMediaSession {
     actor_subject: String,
+    revision: u64,
     idle_expires_at: Instant,
     absolute_expires_at: Instant,
 }
@@ -197,6 +219,7 @@ impl MediaTicketStore {
                 if session.actor_subject == actor_subject {
                     session.idle_expires_at =
                         std::cmp::min(now + MEDIA_SESSION_IDLE_TTL, session.absolute_expires_at);
+                    session.revision = session.revision.wrapping_add(1);
                     return MediaSessionIssue::Issued(MediaSessionLease {
                         token,
                         binding: MediaSessionBinding {
@@ -225,6 +248,7 @@ impl MediaTicketStore {
                 digest,
                 StoredMediaSession {
                     actor_subject: actor_subject.to_owned(),
+                    revision: 0,
                     idle_expires_at: now + MEDIA_SESSION_IDLE_TTL,
                     absolute_expires_at,
                 },
@@ -240,7 +264,103 @@ impl MediaTicketStore {
         MediaSessionIssue::Capacity
     }
 
-    /// Issues a legacy ticket. Phase 02 replaces this with `issue_for_session`.
+    /// Atomically establishes/reuses a session and admits a ticket bound to it.
+    pub(crate) fn issue_bound(
+        &self,
+        expected_generation: u64,
+        actor_subject: &str,
+        existing: Option<MediaSessionToken>,
+        record: MediaTicketRecord,
+    ) -> MediaTicketBoundIssue {
+        let now = self.clock.now_instant();
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prune_expired(&mut inner, now);
+        if inner.generation != expected_generation {
+            return MediaTicketBoundIssue::ContextChanged;
+        }
+
+        let reusable = existing.and_then(|token| {
+            let digest = token.digest();
+            inner
+                .sessions
+                .iter_mut()
+                .find(|(stored_digest, stored)| {
+                    stored_digest.matches(&digest) && stored.actor_subject == actor_subject
+                })
+                .map(|(stored_digest, stored)| {
+                    stored.idle_expires_at =
+                        std::cmp::min(now + MEDIA_SESSION_IDLE_TTL, stored.absolute_expires_at);
+                    MediaSessionLease {
+                        token,
+                        binding: MediaSessionBinding {
+                            actor_subject: actor_subject.to_owned(),
+                            session_digest: *stored_digest,
+                        },
+                    }
+                })
+        });
+        let session = if let Some(session) = reusable {
+            session
+        } else {
+            if inner.sessions.len() >= MAX_MEDIA_SESSIONS
+                || count_sessions_for_actor(&inner, actor_subject) >= MAX_MEDIA_SESSIONS_PER_ACTOR
+            {
+                return MediaTicketBoundIssue::Capacity;
+            }
+            let token = MediaSessionToken::new();
+            let digest = token.digest();
+            if inner.sessions.contains_key(&digest) {
+                return MediaTicketBoundIssue::Capacity;
+            }
+            inner.sessions.insert(
+                digest,
+                StoredMediaSession {
+                    actor_subject: actor_subject.to_owned(),
+                    revision: 0,
+                    idle_expires_at: now + MEDIA_SESSION_IDLE_TTL,
+                    absolute_expires_at: now + MEDIA_SESSION_ABSOLUTE_TTL,
+                },
+            );
+            MediaSessionLease {
+                token,
+                binding: MediaSessionBinding {
+                    actor_subject: actor_subject.to_owned(),
+                    session_digest: digest,
+                },
+            }
+        };
+        if inner.tickets.len() >= MAX_MEDIA_TICKETS
+            || !binding_is_admissible(&inner, Some(&session.binding))
+        {
+            return MediaTicketBoundIssue::Capacity;
+        }
+        let ticket = random_token();
+        if inner.tickets.contains_key(&ticket) {
+            return MediaTicketBoundIssue::Capacity;
+        }
+        inner.tickets.insert(
+            ticket.clone(),
+            StoredMediaTicket {
+                record,
+                binding: Some(session.binding.clone()),
+                revision: 0,
+                idle_expires_at: now + MEDIA_TICKET_IDLE_TTL,
+                absolute_expires_at: now + MEDIA_TICKET_ABSOLUTE_TTL,
+            },
+        );
+        MediaTicketBoundIssue::Issued(MediaTicketBoundLease {
+            ticket: MediaTicketLease {
+                ticket,
+                expires_at_epoch_ms: epoch_ms(self.clock.now_system() + MEDIA_TICKET_IDLE_TTL),
+            },
+            session,
+        })
+    }
+
+    /// Issues a legacy ticket retained only for existing adapter tests.
     pub(crate) fn issue(
         &self,
         expected_generation: u64,
@@ -294,6 +414,7 @@ impl MediaTicketStore {
                 StoredMediaTicket {
                     record: record.clone(),
                     binding: binding.cloned(),
+                    revision: 0,
                     idle_expires_at,
                     absolute_expires_at,
                 },
@@ -306,6 +427,79 @@ impl MediaTicketStore {
         MediaTicketIssue::Capacity
     }
 
+    /// Authorizes a bound stream without extending ticket or session TTLs.
+    pub(crate) fn authorize_bound(
+        &self,
+        ticket: &str,
+        expected_kind: MediaTicketKind,
+        token: &MediaSessionToken,
+    ) -> Option<MediaTicketAuthorization> {
+        let now = self.clock.now_instant();
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prune_expired(&mut inner, now);
+        let stored = inner.tickets.get(ticket)?;
+        let binding = stored.binding.clone()?;
+        if stored.record.kind != expected_kind
+            || !session_matches(Some(&binding), Some(token), &inner.sessions)
+        {
+            return None;
+        }
+        let session_revision = inner.sessions.get(&binding.session_digest)?.revision;
+        Some(MediaTicketAuthorization {
+            record: stored.record.clone(),
+            ticket_revision: stored.revision,
+            session_revision,
+            binding,
+        })
+    }
+
+    /// Rechecks the exact authorized revisions then extends both idle TTLs.
+    pub(crate) fn finalize_bound_and_touch(
+        &self,
+        ticket: &str,
+        expected_kind: MediaTicketKind,
+        token: &MediaSessionToken,
+        authorization: &MediaTicketAuthorization,
+    ) -> bool {
+        let now = self.clock.now_instant();
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prune_expired(&mut inner, now);
+        let Some(stored) = inner.tickets.get(ticket) else {
+            return false;
+        };
+        if stored.record.kind != expected_kind
+            || stored.revision != authorization.ticket_revision
+            || stored.binding.as_ref() != Some(&authorization.binding)
+            || !session_matches(stored.binding.as_ref(), Some(token), &inner.sessions)
+        {
+            return false;
+        }
+        let Some(session) = inner.sessions.get(&authorization.binding.session_digest) else {
+            return false;
+        };
+        if session.revision != authorization.session_revision {
+            return false;
+        }
+        let session = inner
+            .sessions
+            .get_mut(&authorization.binding.session_digest)
+            .expect("checked live session");
+        session.idle_expires_at =
+            std::cmp::min(now + MEDIA_SESSION_IDLE_TTL, session.absolute_expires_at);
+        session.revision = session.revision.wrapping_add(1);
+        let stored = inner.tickets.get_mut(ticket).expect("checked live ticket");
+        stored.idle_expires_at =
+            std::cmp::min(now + MEDIA_TICKET_IDLE_TTL, stored.absolute_expires_at);
+        stored.revision = stored.revision.wrapping_add(1);
+        true
+    }
+
     /// Unknown, expired, revoked, and wrong-kind tickets are indistinguishable.
     pub(crate) fn lookup_and_touch(
         &self,
@@ -315,7 +509,7 @@ impl MediaTicketStore {
         self.lookup_inner(ticket, expected_kind, None)
     }
 
-    /// Phase 02 stream admission: requires the matching live media-session cookie.
+    /// Legacy test adapter for the pre-finalization stream flow.
     pub(crate) fn lookup_and_touch_for_session(
         &self,
         ticket: &str,
@@ -351,10 +545,12 @@ impl MediaTicketStore {
                 .expect("validated binding must reference a live session");
             session.idle_expires_at =
                 std::cmp::min(now + MEDIA_SESSION_IDLE_TTL, session.absolute_expires_at);
+            session.revision = session.revision.wrapping_add(1);
         }
         let stored = inner.tickets.get_mut(ticket)?;
         stored.idle_expires_at =
             std::cmp::min(now + MEDIA_TICKET_IDLE_TTL, stored.absolute_expires_at);
+        stored.revision = stored.revision.wrapping_add(1);
         Some(stored.record.clone())
     }
 
@@ -369,6 +565,57 @@ impl MediaTicketStore {
             .is_some_and(|stored| stored.record.kind == expected_kind)
         {
             inner.tickets.remove(ticket);
+        }
+    }
+
+    /// Revokes only a ticket owned by the presented actor/session pair.
+    pub(crate) fn revoke_bound(
+        &self,
+        ticket: &str,
+        expected_kind: MediaTicketKind,
+        actor_subject: &str,
+        token: &MediaSessionToken,
+    ) {
+        let now = self.clock.now_instant();
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prune_expired(&mut inner, now);
+        let remove = inner.tickets.get(ticket).is_some_and(|stored| {
+            stored.record.kind == expected_kind
+                && stored.binding.as_ref().is_some_and(|binding| {
+                    binding.actor_subject == actor_subject
+                        && session_matches(Some(binding), Some(token), &inner.sessions)
+                })
+        });
+        if remove {
+            inner.tickets.remove(ticket);
+        }
+    }
+
+    /// Revokes the current session only when it belongs to the authenticated actor.
+    pub(crate) fn revoke_session_for_actor(&self, actor_subject: &str, token: &MediaSessionToken) {
+        let digest = token.digest();
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let removed = inner
+            .sessions
+            .iter()
+            .find(|(stored, session)| {
+                stored.matches(&digest) && session.actor_subject == actor_subject
+            })
+            .map(|(stored, _)| *stored);
+        if let Some(digest) = removed {
+            inner.sessions.remove(&digest);
+            inner.tickets.retain(|_, ticket| {
+                ticket
+                    .binding
+                    .as_ref()
+                    .is_none_or(|binding| binding.session_digest != digest)
+            });
         }
     }
 
