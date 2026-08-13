@@ -14,7 +14,7 @@ Token stored at `~/.config/dam-hopper/server-token`.
 
 ### Dev Mode (--no-auth)
 
-The server supports a `--no-auth` authentication bypass mode for local development (Phase 01). When enabled:
+The server supports a `--no-auth` authentication bypass mode for development (Phase 01). It may bind to the configured host, including `0.0.0.0`; use only on a trusted development network, never publicly or with sensitive data. When enabled:
 
 - All protected routes bypass authentication checks
 - The `/ws` terminal/event stream accepts connections without a token
@@ -1542,8 +1542,9 @@ only an opaque stream path on the configured server origin, performs a credentia
 the URL to a native image/video element or download anchor only after a 2xx probe.
 Native elements use `crossOrigin="use-credentials"`. Probe failures expose fixed,
 redacted compatibility guidance and never trigger a media-body or Blob fallback.
-Installed Chromium 151 passed the 112-test full browser suite twice, including 11
-media-specific tests. The broader gate also passed 1,013 UI tests and 740 Rust tests;
+Installed Chromium 151 passed the 116-test full browser suite, including 11
+media-specific tests. The broader gate also passed 1,018 UI tests and 691 Rust tests
+(one ignored performance test);
 `pnpm build` and `pnpm lint` were clean. The same-origin browser fixture does not
 qualify real cross-site CHIPS behavior. Edge, Tauri/WebView, Safari, and Firefox
 remain unqualified and must not be advertised as supported. Session and ticket state
@@ -1604,9 +1605,9 @@ empty body and ignores range selection. Unknown/revoked capabilities return
 `404`; a file identity/version change revokes the capability and returns `410`.
 
 Responses include `Accept-Ranges`, `Content-Length`, `Content-Type`, `ETag`,
-`Last-Modified`, and `Cache-Control: private, no-store`. Range, length,
-validator, disposition, and cache headers are exposed only through the existing
-configured CORS policy. Image disposition is always `inline`; no image ticket
+`Last-Modified`, and `Cache-Control: private, no-store`. The backend is
+same-origin only and emits no CORS headers or preflight behavior. Image
+disposition is always `inline`; no image ticket
 can be upgraded to video playback or download behavior. Workspace, config, and
 settings context changes invalidate shared image and video capabilities.
 

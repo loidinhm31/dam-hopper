@@ -648,7 +648,7 @@ packages/ui/src/
 
 `apps/web` owns browser bootstrapping only: `QueryClientProvider`, `initTransport(new WsTransport(getServerUrl()))`, DOM mount, and host Vite config.
 
-`apps/native` owns Tauri bootstrapping only: the same `QueryClientProvider` and `DamHopperApp` mount, native Vite config on strict port `1420`, and the minimal `src-tauri` shell. The Phase 01 SSH feasibility seam is desktop-only: its target-OS dependencies and the narrowly scoped `ssh-forward` capability/permission are excluded from mobile builds. It must remain a remote client; do not add backend sidecars, filesystem, shell, opener, or HTTP permissions without a phase plan that justifies the native API surface.
+`apps/native` owns Tauri bootstrapping only: the same `QueryClientProvider` and `DamHopperApp` mount, native Vite config on strict port `1420`, and the minimal `src-tauri` shell. The SSH feasibility seam is desktop-only: its target-OS dependencies and the narrowly scoped `ssh-forward` capability/permission are excluded from mobile builds. It must remain a remote client; do not add backend sidecars, filesystem, shell, opener, or HTTP permissions without a phase plan that justifies the native API surface.
 
 Native startup must not depend on packaged webview same-origin fallback. Use the shared server profile flow, and keep the no-profile transport idle until the shared `ServerProfileGuard` prompts for an explicit profile.
 
@@ -711,7 +711,7 @@ await transport.fsWriteFile(project, path, content, mtime);
 
 ### No-Auth Dev Mode
 
-The `--no-auth` flag enables local development without MongoDB authentication:
+The `--no-auth` flag enables development without MongoDB authentication. It binds to the configured host, including the default `0.0.0.0`; use only on a trusted development network, never publicly or with sensitive data:
 
 ```bash
 # Command-line flag
@@ -743,7 +743,7 @@ pub async fn require_auth(
 
 - Panics if MongoDB configured while no-auth enabled
 - Panics if RUST_ENV or ENVIRONMENT set to "production"
-- Multi-line warning banner on startup
+- Multi-line trusted-network warning banner on startup
 - ERROR-level logging for visibility
 
 See [Phase 01 documentation](./phase-01-server-auth-bypass/index.md) for complete security considerations.
@@ -863,9 +863,9 @@ Routes registered conditionally at router construction time.
 - [ ] Bearer token authentication
 - [ ] No shell injection (avoid shlex parsing for commands)
 - [ ] No symlink traversal (validate all path operations)
-- [ ] CORS is optional; cross-origin browser deployments allow only exact configured HTTP/HTTPS origins (never wildcard/arbitrary reflection)
+- [ ] Backend remains same-origin only; no CORS headers or preflight behavior are emitted
 - [ ] Media preserves Bearer ticket issuance, host-only HttpOnly SameSite=Lax session cookies, and credentialed native stream requests; auth cookies remain SameSite=Strict
-- [ ] Cross-site HTTP media is rejected by browser cookie policy; cleartext HTTP interception/modification risk is documented and accepted only on a trusted encrypted network
+- [ ] Cross-site HTTP media is unsupported; cleartext HTTP interception/modification risk is documented and accepted only on a trusted encrypted network
 - [ ] Error messages don't leak paths/credentials
 
 ## Telemetry Privacy and Fault Boundaries
