@@ -183,6 +183,10 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Errors return JSON with status code
 - ✓ Binary files detected, not force-decoded as text
 - ✓ Export Diagnostics downloads `dam-hopper-diagnostics-{timestamp}.json`
+- ✓ Native image/video streams require opaque ticket plus actor-bound media-session cookie
+- ✓ Ticket clients require `session-cookie-v1` and a credentialed successful `HEAD` before native source/download exposure
+- ✓ Profile change/logout revokes the bounded media session before credential removal, including stale dialog profiles
+- ✓ Missing or foreign media cookies fail as non-disclosing `404` without bearer/blob fallback
 
 **Non-Functional Requirements:**
 
@@ -190,6 +194,10 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Store token securely (0600 file permissions)
 - Log auth failures without leaking tokens
 - Diagnostics exports include recent terminal output tails by default and must be reviewed before sharing
+- Authenticated remote media requires HTTPS and exact configured CORS origins
+- Current automated native-media evidence is installed Chromium 151 only: 112 browser tests twice, including 11 media-specific tests; real cross-site CHIPS, Edge, Tauri/WebView, Safari, and Firefox remain unqualified
+- Qualification also passed 1,013 UI tests and 740 Rust tests; build and lint were clean
+- Media session/ticket state is process-local; multi-instance deployments require sticky routing to the issuing process
 
 ### PR-007: Multi-Server Profile Management (Phase 2)
 
@@ -242,13 +250,14 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 ### PR-009: Host Resource Monitoring (Current Delivery)
 
-**Status:** Phase 07 completed on 2026-08-10 with release-owner approval after local packaging, soak, and browser validation. The still-unobserved Windows CI result, canary-host profiling, staged monitor/in-app-alert canary, and rollback rehearsal are owner-authorized deferred follow-up work, not passed gates. Re-authentication, mutation lifecycle/audit, privileged IPC, enrollment, and fixed host operations are deferred together and are not part of the current release.
+**Status:** Phase 07 completed on 2026-08-10 with release-owner approval after local packaging, soak, and browser validation. Phase 02 host-resource restoration alerts completed on 2026-08-11: additive thermal/disk current alerts, mixed history, validated compatible push events, and per-target recovery are now delivered. The still-unobserved Windows CI result, canary-host profiling, staged monitor/in-app-alert canary, and rollback rehearsal are owner-authorized deferred follow-up work, not passed gates. Re-authentication, mutation lifecycle/audit, privileged IPC, enrollment, and fixed host operations are deferred together and are not part of the current release.
 
 **Current Functional Requirements:**
 
 - Keep `HostResourceMonitor` read-only, bounded, startup-owned, and independent from every mutation subsystem.
 - Preserve the `GET /api/system/metrics` response shape from the monitor cache; expose immutable deep snapshots and bounded incident history through versioned protected read APIs.
-- Publish sanitized `host:alertChanged` refresh events; REST remains authoritative after reconnect, lag, or missed events.
+- Preserve the legacy memory `alert` and publish additive `currentAlerts` for concurrent thermal/disk incidents; return bounded mixed history with per-target recovery records.
+- Publish sanitized, strictly validated compatible `host:alertChanged` events; REST remains authoritative after reconnect, lag, missed events, malformed data, and older servers that omit an additive field.
 - Render in-app status, alert history, evidence, uncertainty, and static operator guidance without credentials or host-mutation controls.
 - Feature-detect Linux procfs, PSI, and cgroup v2 data. Return explicit unsupported/stale/partial states on constrained Linux, containers, and non-Linux hosts.
 
@@ -257,7 +266,8 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - [x] `HostResourceSnapshotV1` uses bounded actual-byte reads, explicit degradation states, cgroup v2/PSI data, bounded process inventory, and non-overlapping cache attribution.
 - [x] One background monitor owns sampling, cached legacy/deep projections, alert state, and shutdown lifecycle independently of UI visibility.
 - [x] `GET /api/system/metrics` remains compatible; `/api/system/resources/v1/snapshot` and `/alerts` return cached read-only state.
-- [x] Sustained alert classification, bounded incident history, and `host:alertChanged` delivery are implemented and tested.
+- [x] Sustained alert classification, bounded mixed incident history, additive concurrent resource alerts, and compatible `host:alertChanged` delivery are implemented and tested.
+- [x] The client validates resource event shape/evidence before cache updates, retains active incidents when an older server omits `currentAlerts`, and removes only the recovered target from an explicit authoritative array.
 - [x] The top-nav diagnosis UI consumes cached snapshot/alert state and exposes no remediation control.
 - [x] Phase 07 completed packaging, compatibility, graceful-degradation, platform/browser, soak-budget, and documentation validation; rollout follow-ups are explicitly deferred.
 
@@ -271,7 +281,7 @@ evidence.
 
 **Accepted Monitoring Follow-ups:**
 
-- Release gate: preserve alert subscriptions across profile switches; tighten event validation; keep legacy metrics visible when deep reads fail; cover profile/disconnect/reconnect behavior in Chromium.
+- Accepted UI polish: a resource-only critical badge can render info-colored after acknowledgement; the active count and incident state remain correct.
 - Backlog polish: refine warning-badge severity semantics after release evidence and threshold tuning.
 
 **Deferred Remediation Backlog and Sign-off:**

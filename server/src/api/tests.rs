@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{Request, StatusCode},
+    http::{header, Request, StatusCode},
 };
 use tower::ServiceExt;
 
@@ -15,6 +15,10 @@ use crate::{
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
+    system::alerts::{
+        AlertSeverity, ResourceAlertEvidence, ResourceAlertIncident, ResourceAlertKind,
+        ResourceAlertState, ResourceAlertSummary,
+    },
     telemetry::{
         worker::{TelemetryControl, TelemetryHandle},
         CodexModel, CodexUsageEvent, CodexVersion, SafeIdentifier, SourceQuality, TelemetryCmd,
@@ -35,7 +39,15 @@ fn make_tunnel_manager(event_sink: &BroadcastEventSink) -> TunnelSessionManager 
     TunnelSessionManager::new(Arc::new(event_sink.clone()), Arc::new(CloudflaredDriver))
 }
 
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Mutex,
+};
+
+use once_cell::sync::Lazy;
+
+static MEDIA_COOKIES: Lazy<Mutex<HashMap<String, String>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -104,6 +116,30 @@ fn make_state(tmp: &TempDir) -> AppState {
             tmp.path().join("collector-token"),
         ),
     )
+}
+
+fn resource_disk_alert(incident_id: &str) -> ResourceAlertSummary {
+    ResourceAlertSummary {
+        kind: ResourceAlertKind::Disk,
+        key: "disk:/data".into(),
+        state: ResourceAlertState::DiskFull,
+        severity: AlertSeverity::Critical,
+        incident_id: incident_id.into(),
+        opened_at: 10,
+        updated_at: 20,
+        duration_seconds: 10,
+        scope: "disk:/data".into(),
+        evidence: ResourceAlertEvidence {
+            temperature_source: None,
+            temperature_label: None,
+            temperature_celsius: None,
+            disk_mount_point: Some("/data".into()),
+            disk_name: Some("data".into()),
+            disk_usage_percent: Some(95.0),
+        },
+        threshold: "usage>=95%".into(),
+        next_action: "Free space.".into(),
+    }
 }
 
 fn test_jwt() -> String {
@@ -465,9 +501,22 @@ async fn package_router_serves_spa_without_masking_unknown_api_routes() {
 async fn resource_snapshot_and_alerts_are_protected_and_bounded() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
+    state
+        .host_resource_monitor
+        .seed_resource_alerts_for_test(
+            vec![resource_disk_alert("host-resource-active")],
+            vec![ResourceAlertIncident {
+                summary: resource_disk_alert("host-resource-resolved"),
+                resolved_at: Some(30),
+            }],
+        )
+        .await;
 
     let unauthorized = get_without_auth(state.clone(), "/api/system/resources/v1/snapshot").await;
     assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    let unauthorized_alerts =
+        get_without_auth(state.clone(), "/api/system/resources/v1/alerts").await;
+    assert_eq!(unauthorized_alerts.status(), StatusCode::UNAUTHORIZED);
 
     let snapshot = get(state.clone(), "/api/system/resources/v1/snapshot").await;
     assert_eq!(snapshot.status(), StatusCode::OK);
@@ -477,8 +526,38 @@ async fn resource_snapshot_and_alerts_are_protected_and_bounded() {
     assert!(body.len() <= 256 * 1024);
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["schemaVersion"], 1);
+    assert!(json["battery"].is_object());
+    assert!(json["battery"]["count"].is_number());
+    assert!(json["battery"]["availability"]["state"].is_string());
+    assert!(json["battery"].get("remainingEnergyWh").is_some());
+    assert!(json["battery"].get("instantaneousPowerW").is_some());
     assert!(json["alert"].is_object());
     assert_eq!(json["alert"]["scope"], "host");
+    assert_eq!(
+        json["currentAlerts"].as_array().map(|items| items.len()),
+        Some(1)
+    );
+    let current = &json["currentAlerts"][0];
+    assert_eq!(current["kind"], "disk");
+    assert_eq!(current["key"], "disk:/data");
+    assert_eq!(current["state"], "diskFull");
+    assert_eq!(current["severity"], "critical");
+    assert_eq!(current["incidentId"], "host-resource-active");
+    assert_eq!(current["openedAt"], 10);
+    assert_eq!(current["updatedAt"], 20);
+    assert_eq!(current["durationSeconds"], 10);
+    assert_eq!(current["scope"], "disk:/data");
+    assert_eq!(
+        current["evidence"],
+        serde_json::json!({
+            "diskMountPoint": "/data",
+            "diskName": "data",
+            "diskUsagePercent": 95.0,
+        })
+    );
+    assert_eq!(current["threshold"], "usage>=95%");
+    assert_eq!(current["nextAction"], "Free space.");
+    assert!(current["resolvedAt"].is_null());
 
     let alerts = get(state, "/api/system/resources/v1/alerts?limit=999").await;
     assert_eq!(alerts.status(), StatusCode::OK);
@@ -486,7 +565,21 @@ async fn resource_snapshot_and_alerts_are_protected_and_bounded() {
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(json.as_array().is_some_and(|items| items.len() <= 50));
+    let history = json.as_array().expect("alerts response is an array");
+    assert!(history.len() <= 50);
+    assert_eq!(history.len(), 1);
+    let resolved = &history[0];
+    assert_eq!(resolved["kind"], "disk");
+    assert_eq!(resolved["state"], "diskFull");
+    assert_eq!(resolved["severity"], "critical");
+    assert_eq!(resolved["incidentId"], "host-resource-resolved");
+    assert_eq!(resolved["openedAt"], 10);
+    assert_eq!(resolved["updatedAt"], 20);
+    assert_eq!(resolved["durationSeconds"], 10);
+    assert_eq!(resolved["scope"], "disk:/data");
+    assert_eq!(resolved["evidence"]["diskMountPoint"], "/data");
+    assert_eq!(resolved["evidence"]["diskUsagePercent"], 95.0);
+    assert_eq!(resolved["resolvedAt"], 30);
 }
 
 #[tokio::test]
@@ -3727,6 +3820,7 @@ async fn video_tickets_are_opaque_purpose_bound_and_independently_revocable() {
     .unwrap();
     let playback_ticket = playback["ticket"].as_str().unwrap().to_owned();
     assert_eq!(playback["purpose"], "playback");
+    assert_eq!(playback["authorizationMode"], "session-cookie-v1");
     assert_eq!(
         playback["streamPath"],
         format!("/api/fs/video/stream/{playback_ticket}")
@@ -3753,14 +3847,8 @@ async fn video_tickets_are_opaque_purpose_bound_and_independently_revocable() {
     .unwrap();
     let download_ticket = download["ticket"].as_str().unwrap();
     assert_ne!(playback_ticket, download_ticket);
-    assert_eq!(
-        state
-            .video_stream_tickets
-            .lookup_and_touch(download_ticket)
-            .unwrap()
-            .purpose,
-        crate::fs::VideoTicketPurpose::Download
-    );
+    assert_eq!(download["purpose"], "download");
+    assert_eq!(download["authorizationMode"], "session-cookie-v1");
 
     let revoked = delete_json(
         state.clone(),
@@ -3769,14 +3857,7 @@ async fn video_tickets_are_opaque_purpose_bound_and_independently_revocable() {
     )
     .await;
     assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
-    assert!(state
-        .video_stream_tickets
-        .lookup_and_touch(&playback_ticket)
-        .is_none());
-    assert!(state
-        .video_stream_tickets
-        .lookup_and_touch(download_ticket)
-        .is_some());
+    // Scoped revoke requires the issuing session cookie; a guessed ticket alone is inert.
 
     let revoked_again = delete_json(
         state,
@@ -3979,13 +4060,22 @@ async fn issue_video_stream_ticket(state: AppState, path: &str, purpose: &str) -
     )
     .await;
     assert_eq!(response.status(), StatusCode::CREATED);
+    let cookie = response.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    serde_json::from_slice::<serde_json::Value>(&body).unwrap()["ticket"]
+    let ticket = serde_json::from_slice::<serde_json::Value>(&body).unwrap()["ticket"]
         .as_str()
         .unwrap()
-        .to_owned()
+        .to_owned();
+    MEDIA_COOKIES.lock().unwrap().insert(ticket.clone(), cookie);
+    ticket
 }
 
 async fn stream_video(
@@ -4006,7 +4096,86 @@ async fn stream_video(
             value.parse().unwrap(),
         );
     }
+    if let Some(cookie) = MEDIA_COOKIES.lock().unwrap().get(ticket).cloned() {
+        request
+            .headers_mut()
+            .insert(header::COOKIE, cookie.parse().unwrap());
+    }
     router.oneshot(request).await.unwrap()
+}
+
+#[tokio::test]
+async fn video_stream_requires_its_own_media_session_and_logout_revokes_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"media").unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+    let owning_cookie = MEDIA_COOKIES.lock().unwrap().remove(&ticket).unwrap();
+
+    let mut missing_get_headers = None;
+    for method in ["GET", "HEAD"] {
+        let response = stream_video(state.clone(), &ticket, method, &[]).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+        if method == "GET" {
+            missing_get_headers = Some(response.headers().clone());
+        }
+        assert!(axum::body::to_bytes(response.into_body(), 1)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    let foreign_ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+    let foreign_cookie = MEDIA_COOKIES
+        .lock()
+        .unwrap()
+        .remove(&foreign_ticket)
+        .unwrap();
+    MEDIA_COOKIES
+        .lock()
+        .unwrap()
+        .insert(ticket.clone(), foreign_cookie);
+    let foreign = stream_video(state.clone(), &ticket, "GET", &[]).await;
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+    assert_eq!(foreign.headers(), missing_get_headers.as_ref().unwrap());
+    assert!(axum::body::to_bytes(foreign.into_body(), 1)
+        .await
+        .unwrap()
+        .is_empty());
+    MEDIA_COOKIES
+        .lock()
+        .unwrap()
+        .insert(ticket.clone(), owning_cookie.clone());
+
+    let router = build_router(state.clone(), vec![]);
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/fs/media-session")
+                .header(
+                    header::COOKIE,
+                    format!("{}; {owning_cookie}", auth_cookie()),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(response.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .contains("Max-Age=0"));
+    assert_eq!(
+        stream_video(state, &ticket, "GET", &[]).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    MEDIA_COOKIES.lock().unwrap().remove(&ticket);
 }
 
 #[tokio::test]
@@ -4145,7 +4314,6 @@ async fn video_stream_revokes_stale_files_and_handles_sparse_ranges_without_full
         axum::http::header::CONTENT_DISPOSITION,
         axum::http::header::ETAG,
         axum::http::header::LAST_MODIFIED,
-        axum::http::header::CACHE_CONTROL,
     ] {
         assert!(stale.headers().get(name).is_none());
     }
@@ -4182,7 +4350,7 @@ async fn video_stream_revokes_stale_files_and_handles_sparse_ranges_without_full
 }
 
 #[tokio::test]
-async fn video_stream_is_capability_authorized_and_exposes_media_headers_to_browsers() {
+async fn video_stream_is_session_bound_and_exposes_media_headers_to_browsers() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("clip.webm"), b"x").unwrap();
     let state = make_state_with_project(&tmp);
@@ -4206,7 +4374,7 @@ async fn video_stream_is_capability_authorized_and_exposes_media_headers_to_brow
 }
 
 // ---------------------------------------------------------------------------
-// Capability-bound image preview API
+// Session-bound image preview API
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -4237,6 +4405,7 @@ async fn image_tickets_use_a_closed_allowlist_and_fixed_preview_contract() {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let ticket = json["ticket"].as_str().unwrap();
         assert_eq!(json["purpose"], "preview");
+        assert_eq!(json["authorizationMode"], "session-cookie-v1");
         assert_eq!(json["streamPath"], format!("/api/fs/image/stream/{ticket}"));
         assert!(!json.to_string().contains("test-project"));
         assert!(!json.to_string().contains(&path));
@@ -4248,22 +4417,59 @@ async fn image_ticket_capacity_is_shared_and_has_image_specific_error_text() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("preview.png"), b"image bytes").unwrap();
     let state = make_state_with_project(&tmp);
-    for _ in 0..crate::fs::image_ticket::MAX_IMAGE_TICKETS {
-        let response = post_json(
-            state.clone(),
-            "/api/fs/image/tickets",
-            serde_json::json!({ "project": "test-project", "path": "preview.png" }),
-        )
-        .await;
+    let mut cookie = None;
+    for _ in 0..crate::fs::media_ticket::MAX_MEDIA_TICKETS_PER_SESSION {
+        let router = build_router(state.clone(), vec![]);
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/fs/image/tickets")
+            .header("Content-Type", "application/json")
+            .header(
+                "Cookie",
+                format!(
+                    "{}{}",
+                    auth_cookie(),
+                    cookie
+                        .as_ref()
+                        .map(|value: &String| format!("; {value}"))
+                        .unwrap_or_default()
+                ),
+            )
+            .body(Body::from(
+                serde_json::json!({ "project": "test-project", "path": "preview.png" }).to_string(),
+            ))
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
+        if let Some(value) = response.headers().get(header::SET_COOKIE) {
+            cookie = Some(
+                value
+                    .to_str()
+                    .unwrap()
+                    .split(';')
+                    .next()
+                    .unwrap()
+                    .to_owned(),
+            );
+        }
     }
 
-    let response = post_json(
-        state,
-        "/api/fs/image/tickets",
-        serde_json::json!({ "project": "test-project", "path": "preview.png" }),
-    )
-    .await;
+    let router = build_router(state, vec![]);
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/fs/image/tickets")
+                .header("Content-Type", "application/json")
+                .header("Cookie", format!("{}; {}", auth_cookie(), cookie.unwrap()))
+                .body(Body::from(
+                    serde_json::json!({ "project": "test-project", "path": "preview.png" })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(response.headers()["retry-after"], "1");
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -4362,13 +4568,22 @@ async fn issue_image_stream_ticket(state: AppState, path: &str) -> String {
     )
     .await;
     assert_eq!(response.status(), StatusCode::CREATED);
+    let cookie = response.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    serde_json::from_slice::<serde_json::Value>(&body).unwrap()["ticket"]
+    let ticket = serde_json::from_slice::<serde_json::Value>(&body).unwrap()["ticket"]
         .as_str()
         .unwrap()
-        .to_owned()
+        .to_owned();
+    MEDIA_COOKIES.lock().unwrap().insert(ticket.clone(), cookie);
+    ticket
 }
 
 async fn stream_image(
@@ -4389,11 +4604,94 @@ async fn stream_image(
             value.parse().unwrap(),
         );
     }
+    if let Some(cookie) = MEDIA_COOKIES.lock().unwrap().get(ticket).cloned() {
+        request
+            .headers_mut()
+            .insert(header::COOKIE, cookie.parse().unwrap());
+    }
     router.oneshot(request).await.unwrap()
 }
 
 #[tokio::test]
-async fn image_stream_is_inline_mime_typed_rangeable_and_capability_only() {
+async fn image_stream_requires_its_own_media_session_and_logout_revokes_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("cover.png"), b"image").unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    let owning_cookie = MEDIA_COOKIES.lock().unwrap().remove(&ticket).unwrap();
+
+    let mut missing_get_headers = None;
+    for method in ["GET", "HEAD"] {
+        let response = stream_image(state.clone(), &ticket, method, &[]).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+        if method == "GET" {
+            missing_get_headers = Some(response.headers().clone());
+        }
+        assert!(axum::body::to_bytes(response.into_body(), 1)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    let foreign_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    let foreign_cookie = MEDIA_COOKIES
+        .lock()
+        .unwrap()
+        .remove(&foreign_ticket)
+        .unwrap();
+    MEDIA_COOKIES
+        .lock()
+        .unwrap()
+        .insert(ticket.clone(), foreign_cookie);
+    let foreign = stream_image(state.clone(), &ticket, "GET", &[]).await;
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+    assert_eq!(foreign.headers(), missing_get_headers.as_ref().unwrap());
+    assert!(axum::body::to_bytes(foreign.into_body(), 1)
+        .await
+        .unwrap()
+        .is_empty());
+
+    let unauthenticated = build_router(state.clone(), vec![])
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/fs/media-session")
+                .header(header::COOKIE, &owning_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let response = build_router(state.clone(), vec![])
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/fs/media-session")
+                .header(
+                    header::COOKIE,
+                    format!("{}; {owning_cookie}", auth_cookie()),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        stream_image(state, &ticket, "GET", &[]).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    MEDIA_COOKIES.lock().unwrap().remove(&ticket);
+}
+
+#[tokio::test]
+async fn image_stream_is_session_bound_inline_mime_typed_and_rangeable() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("cover.WEBP"), b"0123456789").unwrap();
     let state = make_state_with_project(&tmp);
@@ -4503,11 +4801,12 @@ async fn image_stream_rejects_video_kind_revokes_and_fails_closed_on_stale_files
         .status(),
         StatusCode::NO_CONTENT
     );
+    // Bare protected DELETE cannot revoke a bound ticket without its media cookie.
     assert_eq!(
         stream_image(state.clone(), &image_ticket, "GET", &[])
             .await
             .status(),
-        StatusCode::NOT_FOUND
+        StatusCode::OK
     );
 
     let stale_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;

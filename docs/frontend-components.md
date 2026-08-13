@@ -21,6 +21,51 @@ Shared runtime libraries:
 - **Tailwind CSS v4** for styling
 - **xterm.js** for terminal rendering
 
+## Host-resource alert presentation
+
+**Locations:** `packages/ui/src/components/organisms/HostResourcePopover.tsx`,
+`HostResourceDiagnosis.tsx`, `HostResourceDiagnosisRows.tsx`,
+`packages/ui/src/hooks/use-sse.ts`, and `use-host-resource-alert-presentation.ts`.
+
+The top-nav popover reads the legacy memory `alert` and additive `currentAlerts`
+from the authoritative snapshot, while the diagnosis panel renders the bounded,
+mixed alert-history response. Concurrent thermal and disk incidents are tracked
+by `incidentId`; a recovery event with `resolvedAt` removes only that target and
+the history retains its resolved record. `resolvedAt: 0` is still a recovery.
+
+The transport listener accepts legacy memory events and resource events on the
+same `host:alertChanged` channel. It validates each resource kind, state,
+finite timestamp/value, required bounded text, and exact evidence keys before
+updating the query cache; invalid payloads do nothing. It then refetches
+snapshot and history, so REST corrects missed events, reconnects, and profile
+switches. A current server's explicit empty `currentAlerts` array clears
+resource presentation; an omitted field is treated as an older-server response
+and does not falsely clear an active incident.
+
+The diagnosis also keeps the legacy `HostMetrics` path for CPU and workspace-disk
+summary values, real temperature rows, and an explicit unavailable state when
+sensors are absent. Host storage is a local, default-collapsed disclosure that
+reveals every server-ordered disk with its name, mount, percentage, and used/total
+bytes; it does not add polling or persistence. Deep-snapshot failure uses the
+same legacy presentation so cached temperatures and disks remain visible.
+
+The diagnosis renders an optional `snapshot.battery` section only when the
+server reports at least one classified battery, the section is not unsupported,
+and at least one field passes the client-side finite/non-negative validation.
+It shows the battery count, normalized status, and capacity when present, plus
+independent rows labeled **Remaining energy (Wh)** and **Instantaneous power
+(W)**. Missing measurements are omitted rather than shown as zero or
+`Unknown`; an energy-only response does not create a power row, and vice versa.
+Availability text is shown beside retained values, including stale or degraded
+states. The field is optional so an older server produces no battery section;
+the UI adds no polling, legacy fallback metric, per-device expansion, chart, or
+mutation control for this data.
+
+Opening the popover acknowledges the presentation count but does not dismiss an
+active resource incident. Known accepted UI caveat: after acknowledgement, a
+resource-only critical badge can render with the info color; its active count
+and underlying incident state remain correct.
+
 ## Error Boundary and stale lazy-chunk recovery
 
 **Location:** `packages/ui/src/components/ui/ErrorBoundary.tsx`

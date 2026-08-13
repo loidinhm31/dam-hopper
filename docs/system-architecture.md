@@ -777,15 +777,22 @@ pub struct PersistedSession {
 
 ### Explorer video playback and download (Phase 04 browser-host validation complete)
 
-Phase 1 delivered the authenticated, purpose-bound ticket boundary. Phase 2 adds
-the capability-only stream endpoint; ticket issuance, revocation, and streaming
-are shipped. Phase 03 completes the browser-host `VideoPreview` integration. Phase
-04 validates it in a real Chromium host with a valid one-second VP8 WebM fixture,
-the real ticket client, and the native download helper. Independent browser-host
-checks verify playback purpose, download purpose, attachment disposition, absence
-of `Blob`/object-URL conversion, and stream-fetch behavior. Media lifecycle checks
-cover stale tickets, retry, cleanup, focus changes, and responsive layouts; the
-browser test suite is green.
+Phase 1 delivered the authenticated, purpose-bound ticket boundary. Phase 2
+ships session-bound media: an opaque ticket URL is paired with an `HttpOnly`
+media-session cookie, so the stream endpoint is no longer capability-only. Phase
+03 completes the browser-host `VideoPreview` integration. Phase 04 validates it
+with the repository Playwright/Vitest harness in installed Chromium 151 using a
+valid one-second VP8 WebM fixture, the real ticket client, and the native download
+helper. The 112-test full browser suite, including 11 media-specific tests,
+passed twice consecutively on Chromium 151. The broader gate also passed 1,013
+UI tests and 740 Rust tests; `pnpm build` and `pnpm lint` were clean. Checks cover the
+versioned session-cookie contract, credentialed `HEAD` before source exposure,
+`crossOrigin="use-credentials"`, playback/seek, direct anchor download, rejected
+probe retry, cleanup, and absence of `Blob`/object-URL conversion. This fixture is
+same-origin HTTP with only the transport assertion replaced; server/router tests
+separately own cookie, CORS, Range, and foreign/missing-session enforcement. It is
+not evidence for real cross-site CHIPS partitioning. Edge, Tauri/WebView, Safari,
+and Firefox remain unqualified.
 Browser routing recognizes only the final, case-insensitive extensions `mp4`,
 `m4v`, `webm`, `ogv`, `ogg`, and `mov` (an extension/MIME hint, not codec proof);
 diff tabs retain their dedicated viewer.
@@ -797,12 +804,12 @@ sequenceDiagram
     participant E as Explorer and EditorTabs
     participant V as VideoPreview
     participant A as Authenticated ticket API
-    participant S as Ticketed stream API
+    participant S as Session-bound stream API
     participant F as ProjectSandbox and file
     E->>A: POST project, path, and purpose with Bearer auth
     A->>F: Resolve sandbox path and stat regular file
     F-->>A: Canonical resource metadata
-    A-->>E: Opaque resource and purpose scoped URL
+    A-->>E: Opaque URL plus HttpOnly media-session cookie
     alt Playback purpose
         E->>V: Open recognized video extension
         V->>S: GET playback URL with optional single Range/If-Range
@@ -821,16 +828,35 @@ purpose. It resolves through the existing `ProjectSandbox`, verifies a regular
 video candidate, and returns a random opaque ticket URL. `DELETE
 /api/fs/video/tickets` revokes a ticket idempotently. The in-memory ticket store is
 capped at 256 live tickets, prunes expired entries before admission, and binds each
-ticket to one canonical project resource, one immutable purpose, and issuance
-metadata. Tickets are never persisted into editor state, browser storage,
-diagnostics, or logs. They use a 30-minute idle expiry capped by an eight-hour
-absolute lifetime; lookup refreshes idle expiry without extending the absolute
-deadline. Workspace reinitialization and configuration changes revoke all tickets
-and advance the generation, preventing issuance across a changed context.
+ticket to one canonical project resource, one immutable purpose, issuance
+metadata, and the authenticated actor's media session. Tickets are never
+persisted into editor state, browser storage, diagnostics, or logs. Ticket and
+session idle expiry is 30 minutes and absolute expiry is eight hours. The stream
+must present the matching `damhopper-media-session` cookie (`HttpOnly`, `Secure`,
+`SameSite=None`, `Partitioned`, `Path=/api/fs`); ticket-only, foreign-session,
+expired, and revoked requests return indistinguishable `404` responses. Idle TTL
+refreshes only after a fully validated stream response or ticket issuance, never
+past the absolute deadline. `DELETE /api/fs/media-session` requires Bearer
+authentication, clears the cookie, and—when a matching cookie is supplied—revokes
+every ticket in that authenticated actor's session; it returns `204` without
+disclosing absent or foreign session state. Ticket-specific image/video DELETEs
+also require Bearer authentication and remove a ticket only with its matching
+actor/session cookie.
+Workspace reinitialization and configuration changes revoke all tickets and
+advance the generation, preventing issuance across a changed context. Session and
+ticket state is process-local; multi-instance deployments require sticky routing
+to the issuing process until a shared store exists. Restart revokes all media state.
 
-`GET|HEAD /api/fs/video/stream/{ticket}` is authorized by the scoped capability
-ticket, not by a long-lived credential in the URL. Every request revalidates the
-sandbox path and file identity (size, mtime, and platform identity) before opening
+During server-profile credential replacement and logout, `ServerSettingsDialog`
+uses this session-revoke endpoint with a five-second bound. An unreachable old
+server falls back to the bounded server-side expiry. If remote revocation
+succeeds but subsequent local token persistence/removal fails, the remote session
+remains revoked intentionally rather than being recreated; a retained/restored
+local login must issue fresh media before it streams.
+
+`GET|HEAD /api/fs/video/stream/{ticket}` is authorized by the bound ticket and
+media-session cookie, not by a long-lived credential in the URL. Every request
+revalidates the sandbox path and file identity (size, mtime, and platform identity) before opening
 the file; drift revokes the ticket and returns `410 Gone`. `GET` supports no range
 (`200`) or exactly one checked byte range (`206`, exact `Content-Length` and
 `Content-Range`). Unsatisfiable, malformed, or multi-range requests return `416`
@@ -849,9 +875,9 @@ filesystem or ticket-store lock is held while streaming.
 
 The configured CORS layer covers GET/HEAD and preflight headers needed for browser
 range playback (`Range`, `If-Range`, and validators), and exposes range, length,
-disposition, validator, and cache headers to allowed origins. Credentialed requests
-mirror the request origin when origins are unrestricted; configured origins remain
-an explicit allowlist.
+disposition, validator, and cache headers to allowed origins. Authenticated browser
+deployments require an explicit allowlist of exact HTTPS origins; credentialed
+responses never reflect an arbitrary origin.
 
 The browser host routes recognized video extensions to `VideoPreview` before
 generic binary or large-text tiering. The player requests a fresh playback
@@ -862,9 +888,9 @@ ticket, then activate a temporary anchor so browser download handling consumes t
 stream directly without `fetch().blob()`. Playback and download can run concurrently
 and expire or revoke independently. Extension and MIME are routing hints only;
 codec failure becomes an actionable unsupported-media state. This validation is
-browser-host-only; it does not claim packaged Tauri playback/download or CSP
-verification. `pnpm check` cannot complete in the validation environment because
-Tauri signing-key configuration is unavailable. V1 does
+browser-host-only. Microsoft Edge was not installed and was not substituted with
+Chromium. Packaged Tauri/WebView playback/download, Safari, Firefox, and real
+cross-site CHIPS partition behavior remain unqualified. V1 does
 not add thumbnails, custom controls, Media Source Extensions, HLS/DASH, codec probing,
 or transcoding.
 
@@ -878,19 +904,20 @@ Key invariants:
 - Playback never depends on download completion; each action owns a separate ticket
   and response stream over the same validated file.
 - File replacement or metadata drift invalidates the prior ticket/range sequence.
-- Unsupported containers/codecs fail visibly without falling back to a 1–3 GB blob read.
+- Unsupported containers/codecs fail visibly; media never falls back to Bearer URLs
+  or a 1–3 GB Blob read.
 
 ### Explorer native image preview (Phase 03 release gate complete)
 
-Image preview uses the same bounded media-ticket core as video while keeping a
-separate public adapter and contract. The server exposes `POST|DELETE
+Image preview uses the same bounded, session-bound media-ticket core as video
+while keeping a separate public adapter and contract. The server exposes `POST|DELETE
 /api/fs/image/tickets` and `GET|HEAD /api/fs/image/stream/{ticket}`. Image
 issuance accepts only final, case-insensitive `png`, `jpg`, `jpeg`, `gif`, and
 `webp` extensions and always binds the capability to the fixed `preview`
 purpose. SVG, AVIF, BMP, TIFF, dotfiles, directories, symlink components, FIFOs,
 and traversal paths remain outside the preview surface.
 
-The browser flow is capability-only:
+The browser flow is session-bound:
 
 ```mermaid
 sequenceDiagram
@@ -901,9 +928,9 @@ sequenceDiagram
     participant F as ProjectSandbox and file
     E->>A: POST project and path with Bearer auth
     A->>F: Resolve, regular-file check, MIME and version bind
-    A-->>E: Opaque preview ticket URL
+    A-->>E: Opaque preview URL plus media-session cookie
     E->>I: Mount one native <img>
-    I->>S: Native GET/HEAD capability request
+    I->>S: Native GET/HEAD with matching cookie
     S->>F: Revalidate sandbox path and file identity
     S-->>I: Inline image bytes/range response
     I->>A: Authenticated best-effort DELETE on cleanup
@@ -1739,12 +1766,19 @@ the in-app diagnosis UI. Phase 07 packages, validates, and rolls out only those
 observation surfaces. It must not enable, package, exercise, or claim support
 for host mutation.
 
-The top-nav host-resource popover presents the cached snapshot, bounded alert
-history, and diagnostic evidence, with no remediation controls. A
-`host:alertChanged` push event invalidates the cached read-only queries so the
-next render reflects authoritative REST projections; it is a refresh signal,
-not a mutation request. Deep Linux reads degrade per signal, while
-`GET /api/system/metrics` remains the compatibility fallback and rollback seam.
+The top-nav host-resource popover presents the cached snapshot, bounded mixed
+alert history, and diagnostic evidence, with no remediation controls. The
+legacy memory `alert` remains stable; the snapshot's additive `currentAlerts`
+array carries concurrent active thermal/disk incidents. A valid
+`host:alertChanged` event updates only its matching cached incident and
+invalidates the read-only queries; recovery (`resolvedAt`, including zero)
+removes only that incident. The browser rejects malformed or unexpected nested
+evidence before changing cache state. An explicit empty `currentAlerts` array
+clears resource presentation, while a missing field is retained for
+old-server compatibility rather than interpreted as recovery. REST projections
+remain authoritative after reconnect, missed events, or profile changes. Deep
+Linux reads degrade per signal, while `GET /api/system/metrics` remains the
+compatibility fallback and rollback seam.
 
 Re-authentication, mutation lifecycle/audit, local privileged IPC, enrollment,
 and fixed host operations are one future remediation backlog. Existing
@@ -1758,16 +1792,21 @@ it is not a dependency of Phase 07.
 ```
 Linux procfs / PSI / cgroup v2
   -> HostResourceMonitor (read-only, bounded, cached)
-  -> protected snapshot and alert APIs / host:alertChanged event
-  -> browser diagnostics UI
+  -> snapshot (`alert` + additive `currentAlerts`), mixed alert history,
+     and `host:alertChanged`
+  -> validated browser cache + diagnostics UI
 ```
 
 `HostResourceMonitor` has no dependency on `HostActionService`, helper IPC, or
 action configuration. Alert collection and delivery can only publish bounded,
-sanitized state. They cannot enqueue or execute an action. The existing
-`GET /api/system/metrics` remains a compatible basic-metrics endpoint; new
-resource APIs are versioned siblings. Phase 03 moves it to the shared monitor's
-cached projection without changing its response shape.
+sanitized state. The resource lifecycle emits one event per changed target, so
+concurrent disk and thermal incidents remain independent and recovery is
+per-target. Current and legacy payloads share the existing event channel; the
+client's strict discriminator/evidence validation preserves old payload support
+without trusting malformed additive data. The existing `GET /api/system/metrics`
+remains a compatible basic-metrics endpoint; new resource APIs are versioned
+siblings. Phase 03 moves it to the shared monitor's cached projection without
+changing its response shape.
 
 The release image is built explicitly for `linux/amd64` and uses pinned base
 image digests. Phase 07 evidence measures clean shutdown only for a server with
@@ -1793,6 +1832,25 @@ v2 membership. Cgroup records report current usage, max/high limits (including
 unlimited markers), file cache, memory events, and cgroup PSI. Mount and
 membership validation runs before cgroup reads; unsupported or invalid layouts
 remain explicitly degraded.
+
+Linux battery telemetry is read from the startup-owned `/sys/class/power_supply`
+tree and remains part of the same cached snapshot. Only entries classified as
+`Battery` contribute. Direct `energy_now` and `power_now` micro-units become Wh
+and W respectively; charge, current, and voltage are never combined to infer a
+missing measurement. Multiple batteries contribute a value only when every
+classified battery supplies the same direct attribute, so partial totals are not
+reported. Capacity uses the direct percentage for one battery and the ratio of
+complete summed `energy_now`/`energy_full` pairs for multiple batteries. Missing
+optional values serialize as `null`; the top-level `battery` field is additive
+and optional for clients interoperating with older servers. The serialized
+`battery` v1 object contains `count`, `capacityPercent`, `status`,
+`remainingEnergyWh`, `instantaneousPowerW`, and `availability`; status is one of
+`charging`,
+`discharging`, `full`, `notCharging`, `unknown`, or `mixed`. An unrecognized or
+malformed raw status is treated as malformed and does not become a fabricated
+status value. Malformed, denied, unsupported, and stale reads retain explicit
+availability (and stale cached values where applicable). Non-Linux platforms
+report battery availability as `unsupported`.
 
 Process inventory is bounded to 4,096 scanned PIDs, 20 returned processes, and PSS
 reads for the top 5 by RSS, with a 100 ms deadline. The response includes scan,
@@ -2123,7 +2181,9 @@ This portal boundary is required because floating terminal panels use `backdrop-
 
 The Explorer tree keeps the Arborist row itself as the direct `asChild` trigger. Opening or dismissing its menu must not update `FileTree` state, since that can recreate virtualized rows during Radix's opening lifecycle. Tree menu callbacks instead close over the originating row's `FsArborNode`; only a selected action may update dialog, upload, operation-error, or other parent state. This preserves pointer and keyboard invocation, the composed Arborist drag ref, and exact action targeting.
 
-Test boundary: JSDOM wrapper and consumer tests verify the shared contract, portal/body mounting, trigger compatibility, scroll close, and disabled-item wiring. Chromium browser tests own the real portal geometry and the focus/navigation regression path, including Arrow/Home/End behavior and the first-enabled-item focus result. Phase 03 is the verification boundary for the wrapper and consumer migration; Phase 04 keeps the browser geometry/focus regression coverage.
+Touch long-press contract: Explorer rows and editor tabs use the existing shared Radix `ContextMenu.Trigger` as the single owner of non-mouse long-press behavior. Radix's built-in 700 ms touch/pen timer, movement/cancel cleanup, native `contextmenu` fallback, anchor placement, focus, and dismissal remain authoritative; no second global gesture timer or dependency is introduced. Nested Git-status and tab-close controls are not menu triggers: they use local touch/pen pointer guards and non-mouse context-menu suppression so their own actions remain reachable without opening the parent row/tab menu. The app marker must remain on the real `asChild` DOM target so document-level native-menu suppression does not block configured triggers. Long-press support is scoped to existing Explorer and editor-tab menus. Monaco text and preview surfaces remain outside this contract until an app context-menu action model exists; mapping a hold to tab actions is prohibited. The shipped UI/test change has no backend, API, database, authentication, configuration, or deployment impact.
+
+Test boundary: JSDOM wrapper and consumer tests verify the shared contract, portal/body mounting, trigger compatibility, scroll close, and disabled-item wiring. Chromium browser tests use synthetic pointer sequences in headless Chromium for app-level timing, portal geometry, focus/navigation, cancellation, nested-control protection, and held row/tab targeting; they are not physical Android Chrome or iOS Safari certification. Native long-press callouts and browser event ordering still require real-device follow-up. Phase 03 is the verification boundary for the wrapper and consumer migration; Phase 04 keeps the browser geometry/focus regression coverage. Monaco text long-press is a documented non-goal until its menu contract is designed.
 
 **Phase 02 migration notes:** the consumer rollout kept the shared Radix foundation as the single menu primitive, forwarded trigger refs through the wrapper layers, isolated the branch `Select` control from the generic context-menu trigger path, and lifted the diagnostics trigger into its own dedicated consumer wiring. A local branch option prevents only right-button Select handling, then hands the pointer-up event to the lifted branch-menu presenter; the native `contextmenu` event remains the fallback, and `ContextMenu`/`Shift+F10` use the same opener. This closes Select before the single menu mounts, so a branch is never checked out by opening its action menu. Escape and outside dismissal clear the lifted state and return focus to the Select trigger when practical; Delete preserves the checked-out-branch guard and transfers focus to the confirmation dialog. The intent is to standardize trigger ownership without expanding the menu API surface or coupling unrelated selectors to the context-menu shell.
 
@@ -2156,7 +2216,7 @@ Test boundary: JSDOM wrapper and consumer tests verify the shared contract, port
 - Symbolic links are allowed but validated
 - Binary file detection prevents accidental text parsing
 
-**CORS:** Configurable via `--cors-origins` flag.
+**CORS:** Authenticated browser deployments require exact HTTPS origins through `--cors-origins`; empty, wildcard, HTTP, malformed, and ambiguous origins reject startup. Responses allow credentials only for listed origins and include `Vary: Origin`. Non-loopback authenticated binds require `--trusted-tls-proxy`, declaring trusted HTTPS termination before the HTTP listener; this is required for Secure partitioned media cookies. The declaration does not isolate the HTTP listener: operators must bind it to loopback or restrict it so only that proxy can reach it.
 
 ## Feature Gating: IDE Explorer
 

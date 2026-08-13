@@ -1,18 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
-import { handleIpcStatusChange, handleWorkspaceChanged } from "./use-sse.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostResourceSnapshotV1 } from "../api/client.js";
 
 const getTransport = vi.hoisted(() => vi.fn());
 
 vi.mock("../api/transport.js", () => ({ getTransport }));
 
 import {
+  applyHostResourceAlert,
   asHostResourceAlertChangedEvent,
   handleIpcStatusChange,
   initTransportListeners,
   invalidateHostResourceQueries,
   resetTransportListeners,
   subscribeIpc,
+  handleWorkspaceChanged,
 } from "./use-sse.js";
 
 function validAlertEvent() {
@@ -29,6 +30,56 @@ function validAlertEvent() {
       threshold: "available memory",
       nextAction: "Inspect workload.",
       evidence: { cgroupOomDelta: false, availablePercent: 12 },
+    },
+  };
+}
+
+function validTemperatureAlertEvent() {
+  return {
+    type: "host:alertChanged" as const,
+    timestamp: 1,
+    data: {
+      kind: "temperature",
+      key: "temperature:thermal_zone0",
+      state: "temperatureHigh",
+      severity: "critical",
+      incidentId: "host-resource-incident-1",
+      openedAt: 1,
+      updatedAt: 1,
+      durationSeconds: 0,
+      scope: "temperature:thermal_zone0",
+      threshold: "celsius>60C for 5 minutes",
+      nextAction: "Inspect cooling.",
+      evidence: {
+        temperatureSource: "thermal_zone0",
+        temperatureLabel: "package",
+        temperatureCelsius: 60.1,
+      },
+    },
+  };
+}
+
+function validDiskAlertEvent() {
+  return {
+    type: "host:alertChanged" as const,
+    timestamp: 1,
+    data: {
+      kind: "disk",
+      key: "disk:/data",
+      state: "diskFull",
+      severity: "critical",
+      incidentId: "host-resource-incident-2",
+      openedAt: 1,
+      updatedAt: 1,
+      durationSeconds: 0,
+      scope: "disk:/data",
+      threshold: "usage>=95%",
+      nextAction: "Free space.",
+      evidence: {
+        diskMountPoint: "/data",
+        diskName: "data",
+        diskUsagePercent: 95,
+      },
     },
   };
 }
@@ -153,6 +204,65 @@ describe("asHostResourceAlertChangedEvent", () => {
     ).toBeNull();
   });
 
+  it("accepts a complete additive temperature event and rejects invalid nested evidence", () => {
+    expect(
+      asHostResourceAlertChangedEvent(validTemperatureAlertEvent()),
+    ).not.toBeNull();
+    for (const data of [
+      { ...validTemperatureAlertEvent().data, key: "" },
+      {
+        ...validTemperatureAlertEvent().data,
+        evidence: { temperatureSource: "thermal_zone0", temperatureCelsius: NaN },
+      },
+      {
+        ...validTemperatureAlertEvent().data,
+        evidence: {
+          ...validTemperatureAlertEvent().data.evidence,
+          unexpected: "untrusted",
+        },
+      },
+    ]) {
+      expect(
+        asHostResourceAlertChangedEvent({ ...validTemperatureAlertEvent(), data }),
+      ).toBeNull();
+    }
+  });
+
+  it("accepts a complete additive disk event", () => {
+    expect(asHostResourceAlertChangedEvent(validDiskAlertEvent())).not.toBeNull();
+  });
+
+  it.each([
+    ["unexpected evidence key", { unexpected: "untrusted" }],
+    ["negative usage", { diskUsagePercent: -1 }],
+    ["over-cap usage", { diskUsagePercent: 101 }],
+    ["non-finite usage", { diskUsagePercent: Number.NaN }],
+    ["invalid disk name", { diskName: 1 }],
+    ["empty disk name", { diskName: "" }],
+  ])("rejects disk evidence with %s", (_reason, invalidEvidence) => {
+    expect(
+      asHostResourceAlertChangedEvent({
+        ...validDiskAlertEvent(),
+        data: {
+          ...validDiskAlertEvent().data,
+          evidence: { ...validDiskAlertEvent().data.evidence, ...invalidEvidence },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects disk evidence with missing mount", () => {
+    expect(
+      asHostResourceAlertChangedEvent({
+        ...validDiskAlertEvent(),
+        data: {
+          ...validDiskAlertEvent().data,
+          evidence: { diskName: "data", diskUsagePercent: 95 },
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("rejects malformed or out-of-scope data before it can refresh resource state", () => {
     for (const event of [
       { ...validAlertEvent(), timestamp: Number.NaN },
@@ -190,6 +300,50 @@ describe("asHostResourceAlertChangedEvent", () => {
     ]) {
       expect(asHostResourceAlertChangedEvent(event)).toBeNull();
     }
+  });
+});
+
+describe("resource alert cache updates", () => {
+  it("keeps concurrent target alerts and removes only the recovered target", () => {
+    const temperature = validTemperatureAlertEvent().data;
+    const disk = {
+      ...temperature,
+      kind: "disk" as const,
+      key: "disk:/data",
+      state: "diskFull" as const,
+      incidentId: "host-resource-incident-2",
+      scope: "disk:/data",
+      evidence: {
+        diskMountPoint: "/data",
+        diskName: "data",
+        diskUsagePercent: 95,
+      },
+    };
+    const snapshot = { currentAlerts: [] } as HostResourceSnapshotV1;
+    const withTemperature = applyHostResourceAlert(snapshot, temperature)!;
+    const withBoth = applyHostResourceAlert(withTemperature, disk)!;
+    expect(withBoth.currentAlerts).toHaveLength(2);
+
+    const recovered = applyHostResourceAlert(withBoth, {
+      ...temperature,
+      resolvedAt: 0,
+    })!;
+    expect(recovered.currentAlerts).toEqual([disk]);
+  });
+
+  it("caps valid resource alert cache updates", () => {
+    const updated = Array.from({ length: 51 }, (_, index) => index).reduce(
+      (snapshot, index) =>
+        applyHostResourceAlert(snapshot, {
+          ...validTemperatureAlertEvent().data,
+          incidentId: `host-resource-incident-${index}`,
+          key: `temperature:thermal_zone${index}`,
+          scope: `temperature:thermal_zone${index}`,
+        })!,
+      { currentAlerts: [] } as HostResourceSnapshotV1,
+    );
+
+    expect(updated.currentAlerts).toHaveLength(50);
   });
 });
 

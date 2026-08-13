@@ -2,7 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import type { HostMetrics, HostResourceSnapshotV1 } from "@/api/client.js";
 import type { Transport } from "@/api/transport.js";
 
@@ -14,6 +14,14 @@ const snapshot: HostResourceSnapshotV1 = {
   host: { hostname: "monitor-host", osName: "Fedora" },
   capabilities: { linuxDeepMetrics: availability },
   memory: { totalBytes: 1_024, availableBytes: 512, availability },
+  battery: {
+    count: 1,
+    capacityPercent: 75,
+    status: "discharging",
+    remainingEnergyWh: 12.5,
+    instantaneousPowerW: 3.25,
+    availability,
+  },
   pressure: { memory: { availability } },
   cgroups: [],
   processes: {
@@ -74,8 +82,25 @@ const legacyMetrics: HostMetrics = {
     usedBytes: 768,
     usagePercent: 75,
   },
-  disks: [],
-  temperatures: [],
+  disks: [
+    {
+      name: "workspace",
+      mountPoint: "/workspace",
+      totalBytes: 2_048,
+      availableBytes: 102,
+      usedBytes: 1_946,
+      usagePercent: 95,
+    },
+    {
+      name: "cache",
+      mountPoint: "/cache/with/a/long/path",
+      totalBytes: 4_096,
+      availableBytes: 3_686,
+      usedBytes: 410,
+      usagePercent: 10,
+    },
+  ],
+  temperatures: [{ label: "Package", source: "pkg", celsius: 61 }],
 };
 
 let snapshotResult: {
@@ -186,6 +211,11 @@ describe("host resource monitoring in Chromium", () => {
     const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
     expect(dialog?.textContent).toContain("Read-only monitoring and diagnosis");
     expect(dialog?.textContent).toContain("Operator guidance");
+    const battery = page.getByRole("region", { name: "Battery" });
+    await expect.element(battery).toHaveTextContent("Remaining energy");
+    await expect.element(battery).toHaveTextContent("12.5 Wh");
+    await expect.element(battery).toHaveTextContent("Instantaneous power");
+    await expect.element(battery).toHaveTextContent("3.25 W");
     expect(dialog?.textContent).not.toContain("password");
     expect(dialog?.textContent).not.toContain("Approve");
 
@@ -234,6 +264,87 @@ describe("host resource monitoring in Chromium", () => {
     expect(dialog?.textContent).toContain("75%");
     expect(dialog?.textContent).not.toContain("Memory available");
     expect(dialog?.textContent).not.toContain("Approve");
+  });
+
+  it("omits battery measurements the host did not report", async () => {
+    snapshotResult = {
+      data: {
+        ...snapshot,
+        battery: {
+          count: 1,
+          status: "charging",
+          remainingEnergyWh: 12.5,
+          instantaneousPowerW: null,
+          availability,
+        },
+      },
+      isLoading: false,
+      isError: false,
+    };
+    await act(async () => root.render(<HostResourcePopover />));
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Host resources: Memory pressure"]',
+    );
+    await act(async () => trigger?.click());
+
+    const battery = page.getByRole("region", { name: "Battery" });
+    await expect.element(battery).toHaveTextContent("12.5 Wh");
+    await expect.element(battery).not.toHaveTextContent("Instantaneous power");
+  });
+
+  it("reveals every disk with pointer and keyboard disclosure", async () => {
+    legacyMetricsResult = { data: legacyMetrics };
+    await act(async () => root.render(<HostResourcePopover />));
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Host resources: Memory pressure"]',
+    );
+    await act(async () => trigger?.click());
+
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
+    const storageButton = page.getByRole("button", { name: "Host storage" });
+    const storageElement = dialog?.querySelector<HTMLButtonElement>(
+      'button[aria-expanded="false"]',
+    );
+    const storagePanel = dialog?.querySelector<HTMLElement>(
+      `[aria-labelledby="${storageElement?.id}"]`,
+    );
+    expect(dialog?.textContent).toContain("Package");
+    expect(dialog?.textContent).toContain("61°C");
+    expect(storageElement?.getAttribute("aria-expanded")).toBe("false");
+    expect(storagePanel?.hidden).toBe(true);
+
+    await act(async () => userEvent.click(storageButton));
+    expect(storageElement?.getAttribute("aria-expanded")).toBe("true");
+    expect(storagePanel?.hidden).toBe(false);
+    expect(dialog?.textContent).toContain("/workspace");
+    expect(dialog?.textContent).toContain("/cache/with/a/long/path");
+    expect(storagePanel?.querySelectorAll('[role="progressbar"]')).toHaveLength(
+      2,
+    );
+
+    await act(async () => userEvent.click(storageButton));
+    expect(storageElement?.getAttribute("aria-expanded")).toBe("false");
+    storageElement?.focus();
+    await act(async () => userEvent.keyboard("{Enter}"));
+    expect(storageElement?.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => userEvent.keyboard(" "));
+    expect(storageElement?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("keeps an unavailable temperature sensor state explicit", async () => {
+    legacyMetricsResult = {
+      data: { ...legacyMetrics, temperatures: [] },
+    };
+    await act(async () => root.render(<HostResourcePopover />));
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Host resources: Memory pressure"]',
+    );
+    await act(async () => trigger?.click());
+
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
+    expect(dialog?.textContent).toContain("Temperature sensors unavailable");
+    expect(dialog?.textContent).not.toContain("0°C");
   });
 
   it("keeps the read-only dialog inside a mobile viewport and restores trigger focus", async () => {

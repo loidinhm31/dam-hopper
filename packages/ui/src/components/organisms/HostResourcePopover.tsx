@@ -6,8 +6,8 @@ import {
   useHostResourceSnapshot,
 } from "@/api/queries.js";
 import { HostResourceDiagnosis } from "@/components/organisms/HostResourceDiagnosis.js";
+import { HostResourceLegacyMetrics } from "@/components/organisms/HostResourceDiagnosisRows.js";
 import { useHostResourceAlertPresentation } from "@/hooks/use-host-resource-alert-presentation.js";
-import { formatPercent } from "@/lib/host-metrics-format.js";
 import { formatAlertState, severityClass } from "@/lib/host-resource-state.js";
 import { cn } from "@/lib/utils.js";
 
@@ -21,7 +21,11 @@ export function HostResourcePopover() {
   const alerts = useHostResourceAlerts(true);
   const legacyMetrics = useHostMetrics(open);
   const alert = snapshot.data?.alert;
-  const alertPresentation = useHostResourceAlertPresentation(alert);
+  const currentAlerts = snapshot.data?.currentAlerts ?? [];
+  const alertPresentation = useHostResourceAlertPresentation(
+    alert,
+    snapshot.data?.currentAlerts,
+  );
 
   const closeAndRestoreFocus = () => {
     setOpen(false);
@@ -68,8 +72,14 @@ export function HostResourcePopover() {
     };
   }, [open]);
 
-  const alertLabel = alert ? formatAlertState(alert.state) : "Sampling host";
-  const hasConcern = alert && alert.state !== "healthy";
+  const alertLabel =
+    currentAlerts.length > 0
+      ? `${currentAlerts.length} active resource incident${currentAlerts.length === 1 ? "" : "s"}`
+      : alert
+        ? formatAlertState(alert.state)
+        : "Sampling host";
+  const hasConcern =
+    currentAlerts.length > 0 || (alert != null && alert.state !== "healthy");
 
   return (
     <div ref={rootRef} className="relative">
@@ -165,20 +175,9 @@ export function HostResourcePopover() {
                       Deep metrics unavailable; showing compatible basic
                       metrics.
                     </p>
-                    <dl className="mt-2 grid grid-cols-2 gap-2 text-[10px] text-[var(--color-text-muted)]">
-                      <div>
-                        <dt>CPU</dt>
-                        <dd className="text-xs text-[var(--color-text)]">
-                          {formatPercent(legacyMetrics.data.cpu.usagePercent)}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>Disk</dt>
-                        <dd className="text-xs text-[var(--color-text)]">
-                          {formatPercent(legacyMetrics.data.disk.usagePercent)}
-                        </dd>
-                      </div>
-                    </dl>
+                    <div className="mt-2">
+                      <HostResourceLegacyMetrics metrics={legacyMetrics.data} />
+                    </div>
                   </section>
                 )}
               </>
