@@ -136,7 +136,7 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
     await act(async () => saveButton!.click());
 
     expect(getAuthToken(profile.id)).toBeNull();
-    expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain(
+    expect(fetchMock.mock.calls.map(([url]) => url)).toContain(
       "http://old.test/api/fs/media-session",
     );
   });
@@ -185,7 +185,7 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("never sends a stale profile bearer token over HTTP logout", async () => {
+  it("revokes media before sending HTTP logout", async () => {
     const staleProfile = {
       id: "profile-http",
       name: "Insecure Server",
@@ -220,7 +220,14 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
       await Promise.resolve();
     });
 
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://insecure.test/api/fs/media-session",
+      expect.objectContaining({
+        method: "DELETE",
+        credentials: "include",
+        headers: { Authorization: "Bearer http-token" },
+      }),
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       "http://insecure.test/api/auth/logout",
       expect.objectContaining({ headers: {} }),

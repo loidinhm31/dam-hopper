@@ -1471,12 +1471,14 @@ outside Bearer middleware so native browser media elements can load them, but
 must present the matching cookie. A ticket and cookie from different sessions,
 or a missing, expired, revoked, or malformed cookie, return the same `404 Not
 Found` response. Do not treat a ticket URL as a standalone credential or put a
-Bearer token in a media URL.
+Bearer token in a media URL. Bearer remains required on issue/revoke/session-
+revoke routes; stream GET/HEAD remains cookie-only.
 
-The cookie is `HttpOnly`, `Secure`, `SameSite=None`, `Partitioned`, and scoped
-to `Path=/api/fs`. Each successful image or video issuance creates or reuses
-that actor's media session, returns the opaque ticket response, and sets or
-refreshes this cookie. Ticket and session idle lifetime is 30 minutes and the
+The media cookie is host-only `HttpOnly; SameSite=Lax; Path=/api/fs` and
+non-`Secure` for HTTP compatibility. The auth fallback cookie is host-only
+`HttpOnly; SameSite=Strict; Path=/`, also non-`Secure`. Each successful image or
+video issuance creates or reuses that actor's media session, returns the opaque
+ticket response, and sets or refreshes the media cookie. Ticket and session idle lifetime is 30 minutes and the
 absolute lifetime is eight hours. Successful issuance and fully validated stream
 responses can refresh idle lifetime but never the absolute deadline. Shared
 limits are 256 tickets, 128 tickets per actor, 64 tickets per media session, 256
@@ -1507,8 +1509,8 @@ until their 30-minute idle or eight-hour absolute expiry. Conversely, if remote
 revocation succeeds but local token persistence or removal then fails, the UI
 intentionally does **not** recreate the remote session. Any restored or retained
 local credential must issue fresh media tickets (and a new media session) before
-streaming again. The shared revoke helper never sends a Bearer token to an HTTP
-origin; remote media itself also requires HTTPS.
+streaming again. The shared revoke helper sends the Bearer token to valid HTTP and
+HTTPS origins; HTTP is supported but exposes credentials and media traffic to interception.
 
 The browser client accepts only `authorizationMode: "session-cookie-v1"`, resolves
 only an opaque stream path on the configured server origin, performs a credentialed
