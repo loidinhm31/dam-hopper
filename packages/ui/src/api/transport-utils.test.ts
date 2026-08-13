@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -26,6 +28,7 @@ import { reinitializeTransport } from "./transport-utils.js";
 describe("reinitializeTransport", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete document.documentElement.dataset.appHost;
   });
 
   it("re-registers push listeners after installing the replacement transport", () => {
@@ -53,6 +56,16 @@ describe("reinitializeTransport", () => {
     expect(initTransportListeners.mock.invocationCallOrder[0]).toBeGreaterThan(
       reconfigureTransport.mock.invocationCallOrder[0],
     );
+  });
+
+  it("keeps native separate-origin profiles idle", () => {
+    document.documentElement.dataset.appHost = "native";
+    getTransport.mockReturnValue({ destroy: vi.fn() });
+
+    reinitializeTransport("http://remote.example", "profile-a");
+
+    expect(WsTransport).not.toHaveBeenCalled();
+    expect(reconfigureTransport).toHaveBeenCalledOnce();
   });
 
   it("forwards the active profile ID to the replacement transport", () => {

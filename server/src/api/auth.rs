@@ -70,7 +70,7 @@ pub enum CredentialVerificationError {
 
 /// Extract token from `Authorization: Bearer <token>` header, falling back to cookie.
 fn extract_token<'a>(request: &'a Request, jar: &'a CookieJar) -> Option<String> {
-    // Prefer Authorization header (cross-origin Bearer)
+    // Prefer Authorization Bearer header when supplied.
     if let Some(val) = request.headers().get(header::AUTHORIZATION) {
         if let Ok(s) = val.to_str() {
             if let Some(token) = s.strip_prefix("Bearer ") {
