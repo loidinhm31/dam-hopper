@@ -1,7 +1,7 @@
 ---
 title: "Host resource battery and energy telemetry"
 description: "Add truthful Linux battery, remaining-energy, and instantaneous-power data to the cached v1 host snapshot and diagnosis UI."
-status: in-progress
+status: completed
 priority: P2
 effort: 7h
 branch: feat/host-resource-battery-energy
@@ -36,7 +36,7 @@ Add one aggregate `battery` section to the v1 snapshot. Read direct `capacity`, 
 |---|---|---|---:|---|
 | 1 | Contract and Linux collector | Completed 2026-08-13 | 3.5h | [phase-01](./phase-01-contract-and-linux-collector.md) |
 | 2 | UI presentation and compatibility | Completed 2026-08-13 11:08:43 +07:00 | 2h | [phase-02](./phase-02-ui-presentation-and-compatibility.md) |
-| 3 | Documentation and release gates | Pending | 1.5h | [phase-03](./phase-03-documentation-and-release-gates.md) |
+| 3 | Documentation and release gates | Completed 2026-08-13 11:39:20 +07:00 | 1.5h | [phase-03](./phase-03-documentation-and-release-gates.md) |
 
 ## Dependencies
 

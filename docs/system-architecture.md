@@ -1603,9 +1603,11 @@ missing measurement. Multiple batteries contribute a value only when every
 classified battery supplies the same direct attribute, so partial totals are not
 reported. Capacity uses the direct percentage for one battery and the ratio of
 complete summed `energy_now`/`energy_full` pairs for multiple batteries. Missing
-optional values stay absent. The serialized `battery` v1 object contains
-`count`, `capacityPercent`, `status`, `remainingEnergyWh`,
-`instantaneousPowerW`, and `availability`; status is one of `charging`,
+optional values serialize as `null`; the top-level `battery` field is additive
+and optional for clients interoperating with older servers. The serialized
+`battery` v1 object contains `count`, `capacityPercent`, `status`,
+`remainingEnergyWh`, `instantaneousPowerW`, and `availability`; status is one of
+`charging`,
 `discharging`, `full`, `notCharging`, `unknown`, or `mixed`. An unrecognized or
 malformed raw status is treated as malformed and does not become a fabricated
 status value. Malformed, denied, unsupported, and stale reads retain explicit
