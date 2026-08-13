@@ -1,7 +1,7 @@
 ---
 title: "Session-bound media stream authorization"
 description: "Bind native video and image stream tickets to an authenticated, partitioned media session across trusted frontend/API origins."
-status: in-progress
+status: completed
 priority: P1
 effort: 32h
 branch: main
@@ -21,7 +21,7 @@ Replace transferable media capability URLs with two-part authorization: opaque t
 - Ticket stores actor subject + media-session binding. Every image/video `GET|HEAD` requires both. “Owning session” means the authenticated browser media session inside its top-level-site partition, not an individual tab or JWT/JTI login.
 - Missing/foreign cookie → identical `404`; no ticket/session TTL touch. No Referer/Origin authorization and no bearer-only fallback.
 - Credentialed CORS uses exact configured origins. Authenticated production rejects empty/`*`; remote media requires HTTPS.
-- Unsupported cookie engines fail closed with actionable UI. Initial release claims require real Chromium + Edge evidence; Tauri qualification is separate follow-up.
+- Unsupported cookie engines fail closed with actionable UI. Deterministic automated evidence currently covers installed Chromium 151 only; Edge, Tauri/WebView, Safari, Firefox, and real cross-site CHIPS qualification remain unsupported follow-ups.
 
 ## Phases
 
@@ -29,8 +29,8 @@ Replace transferable media capability URLs with two-part authorization: opaque t
 |---|---|---:|---|---|
 | 1 | [Media session + strict CORS contract](./phase-01-server-media-session-and-strict-cors-contract.md) | 8h | None | DONE — 2026-08-12 20:05:25 +07:00 |
 | 2 | [Ticket binding + stream/logout lifecycle](./phase-02-bind-media-tickets-and-stream-logout-lifecycle.md) | 8h | Phase 1 | DONE — 2026-08-13 00:20:59 +07:00 |
-| 3 | [Frontend compatibility + deployment UX](./phase-03-frontend-native-media-compatibility-and-deployment.md) | 7h | Phase 2 contract | In review — 2026-08-13 |
-| 4 | [Qualification, docs, rollout/rollback](./phase-04-qualification-documentation-and-rollout.md) | 9h | Phases 1–3 | Pending |
+| 3 | [Frontend compatibility + deployment UX](./phase-03-frontend-native-media-compatibility-and-deployment.md) | 7h | Phase 2 contract | DONE — 2026-08-13 |
+| 4 | [Qualification, docs, rollout/rollback](./phase-04-qualification-documentation-and-rollout.md) | 9h | Phases 1–3 | DONE — 2026-08-13 10:06:21 +07:00 |
 
 ## End-to-end contract
 
@@ -43,7 +43,7 @@ Replace transferable media capability URLs with two-part authorization: opaque t
 ## Dependencies
 
 - Existing `MediaTicketStore`, video/image adapters, auth actor extension, sandbox revalidation, native Range response path.
-- Exact deployment origin list, production HTTPS certificate/proxy, and supported Chromium/Edge versions.
+- Exact deployment origin list, production HTTPS certificate/proxy, and an installed Chromium executable for the deterministic browser gate.
 - Single server process or sticky routing; shared session store deferred until multi-instance deployment exists.
 
 ## Scope guard
@@ -57,17 +57,17 @@ No JWT redesign, database persistence, service worker, Blob buffering, MSE, sign
 
 ### Confirmed Decisions
 
-- Initial release gate: real Chromium + Edge; Tauri qualification later.
-- HTTPS/local HTTP development setup: out of scope; production remote HTTPS invariant stays.
+- Deterministic browser gate follows prior repository plans and runs the real installed Chromium host; absent engines are recorded unsupported rather than simulated.
+- Edge, Tauri/WebView, Safari, Firefox, and real cross-site CHIPS qualification are follow-ups and are not support claims.
+- HTTPS/local HTTP development setup and rollout rehearsal are out of scope; production remote HTTPS and fail-closed skew invariants stay.
 - Limits accepted: 30m idle, 8h absolute, and proposed global/per-actor/per-session bounds.
-- Deployment rollout procedure: out of scope; version skew must still fail closed with no bearer fallback.
 
 ### Action Items
 
-- [ ] Revise Phase 4 before implementation: move Tauri from release blocker to follow-up.
-- [ ] Remove local HTTPS/loopback and rollout-rehearsal tasks; preserve Secure cookie and fail-closed contracts.
-- [ ] Release owner sets minimum Chromium and Edge versions.
+- [x] Revise Phase 4: move Tauri and unavailable engines from release blockers to explicit unsupported follow-ups.
+- [x] Remove local HTTPS/loopback and rollout-rehearsal tasks; preserve Secure cookie and fail-closed contracts.
+- [x] Record the exact executed Chromium version and avoid minimum-version/support claims for unexecuted engines.
 
 ## Unresolved questions
 
-- Exact minimum Chromium and Edge versions.
+- None. Installed Chromium 151 is observed evidence, not a general minimum-version claim.

@@ -10,6 +10,17 @@ const profileState = vi.hoisted(() => ({
   listeners: new Set<() => void>(),
 }));
 
+vi.mock("@/api/media-session.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/api/media-session.js")>();
+  return {
+    ...actual,
+    // The shared browser fixture is HTTP and validates native-element behavior;
+    // real HTTPS/cookie enforcement remains covered by server contract tests.
+    assertMediaTransport: () => undefined,
+  };
+});
+
 vi.mock("@/api/server-config.js", () => ({
   getActiveProfile: () => ({
     id: `browser-profile-${profileState.version}`,
@@ -44,6 +55,10 @@ describe("Explorer image preview in Chromium", () => {
   const deleteCalls = () =>
     fetchSpy.mock.calls.filter(
       ([, init]) => (init as RequestInit | undefined)?.method === "DELETE",
+    );
+  const headCalls = () =>
+    fetchSpy.mock.calls.filter(
+      ([, init]) => (init as RequestInit | undefined)?.method === "HEAD",
     );
   const expectReady = () =>
     expect
@@ -106,6 +121,7 @@ describe("Explorer image preview in Chromium", () => {
     ).toBeVisible();
     await expectReady();
     expect(image.currentSrc).toContain("/api/fs/image/stream/image_ticket");
+    expect(image.crossOrigin).toBe("use-credentials");
     const post = postCalls()[0];
     expect(post?.[0]).toBe(`${window.location.origin}/api/fs/image/tickets`);
     expect(post?.[1]).toEqual(
@@ -116,6 +132,12 @@ describe("Explorer image preview in Chromium", () => {
           Authorization: "Bearer browser-test-token",
         }),
       }),
+    );
+    const probe = headCalls().find(([input]) =>
+      String(input).endsWith("/api/fs/image/stream/image_ticket"),
+    );
+    expect(probe?.[1]).toEqual(
+      expect.objectContaining({ method: "HEAD", credentials: "include" }),
     );
     expect(document.querySelectorAll("img")).toHaveLength(1);
     expect(createObjectUrlSpy).not.toHaveBeenCalled();
@@ -149,7 +171,7 @@ describe("Explorer image preview in Chromium", () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    await expect(page.getByText("Ready to view")).toBeVisible();
+    await expectReady();
 
     await act(async () => {
       profileState.version = 1;
@@ -166,17 +188,13 @@ describe("Explorer image preview in Chromium", () => {
     await expectReady();
   });
 
-  it("shows a native stream error and recovers through a fresh retry ticket", async () => {
+  it("fails closed on a rejected probe and recovers through a fresh ticket", async () => {
     await renderPreview("images/retry.png");
     const image = document.querySelector("img") as HTMLImageElement;
     await expect
-      .poll(() => image.currentSrc)
-      .toContain("/api/fs/image/stream/retry_bad_ticket");
-    await expect.poll(() => image.complete).toBe(true);
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-    await expect(page.getByText("Image preview unavailable")).toBeVisible();
+      .element(page.getByText("Browser media access is unavailable").first())
+      .toBeVisible();
+    await expect.poll(() => image.currentSrc).toBe("");
     await expect(
       page.getByRole("button", { name: "Retry image preview" }),
     ).toBeVisible();

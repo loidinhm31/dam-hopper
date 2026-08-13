@@ -1498,14 +1498,31 @@ presented session's tickets only when the session belongs to the authenticated
 actor. It is safe to call when no usable media cookie exists; no ticket or
 session state is disclosed.
 
-The UI uses this endpoint during profile credential replacement and before
-logout. Remote revocation is bounded to five seconds; an unreachable server does
+The UI uses this endpoint during profile switching/deletion, profile credential
+replacement, and before logout, including when an open settings dialog outlives
+a concurrently deleted profile. Remote revocation is bounded to five seconds;
+an unreachable server does
 not block local cleanup/logout, so the old cookie and tickets can remain usable
 until their 30-minute idle or eight-hour absolute expiry. Conversely, if remote
 revocation succeeds but local token persistence or removal then fails, the UI
 intentionally does **not** recreate the remote session. Any restored or retained
 local credential must issue fresh media tickets (and a new media session) before
-streaming again.
+streaming again. The shared revoke helper never sends a Bearer token to an HTTP
+origin; remote media itself also requires HTTPS.
+
+The browser client accepts only `authorizationMode: "session-cookie-v1"`, resolves
+only an opaque stream path on the configured server origin, performs a credentialed
+`HEAD`, and exposes
+the URL to a native image/video element or download anchor only after a 2xx probe.
+Native elements use `crossOrigin="use-credentials"`. Probe failures expose fixed,
+redacted compatibility guidance and never trigger a media-body or Blob fallback.
+Installed Chromium 151 passed the 112-test full browser suite twice, including 11
+media-specific tests. The broader gate also passed 1,013 UI tests and 740 Rust tests;
+`pnpm build` and `pnpm lint` were clean. The same-origin browser fixture does not
+qualify real cross-site CHIPS behavior. Edge, Tauri/WebView, Safari, and Firefox
+remain unqualified and must not be advertised as supported. Session and ticket state
+is process-local, so multi-instance deployments require sticky routing to the
+issuing process until a shared store exists.
 
 ### Native Image Preview Capabilities
 
