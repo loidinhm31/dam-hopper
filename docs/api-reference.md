@@ -279,15 +279,27 @@ response remains compatible and is served from the monitor's cached projection.
 
 The snapshot also includes an additive `battery` object with `count`, nullable
 `capacityPercent`, nullable `status`, nullable `remainingEnergyWh`, nullable
-`instantaneousPowerW`, and `availability`. Status values are `charging`,
-`discharging`, `full`, `notCharging`, `unknown`, or `mixed`. On Linux, only
-`/sys/class/power_supply` entries whose `type` is `Battery` are counted;
-`energy_now` and `power_now` are read directly in sysfs micro-units and converted
-to Wh/W. For multiple batteries, totals are emitted only when every battery has
-the direct field, and capacity uses complete valid summed energy pairs.
-Malformed or unrecognized fields serialize as `null` and mark battery availability
-unavailable; permission, unsupported, and stale conditions remain explicit.
-Older clients can ignore this additive object.
+`instantaneousPowerW`, and `availability`. Current servers always serialize this
+section; clients must still treat the top-level field as optional for old-server
+compatibility. A missing measurement is serialized as `null`, never as a
+fabricated zero. Status values are `charging`, `discharging`, `full`,
+`notCharging`, `unknown`, or `mixed`; raw sysfs status strings are not exposed.
+
+On Linux, only `/sys/class/power_supply` entries whose `type` is exactly
+`Battery` are counted. `energy_now` and `power_now` are read directly in sysfs
+micro-units and converted to remaining energy in Wh and instantaneous power in
+W respectively. Charge, current, and voltage are never used to infer either
+value. For one battery, capacity uses its direct `capacity` percentage. For
+multiple batteries, each energy or power total is emitted only when every
+classified battery provides that direct field; capacity uses the ratio of
+complete summed `energy_now`/`energy_full` pairs and never averages percentages.
+
+Malformed or unrecognized fields are omitted/null and mark battery availability
+`temporarilyUnavailable` with a bounded detail code. Missing optional
+attributes can leave the section available with only the measurements the host
+reported. A missing power-supply tree or a tree with no classified batteries is
+`unsupported`; permission and stale conditions remain explicit. Older clients
+can ignore this additive object.
 
 The current UI is monitoring-only. It displays the snapshot, bounded alert
 history, and diagnostic evidence; it does not offer remediation controls. REST

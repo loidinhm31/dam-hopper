@@ -53,7 +53,8 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 ### Host Resource Battery and Energy Telemetry (2026-08-13)
 
 - **Phase 01 — [COMPLETED 2026-08-13 10:15:26 +07:00]**: additive v1 battery DTO, bounded Linux power-supply collector, truthful direct energy/power aggregation, degradation/stale handling, and focused Rust/API validation delivered and approved.
-- **Phases 02–03 — [PENDING]**: diagnosis UI presentation/compatibility, contract documentation, and repository release gates remain.
+- **Phase 02 — [COMPLETED 2026-08-13 11:08:43 +07:00]**: diagnosis battery/status, remaining-energy (Wh), and instantaneous-power (W) rows delivered with old-server absence tolerance, invalid-value omission, and focused/browser regressions.
+- **Phase 03 — [COMPLETED 2026-08-13 11:39:20 +07:00]**: API/frontend contract documentation, Rust/UI/browser/repository release gates, compatibility review, and architecture-drift review completed. Validation caveat: the `TAURI_SIGNING_PRIVATE_KEY` native signing gate was explicitly waived; signing configuration was not changed.
 
 ### Linux Host Resource Monitoring and Gated Remediation (2026-08-08)
 
