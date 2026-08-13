@@ -35,7 +35,7 @@ Add one aggregate `battery` section to the v1 snapshot. Read direct `capacity`, 
 | # | Phase | Status | Effort | Link |
 |---|---|---|---:|---|
 | 1 | Contract and Linux collector | Completed 2026-08-13 | 3.5h | [phase-01](./phase-01-contract-and-linux-collector.md) |
-| 2 | UI presentation and compatibility | Pending | 2h | [phase-02](./phase-02-ui-presentation-and-compatibility.md) |
+| 2 | UI presentation and compatibility | Completed 2026-08-13 11:08:43 +07:00 | 2h | [phase-02](./phase-02-ui-presentation-and-compatibility.md) |
 | 3 | Documentation and release gates | Pending | 1.5h | [phase-03](./phase-03-documentation-and-release-gates.md) |
 
 ## Dependencies

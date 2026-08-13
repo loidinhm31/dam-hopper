@@ -77,6 +77,161 @@ const snapshot: HostResourceSnapshotV1 = {
 };
 
 describe("HostResourceDiagnosis", () => {
+  it("renders complete battery telemetry with explicit units and mixed status", () => {
+    const markup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          battery: {
+            count: 2,
+            capacityPercent: 62.5,
+            status: "mixed",
+            remainingEnergyWh: 42.5,
+            instantaneousPowerW: 8.125,
+            availability,
+          },
+        }}
+        alerts={[]}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Battery"');
+    expect(markup).toContain("Batteries");
+    expect(markup).toContain("Mixed");
+    expect(markup).toContain("62.5%");
+    expect(markup).toContain("Remaining energy");
+    expect(markup).toContain("42.5 Wh");
+    expect(markup).toContain("Instantaneous power");
+    expect(markup).toContain("8.13 W");
+    expect(markup).not.toContain("current Wh");
+  });
+
+  it("shows only the trustworthy measurement when battery fields are partial", () => {
+    const energyMarkup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          battery: {
+            count: 1,
+            capacityPercent: null,
+            status: null,
+            remainingEnergyWh: 12.5,
+            instantaneousPowerW: null,
+            availability,
+          },
+        }}
+        alerts={[]}
+      />,
+    );
+    expect(energyMarkup).toContain("12.5 Wh");
+    expect(energyMarkup).not.toContain("Instantaneous power");
+    expect(energyMarkup).not.toContain("Capacity");
+
+    const powerMarkup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          battery: {
+            count: 1,
+            status: "charging",
+            remainingEnergyWh: null,
+            instantaneousPowerW: 3.25,
+            availability,
+          },
+        }}
+        alerts={[]}
+      />,
+    );
+    expect(powerMarkup).toContain("Charging");
+    expect(powerMarkup).toContain("3.25 W");
+    expect(powerMarkup).not.toContain("Remaining energy");
+  });
+
+  it("hides absent, unsupported, and empty battery sections", () => {
+    const oldServerMarkup = renderToStaticMarkup(
+      <HostResourceDiagnosis snapshot={snapshot} alerts={[]} />,
+    );
+    expect(oldServerMarkup).not.toContain('aria-label="Battery"');
+
+    const unsupportedMarkup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          battery: {
+            count: 1,
+            status: "full",
+            remainingEnergyWh: 10,
+            availability: { state: "unsupported", sampledAt: 1 },
+          },
+        }}
+        alerts={[]}
+      />,
+    );
+    expect(unsupportedMarkup).not.toContain('aria-label="Battery"');
+
+    const emptyMarkup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          battery: {
+            count: 0,
+            capacityPercent: null,
+            status: null,
+            remainingEnergyWh: null,
+            instantaneousPowerW: null,
+            availability,
+          },
+        }}
+        alerts={[]}
+      />,
+    );
+    expect(emptyMarkup).not.toContain('aria-label="Battery"');
+  });
+
+  it("keeps stale availability beside retained values and rejects invalid values", () => {
+    const markup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          battery: {
+            count: 1,
+            capacityPercent: 101,
+            status: "notCharging",
+            remainingEnergyWh: Number.NaN,
+            instantaneousPowerW: -1,
+            availability: { state: "stale", sampledAt: 1 },
+          },
+        }}
+        alerts={[]}
+      />,
+    );
+    expect(markup).toContain("Not charging");
+    expect(markup).toContain("Stale data");
+    expect(markup).not.toContain("101%");
+    expect(markup).not.toContain("NaN");
+    expect(markup).not.toContain("Infinity");
+    expect(markup).not.toContain("-1 W");
+
+    const degradedMarkup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          battery: {
+            count: 1,
+            remainingEnergyWh: 2,
+            availability: {
+              state: "temporarilyUnavailable",
+              sampledAt: 1,
+            },
+          },
+        }}
+        alerts={[]}
+      />,
+    );
+    expect(degradedMarkup).toContain("2 Wh");
+    expect(degradedMarkup).toContain("Temporarily unavailable");
+  });
+
   it("renders legacy temperatures and keeps storage collapsed by default", () => {
     const markup = renderToStaticMarkup(
       <HostResourceDiagnosis

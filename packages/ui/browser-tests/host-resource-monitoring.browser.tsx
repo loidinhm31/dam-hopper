@@ -14,6 +14,14 @@ const snapshot: HostResourceSnapshotV1 = {
   host: { hostname: "monitor-host", osName: "Fedora" },
   capabilities: { linuxDeepMetrics: availability },
   memory: { totalBytes: 1_024, availableBytes: 512, availability },
+  battery: {
+    count: 1,
+    capacityPercent: 75,
+    status: "discharging",
+    remainingEnergyWh: 12.5,
+    instantaneousPowerW: 3.25,
+    availability,
+  },
   pressure: { memory: { availability } },
   cgroups: [],
   processes: {
@@ -203,6 +211,11 @@ describe("host resource monitoring in Chromium", () => {
     const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
     expect(dialog?.textContent).toContain("Read-only monitoring and diagnosis");
     expect(dialog?.textContent).toContain("Operator guidance");
+    const battery = page.getByRole("region", { name: "Battery" });
+    await expect.element(battery).toHaveTextContent("Remaining energy");
+    await expect.element(battery).toHaveTextContent("12.5 Wh");
+    await expect.element(battery).toHaveTextContent("Instantaneous power");
+    await expect.element(battery).toHaveTextContent("3.25 W");
     expect(dialog?.textContent).not.toContain("password");
     expect(dialog?.textContent).not.toContain("Approve");
 
@@ -251,6 +264,33 @@ describe("host resource monitoring in Chromium", () => {
     expect(dialog?.textContent).toContain("75%");
     expect(dialog?.textContent).not.toContain("Memory available");
     expect(dialog?.textContent).not.toContain("Approve");
+  });
+
+  it("omits battery measurements the host did not report", async () => {
+    snapshotResult = {
+      data: {
+        ...snapshot,
+        battery: {
+          count: 1,
+          status: "charging",
+          remainingEnergyWh: 12.5,
+          instantaneousPowerW: null,
+          availability,
+        },
+      },
+      isLoading: false,
+      isError: false,
+    };
+    await act(async () => root.render(<HostResourcePopover />));
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Host resources: Memory pressure"]',
+    );
+    await act(async () => trigger?.click());
+
+    const battery = page.getByRole("region", { name: "Battery" });
+    await expect.element(battery).toHaveTextContent("12.5 Wh");
+    await expect.element(battery).not.toHaveTextContent("Instantaneous power");
   });
 
   it("reveals every disk with pointer and keyboard disclosure", async () => {
