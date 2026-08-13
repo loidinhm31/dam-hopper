@@ -772,8 +772,10 @@ pub struct PersistedSession {
 ### Explorer video playback and download (Phase 04 browser-host validation complete)
 
 Phase 1 delivered the authenticated, purpose-bound ticket boundary. Phase 2
-ships session-bound media: an opaque ticket URL is paired with an `HttpOnly`
-media-session cookie, so the stream endpoint is no longer capability-only. Phase
+ships session-bound media: an opaque ticket URL is paired with an HTTP-compatible,
+host-only `HttpOnly; SameSite=Lax; Path=/api/fs` media-session cookie without
+`Secure`, so the stream endpoint is no longer capability-only. Auth cookies remain
+`HttpOnly; SameSite=Strict`. Phase
 03 completes the browser-host `VideoPreview` integration. Phase 04 validates it
 with the repository Playwright/Vitest harness in installed Chromium 151 using a
 valid one-second VP8 WebM fixture, the real ticket client, and the native download
@@ -782,11 +784,14 @@ passed twice consecutively on Chromium 151. The broader gate also passed 1,013
 UI tests and 740 Rust tests; `pnpm build` and `pnpm lint` were clean. Checks cover the
 versioned session-cookie contract, credentialed `HEAD` before source exposure,
 `crossOrigin="use-credentials"`, playback/seek, direct anchor download, rejected
-probe retry, cleanup, and absence of `Blob`/object-URL conversion. This fixture is
-same-origin HTTP with only the transport assertion replaced; server/router tests
-separately own cookie, CORS, Range, and foreign/missing-session enforcement. It is
-not evidence for real cross-site CHIPS partitioning. Edge, Tauri/WebView, Safari,
-and Firefox remain unqualified.
+probe retry, cleanup, and absence of `Blob`/object-URL conversion. The fixture uses
+real same-origin HTTP cookie storage and native cookie sending, including missing or
+foreign-cookie `404` and DELETE clearing; it does not expose the HttpOnly cookie to
+JavaScript. Optional cross-origin HTTP/HTTPS CORS remains exact-origin only. Cross-site
+HTTP media is unsupported because `SameSite=Lax` cookies are not sent cross-site;
+cleartext HTTP still permits interception or modification of credentials, ticket URLs,
+actions, and media bytes. It is not evidence for real cross-site CHIPS partitioning.
+Edge, Tauri/WebView, Safari, and Firefox remain unqualified.
 Browser routing recognizes only the final, case-insensitive extensions `mp4`,
 `m4v`, `webm`, `ogv`, `ogg`, and `mov` (an extension/MIME hint, not codec proof);
 diff tabs retain their dedicated viewer.
@@ -826,8 +831,8 @@ ticket to one canonical project resource, one immutable purpose, issuance
 metadata, and the authenticated actor's media session. Tickets are never
 persisted into editor state, browser storage, diagnostics, or logs. Ticket and
 session idle expiry is 30 minutes and absolute expiry is eight hours. The stream
-must present the matching `damhopper-media-session` cookie (`HttpOnly`, `Secure`,
-`SameSite=None`, `Partitioned`, `Path=/api/fs`); ticket-only, foreign-session,
+must present the matching `damhopper-media-session` cookie (host-only, `HttpOnly`,
+`SameSite=Lax`, `Path=/api/fs`; no `Secure`); ticket-only, foreign-session,
 expired, and revoked requests return indistinguishable `404` responses. Idle TTL
 refreshes only after a fully validated stream response or ticket issuance, never
 past the absolute deadline. `DELETE /api/fs/media-session` requires Bearer
@@ -869,9 +874,10 @@ filesystem or ticket-store lock is held while streaming.
 
 The configured CORS layer covers GET/HEAD and preflight headers needed for browser
 range playback (`Range`, `If-Range`, and validators), and exposes range, length,
-disposition, validator, and cache headers to allowed origins. Authenticated browser
-deployments require an explicit allowlist of exact HTTPS origins; credentialed
-responses never reflect an arbitrary origin.
+disposition, validator, and cache headers to allowed origins. Authenticated browser deployments may configure an explicit allowlist of exact
+HTTP/HTTPS origins; credentialed responses never reflect an arbitrary origin. Cross-site
+HTTP media remains unsupported by browser cookie policy, and cleartext interception or
+modification remains a deployment risk.
 
 The browser host routes recognized video extensions to `VideoPreview` before
 generic binary or large-text tiering. The player requests a fresh playback
@@ -2005,7 +2011,7 @@ Test boundary: JSDOM wrapper and consumer tests verify the shared contract, port
 - Symbolic links are allowed but validated
 - Binary file detection prevents accidental text parsing
 
-**CORS:** Authenticated browser deployments require exact HTTPS origins through `--cors-origins`; empty, wildcard, HTTP, malformed, and ambiguous origins reject startup. Responses allow credentials only for listed origins and include `Vary: Origin`. Non-loopback authenticated binds require `--trusted-tls-proxy`, declaring trusted HTTPS termination before the HTTP listener; this is required for Secure partitioned media cookies. The declaration does not isolate the HTTP listener: operators must bind it to loopback or restrict it so only that proxy can reach it.
+**CORS:** Same-origin browser deployments leave CORS unset. Cross-origin deployments use exact HTTP/HTTPS origins through `--cors-origins`; empty/unset disables CORS, while wildcard, malformed, and ambiguous origins reject startup. Responses allow credentials only for listed origins and include `Vary: Origin`. Authenticated HTTP binds, including non-loopback binds, are supported without a TLS-proxy assertion. HTTP exposes Bearer/auth cookies, ticket URLs, API actions, and media bytes to interception or modification; use HTTPS or a trusted encrypted network when needed. Cross-site HTTP media is unsupported because `SameSite=Lax` cookies are not sent cross-site.
 
 ## Feature Gating: IDE Explorer
 

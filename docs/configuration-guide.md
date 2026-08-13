@@ -609,8 +609,7 @@ Edit `~/.config/dam-hopper/server.conf` to set:
 - `DAM_HOPPER_CONFIG`
 - `DAM_HOPPER_HOST`
 - `DAM_HOPPER_PORT`
-- `DAM_HOPPER_CORS_ORIGINS` (required for authenticated browser deployments)
-- `DAM_HOPPER_TRUSTED_TLS_PROXY=1` (required for authenticated non-loopback binds behind a TLS proxy)
+- `DAM_HOPPER_CORS_ORIGINS` (optional exact HTTP/HTTPS origins for cross-origin browser deployments)
 - `DAM_HOPPER_WORKSPACE` (legacy directory-discovery override, optional)
 
 Runtime files:
@@ -621,28 +620,28 @@ Runtime files:
 
 ## Cross-Origin Resource Sharing (CORS)
 
-Authenticated browser deployments require a comma-separated exact HTTPS
-allowlist via `--cors-origins` (or `DAM_HOPPER_CORS_ORIGINS`). Empty, wildcard,
-malformed, duplicate, HTTP, path, query, user-info, and fragment origins reject
-startup. The server returns credentialed CORS headers only for listed origins;
-it never reflects arbitrary origins.
+Same-origin browser deployments need no CORS configuration. For a separate
+frontend, use a comma-separated exact HTTP/HTTPS allowlist via `--cors-origins`
+(or `DAM_HOPPER_CORS_ORIGINS`). Empty/unset disables CORS; wildcard, malformed,
+duplicate, path, query, user-info, and fragment origins reject startup. The
+server returns credentialed CORS headers only for listed origins; it never
+reflects arbitrary origins.
 
 ```bash
 cargo run -- \
   --config /path/to/dam-hopper.toml \
-  --cors-origins "https://app.example,https://admin.example" \
-  --host 0.0.0.0 \
-  --trusted-tls-proxy
+  --cors-origins "http://app.example,https://admin.example" \
+  --host 0.0.0.0
 ```
 
-The server listener is HTTP. An authenticated non-loopback bind requires the
-explicit `--trusted-tls-proxy` declaration: the operator must terminate HTTPS
-at a trusted reverse proxy. This is required for Secure, partitioned media
-cookies. The flag is an operator assertion, not network isolation: bind port
-4800 to loopback when the proxy is local, or firewall it so only the trusted
-proxy can reach it. Never publish the backend HTTP port directly. No-auth
-development defaults to `https://localhost:5173`; local HTTP is unsupported for
-media-cookie flows. Tauri qualification is a later phase.
+Authenticated HTTP binds, including non-loopback binds, are supported. HTTP
+media uses host-only HttpOnly cookies (`SameSite=Lax` for media,
+`SameSite=Strict` for auth) and remains cookie-authorized. Cleartext exposes
+Bearer/auth cookies, ticket URLs, API actions, and media bytes to interception,
+replay, and modification; use HTTPS, a VPN/Tailscale network, or another trusted
+encrypted network when that risk is unacceptable. Cross-site HTTP media is not
+supported because `SameSite=Lax` cookies are not sent cross-site; use same-origin
+or schemefully same-site HTTP, or HTTPS for cross-site deployments.
 
 Use only origins and proxy topology you actually operate. Native remains a
 remote client; it still connects through saved server profiles and does not
