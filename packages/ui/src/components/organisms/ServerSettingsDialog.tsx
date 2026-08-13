@@ -604,7 +604,7 @@ export function ServerSettingsDialog({
             )}
             {urlSchemeValid && crossOrigin && (
               <p className="mt-1.5 text-xs text-yellow-400/80">
-                Cross-origin server — Bearer token required.
+                Separate-origin browser access unsupported; use the server UI origin.
               </p>
             )}
           </div>

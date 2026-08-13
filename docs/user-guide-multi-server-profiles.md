@@ -2,14 +2,9 @@
 
 ## Overview
 
-The **Multi-Server Profiles** feature (Phase 2) lets you manage and switch between multiple dam-hopper server configurations without restarting the application. This is useful for development workflows that involve:
+The **Multi-Server Profiles** feature (Phase 2) stores server profiles locally. Browser API/media access is same-origin only because the backend emits no CORS headers; packaged native browser transport ignores separate-origin profiles until a native transport exists. Use a profile when the app is served by that same server origin.
 
-- Local development server (usually `http://localhost:4800`)
-- Staging server (e.g., `https://staging.example.com`)
-- Production server (e.g., `https://damhopper.example.com`)
-- Team server at a different IP
-
-All profiles are **stored in your browser's localStorage** — no server involvement, instant switching, automatic migration from legacy config. HTTP profiles are supported, but cleartext exposes Bearer tokens, cookies, ticket URLs, API actions, and media bytes to interception or modification; use HTTPS or a trusted encrypted network when needed. Cross-site HTTP media is unsupported because `SameSite=Lax` cookies are not sent cross-site.
+HTTP profiles are supported, but cleartext exposes Bearer tokens, cookies, ticket URLs, API actions, and media bytes to interception or modification; use HTTPS or a trusted encrypted network when needed. Cross-site HTTP media is unsupported because `SameSite=Lax` cookies are not sent cross-site.
 
 ## Creating Your First Profile
 

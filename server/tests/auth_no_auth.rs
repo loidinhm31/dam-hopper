@@ -150,7 +150,7 @@ fn create_normal_auth_state(workspace_root: PathBuf) -> AppState {
 async fn test_no_auth_login_returns_dev_token() {
     let tmp = tempfile::tempdir().unwrap();
     let state = create_no_auth_state(tmp.path().to_path_buf());
-    let app = dam_hopper_server::api::build_router(state, vec![]);
+    let app = dam_hopper_server::api::build_router(state);
 
     // POST /api/auth/login with empty body (no credentials needed in dev mode)
     let request = Request::builder()
@@ -182,7 +182,7 @@ async fn test_no_auth_login_returns_dev_token() {
 async fn test_no_auth_status_shows_dev_mode() {
     let tmp = tempfile::tempdir().unwrap();
     let state = create_no_auth_state(tmp.path().to_path_buf());
-    let app = dam_hopper_server::api::build_router(state, vec![]);
+    let app = dam_hopper_server::api::build_router(state);
 
     // GET /api/auth/status without any token
     let request = Request::builder()
@@ -216,7 +216,7 @@ async fn test_no_auth_status_shows_dev_mode() {
 async fn test_no_auth_bypasses_middleware() {
     let tmp = tempfile::tempdir().unwrap();
     let state = create_no_auth_state(tmp.path().to_path_buf());
-    let app = dam_hopper_server::api::build_router(state, vec![]);
+    let app = dam_hopper_server::api::build_router(state);
 
     // GET /api/workspace without any authorization header
     // This is a protected route that normally requires auth
@@ -241,7 +241,7 @@ async fn test_no_auth_bypasses_middleware() {
 async fn test_no_auth_allows_diagnostics_export() {
     let tmp = tempfile::tempdir().unwrap();
     let state = create_no_auth_state(tmp.path().to_path_buf());
-    let app = dam_hopper_server::api::build_router(state, vec![]);
+    let app = dam_hopper_server::api::build_router(state);
 
     let request = Request::builder()
         .method("POST")
@@ -273,7 +273,7 @@ async fn test_no_auth_allows_diagnostics_export() {
 async fn test_normal_auth_requires_credentials() {
     let tmp = tempfile::tempdir().unwrap();
     let state = create_normal_auth_state(tmp.path().to_path_buf());
-    let app = dam_hopper_server::api::build_router(state, vec![]);
+    let app = dam_hopper_server::api::build_router(state);
 
     // POST /api/auth/login with empty credentials
     let request = Request::builder()
@@ -297,7 +297,7 @@ async fn test_normal_auth_requires_credentials() {
 async fn test_normal_auth_protects_routes() {
     let tmp = tempfile::tempdir().unwrap();
     let state = create_normal_auth_state(tmp.path().to_path_buf());
-    let app = dam_hopper_server::api::build_router(state, vec![]);
+    let app = dam_hopper_server::api::build_router(state);
 
     // GET /api/workspace without authorization
     let request = Request::builder()
@@ -319,7 +319,7 @@ async fn test_normal_auth_protects_routes() {
 async fn test_normal_auth_status_without_token() {
     let tmp = tempfile::tempdir().unwrap();
     let state = create_normal_auth_state(tmp.path().to_path_buf());
-    let app = dam_hopper_server::api::build_router(state, vec![]);
+    let app = dam_hopper_server::api::build_router(state);
 
     // GET /api/auth/status without token
     let request = Request::builder()
@@ -490,7 +490,7 @@ async fn test_no_auth_in_production_env_fails() {
 async fn test_no_auth_login_response_structure() {
     let tmp = tempfile::tempdir().unwrap();
     let state = create_no_auth_state(tmp.path().to_path_buf());
-    let app = dam_hopper_server::api::build_router(state, vec![]);
+    let app = dam_hopper_server::api::build_router(state);
 
     // POST /api/auth/login in dev mode
     let login_body = serde_json::json!({
@@ -538,7 +538,7 @@ async fn test_no_auth_login_response_structure() {
 async fn test_no_auth_status_response_structure() {
     let tmp = tempfile::tempdir().unwrap();
     let state = create_no_auth_state(tmp.path().to_path_buf());
-    let app = dam_hopper_server::api::build_router(state, vec![]);
+    let app = dam_hopper_server::api::build_router(state);
 
     let request = Request::builder()
         .uri("/api/auth/status")
@@ -580,7 +580,7 @@ async fn test_no_auth_status_response_structure() {
 async fn test_normal_auth_login_error_response_structure() {
     let tmp = tempfile::tempdir().unwrap();
     let state = create_normal_auth_state(tmp.path().to_path_buf());
-    let app = dam_hopper_server::api::build_router(state, vec![]);
+    let app = dam_hopper_server::api::build_router(state);
 
     // POST /api/auth/login without credentials (should return error response)
     let login_body = serde_json::json!({});

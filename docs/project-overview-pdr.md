@@ -172,7 +172,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 - Bearer token authentication (hex UUID)
 - Structured error responses
-- CORS configurable per deployment
+- Same-origin browser/API deployment; cross-origin browser clients unsupported
 - Content negotiation for binary vs. text responses
 - Diagnostics export from Settings > Maintenance with canonical frontend snapshot payload and capped terminal tails
 
@@ -195,10 +195,10 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Log auth failures without leaking tokens
 - Diagnostics exports include recent terminal output tails by default and must be reviewed before sharing
 - Media uses an HTTP-compatible host-only `HttpOnly; SameSite=Lax; Path=/api/fs` cookie; auth remains `HttpOnly; SameSite=Strict`, and ticket/session auth is preserved
-- CORS is optional; cross-origin browser deployments use exact configured HTTP/HTTPS origins, never arbitrary reflection
+- Backend emits no CORS headers or preflight behavior; browser media remains same-origin only
 - Cleartext HTTP permits interception or modification of Bearer/auth cookies, ticket URLs, actions, and media bytes; cross-site HTTP media is unsupported because `SameSite=Lax` cookies are not sent cross-site
-- Current automated native-media evidence is installed Chromium 151 only: 112 browser tests twice, including 11 media-specific tests; real cross-site CHIPS, Edge, Tauri/WebView, Safari, and Firefox remain unqualified
-- Qualification also passed 1,013 UI tests and 740 Rust tests; build and lint were clean
+- Current automated native-media evidence is installed Chromium 151 only: 116 browser tests, including 11 media-specific tests; real cross-site CHIPS, Edge, Tauri/WebView, Safari, and Firefox remain unqualified
+- Qualification also passed 1,018 UI tests and 691 Rust tests (one ignored performance test); build and lint were clean
 - Media session/ticket state is process-local; multi-instance deployments require sticky routing to the issuing process
 
 ### PR-007: Multi-Server Profile Management (Phase 2)

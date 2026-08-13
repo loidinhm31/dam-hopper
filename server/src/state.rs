@@ -168,8 +168,8 @@ impl AppState {
                 "\n⚠️  ═══════════════════════════════════════════════════════\n",
                 "⚠️  SECURITY WARNING: Authentication disabled!\n",
                 "⚠️  All API requests will bypass authentication checks.\n",
-                "⚠️  This mode is for LOCAL DEVELOPMENT ONLY.\n",
-                "⚠️  DO NOT use in production or with sensitive data.\n",
+                "⚠️  Use only on a trusted development network.\n",
+                "⚠️  DO NOT expose publicly or use with sensitive data.\n",
                 "⚠️  ═══════════════════════════════════════════════════════\n"
             ));
 
