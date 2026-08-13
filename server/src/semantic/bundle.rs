@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
@@ -18,7 +19,10 @@ use super::bundle_manifest::{
     BundleArchitecture, BundleDescriptor, BundleManifest, BundleOs, PublicBundleState,
 };
 
-pub const RELEASE_MANIFEST_SCHEMA_VERSION: u16 = 1;
+pub const RELEASE_MANIFEST_SCHEMA_VERSION: u16 = 2;
+const PAYLOAD_DIR: &str = "payload";
+const MAX_PAYLOAD_FILES: usize = 100_000;
+const MAX_PAYLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SIGNATURE_BYTES: usize = 4096;
 const MAX_DIGEST_BYTES: usize = 256;
@@ -27,6 +31,7 @@ const MAX_DIGEST_BYTES: usize = 256;
 pub struct BundleCommandSpec {
     executable_relative_path: String,
     args: Vec<String>,
+    typescript_server_path: Option<String>,
 }
 
 impl BundleCommandSpec {
@@ -42,7 +47,13 @@ impl BundleCommandSpec {
         Ok(Self {
             executable_relative_path,
             args,
+            typescript_server_path: None,
         })
+    }
+
+    pub(crate) fn with_typescript_server_path(mut self, path: impl Into<String>) -> Self {
+        self.typescript_server_path = Some(path.into());
+        self
     }
 }
 
@@ -54,6 +65,7 @@ pub struct VerifiedBundle {
     version: String,
     program: PathBuf,
     args: Vec<String>,
+    typescript_server_path: Option<PathBuf>,
 }
 
 impl VerifiedBundle {
@@ -80,6 +92,10 @@ impl VerifiedBundle {
     pub fn args(&self) -> &[String] {
         &self.args
     }
+
+    pub(crate) fn typescript_server_path(&self) -> Option<&Path> {
+        self.typescript_server_path.as_deref()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,6 +111,8 @@ pub struct BundleResolver {
     manifest: BundleManifest,
     commands: HashMap<String, BundleCommandSpec>,
     manifest_error: Option<super::bundle_manifest::BundleManifestError>,
+    /// Immutable bundles are verified once; subsequent availability checks are O(1).
+    payload_tree_cache: Arc<OnceLock<Result<String, BundleErrorKind>>>,
 }
 
 impl BundleResolver {
@@ -105,6 +123,7 @@ impl BundleResolver {
             manifest,
             commands: HashMap::new(),
             manifest_error,
+            payload_tree_cache: Arc::new(OnceLock::new()),
         }
     }
 
@@ -151,13 +170,8 @@ impl BundleResolver {
         {
             return Err(BundleError::ManifestDigestMismatch);
         }
-        let file: ReleaseManifestFile = match serde_json::from_slice(bytes) {
-            Ok(file) => file,
-            Err(_) => {
-                let text = std::str::from_utf8(bytes).map_err(|_| BundleError::InvalidManifest)?;
-                toml::from_str(text).map_err(|_| BundleError::InvalidManifest)?
-            }
-        };
+        let file: ReleaseManifestFile =
+            serde_json::from_slice(bytes).map_err(|_| BundleError::InvalidManifest)?;
         if file.schema_version != RELEASE_MANIFEST_SCHEMA_VERSION {
             return Err(BundleError::UnsupportedManifestSchema);
         }
@@ -252,7 +266,7 @@ impl BundleResolver {
         let state = if self.manifest_error.is_some() {
             PublicBundleState::BundleInvalid
         } else {
-            match self.verify_descriptor(descriptor) {
+            match self.verify_descriptor(descriptor, false) {
                 Ok(_) => PublicBundleState::Ready,
                 Err(BundleErrorKind::Unavailable) => PublicBundleState::BundleUnavailable,
                 Err(_) => PublicBundleState::BundleInvalid,
@@ -281,18 +295,26 @@ impl BundleResolver {
                 descriptor.descriptor_id == descriptor_id && descriptor.target == target
             })
             .ok_or(BundleError::BundleUnavailable)?;
-        self.verify_descriptor(descriptor)
+        // Availability is cached for cheap handshakes; a spawn must always
+        // rehash the complete payload so post-startup tampering is rejected.
+        self.verify_descriptor(descriptor, true)
             .map_err(BundleError::from)
     }
 
     fn verify_descriptor(
         &self,
         descriptor: &BundleDescriptor,
+        fresh_payload_verification: bool,
     ) -> Result<VerifiedBundle, BundleErrorKind> {
         let root = self
             .root
             .canonicalize()
             .map_err(|_| BundleErrorKind::Unavailable)?;
+        self.verify_payload_tree(
+            &root,
+            &descriptor.artifact.payload_tree_sha256,
+            fresh_payload_verification,
+        )?;
         let spec = self.commands.get(&descriptor.descriptor_id);
         let entrypoint = spec
             .map(|spec| spec.executable_relative_path.as_str())
@@ -320,47 +342,74 @@ impl BundleResolver {
         if !constant_time_hex_eq(&actual, &descriptor.artifact.sha256) {
             return Err(BundleErrorKind::ChecksumMismatch);
         }
+        let args = spec
+            .map(|spec| resolve_fixed_args(&root, &spec.args))
+            .transpose()?
+            .unwrap_or_default();
+        let typescript_server_path = spec
+            .and_then(|spec| spec.typescript_server_path.as_deref())
+            .map(|path| resolve_fixed_path(&root, path))
+            .transpose()?;
         Ok(VerifiedBundle {
             descriptor_id: descriptor.descriptor_id.clone(),
             runtime_id: descriptor.runtime_id.clone(),
             language: descriptor.language,
             version: descriptor.version.clone(),
             program,
-            args: spec.map(|spec| spec.args.clone()).unwrap_or_default(),
+            args,
+            typescript_server_path,
         })
     }
-}
 
-impl BundleTarget {
-    pub const fn current() -> Self {
-        Self {
-            os: current_os(),
-            architecture: current_architecture(),
+    fn verify_payload_tree(
+        &self,
+        root: &Path,
+        expected_sha256: &str,
+        fresh: bool,
+    ) -> Result<(), BundleErrorKind> {
+        let payload_root = root.join(PAYLOAD_DIR);
+        let actual = if fresh {
+            hash_payload_tree(&payload_root)?
+        } else {
+            self.payload_tree_cache
+                .get_or_init(|| hash_payload_tree(&payload_root))
+                .clone()?
+        };
+        if constant_time_hex_eq(&actual, expected_sha256) {
+            Ok(())
+        } else {
+            Err(BundleErrorKind::PayloadTreeMismatch)
         }
     }
 }
 
-const fn current_os() -> BundleOs {
-    #[cfg(target_os = "windows")]
-    {
-        return BundleOs::Windows;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        return BundleOs::Macos;
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        BundleOs::Linux
+impl BundleTarget {
+    pub const fn current() -> Option<Self> {
+        match (current_os(), current_architecture()) {
+            (Some(os), Some(architecture)) => Some(Self { os, architecture }),
+            _ => None,
+        }
     }
 }
 
-const fn current_architecture() -> BundleArchitecture {
-    #[cfg(target_arch = "aarch64")]
-    {
-        return BundleArchitecture::Aarch64;
-    }
-    BundleArchitecture::X86_64
+#[cfg(target_os = "linux")]
+const fn current_os() -> Option<BundleOs> {
+    Some(BundleOs::Linux)
+}
+
+#[cfg(not(target_os = "linux"))]
+const fn current_os() -> Option<BundleOs> {
+    None
+}
+
+#[cfg(target_arch = "x86_64")]
+const fn current_architecture() -> Option<BundleArchitecture> {
+    Some(BundleArchitecture::X86_64)
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+const fn current_architecture() -> Option<BundleArchitecture> {
+    None
 }
 
 #[derive(Debug, Deserialize)]
@@ -382,6 +431,34 @@ fn read_bounded_file(path: &Path, limit: usize) -> Result<Vec<u8>, BundleError> 
     Ok(bytes)
 }
 
+fn resolve_fixed_args(root: &Path, args: &[String]) -> Result<Vec<String>, BundleErrorKind> {
+    args.iter()
+        .map(|arg| {
+            if !arg.starts_with("payload/") {
+                return Ok(arg.clone());
+            }
+            resolve_fixed_path(root, arg).and_then(|path| {
+                path.into_os_string()
+                    .into_string()
+                    .map_err(|_| BundleErrorKind::InvalidCommandSpec)
+            })
+        })
+        .collect()
+}
+
+fn resolve_fixed_path(root: &Path, value: &str) -> Result<PathBuf, BundleErrorKind> {
+    validate_relative_entrypoint(value).map_err(|_| BundleErrorKind::InvalidCommandSpec)?;
+    let path = root
+        .join(value)
+        .canonicalize()
+        .map_err(|_| BundleErrorKind::Unavailable)?;
+    let metadata = std::fs::metadata(&path).map_err(|_| BundleErrorKind::Unavailable)?;
+    if !path.starts_with(root) || !metadata.is_file() {
+        return Err(BundleErrorKind::InvalidCommandSpec);
+    }
+    Ok(path)
+}
+
 fn validate_relative_entrypoint(value: &str) -> Result<(), BundleError> {
     let path = Path::new(value);
     if value.trim().is_empty()
@@ -395,6 +472,74 @@ fn validate_relative_entrypoint(value: &str) -> Result<(), BundleError> {
         || value.contains('\0')
     {
         return Err(BundleError::InvalidCommandSpec);
+    }
+    Ok(())
+}
+
+pub(crate) fn hash_payload_tree(payload_root: &Path) -> Result<String, BundleErrorKind> {
+    let metadata =
+        std::fs::symlink_metadata(payload_root).map_err(|_| BundleErrorKind::Unavailable)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(BundleErrorKind::PayloadTreeMismatch);
+    }
+    let mut files = Vec::new();
+    collect_payload_files(payload_root, payload_root, &mut files)?;
+    if files.is_empty() || files.len() > MAX_PAYLOAD_FILES {
+        return Err(BundleErrorKind::PayloadTreeMismatch);
+    }
+    let payload_bytes = files.iter().try_fold(0u64, |total, path| {
+        let size = std::fs::metadata(path)
+            .map_err(|_| BundleErrorKind::Unavailable)?
+            .len();
+        total
+            .checked_add(size)
+            .filter(|size| *size <= MAX_PAYLOAD_BYTES)
+            .ok_or(BundleErrorKind::PayloadTreeMismatch)
+    })?;
+    if payload_bytes > MAX_PAYLOAD_BYTES {
+        return Err(BundleErrorKind::PayloadTreeMismatch);
+    }
+    files.sort();
+    let mut digest = Sha256::new();
+    for path in files {
+        let relative = path
+            .strip_prefix(payload_root)
+            .map_err(|_| BundleErrorKind::PayloadTreeMismatch)?;
+        let relative = relative
+            .to_str()
+            .ok_or(BundleErrorKind::PayloadTreeMismatch)?;
+        let file_digest = hash_file(&path).map_err(|_| BundleErrorKind::Unavailable)?;
+        digest.update(relative.as_bytes());
+        digest.update([0]);
+        digest.update(file_digest.as_bytes());
+        digest.update([b'\n']);
+    }
+    Ok(hex::encode(digest.finalize()))
+}
+
+fn collect_payload_files(
+    root: &Path,
+    current: &Path,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), BundleErrorKind> {
+    for entry in std::fs::read_dir(current).map_err(|_| BundleErrorKind::Unavailable)? {
+        let entry = entry.map_err(|_| BundleErrorKind::Unavailable)?;
+        let path = entry.path();
+        let metadata =
+            std::fs::symlink_metadata(&path).map_err(|_| BundleErrorKind::Unavailable)?;
+        if metadata.file_type().is_symlink() {
+            return Err(BundleErrorKind::PayloadTreeMismatch);
+        }
+        if metadata.is_dir() {
+            collect_payload_files(root, &path, files)?;
+        } else if metadata.is_file() {
+            if !path.starts_with(root) {
+                return Err(BundleErrorKind::PayloadTreeMismatch);
+            }
+            files.push(path);
+        } else {
+            return Err(BundleErrorKind::PayloadTreeMismatch);
+        }
     }
     Ok(())
 }
@@ -426,24 +571,25 @@ fn constant_time_hex_eq(left: &str, right: &str) -> bool {
     left.as_bytes().ct_eq(right.as_bytes()).into()
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, target_os = "linux", target_arch = "x86_64"))]
 fn is_executable(metadata: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt;
     metadata.permissions().mode() & 0o111 != 0
 }
 
-#[cfg(not(unix))]
+#[cfg(not(all(unix, target_os = "linux", target_arch = "x86_64")))]
 fn is_executable(_: &std::fs::Metadata) -> bool {
     true
 }
 
 #[derive(Clone, Debug)]
-enum BundleErrorKind {
+pub(crate) enum BundleErrorKind {
     Unavailable,
     InvalidCommandSpec,
     SizeOrTypeMismatch,
     NotExecutable,
     ChecksumMismatch,
+    PayloadTreeMismatch,
 }
 
 #[derive(Debug, Error)]
@@ -471,7 +617,8 @@ impl From<BundleErrorKind> for BundleError {
             BundleErrorKind::InvalidCommandSpec
             | BundleErrorKind::SizeOrTypeMismatch
             | BundleErrorKind::NotExecutable
-            | BundleErrorKind::ChecksumMismatch => Self::InvalidCommandSpec,
+            | BundleErrorKind::ChecksumMismatch
+            | BundleErrorKind::PayloadTreeMismatch => Self::InvalidCommandSpec,
         }
     }
 }
@@ -484,7 +631,7 @@ mod tests {
 
     use crate::semantic::bundle_manifest::BundleArtifact;
 
-    fn descriptor(digest: &str) -> BundleDescriptor {
+    fn descriptor(digest: &str, payload_tree_sha256: String) -> BundleDescriptor {
         BundleDescriptor {
             descriptor_id: "rust-analyzer".into(),
             runtime_id: "native".into(),
@@ -500,39 +647,59 @@ mod tests {
                 sbom_component: "rust-analyzer".into(),
                 compressed_size_bytes: 1,
                 uncompressed_size_bytes: 4096,
+                payload_tree_sha256,
             },
         }
     }
 
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[tokio::test]
     async fn resolver_requires_checksum_and_executable_mode() {
         let dir = tempfile::tempdir().unwrap();
-        let program = dir.path().join("rust-analyzer");
+        let payload = dir.path().join(PAYLOAD_DIR);
+        std::fs::create_dir(&payload).unwrap();
+        let program = payload.join("rust-analyzer");
         let mut file = std::fs::File::create(&program).unwrap();
         file.write_all(b"fixture").unwrap();
         let digest = hex_digest(b"fixture");
+        let payload_tree_sha256 = hash_payload_tree(&payload).unwrap();
         let manifest = BundleManifest {
-            descriptors: vec![descriptor(&digest)],
+            descriptors: vec![descriptor(&digest, payload_tree_sha256)],
         };
-        let resolver = BundleResolver::new(dir.path(), manifest);
-        #[cfg(unix)]
+        let resolver = BundleResolver::new(dir.path(), manifest).with_command_spec(
+            "rust-analyzer",
+            BundleCommandSpec::new("payload/rust-analyzer", vec![]).unwrap(),
+        );
         assert!(matches!(
-            resolver.resolve("rust-analyzer", BundleTarget::current()),
+            resolver.resolve(
+                "rust-analyzer",
+                BundleTarget::current().expect("supported test target")
+            ),
             Err(BundleError::InvalidCommandSpec)
         ));
-        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
             assert!(resolver
-                .resolve("rust-analyzer", BundleTarget::current())
+                .resolve(
+                    "rust-analyzer",
+                    BundleTarget::current().expect("supported test target")
+                )
                 .is_ok());
+            std::fs::write(&program, b"tampered").unwrap();
+            assert!(matches!(
+                resolver.resolve(
+                    "rust-analyzer",
+                    BundleTarget::current().expect("supported test target")
+                ),
+                Err(BundleError::InvalidCommandSpec)
+            ));
         }
     }
 
     #[test]
     fn resolver_rejects_manifest_digest_mismatch_without_path_fallback() {
-        let raw = br#"{"schema_version":1,"descriptors":[]}"#;
+        let raw = br#"{"schema_version":2,"descriptors":[]}"#;
         assert!(matches!(
             BundleResolver::from_signed_manifest_bytes(
                 tempfile::tempdir().unwrap().path(),
@@ -549,7 +716,7 @@ mod tests {
     fn resolver_loads_fixed_signed_manifest_files_without_fallback() {
         let dir = tempfile::tempdir().unwrap();
         let raw = br#"{
-            "schema_version": 1,
+            "schema_version": 2,
             "descriptors": [{
                 "descriptor_id": "rust-analyzer",
                 "runtime_id": "native",
@@ -561,7 +728,8 @@ mod tests {
                     "license_id": "MIT",
                     "sbom_component": "rust-analyzer",
                     "compressed_size_bytes": 1,
-                    "uncompressed_size_bytes": 2
+                    "uncompressed_size_bytes": 2,
+                    "payload_tree_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                 }
             }]
         }"#;
@@ -593,10 +761,11 @@ mod tests {
         ));
     }
 
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn resolver_accepts_only_a_signed_current_schema_manifest() {
         let raw = br#"{
-            "schema_version": 1,
+            "schema_version": 2,
             "descriptors": [{
                 "descriptor_id": "rust-analyzer",
                 "runtime_id": "native",
@@ -608,7 +777,8 @@ mod tests {
                     "license_id": "MIT",
                     "sbom_component": "rust-analyzer",
                     "compressed_size_bytes": 1,
-                    "uncompressed_size_bytes": 2
+                    "uncompressed_size_bytes": 2,
+                    "payload_tree_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                 }
             }]
         }"#;
@@ -624,7 +794,10 @@ mod tests {
         )
         .unwrap();
         assert!(resolver
-            .descriptor_fingerprint("rust-analyzer", BundleTarget::current())
+            .descriptor_fingerprint(
+                "rust-analyzer",
+                BundleTarget::current().expect("supported test target"),
+            )
             .is_some());
 
         let mut tampered = raw.to_vec();
@@ -638,6 +811,45 @@ mod tests {
                 signing_key.verifying_key().as_bytes(),
             ),
             Err(BundleError::InvalidManifestSignature)
+        ));
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn resolve_rechecks_non_entrypoint_payload_after_cached_availability() {
+        let dir = tempfile::tempdir().unwrap();
+        let payload = dir.path().join(PAYLOAD_DIR);
+        std::fs::create_dir_all(payload.join("nested")).unwrap();
+        let program = payload.join("rust-analyzer");
+        std::fs::write(&program, b"fixture").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let dependency = payload.join("nested/dependency");
+        std::fs::write(&dependency, b"safe").unwrap();
+        let tree = hash_payload_tree(&payload).unwrap();
+        let digest = hash_file(&program).unwrap();
+        let resolver = BundleResolver::new(
+            dir.path(),
+            BundleManifest {
+                descriptors: vec![descriptor(&digest, tree)],
+            },
+        )
+        .with_command_spec(
+            "rust-analyzer",
+            BundleCommandSpec::new("payload/rust-analyzer", vec![]).unwrap(),
+        );
+        let target = BundleTarget::current().expect("supported test target");
+        assert_eq!(
+            resolver.availability("rust-analyzer", target).state,
+            PublicBundleState::Ready
+        );
+        std::fs::write(dependency, b"tampered").unwrap();
+        assert!(matches!(
+            resolver.resolve("rust-analyzer", target),
+            Err(BundleError::InvalidCommandSpec)
         ));
     }
 }

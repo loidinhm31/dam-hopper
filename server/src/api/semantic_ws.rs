@@ -31,6 +31,7 @@ use crate::state::AppState;
 
 const OUTBOUND_CAPACITY: usize = 64;
 const MAX_NAVIGATION_TASKS: usize = 64;
+const MAX_NAVIGATION_TASK_AGE_MS: u64 = 5_000;
 const LANGUAGES: [SemanticLanguage; 4] = [
     SemanticLanguage::Rust,
     SemanticLanguage::Typescript,
@@ -98,7 +99,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, actor_subject: String
         out_tx.clone(),
         Arc::clone(&shutdown_signal),
     ));
-    let mut navigation_tasks: Vec<JoinHandle<()>> = Vec::new();
+    let mut navigation_tasks: Vec<(JoinHandle<()>, std::time::Instant)> = Vec::new();
 
     loop {
         let message = tokio::select! {
@@ -188,7 +189,14 @@ async fn handle_socket(socket: WebSocket, state: AppState, actor_subject: String
                 handle_close(&state, &connection, uri, document_version, &out_tx).await;
             }
             SemanticClientMessage::Navigate(request) => {
-                navigation_tasks.retain(|task| !task.is_finished());
+                navigation_tasks.retain_mut(|(task, started)| {
+                    if !task.is_finished()
+                        && started.elapsed().as_millis() > MAX_NAVIGATION_TASK_AGE_MS as u128
+                    {
+                        task.abort();
+                    }
+                    !task.is_finished()
+                });
                 if navigation_tasks.len() >= MAX_NAVIGATION_TASKS {
                     let _ = send_message(
                         &out_tx,
@@ -197,10 +205,11 @@ async fn handle_socket(socket: WebSocket, state: AppState, actor_subject: String
                     .await;
                     continue;
                 }
-                navigation_tasks.push(
+                navigation_tasks.push((
                     spawn_navigation(state.clone(), connection.clone(), request, out_tx.clone())
                         .await,
-                );
+                    std::time::Instant::now(),
+                ));
             }
             SemanticClientMessage::Cancel(cancel) => {
                 let _ = connection
@@ -216,7 +225,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, actor_subject: String
     connection.close().await;
     event_task.abort();
     let _ = event_task.await;
-    for task in navigation_tasks {
+    for (task, _) in navigation_tasks {
         task.abort();
         let _ = task.await;
     }

@@ -113,8 +113,18 @@ async fn next_json(
     }
 }
 
+fn fixture_payload_tree_digest(path: &std::path::Path) -> String {
+    let file_digest = hex::encode(sha2::Sha256::digest(std::fs::read(path).unwrap()));
+    hex::encode(sha2::Sha256::digest(format!(
+        "rust-analyzer\0{file_digest}\n"
+    )))
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn fixture_supervisor(tmp: &TempDir) -> Arc<SemanticSupervisor> {
-    let script = tmp.path().join("rust-analyzer");
+    let payload = tmp.path().join("payload");
+    std::fs::create_dir(&payload).unwrap();
+    let script = payload.join("rust-analyzer");
     let body = r#"#!/bin/sh
 while :; do
   length=""
@@ -138,7 +148,6 @@ while :; do
 done
 "#;
     std::fs::write(&script, body).unwrap();
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -160,12 +169,13 @@ done
                 sbom_component: "test-rust-analyzer".into(),
                 compressed_size_bytes: 1,
                 uncompressed_size_bytes: body.len() as u64 + 1024,
+                payload_tree_sha256: fixture_payload_tree_digest(&script),
             },
         }],
     };
     let resolver = BundleResolver::for_test(tmp.path(), manifest).with_test_command_spec(
         "rust-analyzer",
-        BundleCommandSpec::new("rust-analyzer", Vec::new()).unwrap(),
+        BundleCommandSpec::new("payload/rust-analyzer", Vec::new()).unwrap(),
     );
     Arc::new(SemanticSupervisor::new(
         SemanticRegistry::new(resolver),
@@ -175,7 +185,7 @@ done
     ))
 }
 
-#[cfg(unix)]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[tokio::test]
 async fn semantic_ws_syncs_unsaved_documents_and_returns_safe_navigation() {
     let tmp = tempfile::tempdir().unwrap();
@@ -251,6 +261,7 @@ async fn semantic_ws_syncs_unsaved_documents_and_returns_safe_navigation() {
     supervisor.shutdown().await;
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[tokio::test]
 async fn semantic_trust_routes_persist_and_revoke_without_host_fields() {
     let tmp = tempfile::tempdir().unwrap();
@@ -359,6 +370,7 @@ async fn semantic_trust_routes_persist_and_revoke_without_host_fields() {
     supervisor.shutdown().await;
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[tokio::test]
 async fn semantic_ws_rejects_unauthenticated_upgrade() {
     let tmp = tempfile::tempdir().unwrap();
@@ -373,24 +385,12 @@ async fn semantic_ws_rejects_unauthenticated_upgrade() {
     supervisor.shutdown().await;
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn current_os() -> BundleOs {
     BundleOs::Linux
 }
-#[cfg(target_os = "macos")]
-fn current_os() -> BundleOs {
-    BundleOs::Macos
-}
-#[cfg(target_os = "windows")]
-fn current_os() -> BundleOs {
-    BundleOs::Windows
-}
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn current_architecture() -> BundleArchitecture {
     BundleArchitecture::X86_64
-}
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec"))]
-fn current_architecture() -> BundleArchitecture {
-    BundleArchitecture::Aarch64
 }

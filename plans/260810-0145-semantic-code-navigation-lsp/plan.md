@@ -1,7 +1,7 @@
 ---
 title: "Semantic Code Navigation via LSP"
 description: "Add bounded, authenticated semantic navigation with bundled language-server runtimes and project trust."
-status: in-progress
+status: complete
 priority: P2
 effort: 148h
 branch: main
@@ -33,7 +33,7 @@ Deliver VS Code-like definition, implementation, and reference navigation for Ru
 | 2 | Bundled registry, trust store, supervisor, and lifecycle | DONE — 2026-08-11 22:36:24 +07:00 | 36h | [phase-02](./phase-02-registry-supervisor-and-resource-lifecycle.md) |
 | 3 | Trust-aware semantic WebSocket, sync, and navigation | Completed — review approved 9.5/10 | 24h | [phase-03](./phase-03-semantic-websocket-document-sync-navigation.md) |
 | 4 | Monaco providers, trust UX, and delayed prewarm | DONE — 2026-08-12 | 24h | [phase-04](./phase-04-monaco-providers-and-navigation-ux.md) |
-| 5 | Rust + JS/TS release, bundle verification, and rollout gates | Pending | 28h | [phase-05](./phase-05-language-rollout-performance-release-gates.md) |
+| 5 | Rust + JS/TS release, bundle verification, and rollout gates | DONE — 2026-08-13 18:28 +07:00 (protected CI/package gates waived as unavailable) | 28h | [phase-05](./phase-05-language-rollout-performance-release-gates.md) |
 | 6 | Java enablement and qualification gate | Pending | 24h | [phase-06](./phase-06-java-enablement-and-qualification-gate.md) |
 
 ## Dependencies

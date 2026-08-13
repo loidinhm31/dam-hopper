@@ -10,10 +10,12 @@ on:
   workflow_dispatch: # Allows manual triggering
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-desktop:
+    permissions:
+      contents: ${{ (github.event_name != 'pull_request' && 'write') || 'read' }}
     strategy:
       fail-fast: false
       matrix:
@@ -105,17 +107,19 @@ jobs:
 
   build-server:
     name: Build server and signed semantic bundle package (${{ matrix.platform.name }})
+    if: github.event_name != 'pull_request'
     needs: build-desktop
+    environment: semantic-release
     strategy:
       fail-fast: false
       matrix:
         platform:
           - name: linux-x86_64
             os: ubuntu-latest
-            source: linux-x86_64
+            semantic_bundle: true
           - name: windows-x86_64
             os: windows-latest
-            source: windows-x86_64
+            semantic_bundle: false
     runs-on: ${{ matrix.platform.os }}
     env:
       # The binary only trusts bundles signed by this release public key. If
@@ -128,16 +132,65 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Python for deterministic archive extraction
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Build server
         run: cd server && cargo build --release --features vendored
 
-      - name: Stage signed semantic bundle when supplied
-        if: hashFiles(format('release/semantic-bundles/{0}/manifest.json', matrix.platform.source)) != ''
+      - name: Write ephemeral semantic signing key
+        if: matrix.platform.semantic_bundle && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/'))
+        shell: bash
+        env:
+          SIGNING_KEY: ${{ secrets.DAM_HOPPER_SEMANTIC_BUNDLE_SIGNING_KEY_PEM }}
+        run: |
+          test -n "$SIGNING_KEY"
+          umask 077
+          printf '%s' "$SIGNING_KEY" > "$RUNNER_TEMP/semantic-bundle-key.pem"
+
+      - name: Build signed Linux semantic bundle from pinned inputs
+        if: matrix.platform.semantic_bundle && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/'))
+        shell: bash
+        env:
+          DAM_HOPPER_SEMANTIC_BUNDLE_SIGNING_KEY_FILE: ${{ runner.temp }}/semantic-bundle-key.pem
+        run: |
+          scripts/prepare-semantic-bundle-input.sh release/semantic-bundle-input.lock.json "$RUNNER_TEMP/semantic-bundle-input"
+          scripts/build-semantic-bundle-release.sh "$RUNNER_TEMP/semantic-bundle-input" release/semantic-bundles/linux-x86_64
+
+      - name: Require signed Linux semantic bundle
+        if: matrix.platform.semantic_bundle && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/'))
+        shell: bash
+        run: test -f release/semantic-bundles/linux-x86_64/manifest.json
+
+      - name: Stage signed Linux semantic bundle
+        if: matrix.platform.semantic_bundle && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/'))
         shell: bash
         run: |
           BIN_PATH="$(find server -type f -name 'dam-hopper-server*' -path '*/release/*' -print -quit)"
           test -n "$BIN_PATH"
-          bash scripts/prepare-semantic-bundle-release.sh "release/semantic-bundles/${{ matrix.platform.source }}" "$(dirname "$BIN_PATH")/semantic-bundles"
+          bash scripts/prepare-semantic-bundle-release.sh release/semantic-bundles/linux-x86_64 "$(dirname "$BIN_PATH")/semantic-bundles"
+
+      - name: Verify staged Linux semantic runtimes
+        if: matrix.platform.semantic_bundle && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/'))
+        shell: bash
+        run: |
+          BIN_PATH="$(find server -type f -name 'dam-hopper-server*' -path '*/release/*' -print -quit)"
+          BUNDLE_ROOT="$(dirname "$BIN_PATH")/semantic-bundles/payload"
+          "$BUNDLE_ROOT/rust-analyzer" --version
+          "$BUNDLE_ROOT/node/bin/node" "$BUNDLE_ROOT/typescript-language-server/lib/cli.mjs" --version
+          scripts/test-semantic-runtime-initialization.sh "$BUNDLE_ROOT"
+          scripts/test-semantic-runtime-slo.sh "$BUNDLE_ROOT"
+
+      - name: Run semantic transport qualification tests
+        if: matrix.platform.semantic_bundle && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/'))
+        run: cd server && cargo test --test ws_semantic_navigation --features vendored
+
+      - name: Remove ephemeral semantic signing key
+        if: always() && matrix.platform.semantic_bundle
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/semantic-bundle-key.pem"
 
       - name: Upload server release package
         uses: actions/upload-artifact@v4

@@ -1,7 +1,7 @@
 //! Controlled stdio LSP session primitives.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -118,6 +118,7 @@ pub struct LspSession {
     pub key: SessionKey,
     pub policy: InitializationPolicy,
     language: SemanticLanguage,
+    typescript_server_path: Option<PathBuf>,
     project_root: PathBuf,
     child: Arc<Mutex<Option<Child>>>,
     stdin: Arc<Mutex<ChildStdin>>,
@@ -188,6 +189,7 @@ impl LspSession {
             key,
             policy,
             language: bundle.language(),
+            typescript_server_path: bundle.typescript_server_path().map(PathBuf::from),
             project_root,
             child: Arc::new(Mutex::new(Some(child))),
             stdin: Arc::new(Mutex::new(stdin)),
@@ -221,7 +223,11 @@ impl LspSession {
     }
 
     async fn initialize(&self) -> Result<(), SessionError> {
-        let initialize = initialization_message(self.policy, self.language);
+        let initialize = initialization_message(
+            self.policy,
+            self.language,
+            self.typescript_server_path.as_deref(),
+        );
         let frame = encode_frame(&initialize).map_err(|_| SessionError::FrameTooLarge)?;
         self.write_request_frame(&frame)
             .await
@@ -722,7 +728,11 @@ fn language_id(language: SemanticLanguage) -> &'static str {
     }
 }
 
-fn initialization_message(policy: InitializationPolicy, language: SemanticLanguage) -> Value {
+fn initialization_message(
+    policy: InitializationPolicy,
+    language: SemanticLanguage,
+    typescript_server_path: Option<&Path>,
+) -> Value {
     let options = policy.options();
     let initialization_options = match language {
         SemanticLanguage::Rust => serde_json::json!({
@@ -731,11 +741,19 @@ fn initialization_message(policy: InitializationPolicy, language: SemanticLangua
             },
             "procMacro": {"enable": options.allow_build_tooling}
         }),
-        SemanticLanguage::Typescript | SemanticLanguage::Javascript => serde_json::json!({
-            "plugins": [],
-            "allowLocalPluginLoads": options.allow_workspace_plugins,
-            "disableAutomaticTypingAcquisition": true
-        }),
+        SemanticLanguage::Typescript | SemanticLanguage::Javascript => {
+            let mut options = serde_json::json!({
+                "plugins": [],
+                "allowLocalPluginLoads": options.allow_workspace_plugins,
+                "disableAutomaticTypingAcquisition": true
+            });
+            if let Some(path) = typescript_server_path {
+                options["tsserver"] = serde_json::json!({
+                    "path": path.to_string_lossy()
+                });
+            }
+            options
+        }
         SemanticLanguage::Java => serde_json::json!({
             "configuration": {"updateBuildConfiguration": "disabled"},
             "import": {
@@ -1002,9 +1020,13 @@ mod tests {
 
     #[test]
     fn initialization_policy_uses_fixed_trusted_deltas() {
-        let restricted =
-            initialization_message(InitializationPolicy::Restricted, SemanticLanguage::Rust);
-        let trusted = initialization_message(InitializationPolicy::Trusted, SemanticLanguage::Rust);
+        let restricted = initialization_message(
+            InitializationPolicy::Restricted,
+            SemanticLanguage::Rust,
+            None,
+        );
+        let trusted =
+            initialization_message(InitializationPolicy::Trusted, SemanticLanguage::Rust, None);
         assert_eq!(
             restricted["params"]["damHopperPolicy"]["allowWorkspacePlugins"],
             false
@@ -1021,6 +1043,7 @@ mod tests {
         let typescript = initialization_message(
             InitializationPolicy::Restricted,
             SemanticLanguage::Typescript,
+            None,
         );
         assert_eq!(
             typescript["params"]["initializationOptions"]["plugins"],
@@ -1029,6 +1052,15 @@ mod tests {
         assert_eq!(
             typescript["params"]["initializationOptions"]["disableAutomaticTypingAcquisition"],
             true
+        );
+        let bundled_typescript = initialization_message(
+            InitializationPolicy::Restricted,
+            SemanticLanguage::Typescript,
+            Some(Path::new("/bundle/payload/typescript/tsserver.js")),
+        );
+        assert_eq!(
+            bundled_typescript["params"]["initializationOptions"]["tsserver"]["path"],
+            "/bundle/payload/typescript/tsserver.js"
         );
     }
 

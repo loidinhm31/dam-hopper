@@ -19,9 +19,16 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: server
+
+      - name: Run semantic bundle release-script tests
+        run: scripts/test-semantic-bundle-release.sh
 
       - name: Run tests
         run: cd server && cargo test --features vendored
@@ -72,8 +79,6 @@ jobs:
     name: Build (windows-x86_64)
     runs-on: windows-latest
     needs: test
-    env:
-      DAM_HOPPER_SEMANTIC_BUNDLE_PUBLIC_KEY: ${{ secrets.DAM_HOPPER_SEMANTIC_BUNDLE_PUBLIC_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -91,26 +96,10 @@ jobs:
       - name: Build release binary
         run: cd server && cargo build --release --features vendored
 
-      - name: Stage signed semantic bundle when supplied
-        if: hashFiles('release/semantic-bundles/windows-x86_64/manifest.json') != ''
-        shell: bash
-        run: |
-          BIN_PATH="$(find server -type f -name dam-hopper-server.exe -path '*/release/*' -print -quit)"
-          test -n "$BIN_PATH"
-          bash scripts/prepare-semantic-bundle-release.sh release/semantic-bundles/windows-x86_64 "$(dirname "$BIN_PATH")/semantic-bundles"
-
       - uses: actions/upload-artifact@v4
         with:
           name: dam-hopper-server-windows-x86_64
           path: server/target/release/dam-hopper-server.exe
-          if-no-files-found: error
-          retention-days: 7
-
-      - uses: actions/upload-artifact@v4
-        if: hashFiles('server/**/release/semantic-bundles/manifest.json') != ''
-        with:
-          name: dam-hopper-semantic-bundle-windows-x86_64
-          path: server/**/release/semantic-bundles
           if-no-files-found: error
           retention-days: 7
 
@@ -135,6 +124,9 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Run semantic Monaco browser gate
+        run: pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts browser-tests/semantic-navigation-compat.browser.tsx
 
       - uses: actions/upload-artifact@v4
         with:

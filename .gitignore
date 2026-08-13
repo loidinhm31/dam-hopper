@@ -5,6 +5,7 @@ apps/web/public/browser-debug-extension/
 *.local
 .idea
 server/target/
+release/semantic-bundles/
 /.claude/
 repomix-output.xml
 /.codex/

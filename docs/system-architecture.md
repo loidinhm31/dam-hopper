@@ -1059,13 +1059,16 @@ dwell, but explorer scans and tab churn do not initiate prewarm.
 
 `AppState` derives one bundle root from the release binary location:
 `<server-executable-parent>/semantic-bundles`. The resolver reads only
-`manifest.json`, `manifest.sig`, and `manifest.sha256` from that root. It never
-probes `PATH`, the project root, a project/config command, another root, or a
-download source. Rust resolves the root-relative `rust-analyzer` entrypoint.
-TypeScript and JavaScript have distinct logical descriptor IDs
+`manifest.json`, `manifest.sig`, and `manifest.sha256` from that root, then
+verifies the staged payload tree before spawn. It never probes `PATH`, the
+project root, a project/config command, another root, or a download source.
+Rust resolves the verified `payload/rust-analyzer` entrypoint. TypeScript and
+JavaScript have distinct logical descriptor IDs
 (`typescript-language-server` and `javascript-language-server`) but use the
-same server-owned Node runtime and fixed root-relative
-`typescript-language-server --stdio` command. Java's `eclipse-jdt-ls`
+same verified bundled Node runtime and fixed
+`payload/typescript-language-server/lib/cli.mjs --stdio` command. The server
+supplies the absolute bundled TypeScript `tsserver.path` through internal
+initialization options. Java's `eclipse-jdt-ls`
 descriptor is registered but disabled until Phase 6. Children use direct
 `Command` spawn (no shell), project cwd, and a cleared environment plus only
 server-owned policy state.

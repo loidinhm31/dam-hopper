@@ -212,6 +212,9 @@ describe("Explorer image preview in Chromium", () => {
     });
 
     await expect.poll(() => postCalls().length).toBe(3);
+    await expect
+      .poll(() => image.currentSrc, { timeout: 5_000 })
+      .toContain("/api/fs/image/stream/image_ticket");
     await expect.poll(() => deleteCalls().length).toBeGreaterThanOrEqual(1);
     await expect.poll(() => image.naturalWidth).toBe(1);
     await act(async () => {

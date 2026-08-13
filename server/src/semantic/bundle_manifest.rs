@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
 use super::protocol::{validate_opaque_id, SemanticLanguage};
@@ -24,11 +24,20 @@ impl BundleManifest {
             return Err(BundleManifestError::TooManyDescriptors);
         }
         let mut descriptor_ids = HashSet::with_capacity(self.descriptors.len());
+        let mut payload_trees = HashMap::new();
         for descriptor in &self.descriptors {
             if !descriptor_ids.insert((&descriptor.descriptor_id, descriptor.target)) {
                 return Err(BundleManifestError::DuplicateDescriptor);
             }
             descriptor.validate()?;
+            if let Some(existing) = payload_trees.insert(
+                descriptor.target,
+                descriptor.artifact.payload_tree_sha256.as_str(),
+            ) {
+                if existing != descriptor.artifact.payload_tree_sha256 {
+                    return Err(BundleManifestError::InconsistentPayloadTree);
+                }
+            }
         }
         Ok(())
     }
@@ -92,11 +101,12 @@ pub struct BundleArtifact {
     pub sbom_component: String,
     pub compressed_size_bytes: u64,
     pub uncompressed_size_bytes: u64,
+    pub payload_tree_sha256: String,
 }
 
 impl BundleArtifact {
     fn validate(&self) -> Result<(), BundleManifestError> {
-        if self.sha256.len() != 64 || !self.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        if !is_sha256(&self.sha256) || !is_sha256(&self.payload_tree_sha256) {
             return Err(BundleManifestError::InvalidChecksum);
         }
         if self.license_id.trim().is_empty()
@@ -113,6 +123,10 @@ impl BundleArtifact {
         }
         Ok(())
     }
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Browser-visible degradation deliberately omits target paths, checksums, and versions.
@@ -148,6 +162,8 @@ pub enum BundleManifestError {
     InvalidArtifactMetadata,
     #[error("bundle artifact exceeds its size budget")]
     ArtifactTooLarge,
+    #[error("bundle descriptors for one target must share a payload tree checksum")]
+    InconsistentPayloadTree,
 }
 
 #[cfg(test)]
@@ -170,6 +186,7 @@ mod tests {
                 sbom_component: "rust-analyzer".into(),
                 compressed_size_bytes: 1,
                 uncompressed_size_bytes: 2,
+                payload_tree_sha256: "b".repeat(64),
             },
         }
     }
@@ -192,6 +209,7 @@ mod tests {
                     sbom_component: "rust-analyzer".into(),
                     compressed_size_bytes: 1,
                     uncompressed_size_bytes: 2,
+                    payload_tree_sha256: "b".repeat(64),
                 },
             }],
         };

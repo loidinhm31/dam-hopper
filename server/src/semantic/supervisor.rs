@@ -1144,12 +1144,12 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::semantic::bundle::{BundleCommandSpec, BundleResolver};
+    use crate::semantic::bundle::{hash_payload_tree, BundleCommandSpec, BundleResolver};
     use crate::semantic::bundle_manifest::{
         BundleArchitecture, BundleArtifact, BundleDescriptor, BundleManifest, BundleOs,
     };
 
-    #[cfg(unix)]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     fn write_lsp_fixture(path: &std::path::Path, lifetime_seconds: &str) {
         use std::os::unix::fs::PermissionsExt;
 
@@ -1164,7 +1164,7 @@ mod tests {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 
-    #[cfg(unix)]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[tokio::test]
     async fn prewarm_requires_exact_dwell_and_reuses_one_process() {
         use sha2::Digest;
@@ -1172,7 +1172,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("project");
         std::fs::create_dir(&project).unwrap();
-        let executable = dir.path().join("rust-analyzer");
+        let payload = dir.path().join("payload");
+        std::fs::create_dir(&payload).unwrap();
+        let executable = payload.join("rust-analyzer");
         write_lsp_fixture(&executable, "10");
         let bytes = std::fs::read(&executable).unwrap();
         let digest = hex::encode(sha2::Sha256::digest(bytes));
@@ -1192,12 +1194,13 @@ mod tests {
                     sbom_component: "rust-analyzer".into(),
                     compressed_size_bytes: 1,
                     uncompressed_size_bytes: 2 * 1024 * 1024,
+                    payload_tree_sha256: hash_payload_tree(&payload).unwrap(),
                 },
             }],
         };
         let resolver = BundleResolver::new(dir.path(), manifest).with_command_spec(
             "rust-analyzer",
-            BundleCommandSpec::new("rust-analyzer", vec![]).unwrap(),
+            BundleCommandSpec::new("payload/rust-analyzer", vec![]).unwrap(),
         );
         let registry = SemanticRegistry::new(resolver);
         let descriptor_fingerprint = registry
@@ -1249,7 +1252,7 @@ mod tests {
         supervisor.shutdown().await;
     }
 
-    #[cfg(unix)]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[tokio::test]
     async fn child_exit_is_observed_as_a_crash() {
         use sha2::Digest;
@@ -1257,7 +1260,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("project");
         std::fs::create_dir(&project).unwrap();
-        let executable = dir.path().join("rust-analyzer");
+        let payload = dir.path().join("payload");
+        std::fs::create_dir(&payload).unwrap();
+        let executable = payload.join("rust-analyzer");
         write_lsp_fixture(&executable, "0.1");
         let digest = hex::encode(sha2::Sha256::digest(std::fs::read(&executable).unwrap()));
         let resolver = BundleResolver::new(
@@ -1278,13 +1283,14 @@ mod tests {
                         sbom_component: "rust-analyzer".into(),
                         compressed_size_bytes: 1,
                         uncompressed_size_bytes: 4096,
+                        payload_tree_sha256: hash_payload_tree(&payload).unwrap(),
                     },
                 }],
             },
         )
         .with_command_spec(
             "rust-analyzer",
-            BundleCommandSpec::new("rust-analyzer", vec![]).unwrap(),
+            BundleCommandSpec::new("payload/rust-analyzer", vec![]).unwrap(),
         );
         let registry = SemanticRegistry::new(resolver);
         let fingerprint = registry

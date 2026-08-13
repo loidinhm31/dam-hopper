@@ -94,11 +94,12 @@ let result = async_op(&sandbox_root).await;  // safe
 Keep semantic process execution server-owned and fail-closed:
 
 - Derive one bundle root from the release binary parent (`semantic-bundles`). Read
-  only `manifest.json`, `manifest.sig`, and `manifest.sha256`; never probe PATH,
-  project commands, alternate roots, shells, or downloads.
-- Registry IDs are fixed. Rust uses root-relative `rust-analyzer`; JS and TS use
-  distinct logical IDs but the same fixed root-relative
-  `typescript-language-server --stdio` command and Node runtime. Java is
+  only `manifest.json`, `manifest.sig`, `manifest.sha256`, and the staged payload;
+  never probe PATH, project commands, alternate roots, shells, or downloads.
+- Registry IDs are fixed. Rust uses the verified `payload/rust-analyzer`; JS and TS
+  use distinct logical IDs but the same verified bundled Node runtime, fixed
+  `payload/typescript-language-server/lib/cli.mjs --stdio` command, and
+  server-owned `tsserver.path` initialization option. Java is
   registered but disabled until Phase 6.
 - Verify manifest schema/target, Ed25519 signature, manifest SHA-256, executable
   mode, regular-file/size/root containment, and artifact SHA-256 before spawn.

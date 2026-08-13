@@ -46,6 +46,7 @@ pub struct SemanticRegistry {
 impl SemanticRegistry {
     pub fn new(resolver: BundleResolver) -> Self {
         let resolver = resolver
+            .with_command_spec(RUST_ANALYZER_DESCRIPTOR, fixed_rust_command())
             .with_command_spec(TYPESCRIPT_LANGUAGE_SERVER_DESCRIPTOR, fixed_node_command())
             .with_command_spec(JAVASCRIPT_LANGUAGE_SERVER_DESCRIPTOR, fixed_node_command());
         Self {
@@ -102,12 +103,18 @@ impl SemanticRegistry {
                 reason: Some(DescriptorAvailabilityReason::CapabilityUnsupported),
             };
         }
-        let availability = self
-            .resolver
-            .availability(descriptor.descriptor_id, BundleTarget::current());
+        let Some(target) = BundleTarget::current() else {
+            return SemanticDescriptorAvailability {
+                descriptor_id: descriptor.descriptor_id.into(),
+                language,
+                state: DescriptorAvailabilityState::UnsupportedCapability,
+                reason: Some(DescriptorAvailabilityReason::CapabilityUnsupported),
+            };
+        };
+        let availability = self.resolver.availability(descriptor.descriptor_id, target);
         let identity_matches = self
             .resolver
-            .descriptor_identity(descriptor.descriptor_id, BundleTarget::current())
+            .descriptor_identity(descriptor.descriptor_id, target)
             .is_some_and(|(language, runtime_id)| {
                 language == descriptor.language && runtime_id == descriptor.runtime_id
             });
@@ -143,9 +150,10 @@ impl SemanticRegistry {
         if !descriptor.enabled {
             return Err(RegistryError::UnsupportedCapability);
         }
+        let target = BundleTarget::current().ok_or(RegistryError::UnsupportedCapability)?;
         let bundle = self
             .resolver
-            .resolve(descriptor.descriptor_id, BundleTarget::current())
+            .resolve(descriptor.descriptor_id, target)
             .map_err(RegistryError::Bundle)?;
         if bundle.descriptor_id() != descriptor.descriptor_id
             || bundle.language() != descriptor.language
@@ -158,13 +166,30 @@ impl SemanticRegistry {
 
     pub fn descriptor_fingerprint(&self, language: SemanticLanguage) -> Option<String> {
         let descriptor = self.descriptor(language)?;
+        let target = BundleTarget::current()?;
         self.resolver
-            .descriptor_fingerprint(descriptor.descriptor_id, BundleTarget::current())
+            .descriptor_fingerprint(descriptor.descriptor_id, target)
     }
 }
 
+fn fixed_rust_command() -> BundleCommandSpec {
+    BundleCommandSpec::new("payload/rust-analyzer", Vec::new())
+        .expect("fixed Rust Analyzer command is valid")
+}
+
 fn fixed_node_command() -> BundleCommandSpec {
-    match BundleCommandSpec::new("typescript-language-server", vec!["--stdio".into()]) {
+    match BundleCommandSpec::new(
+        "payload/node/bin/node",
+        vec![
+            "payload/typescript-language-server/lib/cli.mjs".into(),
+            "--stdio".into(),
+        ],
+    )
+    .map(|spec| {
+        spec.with_typescript_server_path(
+            "payload/typescript-language-server/node_modules/typescript/lib/tsserver.js",
+        )
+    }) {
         Ok(spec) => spec,
         Err(_) => unreachable!("fixed Node language-server command is valid"),
     }
@@ -200,15 +225,24 @@ mod tests {
         assert_eq!(typescript.runtime_id, NODE_RUNTIME_ID);
     }
 
-    #[cfg(unix)]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn node_descriptors_use_fixed_entrypoint_and_stdio_arguments() {
         use sha2::Digest;
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
-        let node = dir.path().join("typescript-language-server");
+        let payload = dir.path().join("payload");
+        let node = payload.join("node/bin/node");
+        std::fs::create_dir_all(node.parent().unwrap()).unwrap();
         std::fs::copy("/bin/sh", &node).unwrap();
+        let lsp_module = payload.join("typescript-language-server/lib/cli.mjs");
+        std::fs::create_dir_all(lsp_module.parent().unwrap()).unwrap();
+        std::fs::write(&lsp_module, "export {};\n").unwrap();
+        let tsserver =
+            payload.join("typescript-language-server/node_modules/typescript/lib/tsserver.js");
+        std::fs::create_dir_all(tsserver.parent().unwrap()).unwrap();
+        std::fs::write(&tsserver, "module.exports = {};\n").unwrap();
         std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o700)).unwrap();
         let project = dir.path().join("project");
         std::fs::create_dir(&project).unwrap();
@@ -218,7 +252,7 @@ mod tests {
         )
         .unwrap();
         let digest = hex::encode(sha2::Sha256::digest(std::fs::read(&node).unwrap()));
-        let target = BundleTarget::current();
+        let target = BundleTarget::current().expect("supported test target");
         let descriptor = |id: &str, language| BundleDescriptor {
             descriptor_id: id.into(),
             runtime_id: "node".into(),
@@ -231,6 +265,7 @@ mod tests {
                 sbom_component: "node-typescript-language-server".into(),
                 compressed_size_bytes: 1,
                 uncompressed_size_bytes: 2 * 1024 * 1024,
+                payload_tree_sha256: super::super::bundle::hash_payload_tree(&payload).unwrap(),
             },
         };
         let resolver = BundleResolver::new(
@@ -257,7 +292,15 @@ mod tests {
         for language in [SemanticLanguage::Typescript, SemanticLanguage::Javascript] {
             let bundle = registry.resolve(language).unwrap();
             assert_eq!(bundle.program(), node);
-            assert_eq!(bundle.args(), &["--stdio".to_string()]);
+            assert_eq!(
+                bundle.args(),
+                &[
+                    lsp_module.to_string_lossy().into_owned(),
+                    "--stdio".to_string(),
+                ]
+            );
+            assert_eq!(bundle.typescript_server_path(), Some(tsserver.as_path()));
+            assert!(std::path::Path::new(&bundle.args()[0]).is_absolute());
             assert!(!bundle.program().starts_with(&project));
         }
     }
