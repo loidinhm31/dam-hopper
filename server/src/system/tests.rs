@@ -7,8 +7,8 @@ use super::{
 
 #[test]
 fn v1_snapshot_serializes_camel_case_contract() {
-    use super::{Availability, MemorySnapshot, MountContext};
-    let snapshot = super::HostResourceSnapshotV1::new(
+    use super::{Availability, BatteryStatus, MemorySnapshot, MountContext};
+    let mut snapshot = super::HostResourceSnapshotV1::new(
         42,
         MemorySnapshot {
             availability: Availability::available(42),
@@ -16,9 +16,23 @@ fn v1_snapshot_serializes_camel_case_contract() {
         },
         MountContext::for_workspace(Path::new("/workspace")),
     );
+    snapshot.battery.status = Some(BatteryStatus::NotCharging);
+    snapshot.battery.remaining_energy_wh = Some(12.5);
+    snapshot.battery.instantaneous_power_w = Some(3.25);
     let value = serde_json::to_value(snapshot).unwrap();
     assert_eq!(value["schemaVersion"], 1);
     assert_eq!(value["sampledAt"], 42);
+    assert_eq!(value["battery"]["count"], 0);
+    assert!(value["battery"].get("capacityPercent").is_some());
+    assert!(value["battery"].get("remainingEnergyWh").is_some());
+    assert!(value["battery"].get("instantaneousPowerW").is_some());
+    assert_eq!(value["battery"]["status"], "notCharging");
+    assert_eq!(value["battery"]["remainingEnergyWh"], 12.5);
+    assert_eq!(value["battery"]["instantaneousPowerW"], 3.25);
+    assert_eq!(
+        value["battery"]["availability"]["state"],
+        "temporarilyUnavailable"
+    );
     assert_eq!(value["currentAlerts"], serde_json::json!([]));
     assert!(value.get("actionCapabilities").is_some());
 }
