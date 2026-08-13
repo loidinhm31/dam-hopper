@@ -38,6 +38,20 @@ interface Props {
 
 type TestState = "idle" | "testing" | "ok" | "fail";
 
+function secureBearerHeaders(
+  serverUrl: string,
+  token: string | null,
+): Record<string, string> {
+  if (!token) return {};
+  try {
+    return new URL(serverUrl).protocol === "https:"
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 export function ServerSettingsDialog({
   open,
   onClose,
@@ -449,15 +463,15 @@ export function ServerSettingsDialog({
     const storedProfile = profile?.id
       ? getProfiles().find((candidate) => candidate.id === profile.id)
       : getActiveProfile();
-    if (profile?.id && !storedProfile) {
-      clearAuthToken(profile.id);
-      onClose();
-      return;
-    }
     const targetProfileId =
       storedProfile?.id ??
+      profile?.id ??
       (profile === undefined ? (getActiveProfileId() ?? undefined) : undefined);
-    const targetServerUrl = storedProfile?.url ?? getServerUrl();
+    // The dialog may outlive a concurrently deleted profile. Its immutable
+    // prop still identifies the origin whose session must be revoked before
+    // removing the remaining profile-scoped token.
+    const targetServerUrl =
+      storedProfile?.url ?? profile?.url ?? getServerUrl();
     const targetToken = getAuthToken(targetProfileId);
     if (targetToken) {
       // Local logout must complete even when the old server is unreachable; its
@@ -469,7 +483,7 @@ export function ServerSettingsDialog({
     try {
       await fetch(`${targetServerUrl}/api/auth/logout`, {
         method: "POST",
-        headers: targetToken ? { Authorization: `Bearer ${targetToken}` } : {},
+        headers: secureBearerHeaders(targetServerUrl, targetToken),
         credentials: "include",
         signal: controller.signal,
       });
