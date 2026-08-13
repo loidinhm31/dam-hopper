@@ -16,6 +16,9 @@ import {
 } from "@/api/server-config.js";
 
 type MediaState = "loading" | "ready" | "buffering" | "seeking" | "error";
+type MediaTicketErrorCode =
+  | "MEDIA_SESSION_UNSUPPORTED"
+  | "INSECURE_MEDIA_SERVER";
 
 interface VideoPreviewProps {
   project: string;
@@ -39,11 +42,36 @@ const mediaStateCopy: Record<MediaState, string> = {
   error: "Playback unavailable",
 };
 
+const mediaTicketErrorCopy: Record<
+  MediaTicketErrorCode,
+  { title: string; description: string }
+> = {
+  MEDIA_SESSION_UNSUPPORTED: {
+    title: "Browser media access is unavailable",
+    description:
+      "Use a supported Chromium or Microsoft Edge browser. Allow site data for this server and turn off privacy blocking, then retry.",
+  },
+  INSECURE_MEDIA_SERVER: {
+    title: "Secure connection required",
+    description:
+      "This media server must use HTTPS before the preview or download can load. Update the server address, then retry.",
+  },
+};
+
 function isAbortError(error: unknown): boolean {
   return (
     (error instanceof DOMException && error.name === "AbortError") ||
     (error instanceof Error && error.name === "AbortError")
   );
+}
+
+function mediaTicketErrorCode(error: unknown): MediaTicketErrorCode | null {
+  if (!error || typeof error !== "object" || !("code" in error)) return null;
+  const { code } = error as { code?: unknown };
+  return code === "MEDIA_SESSION_UNSUPPORTED" ||
+    code === "INSECURE_MEDIA_SERVER"
+    ? code
+    : null;
 }
 
 function revokePlayback(handle: VideoPlaybackHandle | null): void {
@@ -79,6 +107,11 @@ export function VideoPreview({
   const sourceUrlRef = useRef<string | null>(null);
   const [mediaState, setMediaState] = useState<MediaState>("loading");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [ticketErrorCode, setTicketErrorCode] =
+    useState<MediaTicketErrorCode | null>(null);
+  const [ticketErrorAction, setTicketErrorAction] = useState<
+    "playback" | "download" | null
+  >(null);
   const [retryToken, setRetryToken] = useState(0);
   const [downloadPending, setDownloadPending] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -119,6 +152,8 @@ export function VideoPreview({
     teardownPlayback();
     setMediaState("loading");
     setErrorMessage(null);
+    setTicketErrorCode(null);
+    setTicketErrorAction(null);
 
     const controller = new AbortController();
     issueControllerRef.current = controller;
@@ -143,6 +178,9 @@ export function VideoPreview({
         playbackRef.current = handle;
         sourceGenerationRef.current = generation;
         sourceUrlRef.current = handle.url;
+        // This must be set before src: native media then sends the session
+        // cookie without exposing the opaque ticket to JavaScript.
+        video.crossOrigin = "use-credentials";
         video.src = handle.url;
         video.load();
         setMediaState("loading");
@@ -156,10 +194,15 @@ export function VideoPreview({
           return;
         }
         setMediaState("error");
-        // Ticket errors intentionally stay generic; the client never exposes
-        // response text, ticket values, paths, or authorization details.
+        const code = mediaTicketErrorCode(error);
+        setTicketErrorCode(code);
+        setTicketErrorAction(code ? "playback" : null);
+        // Never expose response text, ticket values, paths, or authorization
+        // details. Typed compatibility errors receive safe remediation copy.
         setErrorMessage(
-          "A playback ticket could not be issued. Retry or download it directly.",
+          code
+            ? mediaTicketErrorCopy[code].title
+            : "A playback ticket could not be issued. Retry or download it directly.",
         );
       });
 
@@ -193,6 +236,8 @@ export function VideoPreview({
   const onMediaError = useCallback(() => {
     const video = videoRef.current;
     if (!video || !acceptsMediaEvent()) return;
+    setTicketErrorCode(null);
+    setTicketErrorAction(null);
     setMediaState("error");
     setErrorMessage(playbackErrorMessage(video));
   }, [acceptsMediaEvent]);
@@ -202,12 +247,19 @@ export function VideoPreview({
     downloadPendingRef.current = true;
     setDownloadPending(true);
     setDownloadError(null);
+    setTicketErrorCode(null);
+    setTicketErrorAction(null);
     try {
       // This intentionally issues a fresh download ticket. It does not touch
       // or await the playback handle/source currently used by the player.
       await startVideoDownload(project, path);
-    } catch {
-      setDownloadError("Download could not be started. Please try again.");
+    } catch (error: unknown) {
+      const code = mediaTicketErrorCode(error);
+      setTicketErrorCode(code);
+      setTicketErrorAction(code ? "download" : null);
+      setDownloadError(
+        code ? null : "Download could not be started. Please try again.",
+      );
     } finally {
       downloadPendingRef.current = false;
       setDownloadPending(false);
@@ -243,9 +295,14 @@ export function VideoPreview({
             size="sm"
             variant="secondary"
             loading={downloadPending}
-            disabled={downloadPending}
+            disabled={downloadPending || ticketErrorCode !== null}
             onClick={() => void handleDownload()}
             aria-label={`Download ${fileName}`}
+            title={
+              ticketErrorCode
+                ? "Downloads require a supported browser and secure HTTPS server."
+                : undefined
+            }
           >
             {!downloadPending && (
               <Download aria-hidden="true" className="h-3.5 w-3.5" />
@@ -260,6 +317,7 @@ export function VideoPreview({
             controls
             preload="metadata"
             playsInline
+            crossOrigin="use-credentials"
             aria-label={`Video preview: ${fileName}`}
             className="max-h-[min(70vh,720px)] w-full max-w-full object-contain"
             onLoadStart={() => {
@@ -322,15 +380,38 @@ export function VideoPreview({
           </span>
         </div>
 
-        {(mediaState === "error" || downloadError) && (
-          <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-400/20 bg-amber-400/5 px-3 py-2.5">
-            {mediaState === "error" && (
+        {(mediaState === "error" || downloadError || ticketErrorCode) && (
+          <div
+            className="flex flex-wrap items-center gap-2 rounded-md border border-amber-400/20 bg-amber-400/5 px-3 py-2.5"
+            role={ticketErrorCode ? "alert" : undefined}
+          >
+            {ticketErrorCode && (
+              <div className="w-full space-y-1">
+                <p className="text-sm font-medium text-amber-100">
+                  {mediaTicketErrorCopy[ticketErrorCode].title}
+                </p>
+                <p className="max-w-2xl text-xs leading-5 text-amber-200">
+                  {mediaTicketErrorCopy[ticketErrorCode].description}
+                </p>
+              </div>
+            )}
+            {(mediaState === "error" || ticketErrorCode) && (
               <Button
                 type="button"
                 size="sm"
                 variant="secondary"
-                onClick={() => setRetryToken((value) => value + 1)}
-                aria-label="Retry video playback"
+                onClick={() => {
+                  if (ticketErrorAction === "download") {
+                    void handleDownload();
+                    return;
+                  }
+                  setRetryToken((value) => value + 1);
+                }}
+                aria-label={
+                  ticketErrorAction === "download"
+                    ? "Retry video download"
+                    : "Retry video playback"
+                }
               >
                 <RotateCw aria-hidden="true" className="h-3.5 w-3.5" />
                 Retry

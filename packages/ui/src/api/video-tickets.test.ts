@@ -35,6 +35,7 @@ function issued(purpose: "playback" | "download") {
     streamPath: "/api/fs/video/stream/opaque_token",
     expiresAt: 1_800_000_000_000,
     purpose,
+    authorizationMode: "session-cookie-v1",
   };
 }
 
@@ -72,6 +73,50 @@ describe("issueVideoTicket", () => {
     expect(fetchMock).toHaveBeenLastCalledWith(
       "https://api.test/api/fs/video/tickets",
       expect.objectContaining({ method: "DELETE", keepalive: true }),
+    );
+  });
+
+  it("fails closed before issuing media to an insecure server", async () => {
+    config.profile = { id: "profile-a", url: "http://api.test" };
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      issueVideoTicket("project", "clips/demo.webm", "playback"),
+    ).rejects.toMatchObject<Partial<VideoTicketError>>({
+      code: "INSECURE_MEDIA_SERVER",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects old servers and probes an issued ticket with credentials", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ ...issued("playback"), authorizationMode: undefined }),
+        {
+          status: 201,
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      issueVideoTicket("project", "clips/demo.webm", "playback"),
+    ).rejects.toMatchObject<Partial<VideoTicketError>>({
+      code: "MEDIA_SESSION_UNSUPPORTED",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    fetchMock
+      .mockReset()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(issued("playback")), { status: 201 }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await issueVideoTicket("project", "clips/demo.webm", "playback");
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "https://api.test/api/fs/video/stream/opaque_token",
+      expect.objectContaining({ method: "HEAD", credentials: "include" }),
     );
   });
 

@@ -1,4 +1,11 @@
 import {
+  assertMediaSessionAuthorizationMode,
+  assertMediaTransport,
+  MediaSessionError,
+  mediaTicketUrl,
+  probeMediaTicket,
+} from "./media-session.js";
+import {
   getActiveProfile,
   getAuthToken,
   getServerUrl,
@@ -27,6 +34,7 @@ interface TicketResponse {
   streamPath: string;
   expiresAt: number;
   purpose: "preview";
+  authorizationMode: "session-cookie-v1";
 }
 
 interface RequestSnapshot {
@@ -52,15 +60,14 @@ function requestSnapshot(): RequestSnapshot {
   const configuredUrl = normalizeServerUrl(profile?.url ?? getServerUrl());
   try {
     const serverUrl = new URL(configuredUrl);
-    if (serverUrl.protocol !== "http:" && serverUrl.protocol !== "https:") {
-      throw new Error("unsupported protocol");
-    }
+    assertMediaTransport(serverUrl.origin);
     return {
       serverOrigin: serverUrl.origin,
       authToken: getAuthToken(profile?.id),
       profileId: profile?.id ?? null,
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof MediaSessionError) throw ticketError(error.code);
     throw ticketError("INVALID_SERVER");
   }
 }
@@ -113,6 +120,7 @@ function parseTicketResponse(value: unknown): TicketResponse {
   if (response.streamPath !== `/api/fs/image/stream/${response.ticket}`) {
     throw ticketError("INVALID_RESPONSE");
   }
+  assertMediaSessionAuthorizationMode(response.authorizationMode);
   return response as TicketResponse;
 }
 
@@ -141,6 +149,7 @@ export async function issueImageTicket(
 ): Promise<ImagePreviewTicket> {
   const snapshot = requestSnapshot();
   const timeout = createTimeoutSignal(signal);
+  let issuedTicket: string | null = null;
   try {
     const response = await fetch(
       `${snapshot.serverOrigin}/api/fs/image/tickets`,
@@ -164,21 +173,23 @@ export async function issueImageTicket(
     }
     throwIfAborted(timeout.signal, signal);
     const issued = parseTicketResponse(payload);
-    const url = new URL(issued.streamPath, snapshot.serverOrigin);
-    if (url.origin !== snapshot.serverOrigin)
-      throw ticketError("INVALID_RESPONSE");
+    issuedTicket = issued.ticket;
+    const url = mediaTicketUrl(issued.streamPath, snapshot.serverOrigin);
+    await probeMediaTicket(url, timeout.signal);
     throwIfAborted(timeout.signal, signal);
     return {
       purpose: "preview",
-      url: url.toString(),
+      url,
       expiresAt: issued.expiresAt,
       revoke: () => revokeTicket(snapshot, issued.ticket),
     };
   } catch (error) {
+    if (issuedTicket) void revokeTicket(snapshot, issuedTicket);
     if (timeout.signal.aborted && signal?.aborted) {
       throw ticketError("ABORTED");
     }
     if (error instanceof ImageTicketError) throw error;
+    if (error instanceof MediaSessionError) throw ticketError(error.code);
     throw ticketError(timeout.signal.aborted ? "TIMEOUT" : "NETWORK");
   } finally {
     timeout.cleanup();

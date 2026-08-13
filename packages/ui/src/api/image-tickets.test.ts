@@ -35,6 +35,7 @@ function issued() {
     streamPath: "/api/fs/image/stream/opaque_token",
     expiresAt: 1_800_000_000_000,
     purpose: "preview",
+    authorizationMode: "session-cookie-v1",
   };
 }
 
@@ -69,6 +70,37 @@ describe("issueImageTicket", () => {
     expect(fetchMock).toHaveBeenLastCalledWith(
       "https://api.test/api/fs/image/tickets",
       expect.objectContaining({ method: "DELETE", keepalive: true }),
+    );
+  });
+
+  it("rejects old servers and probes an issued ticket with credentials", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ ...issued(), authorizationMode: undefined }),
+        {
+          status: 201,
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      issueImageTicket("project", "images/preview.webp"),
+    ).rejects.toMatchObject<Partial<ImageTicketError>>({
+      code: "MEDIA_SESSION_UNSUPPORTED",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    fetchMock
+      .mockReset()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(issued()), { status: 201 }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await issueImageTicket("project", "images/preview.webp");
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "https://api.test/api/fs/image/stream/opaque_token",
+      expect.objectContaining({ method: "HEAD", credentials: "include" }),
     );
   });
 

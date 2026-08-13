@@ -29,7 +29,7 @@ Replace transferable media capability URLs with two-part authorization: opaque t
 |---|---|---:|---|---|
 | 1 | [Media session + strict CORS contract](./phase-01-server-media-session-and-strict-cors-contract.md) | 8h | None | DONE — 2026-08-12 20:05:25 +07:00 |
 | 2 | [Ticket binding + stream/logout lifecycle](./phase-02-bind-media-tickets-and-stream-logout-lifecycle.md) | 8h | Phase 1 | DONE — 2026-08-13 00:20:59 +07:00 |
-| 3 | [Frontend compatibility + deployment UX](./phase-03-frontend-native-media-compatibility-and-deployment.md) | 7h | Phase 2 contract | Pending |
+| 3 | [Frontend compatibility + deployment UX](./phase-03-frontend-native-media-compatibility-and-deployment.md) | 7h | Phase 2 contract | In review — 2026-08-13 |
 | 4 | [Qualification, docs, rollout/rollback](./phase-04-qualification-documentation-and-rollout.md) | 9h | Phases 1–3 | Pending |
 
 ## End-to-end contract
