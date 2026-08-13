@@ -11,6 +11,17 @@ const serverConfig = vi.hoisted(() => ({
   getAuthToken: () => "synthetic-auth",
 }));
 
+vi.mock("@/api/media-session.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/api/media-session.js")>();
+  return {
+    ...actual,
+    // The shared browser fixture is HTTP and validates native-element behavior;
+    // real HTTPS/cookie enforcement remains covered by server contract tests.
+    assertMediaTransport: () => undefined,
+  };
+});
+
 vi.mock("@/api/server-config.js", () => ({
   getActiveProfile: serverConfig.getActiveProfile,
   getAuthToken: serverConfig.getAuthToken,
@@ -29,6 +40,7 @@ function ticketResponse(ticket: string, purpose: TicketPurpose) {
       streamPath: `/api/fs/video/stream/${ticket}`,
       expiresAt: 1_800_000_000_000,
       purpose,
+      authorizationMode: "session-cookie-v1",
     }),
     { status: 201, headers: { "Content-Type": "application/json" } },
   );
@@ -129,6 +141,7 @@ describe("Explorer video playback in Chromium", () => {
     expect(player.controls).toBe(true);
     expect(player.autoplay).toBe(false);
     expect(player.playsInline).toBe(true);
+    expect(player.crossOrigin).toBe("use-credentials");
     await expect.poll(() => player.readyState).toBeGreaterThanOrEqual(1);
     await expect.element(page.getByText("Ready to play")).toBeVisible();
     expect(postBodies()).toContainEqual(
@@ -146,6 +159,13 @@ describe("Explorer video playback in Chromium", () => {
     expect(
       (ticketRequest?.[1] as RequestInit | undefined)?.headers,
     ).toMatchObject({ Authorization: "Bearer synthetic-auth" });
+    const probeRequest = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        init?.method === "HEAD" && String(input).endsWith("/playback_ticket"),
+    );
+    expect(probeRequest?.[1]).toEqual(
+      expect.objectContaining({ method: "HEAD", credentials: "include" }),
+    );
 
     player.focus();
     const playing = new Promise<void>((resolve) =>
@@ -198,14 +218,18 @@ describe("Explorer video playback in Chromium", () => {
     await expect
       .poll(() => postBodies())
       .toContainEqual(expect.objectContaining({ purpose: "download" }));
+    await expect
+      .poll(() => activatedHref?.endsWith("/download_ticket") ?? false)
+      .toBe(true);
     expect(click).toHaveBeenCalledOnce();
-    expect(activatedHref?.endsWith("/download_ticket")).toBe(true);
     expect(player.currentSrc === playbackSource).toBe(true);
     expect(
       fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")
         .length,
     ).toBe(deleteCallsBefore);
-    expect(streamFetchCount()).toBe(streamFetchesBefore);
+    // One credentialed HEAD compatibility probe occurs for the new download
+    // ticket; JavaScript still never requests the media body.
+    expect(streamFetchCount()).toBe(streamFetchesBefore + 1);
     expect(blob).not.toHaveBeenCalled();
     expect(objectUrl).not.toHaveBeenCalled();
     const attachment = await browserFetch(activatedHref ?? "", {
@@ -239,11 +263,13 @@ describe("Explorer video playback in Chromium", () => {
     expect(player.currentSrc === activeSource).toBe(true);
   });
 
-  it("shows a retryable native-media failure and cleans up its source", async () => {
+  it("fails closed when the credentialed ticket probe is rejected", async () => {
     await render("clips/unsupported.webm");
     const player = document.querySelector("video") as HTMLVideoElement;
-    await expect.poll(() => player.currentSrc).toContain("/unsupported_ticket");
-    await expect.poll(() => player.error?.code ?? 0).toBeGreaterThan(0);
+    await expect
+      .element(page.getByText("Browser media access is unavailable").first())
+      .toBeVisible();
+    await expect.poll(() => player.currentSrc).toBe("");
     const retry = page.getByRole("button", { name: "Retry video playback" });
     await expect.element(retry).toBeVisible();
     await userEvent.click(retry);

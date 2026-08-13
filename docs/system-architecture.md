@@ -780,12 +780,19 @@ pub struct PersistedSession {
 Phase 1 delivered the authenticated, purpose-bound ticket boundary. Phase 2
 ships session-bound media: an opaque ticket URL is paired with an `HttpOnly`
 media-session cookie, so the stream endpoint is no longer capability-only. Phase
-03 completes the browser-host `VideoPreview` integration. Phase 04 validates it in a real Chromium host with a valid one-second VP8 WebM fixture,
-the real ticket client, and the native download helper. Independent browser-host
-checks verify playback purpose, download purpose, attachment disposition, absence
-of `Blob`/object-URL conversion, and stream-fetch behavior. Media lifecycle checks
-cover stale tickets, retry, cleanup, focus changes, and responsive layouts; the
-browser test suite is green.
+03 completes the browser-host `VideoPreview` integration. Phase 04 validates it
+with the repository Playwright/Vitest harness in installed Chromium 151 using a
+valid one-second VP8 WebM fixture, the real ticket client, and the native download
+helper. The 112-test full browser suite, including 11 media-specific tests,
+passed twice consecutively on Chromium 151. The broader gate also passed 1,013
+UI tests and 740 Rust tests; `pnpm build` and `pnpm lint` were clean. Checks cover the
+versioned session-cookie contract, credentialed `HEAD` before source exposure,
+`crossOrigin="use-credentials"`, playback/seek, direct anchor download, rejected
+probe retry, cleanup, and absence of `Blob`/object-URL conversion. This fixture is
+same-origin HTTP with only the transport assertion replaced; server/router tests
+separately own cookie, CORS, Range, and foreign/missing-session enforcement. It is
+not evidence for real cross-site CHIPS partitioning. Edge, Tauri/WebView, Safari,
+and Firefox remain unqualified.
 Browser routing recognizes only the final, case-insensitive extensions `mp4`,
 `m4v`, `webm`, `ogv`, `ogg`, and `mov` (an extension/MIME hint, not codec proof);
 diff tabs retain their dedicated viewer.
@@ -836,7 +843,9 @@ disclosing absent or foreign session state. Ticket-specific image/video DELETEs
 also require Bearer authentication and remove a ticket only with its matching
 actor/session cookie.
 Workspace reinitialization and configuration changes revoke all tickets and
-advance the generation, preventing issuance across a changed context.
+advance the generation, preventing issuance across a changed context. Session and
+ticket state is process-local; multi-instance deployments require sticky routing
+to the issuing process until a shared store exists. Restart revokes all media state.
 
 During server-profile credential replacement and logout, `ServerSettingsDialog`
 uses this session-revoke endpoint with a five-second bound. An unreachable old
@@ -866,9 +875,9 @@ filesystem or ticket-store lock is held while streaming.
 
 The configured CORS layer covers GET/HEAD and preflight headers needed for browser
 range playback (`Range`, `If-Range`, and validators), and exposes range, length,
-disposition, validator, and cache headers to allowed origins. Credentialed requests
-mirror the request origin when origins are unrestricted; configured origins remain
-an explicit allowlist.
+disposition, validator, and cache headers to allowed origins. Authenticated browser
+deployments require an explicit allowlist of exact HTTPS origins; credentialed
+responses never reflect an arbitrary origin.
 
 The browser host routes recognized video extensions to `VideoPreview` before
 generic binary or large-text tiering. The player requests a fresh playback
@@ -879,9 +888,9 @@ ticket, then activate a temporary anchor so browser download handling consumes t
 stream directly without `fetch().blob()`. Playback and download can run concurrently
 and expire or revoke independently. Extension and MIME are routing hints only;
 codec failure becomes an actionable unsupported-media state. This validation is
-browser-host-only; it does not claim packaged Tauri playback/download or CSP
-verification. `pnpm check` cannot complete in the validation environment because
-Tauri signing-key configuration is unavailable. V1 does
+browser-host-only. Microsoft Edge was not installed and was not substituted with
+Chromium. Packaged Tauri/WebView playback/download, Safari, Firefox, and real
+cross-site CHIPS partition behavior remain unqualified. V1 does
 not add thumbnails, custom controls, Media Source Extensions, HLS/DASH, codec probing,
 or transcoding.
 
@@ -895,7 +904,8 @@ Key invariants:
 - Playback never depends on download completion; each action owns a separate ticket
   and response stream over the same validated file.
 - File replacement or metadata drift invalidates the prior ticket/range sequence.
-- Unsupported containers/codecs fail visibly without falling back to a 1–3 GB blob read.
+- Unsupported containers/codecs fail visibly; media never falls back to Bearer URLs
+  or a 1–3 GB Blob read.
 
 ### Explorer native image preview (Phase 03 release gate complete)
 

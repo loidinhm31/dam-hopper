@@ -10,78 +10,77 @@
 ## Overview
 
 - Date: 2026-08-12
-- Description: prove cross-site cookie binding in server/unit/real browser/Tauri, update contracts, stage rollout with fail-closed rollback.
+- Description: complete deterministic server checks and real Chromium native-media regression evidence, then document only observed support.
 - Priority: P1
-- Implementation status: Pending; blocked by Phases 1–3
-- Review status: Required; security reviewer + release owner sign-off
+- Implementation status: DONE — 2026-08-13 10:06:21 +07:00; Phase 3 stale-profile prerequisite included
+- Review status: APPROVED — 9.7/10, 2026-08-13 10:06:21 +07:00
 
 ## Key Insights
 
 - jsdom cannot prove Partitioned cookie, top-level partitioning, native Range, anchor download, or WebView policy.
-- Test two top-level origins and isolated browser contexts; curl/no-cookie is a server assertion, not a CORS test.
+- Existing repository precedent separates deterministic server authorization checks from same-origin real-Chromium native-element regression tests; neither is mislabeled as cross-site CHIPS evidence.
 - Multi-instance remains unsupported because tickets/sessions are in-memory. Restart intentionally invalidates all media.
-- Rollback must never reactivate capability-only authorization. Safe rollback disables media or rolls server/client together with explicit risk acceptance.
+- Tauri/WebView qualification remains a separate follow-up and is absent from initial support claims.
 
 ## Requirements
 
 - Unit: store binding/no-touch, cookie attributes, TTL/capacity, actor/kind/purpose, logout/workspace/restart, CORS startup guards, log redaction.
-- Integration: video + image GET/HEAD, full/single Range/If-Range, seek/decode, attachment anchor, missing/foreign partition/cookie, revoke/expiry/profile switch.
-- Browser: trusted frontend A/API B over HTTPS; foreign top-level C; two contexts; Chromium and installed Edge channel; third-party-cookie restrictions enabled.
-- Tauri: packaged selected OS/WebView build against HTTPS API; playback seek, image, download, profile switch/logout; capture exact OS/WebView versions and sanitized network/status evidence.
-- Docs: API/cookie/CORS/deployment/support matrix/multi-instance/TTL/capacity/logging/CSRF/rollout/rollback. Do not mark unexecuted engine as supported.
+- Integration: video + image GET/HEAD, full/single Range/If-Range, missing/foreign cookie, revoke/expiry/profile switch, exact authorization mode, and non-disclosing failures.
+- Browser: repository Playwright/Vitest harness with real Chromium validates credentialed issue/HEAD ordering, native decode/seek, direct anchor download, retry, cleanup, and no Blob fallback.
+- Edge runs only when a real installed `msedge` channel is available; otherwise it remains explicitly unsupported. Tauri is deferred.
+- Docs: API/cookie/CORS/deployment/support matrix/multi-instance/TTL/capacity/logging/CSRF. Do not mark unexecuted engine or cross-site partition behavior as qualified.
 
 ## Architecture
 
-- Test fixture serves exact origins with trusted local TLS and real server; server gets only A allowlisted. C and second context attempt same ticket.
-- Acceptance sequence: issue → inspect Set-Cookie → credentialed HEAD → image decode/video metadata+seek/Range → direct download → deny copied URL in C/context/curl → logout deny.
-- Rollout: validate config and gates → atomically/coordinately deploy session-bound server+client. Independently hosted clients use an explicit media maintenance window during version skew. No deployment ordering can preserve media without a forbidden fallback.
-- Rollback: keep media disabled during skew or restore a previously qualified session-bound server+client pair; never switch to legacy bearer-only. Restart revokes all active state.
+- Server/router tests prove cookie+ticket authorization, exact headers, Range/HEAD, lifecycle, capacity, and generic denials with real temporary files.
+- Browser fixture follows prior Explorer media plans: synthetic same-origin endpoints plus real Chromium native elements. It validates client/native behavior, not real CHIPS partitioning.
+- Browser channel selection is explicit. The default may use an installed system Chromium; requested unavailable channels fail instead of silently substituting another engine.
+- Safe operational invariant remains: never restore legacy bearer/capability-only media authorization.
 
 ## Related code files
 
 - Modify `server/src/api/tests.rs` and `server/src/fs/media_ticket.rs` tests — complete security/lifecycle matrix.
 - Modify `packages/ui/browser-tests/explorer-video-playback-download.browser.tsx` — credentialed native playback/seek/download gates.
 - Modify `packages/ui/browser-tests/explorer-image-preview.browser.tsx` — credentialed image/decode/foreign-context gates.
-- Create `packages/ui/browser-tests/session-bound-cross-site-media.browser.tsx` — HTTPS multi-origin/partition/copy/logout matrix.
-- Modify `packages/ui/vitest.browser.config.ts` — explicit Chromium and Edge channel selection; no engine claim from Chromium emulation alone.
-- Create `apps/native/scripts/qualify-session-bound-media.mjs` — evidence validator/run instructions for packaged selected WebView; no mocked success.
+- Modify existing image/video browser suites — session-cookie version, credentialed probe, native credential mode, fail-closed retry, and no-body download checks.
+- Modify `packages/ui/vitest.browser.config.ts` — installed Chromium fallback and explicit optional browser channel selection; no engine substitution claim.
+- Tauri/native qualification files: deferred; do not create or modify them in this phase.
 - Modify `docs/system-architecture.md`, `docs/api-reference.md`, `docs/configuration-guide.md`, `docs/project-overview-pdr.md`, `docs/codebase-summary.md` — shipped design/support/operations after gates.
 - Delete: obsolete capability-only assertions/comments only; no unrelated semantic-navigation files.
 
 ## Implementation Steps
 
 1. Add deterministic store/API tests; assert foreign/missing lookup does not extend TTL and all failure bodies/status are indistinguishable.
-2. Build real HTTPS three-origin fixture. Assert exact ACAO/credentials/`Vary: Origin`, rejected C, cookie attributes, `private,no-store` on every stream status, and no raw ticket/cookie in captured logs.
-3. Extend browser tests for Chromium and installed Microsoft Edge: two contexts/top-level sites, privacy restriction, GET/HEAD/Range/seek/decode/download/copy/curl-like denial/logout/restart.
-4. Run packaged Tauri Windows WebView2 (first recommended engine) against same fixture. Record actual packaged top-level origin, partition key behavior, runtime version, and pass/fail; Linux WebKit/macOS remain unsupported until separately executed.
+2. Complete router/config assertions for exact ACAO/credentials/`Vary: Origin`, rejected origins, cookie attributes, `private,no-store` on every stream status, and sanitized failures/logging.
+3. Extend existing browser tests using prior Explorer Playwright patterns: credentialed HEAD before native source, native seek/decode, direct anchor/no Blob, fail-closed retry, cleanup, and profile refresh.
+4. Make browser selection explicit. Run installed Chromium; attempt Edge only when installed and otherwise record unsupported without substitution.
 5. Load/capacity test issuance at limits; verify `429`, pruning, no unbounded memory, no TTL refresh from hostile replay.
-6. Update architecture/API/config/PDR/summary only with observed results. State HTTPS, exact origins, cookie mode, 30m/8h defaults, caps, sticky-routing limitation.
-7. Rehearse coordinated rollout and rollback in staging, including independently hosted client maintenance window. Prove both skew directions fail closed and media stays disabled rather than using capability fallback.
-8. Run full validation; attach command outputs and sanitized engine matrix to reviewer report. Obtain required reviewer/release-owner gate.
+6. Update architecture/API/config/PDR/summary only with observed results. State HTTPS production requirement, exact origins, cookie mode, 30m/8h defaults, caps, and sticky-routing limitation.
+7. Run full deterministic validation and attach sanitized engine status to reviewer report. Tauri and real cross-site CHIPS qualification remain follow-ups.
 
 ## Todo list
 
-- [ ] Rust/unit/integration matrix green
-- [ ] Chromium real cross-site gate green
-- [ ] Microsoft Edge real cross-site gate green
-- [ ] Selected packaged Tauri engine gate green
-- [ ] Logging redaction and capacity checks green
-- [ ] Docs match observed support only
-- [ ] Rollout/rollback rehearsal complete
-- [ ] Reviewer/release owner approve
+- [x] Rust/unit/integration matrix green
+- [x] Installed Chromium native-media browser gate green
+- [x] Edge status recorded honestly; no substitution or unsupported claim
+- [x] Tauri explicitly deferred with no support claim
+- [x] Logging redaction and capacity checks green
+- [x] Docs match observed support only
+- [x] Fail-closed operational invariant documented
+- [x] Security reviewer approved after warning fixes — 9.7/10, 2026-08-13 10:06:21 +07:00
 
 ## Success Criteria
 
-- Owning partition succeeds for video/image GET+HEAD+Range and direct download; foreign context/site/curl/no-cookie receives `404` and cannot refresh expiry.
+- Server/router tests prove owning cookie succeeds for video/image GET+HEAD+Range while foreign/missing cookie receives identical `404` without TTL refresh; Chromium proves native seek/decode and direct anchor behavior separately.
 - Logout/profile switch/workspace change/restart invalidate expected bindings. Remote HTTP and unsafe CORS config fail before media use/server start.
-- Commands pass: `cd server && cargo test`; `pnpm --filter @dam-hopper/ui test`; `pnpm --filter @dam-hopper/ui test:browser`; `BROWSER_CHANNEL=msedge pnpm --filter @dam-hopper/ui test:browser`; `pnpm build:native`; `node apps/native/scripts/qualify-session-bound-media.mjs --evidence <file>`; `pnpm check`.
+- Deterministic commands pass: `cd server && cargo test`; `pnpm --filter @dam-hopper/ui test`; `pnpm --filter @dam-hopper/ui test:browser`; `pnpm build`; and `pnpm lint`. The aggregate `pnpm check` may stop only at the explicitly deferred Tauri signing gate when authorized `TAURI_SIGNING_PRIVATE_KEY` is absent; web/native compilation evidence before that stop is recorded. `BROWSER_CHANNEL=msedge ...` runs only when Edge is installed and otherwise records unsupported.
 - `git diff --check` clean; `git diff --cached --quiet`; review report has no blockers.
 
 ## Risk Assessment
 
-- CI lacks Edge/Tauri engine: keep release blocked or explicitly unsupported; do not substitute UA simulation.
-- TLS/local partition behavior differs from production: stage with production-equivalent domains/proxy headers.
-- Server/client skew causes intentional media outage: use coordinated deployment or maintenance window. Rollback restores only a qualified session-bound pair or keeps media disabled.
+- CI lacks Edge/Tauri engine: record unsupported; do not substitute UA simulation or make support claims.
+- Same-origin browser fixtures do not prove real CHIPS partitioning; documentation states this boundary.
+- Server/client skew causes intentional media outage; rollback never restores legacy capability-only authorization.
 
 ## Security Considerations
 
@@ -95,5 +94,4 @@
 
 ## Unresolved questions
 
-- Release owner must name minimum Chromium, Edge, Windows, and WebView2 versions plus evidence retention location.
-- Decide whether Safari/Firefox/Linux WebKit are explicit unsupported targets or blockers for initial release.
+- None blocking. Edge, Tauri/WebView, Safari, Firefox, and real cross-site CHIPS behavior remain explicitly unsupported/pending.

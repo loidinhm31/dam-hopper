@@ -648,6 +648,29 @@ Use only origins and proxy topology you actually operate. Native remains a
 remote client; it still connects through saved server profiles and does not
 embed the DamHopper backend.
 
+### Media compatibility qualification status
+
+The deterministic server matrix covers exact-origin CORS startup guards,
+credentialed media sessions, cookie/ticket binding, generic denials, Range/HEAD,
+capacity, and lifecycle revocation. The repository Playwright/Vitest browser
+full suite passed 112/112 tests twice on installed Chromium 151; its 11
+media-specific tests cover native image decode, video metadata/seek, credentialed
+`HEAD` probes, direct anchor
+download, cleanup, and no Blob fallback. That browser fixture is same-origin and
+does not prove real cross-site partition behavior. Microsoft Edge was not
+installed and was not substituted; Tauri/WebView, Safari, and Firefox media
+support remain unqualified. Operators must not infer support from a user-agent
+string or Chromium emulation. The broader gate passed 1,013 UI tests and 740 Rust
+tests; `pnpm build` and `pnpm lint` were clean.
+
+Deploy the session-bound server and client together. During version skew, keep
+media unavailable rather than re-enabling capability-only URLs or a Bearer
+fallback. A rollback may restore only a previously qualified session-bound
+server/client pair; restarting the server intentionally revokes every in-memory
+media session and ticket. Session and ticket state is process-local. Multi-instance
+deployments require sticky routing to the issuing process until a shared store is
+designed.
+
 ## SSH Key Management
 
 SSH credentials are loaded on-demand via `/api/ssh/keys/load`:

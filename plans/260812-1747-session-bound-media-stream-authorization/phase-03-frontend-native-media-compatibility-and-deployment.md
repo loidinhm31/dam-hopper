@@ -12,8 +12,8 @@
 - Date: 2026-08-12
 - Description: require versioned session-cookie contract, credentialed compatibility probe, native credential mode, actionable fail-closed UX, deployment checks.
 - Priority: P1
-- Implementation status: Review changes required — 2026-08-13; Phase 2 contract consumed
-- Review status: Fix stale-profile logout revocation bypass, then re-review; Phase 4 engine qualification remains required
+- Implementation status: DONE — 2026-08-13; Phase 2 contract consumed
+- Review status: Stale-profile logout revocation fixed and regression-tested in Phase 4 prerequisite work
 
 ## Key Insights
 
@@ -28,7 +28,7 @@
 - Ticket issue/revoke/probe use `credentials: "include"`; require exact response version and same-origin stream path.
 - Probe issued URL with credentialed `HEAD`; success only 2xx. On 404/CORS/network/privacy failure, revoke best effort and return typed `MEDIA_SESSION_UNSUPPORTED`/`INSECURE_MEDIA_SERVER` without leaking response body.
 - Set `crossOrigin="use-credentials"` before assigning image/video `src`; preserve direct opaque URL, no Blob/object URL/service-worker fallback.
-- Preview/download UI explains HTTPS, supported Chromium/Edge/Tauri engine, site-data/privacy setting, retry; never suggests copying URL or bearer fallback.
+- Preview/download UI explains HTTPS, observed Chromium support, site-data/privacy settings, and retry; it never claims unexecuted engines or suggests copying URLs/bearer fallback.
 - Profile switch/logout revokes `/api/fs/media-session` before clearing/switching token; network failure remains bounded server-side.
 - Ownership is browser media-session + actor within one top-level-site partition. Same partition may reuse that session across tabs/logins for the actor; per-login/JTI binding is out of scope.
 
@@ -37,7 +37,7 @@
 - Create shared compatibility helper: validate server transport/version → credentialed HEAD probe → typed safe error category.
 - Ticket clients keep media-specific parsing/purpose; reuse helper rather than broad ticket-client refactor.
 - Components attach URL only after probe, retain generation/abort/revoke protections, and render shared actionable copy.
-- Deployment contract: frontend origin exactly allowlisted; API reachable over HTTPS; Tauri packaged origin allowlisted; no wildcard reflection.
+- Deployment contract: frontend origin exactly allowlisted; API reachable over HTTPS; no wildcard reflection. Tauri packaged-origin qualification remains deferred.
 
 ## Related code files
 
@@ -69,7 +69,7 @@
 - [x] Shared credentialed probe used by image/video/download
 - [x] Native URLs and Range path preserved
 - [x] Unsupported UX accessible/actionable
-- [ ] Logout/profile lifecycle covered — stale/deleted-profile logout clears token without shared session revoke; fix and regression-test
+- [x] Logout/profile lifecycle covered, including stale/deleted-profile dialog regression
 - [x] No bearer/blob fallback introduced
 
 ## Success Criteria
@@ -93,8 +93,7 @@
 
 ## Next steps
 
-- Fix `ServerSettingsDialog` stale/deleted-profile logout so it calls `revokeCurrentMediaSession(profile.url, token)` before local token removal; add regression coverage.
-- Phase 4 runs actual multi-origin browser and packaged WebView qualification before support/docs claims.
+- Phase 4 records deterministic installed-Chromium browser evidence and explicitly defers unexecuted real cross-site CHIPS and packaged WebView support claims.
 
 ## Unresolved questions
 

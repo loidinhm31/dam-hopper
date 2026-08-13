@@ -183,6 +183,10 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Errors return JSON with status code
 - ✓ Binary files detected, not force-decoded as text
 - ✓ Export Diagnostics downloads `dam-hopper-diagnostics-{timestamp}.json`
+- ✓ Native image/video streams require opaque ticket plus actor-bound media-session cookie
+- ✓ Ticket clients require `session-cookie-v1` and a credentialed successful `HEAD` before native source/download exposure
+- ✓ Profile change/logout revokes the bounded media session before credential removal, including stale dialog profiles
+- ✓ Missing or foreign media cookies fail as non-disclosing `404` without bearer/blob fallback
 
 **Non-Functional Requirements:**
 
@@ -190,6 +194,10 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Store token securely (0600 file permissions)
 - Log auth failures without leaking tokens
 - Diagnostics exports include recent terminal output tails by default and must be reviewed before sharing
+- Authenticated remote media requires HTTPS and exact configured CORS origins
+- Current automated native-media evidence is installed Chromium 151 only: 112 browser tests twice, including 11 media-specific tests; real cross-site CHIPS, Edge, Tauri/WebView, Safari, and Firefox remain unqualified
+- Qualification also passed 1,013 UI tests and 740 Rust tests; build and lint were clean
+- Media session/ticket state is process-local; multi-instance deployments require sticky routing to the issuing process
 
 ### PR-007: Multi-Server Profile Management (Phase 2)
 

@@ -141,6 +141,93 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
     );
   });
 
+  it("revokes a stale profile session before clearing its remaining token", async () => {
+    const staleProfile = {
+      id: "profile-stale",
+      name: "Deleted Server",
+      url: "https://deleted.test",
+      authType: "basic" as const,
+      username: "user",
+      createdAt: 1,
+    };
+    setAuthToken("stale-token", staleProfile.id);
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const onClose = vi.fn();
+
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(
+        createElement(ServerSettingsDialog, {
+          open: true,
+          profile: staleProfile,
+          onClose,
+        }),
+      );
+    });
+
+    const logoutButton = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Logout",
+    );
+    await act(async () => {
+      logoutButton!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://deleted.test/api/fs/media-session",
+      "https://deleted.test/api/auth/logout",
+    ]);
+    expect(getAuthToken(staleProfile.id)).toBeNull();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("never sends a stale profile bearer token over HTTP logout", async () => {
+    const staleProfile = {
+      id: "profile-http",
+      name: "Insecure Server",
+      url: "http://insecure.test",
+      authType: "basic" as const,
+      username: "user",
+      createdAt: 1,
+    };
+    setAuthToken("http-token", staleProfile.id);
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(
+        createElement(ServerSettingsDialog, {
+          open: true,
+          profile: staleProfile,
+          onClose: vi.fn(),
+        }),
+      );
+    });
+
+    const logoutButton = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Logout",
+    );
+    await act(async () => {
+      logoutButton!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://insecure.test/api/auth/logout",
+      expect.objectContaining({ headers: {} }),
+    );
+    expect(getAuthToken(staleProfile.id)).toBeNull();
+  });
+
   it("continues local logout after a failed media-session revoke", async () => {
     const profile = {
       id: "profile-a",
