@@ -11,7 +11,7 @@
 
 - **Date:** 2026-08-13
 - **Priority:** P2
-- **Status:** Pending
+- **Status:** DONE — Completed 2026-08-13 11:39:20 +07:00
 - **Goal:** document observable semantics and prove focused plus repository-wide compatibility.
 
 ## Key Insights
@@ -50,11 +50,11 @@ No new component, endpoint, cache, state machine, dependency, config, or deploym
 
 ## Todo List
 
-- [ ] Update API and frontend docs.
-- [ ] Pass Rust format/focused tests.
-- [ ] Pass UI unit/browser/build gates.
-- [ ] Pass repository lint/build/test/check gates.
-- [ ] Complete final diff and architecture-drift review.
+- [x] Update API and frontend docs.
+- [x] Pass Rust format/focused tests.
+- [x] Pass UI unit/browser/build gates.
+- [x] Pass repository lint/build/test/check gates.
+- [x] Complete final diff and architecture-drift review.
 
 ## Success Criteria
 
@@ -65,7 +65,7 @@ No new component, endpoint, cache, state machine, dependency, config, or deploym
 
 ## Risk Assessment
 
-- **Environment-specific browser/native gate:** report exact command/error; do not label completion until the required gate passes or user explicitly changes acceptance.
+- **Environment-specific browser/native gate:** the `TAURI_SIGNING_PRIVATE_KEY` native signing gate was explicitly waived by the user; this is a validation caveat, not a product/configuration change.
 - **Flaky host-dependent API assertion:** assert shape/availability, not local battery presence.
 - **Documentation drift:** compare JSON field names directly with Rust serde and TypeScript types.
 
@@ -77,4 +77,4 @@ No new component, endpoint, cache, state machine, dependency, config, or deploym
 
 ## Next Steps
 
-Request user approval after all gates. Commit/push only on explicit instruction.
+Finalization approved. No commit/push performed per scope.

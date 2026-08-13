@@ -49,6 +49,18 @@ reveals every server-ordered disk with its name, mount, percentage, and used/tot
 bytes; it does not add polling or persistence. Deep-snapshot failure uses the
 same legacy presentation so cached temperatures and disks remain visible.
 
+The diagnosis renders an optional `snapshot.battery` section only when the
+server reports at least one classified battery, the section is not unsupported,
+and at least one field passes the client-side finite/non-negative validation.
+It shows the battery count, normalized status, and capacity when present, plus
+independent rows labeled **Remaining energy (Wh)** and **Instantaneous power
+(W)**. Missing measurements are omitted rather than shown as zero or
+`Unknown`; an energy-only response does not create a power row, and vice versa.
+Availability text is shown beside retained values, including stale or degraded
+states. The field is optional so an older server produces no battery section;
+the UI adds no polling, legacy fallback metric, per-device expansion, chart, or
+mutation control for this data.
+
 Opening the popover acknowledges the presentation count but does not dismiss an
 active resource incident. Known accepted UI caveat: after acknowledgement, a
 resource-only critical badge can render with the info color; its active count
