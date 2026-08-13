@@ -57,7 +57,7 @@ fn free_bytes(path: &Path) -> Option<u64> {
             (libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) == 0)
                 .then(|| {
                     let stat = stat.assume_init();
-                    (stat.f_bavail as u64).checked_mul(stat.f_frsize as u64)
+                    checked_block_bytes(stat.f_bavail, stat.f_frsize)
                 })
                 .flatten()
         }
@@ -67,6 +67,14 @@ fn free_bytes(path: &Path) -> Option<u64> {
         let _ = path;
         None
     }
+}
+
+#[cfg(unix)]
+fn checked_block_bytes(blocks: impl TryInto<u64>, block_size: impl TryInto<u64>) -> Option<u64> {
+    blocks
+        .try_into()
+        .ok()?
+        .checked_mul(block_size.try_into().ok()?)
 }
 
 #[derive(Clone, Debug)]
@@ -168,6 +176,7 @@ fn unsupported_snapshot(
         MountContext::for_workspace_at(workspace, sampled_at),
     );
     snapshot.memory.availability = Availability::unsupported(sampled_at);
+    snapshot.battery = super::BatterySnapshot::unsupported(sampled_at);
     snapshot.mount_context.availability = Availability::unsupported(sampled_at);
     snapshot.with_deep_sections(
         Availability::unsupported(sampled_at),
@@ -261,6 +270,10 @@ mod tests {
         assert_eq!(snapshot.sampled_at, 99);
         assert_eq!(snapshot.memory.total_bytes, Some(2048));
         assert_eq!(
+            snapshot.battery.availability.state,
+            crate::system::AvailabilityState::Unsupported
+        );
+        assert_eq!(
             snapshot.host.boot_id.as_deref(),
             Some("123e4567-e89b-12d3-a456-426614174000")
         );
@@ -338,6 +351,7 @@ mod non_linux_tests {
             "unsupported"
         );
         assert_eq!(value["memory"]["availability"]["state"], "unsupported");
+        assert_eq!(value["battery"]["availability"]["state"], "unsupported");
         assert_eq!(value["processes"]["availability"]["state"], "unsupported");
         assert_eq!(
             value["mountContext"]["availability"]["state"],

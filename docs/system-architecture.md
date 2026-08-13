@@ -1595,6 +1595,25 @@ unlimited markers), file cache, memory events, and cgroup PSI. Mount and
 membership validation runs before cgroup reads; unsupported or invalid layouts
 remain explicitly degraded.
 
+Linux battery telemetry is read from the startup-owned `/sys/class/power_supply`
+tree and remains part of the same cached snapshot. Only entries classified as
+`Battery` contribute. Direct `energy_now` and `power_now` micro-units become Wh
+and W respectively; charge, current, and voltage are never combined to infer a
+missing measurement. Multiple batteries contribute a value only when every
+classified battery supplies the same direct attribute, so partial totals are not
+reported. Capacity uses the direct percentage for one battery and the ratio of
+complete summed `energy_now`/`energy_full` pairs for multiple batteries. Missing
+optional values serialize as `null`; the top-level `battery` field is additive
+and optional for clients interoperating with older servers. The serialized
+`battery` v1 object contains `count`, `capacityPercent`, `status`,
+`remainingEnergyWh`, `instantaneousPowerW`, and `availability`; status is one of
+`charging`,
+`discharging`, `full`, `notCharging`, `unknown`, or `mixed`. An unrecognized or
+malformed raw status is treated as malformed and does not become a fabricated
+status value. Malformed, denied, unsupported, and stale reads retain explicit
+availability (and stale cached values where applicable). Non-Linux platforms
+report battery availability as `unsupported`.
+
 Process inventory is bounded to 4,096 scanned PIDs, 20 returned processes, and PSS
 reads for the top 5 by RSS, with a 100 ms deadline. The response includes scan,
 truncation, deadline, skipped, and issue counters for permission denied, invalid
