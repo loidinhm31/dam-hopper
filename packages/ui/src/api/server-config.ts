@@ -73,6 +73,10 @@ export function getServerUrl(): string {
     return activeProfile.url.replace(/\/$/, "");
   }
 
+  // Native browser transport cannot use separate-origin profiles without CORS.
+  // Skip legacy remote URLs and fall through to the packaged page origin.
+  if (isNativeBrowserHost()) return `${location.protocol}//${location.host}`;
+
   // Priority 2: Legacy localStorage (for migration period)
   try {
     const stored = localStorage.getItem(KEY_URL);
@@ -269,8 +273,7 @@ export function clearAuthUsername(): void {
 
 /**
  * Whether the configured server is cross-origin relative to the current page.
- * Same-origin: cookies work, no special auth headers needed.
- * Cross-origin: must use Bearer token in Authorization header.
+ * Browser API/media access requires the server UI and API to share an origin.
  */
 export function isCrossOriginServer(serverUrl: string): boolean {
   try {
@@ -391,11 +394,30 @@ export function getActiveProfileId(): string | null {
   }
 }
 
+function isNativeBrowserHost(): boolean {
+  return (
+    typeof document !== "undefined" &&
+    document.documentElement.dataset.appHost === "native"
+  );
+}
+
+function isSameOriginProfile(profile: ServerProfile): boolean {
+  if (!isNativeBrowserHost()) return true;
+  if (typeof window === "undefined") return true;
+
+  try {
+    return new URL(normalizeServerUrl(profile.url), window.location.href).origin ===
+      window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
 /** Get the currently active profile */
 export function getActiveProfile(): ServerProfile | null {
   const id = getActiveProfileId();
   if (!id) return null;
-  return getProfiles().find((p) => p.id === id) ?? null;
+  return getProfiles().find((p) => p.id === id && isSameOriginProfile(p)) ?? null;
 }
 
 /** Set the active profile by ID */
