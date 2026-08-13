@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -22,6 +22,28 @@ const KNOWN_TEST_TICKETS = new Set([
   "download_ticket",
 ]);
 const imageIssueCounts = new Map<string, number>();
+const requestedBrowserChannel = process.env.BROWSER_CHANNEL?.trim();
+const requestedExecutablePath = process.env.BROWSER_EXECUTABLE_PATH?.trim();
+if (requestedBrowserChannel && requestedExecutablePath) {
+  throw new Error("Set only one of BROWSER_CHANNEL or BROWSER_EXECUTABLE_PATH");
+}
+if (requestedExecutablePath && !existsSync(requestedExecutablePath)) {
+  throw new Error(
+    `BROWSER_EXECUTABLE_PATH does not exist: ${requestedExecutablePath}`,
+  );
+}
+const systemChromiumPath = [
+  requestedExecutablePath,
+  "/usr/bin/chromium-browser",
+  "/usr/bin/chromium",
+].find((candidate): candidate is string =>
+  Boolean(candidate && existsSync(candidate)),
+);
+const browserLaunchOptions = requestedBrowserChannel
+  ? { channel: requestedBrowserChannel }
+  : systemChromiumPath
+    ? { executablePath: systemChromiumPath }
+    : {};
 
 function readJsonBody(
   request: {
@@ -120,6 +142,7 @@ const mediaFixturePlugin = {
               streamPath: `/api/fs/image/stream/${ticket}`,
               expiresAt: 1_800_000_000_000,
               purpose: "preview",
+              authorizationMode: "session-cookie-v1",
             }),
           );
         });
@@ -172,7 +195,7 @@ export default defineConfig({
     include: ["browser-tests/**/*.browser.{ts,tsx}"],
     browser: {
       enabled: true,
-      provider: playwright(),
+      provider: playwright({ launchOptions: browserLaunchOptions }),
       instances: [{ browser: "chromium" }],
       headless: true,
     },

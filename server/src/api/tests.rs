@@ -3815,6 +3815,7 @@ async fn video_tickets_are_opaque_purpose_bound_and_independently_revocable() {
     .unwrap();
     let playback_ticket = playback["ticket"].as_str().unwrap().to_owned();
     assert_eq!(playback["purpose"], "playback");
+    assert_eq!(playback["authorizationMode"], "session-cookie-v1");
     assert_eq!(
         playback["streamPath"],
         format!("/api/fs/video/stream/{playback_ticket}")
@@ -3842,6 +3843,7 @@ async fn video_tickets_are_opaque_purpose_bound_and_independently_revocable() {
     let download_ticket = download["ticket"].as_str().unwrap();
     assert_ne!(playback_ticket, download_ticket);
     assert_eq!(download["purpose"], "download");
+    assert_eq!(download["authorizationMode"], "session-cookie-v1");
 
     let revoked = delete_json(
         state.clone(),
@@ -4105,6 +4107,7 @@ async fn video_stream_requires_its_own_media_session_and_logout_revokes_it() {
     let ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
     let owning_cookie = MEDIA_COOKIES.lock().unwrap().remove(&ticket).unwrap();
 
+    let mut missing_get_headers = None;
     for method in ["GET", "HEAD"] {
         let response = stream_video(state.clone(), &ticket, method, &[]).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -4112,6 +4115,9 @@ async fn video_stream_requires_its_own_media_session_and_logout_revokes_it() {
             response.headers()[header::CACHE_CONTROL],
             "private, no-store"
         );
+        if method == "GET" {
+            missing_get_headers = Some(response.headers().clone());
+        }
         assert!(axum::body::to_bytes(response.into_body(), 1)
             .await
             .unwrap()
@@ -4128,12 +4134,13 @@ async fn video_stream_requires_its_own_media_session_and_logout_revokes_it() {
         .lock()
         .unwrap()
         .insert(ticket.clone(), foreign_cookie);
-    assert_eq!(
-        stream_video(state.clone(), &ticket, "GET", &[])
-            .await
-            .status(),
-        StatusCode::NOT_FOUND
-    );
+    let foreign = stream_video(state.clone(), &ticket, "GET", &[]).await;
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+    assert_eq!(foreign.headers(), missing_get_headers.as_ref().unwrap());
+    assert!(axum::body::to_bytes(foreign.into_body(), 1)
+        .await
+        .unwrap()
+        .is_empty());
     MEDIA_COOKIES
         .lock()
         .unwrap()
@@ -4338,7 +4345,7 @@ async fn video_stream_revokes_stale_files_and_handles_sparse_ranges_without_full
 }
 
 #[tokio::test]
-async fn video_stream_is_capability_authorized_and_exposes_media_headers_to_browsers() {
+async fn video_stream_is_session_bound_and_exposes_media_headers_to_browsers() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("clip.webm"), b"x").unwrap();
     let state = make_state_with_project(&tmp);
@@ -4362,7 +4369,7 @@ async fn video_stream_is_capability_authorized_and_exposes_media_headers_to_brow
 }
 
 // ---------------------------------------------------------------------------
-// Capability-bound image preview API
+// Session-bound image preview API
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -4393,6 +4400,7 @@ async fn image_tickets_use_a_closed_allowlist_and_fixed_preview_contract() {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let ticket = json["ticket"].as_str().unwrap();
         assert_eq!(json["purpose"], "preview");
+        assert_eq!(json["authorizationMode"], "session-cookie-v1");
         assert_eq!(json["streamPath"], format!("/api/fs/image/stream/{ticket}"));
         assert!(!json.to_string().contains("test-project"));
         assert!(!json.to_string().contains(&path));
@@ -4607,6 +4615,7 @@ async fn image_stream_requires_its_own_media_session_and_logout_revokes_it() {
     let ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
     let owning_cookie = MEDIA_COOKIES.lock().unwrap().remove(&ticket).unwrap();
 
+    let mut missing_get_headers = None;
     for method in ["GET", "HEAD"] {
         let response = stream_image(state.clone(), &ticket, method, &[]).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -4614,6 +4623,13 @@ async fn image_stream_requires_its_own_media_session_and_logout_revokes_it() {
             response.headers()[header::CACHE_CONTROL],
             "private, no-store"
         );
+        if method == "GET" {
+            missing_get_headers = Some(response.headers().clone());
+        }
+        assert!(axum::body::to_bytes(response.into_body(), 1)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     let foreign_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
@@ -4626,12 +4642,13 @@ async fn image_stream_requires_its_own_media_session_and_logout_revokes_it() {
         .lock()
         .unwrap()
         .insert(ticket.clone(), foreign_cookie);
-    assert_eq!(
-        stream_image(state.clone(), &ticket, "GET", &[])
-            .await
-            .status(),
-        StatusCode::NOT_FOUND
-    );
+    let foreign = stream_image(state.clone(), &ticket, "GET", &[]).await;
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+    assert_eq!(foreign.headers(), missing_get_headers.as_ref().unwrap());
+    assert!(axum::body::to_bytes(foreign.into_body(), 1)
+        .await
+        .unwrap()
+        .is_empty());
 
     let unauthenticated = build_router(state.clone(), vec![])
         .oneshot(
@@ -4669,7 +4686,7 @@ async fn image_stream_requires_its_own_media_session_and_logout_revokes_it() {
 }
 
 #[tokio::test]
-async fn image_stream_is_inline_mime_typed_rangeable_and_capability_only() {
+async fn image_stream_is_session_bound_inline_mime_typed_and_rangeable() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("cover.WEBP"), b"0123456789").unwrap();
     let state = make_state_with_project(&tmp);
