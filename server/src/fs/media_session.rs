@@ -96,7 +96,7 @@ pub(crate) fn media_session_from_headers(headers: &HeaderMap) -> Option<MediaSes
 
 fn cookie_header(value: &str, max_age: u64) -> HeaderValue {
     HeaderValue::from_str(&format!(
-        "{MEDIA_SESSION_COOKIE}={value}; HttpOnly; Secure; SameSite=None; Partitioned; Path={MEDIA_SESSION_PATH}; Max-Age={max_age}"
+        "{MEDIA_SESSION_COOKIE}={value}; HttpOnly; SameSite=Lax; Path={MEDIA_SESSION_PATH}; Max-Age={max_age}"
     ))
     .expect("generated media session cookie must be valid")
 }
@@ -126,14 +126,14 @@ mod tests {
         assert_eq!(
             media_session_cookie(&lease),
             format!(
-                "{MEDIA_SESSION_COOKIE}={}; HttpOnly; Secure; SameSite=None; Partitioned; Path={MEDIA_SESSION_PATH}; Max-Age=28800",
+                "{MEDIA_SESSION_COOKIE}={}; HttpOnly; SameSite=Lax; Path={MEDIA_SESSION_PATH}; Max-Age=28800",
                 lease.token.as_str()
             )
         );
         assert_eq!(
             clear_media_session_cookie(),
             format!(
-                "{MEDIA_SESSION_COOKIE}=; HttpOnly; Secure; SameSite=None; Partitioned; Path={MEDIA_SESSION_PATH}; Max-Age=0"
+                "{MEDIA_SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path={MEDIA_SESSION_PATH}; Max-Age=0"
             )
         );
     }

@@ -10,17 +10,6 @@ const profileState = vi.hoisted(() => ({
   listeners: new Set<() => void>(),
 }));
 
-vi.mock("@/api/media-session.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@/api/media-session.js")>();
-  return {
-    ...actual,
-    // The shared browser fixture is HTTP and validates native-element behavior;
-    // real HTTPS/cookie enforcement remains covered by server contract tests.
-    assertMediaTransport: () => undefined,
-  };
-});
-
 vi.mock("@/api/server-config.js", () => ({
   getActiveProfile: () => ({
     id: `browser-profile-${profileState.version}`,

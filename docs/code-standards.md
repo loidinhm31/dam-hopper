@@ -752,7 +752,7 @@ See [Phase 01 documentation](./phase-01-server-auth-bypass/index.md) for complet
 
 - **Token Storage**: `~/.config/dam-hopper/server-token` (hex UUID)
 - **Signing Algorithm**: HS256 (HMAC-SHA256)
-- **Cookie Transport**: httpOnly, Secure, SameSite=Strict
+- **Cookie Transport**: auth cookies are `HttpOnly; SameSite=Strict`; media uses a host-only `HttpOnly; SameSite=Lax; Path=/api/fs` cookie without `Secure` for HTTP compatibility
 - **Validation**: Constant-time comparison via `subtle` crate
 - **Expiry**: 30 days for production, 30 days for dev mode
 
@@ -863,7 +863,9 @@ Routes registered conditionally at router construction time.
 - [ ] Bearer token authentication
 - [ ] No shell injection (avoid shlex parsing for commands)
 - [ ] No symlink traversal (validate all path operations)
-- [ ] CORS configured (default: localhost:5173)
+- [ ] CORS is optional; cross-origin browser deployments allow only exact configured HTTP/HTTPS origins (never wildcard/arbitrary reflection)
+- [ ] Media preserves Bearer ticket issuance, host-only HttpOnly SameSite=Lax session cookies, and credentialed native stream requests; auth cookies remain SameSite=Strict
+- [ ] Cross-site HTTP media is rejected by browser cookie policy; cleartext HTTP interception/modification risk is documented and accepted only on a trusted encrypted network
 - [ ] Error messages don't leak paths/credentials
 
 ## Telemetry Privacy and Fault Boundaries

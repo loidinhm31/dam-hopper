@@ -16,9 +16,7 @@ import {
 } from "@/api/server-config.js";
 
 type MediaState = "loading" | "ready" | "buffering" | "seeking" | "error";
-type MediaTicketErrorCode =
-  | "MEDIA_SESSION_UNSUPPORTED"
-  | "INSECURE_MEDIA_SERVER";
+type MediaTicketErrorCode = "MEDIA_SESSION_UNSUPPORTED";
 
 interface VideoPreviewProps {
   project: string;
@@ -51,11 +49,6 @@ const mediaTicketErrorCopy: Record<
     description:
       "Use a supported Chromium or Microsoft Edge browser. Allow site data for this server and turn off privacy blocking, then retry.",
   },
-  INSECURE_MEDIA_SERVER: {
-    title: "Secure connection required",
-    description:
-      "This media server must use HTTPS before the preview or download can load. Update the server address, then retry.",
-  },
 };
 
 function isAbortError(error: unknown): boolean {
@@ -68,10 +61,7 @@ function isAbortError(error: unknown): boolean {
 function mediaTicketErrorCode(error: unknown): MediaTicketErrorCode | null {
   if (!error || typeof error !== "object" || !("code" in error)) return null;
   const { code } = error as { code?: unknown };
-  return code === "MEDIA_SESSION_UNSUPPORTED" ||
-    code === "INSECURE_MEDIA_SERVER"
-    ? code
-    : null;
+  return code === "MEDIA_SESSION_UNSUPPORTED" ? code : null;
 }
 
 function revokePlayback(handle: VideoPlaybackHandle | null): void {
@@ -300,7 +290,7 @@ export function VideoPreview({
             aria-label={`Download ${fileName}`}
             title={
               ticketErrorCode
-                ? "Downloads require a supported browser and secure HTTPS server."
+                ? "Downloads require a supported browser and working session cookies."
                 : undefined
             }
           >

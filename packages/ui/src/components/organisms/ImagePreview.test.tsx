@@ -154,7 +154,6 @@ describe("ImagePreview", () => {
       "Browser media access is unavailable",
       "Allow site data",
     ],
-    ["INSECURE_MEDIA_SERVER", "Secure connection required", "must use HTTPS"],
   ])(
     "renders safe, actionable %s guidance and retries",
     async (code, title, guidance) => {
