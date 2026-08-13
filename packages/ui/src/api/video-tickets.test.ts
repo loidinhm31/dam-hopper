@@ -76,17 +76,27 @@ describe("issueVideoTicket", () => {
     );
   });
 
-  it("fails closed before issuing media to an insecure server", async () => {
+  it("issues and probes media tickets from an HTTP server", async () => {
     config.profile = { id: "profile-a", url: "http://api.test" };
-    const fetchMock = vi.fn();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(issued("playback")), { status: 201 }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      issueVideoTicket("project", "clips/demo.webm", "playback"),
-    ).rejects.toMatchObject<Partial<VideoTicketError>>({
-      code: "INSECURE_MEDIA_SERVER",
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
+    const ticket = await issueVideoTicket(
+      "project",
+      "clips/demo.webm",
+      "playback",
+    );
+    expect(ticket.url).toContain("http://api.test/api/fs/video/stream/");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("http://api.test/api/fs/video/stream/"),
+      expect.objectContaining({ method: "HEAD", credentials: "include" }),
+    );
   });
 
   it("rejects old servers and probes an issued ticket with credentials", async () => {

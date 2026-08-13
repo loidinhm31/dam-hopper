@@ -54,7 +54,7 @@ Restart after changes:
 pnpm server:restart
 ```
 
-Only bind to `0.0.0.0` when the host is protected by a trusted network, firewall, or Tailscale. DamHopper exposes terminal, file, git, and tunnel operations for the configured registry projects.
+Authenticated HTTP binds may use `0.0.0.0` without a TLS-proxy assertion. Only do so when the host is protected by a trusted network, firewall, or Tailscale: cleartext exposes Bearer tokens, cookies, ticket URLs, terminal/file/git actions, and media bytes to interception and modification. Use HTTPS or a trusted encrypted network when that risk is unacceptable. Same-origin HTTP media is supported; cross-site HTTP media is not, because `SameSite=Lax` cookies are not sent cross-site.
 
 ## Operate
 

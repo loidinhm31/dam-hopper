@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{header, Request, StatusCode},
+    http::{header, HeaderValue, Request, StatusCode},
 };
 use tower::ServiceExt;
 
@@ -4084,7 +4084,17 @@ async fn stream_video(
     method: &str,
     headers: &[(&str, &str)],
 ) -> axum::response::Response {
-    let router = build_router(state, vec![]);
+    stream_video_with_origins(state, ticket, method, headers, vec![]).await
+}
+
+async fn stream_video_with_origins(
+    state: AppState,
+    ticket: &str,
+    method: &str,
+    headers: &[(&str, &str)],
+    allowed_origins: Vec<HeaderValue>,
+) -> axum::response::Response {
+    let router = build_router(state, allowed_origins);
     let mut request = Request::builder()
         .method(method)
         .uri(format!("/api/fs/video/stream/{ticket}"))
@@ -4355,11 +4365,12 @@ async fn video_stream_is_session_bound_and_exposes_media_headers_to_browsers() {
     std::fs::write(tmp.path().join("clip.webm"), b"x").unwrap();
     let state = make_state_with_project(&tmp);
     let ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
-    let response = stream_video(
+    let response = stream_video_with_origins(
         state.clone(),
         &ticket,
         "GET",
         &[("origin", "https://browser.example")],
+        vec![HeaderValue::from_static("https://browser.example")],
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -4592,7 +4603,17 @@ async fn stream_image(
     method: &str,
     headers: &[(&str, &str)],
 ) -> axum::response::Response {
-    let router = build_router(state, vec![]);
+    stream_image_with_origins(state, ticket, method, headers, vec![]).await
+}
+
+async fn stream_image_with_origins(
+    state: AppState,
+    ticket: &str,
+    method: &str,
+    headers: &[(&str, &str)],
+    allowed_origins: Vec<HeaderValue>,
+) -> axum::response::Response {
+    let router = build_router(state, allowed_origins);
     let mut request = Request::builder()
         .method(method)
         .uri(format!("/api/fs/image/stream/{ticket}"))
@@ -4697,7 +4718,7 @@ async fn image_stream_is_session_bound_inline_mime_typed_and_rangeable() {
     let state = make_state_with_project(&tmp);
     let ticket = issue_image_stream_ticket(state.clone(), "cover.WEBP").await;
 
-    let response = stream_image(
+    let response = stream_image_with_origins(
         state.clone(),
         &ticket,
         "GET",
@@ -4705,6 +4726,7 @@ async fn image_stream_is_session_bound_inline_mime_typed_and_rangeable() {
             ("range", "bytes=2-4"),
             ("origin", "https://browser.example"),
         ],
+        vec![HeaderValue::from_static("https://browser.example")],
     )
     .await;
     assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);

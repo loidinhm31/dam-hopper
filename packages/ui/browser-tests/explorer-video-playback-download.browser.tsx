@@ -11,17 +11,6 @@ const serverConfig = vi.hoisted(() => ({
   getAuthToken: () => "synthetic-auth",
 }));
 
-vi.mock("@/api/media-session.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@/api/media-session.js")>();
-  return {
-    ...actual,
-    // The shared browser fixture is HTTP and validates native-element behavior;
-    // real HTTPS/cookie enforcement remains covered by server contract tests.
-    assertMediaTransport: () => undefined,
-  };
-});
-
 vi.mock("@/api/server-config.js", () => ({
   getActiveProfile: serverConfig.getActiveProfile,
   getAuthToken: serverConfig.getAuthToken,
@@ -31,21 +20,6 @@ vi.mock("@/api/server-config.js", () => ({
   subscribeToProfileChanges: () => () => {},
 }));
 
-type TicketPurpose = "playback" | "download";
-
-function ticketResponse(ticket: string, purpose: TicketPurpose) {
-  return new Response(
-    JSON.stringify({
-      ticket,
-      streamPath: `/api/fs/video/stream/${ticket}`,
-      expiresAt: 1_800_000_000_000,
-      purpose,
-      authorizationMode: "session-cookie-v1",
-    }),
-    { status: 201, headers: { "Content-Type": "application/json" } },
-  );
-}
-
 describe("Explorer video playback in Chromium", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -53,7 +27,7 @@ describe("Explorer video playback in Chromium", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   let browserFetch: typeof fetch;
   let deferStale = false;
-  let resolveStale: ((response: Response) => void) | undefined;
+  let resolveStale: (() => void) | undefined;
 
   async function render(path = "clips/one-second-vp8.webm") {
     await act(async () => {
@@ -85,29 +59,18 @@ describe("Explorer video playback in Chromium", () => {
   beforeEach(async () => {
     browserFetch = window.fetch.bind(window);
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === "POST") {
-        const body = JSON.parse(String(init.body)) as {
-          path: string;
-          purpose: TicketPurpose;
-        };
-        if (body.path === "clips/stale.webm" && deferStale) {
-          return new Promise<Response>((resolve) => (resolveStale = resolve));
-        }
-        if (body.path === "clips/unsupported.webm") {
-          return ticketResponse("unsupported_ticket", body.purpose);
-        }
-        if (body.path === "clips/active.webm") {
-          return ticketResponse("active_ticket", body.purpose);
-        }
+      if (init?.method === "POST" && deferStale) {
+        const body = JSON.parse(String(init.body)) as { path?: string };
         if (body.path === "clips/stale.webm") {
-          return ticketResponse("stale_ticket", body.purpose);
+          const response = await browserFetch(input, {
+            ...init,
+            signal: undefined,
+          });
+          return new Promise<Response>((resolve) => {
+            resolveStale = () => resolve(response);
+          });
         }
-        return ticketResponse(
-          body.purpose === "download" ? "download_ticket" : "playback_ticket",
-          body.purpose,
-        );
       }
-      if (init?.method === "DELETE") return new Response(null, { status: 204 });
       return browserFetch(input, init);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -248,9 +211,7 @@ describe("Explorer video playback in Chromium", () => {
     const player = document.querySelector("video") as HTMLVideoElement;
     await expect.poll(() => player.currentSrc).toContain("/active_ticket");
     const activeSource = player.currentSrc;
-    await act(async () =>
-      resolveStale?.(ticketResponse("stale_ticket", "playback")),
-    );
+    await act(async () => resolveStale?.());
 
     await expect
       .poll(() =>

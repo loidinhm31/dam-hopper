@@ -14,13 +14,14 @@ import {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("media session contract", () => {
-  it("requires HTTPS because the media cookie is always Secure", () => {
-    expect(() => assertMediaTransport("http://localhost:4800")).toThrow(
+  it("accepts HTTP and HTTPS web origins but rejects other schemes", () => {
+    expect(() => assertMediaTransport("http://localhost:4800")).not.toThrow();
+    expect(() => assertMediaTransport("https://api.test")).not.toThrow();
+    expect(() => assertMediaTransport("ftp://api.test")).toThrow(
       expect.objectContaining<Partial<MediaSessionError>>({
-        code: "INSECURE_MEDIA_SERVER",
+        code: "MEDIA_SESSION_UNSUPPORTED",
       }),
     );
-    expect(() => assertMediaTransport("https://api.test")).not.toThrow();
   });
 
   it("rejects absent and unknown authorization modes", () => {
@@ -83,13 +84,20 @@ describe("media session contract", () => {
     );
   });
 
-  it("does not send a bearer token when a profile uses HTTP", async () => {
-    const fetchMock = vi.fn();
+  it("revokes a media session over HTTP with bearer and cookies", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await revokeCurrentMediaSession("http://api.test", "secret-token");
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/api/fs/media-session",
+      expect.objectContaining({
+        method: "DELETE",
+        credentials: "include",
+        headers: { Authorization: "Bearer secret-token" },
+      }),
+    );
   });
 
   it("maps HEAD status and network failures to one redacted compatibility error", async () => {

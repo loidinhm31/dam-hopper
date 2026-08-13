@@ -1,8 +1,6 @@
 export const MEDIA_SESSION_AUTHORIZATION_MODE = "session-cookie-v1";
 
-export type MediaSessionErrorCode =
-  | "MEDIA_SESSION_UNSUPPORTED"
-  | "INSECURE_MEDIA_SERVER";
+export type MediaSessionErrorCode = "MEDIA_SESSION_UNSUPPORTED";
 
 export class MediaSessionError extends Error {
   constructor(readonly code: MediaSessionErrorCode) {
@@ -15,15 +13,17 @@ function fail(code: MediaSessionErrorCode): never {
   throw new MediaSessionError(code);
 }
 
-/** Reject media origins that cannot receive the mandatory Secure session cookie. */
+/** Accept only web origins supported by browser credentialed requests. */
 export function assertMediaTransport(serverOrigin: string): void {
   let server: URL;
   try {
     server = new URL(serverOrigin);
   } catch {
-    fail("INSECURE_MEDIA_SERVER");
+    fail("MEDIA_SESSION_UNSUPPORTED");
   }
-  if (server.protocol !== "https:") fail("INSECURE_MEDIA_SERVER");
+  if (server.protocol !== "http:" && server.protocol !== "https:") {
+    fail("MEDIA_SESSION_UNSUPPORTED");
+  }
 }
 
 /** Require the server contract version; capability-only servers fail closed. */
@@ -51,7 +51,7 @@ export function mediaTicketUrl(
 }
 
 /**
- * Verify native media can send the HttpOnly partitioned cookie before exposing
+ * Verify native media can send the HttpOnly session cookie before exposing
  * a ticket URL to an image, video, or browser-managed download.
  */
 export async function probeMediaTicket(
@@ -76,10 +76,9 @@ export async function revokeCurrentMediaSession(
   serverOrigin: string,
   authToken: string,
 ): Promise<void> {
-  // Profiles still support loopback HTTP for general development, but this
-  // security-sensitive request must never transmit a bearer token in cleartext.
   try {
-    if (new URL(serverOrigin).protocol !== "https:") return;
+    const protocol = new URL(serverOrigin).protocol;
+    if (protocol !== "http:" && protocol !== "https:") return;
   } catch {
     return;
   }
