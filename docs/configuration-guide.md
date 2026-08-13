@@ -576,7 +576,7 @@ curl -H "Authorization: Bearer $(cat ~/.config/dam-hopper/server-token)" \
 ```bash
 cd server
 cargo run -- --config /path/to/dam-hopper.toml --port 4800 \
-  --host 127.0.0.1 --cors-origins "https://localhost:5173"
+  --host 127.0.0.1
 # Or omit --config to use ~/.config/dam-hopper/dam-hopper.toml
 ```
 
@@ -584,7 +584,7 @@ cargo run -- --config /path/to/dam-hopper.toml --port 4800 \
 
 ```bash
 RUST_LOG=dam_hopper=debug cargo run -- --config /path/to/dam-hopper.toml \
-  --host 127.0.0.1 --cors-origins "https://localhost:5173"
+  --host 127.0.0.1
 ```
 
 ### Release Build
@@ -592,7 +592,7 @@ RUST_LOG=dam_hopper=debug cargo run -- --config /path/to/dam-hopper.toml \
 ```bash
 cargo build --release
 ./target/release/dam-hopper-server --config /path/to/dam-hopper.toml --port 4800 \
-  --host 127.0.0.1 --cors-origins "https://localhost:5173"
+  --host 127.0.0.1
 ```
 
 ### Nohup Background Server
@@ -609,7 +609,6 @@ Edit `~/.config/dam-hopper/server.conf` to set:
 - `DAM_HOPPER_CONFIG`
 - `DAM_HOPPER_HOST`
 - `DAM_HOPPER_PORT`
-- `DAM_HOPPER_CORS_ORIGINS` (optional exact HTTP/HTTPS origins for cross-origin browser deployments)
 - `DAM_HOPPER_WORKSPACE` (legacy directory-discovery override, optional)
 
 Runtime files:
@@ -618,49 +617,34 @@ Runtime files:
 - Log: `~/.config/dam-hopper/output.log`
 - PID: `~/.config/dam-hopper/server.pid`
 
-## Cross-Origin Resource Sharing (CORS)
+## Browser origin and transport
 
-Same-origin browser deployments need no CORS configuration. For a separate
-frontend, use a comma-separated exact HTTP/HTTPS allowlist via `--cors-origins`
-(or `DAM_HOPPER_CORS_ORIGINS`). Empty/unset disables CORS; wildcard, malformed,
-duplicate, path, query, user-info, and fragment origins reject startup. The
-server returns credentialed CORS headers only for listed origins; it never
-reflects arbitrary origins.
+The backend serves the SPA and API as a same-origin application. CORS is not a
+server feature: no `Access-Control-*` headers or preflight behavior are emitted,
+and separate cross-origin browser frontends are unsupported. Packaged native
+browser transport also ignores separate-origin profiles until a native HTTP/WebSocket
+transport exists; it does not embed the DamHopper backend.
 
-```bash
-cargo run -- \
-  --config /path/to/dam-hopper.toml \
-  --cors-origins "http://app.example,https://admin.example" \
-  --host 0.0.0.0
-```
-
-Authenticated HTTP binds, including non-loopback binds, are supported. HTTP
+Authenticated HTTP binds, including the default `0.0.0.0`, are supported. HTTP
 media uses host-only HttpOnly cookies (`SameSite=Lax` for media,
 `SameSite=Strict` for auth) and remains cookie-authorized. Cleartext exposes
 Bearer/auth cookies, ticket URLs, API actions, and media bytes to interception,
 replay, and modification; use HTTPS, a VPN/Tailscale network, or another trusted
-encrypted network when that risk is unacceptable. Cross-site HTTP media is not
-supported because `SameSite=Lax` cookies are not sent cross-site; use same-origin
-or schemefully same-site HTTP, or HTTPS for cross-site deployments.
-
-Use only origins and proxy topology you actually operate. Native remains a
-remote client; it still connects through saved server profiles and does not
-embed the DamHopper backend.
+encrypted network when that risk is unacceptable.
 
 ### Media compatibility qualification status
 
-The deterministic server matrix covers exact-origin CORS startup guards,
-credentialed media sessions, cookie/ticket binding, generic denials, Range/HEAD,
-capacity, and lifecycle revocation. The repository Playwright/Vitest browser
-full suite passed 112/112 tests twice on installed Chromium 151; its 11
-media-specific tests cover native image decode, video metadata/seek, credentialed
-`HEAD` probes, direct anchor
+The deterministic server matrix covers same-origin media sessions,
+cookie/ticket binding, generic denials, Range/HEAD, capacity, and lifecycle
+revocation. The repository Playwright/Vitest browser full suite passed 116/116
+tests on installed Chromium 151; its 11 media-specific tests cover native
+image decode, video metadata/seek, credentialed `HEAD` probes, direct anchor
 download, cleanup, and no Blob fallback. That browser fixture is same-origin and
 does not prove real cross-site partition behavior. Microsoft Edge was not
 installed and was not substituted; Tauri/WebView, Safari, and Firefox media
 support remain unqualified. Operators must not infer support from a user-agent
-string or Chromium emulation. The broader gate passed 1,013 UI tests and 740 Rust
-tests; `pnpm build` and `pnpm lint` were clean.
+string or Chromium emulation. The broader gate passed 1,018 UI tests and 691 Rust
+tests (one ignored performance test); `pnpm build` and `pnpm lint` were clean.
 
 Deploy the session-bound server and client together. During version skew, keep
 media unavailable rather than re-enabling capability-only URLs or a Bearer
@@ -689,7 +673,7 @@ Keys are stored in-memory per session (not persisted to disk).
 1. Create `~/.config/dam-hopper/dam-hopper.toml` with at least two projects whose `projects[].path` values point at separate roots. On Windows, use different drives if available.
    Expected: `GET /api/workspace/status` reports the registry `configPath` and the expected `projectCount`.
 
-2. Start the loopback server with `cargo run -- --config ~/.config/dam-hopper/dam-hopper.toml --port 4800 --host 127.0.0.1 --cors-origins "https://localhost:5173"`.
+2. Start the same-origin server with `cargo run -- --config ~/.config/dam-hopper/dam-hopper.toml --port 4800 --host 127.0.0.1`.
    Expected: startup succeeds without requiring a repo-local `dam-hopper.toml`.
 
 3. Browse and read files in each project, then create or edit a file inside each root.
