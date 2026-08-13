@@ -45,6 +45,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 03 — [COMPLETED 2026-08-11 07:18:58 +07:00]**: restored accessible legacy temperature disclosure with explicit unavailable state and a keyboard-operable, collapsed all-disk storage disclosure while preserving CPU/workspace summary and open-only polling. Review approved 9/10.
 - **Phase 04 — [COMPLETED 2026-08-11 09:15:59 +07:00]**: test, validation, and documentation handoff approved; bounded/authenticated/additive alert behavior and accessible disclosure release gate closed. Residual: manual Linux hardware sensor verification remains host-dependent. [Plan](../plans/260811-0145-host-resource-monitor-restoration-alerts/plan.md).
 
+### Host Resource Battery and Energy Telemetry (2026-08-13)
+
+- **Phase 01 — [COMPLETED 2026-08-13 10:15:26 +07:00]**: additive v1 battery DTO, bounded Linux power-supply collector, truthful direct energy/power aggregation, degradation/stale handling, and focused Rust/API validation delivered and approved.
+- **Phases 02–03 — [PENDING]**: diagnosis UI presentation/compatibility, contract documentation, and repository release gates remain.
+
 ### Linux Host Resource Monitoring and Gated Remediation (2026-08-08)
 
 - **Phases 01–03, 06 — [COMPLETED 2026-08-08–09]**: delivered the read-only monitoring threat model, bounded contracts/parsers, cached monitor/read APIs, sustained alerts, and in-app diagnosis. No host mutation is enabled.
