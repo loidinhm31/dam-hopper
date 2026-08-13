@@ -27,22 +27,6 @@ const imageIssueCounts = new Map<string, number>();
 const activeImageTickets = new Set<string>();
 const activeMediaTickets = new Set(KNOWN_TEST_TICKETS);
 
-function setExactCors(
-  request: { headers?: { origin?: string; host?: string } },
-  response: { setHeader: (name: string, value: string) => void },
-): void {
-  const origin = request.headers?.origin;
-  const host = request.headers?.host;
-  // The fixture is same-origin HTTP. Only emit credentialed CORS for that
-  // exact origin; never reflect an arbitrary Origin header.
-  if (origin && host && origin === `http://${host}`) {
-    response.setHeader("Access-Control-Allow-Origin", origin);
-    response.setHeader("Access-Control-Allow-Credentials", "true");
-    response.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
-    response.setHeader("Vary", "Origin");
-  }
-}
-
 function hasMediaCookie(cookieHeader: string | undefined): boolean {
   return (
     cookieHeader
@@ -219,7 +203,6 @@ const mediaFixturePlugin = {
     });
     server.middlewares.use("/api/fs/video/stream", (request, response) => {
       const ticket = request.url?.split("?")[0]?.split("/").pop();
-      setExactCors(request, response);
       if (
         !hasMediaCookie(request.headers?.cookie) ||
         ticket === "unsupported_ticket" ||
@@ -285,7 +268,6 @@ const mediaFixturePlugin = {
     });
     server.middlewares.use("/api/fs/image/stream", (request, response) => {
       const ticket = request.url?.split("?")[0]?.split("/").pop();
-      setExactCors(request, response);
       if (!hasMediaCookie(request.headers?.cookie)) {
         response.statusCode = 404;
         response.end();

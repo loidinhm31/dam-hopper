@@ -618,7 +618,7 @@ permissions to `core:default`.
 
 - `apps/native/src-tauri` contains the default Tauri builder, the main window config, and the checked-in Android Studio project under `src-tauri/gen/android`.
 - No filesystem, shell, opener, HTTP, or sidecar plugin permissions are granted in Phase 03. The native CSP allows local/profile HTTP and WebSocket connections but keeps default script execution to self.
-- Native desktop dev uses `http://localhost:1420`. Android dev uses `tauri android dev --host`, which sets `TAURI_DEV_HOST` so the Vite dev server and HMR bind to the LAN-reachable address for an emulator or physical device. Packaged desktop webview requests can present `tauri://localhost`, `http://tauri.localhost`, or `https://tauri.localhost` depending on platform/webview. DamHopper servers that enforce CORS must allow the origin used by the packaged client when it connects cross-origin.
+- Native desktop dev uses `http://localhost:1420`. Android dev uses `tauri android dev --host`, which sets `TAURI_DEV_HOST` so the Vite dev server and HMR bind to the LAN-reachable address for an emulator or physical device. Packaged desktop webview requests can present `tauri://localhost`, `http://tauri.localhost`, or `https://tauri.localhost` depending on platform/webview. Packaged native browser transport ignores separate-origin profiles because the backend emits no CORS headers; a native HTTP/WebSocket transport is deferred.
 
 **Native browser-debug controller (Phase 03):**
 
@@ -779,16 +779,17 @@ host-only `HttpOnly; SameSite=Lax; Path=/api/fs` media-session cookie without
 03 completes the browser-host `VideoPreview` integration. Phase 04 validates it
 with the repository Playwright/Vitest harness in installed Chromium 151 using a
 valid one-second VP8 WebM fixture, the real ticket client, and the native download
-helper. The 112-test full browser suite, including 11 media-specific tests,
-passed twice consecutively on Chromium 151. The broader gate also passed 1,013
-UI tests and 740 Rust tests; `pnpm build` and `pnpm lint` were clean. Checks cover the
+helper. The 116-test full browser suite, including 11 media-specific tests,
+passed on Chromium 151. The broader gate also passed 1,018 UI tests and 691 Rust
+tests (one ignored performance test); `pnpm build` and `pnpm lint` were clean. Checks cover the
 versioned session-cookie contract, credentialed `HEAD` before source exposure,
 `crossOrigin="use-credentials"`, playback/seek, direct anchor download, rejected
 probe retry, cleanup, and absence of `Blob`/object-URL conversion. The fixture uses
 real same-origin HTTP cookie storage and native cookie sending, including missing or
 foreign-cookie `404` and DELETE clearing; it does not expose the HttpOnly cookie to
-JavaScript. Optional cross-origin HTTP/HTTPS CORS remains exact-origin only. Cross-site
-HTTP media is unsupported because `SameSite=Lax` cookies are not sent cross-site;
+JavaScript. The backend is same-origin only; CORS is not a server feature and no
+cross-origin browser frontend or cross-site HTTP media is supported. `SameSite=Lax`
+cookies are not sent cross-site;
 cleartext HTTP still permits interception or modification of credentials, ticket URLs,
 actions, and media bytes. It is not evidence for real cross-site CHIPS partitioning.
 Edge, Tauri/WebView, Safari, and Firefox remain unqualified.
@@ -872,12 +873,9 @@ ticket. Bodies use an async reader bounded to 128 KiB with Hyper backpressure;
 client disconnect drops the body and file without a detached producer, and no
 filesystem or ticket-store lock is held while streaming.
 
-The configured CORS layer covers GET/HEAD and preflight headers needed for browser
-range playback (`Range`, `If-Range`, and validators), and exposes range, length,
-disposition, validator, and cache headers to allowed origins. Authenticated browser deployments may configure an explicit allowlist of exact
-HTTP/HTTPS origins; credentialed responses never reflect an arbitrary origin. Cross-site
-HTTP media remains unsupported by browser cookie policy, and cleartext interception or
-modification remains a deployment risk.
+The backend emits no CORS or preflight headers. Browser media playback is
+same-origin only; cross-origin browser frontends are unsupported. Cleartext
+interception or modification remains a deployment risk.
 
 The browser host routes recognized video extensions to `VideoPreview` before
 generic binary or large-text tiering. The player requests a fresh playback
@@ -949,7 +947,7 @@ reload, and Git reconciliation paths treat image tabs as preview-only and never
 materialize bytes. Diff tabs retain their dedicated viewer and video routing
 continues to take precedence. The shared store keeps the 256-ticket capacity,
 idle/absolute expiry, generation invalidation, stale-file `410`, range/HEAD,
-revalidation, CORS, and private no-store response invariants used by video.
+revalidation and private no-store response invariants used by video.
 
 ### git/
 
@@ -2011,7 +2009,13 @@ Test boundary: JSDOM wrapper and consumer tests verify the shared contract, port
 - Symbolic links are allowed but validated
 - Binary file detection prevents accidental text parsing
 
-**CORS:** Same-origin browser deployments leave CORS unset. Cross-origin deployments use exact HTTP/HTTPS origins through `--cors-origins`; empty/unset disables CORS, while wildcard, malformed, and ambiguous origins reject startup. Responses allow credentials only for listed origins and include `Vary: Origin`. Authenticated HTTP binds, including non-loopback binds, are supported without a TLS-proxy assertion. HTTP exposes Bearer/auth cookies, ticket URLs, API actions, and media bytes to interception or modification; use HTTPS or a trusted encrypted network when needed. Cross-site HTTP media is unsupported because `SameSite=Lax` cookies are not sent cross-site.
+**Browser origin:** The backend is same-origin only. CORS is not a server
+feature: it emits no `Access-Control-*` headers and does not implement OPTIONS
+preflight behavior. Authenticated HTTP binds, including non-loopback binds, are
+supported. HTTP exposes Bearer/auth cookies, ticket URLs, API actions, and media
+bytes to interception or modification; use HTTPS or a trusted encrypted network
+when needed. Cross-site HTTP media is unsupported because `SameSite=Lax` cookies
+are not sent cross-site.
 
 ## Feature Gating: IDE Explorer
 
