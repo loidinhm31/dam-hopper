@@ -11,7 +11,7 @@
 
 - **Date:** 2026-08-13
 - **Priority:** P2
-- **Status:** Pending
+- **Status:** Completed 2026-08-13 11:08:43 +07:00 (approved)
 - **Goal:** consume the additive DTO and show precise, accessible rows only for reported values.
 
 ## Key Insights
@@ -53,11 +53,11 @@ Existing query result → optional `snapshot.battery` → pure validated formatt
 
 ## Todo List
 
-- [ ] Add old-server-compatible TypeScript DTO.
-- [ ] Add safe energy/power formatters.
-- [ ] Render conditional battery rows.
-- [ ] Add component and browser regressions.
-- [ ] Verify no query/transport/legacy changes.
+- [x] Add old-server-compatible TypeScript DTO.
+- [x] Add safe energy/power formatters.
+- [x] Render conditional battery rows.
+- [x] Add component and browser regressions.
+- [x] Verify no query/transport/legacy changes.
 
 ## Success Criteria
 
