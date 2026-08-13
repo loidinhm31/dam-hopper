@@ -91,6 +91,7 @@ describe("VideoPreview", () => {
     expect(player?.hasAttribute("controls")).toBe(true);
     expect(player?.hasAttribute("autoplay")).toBe(false);
     expect(player?.hasAttribute("playsinline")).toBe(true);
+    expect(player?.getAttribute("crossorigin")).toBe("use-credentials");
     expect(issueVideoTicket).toHaveBeenCalledWith(
       "demo",
       "clips/demo.webm",
@@ -185,6 +186,77 @@ describe("VideoPreview", () => {
     );
     await act(async () => retry?.click());
     expect(issueVideoTicket).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [
+      "MEDIA_SESSION_UNSUPPORTED",
+      "Browser media access is unavailable",
+      "Allow site data",
+    ],
+    ["INSECURE_MEDIA_SERVER", "Secure connection required", "must use HTTPS"],
+  ])(
+    "renders safe, actionable %s guidance and retries without starting a download",
+    async (code, title, guidance) => {
+      issueVideoTicket.mockRejectedValueOnce(
+        Object.assign(new Error(), { code }),
+      );
+      await mount();
+
+      expect(document.body.textContent).toContain(title);
+      expect(document.body.textContent).toContain(guidance);
+      expect(document.body.textContent).not.toContain(code);
+      const download = [...document.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("Download"),
+      ) as HTMLButtonElement;
+      expect(download.disabled).toBe(true);
+      await act(async () => download.click());
+      expect(startVideoDownload).not.toHaveBeenCalled();
+
+      issueVideoTicket.mockResolvedValueOnce({
+        purpose: "playback",
+        url: "https://api.test/api/fs/video/stream/retry-token",
+        expiresAt: 1,
+        revoke: vi.fn(),
+      });
+      const retry = [...document.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("Retry"),
+      );
+      await act(async () => retry?.click());
+      expect(issueVideoTicket).toHaveBeenCalledTimes(2);
+      expect(document.querySelector("video")?.getAttribute("src")).toContain(
+        "retry-token",
+      );
+    },
+  );
+
+  it("shows safe guidance and retries a typed download compatibility error", async () => {
+    issueVideoTicket.mockResolvedValue({
+      purpose: "playback",
+      url: "https://api.test/api/fs/video/stream/playback-token",
+      expiresAt: 1,
+      revoke: vi.fn(),
+    });
+    startVideoDownload
+      .mockRejectedValueOnce(
+        Object.assign(new Error(), { code: "MEDIA_SESSION_UNSUPPORTED" }),
+      )
+      .mockResolvedValueOnce(undefined);
+    await mount();
+
+    const download = [...document.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Download"),
+    );
+    await act(async () => download?.click());
+    expect(document.body.textContent).toContain(
+      "Browser media access is unavailable",
+    );
+
+    const retry = [...document.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Retry"),
+    );
+    await act(async () => retry?.click());
+    expect(startVideoDownload).toHaveBeenCalledTimes(2);
   });
 
   it("debounces repeated download clicks while playback remains mounted", async () => {
