@@ -22,9 +22,7 @@ import {
 } from "@/api/server-config.js";
 
 type ImageState = "loading" | "ready" | "error";
-type MediaTicketErrorCode =
-  | "MEDIA_SESSION_UNSUPPORTED"
-  | "INSECURE_MEDIA_SERVER";
+type MediaTicketErrorCode = "MEDIA_SESSION_UNSUPPORTED";
 
 interface ImagePreviewProps {
   project: string;
@@ -48,11 +46,6 @@ const mediaTicketErrorCopy: Record<
     description:
       "Use a supported Chromium or Microsoft Edge browser. Allow site data for this server and turn off privacy blocking, then retry.",
   },
-  INSECURE_MEDIA_SERVER: {
-    title: "Secure connection required",
-    description:
-      "This media server must use HTTPS before the preview can load. Update the server address, then retry.",
-  },
 };
 
 function isAbortError(error: unknown): boolean {
@@ -65,10 +58,7 @@ function isAbortError(error: unknown): boolean {
 function mediaTicketErrorCode(error: unknown): MediaTicketErrorCode | null {
   if (!error || typeof error !== "object" || !("code" in error)) return null;
   const { code } = error as { code?: unknown };
-  return code === "MEDIA_SESSION_UNSUPPORTED" ||
-    code === "INSECURE_MEDIA_SERVER"
-    ? code
-    : null;
+  return code === "MEDIA_SESSION_UNSUPPORTED" ? code : null;
 }
 
 function revokePreview(ticket: ImagePreviewTicket | null): void {
