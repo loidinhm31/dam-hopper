@@ -1,6 +1,12 @@
 mod cgroup;
 mod meminfo;
 mod mounts;
+mod power_supply;
+mod power_supply_aggregation;
+#[cfg(test)]
+mod power_supply_edge_tests;
+#[cfg(test)]
+mod power_supply_tests;
 mod process;
 mod psi;
 
@@ -23,6 +29,7 @@ pub fn collect_with_options(
 ) -> HostResourceSnapshotV1 {
     let sampled_at = source.now_ms();
     let memory = meminfo::collect(source.proc_root(), sampled_at);
+    let battery = power_supply::collect(source.sys_root(), sampled_at);
     let pressure = psi::collect(source.proc_root(), sampled_at);
     let cgroups = cgroup::collect(source, sampled_at);
     let processes = if collect_processes {
@@ -39,6 +46,7 @@ pub fn collect_with_options(
     let mut snapshot = HostResourceSnapshotV1::new(sampled_at, memory, mount_context);
     snapshot.host.boot_id = bounded_file(&source.proc_root().join("sys/kernel/random/boot_id"));
     snapshot.capabilities.linux_deep_metrics = Availability::available(sampled_at);
+    snapshot.battery = battery;
     snapshot.pressure.memory = pressure;
     snapshot.cgroups = cgroups;
     snapshot.processes = processes;

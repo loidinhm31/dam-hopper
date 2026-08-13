@@ -518,6 +518,11 @@ async fn resource_snapshot_and_alerts_are_protected_and_bounded() {
     assert!(body.len() <= 256 * 1024);
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["schemaVersion"], 1);
+    assert!(json["battery"].is_object());
+    assert!(json["battery"]["count"].is_number());
+    assert!(json["battery"]["availability"]["state"].is_string());
+    assert!(json["battery"].get("remainingEnergyWh").is_some());
+    assert!(json["battery"].get("instantaneousPowerW").is_some());
     assert!(json["alert"].is_object());
     assert_eq!(json["alert"]["scope"], "host");
     assert_eq!(

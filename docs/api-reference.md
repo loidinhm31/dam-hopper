@@ -277,6 +277,18 @@ counters. Cache attribution labels are descriptive and may overlap, so clients
 must not add them as an accounting total. The existing `GET /api/system/metrics`
 response remains compatible and is served from the monitor's cached projection.
 
+The snapshot also includes an additive `battery` object with `count`, nullable
+`capacityPercent`, nullable `status`, nullable `remainingEnergyWh`, nullable
+`instantaneousPowerW`, and `availability`. Status values are `charging`,
+`discharging`, `full`, `notCharging`, `unknown`, or `mixed`. On Linux, only
+`/sys/class/power_supply` entries whose `type` is `Battery` are counted;
+`energy_now` and `power_now` are read directly in sysfs micro-units and converted
+to Wh/W. For multiple batteries, totals are emitted only when every battery has
+the direct field, and capacity uses complete valid summed energy pairs.
+Malformed or unrecognized fields serialize as `null` and mark battery availability
+unavailable; permission, unsupported, and stale conditions remain explicit.
+Older clients can ignore this additive object.
+
 The current UI is monitoring-only. It displays the snapshot, bounded alert
 history, and diagnostic evidence; it does not offer remediation controls. REST
 responses remain authoritative after reconnect, missed events, profile changes,
