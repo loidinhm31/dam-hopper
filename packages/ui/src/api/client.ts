@@ -231,6 +231,24 @@ export interface Availability {
   detailCode?: string | null;
 }
 
+export type BatteryStatus =
+  | "charging"
+  | "discharging"
+  | "full"
+  | "notCharging"
+  | "unknown"
+  | "mixed";
+
+/** Additive host snapshot section; optional for clients connected to old servers. */
+export interface BatterySnapshot {
+  count: number;
+  capacityPercent?: number | null;
+  status?: BatteryStatus | null;
+  remainingEnergyWh?: number | null;
+  instantaneousPowerW?: number | null;
+  availability: Availability;
+}
+
 export type AlertState =
   | "healthy"
   | "reclaimableCacheHigh"
@@ -264,8 +282,7 @@ export interface HostResourceAlert {
   nextAction: string;
 }
 
-export interface MemoryHostResourceAlertIncident
-  extends HostResourceAlert {
+export interface MemoryHostResourceAlertIncident extends HostResourceAlert {
   incidentId: string;
   openedAt: number;
   resolvedAt?: number | null;
@@ -306,12 +323,18 @@ export type HostResourceAlertIncident =
   | HostResourceResourceAlert;
 
 export interface MemoryPressure {
-  some?:
-    | { avg10: number; avg60: number; avg300: number; totalMicros: number }
-    | null;
-  full?:
-    | { avg10: number; avg60: number; avg300: number; totalMicros: number }
-    | null;
+  some?: {
+    avg10: number;
+    avg60: number;
+    avg300: number;
+    totalMicros: number;
+  } | null;
+  full?: {
+    avg10: number;
+    avg60: number;
+    avg300: number;
+    totalMicros: number;
+  } | null;
   availability: Availability;
 }
 
@@ -346,6 +369,8 @@ export interface HostResourceSnapshotV1 {
     swapUsedBytes?: number | null;
     availability: Availability;
   };
+  /** Added after v1; old servers omit this field. */
+  battery?: BatterySnapshot | null;
   pressure: {
     memory: MemoryPressure;
   };
