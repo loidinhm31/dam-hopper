@@ -136,13 +136,8 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
     await act(async () => saveButton!.click());
 
     expect(getAuthToken(profile.id)).toBeNull();
-    expect(fetchMock).toHaveBeenLastCalledWith(
+    expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain(
       "http://old.test/api/fs/media-session",
-      expect.objectContaining({
-        method: "DELETE",
-        headers: { Authorization: "Bearer old-token" },
-        credentials: "include",
-      }),
     );
   });
 

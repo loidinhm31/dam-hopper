@@ -12,8 +12,8 @@
 - Date: 2026-08-12
 - Description: require versioned session-cookie contract, credentialed compatibility probe, native credential mode, actionable fail-closed UX, deployment checks.
 - Priority: P1
-- Implementation status: Pending; blocked by Phase 2 API
-- Review status: Required; frontend, accessibility, native-host review
+- Implementation status: Review changes required — 2026-08-13; Phase 2 contract consumed
+- Review status: Fix stale-profile logout revocation bypass, then re-review; Phase 4 engine qualification remains required
 
 ## Key Insights
 
@@ -65,12 +65,12 @@
 
 ## Todo list
 
-- [ ] Old/insecure server fails closed
-- [ ] Shared credentialed probe used by image/video/download
-- [ ] Native URLs and Range path preserved
-- [ ] Unsupported UX accessible/actionable
-- [ ] Logout/profile lifecycle covered
-- [ ] No bearer/blob fallback introduced
+- [x] Old/insecure server fails closed
+- [x] Shared credentialed probe used by image/video/download
+- [x] Native URLs and Range path preserved
+- [x] Unsupported UX accessible/actionable
+- [ ] Logout/profile lifecycle covered — stale/deleted-profile logout clears token without shared session revoke; fix and regression-test
+- [x] No bearer/blob fallback introduced
 
 ## Success Criteria
 
@@ -93,6 +93,7 @@
 
 ## Next steps
 
+- Fix `ServerSettingsDialog` stale/deleted-profile logout so it calls `revokeCurrentMediaSession(profile.url, token)` before local token removal; add regression coverage.
 - Phase 4 runs actual multi-origin browser and packaged WebView qualification before support/docs claims.
 
 ## Unresolved questions

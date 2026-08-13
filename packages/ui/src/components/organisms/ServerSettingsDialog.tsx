@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { X, Server, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { revokeCurrentMediaSession } from "@/api/media-session.js";
 import type { ServerProfile } from "@/api/server-config.js";
 import {
   getServerUrl,
@@ -36,27 +37,6 @@ interface Props {
 }
 
 type TestState = "idle" | "testing" | "ok" | "fail";
-
-async function revokeMediaSession(
-  serverUrl: string,
-  token: string,
-): Promise<boolean> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
-  try {
-    const response = await fetch(`${serverUrl}/api/fs/media-session`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
-      credentials: "include",
-      signal: controller.signal,
-    });
-    return response.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
 
 export function ServerSettingsDialog({
   open,
@@ -258,7 +238,7 @@ export function ServerSettingsDialog({
         if (shouldRevokePreviousProfileSession) {
           // Persist profile changes first: local persistence failure must not
           // revoke a still-active remote media session.
-          void (await revokeMediaSession(profile!.url, previousProfileToken!));
+          await revokeCurrentMediaSession(profile!.url, previousProfileToken!);
         }
         if (!clearAuthToken(profile!.id)) {
           restoreProfileState(profile!.id);
@@ -319,7 +299,7 @@ export function ServerSettingsDialog({
       }
       if (!tokenClearedForUrlChange && (tokenMustBeCleared || !t)) {
         if (shouldRevokePreviousProfileSession) {
-          void (await revokeMediaSession(profile!.url, previousProfileToken!));
+          await revokeCurrentMediaSession(profile!.url, previousProfileToken!);
         }
         if (!clearAuthToken(savedProfile.id)) {
           const restored = restoreProfileState(savedProfile.id);
@@ -333,7 +313,7 @@ export function ServerSettingsDialog({
         }
       }
       if (t && !tokenMustBeCleared && shouldRevokePreviousProfileSession) {
-        void (await revokeMediaSession(profile!.url, previousProfileToken!));
+        await revokeCurrentMediaSession(profile!.url, previousProfileToken!);
       }
       if (t && !tokenMustBeCleared && !setAuthToken(t, savedProfile.id)) {
         const restored = restoreProfileState(savedProfile.id);
@@ -381,10 +361,10 @@ export function ServerSettingsDialog({
         if (shouldRevokePreviousLegacySession) {
           // Persist the replacement URL first so failed local storage does not
           // revoke a session whose credentials are restored locally.
-          void (await revokeMediaSession(
+          await revokeCurrentMediaSession(
             initialUrl || getServerUrl(),
             previousLegacyToken!,
-          ));
+          );
         }
         if (!clearAuthToken(activeProfileId)) {
           restoreLegacyState();
@@ -428,10 +408,10 @@ export function ServerSettingsDialog({
         return;
       }
       if (t && !tokenMustBeCleared && shouldRevokePreviousLegacySession) {
-        void (await revokeMediaSession(
+        await revokeCurrentMediaSession(
           initialUrl || getServerUrl(),
           previousLegacyToken!,
-        ));
+        );
       }
       if (t && !tokenMustBeCleared && !setAuthToken(t, activeProfileId)) {
         const restored = restoreLegacyState();
@@ -482,7 +462,7 @@ export function ServerSettingsDialog({
     if (targetToken) {
       // Local logout must complete even when the old server is unreachable; its
       // bounded media-session TTL remains the cleanup fallback.
-      void (await revokeMediaSession(targetServerUrl, targetToken));
+      await revokeCurrentMediaSession(targetServerUrl, targetToken);
     }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
