@@ -497,6 +497,7 @@ fn jittered_delay(config: &HostResourceMonitorConfig) -> Duration {
 
 fn mark_snapshot_stale(snapshot: &mut HostResourceSnapshotV1, sampled_at: u64, detail_code: &str) {
     snapshot.memory.availability = Availability::stale(sampled_at, detail_code);
+    snapshot.battery.availability = Availability::stale(sampled_at, detail_code);
     snapshot.pressure.memory.availability = Availability::stale(sampled_at, detail_code);
     snapshot.capabilities.linux_deep_metrics = Availability::stale(sampled_at, detail_code);
     snapshot.mount_context.availability = Availability::stale(sampled_at, detail_code);
@@ -836,6 +837,14 @@ mod tests {
         let (sink, _) = BroadcastEventSink::new(8);
         let monitor = HostResourceMonitor::system(root, sink, Default::default());
         let mut snapshot = HostResourceSnapshotV1::unavailable(1, PathBuf::from("/tmp").as_path());
+        snapshot.battery = crate::system::BatterySnapshot {
+            count: 1,
+            capacity_percent: Some(50.0),
+            status: Some(crate::system::BatteryStatus::Discharging),
+            remaining_energy_wh: Some(20.0),
+            instantaneous_power_w: Some(5.0),
+            availability: Availability::available(1),
+        };
         snapshot.processes.availability = Availability::available(1);
         snapshot.cgroups.push(crate::system::CgroupMemory {
             path: "test".into(),
@@ -852,6 +861,11 @@ mod tests {
         });
 
         mark_snapshot_stale(&mut snapshot, 2, "monitorStale");
+        assert_eq!(
+            snapshot.battery.availability.state,
+            crate::system::AvailabilityState::Stale
+        );
+        assert_eq!(snapshot.battery.remaining_energy_wh, Some(20.0));
         assert_eq!(
             snapshot.processes.availability.state,
             crate::system::AvailabilityState::Stale
