@@ -4,6 +4,10 @@ import type {
   HostResourceSnapshotV1,
 } from "@/api/client.js";
 import {
+  formatBatteryCapacity,
+  formatBatteryEnergy,
+  formatBatteryPower,
+  formatBatteryStatus,
   formatAvailability,
   formatAlertState,
   formatOptionalBytes,
@@ -33,6 +37,7 @@ export function HostResourceDiagnosis({
   const visibleCgroups = snapshot.cgroups.filter(isUsableCgroup);
   const alert = snapshot.alert;
   const availablePercent = percentage(memory.availableBytes, memory.totalBytes);
+  const battery = getBatteryPresentation(snapshot.battery);
 
   return (
     <div className="space-y-4">
@@ -129,6 +134,8 @@ export function HostResourceDiagnosis({
         detail="some / full, 10-second average"
         availability={pressure.memory.availability}
       />
+
+      {battery && <BatterySection battery={battery} />}
 
       {legacyMetrics && <HostResourceLegacyMetrics metrics={legacyMetrics} />}
 
@@ -268,6 +275,96 @@ export function HostResourceDiagnosis({
         </section>
       )}
     </div>
+  );
+}
+
+interface BatteryPresentation {
+  availability: HostResourceSnapshotV1["memory"]["availability"];
+  count?: string;
+  status?: string;
+  capacity?: string;
+  energy?: string;
+  power?: string;
+}
+
+function getBatteryPresentation(
+  battery: HostResourceSnapshotV1["battery"],
+): BatteryPresentation | undefined {
+  if (
+    !battery ||
+    battery.count === 0 ||
+    !battery.availability ||
+    battery.availability.state === "unsupported"
+  ) {
+    return undefined;
+  }
+
+  const count =
+    typeof battery.count === "number" &&
+    Number.isFinite(battery.count) &&
+    Number.isInteger(battery.count) &&
+    battery.count > 0
+      ? `${battery.count}`
+      : undefined;
+  const status = formatBatteryStatus(battery.status);
+  const capacity = formatBatteryCapacity(battery.capacityPercent);
+  const energy = formatBatteryEnergy(battery.remainingEnergyWh);
+  const power = formatBatteryPower(battery.instantaneousPowerW);
+
+  if (!count && !status && !capacity && !energy && !power) return undefined;
+  return {
+    availability: battery.availability,
+    count,
+    status,
+    capacity,
+    energy,
+    power,
+  };
+}
+
+function BatterySection({ battery }: { battery: BatteryPresentation }) {
+  const availability = formatAvailability(battery.availability);
+  return (
+    <section
+      aria-label="Battery"
+      className="space-y-1.5 border-t border-[var(--color-border)] pt-3 text-[10px]"
+    >
+      <p className="font-bold uppercase tracking-widest text-[var(--color-text-muted)]">
+        Battery
+      </p>
+      <div className="space-y-1">
+        {battery.count && (
+          <HostResourceInfoRow
+            label="Batteries"
+            value={`${battery.count} · ${availability}`}
+          />
+        )}
+        {battery.status && (
+          <HostResourceInfoRow
+            label="Status"
+            value={`${battery.status} · ${availability}`}
+          />
+        )}
+        {battery.capacity && (
+          <HostResourceInfoRow
+            label="Capacity"
+            value={`${battery.capacity} · ${availability}`}
+          />
+        )}
+        {battery.energy && (
+          <HostResourceInfoRow
+            label="Remaining energy (Wh)"
+            value={`${battery.energy} · ${availability}`}
+          />
+        )}
+        {battery.power && (
+          <HostResourceInfoRow
+            label="Instantaneous power (W)"
+            value={`${battery.power} · ${availability}`}
+          />
+        )}
+      </div>
+    </section>
   );
 }
 
