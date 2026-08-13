@@ -26,6 +26,11 @@ struct ErrorBody {
     error: String,
 }
 
+fn auth_cookie_header(value: &str, clear: bool) -> String {
+    let max_age = if clear { "; Max-Age=0" } else { "" };
+    format!("{AUTH_COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/{max_age}")
+}
+
 fn unauthorized() -> Response {
     (
         StatusCode::UNAUTHORIZED,
@@ -285,10 +290,7 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
             }
         };
 
-        let cookie_attrs = format!(
-            "{AUTH_COOKIE}={}; HttpOnly; Secure; Path=/; SameSite=Strict",
-            jwt_token
-        );
+        let cookie_attrs = auth_cookie_header(&jwt_token, false);
 
         return (
             StatusCode::OK,
@@ -336,10 +338,7 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
         }
     };
 
-    let cookie_attrs = format!(
-        "{AUTH_COOKIE}={}; HttpOnly; Secure; Path=/; SameSite=Strict",
-        jwt_token
-    );
+    let cookie_attrs = auth_cookie_header(&jwt_token, false);
 
     (
         StatusCode::OK,
@@ -370,7 +369,7 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Requ
                 .revoke_session_for_actor(&claims.sub, &token);
         }
     }
-    let clear = format!("{AUTH_COOKIE}=; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=0");
+    let clear = auth_cookie_header("", true);
     let mut response = (
         StatusCode::OK,
         [(header::SET_COOKIE, clear)],

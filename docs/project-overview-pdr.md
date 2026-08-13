@@ -194,7 +194,9 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Store token securely (0600 file permissions)
 - Log auth failures without leaking tokens
 - Diagnostics exports include recent terminal output tails by default and must be reviewed before sharing
-- Authenticated remote media requires HTTPS and exact configured CORS origins
+- Media uses an HTTP-compatible host-only `HttpOnly; SameSite=Lax; Path=/api/fs` cookie; auth remains `HttpOnly; SameSite=Strict`, and ticket/session auth is preserved
+- CORS is optional; cross-origin browser deployments use exact configured HTTP/HTTPS origins, never arbitrary reflection
+- Cleartext HTTP permits interception or modification of Bearer/auth cookies, ticket URLs, actions, and media bytes; cross-site HTTP media is unsupported because `SameSite=Lax` cookies are not sent cross-site
 - Current automated native-media evidence is installed Chromium 151 only: 112 browser tests twice, including 11 media-specific tests; real cross-site CHIPS, Edge, Tauri/WebView, Safari, and Firefox remain unqualified
 - Qualification also passed 1,013 UI tests and 740 Rust tests; build and lint were clean
 - Media session/ticket state is process-local; multi-instance deployments require sticky routing to the issuing process
