@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use super::{
     media_session::MediaSessionToken,
     media_ticket::{
-        MediaFileVersion, MediaTicketBoundIssue, MediaTicketIssue, MediaTicketKind,
-        MediaTicketPurpose, MediaTicketRecord, MediaTicketStore, MAX_MEDIA_TICKETS,
-        MEDIA_TICKET_ABSOLUTE_TTL, MEDIA_TICKET_IDLE_TTL,
+        MediaFileVersion, MediaTicketBoundIssue, MediaTicketKind, MediaTicketPurpose,
+        MediaTicketRecord, MediaTicketStore, MAX_MEDIA_TICKETS, MEDIA_TICKET_ABSOLUTE_TTL,
+        MEDIA_TICKET_IDLE_TTL,
     },
 };
 
@@ -54,7 +54,6 @@ pub struct VideoTicketLease {
 }
 
 pub(crate) enum VideoTicketIssue {
-    Issued(VideoTicketLease),
     Capacity,
     ContextChanged,
 }
@@ -110,47 +109,11 @@ impl VideoStreamTicketStore {
         }
     }
 
-    pub(crate) fn issue(
-        &self,
-        expected_generation: u64,
-        record: VideoTicketRecord,
-    ) -> VideoTicketIssue {
-        let purpose = record.purpose;
-        match self.media.issue(expected_generation, record.into_media()) {
-            MediaTicketIssue::Issued(lease) => VideoTicketIssue::Issued(VideoTicketLease {
-                ticket: lease.ticket,
-                expires_at_epoch_ms: lease.expires_at_epoch_ms,
-                purpose,
-            }),
-            MediaTicketIssue::Capacity => VideoTicketIssue::Capacity,
-            MediaTicketIssue::ContextChanged => VideoTicketIssue::ContextChanged,
-        }
-    }
-
     /// Unknown, expired, revoked, and non-video tickets all return `None`.
     pub fn lookup_and_touch(&self, ticket: &str) -> Option<VideoTicketRecord> {
         self.media
             .lookup_and_touch(ticket, MediaTicketKind::Video)
             .and_then(VideoTicketRecord::from_media)
-    }
-
-    pub(crate) fn authorize_bound(
-        &self,
-        ticket: &str,
-        token: &MediaSessionToken,
-    ) -> Option<super::media_ticket::MediaTicketAuthorization> {
-        self.media
-            .authorize_bound(ticket, MediaTicketKind::Video, token)
-    }
-
-    pub(crate) fn finalize_bound_and_touch(
-        &self,
-        ticket: &str,
-        token: &MediaSessionToken,
-        authorization: &super::media_ticket::MediaTicketAuthorization,
-    ) -> bool {
-        self.media
-            .finalize_bound_and_touch(ticket, MediaTicketKind::Video, token, authorization)
     }
 
     pub(crate) fn revoke_bound(
@@ -249,70 +212,5 @@ mod tests {
         let mut image_record = record.into_media();
         image_record.kind = MediaTicketKind::Image;
         assert!(VideoTicketRecord::from_media(image_record).is_none());
-    }
-
-    #[test]
-    fn video_adapter_preserves_issue_lookup_and_revoke_lifecycle() {
-        let store = VideoStreamTicketStore::from_media(MediaTicketStore::new());
-        let playback = match store.issue(
-            store.generation(),
-            VideoTicketRecord {
-                purpose: VideoTicketPurpose::Playback,
-                ..record(VideoTicketPurpose::Playback)
-            },
-        ) {
-            VideoTicketIssue::Issued(lease) => lease,
-            VideoTicketIssue::Capacity | VideoTicketIssue::ContextChanged => {
-                panic!("video ticket should be issued")
-            }
-        };
-        let download = match store.issue(
-            store.generation(),
-            VideoTicketRecord {
-                purpose: VideoTicketPurpose::Download,
-                ..record(VideoTicketPurpose::Download)
-            },
-        ) {
-            VideoTicketIssue::Issued(lease) => lease,
-            VideoTicketIssue::Capacity | VideoTicketIssue::ContextChanged => {
-                panic!("video ticket should be issued")
-            }
-        };
-
-        assert_eq!(
-            store.lookup_and_touch(&playback.ticket).unwrap().purpose,
-            VideoTicketPurpose::Playback
-        );
-        assert_eq!(
-            store.lookup_and_touch(&download.ticket).unwrap().purpose,
-            VideoTicketPurpose::Download
-        );
-        store.revoke(&playback.ticket);
-        assert!(store.lookup_and_touch(&playback.ticket).is_none());
-        assert!(store.lookup_and_touch(&download.ticket).is_some());
-    }
-
-    fn record(purpose: VideoTicketPurpose) -> VideoTicketRecord {
-        VideoTicketRecord {
-            purpose,
-            project: "project".into(),
-            project_relative_path: PathBuf::from("clip.webm"),
-            file: MediaFileVersion {
-                canonical_path: PathBuf::from("/private/clip.webm"),
-                size: 1,
-                modified: std::time::SystemTime::UNIX_EPOCH,
-                validator: "opaque".into(),
-                #[cfg(unix)]
-                device: 1,
-                #[cfg(unix)]
-                inode: 1,
-                #[cfg(windows)]
-                volume_serial: None,
-                #[cfg(windows)]
-                file_index: None,
-            },
-            mime: "video/webm".into(),
-            filename: "clip.webm".into(),
-        }
     }
 }
