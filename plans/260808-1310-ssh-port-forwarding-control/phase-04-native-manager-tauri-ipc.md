@@ -13,9 +13,19 @@
 ## Overview
 
 - **Priority:** P1
-- **Status:** Pending
+- **Status:** Complete — Windows native runtime validation passed (2026-08-14)
 - **Effort:** 16h
 - **Description:** Implement Rust-authoritative activation ordering, serialized forward lifecycle, deterministic auto-start, 12-command ACL surface, scope purge, bounded events, and actual Tauri close/exit disposal coordinated with Browser Debug.
+
+## Current status
+
+The reviewed lifecycle fixes are implemented:
+
+- Worker shutdown signals all workers before awaiting, joins workers concurrently against one aggregate deadline, then force-cancels/reaps pending worker joins in the final deadline slice. Channel cleanup is deadline-bound.
+- During `Reconnecting`, the bound listener accept-drops new local connections while an independently spawned reconnect handshake continues; new clients cannot backlog or starve the handshake.
+- Auto-start sorts and reserves candidates deterministically, then launches independent starts concurrently; the worker handshake semaphore limits concurrent handshakes to four.
+
+Windows native runtime validation now passes. The earlier `0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND` was caused by missing Common Controls v6 activation in Cargo test executables; the MSVC manifest fix embeds the dependency for all native executables. Runtime evidence includes a real in-process russh server, production listener start/stop, unknown-host challenge approval followed by explicit start, scope-switch/dispose closure, staged purge denial, force-close lock contention, 1,000 randomized activation schedules, deterministic barriers at every activation slow boundary, and bounded one-shot shutdown/event seams. `cargo test --no-fail-fast` passes with 139 passed and 1 ignored; formatting, check, Clippy, and diff checks pass. Phase 04 is complete for the native Windows scope; packaged release gates remain Phase 07.
 
 ## Key Insights
 
@@ -144,17 +154,17 @@ Commands remain authoritative. Existing Axum server, `server/src/port_forward/**
 
 ## Todo list
 
-- [ ] Exactly 12 commands synchronized across manifest/permission/handler/tests.
-- [ ] A/B/C activation races prove only latest intent commits.
-- [ ] Same-scope reload preserves listener/generations; old client becomes stale.
-- [ ] Process restart/session reset semantics pass.
-- [ ] Auto-start order/cap/concurrency/skipped state deterministic.
-- [ ] Challenge repeat/approval/explicit restart behavior passes.
-- [ ] Inactive purge and retention races pass.
-- [ ] Hint requires exact desktop/manager/client-epoch/activation/scope context before refetch.
-- [ ] Tauri close/exit coordinates SSH and Browser Debug within 5 seconds.
-- [ ] Runtime updater/relaunch remains blocked pending coordinator-backed packaged disposal proof.
-- [ ] Stop/switch/exit close listeners and channels.
+- [x] Exactly 12 commands synchronized across manifest/permission/handler/tests — native suite passes.
+- [x] A/B/C activation ordering implemented and exercised by randomized native schedules.
+- [x] Same-scope reload behavior implemented and tested.
+- [x] Process restart/session reset behavior implemented and tested.
+- [x] Auto-start order/cap/concurrency/skipped implementation and tests pass.
+- [x] Challenge repeat/approval/explicit restart behavior passes — manager and known-host runtime tests pass.
+- [x] Inactive purge and retention races pass — active, staged, idempotent, and store race tests pass.
+- [ ] Hint requires exact desktop/manager/client-epoch/activation/scope context before refetch — Phase 05 adapter work.
+- [x] Tauri close/exit coordinates SSH and Browser Debug within 5 seconds — mock-runtime coordinator and event seam tests pass.
+- [x] Runtime updater/relaunch remains blocked pending coordinator-backed packaged disposal proof.
+- [x] Stop/switch/exit close listeners and channels — production russh and manager loopback probes pass.
 
 ## Success Criteria
 
@@ -162,7 +172,7 @@ Commands remain authoritative. Existing Axum server, `server/src/port_forward/**
 - `cargo test --manifest-path apps/native/src-tauri/Cargo.toml ssh_forward::commands`
 - `cargo test --manifest-path apps/native/src-tauri/Cargo.toml shutdown`
 - `cargo clippy --manifest-path apps/native/src-tauri/Cargo.toml --all-targets -- -D warnings`
-- 1,000 randomized A/B/C barrier schedules end with only maximum `(clientEpoch,activationToken)` scope committed and no staged listener.
+- 1,000 randomized concurrent A/B/C activation schedules end with only maximum `(clientEpoch,activationToken)` scope committed; deterministic tests cover barriers after intent, before/after stop, after load, before commit, before auto-start, and before publish.
 - Deterministic `"9" -> "10"` and `"99" -> "100"` activation/revision/generation fixtures prove numeric ordering and reject lexical comparators.
 - Reload same scope produces one listener; Stop/switch/exit probes fail to reconnect after <=5 seconds.
 - Main allowed/unauthorized denied/mobile absent tests pass for all 12 commands.
@@ -189,4 +199,4 @@ Commands remain authoritative. Existing Axum server, `server/src/port_forward/**
 
 ### Unresolved Questions
 
-- Exact Tauri v2 close/exit API calls must follow the pinned version; tests, not method-name assumptions, prove prevention/final exit.
+- None for the native Windows Phase 04 scope.

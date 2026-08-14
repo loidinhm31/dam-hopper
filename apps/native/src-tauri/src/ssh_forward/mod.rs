@@ -29,6 +29,10 @@ pub(crate) mod ssh_client;
 pub(crate) mod trust_repair;
 
 #[cfg(windows)]
+pub(crate) mod commands;
+#[cfg(windows)]
+pub(crate) mod manager;
+#[cfg(windows)]
 #[allow(dead_code)]
 pub(crate) mod store;
 

@@ -531,6 +531,34 @@ impl StoredProfiles {
             }
         })
     }
+
+    pub(crate) fn revision(&self) -> WireCounter {
+        self.profiles_revision
+    }
+
+    pub(crate) fn profiles(&self) -> io::Result<Vec<SshForwardProfile>> {
+        self.profiles
+            .iter()
+            .map(StoredProfile::to_profile)
+            .collect()
+    }
+
+    pub(crate) fn from_profiles(
+        scope_id: &str,
+        profiles: Vec<SshForwardProfile>,
+    ) -> io::Result<Self> {
+        let stored = Self {
+            schema_version: SCHEMA_VERSION,
+            scope_id: scope_id.into(),
+            profiles_revision: WireCounter::ZERO,
+            profiles: profiles
+                .into_iter()
+                .map(StoredProfile::from_profile)
+                .collect(),
+        };
+        stored.validate(scope_id)?;
+        Ok(stored)
+    }
 }
 
 impl StoredTrust {
@@ -548,6 +576,10 @@ impl StoredTrust {
             .iter()
             .filter(|entry| entry.ssh_host == host && entry.ssh_port == port)
             .collect()
+    }
+
+    pub(crate) fn revision(&self) -> WireCounter {
+        self.trust_revision
     }
     fn validate(&self, scope_id: &str) -> io::Result<()> {
         validate_document_header(self.schema_version, &self.scope_id, scope_id)?;
@@ -706,6 +738,29 @@ fn is_canonical_sha256_fingerprint(fingerprint: &str) -> bool {
 }
 
 impl StoredProfile {
+    fn from_profile(profile: SshForwardProfile) -> Self {
+        let auth = match profile.auth {
+            SshForwardAuth::Agent => StoredAuth::Agent,
+            SshForwardAuth::Key { key_id } => StoredAuth::Key { key_id },
+        };
+        Self {
+            id: profile.id,
+            scope_id: profile.scope_id,
+            name: profile.name,
+            ssh_host: profile.ssh_host,
+            ssh_port: profile.ssh_port,
+            ssh_user: profile.ssh_user,
+            auth,
+            local_port: profile.local_port,
+            target_host: profile.target_host,
+            target_port: profile.target_port,
+            auto_start: profile.auto_start,
+            reconnect: profile.reconnect,
+            created_at: profile.created_at,
+            updated_at: profile.updated_at,
+        }
+    }
+
     fn validate(&self, scope_id: &str) -> io::Result<()> {
         self.to_profile()?
             .validate()

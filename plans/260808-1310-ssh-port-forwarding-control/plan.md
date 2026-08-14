@@ -1,7 +1,7 @@
 ---
 title: "Native SSH Port-Forwarding Control"
 description: "Add ordered desktop-local SSH forwarding through a narrow Tauri/Rust capability and browser-safe shared UI host."
-status: in_progress
+status: blocked
 priority: P2
 effort: 88h
 branch: features/ssh-port-forwarding
@@ -36,8 +36,8 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 | 1 | Windows dependency, ACL, and platform feasibility gates | Complete | 100% | 10h | [Phase 01](./phase-01-dependency-platform-gates.md) |
 | 2 | Contracts, persistence, scope retention | Complete | 100% | 12h | [Phase 02](./phase-02-native-contracts-persistence.md) |
 | 3 | SSH transport, authentication, trust, errors | Complete | 100% | 14h | [Phase 03](./phase-03-ssh-transport-trust.md) |
-| 4 | Manager ordering, lifecycle, IPC, shutdown | Pending | 0% | 16h | [Phase 04](./phase-04-native-manager-tauri-ipc.md) |
-| 5 | Browser-safe host and ordered adapter | Pending | 0% | 10h | [Phase 05](./phase-05-host-context-native-adapter.md) |
+| 4 | Manager ordering, lifecycle, IPC, shutdown | Complete | 100% | 16h | [Phase 04](./phase-04-native-manager-tauri-ipc.md) |
+| 5 | Browser-safe host and ordered adapter | Complete | 100% | 10h | [Phase 05](./phase-05-host-context-native-adapter.md) |
 | 6 | Desktop-only control surface | Pending | 0% | 10h | [Phase 06](./phase-06-desktop-control-surface.md) |
 | 7 | Deferred cross-platform and product release gates | Deferred | 0% | 16h | [Phase 07](./phase-07-cross-platform-release-gates.md) |
 
@@ -64,6 +64,12 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 **2026-08-11 — Phase 02 complete:** Final review/remediation closed the staging-file race, decoded-fingerprint canonicality, and real process crash/restart/recovery proofs, including idempotent purge proofs. Contract and persistence validation is accepted for continued implementation. Windows automated/package runtime evidence and cross-platform (Linux/macOS/iOS) evidence remain deferred; no release/platform work is claimed complete.
 
 **2026-08-11 — Phase 03 approved:** SSH transport, authentication, endpoint-first host trust, scoped approval challenges, redacted errors, bounded credentials, aggregate timeouts, and Windows-safe trust recovery passed validation and security review. Phase 04 manager/IPC lifecycle work remains pending.
+
+**2026-08-13 — Phase 04 blocked:** Manager ordering, active-forward admission, full-context challenge binding, stop-state guards, ordered lifecycle disposal, reconnect listener rejection, deterministic concurrent auto-start, exact IPC command-list checks, and shutdown coordination are implemented. Static Rust gates pass. Native test executables compile but fail before assertions on this Windows host with `0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND`; root cause remains unconfirmed. Runtime validation is deferred to a known-good Windows environment. Root `pnpm test` also reports unrelated `windows_by_handle` `E0658`. Phase 04 is not approved, complete, runtime-validated, or release-ready.
+
+**2026-08-13 — Phase 05 complete:** Final independent review scored 8.8/10 with conditional acceptance and no critical findings. UI 981/981 and native 17/17 passed; builds, lint (0 errors/0 warnings), `cargo fmt`, `cargo check`, `cargo clippy`, and diff check passed. This phase acceptance does not claim feature or release readiness; Phase 04 remains blocked by the Windows native runtime failure above.
+
+**2026-08-14 — Phase 04 complete:** The Windows Common Controls v6 manifest fixed native test-process startup. Full native validation passed with 139 tests passed and 1 ignored, including real russh listener start/stop, host-key challenge approval plus explicit restart, scope-switch/dispose closure, staged/idempotent purge, force-close contention, randomized activation schedules, and bounded shutdown/event seams. Phase 07 packaging and release gates remain deferred.
 
 - Phase 02 must retain the approved `russh`/`ring` and Windows OpenSSH named-pipe choices until a separate security review changes them.
 - Named release/security/product owners and protected runtime-evidence environment must be configured.

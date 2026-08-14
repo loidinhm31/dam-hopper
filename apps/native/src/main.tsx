@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { configureLogger, resolveLogLevel } from "@dam-hopper/shared/logger";
-import { BrowserDebugHostProvider, DamHopperApp } from "@dam-hopper/ui";
+import { BrowserDebugHostProvider, DamHopperApp, SshForwardHostProvider, SshForwardScopeBridge } from "@dam-hopper/ui";
 import "@dam-hopper/ui/styles";
 
 import { initTransport } from "@dam-hopper/ui/api/transport";
@@ -14,6 +14,7 @@ import {
 import { IdleTransport } from "./idle-transport";
 import { getNativeServerUrl } from "./native-server-url";
 import { getActiveProfile } from "@dam-hopper/ui/api/server-config";
+import { createNativeSshForwardHost } from "./native-ssh-forward-host";
 import {
   getNativeBrowserDebugEnvironment,
   isNativeBrowserDebugEnabled,
@@ -84,6 +85,13 @@ const queryClient = new QueryClient({
   },
 });
 
+const nativeSshForwardHost = createNativeSshForwardHost(
+  typeof __DAM_HOPPER_TAURI_PLATFORM__ === "string" ? __DAM_HOPPER_TAURI_PLATFORM__ : "unknown",
+);
+const nativeSshForwardEnvironment = {
+  kind: nativeSshForwardHost ? ("nativeDesktop" as const) : ("nativeMobile" as const),
+  platform: typeof __DAM_HOPPER_TAURI_PLATFORM__ === "string" ? __DAM_HOPPER_TAURI_PLATFORM__ : "unknown",
+};
 const nativeBrowserDebugEnabled = isNativeBrowserDebugEnabled(
   viteEnv?.VITE_DAM_HOPPER_NATIVE_BROWSER_DEBUG,
 );
@@ -98,17 +106,18 @@ const nativeBrowserDebugEnvironment = getNativeBrowserDebugEnvironment(
 );
 window.addEventListener(
   "beforeunload",
-  () => nativeBrowserDebugHost?.dispose(),
+  () => { nativeBrowserDebugHost?.dispose(); nativeSshForwardHost?.dispose(); },
   { once: true },
 );
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
-    <BrowserDebugHostProvider
-      host={nativeBrowserDebugHost}
-      environment={nativeBrowserDebugEnvironment}
-    >
-      <DamHopperApp />
-    </BrowserDebugHostProvider>
+    <SshForwardHostProvider host={nativeSshForwardHost} environment={nativeSshForwardEnvironment}>
+      <SshForwardScopeBridge>
+        <BrowserDebugHostProvider host={nativeBrowserDebugHost} environment={nativeBrowserDebugEnvironment}>
+          <DamHopperApp />
+        </BrowserDebugHostProvider>
+      </SshForwardScopeBridge>
+    </SshForwardHostProvider>
   </QueryClientProvider>,
 );

@@ -9,7 +9,7 @@ import {
 /** Reactive active profile snapshot for guards and navigation chrome. */
 export function useServerProfile(): ServerProfile | null {
   useSyncExternalStore(
-    subscribeToProfileChanges,
+    (notify) => subscribeToProfileChanges(() => notify()),
     getProfileChangeVersion,
     getProfileChangeVersion,
   );
