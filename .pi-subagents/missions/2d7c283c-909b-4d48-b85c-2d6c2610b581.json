@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "id": "2d7c283c-909b-4d48-b85c-2d6c2610b581",
+  "title": "Final sign-off review only. Inspect the latest Phase 04 changes after adding all seven determinis...",
+  "objective": "Final sign-off review only. Inspect the latest Phase 04 changes after adding all seven deterministic activation barrier points and the passing full validation. Check for compile/runtime/test isolation issues and confirm whether the Phase 04 plan can remain Complete. Do not edit files. Environment: Windows 11 x64, Rust/Cargo stable 1.96, cwd G:\\ws\\sharing\\dam-hopper, branch features/ssh-port-forwarding-control.\n\n## Subagent: code-reviewer\nID: evcrate-node-0-5bc700bd-46da-410d-a1e9-6cf905b0ec1f | CWD: G:/ws/sharing/dam-hopper\n\n## Context\n- Plan: none\n- Reports: G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- Paths: G:\\ws\\sharing\\dam-hopper\\plans/ | G:\\ws\\sharing\\dam-hopper\\docs/\n\n## Rules\n- Reports → G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- YAGNI / KISS / DRY\n- Concise, list unresolved Qs at end\n\n## Naming\n- Report: G:\\ws\\sharing\\dam-hopper\\plans\\reports\\code-reviewer-260814-1056-{slug}.md\n- Plan dir: G:\\ws\\sharing\\dam-hopper\\plans\\260814-1056-{slug}/\n\nActive workflow root: C:\\Users\\loidi\\.pi\\agent\\evcrate\\workflows\n\nActive config root: C:\\Users\\loidi\\.pi\n\nActive resource root: C:\\Users\\loidi\\.pi\\agent\\evcrate",
+  "status": "completed",
+  "createdAt": "2026-08-14T03:56:46.887Z",
+  "updatedAt": "2026-08-14T03:58:51.146Z",
+  "runs": [
+    {
+      "runId": "fcc1ed5e",
+      "mode": "single",
+      "agent": "code-reviewer",
+      "status": "completed",
+      "startedAt": "2026-08-14T03:58:51.146Z",
+      "completedAt": "2026-08-14T03:58:51.146Z",
+      "usage": {
+        "tokens": 94110
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\fcc1ed5e_code-reviewer_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\fcc1ed5e_code-reviewer_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-13T16-58-22-327Z_019ffc0f-80f7-79c4-92bb-7260ddccb07c.jsonl",
+  "summary": "## Code Review Summary\n\n### Scope\n- Reviewed: Phase 04 plan, activation barriers, manager/shutdown/build integration, IPC wiring.\n- Validation run: native Cargo suite, Clippy, native/UI Vitest.\n- No files edited.\n\n### Overall Assessment\n**Approve. Phase 04 can remain Complete** for its Windows-native scope.\n\nAll seven deterministic activation barrier points exist and are exercised: after intent, before/after stop, after load, before commit, before auto-start, before publish. Rechecks surround slow lifecycle boundaries; superseded requests cannot commit or publish stale state.\n\n### Critical / High Issues\n- None.\n\n### Medium Priority Improvements\n- `phase-04-native-manager-tauri-ipc.md` still has one unchecked hint-context TODO, labelled Phase 05 work. The implemented native adapter now enforces exact desktop/manager/client epoch/token/scope equality before refetch, so this is stale documentation only; it does not invalidate Phase 04.\n- Phase evidence says 138 passed; current independent run reports **139 passed, 1 ignored**. Update evidence when edits are permitted.\n\n### Positive Observations\n- Windows Common Controls manifest fix is scoped to Windows/MSVC and resolves test executable startup isolation.\n- `cargo test --no-fail-fast`: **139 passed, 1 ignored**.\n- Manager target: **22 passed**; barrier and randomized activation tests passed.\n- `cargo clippy --all-targets -- -D warnings`: passed.\n- Native Vitest: **17 passed**; UI Vitest: **1,027 passed**.\n- Shutdown is single-owner, bounded, and force-close fallback remains idempotent.\n- Exact 12-command handler/permission/capability boundary remains tested.\n\n### Metrics\n- Linting issues: 0\n- Native Rust tests: 139 passed / 1 ignored\n- Native UI tests: 17 passed\n- Shared UI tests: 1,027 passed\n\n### Unresolved Questions\n- None blocking Phase 04.",
+  "acceptance": {
+    "status": "not-required",
+    "evidenceStatus": "not-required",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "none",
+      "explicit": true,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [],
+          "severity": "required"
+        }
+      ],
+      "evidence": [],
+      "verify": [],
+      "stopRules": [],
+      "reason": "disabled by deprecated false shorthand"
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": []
+  }
+}

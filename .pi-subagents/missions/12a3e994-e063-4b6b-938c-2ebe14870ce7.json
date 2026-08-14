@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "id": "12a3e994-e063-4b6b-938c-2ebe14870ce7",
+  "title": "Review the current Phase 04 SSH forwarding implementation and the Windows native test-loader fix ...",
+  "objective": "Review the current Phase 04 SSH forwarding implementation and the Windows native test-loader fix for phase completion. Read the Phase 04 plan, inspect the current diff and relevant native tests, and assess: (1) whether acceptance criteria are met, (2) any unresolved blockers, (3) whether build.rs/windows.manifest is safe and minimal, and (4) whether the phase should be marked complete. Do not modify files. Environment: Windows 11 x64, Rust/Cargo stable 1.96, cwd G:\\ws\\sharing\\dam-hopper, branch features/ssh-port-forwarding-control. Existing working-tree changes are intentional; review only Phase 04-related code and preserve unrelated changes. Return concise findings with severity and evidence.\n\n## Subagent: code-reviewer\nID: evcrate-node-0-80e05e3f-4a66-4632-9d75-64e49ebc4a08 | CWD: G:/ws/sharing/dam-hopper\n\n## Context\n- Plan: none\n- Reports: G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- Paths: G:\\ws\\sharing\\dam-hopper\\plans/ | G:\\ws\\sharing\\dam-hopper\\docs/\n\n## Rules\n- Reports → G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- YAGNI / KISS / DRY\n- Concise, list unresolved Qs at end\n\n## Naming\n- Report: G:\\ws\\sharing\\dam-hopper\\plans\\reports\\code-reviewer-260814-0937-{slug}.md\n- Plan dir: G:\\ws\\sharing\\dam-hopper\\plans\\260814-0937-{slug}/\n\nActive workflow root: C:\\Users\\loidi\\.pi\\agent\\evcrate\\workflows\n\nActive config root: C:\\Users\\loidi\\.pi\n\nActive resource root: C:\\Users\\loidi\\.pi\\agent\\evcrate",
+  "status": "completed",
+  "createdAt": "2026-08-14T02:37:52.440Z",
+  "updatedAt": "2026-08-14T02:42:58.812Z",
+  "runs": [
+    {
+      "runId": "653b666a",
+      "mode": "single",
+      "agent": "code-reviewer",
+      "status": "completed",
+      "startedAt": "2026-08-14T02:42:58.812Z",
+      "completedAt": "2026-08-14T02:42:58.812Z",
+      "usage": {
+        "tokens": 122577
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\653b666a_code-reviewer_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\653b666a_code-reviewer_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-13T16-58-22-327Z_019ffc0f-80f7-79c4-92bb-7260ddccb07c.jsonl",
+  "summary": "Turn budget wrap-up was requested after 8 assistant turns (soft limit 8, grace 1). Process-mode live steering is unavailable, so the child was warned at launch to wrap up by this budget. Output may be partial.\n\n## Code Review Summary\n\n### Scope\n- Phase 04 plan, Rust manager/IPC/shutdown, native host loader tests, `build.rs`, `windows.manifest`.\n- No files modified.\n\n### Overall Assessment\nWindows test-loader fix works: native Rust test executables now run, not `0xc0000139`. Build manifest change is minimal and scoped safely to Windows MSVC.\n\n### High — Phase completion remains blocked\nPhase acceptance requires actual listener-closure probes and Tauri close/exit runtime coverage. Current tests do not prove either:\n- `shutdown_contract_is_single_owner_and_bounded` only asserts constants (`shutdown.rs:92`).\n- Manager tests exercise task cleanup, but no test starts a real forwarded listener then verifies Stop/scope switch/app exit rejects reconnection within five seconds.\n- Plan TODO still lists shutdown/listener closure as pending; static command/ACL tests do not execute Tauri authorization paths.\n\n**Decision:** do **not** mark Phase 04 complete yet. The previous native-test-loader blocker is resolved, but required runtime acceptance evidence is still absent.\n\n### Medium — Plan status is stale\n`phase-04-native-manager-tauri-ipc.md` says all native test executables fail pre-assertion. On this Windows 11 host they now pass:\n- `cargo test --manifest-path apps/native/src-tauri/Cargo.toml`: **125 passed, 1 ignored**\n- manager subset: **11 passed**\n- commands subset: **1 passed**\n- shutdown subset: **2 passed**\n\nUpdate the plan from “runtime validation deferred” to “loader fixed; listener/Tauri lifecycle acceptance still pending” when edits are permitted.\n\n### `build.rs` / `windows.manifest`\n**Safe/minimal.**\n- Guarded strictly by `target_os == windows && target_env == msvc`.\n- Supplies one embedded Common Controls v6 dependency only; no execution-level, capability, updat...",
+  "acceptance": {
+    "status": "not-required",
+    "evidenceStatus": "not-required",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "none",
+      "explicit": true,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [],
+          "severity": "required"
+        }
+      ],
+      "evidence": [],
+      "verify": [],
+      "stopRules": [],
+      "reason": "disabled by deprecated false shorthand"
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": []
+  }
+}

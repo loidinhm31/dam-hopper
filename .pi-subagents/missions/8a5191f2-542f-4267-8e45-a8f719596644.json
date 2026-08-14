@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "id": "8a5191f2-542f-4267-8e45-a8f719596644",
+  "title": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, branch features/ssh-port-forwarding-contro...",
+  "objective": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, branch features/ssh-port-forwarding-control. Runtime test execution is deferred due 0xc0000139. Review current uncommitted Phase 04 static implementation after latest changes. Focus on correctness of concurrent auto-start reservation/launch, worker reaping, reconnect rejection, command surface, and plan status. Identify only concrete code defects that block continuing to Phase 05; do not demand runtime diagnostic work. Do not edit. Terminal report: score, critical/warnings, validation evidence, unresolved questions last.",
+  "status": "completed",
+  "createdAt": "2026-08-13T11:36:59.976Z",
+  "updatedAt": "2026-08-13T11:39:21.076Z",
+  "runs": [
+    {
+      "runId": "call_ELmTtCSVGxusNjcsEadgsNZs|fc_0723c5b70ccc75b4016a7dac568dd4819184ca5e8de032ade6",
+      "mode": "workflow",
+      "agent": "code-reviewer",
+      "status": "completed",
+      "startedAt": "2026-08-13T11:39:21.076Z",
+      "completedAt": "2026-08-13T11:39:21.076Z",
+      "usage": {
+        "tokens": 108577
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\90fed533_code-reviewer_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\90fed533_code-reviewer_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c.jsonl",
+  "summary": "Workflow completed.\n\nReturn:\n{\n  \"key\": \"phase-04-static-review\",\n  \"ok\": true,\n  \"runId\": \"90fed533\",\n  \"output\": \"## Code Review Summary\\n\\n**Score: 7/10 — do not continue to Phase 05 until High finding fixed.**\\n\\n### Scope\\n- Reviewed: Phase 04 manager, command boundary, shutdown integration, plan status.\\n- Validation: static only; runtime tests intentionally not run (`0xc0000139` deferred).\\n\\n### Critical Issues\\n- None.\\n\\n### Warnings\\n\\n1. **High — completed workers remain retained in manager maps**\\n   - `apps/native/src-tauri/src/ssh_forward/manager.rs:1177-1335,1601-1625`\\n   - A worker that fails initial connect, exhausts reconnect, or exits after listener failure calls `fail_runtime()` then returns, but never removes its own `worker` `JoinHandle` or corresponding `abort_handles` entry.\\n   - This violates Phase 04 requirement that no task/handle remains in manager maps, retains completed task resources indefinitely, and makes runtime ownership inaccurate until a later Stop/Restart/dispose.\\n   - Fix: on all worker terminal paths, conditionally remove/reap the matching generation’s stored handle and abort-handle. Avoid a task awaiting/removing its own handle; hand off reaping or centralize worker completion notification.\\n\\n2. **Medium — plan marks unexecuted runtime assertions as passed**\\n   - `plans/260808-1310-ssh-port-forwarding-control/phase-04-native-manager-tauri-ipc.md:157-161`\\n   - These items say activation, reload, restart, and auto-start behavior “prove/pass,” while line 28 states native test executables fail before assertions and runtime validation is deferred.\\n   - Keep implementation claims, but mark proof/pass evidence pending (or explicitly static-only) until tests execute. Main plan correctly remains blocked.\\n\\n### Positive Observations\\n- Auto-start reservation precedes concurrent launches; active cap is deterministic.\\n- Handshake semaphore correctly limits connection attempts to four.\\n- Reconnect accept loop drops new socke...",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete High finding at apps/native/src-tauri/src/ssh_forward/manager.rs:1177-1335 and plan-status finding at plans/260808-1310-ssh-port-forwarding-control/phase-04-native-manager-tauri-ipc.md:157-161."
+        }
+      ],
+      "changedFiles": [
+        "apps/native/src-tauri/src/ssh_forward/manager.rs",
+        "apps/native/src-tauri/src/ssh_forward/commands.rs",
+        "apps/native/src-tauri/src/shutdown.rs",
+        "apps/native/src-tauri/src/lib.rs",
+        "plans/260808-1310-ssh-port-forwarding-control/phase-04-native-manager-tauri-ipc.md",
+        "plans/260808-1310-ssh-port-forwarding-control/plan.md"
+      ],
+      "testsAddedOrUpdated": [
+        "apps/native/src-tauri/src/ssh_forward/manager.rs",
+        "apps/native/src-tauri/src/ssh_forward/commands.rs",
+        "apps/native/src-tauri/src/shutdown.rs"
+      ],
+      "commandsRun": [
+        {
+          "command": "git diff --check",
+          "result": "passed",
+          "summary": "No whitespace errors."
+        },
+        {
+          "command": "cargo check --manifest-path apps/native/src-tauri/Cargo.toml",
+          "result": "passed",
+          "summary": "Finished dev profile successfully."
+        },
+        {
+          "command": "cargo test --manifest-path apps/native/src-tauri/Cargo.toml ...",
+          "result": "not-run",
+          "summary": "Deferred by request because this host fails test executables with 0xc0000139."
+        }
+      ],
+      "validationOutput": [
+        "Static compile and diff validation pass.",
+        "Runtime validation intentionally deferred."
+      ],
+      "residualRisks": [
+        "Runtime listener closure, shutdown, and reconnect behavior remain unvalidated on this Windows host.",
+        "Completed failed/reconnect-exhausted workers retain JoinHandle and AbortHandle entries until later lifecycle action."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Phase 04 adds manager lifecycle, exact Tauri IPC surface, shutdown coordination, contract DTOs, and plan updates.",
+      "reviewFindings": [
+        "high: apps/native/src-tauri/src/ssh_forward/manager.rs:1177-1335,1601-1625 - terminal workers do not remove/reap their own stored JoinHandle or abort handle; violates no-task/handle-remains requirement.",
+        "medium: plans/260808-1310-ssh-port-forwarding-control/phase-04-native-manager-tauri-ipc.md:157-161 - TODOs claim pass/proof although the plan states test executables never reached assertions."
+      ],
+      "manualNotes": "No edits made. Fix the High worker-reaping defect before Phase 05."
+    }
+  }
+}

@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "id": "ebf14537-185b-4b6e-b383-d52c86f9ac68",
+  "title": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, pnpm monorepo. Phase 04 runtime validation...",
+  "objective": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, pnpm monorepo. Phase 04 runtime validation deferred; review newly implemented Phase 05 work against plans/260808-1310-ssh-port-forwarding-control/phase-05-host-context-native-adapter.md. Inspect changed UI/native files. Focus security, Tauri isolation, strict decimals, operation/hint reconciliation, deletion purge sequencing, no-call mobile/web behavior, test sufficiency, YAGNI/KISS/DRY. Do not edit. Terminal report required: score, critical issues, warnings, suggestions, files, validation evidence, next minimal fixes; unresolved questions last.",
+  "status": "completed",
+  "createdAt": "2026-08-13T12:00:41.881Z",
+  "updatedAt": "2026-08-13T12:03:46.115Z",
+  "runs": [
+    {
+      "runId": "call_mCI5GCK49w6Bs44MXJhSoIRO|fc_0723c5b70ccc75b4016a7db1e372a881918e869690bce1480b",
+      "mode": "workflow",
+      "agent": "code-reviewer",
+      "status": "completed",
+      "startedAt": "2026-08-13T12:03:46.115Z",
+      "completedAt": "2026-08-13T12:03:46.115Z",
+      "usage": {
+        "tokens": 81162
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\f4c6e388_code-reviewer_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\f4c6e388_code-reviewer_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c.jsonl",
+  "summary": "Workflow completed.\n\nReturn:\n{\n  \"key\": \"phase-05-review\",\n  \"ok\": true,\n  \"runId\": \"f4c6e388\",\n  \"output\": \"## Code Review Summary\\n\\n**Score: 3/10 — not ready for Phase 05 acceptance.**\\n\\n### Scope\\n- Reviewed: Phase 05 plan; changed TS/React/Tauri adapter/UI files; IPC Rust contracts/ACL.\\n- Focus: isolation, strict decimals, reconciliation, deletion ordering, no-call behavior, tests.\\n- No edits made. Plan TODO remains unchecked.\\n\\n### Critical Issues\\n- None.\\n\\n### High Priority Findings\\n1. **High — untrusted IPC errors accepted verbatim**  \\n   `apps/native/src/native-ssh-forward-host.ts:15` accepts any object with string `code`, retaining arbitrary `message`, fields, and invalid codes. This violates the fixed redacted error contract; malformed/unknown errors must become fixed `IPC_UNAVAILABLE`.  \\n   **Fix:** allowlist every error code and validate optional counter fields with `parseWireCounter`; construct a new fixed DTO, never cast raw input.\\n\\n2. **High — command/snapshot responses are not identity-validated**  \\n   `apps/native/src/native-ssh-forward-host.ts:42-43,61-67` only partially checks activation response (`clientEpoch`), and accepts every command snapshot. It never validates exact desktop/manager/client/token/scope/scope-generation identity before caching/publishing. A delayed result after reload/scope switch can overwrite current state.  \\n   **Fix:** centralize strict result/snapshot validation; reject responses unless exact current context/token/scope match.\\n\\n3. **High — hint reconciliation missing numeric freshness/coalescing**  \\n   `apps/native/src/native-ssh-forward-host.ts:70-74`, `packages/ui/src/hooks/use-ssh-forward.ts:15-18` forwards every identity-matching hint and starts an unlimited concurrent `snapshot()`. It does not compare hint revisions/generations numerically against the authoritative cached snapshot, nor enforce one in-flight plus one trailing refetch.  \\n   **Impact:** stale/duplicate/reordered valid hints create r...",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete severity-tagged findings cite apps/native/src/native-ssh-forward-host.ts, packages/ui/src/contexts/SshForwardHostContext.tsx, packages/ui/src/hooks/use-ssh-forward.ts, packages/ui/src/lib/ssh-forward-host.ts, and Rust capability/contracts."
+        }
+      ],
+      "changedFiles": [
+        "apps/native/src/native-ssh-forward-host.ts",
+        "apps/native/src/native-ssh-forward-host.test.ts",
+        "apps/native/src/main.tsx",
+        "packages/ui/src/lib/ssh-forward-host.ts",
+        "packages/ui/src/lib/ssh-forward-host.test.ts",
+        "packages/ui/src/contexts/SshForwardHostContext.tsx",
+        "packages/ui/src/hooks/use-ssh-forward.ts",
+        "packages/ui/src/api/server-config.ts",
+        "packages/ui/src/embed/dam-hopper-app.tsx"
+      ],
+      "testsAddedOrUpdated": [
+        "apps/native/src/native-ssh-forward-host.test.ts",
+        "packages/ui/src/lib/ssh-forward-host.test.ts"
+      ],
+      "commandsRun": [
+        {
+          "command": "pnpm --filter @dam-hopper/native test",
+          "result": "passed",
+          "summary": "2 files, 12 tests passed"
+        },
+        {
+          "command": "pnpm --filter @dam-hopper/ui test -- src/lib/ssh-forward-host.test.ts src/contexts/SshForwardHostContext.test.tsx src/hooks/use-ssh-forward.test.tsx src/api/server-config.test.ts",
+          "result": "failed",
+          "summary": "Full suite executed; 973 passed, 1 unrelated transport-utils assertion failed; two requested Phase 05 test files do not exist"
+        },
+        {
+          "command": "pnpm --filter @dam-hopper/native build",
+          "result": "passed",
+          "summary": "Typecheck and Vite build passed"
+        },
+        {
+          "command": "pnpm --filter @dam-hopper/ui build",
+          "result": "passed",
+          "summary": "TypeScript build passed"
+        },
+        {
+          "command": "pnpm lint",
+          "result": "failed",
+          "summary": "One error: synchronous setState in use-ssh-forward.ts effect"
+        },
+        {
+          "command": "git diff --check",
+          "result": "passed",
+          "summary": "No whitespace errors"
+        }
+      ],
+      "validationOutput": [
+        "Shared UI forwarding modules have no Tauri, invoke/listen, HTTP, or WebSocket imports.",
+        "Adapter command map and Rust ACL each contain 12 expected names.",
+        "Strict BigInt scalar tests cover numeric boundaries and overflow."
+      ],
+      "residualRisks": [
+        "Unvalidated/stale IPC command snapshots can replace current state.",
+        "Malformed native errors may expose raw fields/messages.",
+        "Duplicate/reordered hints can create concurrent snapshot requests.",
+        "Active-profile deletion can race activation and leave scope unpurged.",
+        "macOS/Linux adapter makes unavailable native calls despite Windows-only capability."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Adds browser-safe SSH host contracts/context, desktop Tauri adapter, server-profile events, and initial scalar/adapter tests; reconciliation and lifecycle requirements remain incomplete.",
+      "reviewFindings": [
+        "high: apps/native/src/native-ssh-forward-host.ts:15 - raw error object is cast rather than strictly parsed/redacted.",
+        "high: apps/native/src/native-ssh-forward-host.ts:42-67 - activation and command snapshots lack exact context/token/scope validation.",
+        "high: apps/native/src/native-ssh-forward-host.ts:70-74 and packages/ui/src/hooks/use-ssh-forward.ts:15-18 - no numeric freshness or single-flight/trailing hint reconciliation.",
+        "high: apps/native/src/native-ssh-forward-host.ts - MANAGER_SESSION_MISMATCH reopen/reactivate recovery is missing.",
+        "medium: packages/ui/src/contexts/SshForwardHostContext.tsx:31-40 - deletion purge can race pending activation.",
+        "medium: apps/native/src/native-ssh-forward-host.ts:13,77 - macOS/Linux host conflicts with Windows-only native capability.",
+        "medium: packages/ui/src/hooks/use-ssh-forward.ts:16 - lint failure."
+      ],
+      "manualNotes": "No files edited. Phase 04 runtime validation remains deferred as requested."
+    }
+  }
+}

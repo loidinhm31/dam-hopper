@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "id": "56260867-4f87-4237-846f-f9b717d0606f",
+  "title": "Environment Windows 11; CWD G:/ws/sharing/dam-hopper. Final acceptance review current Phase 05 on...",
+  "objective": "Environment Windows 11; CWD G:/ws/sharing/dam-hopper. Final acceptance review current Phase 05 only after last hook fix and full UI/native test pass. Verify single adapter-owned hint refresh (hook consumes optional event snapshot), stale operation guards, strict timestamp/DTO parsing, deletion ordering, no mutation replay, test evidence. Phase 04 native runtime blocker remains deferred and must be stated separately. Do not edit. Terminal report: score, critical/warnings, files, validation, next phase recommendation, unresolved questions last.",
+  "status": "failed",
+  "createdAt": "2026-08-13T12:39:27.301Z",
+  "updatedAt": "2026-08-13T12:39:32.638Z",
+  "runs": [
+    {
+      "runId": "call_Ue0DMxs8eJaFZm2kKKg77nR1|fc_0723c5b70ccc75b4016a7dbaf98d548191b0b4c9e3217b78a8",
+      "mode": "workflow",
+      "agent": "code-reviewer",
+      "status": "failed",
+      "startedAt": "2026-08-13T12:39:32.638Z",
+      "completedAt": "2026-08-13T12:39:32.638Z"
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\26930184_code-reviewer_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\26930184_code-reviewer_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c.jsonl",
+  "summary": "Workflow failed: Error: Run 'phase-05-acceptance-review' failed: Codex error: The usage limit has been reached\n\nOutput artifact: G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\26930184_code-reviewer_0_output.md\n    at MessagePort.<anonymous> ([worker eval]:133:23)\n    at [nodejs.internal.kHybridDispatch] (node:internal/event_target:843:20)\n    at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28)\n\nCall trace:\n- run phase-05-acceptance-review: started\n- run phase-05-acceptance-review: failed (26930184) — Codex error: The usage limit has been reached\n\nOutput artifact: G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\26930184_code-reviewer_0_output.md",
+  "acceptance": {
+    "status": "rejected",
+    "evidenceStatus": "rejected",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "attestation",
+        "status": "failed",
+        "message": "Structured acceptance report not found."
+      }
+    ],
+    "verifyRuns": [],
+    "childReportParseError": "Structured acceptance report not found."
+  }
+}

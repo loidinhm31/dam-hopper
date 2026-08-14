@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "74ec8ad5-795d-4a2b-a9bd-488383d971b6",
+  "title": "Second review found remaining Phase 05 blockers. Apply all fixes; preserve Phase 04/unrelated cha...",
+  "objective": "Second review found remaining Phase 05 blockers. Apply all fixes; preserve Phase 04/unrelated changes and do not change plan docs. Environment Windows 11, CWD G:/ws/sharing/dam-hopper. Requirements: (1) NEVER retry create/update/delete/start/stop/restart/listKeys/approve/purge after MANAGER_SESSION_MISMATCH. Only snapshot may one-time reopen client + reactivate active scope; mutations return parsed mismatch after recovery/snapshot so UI requires retry. (2) One owner for hint reconciliation: eliminate adapter+hook duplicate snapshot. Implement one-in-flight plus one trailing refresh with strict BigInt freshness and ensure consumers can receive accepted refreshed state without issuing a second snapshot. (3) strict-parse snapshot/key inventory/activation/open response DTOs, including counters, timestamp/profile/runtime/challenge/key fields; reject malformed as fixed IPC_UNAVAILABLE. (4) Include all Phase 03 Rust compatibility error codes in shared union/parser parity. (5) Add required focused tests: adapter A/B/C late response, no mutation replay manager recovery, wrong/reordered/duplicate hint bounded refresh; context deletion waits activation/replacement then purge and unavailable read doesn’t purge; hook behavior; server-config typed events/read failure. Fix tests/lint. Run focused tests (not accidental full suite), native/ui build, lint, diff check. Concise final report with exact changed files/commands/results/residual risks/unresolved questions last.",
+  "status": "failed",
+  "createdAt": "2026-08-13T12:12:09.612Z",
+  "updatedAt": "2026-08-13T12:12:09.647Z",
+  "runs": [
+    {
+      "runId": "call_1rDE5bnOiTlcSmcvutx54Jhn|fc_0723c5b70ccc75b4016a7db49025488191bd577673ba40e2ac",
+      "mode": "workflow",
+      "status": "failed",
+      "startedAt": "2026-08-13T12:12:09.647Z",
+      "completedAt": "2026-08-13T12:12:09.647Z"
+    }
+  ],
+  "decisions": [],
+  "artifacts": [],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c.jsonl",
+  "summary": "Workflow failed: Error: Run 'phase-05-final-remediate' failed: Invalid async recovery descriptor 'C:\\Users\\loidi\\AppData\\Local\\Temp\\pi-subagents-user-loidi\\async-subagent-runs\\1ac9e3aa\\recovery-descriptor.json': recoveryDescriptor.initialTurnBudget.outcome is not supported.\n    at MessagePort.<anonymous> ([worker eval]:133:23)\n    at [nodejs.internal.kHybridDispatch] (node:internal/event_target:843:20)\n    at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28)\n\nCall trace:\n- run phase-05-final-remediate: started\n- run phase-05-final-remediate: failed — Invalid async recovery descriptor 'C:\\Users\\loidi\\AppData\\Local\\Temp\\pi-subagents-user-loidi\\async-subagent-runs\\1ac9e3aa\\recovery-descriptor.json': recoveryDescriptor.initialTurnBudget.outcome is not supported."
+}

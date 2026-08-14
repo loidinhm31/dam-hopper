@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "id": "01bcabd3-b160-4cd7-928f-8e7d2753c869",
+  "title": "Environment: monorepo at G:/ws/sharing/dam-hopper; Windows win32; CWD G:/ws/sharing/dam-hopper; b...",
+  "objective": "Environment: monorepo at G:/ws/sharing/dam-hopper; Windows win32; CWD G:/ws/sharing/dam-hopper; branch features/ssh-port-forwarding-control; PM pnpm; session 2026-08-13 23:58 Asia/Bangkok. Read CLAUDE.md, AGENTS.md, plans/260808-1310-ssh-port-forwarding-control/plan.md, all phase files, and relevant reports. Extraction only: identify the next phase under the stated preference, map dependencies, validate assumptions, and list blockers/ambiguities. Do not edit files or run implementation. Concise report; sacrifice grammar; apply YAGNI/KISS/DRY. End with unresolved questions, if any. Return terminal report, not progress.\n\n## Subagent: planner\nID: evcrate-node-0-f3b33f63-cc76-4498-bc4b-e646f24b402d | CWD: G:/ws/sharing/dam-hopper\n\n## Context\n- Plan: none\n- Reports: G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- Paths: G:\\ws\\sharing\\dam-hopper\\plans/ | G:\\ws\\sharing\\dam-hopper\\docs/\n\n## Rules\n- Reports → G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- YAGNI / KISS / DRY\n- Concise, list unresolved Qs at end\n\n## Naming\n- Report: G:\\ws\\sharing\\dam-hopper\\plans\\reports\\planner-260814-0000-{slug}.md\n- Plan dir: G:\\ws\\sharing\\dam-hopper\\plans\\260814-0000-{slug}/\n\nActive workflow root: C:\\Users\\loidi\\.pi\\agent\\evcrate\\workflows\n\nActive config root: C:\\Users\\loidi\\.pi\n\nActive resource root: C:\\Users\\loidi\\.pi\\agent\\evcrate",
+  "status": "failed",
+  "createdAt": "2026-08-13T17:00:54.498Z",
+  "updatedAt": "2026-08-13T17:02:54.479Z",
+  "runs": [
+    {
+      "runId": "bb374c42",
+      "mode": "single",
+      "agent": "planner",
+      "status": "failed",
+      "startedAt": "2026-08-13T17:02:54.478Z",
+      "completedAt": "2026-08-13T17:02:54.478Z",
+      "usage": {
+        "tokens": 75509
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-13T16-58-22-327Z_019ffc0f-80f7-79c4-92bb-7260ddccb07c.jsonl",
+  "summary": "Subagent process terminated by signal SIGTERM.",
+  "acceptance": {
+    "status": "not-required",
+    "evidenceStatus": "not-required",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "none",
+      "explicit": true,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [],
+          "severity": "required"
+        }
+      ],
+      "evidence": [],
+      "verify": [],
+      "stopRules": [],
+      "reason": "disabled by deprecated false shorthand"
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": []
+  }
+}

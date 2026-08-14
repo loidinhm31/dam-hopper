@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "id": "9c7da37a-bcc6-4389-bdb6-5bebda39c243",
+  "title": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, timezone Asia/Bangkok. User explicitly app...",
+  "objective": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, timezone Asia/Bangkok. User explicitly approved Phase 05 final review. Update ONLY existing SSH forwarding plan docs (no new markdown, no source code): plans/260808-1310-ssh-port-forwarding-control/phase-05-host-context-native-adapter.md and plans/260808-1310-ssh-port-forwarding-control/plan.md. Mark Phase 05 Complete/100% and record acceptance: final independent review 8.8/10 conditional accept with no critical findings; UI 981/981, native 17/17, builds, lint 0 errors/0 warnings, cargo fmt/check/clippy pass, diff check pass. Preserve Phase 04 Blocked and explicitly state Windows native runtime 0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND plus root pnpm test unrelated windows_by_handle E0658. Do not claim feature/release readiness. Return changed files and summary.\n\n## Subagent: project-manager\nID: evcrate-node-0-bd146d85-dd32-4fbf-a860-df90f026fc96 | CWD: G:/ws/sharing/dam-hopper\n\n## Context\n- Plan: none\n- Reports: G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- Paths: G:\\ws\\sharing\\dam-hopper\\plans/ | G:\\ws\\sharing\\dam-hopper\\docs/\n\n## Rules\n- Reports → G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- YAGNI / KISS / DRY\n- Concise, list unresolved Qs at end\n\n## Naming\n- Report: G:\\ws\\sharing\\dam-hopper\\plans\\reports\\project-manager-260813-2108-{slug}.md\n- Plan dir: G:\\ws\\sharing\\dam-hopper\\plans\\260813-2108-{slug}/\n\nActive workflow root: C:\\Users\\loidi\\.pi\\agent\\evcrate\\workflows\n\nActive config root: C:\\Users\\loidi\\.pi\n\nActive resource root: C:\\Users\\loidi\\.pi\\agent\\evcrate",
+  "status": "completed",
+  "createdAt": "2026-08-13T14:08:12.928Z",
+  "updatedAt": "2026-08-13T14:08:52.678Z",
+  "runs": [
+    {
+      "runId": "0caa20d9",
+      "mode": "single",
+      "agent": "project-manager",
+      "status": "completed",
+      "startedAt": "2026-08-13T14:08:52.678Z",
+      "completedAt": "2026-08-13T14:08:52.678Z",
+      "usage": {
+        "tokens": 14864
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\0caa20d9_project-manager_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\0caa20d9_project-manager_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c.jsonl",
+  "summary": "Changed files:\n- `plans/260808-1310-ssh-port-forwarding-control/phase-05-host-context-native-adapter.md`\n- `plans/260808-1310-ssh-port-forwarding-control/plan.md`\n\nSummary:\n- Marked Phase 05 Complete, 100%.\n- Recorded conditional independent review acceptance: 8.8/10, no critical findings.\n- Recorded all requested test/build/lint/Rust validation results.\n- Preserved Phase 04 Blocked, including `0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND` and unrelated `windows_by_handle E0658`.\n- Explicitly stated no feature or release readiness claim.",
+  "acceptance": {
+    "status": "not-required",
+    "evidenceStatus": "not-required",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "none",
+      "explicit": true,
+      "inferredReason": [
+        "risky write-capable run"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [],
+          "severity": "required"
+        },
+        {
+          "id": "criterion-2",
+          "must": "Return evidence sufficient for an independent acceptance review",
+          "evidence": [],
+          "severity": "required"
+        }
+      ],
+      "evidence": [],
+      "verify": [],
+      "review": {
+        "agent": "reviewer",
+        "required": true
+      },
+      "stopRules": [],
+      "reason": "disabled by deprecated false shorthand"
+    },
+    "inferredReason": [
+      "risky write-capable run"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [],
+        "severity": "required"
+      },
+      {
+        "id": "criterion-2",
+        "must": "Return evidence sufficient for an independent acceptance review",
+        "evidence": [],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": []
+  }
+}

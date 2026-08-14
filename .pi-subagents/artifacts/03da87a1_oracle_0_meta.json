@@ -1,0 +1,163 @@
+{
+  "runId": "03da87a1",
+  "agent": "oracle",
+  "task": "Environment: Windows 11 Pro build 26200 x64, CWD G:/ws/sharing/dam-hopper, branch features/ssh-port-forwarding-control. Native Rust tests compile/link but the lib test exe fails before test enumeration with STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139). App/native code should not be changed speculatively. Evidence: Cargo native dependency includes russh 0.62.5, which brings pageant 0.2.1 -> windows 0.62.2; Tauri/WebView2 uses windows 0.61.x. VC runtime installed; packaged WebView2 app works. PE imports include bcryptprimitives!ProcessPrng, api-ms-win-core-synch WaitOnAddress/Wake*, ntdll, user32, kernel32, etc.; direct dumpbin confirms ProcessPrng, kernel32 APIs and NtFlushBuffersFileEx exist. User asks what we should do to resolve. Give decision-grade, minimal safe plan: evidence collection, likely causes ranked, no-code paths vs narrow code/dependency remedy criteria, commands, rollback/safety. Do not edit. Concise, explain non-codebase tools plainly; unresolved questions last.",
+  "exitCode": 0,
+  "processSignal": "SIGTERM",
+  "usage": {
+    "input": 19808,
+    "output": 4650,
+    "cacheRead": 25088,
+    "cacheWrite": 0,
+    "cost": 0.1004336,
+    "turns": 7
+  },
+  "model": "openai-codex/gpt-5.6-terra:high",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-terra:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-terra:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 19808,
+        "output": 4650,
+        "cacheRead": 25088,
+        "cacheWrite": 0,
+        "cost": 0.1004336,
+        "turns": 7
+      }
+    }
+  ],
+  "durationMs": 106625,
+  "toolCount": 13,
+  "launchContractDigest": "6349b140b17bfe984daa03848212b8c80762f51f08f8c72151461159b44834b2",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:6bbd3ab6ff42e3f1"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:6bbd3ab6ff42e3f1"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete findings cite apps/native/src-tauri/Cargo.toml and apps/native/src-tauri/Cargo.lock, with ranked severity/likelihood and a non-code-first decision plan."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "cd apps/native/src-tauri && cargo tree -i pageant -e normal",
+          "result": "passed",
+          "summary": "Confirmed pageant 0.2.1 is exclusively introduced by russh 0.62.5."
+        },
+        {
+          "command": "cd apps/native/src-tauri && cargo tree -i windows@0.62.2 -e normal",
+          "result": "passed",
+          "summary": "Confirmed windows 0.62.2 is exclusively introduced through pageant."
+        },
+        {
+          "command": "cd apps/native/src-tauri && cargo tree -i windows@0.61.3 -e normal",
+          "result": "passed",
+          "summary": "Confirmed Tauri/WebView2 and direct native dependencies use windows 0.61.3."
+        },
+        {
+          "command": "git status --short; git branch --show-current; git diff --cached --quiet",
+          "result": "passed",
+          "summary": "Branch is features/ssh-port-forwarding-control; pre-existing unstaged native changes exist; index is clean."
+        },
+        {
+          "command": "Inspect target/debug/deps test artifacts",
+          "result": "not-run",
+          "summary": "Repository tooling blocks target directory access; exact test executable path was not provided."
+        }
+      ],
+      "validationOutput": [
+        "Dependency graph verified from the active native Cargo.lock.",
+        "No code, lockfile, or configuration changes were made."
+      ],
+      "residualRisks": [
+        "Exact missing entry point and actual faulting/resolved DLL remain unproven until Event Viewer or ProcMon captures the loader failure.",
+        "A dependency adjustment before loader attribution may mask or fail to fix host-level servicing/interception.",
+        "Current worktree contains pre-existing uncommitted native SSH-forwarding changes."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No changes made.",
+      "reviewFindings": [
+        "high: apps/native/src-tauri/Cargo.toml - russh 0.62.5 introduces pageant 0.2.1 and windows 0.62.2; investigate only after loader attribution.",
+        "info: apps/native/src-tauri/Cargo.lock - windows 0.61.3 and 0.62.2 coexist through separate dependency paths; Cargo duplicate versions are not, by themselves, a runtime conflict.",
+        "no blockers in reviewed repository files; host loader evidence is the present blocker."
+      ],
+      "manualNotes": "Use Event Viewer/ProcMon to identify the failing export and DLL before code or dependency changes."
+    }
+  },
+  "effects": {
+    "fileMutation": {
+      "status": "not-applicable",
+      "expected": false,
+      "attempted": true
+    }
+  },
+  "transcriptPath": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\03da87a1_oracle_0_transcript.jsonl",
+  "timestamp": 1786566963189
+}

@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "id": "e3759b6b-2f4f-4514-a455-633153e11e66",
+  "title": "Review the newly implemented Phase 04 completion work. Inspect the current diff and Phase 04 plan...",
+  "objective": "Review the newly implemented Phase 04 completion work. Inspect the current diff and Phase 04 plan. Focus on: correctness of generic Tauri Runtime shutdown refactor, one-shot/bounded coordinator test using tauri MockRuntime, manager stop/scope-switch/dispose real TCP listener probes, test-only dependency scope, and whether acceptance can now be marked complete. Do not edit files. Be skeptical: identify any claim that is not actually proven. Environment: Windows 11 x64, Rust/Cargo stable 1.96, cwd G:\\ws\\sharing\\dam-hopper, branch features/ssh-port-forwarding-control. Existing working-tree changes are intentional; review only relevant Phase 04 files.\n\n## Subagent: code-reviewer\nID: evcrate-node-0-50305ec9-c26a-425f-adc0-410712588bc1 | CWD: G:/ws/sharing/dam-hopper\n\n## Context\n- Plan: none\n- Reports: G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- Paths: G:\\ws\\sharing\\dam-hopper\\plans/ | G:\\ws\\sharing\\dam-hopper\\docs/\n\n## Rules\n- Reports → G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- YAGNI / KISS / DRY\n- Concise, list unresolved Qs at end\n\n## Naming\n- Report: G:\\ws\\sharing\\dam-hopper\\plans\\reports\\code-reviewer-260814-1011-{slug}.md\n- Plan dir: G:\\ws\\sharing\\dam-hopper\\plans\\260814-1011-{slug}/\n\nActive workflow root: C:\\Users\\loidi\\.pi\\agent\\evcrate\\workflows\n\nActive config root: C:\\Users\\loidi\\.pi\n\nActive resource root: C:\\Users\\loidi\\.pi\\agent\\evcrate",
+  "status": "completed",
+  "createdAt": "2026-08-14T03:11:16.733Z",
+  "updatedAt": "2026-08-14T03:13:37.341Z",
+  "runs": [
+    {
+      "runId": "9f54e30c",
+      "mode": "single",
+      "agent": "code-reviewer",
+      "status": "completed",
+      "startedAt": "2026-08-14T03:13:37.341Z",
+      "completedAt": "2026-08-14T03:13:37.341Z",
+      "usage": {
+        "tokens": 113643
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\9f54e30c_code-reviewer_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\9f54e30c_code-reviewer_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-13T16-58-22-327Z_019ffc0f-80f7-79c4-92bb-7260ddccb07c.jsonl",
+  "summary": "## Code Review Summary\n\n### Scope\n- Files: `shutdown.rs`, `lib.rs`, `browser_debug/controller.rs`, `ssh_forward/manager.rs`, `Cargo.toml`, Phase 04 plan.\n- Focus: Phase 04 shutdown/listener completion.\n- No files edited.\n\n### Overall Assessment\nBuild/lint and targeted tests pass on this Windows host. Refactor is structurally sound, but acceptance remains **not complete**. Several plan claims overstate what tests prove.\n\n### High Priority Findings\n1. **Shutdown MockRuntime test does not exercise shutdown trigger/event behavior.**  \n   `close_and_exit_disposal_is_one_shot_and_bounded` uses `tauri::test::mock_app()`, but directly calls `begin_disposal()` and private `dispose_resources()` (`shutdown.rs:118-134`). It never calls `trigger()`, observes `app.exit(0)`, or dispatches `CloseRequested`/`ExitRequested`.  \n   Thus it proves coordinator state + direct disposal, not Tauri close/exit prevention/final-exit integration.\n\n2. **“Before commit” listener-closure claim is not proven.**  \n   The scope-switch test waits until `activate_scope(..., None)` returns, then verifies closure (`manager.rs:2455-2483`). It has no barrier/observer proving listener closure occurs before `commit_scope`; the test name overclaims ordering.\n\n3. **Listener probes use injected synthetic workers, not the production forwarding worker.**  \n   `install_listener_worker` creates a bare `TcpListener`, manually inserts `RuntimeEntry`, and closes on a oneshot (`manager.rs:2137-2160`). These tests prove `stop`, `stop_all_workers`, and `dispose` signal/await manager-owned worker handles and release a real TCP port. They do **not** prove `run_profile`’s actual listener/SSH/channel cleanup path.\n\n4. **Force-close cannot guarantee map cleanup under lock contention.**  \n   `force_close()` uses `runtimes.try_lock()` and silently skips runtime-map cleanup if unavailable (`manager.rs:1180-1192`). The shutdown test has no concurrent command/worker holding that mutex. This fails to substantiate Phase 04’s “no ...",
+  "acceptance": {
+    "status": "not-required",
+    "evidenceStatus": "not-required",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "none",
+      "explicit": true,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [],
+          "severity": "required"
+        }
+      ],
+      "evidence": [],
+      "verify": [],
+      "stopRules": [],
+      "reason": "disabled by deprecated false shorthand"
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": []
+  }
+}

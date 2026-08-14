@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 1,
+  "id": "3e5a35ef-8e49-422c-8b78-8e472431b968",
+  "title": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper. Static-only final review of apps/native/sr...",
+  "objective": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper. Static-only final review of apps/native/src-tauri/src/ssh_forward/manager.rs changes after previous review: force_close now clears abort map independent of runtime lock; reconnect accept failure maps BindFailed. Confirm no regressions in these two fixes. Runtime tests blocked by external 0xc0000139, do not require them. No edits. Concise terminal report with score, critical/warnings, unresolved questions last.",
+  "status": "completed",
+  "createdAt": "2026-08-13T11:48:46.273Z",
+  "updatedAt": "2026-08-13T11:49:42.492Z",
+  "runs": [
+    {
+      "runId": "call_JWvKGToRGGDSS52fKccmaQKD|fc_0723c5b70ccc75b4016a7daf19839481919c3a51f85e250b98",
+      "mode": "workflow",
+      "agent": "code-reviewer",
+      "status": "completed",
+      "startedAt": "2026-08-13T11:49:42.492Z",
+      "completedAt": "2026-08-13T11:49:42.492Z",
+      "usage": {
+        "tokens": 33318
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\831eb6d9_code-reviewer_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\831eb6d9_code-reviewer_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c.jsonl",
+  "summary": "Workflow completed.\n\nReturn:\n{\n  \"key\": \"phase-04-final-fix-review\",\n  \"ok\": true,\n  \"runId\": \"831eb6d9\",\n  \"output\": \"## Code Review Summary\\n\\n**Score: 8/10 — warning**\\n\\n### Scope\\n- Reviewed: `apps/native/src-tauri/src/ssh_forward/manager.rs`\\n- Focus: `force_close` abort-map cleanup; reconnect `accept()` errors.\\n- No edits made.\\n\\n### Critical\\n- None.\\n\\n### Warnings\\n- **High** — `apps/native/src-tauri/src/ssh_forward/manager.rs:1380`: the reconnect-backoff `listener.accept()` error still maps to `LocalPortInUse`, while the later reconnect `accept()` error maps to `BindFailed` (`:1412`). An already-bound listener cannot meaningfully report local-port contention here; this leaves one reconnect accept-failure path misclassified. Map `:1380` to `BindFailed` too.\\n\\n### Positive\\n- `force_close` now snapshots/aborts handles then clears `abort_handles` before attempting `runtimes.try_lock()` (`manager.rs:1164-1189`), so runtime-lock contention cannot retain abort handles.\\n- Cleanup repeats after runtime shutdown; harmless defense-in-depth.\\n- `cargo check --lib` passes.\\n- `git diff --check` passed.\\n\\n### Residual risks\\n- Runtime test execution intentionally not performed: external Windows loader failure `0xc0000139`.\\n- Static review found the early reconnect-backoff accept-error classification above.\\n\\n### Unresolved questions\\n- None.\",\n  \"artifactPaths\": [\n    \"C:\\\\Users\\\\loidi\\\\.pi\\\\agent\\\\sessions\\\\--G--ws-sharing-dam-hopper--\\\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c\\\\831eb6d9\\\\run-0\\\\session.jsonl\"\n  ],\n  \"results\": [\n    {\n      \"index\": 0,\n      \"agent\": \"code-reviewer\",\n      \"task\": \"Environment: Windows 11, CWD G:/ws/sharing/dam-hopper. Static-only final review of apps/native/src-tauri/src/ssh_forward/manager.rs changes after previous review: force_close now clears abort map independent of runtime lock; reconnect accept failure maps BindFailed. Confirm no regressions in these two fixes. Runtime tests blocked by external ...",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete high-severity finding reported at apps/native/src-tauri/src/ssh_forward/manager.rs:1380; force_close cleanup independently verified at lines 1164-1189."
+        }
+      ],
+      "changedFiles": [
+        "apps/native/src-tauri/src/ssh_forward/manager.rs"
+      ],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "cargo check --lib (apps/native/src-tauri)",
+          "result": "passed",
+          "summary": "Finished dev profile successfully."
+        },
+        {
+          "command": "git diff --check",
+          "result": "passed",
+          "summary": "No whitespace errors."
+        }
+      ],
+      "validationOutput": [
+        "Static verification confirms force_close clears abort_handles before any runtime try_lock.",
+        "Reconnect has a remaining listener.accept() error path mapping to LocalPortInUse at manager.rs:1380."
+      ],
+      "residualRisks": [
+        "Runtime tests not run per instruction; external Windows loader error 0xc0000139 blocks them.",
+        "Reconnect-backoff accept failure remains misclassified as LocalPortInUse."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Reviewed untracked SSH forwarding manager implementation; no edits made.",
+      "reviewFindings": [
+        "high: apps/native/src-tauri/src/ssh_forward/manager.rs:1380 - reconnect-backoff listener.accept() failure returns LocalPortInUse instead of BindFailed; later equivalent path correctly uses BindFailed.",
+        "no blockers: apps/native/src-tauri/src/ssh_forward/manager.rs:1164-1189 - force_close clears abort map independently of runtime lock acquisition."
+      ],
+      "manualNotes": "Static-only review; runtime validation intentionally omitted."
+    }
+  }
+}

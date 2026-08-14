@@ -39,6 +39,12 @@ import { matchesNewTerminalShortcut } from "@/lib/shortcuts.js";
 import { normalizeRouterBasename } from "@/lib/router-basename.js";
 import { recordClientRoute } from "@/lib/diagnostics-client.js";
 export {
+  SshForwardHostProvider,
+  SshForwardScopeBridge,
+  useSshForwardHost,
+  type SshForwardHostEnvironment,
+} from "@/contexts/SshForwardHostContext.js";
+export {
   BrowserDebugHostProvider,
   useBrowserDebugHost,
   type BrowserDebugHostEnvironment,

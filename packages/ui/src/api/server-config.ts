@@ -15,6 +15,18 @@ const KEY_ACTIVE_PROFILE = "damhopper_active_profile_id";
 const PROFILE_CHANGED_EVENT = "damhopper:profile-changed";
 let profileChangeVersion = 0;
 
+export type KnownServerProfiles =
+  | { status: "available"; profiles: ServerProfile[] }
+  | { status: "unavailable" };
+export type ServerProfileChange =
+  | { type: "activeChanged"; activeProfileId: string | null }
+  | {
+      type: "deleted";
+      deletedProfileId: string;
+      knownProfileIds: { status: "available"; ids: string[] } | { status: "unavailable" };
+    };
+const profileChangeListeners = new Set<(event: ServerProfileChange) => void>();
+
 /** Server profile interface */
 export interface ServerProfile {
   id: string; // UUID v4
@@ -323,31 +335,28 @@ function uuid(): string {
   return crypto.randomUUID();
 }
 
-/** Get all server profiles from localStorage */
-export function getProfiles(): ServerProfile[] {
+/** Reads profiles without confusing unavailable storage with an empty list. */
+export function readServerProfiles(): KnownServerProfiles {
   try {
     const stored = localStorage.getItem(KEY_PROFILES);
-    if (stored) {
-      const parsed: unknown = JSON.parse(stored);
-      if (Array.isArray(parsed)) {
-        const seenIds = new Set<string>();
-        return parsed
-          .filter(isServerProfile)
-          .map((profile) => ({
-            ...profile,
-            url: normalizeServerUrl(profile.url),
-          }))
-          .filter((profile) => {
-            if (seenIds.has(profile.id)) return false;
-            seenIds.add(profile.id);
-            return true;
-          });
-      }
-    }
+    if (!stored) return { status: "available", profiles: [] };
+    const parsed: unknown = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return { status: "available", profiles: [] };
+    const seenIds = new Set<string>();
+    const profiles = parsed
+      .filter(isServerProfile)
+      .map((profile) => ({ ...profile, url: normalizeServerUrl(profile.url) }))
+      .filter((profile) => !seenIds.has(profile.id) && Boolean(seenIds.add(profile.id)));
+    return { status: "available", profiles };
   } catch {
-    // ignore parse errors
+    return { status: "unavailable" };
   }
-  return [];
+}
+
+/** Get all server profiles from localStorage, preserving legacy empty fallback. */
+export function getProfiles(): ServerProfile[] {
+  const result = readServerProfiles();
+  return result.status === "available" ? result.profiles : [];
 }
 
 function isServerProfile(value: unknown): value is ServerProfile {
@@ -404,7 +413,7 @@ export function setActiveProfile(id: string): boolean {
   try {
     localStorage.setItem(KEY_ACTIVE_PROFILE, id);
     if (localStorage.getItem(KEY_ACTIVE_PROFILE) !== id) return false;
-    notifyProfileChange();
+    notifyProfileChange({ type: "activeChanged", activeProfileId: id });
     return true;
   } catch {
     return false;
@@ -415,7 +424,7 @@ export function clearActiveProfile(): boolean {
   try {
     localStorage.removeItem(KEY_ACTIVE_PROFILE);
     if (localStorage.getItem(KEY_ACTIVE_PROFILE) !== null) return false;
-    notifyProfileChange();
+    notifyProfileChange({ type: "activeChanged", activeProfileId: null });
     return true;
   } catch {
     return false;
@@ -493,6 +502,14 @@ export function deleteProfile(id: string): boolean {
       return false;
     }
   }
+  const profiles = readServerProfiles();
+  notifyProfileChange({
+    type: "deleted",
+    deletedProfileId: id,
+    knownProfileIds: profiles.status === "available"
+      ? { status: "available", ids: profiles.profiles.map((candidate) => candidate.id) }
+      : { status: "unavailable" },
+  });
   return true;
 }
 
@@ -560,11 +577,10 @@ export function migrateToProfiles(): void {
   }
 }
 
-function notifyProfileChange(): void {
+function notifyProfileChange(event?: ServerProfileChange): void {
   profileChangeVersion += 1;
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
-  }
+  if (event) for (const listener of profileChangeListeners) listener(event);
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
 }
 
 /** Monotonic revision for active profile, profile metadata, and token changes. */
@@ -573,10 +589,11 @@ export function getProfileChangeVersion(): number {
 }
 
 /** Subscribe to active-profile and profile-list changes in this tab and other tabs. */
-export function subscribeToProfileChanges(callback: () => void): () => void {
+export function subscribeToProfileChanges(callback: (event: ServerProfileChange) => void): () => void {
   if (typeof window === "undefined") return () => {};
 
-  const onProfileChange = () => callback();
+  profileChangeListeners.add(callback);
+  const onProfileChange = () => callback({ type: "activeChanged", activeProfileId: getActiveProfileId() });
   const onStorage = (event: StorageEvent) => {
     if (
       event.key === KEY_ACTIVE_PROFILE ||
@@ -585,12 +602,13 @@ export function subscribeToProfileChanges(callback: () => void): () => void {
       event.key?.startsWith(`${KEY_TOKEN}_`)
     ) {
       profileChangeVersion += 1;
-      callback();
+      callback({ type: "activeChanged", activeProfileId: getActiveProfileId() });
     }
   };
   window.addEventListener(PROFILE_CHANGED_EVENT, onProfileChange);
   window.addEventListener("storage", onStorage);
   return () => {
+    profileChangeListeners.delete(callback);
     window.removeEventListener(PROFILE_CHANGED_EVENT, onProfileChange);
     window.removeEventListener("storage", onStorage);
   };

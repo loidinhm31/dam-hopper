@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "id": "4db36962-ef69-4459-8a28-defbd3dd42ec",
+  "title": "Perform final acceptance review of Phase 04 after the last implementation and plan-status updates...",
+  "objective": "Perform final acceptance review of Phase 04 after the last implementation and plan-status updates. Verify the code diff and current Phase 04 plan. New final changes include deterministic activation-stage barrier coverage, pending-intent purge guard/race test, unknown-host Start -> challenge -> approve -> explicit Start -> running production russh listener test, and runtime-independent force_close cleanup. Confirm no critical issues, required gates pass, and whether marking Phase 04 Complete is now honest. Do not edit files. Environment: Windows 11 x64, Rust/Cargo stable 1.96, cwd G:\\ws\\sharing\\dam-hopper, branch features/ssh-port-forwarding-control.\n\n## Subagent: code-reviewer\nID: evcrate-node-0-e29e984f-e57e-4a2c-b2f1-c0c79b584a6b | CWD: G:/ws/sharing/dam-hopper\n\n## Context\n- Plan: none\n- Reports: G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- Paths: G:\\ws\\sharing\\dam-hopper\\plans/ | G:\\ws\\sharing\\dam-hopper\\docs/\n\n## Rules\n- Reports → G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- YAGNI / KISS / DRY\n- Concise, list unresolved Qs at end\n\n## Naming\n- Report: G:\\ws\\sharing\\dam-hopper\\plans\\reports\\code-reviewer-260814-1049-{slug}.md\n- Plan dir: G:\\ws\\sharing\\dam-hopper\\plans\\260814-1049-{slug}/\n\nActive workflow root: C:\\Users\\loidi\\.pi\\agent\\evcrate\\workflows\n\nActive config root: C:\\Users\\loidi\\.pi\n\nActive resource root: C:\\Users\\loidi\\.pi\\agent\\evcrate",
+  "status": "completed",
+  "createdAt": "2026-08-14T03:49:47.798Z",
+  "updatedAt": "2026-08-14T03:52:35.701Z",
+  "runs": [
+    {
+      "runId": "43eae078",
+      "mode": "single",
+      "agent": "code-reviewer",
+      "status": "completed",
+      "startedAt": "2026-08-14T03:52:35.701Z",
+      "completedAt": "2026-08-14T03:52:35.701Z",
+      "usage": {
+        "tokens": 100425
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\43eae078_code-reviewer_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\43eae078_code-reviewer_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-13T16-58-22-327Z_019ffc0f-80f7-79c4-92bb-7260ddccb07c.jsonl",
+  "summary": "## Code Review Summary\n\n### Scope\n- Reviewed: Phase 04 plan, Rust manager/commands/shutdown/bootstrap, current SSH adapter integration.\n- Focus: final Phase 04 acceptance changes.\n- Plans updated: none (review-only).\n\n### Overall Assessment\nNo critical implementation/security issue found. Windows native runtime gates now pass; listener/challenge/purge/force-close changes are sound.\n\n### High Priority Findings\n- **Acceptance evidence gap:** Phase 04 requires injectable barriers at each listed activation boundary. `manager.rs` has one test barrier (after staged load) plus command-gate scheduling; it does not provide deterministic barriers before/after stop, before commit, auto-start, and publish. Therefore the plan’s literal “1,000 randomized A/B/C barrier schedules” success criterion is not fully evidenced.\n- **Plan inconsistency:** Phase 04 is marked Complete but four checked TODO annotations still state “runtime execution pending.” Phase 05 is Complete while its TODO list remains entirely unchecked and its Acceptance section retains the prior runtime-blocked statement. Status documentation is stale/internally contradictory.\n\n### Medium Priority Improvements\n- `manager.rs` is substantially over the project’s 200-line guideline. Lifecycle, activation ordering, worker shutdown, and tests should eventually be separated; not a Phase 04 blocker.\n\n### Positive Observations\n- `force_close` correctly has a no-current-runtime fallback and test coverage for lock contention/runtime absence.\n- Production in-process russh test proves unknown-host Start → challenge → approve → explicit Start → Running, then listener closure after Stop.\n- Purge is denied while staged intent exists.\n- Shutdown is one-shot, deadline-bounded, and prevents new commands through manager shutdown state.\n- Exact 12-command boundary, main-window validation, and manifest command list are tested.\n\n### Recommended Actions\n1. Before claiming every Phase 04 success criterion complete, add deterministic barri...",
+  "acceptance": {
+    "status": "not-required",
+    "evidenceStatus": "not-required",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "none",
+      "explicit": true,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [],
+          "severity": "required"
+        }
+      ],
+      "evidence": [],
+      "verify": [],
+      "stopRules": [],
+      "reason": "disabled by deprecated false shorthand"
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": []
+  }
+}

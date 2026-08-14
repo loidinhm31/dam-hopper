@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "id": "3debd755-3918-4095-a374-e3bd54e826a1",
+  "title": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, pnpm monorepo. User says keep going; Phase...",
+  "objective": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, pnpm monorepo. User says keep going; Phase 04 runtime test blocker deferred. Read Phase 05 plan. Map exact existing frontend/native files/patterns for BrowserDebugHostContext, native Browser Debug adapter, server-config subscriptions/tests, app composition, package test setup. Report minimal Phase 05 implementation order and file ownership; no edits. Concise; unresolved questions last.",
+  "status": "completed",
+  "createdAt": "2026-08-13T11:52:01.629Z",
+  "updatedAt": "2026-08-13T11:52:48.775Z",
+  "runs": [
+    {
+      "runId": "call_4uqyHtWaGqcINT8i4WMDcKDf|fc_0723c5b70ccc75b4016a7dafb0d6e48191a8504aa41f224470",
+      "mode": "workflow",
+      "agent": "scout",
+      "status": "completed",
+      "startedAt": "2026-08-13T11:52:48.775Z",
+      "completedAt": "2026-08-13T11:52:48.775Z",
+      "usage": {
+        "tokens": 35456
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\31299534_scout_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\31299534_scout_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c.jsonl",
+  "summary": "Workflow completed.\n\nReturn:\n{\n  \"key\": \"phase-05-file-map\",\n  \"ok\": true,\n  \"runId\": \"31299534\",\n  \"output\": \"## scout-260813-1852-phase-05-host-context-native-adapter\\n\\n### Findings / ownership\\n\\n- **Shared contracts — create**\\n  - `packages/ui/src/lib/ssh-forward-host.ts`\\n  - `packages/ui/src/lib/ssh-forward-host.test.ts`\\n  - Pattern: `packages/ui/src/lib/browser-debug-host.ts` (host DTO/parser boundary). Keep all Tauri imports out of `packages/ui`.\\n\\n- **Context + bridge — create**\\n  - `packages/ui/src/contexts/SshForwardHostContext.tsx`\\n  - `packages/ui/src/contexts/SshForwardHostContext.test.tsx`\\n  - Pattern: `packages/ui/src/contexts/BrowserDebugHostContext.tsx` provides nullable `{host:null, environment:{kind:\\\"web\\\"}}`.\\n  - Composition/export owner: `packages/ui/src/embed/dam-hopper-app.tsx`; currently re-exports BrowserDebug provider and owns app-level composition.\\n\\n- **UI state — create**\\n  - `packages/ui/src/hooks/use-ssh-forward.ts`\\n  - `packages/ui/src/hooks/use-ssh-forward.test.tsx`\\n  - Pattern: Browser Debug host consumers subscribe in effects and gate events by generation: `packages/ui/src/components/organisms/BrowserDebugKeepAliveHost.tsx`.\\n\\n- **Server profile changes — modify**\\n  - `packages/ui/src/api/server-config.ts`\\n  - `packages/ui/src/api/server-config.test.ts`\\n  - Existing `getProfiles()` collapses unavailable storage/read failure to `[]`; Phase 05 needs `readServerProfiles()` explicit availability.\\n  - Existing `subscribeToProfileChanges(callback)` is untyped. Add typed `activeChanged` and `deleted` events only after successful commits.\\n  - `deleteProfile()` is the emission point; retain transactional rollback behavior.\\n\\n- **Native adapter — create**\\n  - `apps/native/src/native-ssh-forward-host.ts`\\n  - `apps/native/src/native-ssh-forward-host.test.ts`\\n  - Pattern: `apps/native/src/native-browser-debug-host.ts` is sole native Tauri adapter: direct `invoke`/`listen`, cached state, listener lifecycle, operation g...",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete Phase 05 implementation files, existing pattern paths, ownership, and blocker severity identified."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [
+        "packages/ui/src/lib/ssh-forward-host.test.ts",
+        "packages/ui/src/contexts/SshForwardHostContext.test.tsx",
+        "packages/ui/src/hooks/use-ssh-forward.test.tsx",
+        "packages/ui/src/api/server-config.test.ts",
+        "apps/native/src/native-ssh-forward-host.test.ts"
+      ],
+      "commandsRun": [],
+      "validationOutput": [
+        "Read Phase 05 plan and mapped existing Browser Debug context/adapter, server config, native/UI composition, and package setup."
+      ],
+      "residualRisks": [
+        "Phase 04 runtime blocker deferred.",
+        "Browser Debug adapter queue/dispose semantics are incompatible with required SSH activation/unload semantics.",
+        "Existing server-config storage failures collapse to an empty profile list."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No edits; reconnaissance only.",
+      "reviewFindings": [
+        "blocker: apps/native/src/native-browser-debug-host.ts - serialized queue and dispose-triggered destroy must not be reused for SSH A/B/C activation or unload.",
+        "high: packages/ui/src/api/server-config.ts - getProfiles() returns [] for unavailable storage; Phase 05 requires explicit availability.",
+        "high: apps/native/package.json - no native Vitest script/dependency despite adapter test file."
+      ],
+      "manualNotes": "Minimal implementation order and file ownership supplied above."
+    }
+  }
+}

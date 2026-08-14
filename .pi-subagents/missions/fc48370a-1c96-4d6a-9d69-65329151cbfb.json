@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "id": "fc48370a-1c96-4d6a-9d69-65329151cbfb",
+  "title": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, timezone Asia/Bangkok. Validate Phase 05 n...",
+  "objective": "Environment: Windows 11, CWD G:/ws/sharing/dam-hopper, timezone Asia/Bangkok. Validate Phase 05 native SSH forwarding host/context adapter only; do not edit files or plan docs. Run the mandatory focused and full checks as practical: pnpm --filter @dam-hopper/ui test, pnpm --filter @dam-hopper/native test, pnpm --filter @dam-hopper/ui build, pnpm --filter @dam-hopper/native build, pnpm lint, git diff --check. Rust static checks if feasible: cargo fmt --manifest-path apps/native/src-tauri/Cargo.toml --check, cargo check, clippy -D warnings. Distinguish Phase 04 Windows runtime blocker (0xc0000139) and do not chase it. Report exact commands/results, changed files (should be none), residual risks, unresolved questions last.\n\n## Subagent: tester\nID: evcrate-node-0-3e78039d-ecfa-4524-8f77-3c095888908f | CWD: G:/ws/sharing/dam-hopper\n\n## Context\n- Plan: none\n- Reports: G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- Paths: G:\\ws\\sharing\\dam-hopper\\plans/ | G:\\ws\\sharing\\dam-hopper\\docs/\n\n## Rules\n- Reports → G:\\ws\\sharing\\dam-hopper\\plans\\reports\n- YAGNI / KISS / DRY\n- Concise, list unresolved Qs at end\n\n## Naming\n- Report: G:\\ws\\sharing\\dam-hopper\\plans\\reports\\tester-260813-2039-{slug}.md\n- Plan dir: G:\\ws\\sharing\\dam-hopper\\plans\\260813-2039-{slug}/\n\nActive workflow root: C:\\Users\\loidi\\.pi\\agent\\evcrate\\workflows\n\nActive config root: C:\\Users\\loidi\\.pi\n\nActive resource root: C:\\Users\\loidi\\.pi\\agent\\evcrate",
+  "status": "completed",
+  "createdAt": "2026-08-13T13:39:17.782Z",
+  "updatedAt": "2026-08-13T13:41:44.958Z",
+  "runs": [
+    {
+      "runId": "90d4a088",
+      "mode": "single",
+      "agent": "tester",
+      "status": "completed",
+      "startedAt": "2026-08-13T13:41:44.958Z",
+      "completedAt": "2026-08-13T13:41:44.958Z",
+      "usage": {
+        "tokens": 52920
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\90d4a088_tester_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\90d4a088_tester_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c.jsonl",
+  "summary": "## Test Results\n- `pnpm --filter @dam-hopper/ui test` — PASS: 169 files, 981 tests.\n- `pnpm --filter @dam-hopper/native test` — PASS: 2 files, 17 tests.\n- `pnpm --filter @dam-hopper/ui build` — PASS.\n- `pnpm --filter @dam-hopper/native build` — PASS.\n- `pnpm lint` — PASS; 0 errors, 7 warnings (test-only `any`/hook dependency warnings).\n- `git diff --check` — PASS; only LF/CRLF warnings.\n- `cargo fmt --manifest-path apps/native/src-tauri/Cargo.toml --check` — PASS.\n- `cargo check --manifest-path apps/native/src-tauri/Cargo.toml` — PASS.\n- `cargo clippy --manifest-path apps/native/src-tauri/Cargo.toml -- -D warnings` — PASS.\n\n## Full Check\n- `pnpm test` — FAIL, unrelated server failure:\n  - `error[E0658]: use of unstable library feature windows_by_handle`\n  - `server/src/telemetry/runtime.rs:462-463`\n  - Existing Phase 04 Windows runtime blocker context; not chased.\n\n## Changes\n- No files edited by validation.\n- Working tree already contained numerous modified/untracked files, including Phase 05 files.\n\n## Coverage / Performance\n- Coverage not configured/run.\n- UI tests: ~11.9s; native tests: ~0.9s.\n- Native build: ~34s frontend production bundle.\n\n## Residual Risks\n- Rust server full-suite remains blocked by `windows_by_handle` compile errors.\n- Seven lint warnings remain.\n- No live SSH forwarding integration test performed.\n\n## Unresolved Questions\n- None.",
+  "acceptance": {
+    "status": "not-required",
+    "evidenceStatus": "not-required",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "none",
+      "explicit": true,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [],
+          "severity": "required"
+        }
+      ],
+      "evidence": [],
+      "verify": [],
+      "stopRules": [],
+      "reason": "disabled by deprecated false shorthand"
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": []
+  }
+}

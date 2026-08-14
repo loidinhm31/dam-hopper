@@ -1,0 +1,211 @@
+{
+  "schemaVersion": 1,
+  "id": "d36e2e8d-63d7-4a73-bf78-9f76e903cf6b",
+  "title": "Environment Windows 11; CWD G:/ws/sharing/dam-hopper. Continue Phase 05 only; preserve all unrela...",
+  "objective": "Environment Windows 11; CWD G:/ws/sharing/dam-hopper. Continue Phase 05 only; preserve all unrelated/Phase04 changes. Fix final review defects comprehensively: stale activation responses must reject as ACTIVATION_SUPERSEDED and never resolve usable stale scope; post-await command results must only update/return if current context/token/scope/generation/operation still match; use one shared strict RFC3339 UTC millisecond calendar validator replacing Date.parse copies; add focused adapter tests for delayed A/B/C and stale command snapshot/new client epoch. Add missing Context bridge test, hook test, and server-config tests for delete sequencing/unavailable read/typed events, using existing test conventions. Keep plan docs unchanged. Run explicit vitest files using exec vitest run, native/UI builds, lint, diff check. Do not run broad UI suite. Report concise evidence.",
+  "status": "completed",
+  "createdAt": "2026-08-13T12:27:02.527Z",
+  "updatedAt": "2026-08-13T12:33:40.894Z",
+  "runs": [
+    {
+      "runId": "call_hkZDjssxIfkC3ASU5SI2eeh5|fc_0723c5b70ccc75b4016a7db80bec548191b0033dad824b10d7",
+      "mode": "workflow",
+      "agent": "worker",
+      "status": "completed",
+      "startedAt": "2026-08-13T12:33:40.894Z",
+      "completedAt": "2026-08-13T12:33:40.894Z",
+      "usage": {
+        "tokens": 93715
+      }
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\5658ba9b_worker_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "G:\\ws\\sharing\\dam-hopper\\.pi-subagents\\artifacts\\5658ba9b_worker_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "G:\\ws\\sharing\\dam-hopper",
+  "ownerSessionId": "C:\\Users\\loidi\\.pi\\agent\\sessions\\--G--ws-sharing-dam-hopper--\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c.jsonl",
+  "summary": "Workflow completed.\n\nReturn:\n{\n  \"key\": \"phase-05-ordering-tests-remediate\",\n  \"ok\": true,\n  \"runId\": \"5658ba9b\",\n  \"output\": \"Turn budget wrap-up was requested after 24 assistant turns (soft limit 24, grace 4). Process-mode live steering is unavailable, so the child was warned at launch to wrap up by this budget. Output may be partial.\\n\\nImplemented Phase 05 review fixes: supersession/operation gates, shared strict timestamp validation, scope deletion sequencing, hint identity filtering, and focused adapter/context/hook/server-config tests.\\n\\nChanged files: native adapter/tests; UI host/context/hook/server-config and tests.\\n\\nValidation: native focused Vitest 9/9 passed; UI focused Vitest 22/22 passed; UI and native builds passed; lint passed with 6 existing/new test warnings only; `git diff --check` passed.\\n\\nOpen risks/questions: UI package script forwards arguments incorrectly and ran broad tests once; direct `pnpm --filter … exec vitest run` was used successfully. No staged files.\\n\\nRecommended next step: review the focused Phase 05 diff before staging.\",\n  \"artifactPaths\": [\n    \"C:\\\\Users\\\\loidi\\\\.pi\\\\agent\\\\sessions\\\\--G--ws-sharing-dam-hopper--\\\\2026-08-12T16-55-56-548Z_019ff6e6-eb84-7391-8451-fbceb064ab2c\\\\5658ba9b\\\\run-0\\\\session.jsonl\"\n  ],\n  \"results\": [\n    {\n      \"index\": 0,\n      \"agent\": \"worker\",\n      \"task\": \"Environment Windows 11; CWD G:/ws/sharing/dam-hopper. Continue Phase 05 only; preserve all unrelated/Phase04 changes. Fix final review defects comprehensively: stale activation responses must reject as ACTIVATION_SUPERSEDED and never resolve usable stale scope; post-await command results must only update/return if current context/token/scope/generation/operation still match; use one shared strict RFC3339 UTC millisecond calendar validator replacing Date.parse copies; add focused adapter tests for delayed A/B/C and stale command snapshot/new client epoch. Add missing Context bridge test, hook test, and server-config tests for delete ...",
+  "acceptance": {
+    "status": "checked",
+    "evidenceStatus": "checked",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "checked",
+      "explicit": true,
+      "inferredReason": [
+        "write-capable worker/task"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "residual-risks",
+            "no-staged-files",
+            "validation-output"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "residual-risks",
+        "no-staged-files",
+        "validation-output"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "write-capable worker/task"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "residual-risks",
+          "no-staged-files",
+          "validation-output"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "criterion:criterion-1",
+        "status": "passed",
+        "message": "Required criterion 'criterion-1' satisfied."
+      },
+      {
+        "id": "evidence:changed-files",
+        "status": "passed",
+        "message": "changed-files evidence present."
+      },
+      {
+        "id": "evidence:tests-added",
+        "status": "passed",
+        "message": "tests-added evidence present."
+      },
+      {
+        "id": "evidence:commands-run",
+        "status": "passed",
+        "message": "commands-run evidence present."
+      },
+      {
+        "id": "evidence:residual-risks",
+        "status": "passed",
+        "message": "residual-risks evidence present."
+      },
+      {
+        "id": "evidence:no-staged-files",
+        "status": "passed",
+        "message": "no-staged-files evidence present."
+      },
+      {
+        "id": "evidence:validation-output",
+        "status": "passed",
+        "message": "validation-output evidence present."
+      },
+      {
+        "id": "no-staged-files",
+        "status": "passed",
+        "message": "No staged files detected."
+      }
+    ],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Changes are limited to Phase 05 SSH-forward adapter, UI bridge/hook, server-profile synchronization, and focused tests."
+        }
+      ],
+      "changedFiles": [
+        "apps/native/src/native-ssh-forward-host.ts",
+        "apps/native/src/native-ssh-forward-host.test.ts",
+        "packages/ui/src/lib/ssh-forward-host.ts",
+        "packages/ui/src/contexts/SshForwardHostContext.tsx",
+        "packages/ui/src/contexts/SshForwardHostContext.test.tsx",
+        "packages/ui/src/hooks/use-ssh-forward.ts",
+        "packages/ui/src/hooks/use-ssh-forward.test.tsx",
+        "packages/ui/src/api/server-config.ts",
+        "packages/ui/src/api/server-config.test.ts"
+      ],
+      "testsAddedOrUpdated": [
+        "apps/native/src/native-ssh-forward-host.test.ts",
+        "packages/ui/src/contexts/SshForwardHostContext.test.tsx",
+        "packages/ui/src/hooks/use-ssh-forward.test.tsx",
+        "packages/ui/src/api/server-config.test.ts",
+        "packages/ui/src/lib/ssh-forward-host.test.ts"
+      ],
+      "commandsRun": [
+        {
+          "command": "pnpm --filter @dam-hopper/native exec vitest run src/native-ssh-forward-host.test.ts",
+          "result": "passed",
+          "summary": "1 file, 9 tests passed"
+        },
+        {
+          "command": "pnpm --filter @dam-hopper/ui exec vitest run src/lib/ssh-forward-host.test.ts src/contexts/SshForwardHostContext.test.tsx src/hooks/use-ssh-forward.test.tsx src/api/server-config.test.ts",
+          "result": "passed",
+          "summary": "4 files, 22 tests passed"
+        },
+        {
+          "command": "pnpm --filter @dam-hopper/ui build",
+          "result": "passed",
+          "summary": "TypeScript build passed"
+        },
+        {
+          "command": "pnpm --filter @dam-hopper/native build",
+          "result": "passed",
+          "summary": "Native Vite/TypeScript build passed"
+        },
+        {
+          "command": "pnpm lint",
+          "result": "passed",
+          "summary": "0 errors; 6 test-file warnings"
+        },
+        {
+          "command": "git diff --check",
+          "result": "passed",
+          "summary": "No whitespace errors"
+        }
+      ],
+      "validationOutput": [
+        "Native focused adapter tests: 9 passed.",
+        "UI focused tests: 22 passed.",
+        "Native and UI builds passed.",
+        "No staged files."
+      ],
+      "residualRisks": [
+        "Lint reports six non-blocking warnings in newly added test files.",
+        "Working tree contains unrelated pre-existing Phase 04 and environment artifacts, preserved unchanged."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Adds strict calendar timestamp validation and current-operation guards to prevent stale activation/command results; adds deletion sequencing and focused coverage.",
+      "reviewFindings": [
+        "no blockers"
+      ],
+      "manualNotes": "Initial package test scripts forwarded arguments incorrectly and ran broad tests; direct exec Vitest commands provided the required focused validation."
+    }
+  }
+}
