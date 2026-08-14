@@ -12,7 +12,7 @@
 ## Overview
 
 - **Priority:** P2
-- **Status:** Pending
+- **Status:** Complete — Windows-only desktop scope (2026-08-14)
 - **Effort:** 10h
 - **Description:** Add the host-gated SSH forwarding page, explicit profile form, lifecycle controls, key inventory selection, host-fingerprint approval, and security-boundary copy.
 
@@ -97,30 +97,30 @@ React local state holds only current form/public challenge/status data. Authorit
 
 ## Implementation Steps
 
-1. Add a pure `getNavEntries({sshForwardHostAvailable})` helper and conditional lazy route. Test absent host before implementing page behavior.
-2. Build page from `useSshForward` snapshot. Join profiles/runtimes by profile ID; do not copy profiles into a second persistent store or TanStack Query.
-3. Implement the complete fixed Phase 03 error/retry/message presentation and state-aware buttons. Keep decimal revision/generation strings opaque; surface conflict-refetched state with explicit retry.
-4. Build new form defaults from active server profile only at dialog-open initialization. Track endpoint review locally; validate integers/ASCII/bounds before host call.
-5. Build edit form from saved native profile only. Add regression: change `ServerProfile.url` after snapshot, rerender/reopen, and assert saved host/port and outgoing update remain unchanged unless user edits them.
-6. Load safe key inventory only after key mode selection. Render opaque selection labels; omit path/file/password/passphrase/keychain UI and redact error handling.
-7. Implement host-key modal. Unknown approval echoes exact algorithm/fingerprint and current decimal generation; after approval close with explicit Start prompt. Changed-key view has no approval callback/button and shows exact resolved path/command, protected backup/quarantine/recovery, and offline removal/reapproval procedure.
-8. Add permanent local-process/loopback limitation copy and targeted accessibility labels, focus restoration, keyboard navigation, and pending/error announcements.
-9. Add JSDOM and Chromium coverage for route/nav gating, form validation, host trust, lifecycle, compact navigation, and zero calls without host.
+1. [x] Add a pure `getNavEntries({sshForwardHostAvailable})` helper and conditional lazy route. Test absent host before implementing page behavior.
+2. [x] Build page from `useSshForward` snapshot. Join profiles/runtimes by profile ID; do not copy profiles into a second persistent store or TanStack Query.
+3. [x] Implement the complete fixed Phase 03 error/retry/message presentation and state-aware buttons. Keep decimal revision/generation strings opaque; surface conflict-refetched state with explicit retry.
+4. [x] Build new form defaults from active server profile only at dialog-open initialization. Track endpoint review locally; validate integers/ASCII/bounds before host call.
+5. [x] Build edit form from saved native profile only. Add regression: change `ServerProfile.url` after snapshot, rerender/reopen, and assert saved host/port and outgoing update remain unchanged unless user edits them.
+6. [x] Load safe key inventory only after key mode selection. Render opaque selection labels; omit path/file/password/passphrase/keychain UI and redact error handling.
+7. [x] Implement host-key modal. Unknown approval echoes exact algorithm/fingerprint and current decimal generation; after approval close with explicit Start prompt. Changed-key view has no approval callback/button and shows exact resolved path/command, protected backup/quarantine/recovery, and offline removal/reapproval procedure.
+8. [x] Add permanent local-process/loopback limitation copy and targeted accessibility labels, focus restoration, keyboard navigation, and pending/error announcements.
+9. [x] Add JSDOM and Chromium coverage for route/nav gating, form validation, host trust, lifecycle, compact navigation, and zero calls without host.
 
 ## Todo list
 
-- [ ] `/ssh-forwarding` route/nav exist only for `nativeDesktop` non-null host.
-- [ ] New form defaults host once, port 22, immutable target `127.0.0.1`, and requires review.
-- [ ] Port 0, IPv6, wildcard, invalid/decimal/out-of-range ports rejected.
-- [ ] Saved endpoint never follows HTTP profile URL edits.
-- [ ] Agent preferred; key mode exposes opaque safe inventory only.
-- [ ] Unknown approval echoes exact fingerprint and does not auto-start; changed key/algorithm has no override.
-- [ ] Changed-key copy/path/command matches the stopped-app maintenance contract on each OS.
-- [ ] No updater/restart/relaunch UI is exposed.
-- [ ] Deterministic auto-start skipped state and explicit later Start are visible.
-- [ ] Stop-then-Edit/Delete is explicit.
-- [ ] Other-local-process limitation is visible and exact.
-- [ ] Browser/native mobile tests prove zero host/Tauri/server calls.
+- [x] `/ssh-forwarding` route/nav exist only for `nativeDesktop` non-null host.
+- [x] New form defaults host once, port 22, immutable target `127.0.0.1`, and requires review.
+- [x] Port 0, IPv6, wildcard, invalid/decimal/out-of-range ports rejected.
+- [x] Saved endpoint never follows HTTP profile URL edits.
+- [x] Agent preferred; key mode exposes opaque safe inventory only.
+- [x] Unknown approval echoes exact fingerprint and does not auto-start; changed key/algorithm has no override.
+- [x] Windows changed-key copy/path/command matches the stopped-app maintenance contract; other OS variants remain Phase 07 scope.
+- [x] No updater/restart/relaunch UI is exposed.
+- [x] Deterministic auto-start skipped state and explicit later Start are visible.
+- [x] Stop-then-Edit/Delete is explicit.
+- [x] Other-local-process limitation is visible and exact.
+- [x] Browser/native mobile tests prove zero host/Tauri/server calls.
 
 ## Success Criteria
 
@@ -147,11 +147,24 @@ React local state holds only current form/public challenge/status data. Authorit
 - UI validation improves feedback; Rust remains authoritative for every field and lifecycle precondition.
 - Never reuse existing Git passphrase dialogs or server `/api/ssh/*` credentials for native forwarding.
 
+## Completion evidence — 2026-08-14
+
+- **Scope:** Phase 06 is complete for the Windows-only desktop control surface. The host-gated `/ssh-forwarding` route/navigation, explicit profile form, lifecycle controls, key inventory, host-key approval/remediation views, accessibility behavior, and local-process security copy are delivered. Browser and native-mobile paths remain structurally unavailable.
+- **Validation:** UI — **181 files / 1,050 passed**; Chromium — **28 files / 121 passed**; Rust — **140 passed / 1 ignored**. Build, lint, `cargo check`, `cargo fmt`, and diff checks passed.
+- **Acceptance:** The Windows desktop scope is approved as Phase 06 complete. This evidence does not promote Phase 07 or claim release readiness.
+
+## Deferred Phase 07 residuals
+
+- macOS/Linux desktop and Android/iOS dependency, build, and runtime evidence.
+- Real OpenSSH/target-loopback, packaged Tauri, listener-closure, trust-repair, long-idle, and second-local-process release smoke evidence.
+- Protected runtime artifact/hash validation, named release-engineer evidence, security approval of ACL/trust/remediation, product acceptance of loopback exposure, and protected source-diff/redaction/manual release gates.
+
 ## Next steps
 
-- Phase 07 validates the full journey with real SSH/target services and packaged Tauri binaries on all three desktop OSes.
-- Capture security-boundary and host-key evidence in release smoke artifacts, not source docs during this planning task.
+- Phase 07 remains **Deferred** until its cross-platform, packaged-runtime, security, product, and manual release gates are independently evidenced.
+- Capture the security-boundary and host-key evidence in release smoke artifacts; do not infer those gates from the Phase 06 UI totals.
 
 ### Unresolved Questions
 
-- Exact platform-specific config paths and atomic stopped-app edit commands shown in remediation copy remain gated on Phase 03/07 verification.
+- Which named release owners and protected environment will provide the deferred Phase 07 evidence?
+- Exact packaged platform paths and atomic stopped-app edit commands remain release-gated; the UI uses runtime-resolved values.

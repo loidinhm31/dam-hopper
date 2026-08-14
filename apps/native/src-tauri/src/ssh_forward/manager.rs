@@ -9,7 +9,7 @@
 use std::{
     collections::HashMap,
     io,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU16, Ordering},
         Arc,
@@ -39,7 +39,8 @@ use super::{
     model::{
         AutoStartDisposition, OpenClientResult, PurgeScopeResult, SshForwardEventHint,
         SshForwardEventReason, SshForwardRuntime, SshForwardScopeActivation, SshForwardSnapshot,
-        SshForwardState, SshKeyInventory, SshKeyInventoryItem, UtcTimestamp, WireCounter,
+        SshForwardState, SshForwardTrustRepairMetadata, SshKeyInventory, SshKeyInventoryItem,
+        UtcTimestamp, WireCounter,
     },
     profile::SshForwardProfile,
     scope_retention::KnownScopesInput,
@@ -173,6 +174,8 @@ impl ActivationTestBarrier {
 pub(crate) struct SshForwardManager {
     store: Arc<SshForwardStore>,
     _runtime_lease: FeatureRuntimeLease,
+    app_config_dir: PathBuf,
+    executable_path: String,
     identity: String,
     issuer: Mutex<ClientEpochIssuer>,
     intent: Mutex<ActivationIntent>,
@@ -201,11 +204,17 @@ impl SshForwardManager {
         let identity = store
             .load_or_create_desktop_instance()
             .map_err(|_| SshForwardErrorCode::IdentityCorrupt.command_error())?;
+        let executable_path = std::env::current_exe()
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?
+            .to_string_lossy()
+            .into_owned();
         let issuer =
             ClientEpochIssuer::new(identity.clone()).map_err(|code| code.command_error())?;
         Ok(Self {
             store,
             _runtime_lease: runtime_lease,
+            app_config_dir: app_config_dir.to_path_buf(),
+            executable_path,
             identity,
             issuer: Mutex::new(issuer),
             intent: Mutex::new(ActivationIntent {
@@ -476,6 +485,7 @@ impl SshForwardManager {
                 .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?,
             runtimes: runtime_values,
             host_key_challenges: challenges.snapshot(UtcTimestamp::now(), scope_id),
+            trust_repair: Some(self.trust_repair_metadata(scope_id)?),
         };
         drop(challenges);
         snapshot
@@ -483,6 +493,18 @@ impl SshForwardManager {
             .sort_by(|left, right| left.id.cmp(&right.id));
         self.ensure_context(context, token).await?;
         Ok(snapshot)
+    }
+
+    fn trust_repair_metadata(
+        &self,
+        scope_id: &str,
+    ) -> Result<SshForwardTrustRepairMetadata, SshForwardCommandError> {
+        let trust_path = super::trust_repair::resolved_trust_path(&self.app_config_dir, scope_id)
+            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
+        Ok(SshForwardTrustRepairMetadata {
+            trust_path: trust_path.to_string_lossy().into_owned(),
+            executable_path: self.executable_path.clone(),
+        })
     }
 
     pub(crate) async fn create_profile(

@@ -30,6 +30,7 @@ import { WorkspaceSetupWizard } from "@/components/organisms/WorkspaceSetupWizar
 import { TerminalNotificationToastViewport } from "@/components/organisms/TerminalNotificationToastViewport.js";
 import { EncryptProvider } from "@/contexts/EncryptContext.js";
 import { AndroidChromeInputPolicyProvider } from "@/contexts/AndroidChromeInputPolicyContext.js";
+import { useSshForwardHost } from "@/contexts/SshForwardHostContext.js";
 import { AndroidChromeKeyboardNotice } from "@/components/organisms/AndroidChromeKeyboardNotice.js";
 import { PassphrasePrompt } from "@/components/molecules/PassphrasePrompt.js";
 import { useBrowserShortcutGuard } from "@/hooks/use-browser-shortcut-guard.js";
@@ -83,6 +84,11 @@ const AgentStorePage = lazy(() =>
 const UsagePage = lazy(() =>
   import("@/components/pages/UsagePage.js").then((m) => ({
     default: m.UsagePage,
+  })),
+);
+const SshForwardingPage = lazy(() =>
+  import("@/components/pages/SshForwardingPage.js").then((m) => ({
+    default: m.SshForwardingPage,
   })),
 );
 
@@ -366,6 +372,10 @@ export function DamHopperApp() {
   useBrowserContextMenuSuppression();
   const qc = useQueryClient();
   const activeProfile = useServerProfile();
+  const { host: sshForwardHost, environment: sshForwardEnvironment } =
+    useSshForwardHost();
+  const sshForwardAvailable =
+    sshForwardHost !== null && sshForwardEnvironment.kind === "nativeDesktop";
   const activeProfileId = activeProfile?.id;
   const activeProfileUrl = activeProfile?.url;
   const activeProfileConnectionKey = JSON.stringify([
@@ -485,6 +495,18 @@ export function DamHopperApp() {
                       </ErrorBoundary>
                     }
                   />
+                  {sshForwardAvailable ? (
+                    <Route
+                      path="/ssh-forwarding"
+                      element={
+                        <ErrorBoundary>
+                          <Suspense fallback={LOADING_FALLBACK}>
+                            <SshForwardingPage />
+                          </Suspense>
+                        </ErrorBoundary>
+                      }
+                    />
+                  ) : null}
                 </Routes>
               </WorkspaceGuard>
             </AuthGuard>
