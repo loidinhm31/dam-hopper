@@ -2,14 +2,9 @@
 
 ## Overview
 
-The **Multi-Server Profiles** feature (Phase 2) lets you manage and switch between multiple dam-hopper server configurations without restarting the application. This is useful for development workflows that involve:
+The **Multi-Server Profiles** feature (Phase 2) stores server profiles locally. Browser API/media access is same-origin by default; a separate browser frontend must be added to the server's exact `DAM_HOPPER_CORS_ORIGINS` allowlist. Ticket issuance requires authentication, and media URLs remain short-lived actor/session-bound capabilities. Packaged native browser transport ignores separate-origin profiles until a native transport exists.
 
-- Local development server (usually `localhost:4800`)
-- Staging server (e.g., `https://staging.example.com`)
-- Production server (e.g., `https://damhopper.example.com`)
-- Team server at a different IP
-
-All profiles are **stored in your browser's localStorage** — no server involvement, instant switching, automatic migration from legacy config.
+HTTP profiles are supported, but cleartext exposes Bearer tokens, cookies, ticket URLs, API actions, and media bytes to interception or modification; use HTTPS or a trusted encrypted network when needed.
 
 ## Creating Your First Profile
 
@@ -98,6 +93,8 @@ In the **Server Connections** dialog, each profile shows:
 
 **Browser Tabs:** All tabs in the same browser share the profiles list. Switching profiles in one tab shows the new active profile in all open tabs.
 
+Media issue/revoke calls use Bearer credentials and `credentials: include`; native stream GET/HEAD uses only the host-only media cookie and opaque ticket. Profile switch, delete, and logout attempt bounded session revocation before local token removal.
+
 Profile selection and profile tokens are therefore shared by tabs in the same browser storage area. Use separate browser profiles or containers when you need independent simultaneous server sessions.
 
 **Browser Close:** Profiles persist indefinitely until manually deleted.
@@ -108,6 +105,7 @@ Profile selection and profile tokens are therefore shared by tabs in the same br
 
 - **Passwords are never stored** locally. Only the username for display purposes.
 - **Auth tokens** (Bearer tokens) are stored in localStorage under a profile-specific key so Android/browser recreation does not discard the login. Tokens are readable by JavaScript; use trusted HTTPS deployments and do not store passwords.
+- **Server URL or token changes** attempt remote media-session revocation during the credential transition; logout does so before normal logout. The request is bounded to five seconds, so local cleanup proceeds if the server is unreachable and its old matching cookie/tickets can remain usable until the 30-minute idle timeout (eight-hour absolute maximum). If remote revocation succeeds but local token persistence or removal fails, the remote session remains revoked intentionally; restore or retain the local login if needed, then reissue media before streaming.
 - **Server URL changes** clear the profile token and require login again. Equivalent formatting changes, such as trailing slashes, do not clear it.
 - **URLs are stored in plain text** in localStorage. Keep your browser secure.
 - **No data sent to server** for profile management — entirely client-side.

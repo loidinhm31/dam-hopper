@@ -7,6 +7,7 @@ use axum::{
         ws::{CloseFrame, Message, WebSocket},
         State, WebSocketUpgrade,
     },
+    http::{header, HeaderMap, StatusCode},
     response::Response,
 };
 use axum_extra::extract::CookieJar;
@@ -80,23 +81,52 @@ pub async fn ws_handler(
     upgrade: WebSocketUpgrade,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
     jar: CookieJar,
+    headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Response {
     let token = params
         .get("token")
         .cloned()
         .or_else(|| jar.get(AUTH_COOKIE).map(|c| c.value().to_string()));
+    let origin_ok = websocket_origin_allowed(
+        state.no_auth,
+        headers.contains_key(header::ORIGIN),
+        state.origin_is_allowed(&headers),
+        params.contains_key("token"),
+    );
+
+    if !origin_ok {
+        return axum::response::IntoResponse::into_response((
+            StatusCode::FORBIDDEN,
+            axum::Json(serde_json::json!({ "error": "Origin not allowed" })),
+        ));
+    }
 
     let auth_ok = websocket_auth_ok(state.no_auth, token, &state.jwt_secret);
 
     if !auth_ok {
         return axum::response::IntoResponse::into_response((
-            axum::http::StatusCode::UNAUTHORIZED,
+            StatusCode::UNAUTHORIZED,
             axum::Json(serde_json::json!({ "error": "Unauthorized" })),
         ));
     }
 
     upgrade.on_upgrade(move |socket| handle_socket(socket, state))
+}
+
+fn websocket_origin_allowed(
+    no_auth: bool,
+    has_origin: bool,
+    origin_is_allowed: bool,
+    has_query_token: bool,
+) -> bool {
+    if has_origin {
+        origin_is_allowed
+    } else {
+        // Browser handshakes always include Origin. Permit origin-less clients
+        // only when they present a bearer query token (or explicit no-auth).
+        no_auth || has_query_token
+    }
 }
 
 fn websocket_auth_ok(no_auth: bool, token: Option<String>, jwt_secret: &str) -> bool {
@@ -2294,7 +2324,7 @@ mod tests {
 
     use tokio::sync::{broadcast, mpsc};
 
-    use super::{pump_host_alerts, pump_pty, websocket_auth_ok};
+    use super::{pump_host_alerts, pump_pty, websocket_auth_ok, websocket_origin_allowed};
     use crate::api::ws_protocol::WireMsg;
 
     #[test]
@@ -2305,6 +2335,15 @@ mod tests {
     #[test]
     fn authenticated_mode_still_requires_a_valid_token() {
         assert!(!websocket_auth_ok(false, None, "test-secret"));
+    }
+
+    #[test]
+    fn websocket_origin_policy_rejects_unlisted_browser_origins() {
+        assert!(websocket_origin_allowed(false, true, true, false));
+        assert!(!websocket_origin_allowed(false, true, false, true));
+        assert!(websocket_origin_allowed(false, false, false, true));
+        assert!(!websocket_origin_allowed(false, false, false, false));
+        assert!(websocket_origin_allowed(true, false, false, false));
     }
 
     #[tokio::test]

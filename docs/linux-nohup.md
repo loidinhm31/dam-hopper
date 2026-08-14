@@ -56,6 +56,8 @@ DAM_HOPPER_CONFIG="/home/user/.config/dam-hopper/dam-hopper.toml"
 # DAM_HOPPER_WORKSPACE="/path/to/workspace"
 DAM_HOPPER_HOST="0.0.0.0"
 DAM_HOPPER_PORT="4800"
+# Exact frontend origins; comma-separated if more than one.
+DAM_HOPPER_CORS_ORIGINS="https://loidinhm31.github.io"
 RUST_LOG="info"
 
 # Optional MongoDB auth.
@@ -69,7 +71,7 @@ Restart after changes:
 pnpm server:restart
 ```
 
-Only bind to `0.0.0.0` when the host is protected by a trusted network, firewall, or Tailscale. DamHopper exposes terminal, file, git, and tunnel operations for the configured registry projects.
+Authenticated HTTP binds may use `0.0.0.0` without a TLS-proxy assertion. Only do so when the host is protected by a trusted network, firewall, or Tailscale: cleartext exposes Bearer tokens, cookies, ticket URLs, terminal/file/git actions, and media bytes to interception and modification. Use HTTPS or a trusted encrypted network when that risk is unacceptable. Cross-origin media uses an authenticated actor/session-bound ticket because `SameSite=Lax` cookies are not sent cross-site.
 
 ## Operate
 

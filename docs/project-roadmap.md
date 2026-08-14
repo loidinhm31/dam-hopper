@@ -2,6 +2,11 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Touch Long-Press Right-Click (2026-08-12)
+
+- **Phases 01–03 — [COMPLETED 2026-08-12; review approved 8.5/10]**: preserved Radix's single 700 ms touch/pen trigger contract and existing Explorer row/editor-tab menus; added focused hold, targeting, cancellation, nested-control, marker/suppression, mouse/keyboard, focus, portal, dismissal, and native-fallback deduplication coverage. Focused browser **17/17**, full UI unit **992/992**, and serial full browser **120/120** passed.
+- ⚠️ Parallel browser runs retain a known unrelated image/video readiness flake (**117–119/120** in reported runs; isolated media and serial runs pass). Physical Android Chrome/iOS Safari native long-press/callout validation remains follow-up. `coverage-v8` was unavailable because the plugin is not installed; no coverage percentage is claimed.
+
 ### Explorer Browser Video Playback and Direct Download (2026-08-10)
 
 - **Phase 01 — [COMPLETED 2026-08-10 11:51:39 +07:00]**: purpose-bound playback/download ticket issuance and lifecycle delivered: authenticated opaque capabilities, sandboxed resource/version binding, independent purpose isolation, deterministic 256-ticket capacity and 30-minute idle/8-hour absolute expiry, authenticated revoke, and workspace-change invalidation.
@@ -11,7 +16,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Explorer Native Image Preview (2026-08-10)
 
-- **Phase 01 — [COMPLETED 2026-08-10]**: shared media-ticket lifecycle, authenticated image ticket/stream APIs, sandbox and regular-file enforcement, closed raster allowlist, version invalidation, range/HEAD/CORS behavior, and security regressions delivered.
+- **Phase 01 — [COMPLETED 2026-08-10]**: shared media-ticket lifecycle, authenticated image ticket/stream APIs, sandbox and regular-file enforcement, closed raster allowlist, version invalidation, range/HEAD/media response behavior, and security regressions delivered.
 - **Phase 02 — [COMPLETED 2026-08-10]**: image tier routing, preview-only editor lifecycle, legacy-tab normalization, native `<img>` UI states, and client tests delivered.
 - **Phase 03 — [COMPLETED 2026-08-10]**: shared-store/API regression coverage, authenticated Chromium lifecycle coverage, checked-in raster fixture, API/architecture/frontend documentation, and release gates completed. The browser harness validates client capability behavior; the Rust suite remains authoritative for backend security and stream semantics. Release caveat: `pnpm check` reached web/native builds and bundling but remains blocked because `TAURI_SIGNING_PRIVATE_KEY` is unset while a public key is configured; signing configuration was not changed.
 
@@ -52,6 +57,12 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 02 — [COMPLETED 2026-08-11]**: added bounded, additive `currentAlerts` for concurrent thermal/disk incidents without changing the legacy memory alert; merged memory and resource incidents into newest-first bounded history; published compatible `host:alertChanged` payloads; and added strict client validation, old-server omission compatibility, and per-target recovery handling. Accepted UI caveat: a resource-only critical badge can be info-colored after acknowledgement. [Plan](../plans/260811-0145-host-resource-monitor-restoration-alerts/plan.md).
 - **Phase 03 — [COMPLETED 2026-08-11 07:18:58 +07:00]**: restored accessible legacy temperature disclosure with explicit unavailable state and a keyboard-operable, collapsed all-disk storage disclosure while preserving CPU/workspace summary and open-only polling. Review approved 9/10.
 - **Phase 04 — [COMPLETED 2026-08-11 09:15:59 +07:00]**: test, validation, and documentation handoff approved; bounded/authenticated/additive alert behavior and accessible disclosure release gate closed. Residual: manual Linux hardware sensor verification remains host-dependent. [Plan](../plans/260811-0145-host-resource-monitor-restoration-alerts/plan.md).
+
+### Host Resource Battery and Energy Telemetry (2026-08-13)
+
+- **Phase 01 — [COMPLETED 2026-08-13 10:15:26 +07:00]**: additive v1 battery DTO, bounded Linux power-supply collector, truthful direct energy/power aggregation, degradation/stale handling, and focused Rust/API validation delivered and approved.
+- **Phase 02 — [COMPLETED 2026-08-13 11:08:43 +07:00]**: diagnosis battery/status, remaining-energy (Wh), and instantaneous-power (W) rows delivered with old-server absence tolerance, invalid-value omission, and focused/browser regressions.
+- **Phase 03 — [COMPLETED 2026-08-13 11:39:20 +07:00]**: API/frontend contract documentation, Rust/UI/browser/repository release gates, compatibility review, and architecture-drift review completed. Validation caveat: the `TAURI_SIGNING_PRIVATE_KEY` native signing gate was explicitly waived; signing configuration was not changed.
 
 ### Linux Host Resource Monitoring and Gated Remediation (2026-08-08)
 
@@ -345,7 +356,8 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **2026-07-18:** Completed context-menu trigger refactor Phase 03: consumer integration and browser regression coverage.
   - ✅ Verified production `FileTree` / Arborist lifecycle coverage, production `GitBranchControl` / `SelectItem` handoff coverage, and shared context-menu dynamic positioning behavior.
   - ✅ Focused tests/build validation passed for the targeted consumer and browser checks.
-  - ⚠️ Touch long-press not run; environment is headless Linux and cannot validate the gesture deterministically.
+  - ✅ Added focused Chromium coverage for Radix touch-held Explorer rows and editor tabs, including marker/ref flow, one-open/native-fallback deduplication, held-target actions, cancellation, and nested-control protection.
+  - ⚠️ Browser pointer sequences are synthetic app-level evidence; physical Android Chrome and iOS Safari checks remain required because native long-press/context-menu ordering and callouts differ.
 
 - **2026-07-18:** Completed context-menu trigger refactor Phase 02: Git branch Select handoff.
   - ✅ Restored the local-branch right-click handoff without changing Select value or checkout behavior.

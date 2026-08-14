@@ -5,7 +5,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 
 use dam_hopper_server::{
     agent_store::AgentStoreService,
-    api::build_router,
+    api::{build_router_with_origins, router::parse_cors_origins},
     config::{
         global_config_path, global_registry_path, read_global_config_at, resolve_startup_config,
         ConfigResolutionInput, ConfigSource, DamHopperConfig,
@@ -44,7 +44,7 @@ struct Cli {
     #[arg(long)]
     new_token: bool,
 
-    /// Comma-separated list of allowed CORS origins (default: *)
+    /// Comma-separated exact HTTP/HTTPS origins allowed to make credentialed browser requests
     #[arg(long, env = "DAM_HOPPER_CORS_ORIGINS")]
     cors_origins: Option<String>,
 
@@ -247,12 +247,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Build state + router ──────────────────────────────────────────────────
 
-    let allowed_origins: Vec<String> = cli
-        .cors_origins
-        .as_deref()
-        .map(|s| s.split(',').map(|o| o.trim().to_string()).collect())
-        .unwrap_or_default();
-
+    let allowed_origins = parse_cors_origins(cli.cors_origins.as_deref())?;
     let fs = FsSubsystem::new(project_roots(&config));
 
     let db = if let (Ok(uri), Ok(name)) = (
@@ -311,7 +306,7 @@ async fn main() -> anyhow::Result<()> {
 
     let telemetry_shutdown = state.telemetry_runtime.clone();
     let semantic_shutdown = state.semantic_supervisor.clone();
-    let router = build_router(state, allowed_origins);
+    let router = build_router_with_origins(state, allowed_origins);
 
     // ── Serve ─────────────────────────────────────────────────────────────────
 

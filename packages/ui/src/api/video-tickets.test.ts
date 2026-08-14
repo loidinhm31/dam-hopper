@@ -35,6 +35,7 @@ function issued(purpose: "playback" | "download") {
     streamPath: "/api/fs/video/stream/opaque_token",
     expiresAt: 1_800_000_000_000,
     purpose,
+    authorizationMode: "session-cookie-v1",
   };
 }
 
@@ -72,6 +73,60 @@ describe("issueVideoTicket", () => {
     expect(fetchMock).toHaveBeenLastCalledWith(
       "https://api.test/api/fs/video/tickets",
       expect.objectContaining({ method: "DELETE", keepalive: true }),
+    );
+  });
+
+  it("issues and probes media tickets from an HTTP server", async () => {
+    config.profile = { id: "profile-a", url: "http://api.test" };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(issued("playback")), { status: 201 }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ticket = await issueVideoTicket(
+      "project",
+      "clips/demo.webm",
+      "playback",
+    );
+    expect(ticket.url).toContain("http://api.test/api/fs/video/stream/");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("http://api.test/api/fs/video/stream/"),
+      expect.objectContaining({ method: "HEAD", credentials: "include" }),
+    );
+  });
+
+  it("rejects old servers and probes an issued ticket with credentials", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ ...issued("playback"), authorizationMode: undefined }),
+        {
+          status: 201,
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      issueVideoTicket("project", "clips/demo.webm", "playback"),
+    ).rejects.toMatchObject<Partial<VideoTicketError>>({
+      code: "MEDIA_SESSION_UNSUPPORTED",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    fetchMock
+      .mockReset()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(issued("playback")), { status: 201 }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await issueVideoTicket("project", "clips/demo.webm", "playback");
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "https://api.test/api/fs/video/stream/opaque_token",
+      expect.objectContaining({ method: "HEAD", credentials: "include" }),
     );
   });
 

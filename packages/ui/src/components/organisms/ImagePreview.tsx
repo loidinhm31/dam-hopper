@@ -22,6 +22,7 @@ import {
 } from "@/api/server-config.js";
 
 type ImageState = "loading" | "ready" | "error";
+type MediaTicketErrorCode = "MEDIA_SESSION_UNSUPPORTED";
 
 interface ImagePreviewProps {
   project: string;
@@ -36,11 +37,28 @@ const imageStateCopy: Record<ImageState, string> = {
   error: "Image preview unavailable",
 };
 
+const mediaTicketErrorCopy: Record<
+  MediaTicketErrorCode,
+  { title: string; description: string }
+> = {
+  MEDIA_SESSION_UNSUPPORTED: {
+    title: "Browser media access is unavailable",
+    description:
+      "Use a supported Chromium or Microsoft Edge browser. Allow site data for this server and turn off privacy blocking, then retry.",
+  },
+};
+
 function isAbortError(error: unknown): boolean {
   return (
     (error instanceof DOMException && error.name === "AbortError") ||
     (error instanceof Error && error.name === "AbortError")
   );
+}
+
+function mediaTicketErrorCode(error: unknown): MediaTicketErrorCode | null {
+  if (!error || typeof error !== "object" || !("code" in error)) return null;
+  const { code } = error as { code?: unknown };
+  return code === "MEDIA_SESSION_UNSUPPORTED" ? code : null;
 }
 
 function revokePreview(ticket: ImagePreviewTicket | null): void {
@@ -62,6 +80,8 @@ export function ImagePreview({
   const sourceGenerationRef = useRef(0);
   const sourceUrlRef = useRef<string | null>(null);
   const [imageState, setImageState] = useState<ImageState>("loading");
+  const [ticketErrorCode, setTicketErrorCode] =
+    useState<MediaTicketErrorCode | null>(null);
   const [retryToken, setRetryToken] = useState(0);
 
   const teardownPreview = useCallback(
@@ -87,6 +107,7 @@ export function ImagePreview({
     const cleanupImage = imageRef.current;
     teardownPreview();
     setImageState("loading");
+    setTicketErrorCode(null);
 
     const controller = new AbortController();
     issueControllerRef.current = controller;
@@ -112,6 +133,9 @@ export function ImagePreview({
         previewRef.current = ticket;
         sourceGenerationRef.current = generation;
         sourceUrlRef.current = ticket.url;
+        // This must be set before src so native loading includes the bound
+        // session cookie without reading or transforming the opaque URL.
+        image.crossOrigin = "use-credentials";
         image.src = ticket.url;
         if (image.complete && image.naturalWidth > 0) {
           setImageState("ready");
@@ -144,6 +168,7 @@ export function ImagePreview({
         ) {
           return;
         }
+        setTicketErrorCode(mediaTicketErrorCode(error));
         setImageState("error");
       });
 
@@ -174,6 +199,7 @@ export function ImagePreview({
 
   const handleImageError = useCallback(() => {
     if (!acceptsImageEvent()) return;
+    setTicketErrorCode(null);
     setImageState("error");
   }, [acceptsImageEvent]);
 
@@ -208,6 +234,7 @@ export function ImagePreview({
             ref={imageRef}
             alt={`Image preview: ${fileName}`}
             decoding="async"
+            crossOrigin="use-credentials"
             className="max-h-[min(70vh,720px)] max-w-full object-contain"
             onLoad={() => {
               if (acceptsImageEvent()) setImageState("ready");
@@ -247,12 +274,27 @@ export function ImagePreview({
                 : "text-[var(--color-text-muted)]"
             }
           >
-            {imageStateCopy[imageState]}
+            {ticketErrorCode
+              ? mediaTicketErrorCopy[ticketErrorCode].title
+              : imageStateCopy[imageState]}
           </span>
         </div>
 
         {imageState === "error" && (
-          <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-400/20 bg-amber-400/5 px-3 py-2.5">
+          <div
+            className="flex flex-wrap items-center gap-2 rounded-md border border-amber-400/20 bg-amber-400/5 px-3 py-2.5"
+            role={ticketErrorCode ? "alert" : undefined}
+          >
+            {ticketErrorCode && (
+              <div className="w-full space-y-1">
+                <p className="text-sm font-medium text-amber-100">
+                  {mediaTicketErrorCopy[ticketErrorCode].title}
+                </p>
+                <p className="max-w-2xl text-xs leading-5 text-amber-200">
+                  {mediaTicketErrorCopy[ticketErrorCode].description}
+                </p>
+              </div>
+            )}
             <Button
               type="button"
               size="sm"

@@ -63,7 +63,7 @@ pnpm check
 
 ## Development Mode (No Auth)
 
-**Phase 01: Server-Side Auth Bypass** enables local development without MongoDB. Start the server with `--no-auth` to bypass authentication entirely:
+**Phase 01: Server-Side Auth Bypass** enables development without MongoDB. Start the server with `--no-auth` to bypass authentication entirely. The default bind is `0.0.0.0`; use only on a trusted development network, never publicly or with sensitive data:
 
 ```bash
 # Via npm script (recommended for dev:server)
@@ -92,10 +92,10 @@ Auth bypass **cannot be used in production** due to multiple failsafe mechanisms
 
 1. **MongoDB Configuration Check**: Fails if `MONGODB_URI` is set (prevents accidental database access)
 2. **Environment Detection**: Fails if `RUST_ENV=production` or `ENVIRONMENT=production`
-3. **Startup Warning**: Multi-line banner emphasizing dev-only usage
+3. **Startup Warning**: Multi-line banner emphasizing trusted-network-only usage
 4. **ERROR-Level Logging**: `⚠️ NO-AUTH mode enabled — authentication bypassed`
 
-The server exits immediately if both `--no-auth` and a production environment are detected, ensuring safe local-only usage.
+The server exits immediately if both `--no-auth` and a production environment are detected. This does not protect a non-loopback development host from network access; firewall or trusted-network controls remain required.
 
 **See** [Phase 01 Documentation](./docs/phase-01-server-auth-bypass/) for technical details, security considerations, and comprehensive test coverage.
 
@@ -135,7 +135,7 @@ Browser
 
 ## Key Design Decisions
 
-**Auth**: Bearer token in `Authorization` header. Token stored in `~/.config/dam-hopper/server-token`. Constant-time comparison via `subtle` crate. CORS configurable via `--cors-origins`.
+**Auth**: Bearer token in `Authorization` header. Token stored in `~/.config/dam-hopper/server-token`. Constant-time comparison via `subtle` crate. Cross-origin browser access uses an explicit `DAM_HOPPER_CORS_ORIGINS` allowlist; media remains authenticated by actor-bound tickets.
 
 **PTY execution**: All process execution happens in `portable-pty` sessions managed by `PtySessionManager`. Sessions identified by UUID. PTY output broadcast via `tokio::sync::broadcast` channel. Buffer retained for live sessions only.
 

@@ -26,6 +26,11 @@ struct ErrorBody {
     error: String,
 }
 
+fn auth_cookie_header(value: &str, clear: bool) -> String {
+    let max_age = if clear { "; Max-Age=0" } else { "" };
+    format!("{AUTH_COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/{max_age}")
+}
+
 fn unauthorized() -> Response {
     (
         StatusCode::UNAUTHORIZED,
@@ -65,7 +70,7 @@ pub enum CredentialVerificationError {
 
 /// Extract token from `Authorization: Bearer <token>` header, falling back to cookie.
 fn extract_token<'a>(request: &'a Request, jar: &'a CookieJar) -> Option<String> {
-    // Prefer Authorization header (cross-origin Bearer)
+    // Prefer Authorization Bearer header when supplied.
     if let Some(val) = request.headers().get(header::AUTHORIZATION) {
         if let Ok(s) = val.to_str() {
             if let Some(token) = s.strip_prefix("Bearer ") {
@@ -144,8 +149,11 @@ pub async fn require_auth(
     mut request: Request,
     next: Next,
 ) -> Response {
-    // Dev mode: skip JWT validation entirely (perf: avoids decode + signature check)
+    // Dev mode has a fixed actor so ticket binding remains identical to production.
     if state.no_auth {
+        request.extensions_mut().insert(AuthenticatedActor {
+            subject: "dev-user".into(),
+        });
         return next.run(request).await;
     }
 
@@ -303,10 +311,7 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
             }
         };
 
-        let cookie_attrs = format!(
-            "{AUTH_COOKIE}={}; HttpOnly; Secure; Path=/; SameSite=Strict",
-            jwt_token
-        );
+        let cookie_attrs = auth_cookie_header(&jwt_token, false);
 
         return (
             StatusCode::OK,
@@ -354,10 +359,7 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
         }
     };
 
-    let cookie_attrs = format!(
-        "{AUTH_COOKIE}={}; HttpOnly; Secure; Path=/; SameSite=Strict",
-        jwt_token
-    );
+    let cookie_attrs = auth_cookie_header(&jwt_token, false);
 
     (
         StatusCode::OK,
@@ -371,10 +373,25 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
         .into_response()
 }
 
-/// POST /api/auth/logout — clears the cookie.
-pub async fn logout() -> Response {
-    let clear = format!("{AUTH_COOKIE}=; HttpOnly; Path=/; Max-Age=0");
-    (
+/// POST /api/auth/logout — revokes the presented media session then clears credentials.
+pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Request) -> Response {
+    if let Some(claims) = if state.no_auth {
+        Some(Claims {
+            sub: "dev-user".into(),
+            exp: 0,
+        })
+    } else {
+        extract_token(&request, &jar).and_then(|token| validated_claims(&token, &state.jwt_secret))
+    } {
+        if let Some(token) = crate::fs::media_session::media_session_from_headers(request.headers())
+        {
+            state
+                .media_tickets
+                .revoke_session_for_actor(&claims.sub, &token);
+        }
+    }
+    let clear = auth_cookie_header("", true);
+    let mut response = (
         StatusCode::OK,
         [(header::SET_COOKIE, clear)],
         Json(LoginResponse {
@@ -383,7 +400,12 @@ pub async fn logout() -> Response {
             dev_mode: None,
         }),
     )
-        .into_response()
+        .into_response();
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        crate::api::media_session::clear_cookie_header(),
+    );
+    response
 }
 
 /// GET /api/auth/status — returns 200 if authenticated, 401 otherwise.

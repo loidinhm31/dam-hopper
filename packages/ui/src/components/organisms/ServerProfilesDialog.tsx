@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { X, Plus, Server, Check, Trash2, Edit2 } from "lucide-react";
+import { revokeCurrentMediaSession } from "@/api/media-session.js";
 import type { ServerProfile } from "@/api/server-config.js";
 import {
+  getActiveProfile,
   getProfiles,
   getActiveProfileId,
+  getAuthToken,
   setActiveProfile,
   deleteProfile,
 } from "@/api/server-config.js";
@@ -29,7 +32,14 @@ export function ServerProfilesDialog({
   const profiles = getProfiles();
   const activeId = getActiveProfileId();
 
-  function handleSwitch(profile: ServerProfile) {
+  async function handleSwitch(profile: ServerProfile) {
+    const previousProfile = getActiveProfile();
+    const previousToken = previousProfile
+      ? getAuthToken(previousProfile.id)
+      : null;
+    if (previousProfile && previousToken) {
+      await revokeCurrentMediaSession(previousProfile.url, previousToken);
+    }
     if (!setActiveProfile(profile.id)) {
       alert("Unable to switch server profiles in this browser");
       return;
@@ -39,8 +49,13 @@ export function ServerProfilesDialog({
     onClose();
   }
 
-  function handleDelete(id: string) {
+  async function handleDelete(id: string) {
     if (!confirm("Delete this server profile?")) return;
+    const profile = profiles.find((candidate) => candidate.id === id);
+    const token = profile ? getAuthToken(profile.id) : null;
+    if (profile && token) {
+      await revokeCurrentMediaSession(profile.url, token);
+    }
     if (!deleteProfile(id)) {
       alert("Unable to delete the profile safely in this browser");
       return;
@@ -115,7 +130,7 @@ export function ServerProfilesDialog({
                 <div className="flex gap-1">
                   {profile.id !== activeId && (
                     <button
-                      onClick={() => handleSwitch(profile)}
+                      onClick={() => void handleSwitch(profile)}
                       className="p-1.5 hover:bg-[var(--color-surface)] rounded text-[var(--color-success)] transition-colors"
                       title="Switch to this server"
                     >
@@ -130,7 +145,7 @@ export function ServerProfilesDialog({
                     <Edit2 size={15} />
                   </button>
                   <button
-                    onClick={() => handleDelete(profile.id)}
+                    onClick={() => void handleDelete(profile.id)}
                     className="p-1.5 hover:bg-[var(--color-surface)] rounded text-[var(--color-error)] transition-colors"
                     title="Delete"
                   >

@@ -115,6 +115,48 @@ impl MemorySnapshot {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BatteryStatus {
+    Charging,
+    Discharging,
+    Full,
+    NotCharging,
+    Unknown,
+    Mixed,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatterySnapshot {
+    pub count: usize,
+    pub capacity_percent: Option<f64>,
+    pub status: Option<BatteryStatus>,
+    pub remaining_energy_wh: Option<f64>,
+    pub instantaneous_power_w: Option<f64>,
+    pub availability: Availability,
+}
+
+impl BatterySnapshot {
+    pub fn unsupported(sampled_at: u64) -> Self {
+        Self {
+            count: 0,
+            capacity_percent: None,
+            status: None,
+            remaining_energy_wh: None,
+            instantaneous_power_w: None,
+            availability: Availability::unsupported(sampled_at),
+        }
+    }
+
+    pub fn unavailable(sampled_at: u64, detail_code: impl Into<String>) -> Self {
+        Self {
+            availability: Availability::unavailable(sampled_at, detail_code),
+            ..Self::unsupported(sampled_at)
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PsiLine {
@@ -263,6 +305,7 @@ pub struct HostResourceSnapshotV1 {
     pub host: HostIdentity,
     pub capabilities: SnapshotCapabilities,
     pub memory: MemorySnapshot,
+    pub battery: BatterySnapshot,
     pub pressure: PressureSnapshot,
     pub cgroups: Vec<CgroupMemory>,
     pub processes: ProcessInventory,
@@ -297,7 +340,7 @@ pub struct ActionCapabilities {
 }
 impl HostResourceSnapshotV1 {
     pub fn unavailable(sampled_at: u64, workspace: &Path) -> Self {
-        Self::new(
+        let mut snapshot = Self::new(
             sampled_at,
             MemorySnapshot::empty_at(sampled_at),
             MountContext::for_workspace_at(workspace, sampled_at),
@@ -306,7 +349,9 @@ impl HostResourceSnapshotV1 {
             Availability::unavailable(sampled_at, "snapshotDeadlineExceeded"),
             Availability::unavailable(sampled_at, "snapshotDeadlineExceeded"),
             Availability::unavailable(sampled_at, "snapshotDeadlineExceeded"),
-        )
+        );
+        snapshot.battery = BatterySnapshot::unavailable(sampled_at, "snapshotDeadlineExceeded");
+        snapshot
     }
 
     pub fn new(sampled_at: u64, memory: MemorySnapshot, mount_context: MountContext) -> Self {
@@ -324,6 +369,7 @@ impl HostResourceSnapshotV1 {
                 linux_deep_metrics: unavailable.clone(),
             },
             memory,
+            battery: BatterySnapshot::unavailable(sampled_at, "notCollected"),
             pressure: PressureSnapshot {
                 memory: MemoryPressure {
                     some: None,

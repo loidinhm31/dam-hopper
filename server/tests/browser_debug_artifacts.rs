@@ -96,7 +96,7 @@ async fn request(
     if let Some(content_type) = content_type {
         builder = builder.header("Content-Type", content_type);
     }
-    build_router(state, vec![])
+    build_router(state)
         .oneshot(builder.body(body).unwrap())
         .await
         .unwrap()

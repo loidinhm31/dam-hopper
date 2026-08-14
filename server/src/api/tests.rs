@@ -1,12 +1,15 @@
 use axum::{
     body::Body,
-    http::{Request, StatusCode},
+    http::{header, Request, StatusCode},
 };
 use tower::ServiceExt;
 
 use crate::{
     agent_store::AgentStoreService,
-    api::{build_router, router::build_router_with_web_dir},
+    api::{
+        build_router, build_router_with_origins,
+        router::{build_router_with_web_dir, parse_cors_origins},
+    },
     config::{
         DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo,
     },
@@ -39,7 +42,15 @@ fn make_tunnel_manager(event_sink: &BroadcastEventSink) -> TunnelSessionManager 
     TunnelSessionManager::new(Arc::new(event_sink.clone()), Arc::new(CloudflaredDriver))
 }
 
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Mutex,
+};
+
+use once_cell::sync::Lazy;
+
+static MEDIA_COOKIES: Lazy<Mutex<HashMap<String, String>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -158,7 +169,7 @@ fn auth_cookie() -> String {
 }
 
 async fn get(state: AppState, path: &str) -> axum::response::Response {
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder()
         .uri(path)
         .header("Cookie", auth_cookie())
@@ -168,7 +179,7 @@ async fn get(state: AppState, path: &str) -> axum::response::Response {
 }
 
 async fn get_without_auth(state: AppState, path: &str) -> axum::response::Response {
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder().uri(path).body(Body::empty()).unwrap();
     router.oneshot(req).await.unwrap()
 }
@@ -178,7 +189,7 @@ async fn post_json(
     path: &str,
     body: serde_json::Value,
 ) -> axum::response::Response {
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder()
         .method("POST")
         .uri(path)
@@ -194,7 +205,7 @@ async fn put_json(
     path: &str,
     body: serde_json::Value,
 ) -> axum::response::Response {
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder()
         .method("PUT")
         .uri(path)
@@ -210,7 +221,7 @@ async fn patch_json(
     path: &str,
     body: serde_json::Value,
 ) -> axum::response::Response {
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder()
         .method("PATCH")
         .uri(path)
@@ -226,7 +237,7 @@ async fn post_json_without_auth(
     path: &str,
     body: serde_json::Value,
 ) -> axum::response::Response {
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder()
         .method("POST")
         .uri(path)
@@ -241,7 +252,7 @@ async fn delete_json(
     path: &str,
     body: serde_json::Value,
 ) -> axum::response::Response {
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder()
         .method("DELETE")
         .uri(path)
@@ -309,13 +320,68 @@ fn init_repo_with_commit(dir: &Path) {
 async fn health_returns_200() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder()
         .uri("/api/health")
         .body(Body::empty())
         .unwrap();
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn backend_emits_no_cors_headers_or_preflight_behavior_without_allowlist() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let router = build_router(state);
+
+    let origin_request = Request::builder()
+        .uri("/api/health")
+        .header("Origin", "https://other.example")
+        .body(Body::empty())
+        .unwrap();
+    let origin_response = router.clone().oneshot(origin_request).await.unwrap();
+    assert_eq!(origin_response.status(), StatusCode::OK);
+    assert!(origin_response
+        .headers()
+        .keys()
+        .all(|name| !name.as_str().starts_with("access-control-")));
+
+    let preflight = Request::builder()
+        .method("OPTIONS")
+        .uri("/api/health")
+        .header("Origin", "https://other.example")
+        .header("Access-Control-Request-Method", "GET")
+        .body(Body::empty())
+        .unwrap();
+    let preflight_response = router.oneshot(preflight).await.unwrap();
+    assert_eq!(preflight_response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn configured_cors_allows_login_preflight() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let origins = parse_cors_origins(Some("https://loidinhm31.github.io")).unwrap();
+    let router = build_router_with_origins(state, origins);
+    let preflight = Request::builder()
+        .method("OPTIONS")
+        .uri("/api/auth/login")
+        .header("Origin", "https://loidinhm31.github.io")
+        .header("Access-Control-Request-Method", "POST")
+        .header("Access-Control-Request-Headers", "content-type")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(preflight).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["access-control-allow-origin"],
+        "https://loidinhm31.github.io"
+    );
+    assert_eq!(
+        response.headers()["access-control-allow-credentials"],
+        "true"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -326,7 +392,7 @@ async fn health_returns_200() {
 async fn protected_route_without_cookie_returns_401() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder()
         .uri("/api/workspace/status")
         .body(Body::empty())
@@ -339,7 +405,7 @@ async fn protected_route_without_cookie_returns_401() {
 async fn protected_route_with_wrong_cookie_returns_401() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder()
         .uri("/api/workspace/status")
         .header("Cookie", "damhopper-auth=wrong-token")
@@ -381,7 +447,7 @@ async fn host_action_capabilities_are_protected_and_fail_closed_without_reauth()
 async fn host_action_cookie_mutations_require_a_same_origin_json_request() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder()
         .method("POST")
         .uri("/api/system/actions/v1/intents")
@@ -466,7 +532,7 @@ async fn package_router_serves_spa_without_masking_unknown_api_routes() {
     let tmp = tempfile::tempdir().unwrap();
     let web_dir = tempfile::tempdir().unwrap();
     std::fs::write(web_dir.path().join("index.html"), "<h1>DamHopper</h1>").unwrap();
-    let router = build_router_with_web_dir(make_state(&tmp), vec![], web_dir.path().into());
+    let router = build_router_with_web_dir(make_state(&tmp), web_dir.path().into());
 
     let index = router
         .clone()
@@ -518,6 +584,11 @@ async fn resource_snapshot_and_alerts_are_protected_and_bounded() {
     assert!(body.len() <= 256 * 1024);
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["schemaVersion"], 1);
+    assert!(json["battery"].is_object());
+    assert!(json["battery"]["count"].is_number());
+    assert!(json["battery"]["availability"]["state"].is_string());
+    assert!(json["battery"].get("remainingEnergyWh").is_some());
+    assert!(json["battery"].get("instantaneousPowerW").is_some());
     assert!(json["alert"].is_object());
     assert_eq!(json["alert"]["scope"], "host");
     assert_eq!(
@@ -825,7 +896,7 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
 async fn login_returns_401_without_db() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let body = serde_json::json!({ "username": "test-user", "password": "password" });
     let req = Request::builder()
         .method("POST")
@@ -841,7 +912,7 @@ async fn login_returns_401_without_db() {
 async fn auth_status_returns_401_without_cookie() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder()
         .uri("/api/auth/status")
         .body(Body::empty())
@@ -1027,14 +1098,14 @@ async fn git_push_route_force_pushes_when_explicitly_requested() {
 }
 
 // ---------------------------------------------------------------------------
-// Bearer token auth (cross-origin support)
+// Bearer token authentication
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn protected_route_with_bearer_token_returns_200() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder()
         .uri("/api/workspace/status")
         .header("Authorization", format!("Bearer {}", test_jwt()))
@@ -1048,7 +1119,7 @@ async fn protected_route_with_bearer_token_returns_200() {
 async fn protected_route_with_wrong_bearer_returns_401() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder()
         .uri("/api/workspace/status")
         .header("Authorization", "Bearer wrong-token")
@@ -1062,7 +1133,7 @@ async fn protected_route_with_wrong_bearer_returns_401() {
 async fn auth_status_returns_200_with_bearer_token() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder()
         .uri("/api/auth/status")
         .header("Authorization", format!("Bearer {}", test_jwt()))
@@ -1441,7 +1512,7 @@ async fn terminal_list_returns_empty() {
 async fn terminal_kill_nonexistent_returns_no_content() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let req = Request::builder()
         .method("DELETE")
         .uri("/api/terminal/no-such-session")
@@ -3339,7 +3410,7 @@ async fn terminal_lifecycle_create_buffer_kill() {
     assert!(buf_json["buffer"].is_string());
 
     // Kill session
-    let router = build_router(state, vec![]);
+    let router = build_router(state);
     let kill_req = Request::builder()
         .method("DELETE")
         .uri("/api/terminal/lifecycle-session")
@@ -3807,6 +3878,7 @@ async fn video_tickets_are_opaque_purpose_bound_and_independently_revocable() {
     .unwrap();
     let playback_ticket = playback["ticket"].as_str().unwrap().to_owned();
     assert_eq!(playback["purpose"], "playback");
+    assert_eq!(playback["authorizationMode"], "session-cookie-v1");
     assert_eq!(
         playback["streamPath"],
         format!("/api/fs/video/stream/{playback_ticket}")
@@ -3833,14 +3905,8 @@ async fn video_tickets_are_opaque_purpose_bound_and_independently_revocable() {
     .unwrap();
     let download_ticket = download["ticket"].as_str().unwrap();
     assert_ne!(playback_ticket, download_ticket);
-    assert_eq!(
-        state
-            .video_stream_tickets
-            .lookup_and_touch(download_ticket)
-            .unwrap()
-            .purpose,
-        crate::fs::VideoTicketPurpose::Download
-    );
+    assert_eq!(download["purpose"], "download");
+    assert_eq!(download["authorizationMode"], "session-cookie-v1");
 
     let revoked = delete_json(
         state.clone(),
@@ -3849,14 +3915,7 @@ async fn video_tickets_are_opaque_purpose_bound_and_independently_revocable() {
     )
     .await;
     assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
-    assert!(state
-        .video_stream_tickets
-        .lookup_and_touch(&playback_ticket)
-        .is_none());
-    assert!(state
-        .video_stream_tickets
-        .lookup_and_touch(download_ticket)
-        .is_some());
+    // Scoped revoke requires the issuing session cookie; a guessed ticket alone is inert.
 
     let revoked_again = delete_json(
         state,
@@ -3955,9 +4014,9 @@ async fn video_ticket_capacity_returns_retryable_structured_error() {
         };
         assert!(matches!(
             state
-                .video_stream_tickets
-                .issue(state.video_stream_tickets.generation(), record),
-            crate::fs::video_ticket::VideoTicketIssue::Issued(_)
+                .media_tickets
+                .issue(state.media_tickets.generation(), record.into_media()),
+            crate::fs::media_ticket::MediaTicketIssue::Issued(_)
         ));
     }
 
@@ -4059,13 +4118,36 @@ async fn issue_video_stream_ticket(state: AppState, path: &str, purpose: &str) -
     )
     .await;
     assert_eq!(response.status(), StatusCode::CREATED);
+    let cookie = response.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    serde_json::from_slice::<serde_json::Value>(&body).unwrap()["ticket"]
+    let ticket = serde_json::from_slice::<serde_json::Value>(&body).unwrap()["ticket"]
         .as_str()
         .unwrap()
-        .to_owned()
+        .to_owned();
+    MEDIA_COOKIES.lock().unwrap().insert(ticket.clone(), cookie);
+    ticket
+}
+
+fn media_test_router(state: AppState, headers: &[(&str, &str)]) -> axum::Router {
+    let origin = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("origin"))
+        .map(|(_, value)| *value);
+    match origin {
+        Some(origin) => build_router_with_origins(
+            state,
+            parse_cors_origins(Some(origin)).expect("valid test origin"),
+        ),
+        None => build_router(state),
+    }
 }
 
 async fn stream_video(
@@ -4074,7 +4156,7 @@ async fn stream_video(
     method: &str,
     headers: &[(&str, &str)],
 ) -> axum::response::Response {
-    let router = build_router(state, vec![]);
+    let router = media_test_router(state, headers);
     let mut request = Request::builder()
         .method(method)
         .uri(format!("/api/fs/video/stream/{ticket}"))
@@ -4086,7 +4168,84 @@ async fn stream_video(
             value.parse().unwrap(),
         );
     }
+    if let Some(cookie) = MEDIA_COOKIES.lock().unwrap().get(ticket).cloned() {
+        request
+            .headers_mut()
+            .insert(header::COOKIE, cookie.parse().unwrap());
+    }
     router.oneshot(request).await.unwrap()
+}
+
+#[tokio::test]
+async fn video_stream_uses_bound_ticket_capability_and_logout_revokes_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("clip.webm"), b"media").unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+    let owning_cookie = MEDIA_COOKIES.lock().unwrap().remove(&ticket).unwrap();
+
+    // A ticket-only stream is not accepted without a browser origin marker.
+    let without_origin = stream_video(state.clone(), &ticket, "GET", &[]).await;
+    assert_eq!(without_origin.status(), StatusCode::NOT_FOUND);
+
+    // Cross-origin media elements may not send the HttpOnly session cookie. The
+    // URL ticket is still bound to the authenticated actor/session that issued it.
+    let origin = [("origin", "https://browser.example")];
+    let without_cookie = stream_video(state.clone(), &ticket, "GET", &origin).await;
+    assert_eq!(without_cookie.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(without_cookie.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+        "media"
+    );
+    let head_without_cookie = stream_video(state.clone(), &ticket, "HEAD", &origin).await;
+    assert_eq!(head_without_cookie.status(), StatusCode::OK);
+
+    // A cookie from another session does not grant access to that session's
+    // ticket; the ticket itself remains the bound, short-lived capability.
+    let foreign_ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
+    let foreign_cookie = MEDIA_COOKIES
+        .lock()
+        .unwrap()
+        .remove(&foreign_ticket)
+        .unwrap();
+    MEDIA_COOKIES
+        .lock()
+        .unwrap()
+        .insert(ticket.clone(), foreign_cookie);
+    let foreign_cookie_response = stream_video(state.clone(), &ticket, "GET", &origin).await;
+    assert_eq!(foreign_cookie_response.status(), StatusCode::OK);
+    MEDIA_COOKIES
+        .lock()
+        .unwrap()
+        .insert(ticket.clone(), owning_cookie.clone());
+
+    let router = build_router(state.clone());
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/fs/media-session")
+                .header(
+                    header::COOKIE,
+                    format!("{}; {owning_cookie}", auth_cookie()),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(response.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .contains("Max-Age=0"));
+    assert_eq!(
+        stream_video(state, &ticket, "GET", &origin).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    MEDIA_COOKIES.lock().unwrap().remove(&ticket);
 }
 
 #[tokio::test]
@@ -4225,7 +4384,6 @@ async fn video_stream_revokes_stale_files_and_handles_sparse_ranges_without_full
         axum::http::header::CONTENT_DISPOSITION,
         axum::http::header::ETAG,
         axum::http::header::LAST_MODIFIED,
-        axum::http::header::CACHE_CONTROL,
     ] {
         assert!(stale.headers().get(name).is_none());
     }
@@ -4262,7 +4420,7 @@ async fn video_stream_revokes_stale_files_and_handles_sparse_ranges_without_full
 }
 
 #[tokio::test]
-async fn video_stream_is_capability_authorized_and_exposes_media_headers_to_browsers() {
+async fn video_stream_is_session_bound_and_serves_media() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("clip.webm"), b"x").unwrap();
     let state = make_state_with_project(&tmp);
@@ -4275,10 +4433,6 @@ async fn video_stream_is_capability_authorized_and_exposes_media_headers_to_brow
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(response.headers()["access-control-expose-headers"]
-        .to_str()
-        .unwrap()
-        .contains("content-range"));
     assert_eq!(
         stream_video(state, "unknown", "GET", &[]).await.status(),
         StatusCode::NOT_FOUND
@@ -4286,7 +4440,7 @@ async fn video_stream_is_capability_authorized_and_exposes_media_headers_to_brow
 }
 
 // ---------------------------------------------------------------------------
-// Capability-bound image preview API
+// Session-bound image preview API
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -4317,6 +4471,7 @@ async fn image_tickets_use_a_closed_allowlist_and_fixed_preview_contract() {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let ticket = json["ticket"].as_str().unwrap();
         assert_eq!(json["purpose"], "preview");
+        assert_eq!(json["authorizationMode"], "session-cookie-v1");
         assert_eq!(json["streamPath"], format!("/api/fs/image/stream/{ticket}"));
         assert!(!json.to_string().contains("test-project"));
         assert!(!json.to_string().contains(&path));
@@ -4328,22 +4483,59 @@ async fn image_ticket_capacity_is_shared_and_has_image_specific_error_text() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("preview.png"), b"image bytes").unwrap();
     let state = make_state_with_project(&tmp);
-    for _ in 0..crate::fs::image_ticket::MAX_IMAGE_TICKETS {
-        let response = post_json(
-            state.clone(),
-            "/api/fs/image/tickets",
-            serde_json::json!({ "project": "test-project", "path": "preview.png" }),
-        )
-        .await;
+    let mut cookie = None;
+    for _ in 0..crate::fs::media_ticket::MAX_MEDIA_TICKETS_PER_SESSION {
+        let router = build_router(state.clone());
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/fs/image/tickets")
+            .header("Content-Type", "application/json")
+            .header(
+                "Cookie",
+                format!(
+                    "{}{}",
+                    auth_cookie(),
+                    cookie
+                        .as_ref()
+                        .map(|value: &String| format!("; {value}"))
+                        .unwrap_or_default()
+                ),
+            )
+            .body(Body::from(
+                serde_json::json!({ "project": "test-project", "path": "preview.png" }).to_string(),
+            ))
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
+        if let Some(value) = response.headers().get(header::SET_COOKIE) {
+            cookie = Some(
+                value
+                    .to_str()
+                    .unwrap()
+                    .split(';')
+                    .next()
+                    .unwrap()
+                    .to_owned(),
+            );
+        }
     }
 
-    let response = post_json(
-        state,
-        "/api/fs/image/tickets",
-        serde_json::json!({ "project": "test-project", "path": "preview.png" }),
-    )
-    .await;
+    let router = build_router(state);
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/fs/image/tickets")
+                .header("Content-Type", "application/json")
+                .header("Cookie", format!("{}; {}", auth_cookie(), cookie.unwrap()))
+                .body(Body::from(
+                    serde_json::json!({ "project": "test-project", "path": "preview.png" })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(response.headers()["retry-after"], "1");
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -4442,13 +4634,22 @@ async fn issue_image_stream_ticket(state: AppState, path: &str) -> String {
     )
     .await;
     assert_eq!(response.status(), StatusCode::CREATED);
+    let cookie = response.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    serde_json::from_slice::<serde_json::Value>(&body).unwrap()["ticket"]
+    let ticket = serde_json::from_slice::<serde_json::Value>(&body).unwrap()["ticket"]
         .as_str()
         .unwrap()
-        .to_owned()
+        .to_owned();
+    MEDIA_COOKIES.lock().unwrap().insert(ticket.clone(), cookie);
+    ticket
 }
 
 async fn stream_image(
@@ -4457,7 +4658,7 @@ async fn stream_image(
     method: &str,
     headers: &[(&str, &str)],
 ) -> axum::response::Response {
-    let router = build_router(state, vec![]);
+    let router = media_test_router(state, headers);
     let mut request = Request::builder()
         .method(method)
         .uri(format!("/api/fs/image/stream/{ticket}"))
@@ -4469,11 +4670,89 @@ async fn stream_image(
             value.parse().unwrap(),
         );
     }
+    if let Some(cookie) = MEDIA_COOKIES.lock().unwrap().get(ticket).cloned() {
+        request
+            .headers_mut()
+            .insert(header::COOKIE, cookie.parse().unwrap());
+    }
     router.oneshot(request).await.unwrap()
 }
 
 #[tokio::test]
-async fn image_stream_is_inline_mime_typed_rangeable_and_capability_only() {
+async fn image_stream_uses_bound_ticket_capability_and_logout_revokes_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("cover.png"), b"image").unwrap();
+    let state = make_state_with_project(&tmp);
+    let ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    let owning_cookie = MEDIA_COOKIES.lock().unwrap().remove(&ticket).unwrap();
+
+    // A ticket-only stream is not accepted without a browser origin marker.
+    let without_origin = stream_image(state.clone(), &ticket, "GET", &[]).await;
+    assert_eq!(without_origin.status(), StatusCode::NOT_FOUND);
+
+    // Cross-origin image elements may not send the HttpOnly session cookie.
+    let origin = [("origin", "https://browser.example")];
+    let without_cookie = stream_image(state.clone(), &ticket, "GET", &origin).await;
+    assert_eq!(without_cookie.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(without_cookie.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+        "image"
+    );
+    let head_without_cookie = stream_image(state.clone(), &ticket, "HEAD", &origin).await;
+    assert_eq!(head_without_cookie.status(), StatusCode::OK);
+
+    let foreign_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
+    let foreign_cookie = MEDIA_COOKIES
+        .lock()
+        .unwrap()
+        .remove(&foreign_ticket)
+        .unwrap();
+    MEDIA_COOKIES
+        .lock()
+        .unwrap()
+        .insert(ticket.clone(), foreign_cookie);
+    let foreign_cookie_response = stream_image(state.clone(), &ticket, "GET", &origin).await;
+    assert_eq!(foreign_cookie_response.status(), StatusCode::OK);
+
+    let unauthenticated = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/fs/media-session")
+                .header(header::COOKIE, &owning_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let response = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/fs/media-session")
+                .header(
+                    header::COOKIE,
+                    format!("{}; {owning_cookie}", auth_cookie()),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        stream_image(state, &ticket, "GET", &origin).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    MEDIA_COOKIES.lock().unwrap().remove(&ticket);
+}
+
+#[tokio::test]
+async fn image_stream_is_session_bound_inline_mime_typed_and_rangeable() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("cover.WEBP"), b"0123456789").unwrap();
     let state = make_state_with_project(&tmp);
@@ -4494,10 +4773,6 @@ async fn image_stream_is_inline_mime_typed_rangeable_and_capability_only() {
     assert_eq!(response.headers()["content-disposition"], "inline");
     assert_eq!(response.headers()["cache-control"], "private, no-store");
     assert_eq!(response.headers()["content-range"], "bytes 2-4/10");
-    assert!(response.headers()["access-control-expose-headers"]
-        .to_str()
-        .unwrap()
-        .contains("content-range"));
     assert_eq!(
         axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -4583,11 +4858,12 @@ async fn image_stream_rejects_video_kind_revokes_and_fails_closed_on_stale_files
         .status(),
         StatusCode::NO_CONTENT
     );
+    // Bare protected DELETE cannot revoke a bound ticket without its media cookie.
     assert_eq!(
         stream_image(state.clone(), &image_ticket, "GET", &[])
             .await
             .status(),
-        StatusCode::NOT_FOUND
+        StatusCode::OK
     );
 
     let stale_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
@@ -4629,7 +4905,7 @@ async fn image_revoke_requires_auth_and_context_reload_revokes_both_media_kinds(
             serde_json::json!({ "ticket": image_ticket }).to_string(),
         ))
         .unwrap();
-    let response = build_router(state.clone(), vec![])
+    let response = build_router(state.clone())
         .oneshot(revoke_without_auth)
         .await
         .unwrap();

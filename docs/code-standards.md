@@ -684,7 +684,7 @@ packages/ui/src/
 
 `apps/web` owns browser bootstrapping only: `QueryClientProvider`, `initTransport(new WsTransport(getServerUrl()))`, DOM mount, and host Vite config.
 
-`apps/native` owns Tauri bootstrapping only: the same `QueryClientProvider` and `DamHopperApp` mount, native Vite config on strict port `1420`, and the minimal `src-tauri` shell. It must remain a remote client; do not add backend sidecars, filesystem permissions, shell permissions, or opener/http plugins without a phase plan that justifies the native API surface.
+`apps/native` owns Tauri bootstrapping only: the same `QueryClientProvider` and `DamHopperApp` mount, native Vite config on strict port `1420`, and the minimal `src-tauri` shell. Its browser transport accepts only same-origin profiles by policy; do not add backend sidecars, filesystem permissions, shell permissions, or opener/http plugins without a phase plan that justifies the native API surface. Separate web frontends use the backend's exact `DAM_HOPPER_CORS_ORIGINS` allowlist.
 
 Native startup must not depend on packaged webview same-origin fallback. Use the shared server profile flow, and keep the no-profile transport idle until the shared `ServerProfileGuard` prompts for an explicit profile.
 
@@ -747,7 +747,7 @@ await transport.fsWriteFile(project, path, content, mtime);
 
 ### No-Auth Dev Mode
 
-The `--no-auth` flag enables local development without MongoDB authentication:
+The `--no-auth` flag enables development without MongoDB authentication. It binds to the configured host, including the default `0.0.0.0`; use only on a trusted development network, never publicly or with sensitive data:
 
 ```bash
 # Command-line flag
@@ -779,7 +779,7 @@ pub async fn require_auth(
 
 - Panics if MongoDB configured while no-auth enabled
 - Panics if RUST_ENV or ENVIRONMENT set to "production"
-- Multi-line warning banner on startup
+- Multi-line trusted-network warning banner on startup
 - ERROR-level logging for visibility
 
 See [Phase 01 documentation](./phase-01-server-auth-bypass/index.md) for complete security considerations.
@@ -788,7 +788,7 @@ See [Phase 01 documentation](./phase-01-server-auth-bypass/index.md) for complet
 
 - **Token Storage**: `~/.config/dam-hopper/server-token` (hex UUID)
 - **Signing Algorithm**: HS256 (HMAC-SHA256)
-- **Cookie Transport**: httpOnly, Secure, SameSite=Strict
+- **Cookie Transport**: auth cookies are `HttpOnly; SameSite=Strict`; media uses a host-only `HttpOnly; SameSite=Lax; Path=/api/fs` cookie without `Secure` for HTTP compatibility
 - **Validation**: Constant-time comparison via `subtle` crate
 - **Expiry**: 30 days for production, 30 days for dev mode
 
@@ -899,7 +899,9 @@ Routes registered conditionally at router construction time.
 - [ ] Bearer token authentication
 - [ ] No shell injection (avoid shlex parsing for commands)
 - [ ] No symlink traversal (validate all path operations)
-- [ ] CORS configured (default: localhost:5173)
+- [ ] Cross-origin browser access, when needed, uses exact `DAM_HOPPER_CORS_ORIGINS` entries; wildcard CORS is never enabled
+- [ ] Media ticket issuance requires authentication; actor/session-bound tickets preserve expiry, revocation, revalidation, and no-store responses
+- [ ] Auth cookies remain SameSite=Strict; media cookies remain host-only SameSite=Lax when used, with cleartext interception/modification risk documented
 - [ ] Error messages don't leak paths/credentials
 
 ## Telemetry Privacy and Fault Boundaries

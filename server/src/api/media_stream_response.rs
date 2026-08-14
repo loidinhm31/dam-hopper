@@ -13,8 +13,8 @@ use tokio_util::io::ReaderStream;
 
 use crate::{
     fs::{
-        MediaFileVersion, MediaTicketKind, MediaTicketPurpose, MediaTicketRecord,
-        VideoTicketPurpose,
+        media_session::media_session_from_headers, MediaFileVersion, MediaTicketKind,
+        MediaTicketPurpose, MediaTicketRecord, VideoTicketPurpose,
     },
     state::AppState,
 };
@@ -35,21 +35,63 @@ pub(crate) async fn respond(
     expected_kind: MediaTicketKind,
     method: Method,
     request_headers: HeaderMap,
+    allow_ticket_only: bool,
 ) -> Response {
     let _workspace_context = state.workspace_context_guard.read().await;
-    let Some(record) = state.media_tickets.lookup_and_touch(&ticket, expected_kind) else {
+    enum AuthorizationMode {
+        Cookie(crate::fs::media_session::MediaSessionToken),
+        Ticket,
+    }
+
+    let authorization = if let Some(token) = media_session_from_headers(&request_headers) {
+        state
+            .media_tickets
+            .authorize_bound(&ticket, expected_kind, &token)
+            .map(|authorization| (authorization, AuthorizationMode::Cookie(token)))
+            .or_else(|| {
+                allow_ticket_only.then(|| {
+                    state
+                        .media_tickets
+                        .authorize_ticket(&ticket, expected_kind)
+                        .map(|authorization| (authorization, AuthorizationMode::Ticket))
+                })?
+            })
+    } else if allow_ticket_only {
+        state
+            .media_tickets
+            .authorize_ticket(&ticket, expected_kind)
+            .map(|authorization| (authorization, AuthorizationMode::Ticket))
+    } else {
+        None
+    };
+    let Some((authorization, authorization_mode)) = authorization else {
         return empty(StatusCode::NOT_FOUND);
     };
+    let record = authorization.record.clone();
     let Some(disposition) = disposition_for(&record, expected_kind) else {
-        state.media_tickets.revoke(&ticket, expected_kind);
         return empty(StatusCode::NOT_FOUND);
     };
     let Some(file) = open_revalidated(&state, &record).await else {
         state.media_tickets.revoke(&ticket, expected_kind);
         return empty(StatusCode::GONE);
     };
-
     if method == Method::HEAD {
+        let finalized = match &authorization_mode {
+            AuthorizationMode::Cookie(token) => state.media_tickets.finalize_bound_and_touch(
+                &ticket,
+                expected_kind,
+                token,
+                &authorization,
+            ),
+            AuthorizationMode::Ticket => state.media_tickets.finalize_ticket_and_touch(
+                &ticket,
+                expected_kind,
+                &authorization,
+            ),
+        };
+        if !finalized {
+            return empty(StatusCode::NOT_FOUND);
+        }
         return response_with_body(StatusCode::OK, &record, None, Body::empty(), disposition)
             .unwrap_or_else(|| stale_response(&state, &ticket, expected_kind));
     }
@@ -63,6 +105,22 @@ pub(crate) async fn respond(
     } else {
         None
     };
+    let finalized = match &authorization_mode {
+        AuthorizationMode::Cookie(token) => state.media_tickets.finalize_bound_and_touch(
+            &ticket,
+            expected_kind,
+            token,
+            &authorization,
+        ),
+        AuthorizationMode::Ticket => {
+            state
+                .media_tickets
+                .finalize_ticket_and_touch(&ticket, expected_kind, &authorization)
+        }
+    };
+    if !finalized {
+        return empty(StatusCode::NOT_FOUND);
+    }
     let (status, body_range) = match range {
         Some(range) => (StatusCode::PARTIAL_CONTENT, Some(range)),
         None => (StatusCode::OK, None),
@@ -317,6 +375,10 @@ async fn stream_body(
 fn empty(status: StatusCode) -> Response {
     let mut response = Response::new(Body::empty());
     *response.status_mut() = status;
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
     response
 }
 

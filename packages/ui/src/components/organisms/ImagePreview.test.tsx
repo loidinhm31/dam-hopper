@@ -80,6 +80,7 @@ describe("ImagePreview", () => {
       "https://api.test/api/fs/image/stream/preview-token",
     );
     expect(image?.alt).toBe("Image preview: preview.webp");
+    expect(image?.getAttribute("crossorigin")).toBe("use-credentials");
     expect(document.body.textContent).not.toContain("Download");
     expect(issueImageTicket).toHaveBeenCalledWith(
       "demo",
@@ -146,6 +147,41 @@ describe("ImagePreview", () => {
     await act(async () => retry?.click());
     expect(issueImageTicket).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    [
+      "MEDIA_SESSION_UNSUPPORTED",
+      "Browser media access is unavailable",
+      "Allow site data",
+    ],
+  ])(
+    "renders safe, actionable %s guidance and retries",
+    async (code, title, guidance) => {
+      issueImageTicket.mockRejectedValueOnce(
+        Object.assign(new Error(), { code }),
+      );
+      await mount();
+
+      expect(document.body.textContent).toContain(title);
+      expect(document.body.textContent).toContain(guidance);
+      expect(document.body.textContent).not.toContain(code);
+
+      issueImageTicket.mockResolvedValueOnce({
+        purpose: "preview",
+        url: "https://api.test/api/fs/image/stream/retry-token",
+        expiresAt: 1,
+        revoke: vi.fn(),
+      });
+      const retry = [...document.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("Retry"),
+      );
+      await act(async () => retry?.click());
+      expect(issueImageTicket).toHaveBeenCalledTimes(2);
+      expect(document.querySelector("img")?.getAttribute("src")).toContain(
+        "retry-token",
+      );
+    },
+  );
 
   it("restarts against a changed profile and cleans the previous ticket", async () => {
     const firstRevoke = vi.fn();

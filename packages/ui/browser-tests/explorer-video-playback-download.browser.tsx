@@ -20,20 +20,6 @@ vi.mock("@/api/server-config.js", () => ({
   subscribeToProfileChanges: () => () => {},
 }));
 
-type TicketPurpose = "playback" | "download";
-
-function ticketResponse(ticket: string, purpose: TicketPurpose) {
-  return new Response(
-    JSON.stringify({
-      ticket,
-      streamPath: `/api/fs/video/stream/${ticket}`,
-      expiresAt: 1_800_000_000_000,
-      purpose,
-    }),
-    { status: 201, headers: { "Content-Type": "application/json" } },
-  );
-}
-
 describe("Explorer video playback in Chromium", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -41,7 +27,7 @@ describe("Explorer video playback in Chromium", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   let browserFetch: typeof fetch;
   let deferStale = false;
-  let resolveStale: ((response: Response) => void) | undefined;
+  let resolveStale: (() => void) | undefined;
 
   async function render(path = "clips/one-second-vp8.webm") {
     await act(async () => {
@@ -73,29 +59,18 @@ describe("Explorer video playback in Chromium", () => {
   beforeEach(async () => {
     browserFetch = window.fetch.bind(window);
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === "POST") {
-        const body = JSON.parse(String(init.body)) as {
-          path: string;
-          purpose: TicketPurpose;
-        };
-        if (body.path === "clips/stale.webm" && deferStale) {
-          return new Promise<Response>((resolve) => (resolveStale = resolve));
-        }
-        if (body.path === "clips/unsupported.webm") {
-          return ticketResponse("unsupported_ticket", body.purpose);
-        }
-        if (body.path === "clips/active.webm") {
-          return ticketResponse("active_ticket", body.purpose);
-        }
+      if (init?.method === "POST" && deferStale) {
+        const body = JSON.parse(String(init.body)) as { path?: string };
         if (body.path === "clips/stale.webm") {
-          return ticketResponse("stale_ticket", body.purpose);
+          const response = await browserFetch(input, {
+            ...init,
+            signal: undefined,
+          });
+          return new Promise<Response>((resolve) => {
+            resolveStale = () => resolve(response);
+          });
         }
-        return ticketResponse(
-          body.purpose === "download" ? "download_ticket" : "playback_ticket",
-          body.purpose,
-        );
       }
-      if (init?.method === "DELETE") return new Response(null, { status: 204 });
       return browserFetch(input, init);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -129,6 +104,7 @@ describe("Explorer video playback in Chromium", () => {
     expect(player.controls).toBe(true);
     expect(player.autoplay).toBe(false);
     expect(player.playsInline).toBe(true);
+    expect(player.crossOrigin).toBe("use-credentials");
     await expect.poll(() => player.readyState).toBeGreaterThanOrEqual(1);
     await expect.element(page.getByText("Ready to play")).toBeVisible();
     expect(postBodies()).toContainEqual(
@@ -146,6 +122,13 @@ describe("Explorer video playback in Chromium", () => {
     expect(
       (ticketRequest?.[1] as RequestInit | undefined)?.headers,
     ).toMatchObject({ Authorization: "Bearer synthetic-auth" });
+    const probeRequest = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        init?.method === "HEAD" && String(input).endsWith("/playback_ticket"),
+    );
+    expect(probeRequest?.[1]).toEqual(
+      expect.objectContaining({ method: "HEAD", credentials: "include" }),
+    );
 
     player.focus();
     const playing = new Promise<void>((resolve) =>
@@ -198,14 +181,18 @@ describe("Explorer video playback in Chromium", () => {
     await expect
       .poll(() => postBodies())
       .toContainEqual(expect.objectContaining({ purpose: "download" }));
+    await expect
+      .poll(() => activatedHref?.endsWith("/download_ticket") ?? false)
+      .toBe(true);
     expect(click).toHaveBeenCalledOnce();
-    expect(activatedHref?.endsWith("/download_ticket")).toBe(true);
     expect(player.currentSrc === playbackSource).toBe(true);
     expect(
       fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")
         .length,
     ).toBe(deleteCallsBefore);
-    expect(streamFetchCount()).toBe(streamFetchesBefore);
+    // One credentialed HEAD compatibility probe occurs for the new download
+    // ticket; JavaScript still never requests the media body.
+    expect(streamFetchCount()).toBe(streamFetchesBefore + 1);
     expect(blob).not.toHaveBeenCalled();
     expect(objectUrl).not.toHaveBeenCalled();
     const attachment = await browserFetch(activatedHref ?? "", {
@@ -224,9 +211,7 @@ describe("Explorer video playback in Chromium", () => {
     const player = document.querySelector("video") as HTMLVideoElement;
     await expect.poll(() => player.currentSrc).toContain("/active_ticket");
     const activeSource = player.currentSrc;
-    await act(async () =>
-      resolveStale?.(ticketResponse("stale_ticket", "playback")),
-    );
+    await act(async () => resolveStale?.());
 
     await expect
       .poll(() =>
@@ -239,11 +224,13 @@ describe("Explorer video playback in Chromium", () => {
     expect(player.currentSrc === activeSource).toBe(true);
   });
 
-  it("shows a retryable native-media failure and cleans up its source", async () => {
+  it("fails closed when the credentialed ticket probe is rejected", async () => {
     await render("clips/unsupported.webm");
     const player = document.querySelector("video") as HTMLVideoElement;
-    await expect.poll(() => player.currentSrc).toContain("/unsupported_ticket");
-    await expect.poll(() => player.error?.code ?? 0).toBeGreaterThan(0);
+    await expect
+      .element(page.getByText("Browser media access is unavailable").first())
+      .toBeVisible();
+    await expect.poll(() => player.currentSrc).toBe("");
     const retry = page.getByRole("button", { name: "Retry video playback" });
     await expect.element(retry).toBeVisible();
     await userEvent.click(retry);

@@ -540,9 +540,10 @@ path = "/tmp/test-workspace"
 
 | Var                    | Type   | Purpose                                                             |
 | ---------------------- | ------ | ------------------------------------------------------------------- |
-| `DAM_HOPPER_CONFIG`    | path   | Load an exact `dam-hopper.toml` registry file                       |
-| `DAM_HOPPER_WORKSPACE` | path   | Override workspace path (takes priority over global config default) |
-| `RUST_LOG`             | string | Logging level (e.g., `dam_hopper=debug,axum=info`)                  |
+| `DAM_HOPPER_CONFIG`        | path   | Load an exact `dam-hopper.toml` registry file                       |
+| `DAM_HOPPER_WORKSPACE`     | path   | Override workspace path (takes priority over global config default) |
+| `DAM_HOPPER_CORS_ORIGINS`  | string | Comma-separated exact browser origins for credentialed CORS         |
+| `RUST_LOG`                 | string | Logging level (e.g., `dam_hopper=debug,axum=info`)                  |
 
 ## Authentication Token
 
@@ -575,21 +576,24 @@ curl -H "Authorization: Bearer $(cat ~/.config/dam-hopper/server-token)" \
 
 ```bash
 cd server
-cargo run -- --config /path/to/dam-hopper.toml --port 4800
+cargo run -- --config /path/to/dam-hopper.toml --port 4800 \
+  --host 127.0.0.1
 # Or omit --config to use ~/.config/dam-hopper/dam-hopper.toml
 ```
 
 ### With Logging
 
 ```bash
-RUST_LOG=dam_hopper=debug cargo run -- --config /path/to/dam-hopper.toml
+RUST_LOG=dam_hopper=debug cargo run -- --config /path/to/dam-hopper.toml \
+  --host 127.0.0.1
 ```
 
 ### Release Build
 
 ```bash
 cargo build --release
-./target/release/dam-hopper-server --config /path/to/dam-hopper.toml --port 4800
+./target/release/dam-hopper-server --config /path/to/dam-hopper.toml --port 4800 \
+  --host 127.0.0.1
 ```
 
 ### Nohup Background Server
@@ -604,9 +608,9 @@ pnpm server:restart
 Edit `~/.config/dam-hopper/server.conf` to set:
 
 - `DAM_HOPPER_CONFIG`
+- `DAM_HOPPER_CORS_ORIGINS` (comma-separated exact browser origins, optional)
 - `DAM_HOPPER_HOST`
 - `DAM_HOPPER_PORT`
-- `DAM_HOPPER_CORS_ORIGINS` (if needed)
 - `DAM_HOPPER_WORKSPACE` (legacy directory-discovery override, optional)
 
 Runtime files:
@@ -615,35 +619,61 @@ Runtime files:
 - Log: `~/.config/dam-hopper/output.log`
 - PID: `~/.config/dam-hopper/server.pid`
 
-## Cross-Origin Resource Sharing (CORS)
+## Browser origin and transport
 
-If `--cors-origins` is omitted, the server mirrors the request `Origin` and
-allows credentials. That keeps local browser and native development flexible,
-but production deployments should usually pass an explicit allowlist.
-
-Override with `--cors-origins`:
+The backend serves the SPA and API as a same-origin application by default. To use a
+separate browser frontend, configure an exact allowlist; wildcard and credentialed
+allow-all CORS are forbidden:
 
 ```bash
-cargo run -- \
-  --config /path/to/dam-hopper.toml \
-  --cors-origins "https://example.com" \
-  --cors-origins "http://localhost:3000"
+# One origin
+DAM_HOPPER_CORS_ORIGINS=https://loidinhm31.github.io \
+  dam-hopper-server --host 0.0.0.0 --port 4800
+
+# Multiple origins, comma-separated
+DAM_HOPPER_CORS_ORIGINS="https://loidinhm31.github.io,https://admin.example.com" \
+  dam-hopper-server --host 0.0.0.0 --port 4800
 ```
 
-For native Tauri clients, also allow the native dev and packaged webview origins
-used by your target platform. Typical entries are:
+The equivalent CLI option is `--cors-origins "https://first.example,https://second.example"`.
+Each value must be an exact `http://` or `https://` origin with no path, query,
+fragment, credentials, or wildcard. Values are trimmed, while duplicate or
+ambiguous origins are rejected at startup. Restart the server after changing
+the setting.
 
-```bash
-cargo run -- \
-  --config /path/to/dam-hopper.toml \
-  --cors-origins "http://localhost:1420" \
-  --cors-origins "tauri://localhost" \
-  --cors-origins "http://tauri.localhost" \
-  --cors-origins "https://tauri.localhost"
-```
+Each allowlisted origin may call authenticated APIs with credentials. CORS does
+not make media public: media ticket issuance still requires the authenticated
+actor, and each stream URL is a short-lived actor/session-bound capability with
+expiry, logout/session revocation, and file revalidation. Packaged native browser
+transport intentionally ignores separate-origin profiles until a native
+HTTP/WebSocket transport exists.
 
-Use only the origins you actually ship. Native remains a remote client; it still
-connects through saved server profiles and does not embed the DamHopper backend.
+Authenticated HTTP binds, including the default `0.0.0.0`, are supported. HTTP
+media and bearer credentials remain exposed to interception, replay, and modification;
+use HTTPS, a VPN/Tailscale network, or another trusted encrypted network when that
+risk is unacceptable.
+
+### Media compatibility qualification status
+
+The deterministic server matrix covers same-origin media sessions,
+cookie/ticket binding, generic denials, Range/HEAD, capacity, and lifecycle
+revocation. The repository Playwright/Vitest browser full suite passed 116/116
+tests on installed Chromium 151; its 11 media-specific tests cover native
+image decode, video metadata/seek, credentialed `HEAD` probes, direct anchor
+download, cleanup, and no Blob fallback. That browser fixture is same-origin and
+does not prove real cross-site partition behavior. Microsoft Edge was not
+installed and was not substituted; Tauri/WebView, Safari, and Firefox media
+support remain unqualified. Operators must not infer support from a user-agent
+string or Chromium emulation. The broader gate passed 1,018 UI tests and 691 Rust
+tests (one ignored performance test); `pnpm build` and `pnpm lint` were clean.
+
+Deploy the session-bound server and client together. During version skew, keep
+media unavailable rather than re-enabling capability-only URLs or a Bearer
+fallback. A rollback may restore only a previously qualified session-bound
+server/client pair; restarting the server intentionally revokes every in-memory
+media session and ticket. Session and ticket state is process-local. Multi-instance
+deployments require sticky routing to the issuing process until a shared store is
+designed.
 
 ## SSH Key Management
 
@@ -664,7 +694,7 @@ Keys are stored in-memory per session (not persisted to disk).
 1. Create `~/.config/dam-hopper/dam-hopper.toml` with at least two projects whose `projects[].path` values point at separate roots. On Windows, use different drives if available.
    Expected: `GET /api/workspace/status` reports the registry `configPath` and the expected `projectCount`.
 
-2. Start the server with `cargo run -- --config ~/.config/dam-hopper/dam-hopper.toml --port 4800`.
+2. Start the same-origin server with `cargo run -- --config ~/.config/dam-hopper/dam-hopper.toml --port 4800 --host 127.0.0.1`.
    Expected: startup succeeds without requiring a repo-local `dam-hopper.toml`.
 
 3. Browse and read files in each project, then create or edit a file inside each root.
