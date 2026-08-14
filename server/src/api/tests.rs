@@ -6,7 +6,10 @@ use tower::ServiceExt;
 
 use crate::{
     agent_store::AgentStoreService,
-    api::{build_router, router::build_router_with_web_dir},
+    api::{
+        build_router, build_router_with_origins,
+        router::{build_router_with_web_dir, parse_cors_origins},
+    },
     config::{
         DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo,
     },
@@ -327,7 +330,7 @@ async fn health_returns_200() {
 }
 
 #[tokio::test]
-async fn backend_emits_no_cors_headers_or_preflight_behavior() {
+async fn backend_emits_no_cors_headers_or_preflight_behavior_without_allowlist() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
     let router = build_router(state);
@@ -353,6 +356,32 @@ async fn backend_emits_no_cors_headers_or_preflight_behavior() {
         .unwrap();
     let preflight_response = router.oneshot(preflight).await.unwrap();
     assert_eq!(preflight_response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn configured_cors_allows_login_preflight() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let origins = parse_cors_origins(Some("https://loidinhm31.github.io")).unwrap();
+    let router = build_router_with_origins(state, origins);
+    let preflight = Request::builder()
+        .method("OPTIONS")
+        .uri("/api/auth/login")
+        .header("Origin", "https://loidinhm31.github.io")
+        .header("Access-Control-Request-Method", "POST")
+        .header("Access-Control-Request-Headers", "content-type")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(preflight).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["access-control-allow-origin"],
+        "https://loidinhm31.github.io"
+    );
+    assert_eq!(
+        response.headers()["access-control-allow-credentials"],
+        "true"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -4107,13 +4136,27 @@ async fn issue_video_stream_ticket(state: AppState, path: &str, purpose: &str) -
     ticket
 }
 
+fn media_test_router(state: AppState, headers: &[(&str, &str)]) -> axum::Router {
+    let origin = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("origin"))
+        .map(|(_, value)| *value);
+    match origin {
+        Some(origin) => build_router_with_origins(
+            state,
+            parse_cors_origins(Some(origin)).expect("valid test origin"),
+        ),
+        None => build_router(state),
+    }
+}
+
 async fn stream_video(
     state: AppState,
     ticket: &str,
     method: &str,
     headers: &[(&str, &str)],
 ) -> axum::response::Response {
-    let router = build_router(state);
+    let router = media_test_router(state, headers);
     let mut request = Request::builder()
         .method(method)
         .uri(format!("/api/fs/video/stream/{ticket}"))
@@ -4134,30 +4177,33 @@ async fn stream_video(
 }
 
 #[tokio::test]
-async fn video_stream_requires_its_own_media_session_and_logout_revokes_it() {
+async fn video_stream_uses_bound_ticket_capability_and_logout_revokes_it() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("clip.webm"), b"media").unwrap();
     let state = make_state_with_project(&tmp);
     let ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
     let owning_cookie = MEDIA_COOKIES.lock().unwrap().remove(&ticket).unwrap();
 
-    let mut missing_get_headers = None;
-    for method in ["GET", "HEAD"] {
-        let response = stream_video(state.clone(), &ticket, method, &[]).await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_eq!(
-            response.headers()[header::CACHE_CONTROL],
-            "private, no-store"
-        );
-        if method == "GET" {
-            missing_get_headers = Some(response.headers().clone());
-        }
-        assert!(axum::body::to_bytes(response.into_body(), 1)
-            .await
-            .unwrap()
-            .is_empty());
-    }
+    // A ticket-only stream is not accepted without a browser origin marker.
+    let without_origin = stream_video(state.clone(), &ticket, "GET", &[]).await;
+    assert_eq!(without_origin.status(), StatusCode::NOT_FOUND);
 
+    // Cross-origin media elements may not send the HttpOnly session cookie. The
+    // URL ticket is still bound to the authenticated actor/session that issued it.
+    let origin = [("origin", "https://browser.example")];
+    let without_cookie = stream_video(state.clone(), &ticket, "GET", &origin).await;
+    assert_eq!(without_cookie.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(without_cookie.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+        "media"
+    );
+    let head_without_cookie = stream_video(state.clone(), &ticket, "HEAD", &origin).await;
+    assert_eq!(head_without_cookie.status(), StatusCode::OK);
+
+    // A cookie from another session does not grant access to that session's
+    // ticket; the ticket itself remains the bound, short-lived capability.
     let foreign_ticket = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
     let foreign_cookie = MEDIA_COOKIES
         .lock()
@@ -4168,13 +4214,8 @@ async fn video_stream_requires_its_own_media_session_and_logout_revokes_it() {
         .lock()
         .unwrap()
         .insert(ticket.clone(), foreign_cookie);
-    let foreign = stream_video(state.clone(), &ticket, "GET", &[]).await;
-    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
-    assert_eq!(foreign.headers(), missing_get_headers.as_ref().unwrap());
-    assert!(axum::body::to_bytes(foreign.into_body(), 1)
-        .await
-        .unwrap()
-        .is_empty());
+    let foreign_cookie_response = stream_video(state.clone(), &ticket, "GET", &origin).await;
+    assert_eq!(foreign_cookie_response.status(), StatusCode::OK);
     MEDIA_COOKIES
         .lock()
         .unwrap()
@@ -4201,7 +4242,7 @@ async fn video_stream_requires_its_own_media_session_and_logout_revokes_it() {
         .unwrap()
         .contains("Max-Age=0"));
     assert_eq!(
-        stream_video(state, &ticket, "GET", &[]).await.status(),
+        stream_video(state, &ticket, "GET", &origin).await.status(),
         StatusCode::NOT_FOUND
     );
     MEDIA_COOKIES.lock().unwrap().remove(&ticket);
@@ -4617,7 +4658,7 @@ async fn stream_image(
     method: &str,
     headers: &[(&str, &str)],
 ) -> axum::response::Response {
-    let router = build_router(state);
+    let router = media_test_router(state, headers);
     let mut request = Request::builder()
         .method(method)
         .uri(format!("/api/fs/image/stream/{ticket}"))
@@ -4638,29 +4679,29 @@ async fn stream_image(
 }
 
 #[tokio::test]
-async fn image_stream_requires_its_own_media_session_and_logout_revokes_it() {
+async fn image_stream_uses_bound_ticket_capability_and_logout_revokes_it() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("cover.png"), b"image").unwrap();
     let state = make_state_with_project(&tmp);
     let ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
     let owning_cookie = MEDIA_COOKIES.lock().unwrap().remove(&ticket).unwrap();
 
-    let mut missing_get_headers = None;
-    for method in ["GET", "HEAD"] {
-        let response = stream_image(state.clone(), &ticket, method, &[]).await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_eq!(
-            response.headers()[header::CACHE_CONTROL],
-            "private, no-store"
-        );
-        if method == "GET" {
-            missing_get_headers = Some(response.headers().clone());
-        }
-        assert!(axum::body::to_bytes(response.into_body(), 1)
+    // A ticket-only stream is not accepted without a browser origin marker.
+    let without_origin = stream_image(state.clone(), &ticket, "GET", &[]).await;
+    assert_eq!(without_origin.status(), StatusCode::NOT_FOUND);
+
+    // Cross-origin image elements may not send the HttpOnly session cookie.
+    let origin = [("origin", "https://browser.example")];
+    let without_cookie = stream_image(state.clone(), &ticket, "GET", &origin).await;
+    assert_eq!(without_cookie.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(without_cookie.into_body(), usize::MAX)
             .await
-            .unwrap()
-            .is_empty());
-    }
+            .unwrap(),
+        "image"
+    );
+    let head_without_cookie = stream_image(state.clone(), &ticket, "HEAD", &origin).await;
+    assert_eq!(head_without_cookie.status(), StatusCode::OK);
 
     let foreign_ticket = issue_image_stream_ticket(state.clone(), "cover.png").await;
     let foreign_cookie = MEDIA_COOKIES
@@ -4672,13 +4713,8 @@ async fn image_stream_requires_its_own_media_session_and_logout_revokes_it() {
         .lock()
         .unwrap()
         .insert(ticket.clone(), foreign_cookie);
-    let foreign = stream_image(state.clone(), &ticket, "GET", &[]).await;
-    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
-    assert_eq!(foreign.headers(), missing_get_headers.as_ref().unwrap());
-    assert!(axum::body::to_bytes(foreign.into_body(), 1)
-        .await
-        .unwrap()
-        .is_empty());
+    let foreign_cookie_response = stream_image(state.clone(), &ticket, "GET", &origin).await;
+    assert_eq!(foreign_cookie_response.status(), StatusCode::OK);
 
     let unauthenticated = build_router(state.clone())
         .oneshot(
@@ -4709,7 +4745,7 @@ async fn image_stream_requires_its_own_media_session_and_logout_revokes_it() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert_eq!(
-        stream_image(state, &ticket, "GET", &[]).await.status(),
+        stream_image(state, &ticket, "GET", &origin).await.status(),
         StatusCode::NOT_FOUND
     );
     MEDIA_COOKIES.lock().unwrap().remove(&ticket);

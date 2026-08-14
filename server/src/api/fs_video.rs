@@ -139,13 +139,22 @@ pub async fn revoke_ticket(
     StatusCode::NO_CONTENT
 }
 
-pub async fn stream_ticket(
+pub(crate) async fn stream_ticket(
     State(state): State<AppState>,
     AxumPath(ticket): AxumPath<String>,
     method: Method,
     headers: HeaderMap,
+    allowed_origin: Option<Extension<super::router::AllowedMediaOrigin>>,
 ) -> Response {
-    media_stream_response::respond(state, ticket, MediaTicketKind::Video, method, headers).await
+    media_stream_response::respond(
+        state,
+        ticket,
+        MediaTicketKind::Video,
+        method,
+        headers,
+        allowed_origin.is_some(),
+    )
+    .await
 }
 
 fn capacity_response() -> Response {
