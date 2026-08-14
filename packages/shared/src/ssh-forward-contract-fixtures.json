@@ -132,7 +132,11 @@
           "fingerprint": "SHA256:fixture",
           "expiresAt": "2026-08-10T12:35:56.789Z"
         }
-      ]
+      ],
+      "trustRepair": {
+        "trustPath": "C:\\Users\\fixture\\AppData\\Roaming\\com.damhopper\\ssh-forward\\scopes\\scope\\known-hosts.toml",
+        "executablePath": "C:\\Program Files\\Dam Hopper\\dam-hopper.exe"
+      }
     },
     "scopeActivation": {
       "context": {

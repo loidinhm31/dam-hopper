@@ -4,7 +4,7 @@ description: "Add ordered desktop-local SSH forwarding through a narrow Tauri/Ru
 status: blocked
 priority: P2
 effort: 88h
-branch: features/ssh-port-forwarding
+branch: features/ssh-port-forwarding-control
 tags: [feature, native, frontend, rust, ssh, security]
 created: 2026-08-08
 ---
@@ -38,7 +38,7 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 | 3 | SSH transport, authentication, trust, errors | Complete | 100% | 14h | [Phase 03](./phase-03-ssh-transport-trust.md) |
 | 4 | Manager ordering, lifecycle, IPC, shutdown | Complete | 100% | 16h | [Phase 04](./phase-04-native-manager-tauri-ipc.md) |
 | 5 | Browser-safe host and ordered adapter | Complete | 100% | 10h | [Phase 05](./phase-05-host-context-native-adapter.md) |
-| 6 | Desktop-only control surface | Pending | 0% | 10h | [Phase 06](./phase-06-desktop-control-surface.md) |
+| 6 | Desktop-only control surface | Complete | 100% | 10h | [Phase 06](./phase-06-desktop-control-surface.md) |
 | 7 | Deferred cross-platform and product release gates | Deferred | 0% | 16h | [Phase 07](./phase-07-cross-platform-release-gates.md) |
 
 ## Explicit non-goals
@@ -70,6 +70,8 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 **2026-08-13 — Phase 05 complete:** Final independent review scored 8.8/10 with conditional acceptance and no critical findings. UI 981/981 and native 17/17 passed; builds, lint (0 errors/0 warnings), `cargo fmt`, `cargo check`, `cargo clippy`, and diff check passed. This phase acceptance does not claim feature or release readiness; Phase 04 remains blocked by the Windows native runtime failure above.
 
 **2026-08-14 — Phase 04 complete:** The Windows Common Controls v6 manifest fixed native test-process startup. Full native validation passed with 139 tests passed and 1 ignored, including real russh listener start/stop, host-key challenge approval plus explicit restart, scope-switch/dispose closure, staged/idempotent purge, force-close contention, randomized activation schedules, and bounded shutdown/event seams. Phase 07 packaging and release gates remain deferred.
+
+**2026-08-14 — Phase 06 complete (Windows-only):** The desktop-only control surface is complete and approved for the Windows scope: host-gated route/navigation, explicit reviewed profile form, lifecycle controls, safe key inventory, host-key approval and stopped-app remediation presentation, fixed security/error copy, and browser/mobile zero-call coverage. Validation passed with UI 181 files/1,050 tests, Chromium 28 files/121 tests, and Rust 140 passed/1 ignored; build, lint, `cargo check`, `cargo fmt`, and diff checks passed. Phase 07 remains deferred, so the overall plan remains **blocked** on cross-platform, packaged-runtime, security, product, and manual release dependencies. No Phase 07 completion is claimed.
 
 - Phase 02 must retain the approved `russh`/`ring` and Windows OpenSSH named-pipe choices until a separate security review changes them.
 - Named release/security/product owners and protected runtime-evidence environment must be configured.

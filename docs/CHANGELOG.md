@@ -114,6 +114,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
+## 2026-08-14
+
+- **Native SSH Port-Forwarding Control — Phase 06 (Windows desktop scope).** Completed the host-gated `/ssh-forwarding` route and navigation, explicit reviewed profile form, lifecycle controls, agent/opaque-key inventory selection, unknown-host approval, changed-key stopped-app remediation presentation, bounded reconnect/auto-start states, and exact local-process/loopback security copy. Browser and native-mobile hosts expose no matching route and make zero forwarding calls. Validation: UI 181 files/1,050 tests, Chromium 28 files/121 tests, Rust 140 passed/1 ignored; build, lint, `cargo check`, `cargo fmt`, and diff checks passed. Cross-platform, packaged-runtime, security, product, and manual Phase 07 release gates remain deferred; release readiness is not claimed. [See completion report](../plans/260808-1310-ssh-port-forwarding-control/reports/04-phase-06-completion.md).
+
 ## 2026-07-26
 
 - **Phase 03: Terminal usage analytics persistence.** Added opt-in telemetry startup/shutdown with a
