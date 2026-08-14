@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dam_hopper_server::agent_store::AgentStoreService;
-use dam_hopper_server::api::build_router;
+use dam_hopper_server::api::build_router_with_origins;
 use dam_hopper_server::config::{
     DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo,
 };
@@ -87,7 +87,7 @@ async fn spawn_server(state: AppState) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, build_router(state, vec![]))
+        axum::serve(listener, build_router_with_origins(state, vec![]))
             .await
             .unwrap();
     });
