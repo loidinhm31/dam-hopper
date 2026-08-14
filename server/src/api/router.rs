@@ -45,6 +45,7 @@ pub fn build_router_with_origins(state: AppState, allowed_origins: Vec<HeaderVal
     build_router_with_web_dir_and_origins(state, allowed_origins, static_web_dir())
 }
 
+#[cfg(test)]
 pub(crate) fn build_router_with_web_dir(state: AppState, web_dir: PathBuf) -> Router {
     build_router_with_web_dir_and_origins(state, Vec::new(), web_dir)
 }
