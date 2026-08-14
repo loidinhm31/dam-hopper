@@ -4014,9 +4014,9 @@ async fn video_ticket_capacity_returns_retryable_structured_error() {
         };
         assert!(matches!(
             state
-                .video_stream_tickets
-                .issue(state.video_stream_tickets.generation(), record),
-            crate::fs::video_ticket::VideoTicketIssue::Issued(_)
+                .media_tickets
+                .issue(state.media_tickets.generation(), record.into_media()),
+            crate::fs::media_ticket::MediaTicketIssue::Issued(_)
         ));
     }
 

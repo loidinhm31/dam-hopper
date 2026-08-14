@@ -98,7 +98,6 @@ pub async fn issue_ticket(
         Err(VideoTicketIssue::ContextChanged) => {
             return Err(ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)))
         }
-        Err(VideoTicketIssue::Issued(_)) => unreachable!("bound issue cannot return a lease enum"),
     };
     let cookie = media_session_cookie(&session);
     Ok((
