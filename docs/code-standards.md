@@ -648,7 +648,7 @@ packages/ui/src/
 
 `apps/web` owns browser bootstrapping only: `QueryClientProvider`, `initTransport(new WsTransport(getServerUrl()))`, DOM mount, and host Vite config.
 
-`apps/native` owns Tauri bootstrapping only: the same `QueryClientProvider` and `DamHopperApp` mount, native Vite config on strict port `1420`, and the minimal `src-tauri` shell. Its browser transport accepts only same-origin profiles because the backend emits no CORS headers; do not add backend sidecars, filesystem permissions, shell permissions, or opener/http plugins without a phase plan that justifies the native API surface.
+`apps/native` owns Tauri bootstrapping only: the same `QueryClientProvider` and `DamHopperApp` mount, native Vite config on strict port `1420`, and the minimal `src-tauri` shell. Its browser transport accepts only same-origin profiles by policy; do not add backend sidecars, filesystem permissions, shell permissions, or opener/http plugins without a phase plan that justifies the native API surface. Separate web frontends use the backend's exact `DAM_HOPPER_CORS_ORIGINS` allowlist.
 
 Native startup must not depend on packaged webview same-origin fallback. Use the shared server profile flow, and keep the no-profile transport idle until the shared `ServerProfileGuard` prompts for an explicit profile.
 
@@ -863,9 +863,9 @@ Routes registered conditionally at router construction time.
 - [ ] Bearer token authentication
 - [ ] No shell injection (avoid shlex parsing for commands)
 - [ ] No symlink traversal (validate all path operations)
-- [ ] Backend remains same-origin only; no CORS headers or preflight behavior are emitted
-- [ ] Media preserves Bearer ticket issuance, host-only HttpOnly SameSite=Lax session cookies, and credentialed native stream requests; auth cookies remain SameSite=Strict
-- [ ] Cross-site HTTP media is unsupported; cleartext HTTP interception/modification risk is documented and accepted only on a trusted encrypted network
+- [ ] Cross-origin browser access, when needed, uses exact `DAM_HOPPER_CORS_ORIGINS` entries; wildcard CORS is never enabled
+- [ ] Media ticket issuance requires authentication; actor/session-bound tickets preserve expiry, revocation, revalidation, and no-store responses
+- [ ] Auth cookies remain SameSite=Strict; media cookies remain host-only SameSite=Lax when used, with cleartext interception/modification risk documented
 - [ ] Error messages don't leak paths/credentials
 
 ## Telemetry Privacy and Fault Boundaries

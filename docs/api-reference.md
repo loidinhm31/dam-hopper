@@ -1488,15 +1488,15 @@ Response:
 
 ### Session-Bound Media Capabilities
 
-Video playback/download and image preview use opaque ticket URLs **and** a
-server-issued media-session cookie. Ticket issue requests require Bearer
-authentication and set `damhopper-media-session`; stream requests remain
-outside Bearer middleware so native browser media elements can load them, but
-must present the matching cookie. A ticket and cookie from different sessions,
-or a missing, expired, revoked, or malformed cookie, return the same `404 Not
-Found` response. Do not treat a ticket URL as a standalone credential or put a
-Bearer token in a media URL. Bearer remains required on issue/revoke/session-
-revoke routes; stream GET/HEAD remains cookie-only.
+Video playback/download and image preview use opaque ticket URLs and a
+server-issued media-session cookie when the browser can send it. Ticket issue
+requests require Bearer authentication and set `damhopper-media-session`.
+Same-origin streams use the matching cookie; allowlisted cross-origin native
+media uses the short-lived ticket capability because `SameSite=Lax` cookies are
+not sent cross-site. Tickets remain bound to the authenticated actor/session,
+purpose, workspace generation, and revalidated file identity; expiry and logout
+revocation still apply. Do not put a Bearer token in a media URL. Bearer remains
+required on issue/revoke/session-revoke routes.
 
 The media cookie is host-only `HttpOnly; SameSite=Lax; Path=/api/fs` and
 non-`Secure` for HTTP compatibility. The auth fallback cookie is host-only
@@ -1596,8 +1596,10 @@ foreign, unknown, or already revoked tickets do not reveal their prior state.
 
 **GET|HEAD /api/fs/image/stream/{ticket}**
 
-The URL contains only the opaque capability; the matching media-session cookie
-is also required. The stream is inline and uses the MIME captured at issuance.
+The URL contains only the opaque capability. The capability is bound to the
+authenticated actor/session that issued it; a matching media-session cookie is
+used when available, while the bound ticket itself authorizes cross-origin native
+media requests. The stream is inline and uses the MIME captured at issuance.
 `GET` returns `200` for the full representation or
 `206` for one valid byte range; malformed, multi-range, or unsatisfiable ranges
 return `416` with `Content-Range: bytes */size`. `HEAD` returns metadata with an
@@ -1605,8 +1607,9 @@ empty body and ignores range selection. Unknown/revoked capabilities return
 `404`; a file identity/version change revokes the capability and returns `410`.
 
 Responses include `Accept-Ranges`, `Content-Length`, `Content-Type`, `ETag`,
-`Last-Modified`, and `Cache-Control: private, no-store`. The backend is
-same-origin only and emits no CORS headers or preflight behavior. Image
+`Last-Modified`, and `Cache-Control: private, no-store`. Cross-origin responses
+require the request origin to be in the server's exact `DAM_HOPPER_CORS_ORIGINS`
+allowlist. Image
 disposition is always `inline`; no image ticket
 can be upgraded to video playback or download behavior. Workspace, config, and
 settings context changes invalidate shared image and video capabilities.
@@ -1633,9 +1636,11 @@ media-session cookie is sent. It removes only a ticket bound to the presented
 actor and media session, returns `204 No Content`, and does not reveal whether
 the ticket was valid.
 
-**GET|HEAD /api/fs/video/stream/{ticket}** requires the matching media-session
-cookie, not a Bearer header. It supports the same range, validator, revalidation,
-private no-store, and indistinguishable `404` behavior as image streams.
+**GET|HEAD /api/fs/video/stream/{ticket}** requires the opaque ticket to remain
+bound to a live authenticated actor/session. It uses the matching media-session
+cookie when available and otherwise authorizes the bound ticket for cross-origin
+native media. It supports the same range, validator, revalidation, private
+no-store, and indistinguishable `404` behavior as image streams.
 Playback uses inline disposition; download uses a sanitized attachment filename.
 
 **GET /api/fs/language-files?project=NAME**
