@@ -463,7 +463,38 @@ impl MediaTicketStore {
         })
     }
 
-    /// Rechecks the live bound ticket/session after async validation, then extends idle TTLs.
+    /// Authorizes a bound ticket using the ticket URL as the media capability.
+    ///
+    /// This fallback is needed for cross-origin native media elements, which cannot
+    /// attach an Authorization header and may not receive a third-party cookie.
+    /// The ticket remains bound to a live authenticated actor/session and is
+    /// revoked with that session.
+    pub(crate) fn authorize_ticket(
+        &self,
+        ticket: &str,
+        expected_kind: MediaTicketKind,
+    ) -> Option<MediaTicketAuthorization> {
+        let now = self.clock.now_instant();
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prune_expired(&mut inner, now);
+        let stored = inner.tickets.get(ticket)?;
+        let binding = stored.binding.clone()?;
+        if stored.record.kind != expected_kind
+            || !binding_matches_live_session(&binding, &inner.sessions)
+        {
+            return None;
+        }
+        Some(MediaTicketAuthorization {
+            record: stored.record.clone(),
+            ticket_incarnation: stored.incarnation,
+            binding,
+        })
+    }
+
+    /// Rechecks a bound ticket after async validation, then extends idle TTLs.
     pub(crate) fn finalize_bound_and_touch(
         &self,
         ticket: &str,
@@ -487,6 +518,41 @@ impl MediaTicketStore {
             || !inner
                 .sessions
                 .contains_key(&authorization.binding.session_digest)
+        {
+            return false;
+        }
+        let session = inner
+            .sessions
+            .get_mut(&authorization.binding.session_digest)
+            .expect("checked live session");
+        session.idle_expires_at =
+            std::cmp::min(now + MEDIA_SESSION_IDLE_TTL, session.absolute_expires_at);
+        let stored = inner.tickets.get_mut(ticket).expect("checked live ticket");
+        stored.idle_expires_at =
+            std::cmp::min(now + MEDIA_TICKET_IDLE_TTL, stored.absolute_expires_at);
+        true
+    }
+
+    /// Rechecks a ticket-only media capability after async validation.
+    pub(crate) fn finalize_ticket_and_touch(
+        &self,
+        ticket: &str,
+        expected_kind: MediaTicketKind,
+        authorization: &MediaTicketAuthorization,
+    ) -> bool {
+        let now = self.clock.now_instant();
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prune_expired(&mut inner, now);
+        let Some(stored) = inner.tickets.get(ticket) else {
+            return false;
+        };
+        if stored.record.kind != expected_kind
+            || stored.incarnation != authorization.ticket_incarnation
+            || stored.binding.as_ref() != Some(&authorization.binding)
+            || !binding_matches_live_session(&authorization.binding, &inner.sessions)
         {
             return false;
         }
@@ -726,6 +792,16 @@ fn tickets_are_admissible(
                 .count()
                 < MAX_MEDIA_TICKETS_PER_SESSION
         })
+}
+
+fn binding_matches_live_session(
+    binding: &MediaSessionBinding,
+    sessions: &HashMap<MediaSessionDigest, StoredMediaSession>,
+) -> bool {
+    sessions.iter().any(|(stored_digest, session)| {
+        stored_digest.matches(&binding.session_digest)
+            && session.actor_subject == binding.actor_subject
+    })
 }
 
 fn session_matches(
