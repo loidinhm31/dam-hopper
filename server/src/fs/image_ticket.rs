@@ -5,8 +5,8 @@ use serde::Serialize;
 use super::{
     media_session::MediaSessionToken,
     media_ticket::{
-        MediaFileVersion, MediaTicketBoundIssue, MediaTicketIssue, MediaTicketKind,
-        MediaTicketPurpose, MediaTicketRecord, MediaTicketStore, MAX_MEDIA_TICKETS,
+        MediaFileVersion, MediaTicketBoundIssue, MediaTicketKind, MediaTicketPurpose,
+        MediaTicketRecord, MediaTicketStore, MAX_MEDIA_TICKETS,
     },
 };
 
@@ -54,7 +54,6 @@ pub struct ImageTicketLease {
 }
 
 pub(crate) enum ImageTicketIssue {
-    Issued(ImageTicketLease),
     Capacity,
     ContextChanged,
 }
@@ -108,45 +107,11 @@ impl ImageStreamTicketStore {
         }
     }
 
-    pub(crate) fn issue(
-        &self,
-        expected_generation: u64,
-        record: ImageTicketRecord,
-    ) -> ImageTicketIssue {
-        match self.media.issue(expected_generation, record.into_media()) {
-            MediaTicketIssue::Issued(lease) => ImageTicketIssue::Issued(ImageTicketLease {
-                ticket: lease.ticket,
-                expires_at_epoch_ms: lease.expires_at_epoch_ms,
-            }),
-            MediaTicketIssue::Capacity => ImageTicketIssue::Capacity,
-            MediaTicketIssue::ContextChanged => ImageTicketIssue::ContextChanged,
-        }
-    }
-
     /// Unknown, expired, revoked, and non-image tickets all return `None`.
     pub fn lookup_and_touch(&self, ticket: &str) -> Option<ImageTicketRecord> {
         self.media
             .lookup_and_touch(ticket, MediaTicketKind::Image)
             .and_then(ImageTicketRecord::from_media)
-    }
-
-    pub(crate) fn authorize_bound(
-        &self,
-        ticket: &str,
-        token: &MediaSessionToken,
-    ) -> Option<super::media_ticket::MediaTicketAuthorization> {
-        self.media
-            .authorize_bound(ticket, MediaTicketKind::Image, token)
-    }
-
-    pub(crate) fn finalize_bound_and_touch(
-        &self,
-        ticket: &str,
-        token: &MediaSessionToken,
-        authorization: &super::media_ticket::MediaTicketAuthorization,
-    ) -> bool {
-        self.media
-            .finalize_bound_and_touch(ticket, MediaTicketKind::Image, token, authorization)
     }
 
     pub(crate) fn revoke_bound(
