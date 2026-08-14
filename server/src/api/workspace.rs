@@ -106,6 +106,10 @@ pub async fn init_workspace(
         )));
     }
 
+    // Serialize config discovery/creation and runtime application with semantic
+    // settings and other workspace-context changes.
+    let _workspace_context = state.workspace_context_guard.write().await;
+
     // Try to load existing config, or create a new one
     let cfg = match load_workspace_config(&path) {
         Ok(existing) => existing,
@@ -162,8 +166,10 @@ pub async fn init_workspace(
         }
     };
 
-    let _workspace_context = state.workspace_context_guard.write().await;
-    state.semantic_supervisor.invalidate_workspace().await;
+    state
+        .semantic_supervisor
+        .invalidate_workspace_with_enabled(cfg.server.semantic.enabled)
+        .await;
     state.media_tickets.revoke_all();
     state.fs.reinit_sandbox(project_roots_from_config(&cfg));
     *state.workspace_dir.write().await = workspace_dir_from_config(&cfg);
@@ -189,7 +195,10 @@ pub async fn switch_workspace(
     state.pty_manager.dispose();
 
     let _workspace_context = state.workspace_context_guard.write().await;
-    state.semantic_supervisor.invalidate_workspace().await;
+    state
+        .semantic_supervisor
+        .invalidate_workspace_with_enabled(cfg.server.semantic.enabled)
+        .await;
     state.media_tickets.revoke_all();
     state.fs.reinit_sandbox(project_roots_from_config(&cfg));
 

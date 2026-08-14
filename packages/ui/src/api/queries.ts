@@ -3,6 +3,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { useCallback, useSyncExternalStore } from "react";
 import { api, isGitUnavailableError } from "./client.js";
 import { getTransport } from "./transport.js";
+import { useTransportGeneration } from "@/hooks/use-transport-generation.js";
 import { useEditorStore } from "@/stores/editor.js";
 import type {
   ExplorerLanguageScanCache,
@@ -273,6 +274,27 @@ export function useConfig() {
     queryKey: ["config"],
     queryFn: () => api.config.get(),
     staleTime: Infinity, // IPC config:changed events drive invalidation
+  });
+}
+
+export function useSemanticNavigationSettings() {
+  const transportGeneration = useTransportGeneration();
+  return useQuery({
+    queryKey: ["semantic-navigation-settings", transportGeneration],
+    queryFn: () => api.settings.semanticNavigation.get(),
+    staleTime: Infinity,
+  });
+}
+
+export function useUpdateSemanticNavigationSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      api.settings.semanticNavigation.update(enabled),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["semantic-navigation-settings"] });
+      void qc.invalidateQueries({ queryKey: ["config"] });
+    },
   });
 }
 

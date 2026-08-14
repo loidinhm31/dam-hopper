@@ -353,6 +353,8 @@ export function DamHopperApp() {
     const transport = getTransport();
     return transport.onEvent("workspace:changed", () => {
       void qc.invalidateQueries({ queryKey: ["workspace-status"] });
+      void qc.invalidateQueries({ queryKey: ["semantic-navigation-settings"] });
+      void qc.invalidateQueries({ queryKey: ["config"] });
     });
   }, [activeProfileConnectionKey, activeProfileId, activeProfileUrl, qc]);
 

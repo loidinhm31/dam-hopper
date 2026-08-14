@@ -34,15 +34,48 @@ pub async fn update_config(
     State(state): State<AppState>,
     Json(mut body): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Hold the workspace guard before taking the snapshot. A full-config PUT
+    // must not serialize a stale semantic value after a settings PATCH wins.
+    let _workspace_context = state.workspace_context_guard.write().await;
     let current = state.config.read().await.clone();
     preserve_and_reject_telemetry_mutation(&mut body, &current)?;
+    preserve_and_reject_semantic_mutation(&mut body, &current)?;
     let config_path = current.config_path.clone();
     let config_dir = config_path.parent().unwrap_or(StdPath::new("/"));
     relativize_project_paths(&mut body, config_dir);
     normalize_config_json_for_toml(&mut body);
     write_json_as_toml(&config_path, &body)?;
-    reload_config(&state).await?;
+    reload_config_locked(&state).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+fn preserve_and_reject_semantic_mutation(
+    body: &mut Value,
+    current: &DamHopperConfig,
+) -> Result<(), ApiError> {
+    let current = serde_json::to_value(&current.server.semantic)
+        .map_err(|error| ApiError::from_app(AppError::Internal(error.to_string())))?;
+    let root = body.as_object_mut().ok_or_else(|| {
+        ApiError::from_app(AppError::InvalidInput(
+            "Config must be an object".to_string(),
+        ))
+    })?;
+    let server = root
+        .entry("server")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| {
+            ApiError::from_app(AppError::InvalidInput(
+                "server must be an object".to_string(),
+            ))
+        })?;
+    let requested = server.entry("semantic").or_insert_with(|| current.clone());
+    if requested != &current {
+        return Err(ApiError::from_app(AppError::InvalidInput(
+            "Update semantic navigation through /api/settings/semantic-navigation".to_string(),
+        )));
+    }
+    Ok(())
 }
 
 fn preserve_and_reject_telemetry_mutation(
@@ -83,6 +116,9 @@ pub async fn update_project(
     Path(name): Path<String>,
     Json(patch): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Serialize project patches with semantic settings and workspace changes from
+    // the active config read through runtime application.
+    let _workspace_context = state.workspace_context_guard.write().await;
     let config_path = state.config.read().await.config_path.clone();
     let raw = read_toml_value(&config_path)?;
 
@@ -93,7 +129,7 @@ pub async fn update_project(
         .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
     atomic_write(&config_path, &toml_str).map_err(ApiError::from_app)?;
 
-    reload_config(&state).await?;
+    reload_config_locked(&state).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -529,11 +565,14 @@ fn json_to_toml(v: &Value) -> Option<toml::Value> {
     }
 }
 
-async fn reload_config(state: &AppState) -> Result<(), ApiError> {
-    let _workspace_context = state.workspace_context_guard.write().await;
+/// Reload workspace state when the caller already owns the workspace write guard.
+async fn reload_config_locked(state: &AppState) -> Result<(), ApiError> {
     let config_path = state.config.read().await.config_path.clone();
     let new_cfg: DamHopperConfig = read_config(&config_path).map_err(ApiError::from_app)?;
-    state.semantic_supervisor.invalidate_workspace().await;
+    state
+        .semantic_supervisor
+        .invalidate_workspace_with_enabled(new_cfg.server.semantic.enabled)
+        .await;
     state.media_tickets.revoke_all();
     state.fs.reinit_sandbox(project_roots_from_config(&new_cfg));
     state

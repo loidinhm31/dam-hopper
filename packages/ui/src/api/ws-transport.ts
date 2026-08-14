@@ -389,6 +389,26 @@ function channelToEndpoint(
     }
 
     // Settings
+    case "settings:semanticNavigation:get":
+      return {
+        method: "GET",
+        url: "/api/settings/semantic-navigation",
+      };
+    case "settings:semanticNavigation:update":
+      if (
+        typeof data !== "object" ||
+        data === null ||
+        Array.isArray(data) ||
+        Object.keys(data).length !== 1 ||
+        typeof (data as { enabled?: unknown }).enabled !== "boolean"
+      ) {
+        throw new Error("Invalid semantic navigation settings payload");
+      }
+      return {
+        method: "PATCH",
+        url: "/api/settings/semantic-navigation",
+        body: data,
+      };
     case "cache:clear":
       return { method: "POST", url: "/api/settings/cache-clear" };
     case "workspace:reset":

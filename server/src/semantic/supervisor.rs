@@ -39,7 +39,7 @@ pub struct SemanticSupervisor {
     backoff_until: Arc<Mutex<HashMap<SessionKey, u64>>>,
     global_slots: Arc<Semaphore>,
     metrics: Arc<SemanticMetrics>,
-    enabled: bool,
+    enabled: Arc<AtomicBool>,
     crash_notifier: CrashNotifier,
     shutting_down: Arc<AtomicBool>,
     lifecycle_generation: Arc<AtomicU64>,
@@ -58,6 +58,27 @@ struct SessionEntry {
 pub struct SemanticSessionFence {
     pub lifecycle_generation: u64,
     pub workspace_epoch: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SemanticCapabilitySummary {
+    pub available: bool,
+    pub disabled_reason: Option<&'static str>,
+}
+
+fn safe_availability_reason(reason: Option<DescriptorAvailabilityReason>) -> Option<&'static str> {
+    match reason {
+        Some(DescriptorAvailabilityReason::ReleaseManifestMissing) => {
+            Some("A signed semantic bundle is not installed on this server.")
+        }
+        Some(DescriptorAvailabilityReason::ReleaseManifestInvalid) => {
+            Some("The signed semantic bundle is invalid on this server.")
+        }
+        Some(DescriptorAvailabilityReason::CapabilityUnsupported) => {
+            Some("Semantic navigation is not supported on this server.")
+        }
+        _ => None,
+    }
 }
 
 #[derive(Default)]
@@ -249,7 +270,7 @@ impl SemanticSupervisor {
             backoff_until,
             global_slots: Arc::new(Semaphore::new(global_cap)),
             metrics,
-            enabled,
+            enabled: Arc::new(AtomicBool::new(enabled)),
             crash_notifier,
             shutting_down: Arc::new(AtomicBool::new(false)),
             lifecycle_generation: Arc::new(AtomicU64::new(0)),
@@ -284,16 +305,64 @@ impl SemanticSupervisor {
     }
 
     pub fn is_enabled(&self) -> bool {
-        self.enabled
+        self.enabled.load(Ordering::Acquire)
+    }
+
+    /// Return raw verified bundle availability, without applying the runtime gate.
+    pub fn raw_availability(&self, language: SemanticLanguage) -> SemanticDescriptorAvailability {
+        self.registry.availability(language)
+    }
+
+    /// Return whether any supported bundled descriptor is ready to run.
+    pub fn semantic_capability(&self) -> SemanticCapabilitySummary {
+        let mut unavailable_reason = None;
+        for language in [
+            SemanticLanguage::Rust,
+            SemanticLanguage::Typescript,
+            SemanticLanguage::Javascript,
+        ] {
+            let availability = self.raw_availability(language);
+            if availability.state == DescriptorAvailabilityState::Ready {
+                return SemanticCapabilitySummary {
+                    available: true,
+                    disabled_reason: None,
+                };
+            }
+            if unavailable_reason.is_none() {
+                unavailable_reason = Some(safe_availability_reason(availability.reason));
+            }
+        }
+        SemanticCapabilitySummary {
+            available: false,
+            disabled_reason: unavailable_reason.flatten().or(Some(
+                "A valid signed semantic bundle is required on this server.",
+            )),
+        }
     }
 
     pub fn availability(&self, language: SemanticLanguage) -> SemanticDescriptorAvailability {
         let mut availability = self.registry.availability(language);
-        if !self.enabled {
+        if !self.is_enabled() {
             availability.state = DescriptorAvailabilityState::UnsupportedCapability;
             availability.reason = Some(DescriptorAvailabilityReason::CapabilityUnsupported);
         }
         availability
+    }
+
+    /// Apply a persisted semantic setting and fence all existing semantic work.
+    pub async fn reconfigure(&self, enabled: bool) {
+        let _lifecycle = self.lifecycle_gate.write().await;
+        if self.enabled.swap(enabled, Ordering::AcqRel) == enabled {
+            return;
+        }
+        self.cleanup_workspace_locked().await;
+    }
+
+    /// Fence a config/workspace replacement while synchronizing its semantic gate.
+    pub async fn invalidate_workspace_with_enabled(&self, enabled: bool) {
+        let _lifecycle = self.lifecycle_gate.write().await;
+        self.enabled.store(enabled, Ordering::Release);
+        self.cleanup_workspace_locked().await;
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<SemanticSupervisorEvent> {
@@ -465,7 +534,7 @@ impl SemanticSupervisor {
             prewarm_cancel,
             client_closed,
         } = admission;
-        if !self.enabled {
+        if !self.is_enabled() {
             return Err(SupervisorError::Disabled);
         }
         if self.shutting_down.load(Ordering::Acquire) {
@@ -576,7 +645,8 @@ impl SemanticSupervisor {
             }
         };
         let _lifecycle = self.lifecycle_gate.write().await;
-        if self.shutting_down.load(Ordering::Acquire)
+        if !self.is_enabled()
+            || self.shutting_down.load(Ordering::Acquire)
             || self.lifecycle_generation.load(Ordering::Acquire) != lifecycle_generation
             || expected_workspace_epoch.is_some_and(|expected| expected != self.workspace_epoch())
             || prewarm_cancel
@@ -704,7 +774,7 @@ impl SemanticSupervisor {
         &self,
         intent: PrewarmIntent,
     ) -> Result<PrewarmOutcome, SupervisorError> {
-        if !self.enabled {
+        if !self.is_enabled() {
             return Err(SupervisorError::Disabled);
         }
         if intent.stable_for_ms < PREWARM_DWELL_MS {
@@ -865,6 +935,10 @@ impl SemanticSupervisor {
     /// Close every semantic session before a new workspace sandbox is admitted.
     pub async fn invalidate_workspace(&self) {
         let _lifecycle = self.lifecycle_gate.write().await;
+        self.cleanup_workspace_locked().await;
+    }
+
+    async fn cleanup_workspace_locked(&self) {
         let generation = self.lifecycle_generation.fetch_add(1, Ordering::AcqRel) + 1;
         let workspace_epoch = self.workspace_epoch.fetch_add(1, Ordering::AcqRel) + 1;
         let entries: Vec<_> = self
@@ -1232,6 +1306,17 @@ mod tests {
         let warm = supervisor.request_prewarm(intent(PREWARM_DWELL_MS)).await;
         assert!(matches!(warm, Ok(PrewarmOutcome::Started)), "{warm:?}");
         assert_eq!(supervisor.metrics().sessions_started, 1);
+
+        supervisor.reconfigure(false).await;
+        assert!(matches!(
+            supervisor.request_prewarm(intent(PREWARM_DWELL_MS)).await,
+            Err(SupervisorError::Disabled)
+        ));
+        supervisor.reconfigure(true).await;
+        let warm_after_enable = supervisor.request_prewarm(intent(PREWARM_DWELL_MS)).await;
+        assert!(matches!(warm_after_enable, Ok(PrewarmOutcome::Started)));
+        assert_eq!(supervisor.metrics().sessions_started, 2);
+
         assert!(supervisor
             .ensure_session(
                 SessionKey {
@@ -1340,6 +1425,45 @@ mod tests {
                 .await,
             Err(SupervisorError::Backoff { .. })
         ));
+        supervisor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn reconfigure_fences_lifecycle_and_updates_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let supervisor = SemanticSupervisor::new(
+            SemanticRegistry::new(BundleResolver::new(
+                dir.path(),
+                BundleManifest {
+                    descriptors: vec![],
+                },
+            )),
+            ProjectTrustStore::open(dir.path().join("trust.json")).unwrap(),
+            1,
+            false,
+        );
+        let mut events = supervisor.subscribe();
+        assert!(!supervisor.is_enabled());
+        supervisor.reconfigure(false).await;
+        assert_eq!(supervisor.lifecycle_generation(), 0);
+        assert_eq!(supervisor.workspace_epoch(), 0);
+        assert!(matches!(
+            events.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        supervisor.reconfigure(true).await;
+        assert!(supervisor.is_enabled());
+        let event = events.recv().await.unwrap();
+        assert!(matches!(
+            event,
+            SemanticSupervisorEvent::WorkspaceChanged { .. }
+        ));
+        assert_eq!(supervisor.lifecycle_generation(), 1);
+        assert_eq!(supervisor.workspace_epoch(), 1);
+        supervisor.reconfigure(false).await;
+        assert!(!supervisor.is_enabled());
+        assert_eq!(supervisor.lifecycle_generation(), 2);
+        assert_eq!(supervisor.workspace_epoch(), 2);
         supervisor.shutdown().await;
     }
 

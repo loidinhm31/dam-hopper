@@ -838,6 +838,12 @@ export interface GlobalConfig {
   ui?: UiConfig;
 }
 
+export interface SemanticNavigationSettings {
+  enabled: boolean;
+  available: boolean;
+  disabledReason: string | null;
+}
+
 export interface Worktree {
   path: string;
   branch: string;
@@ -1329,6 +1335,17 @@ export const api = {
       }),
   },
   settings: {
+    semanticNavigation: {
+      get: () =>
+        getTransport().invoke<SemanticNavigationSettings>(
+          "settings:semanticNavigation:get",
+        ),
+      update: (enabled: boolean) =>
+        getTransport().invoke<SemanticNavigationSettings>(
+          "settings:semanticNavigation:update",
+          { enabled },
+        ),
+    },
     clearCache: () =>
       getTransport().invoke<{ cleared: boolean }>("cache:clear"),
     reset: () => getTransport().invoke<{ reset: boolean }>("workspace:reset"),

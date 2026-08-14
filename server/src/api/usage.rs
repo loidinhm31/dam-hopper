@@ -364,7 +364,10 @@ pub async fn update_settings(
             .await;
         return Err(ApiError::from_app(error));
     }
-    state.semantic_supervisor.invalidate_workspace().await;
+    state
+        .semantic_supervisor
+        .invalidate_workspace_with_enabled(config.server.semantic.enabled)
+        .await;
     state
         .host_resource_monitor
         .reconfigure(config.server.host_resources.clone())

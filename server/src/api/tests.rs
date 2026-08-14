@@ -1491,6 +1491,233 @@ restartPolicy = "never"
     assert_eq!(json["projects"][0]["envFile"], ".env");
 }
 
+#[tokio::test]
+async fn semantic_navigation_settings_are_protected_and_report_safe_availability() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    let unauthenticated =
+        get_without_auth(state.clone(), "/api/settings/semantic-navigation").await;
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let response = get(state, "/api/settings/semantic-navigation").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["enabled"], false);
+    assert_eq!(json["available"], false);
+    assert!(json["disabledReason"].as_str().is_some());
+    assert!(!json.to_string().contains("/") && !json.to_string().contains("PATH"));
+}
+
+#[tokio::test]
+async fn semantic_navigation_unavailable_enable_conflict_does_not_write_toml() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let path = tmp.path().join("dam-hopper.toml");
+    let original = "[workspace]\nname = \"before\"\nroot = \".\"\n";
+    std::fs::write(&path, original).unwrap();
+
+    let response = patch_json(
+        state,
+        "/api/settings/semantic-navigation",
+        serde_json::json!({"enabled": true}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+}
+
+#[tokio::test]
+async fn semantic_navigation_patch_rolls_back_when_reload_rejects_active_toml() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let path = tmp.path().join("dam-hopper.toml");
+    let original = "[workspace]\nname = \"before\"\nroot = \".\"\n[server.telemetry.collector]\nhost = \"8.8.8.8\"\n";
+    std::fs::write(&path, original).unwrap();
+
+    let response = patch_json(
+        state,
+        "/api/settings/semantic-navigation",
+        serde_json::json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+}
+
+#[tokio::test]
+async fn full_config_put_waits_for_workspace_guard_before_writing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let path = tmp.path().join("dam-hopper.toml");
+    let original =
+        "[workspace]\nname = \"before\"\nroot = \".\"\n[server.semantic]\nenabled = false\n";
+    std::fs::write(&path, original).unwrap();
+
+    let _workspace_context = state.workspace_context_guard.write().await;
+    let request = tokio::spawn(put_json(
+        state.clone(),
+        "/api/config",
+        serde_json::json!({
+            "workspace": {"name": "stale", "root": "."},
+            "projects": [],
+            "server": {"semantic": {"enabled": false}}
+        }),
+    ));
+
+    // The request must be blocked before it can serialize even unrelated
+    // fields. The old ordering wrote the stale full snapshot here.
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+    drop(_workspace_context);
+    assert_eq!(request.await.unwrap().status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn project_patch_waits_for_workspace_guard_before_reading_or_writing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let path = tmp.path().join("dam-hopper.toml");
+    let original = r#"[workspace]
+name = "before"
+root = "."
+
+[[projects]]
+name = "demo"
+path = "."
+type = "custom"
+
+[server.semantic]
+enabled = false
+"#;
+    std::fs::write(&path, original).unwrap();
+
+    let _workspace_context = state.workspace_context_guard.write().await;
+    let request = tokio::spawn(patch_json(
+        state.clone(),
+        "/api/config/projects/demo",
+        serde_json::json!({"tags": ["patched"]}),
+    ));
+
+    // The route must wait before reading the TOML. Without the guard at the
+    // start of update_project, this atomic project write can happen here.
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+    drop(_workspace_context);
+    assert_eq!(request.await.unwrap().status(), StatusCode::OK);
+    let document: toml::Value = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(
+        document["server"]["semantic"]["enabled"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(document["projects"][0]["tags"][0].as_str(), Some("patched"));
+}
+
+#[tokio::test]
+async fn workspace_init_waits_for_workspace_guard_before_creating_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let target = tempfile::tempdir().unwrap();
+    let config_path = target.path().join("dam-hopper.toml");
+    assert!(!config_path.exists());
+
+    let _workspace_context = state.workspace_context_guard.write().await;
+    let request = tokio::spawn(post_json(
+        state.clone(),
+        "/api/workspace/init",
+        serde_json::json!({"path": target.path().to_string_lossy().to_string()}),
+    ));
+
+    // Config discovery/creation must be behind the same guard as semantic
+    // settings updates; no file may appear while this lock is held.
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert!(!config_path.exists());
+
+    drop(_workspace_context);
+    assert_eq!(request.await.unwrap().status(), StatusCode::OK);
+    assert!(config_path.exists());
+}
+
+#[tokio::test]
+async fn semantic_navigation_persists_only_active_toml_and_reload_syncs_gate() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let path = tmp.path().join("dam-hopper.toml");
+    std::fs::write(
+        &path,
+        "[workspace]\nname = \"persisted\"\nroot = \".\"\n[server.semantic]\nenabled = true\n[server.telemetry]\nenabled = false\n",
+    )
+    .unwrap();
+
+    let response = patch_json(
+        state.clone(),
+        "/api/settings/semantic-navigation",
+        serde_json::json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let written = std::fs::read_to_string(&path).unwrap();
+    let document: toml::Value = toml::from_str(&written).unwrap();
+    assert_eq!(document["workspace"]["name"].as_str(), Some("persisted"));
+    assert_eq!(
+        document["server"]["semantic"]["enabled"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        document["server"]["telemetry"]["enabled"].as_bool(),
+        Some(false)
+    );
+    assert!(!state.semantic_supervisor.is_enabled());
+
+    let rejected = put_json(
+        state.clone(),
+        "/api/config",
+        serde_json::json!({
+            "workspace": {"name": "persisted", "root": "."},
+            "projects": [],
+            "server": {"semantic": {"enabled": true}}
+        }),
+    )
+    .await;
+    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), written);
+
+    std::fs::write(
+        &path,
+        "[workspace]\nname = \"persisted\"\nroot = \".\"\n[server.semantic]\nenabled = true\n",
+    )
+    .unwrap();
+    let reloaded = post_json(
+        state.clone(),
+        "/api/settings/cache-clear",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(reloaded.status(), StatusCode::OK);
+    assert!(state.semantic_supervisor.is_enabled());
+    assert!(state.config.read().await.server.semantic.enabled);
+
+    std::fs::write(
+        &path,
+        "[workspace]\nname = \"persisted\"\nroot = \".\"\n[server.semantic]\nenabled = false\n",
+    )
+    .unwrap();
+    let reloaded = post_json(
+        state.clone(),
+        "/api/settings/cache-clear",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(reloaded.status(), StatusCode::OK);
+    assert!(!state.semantic_supervisor.is_enabled());
+    assert!(!state.config.read().await.server.semantic.enabled);
+}
+
 // ---------------------------------------------------------------------------
 // Terminal
 // ---------------------------------------------------------------------------

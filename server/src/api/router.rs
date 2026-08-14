@@ -27,9 +27,9 @@ use crate::state::AppState;
 
 use super::{
     agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
-    fs as fs_api, fs_image, fs_video, git, git_diff, host_actions,
+    fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, media_session,
     port_forward as port_forward_api, semantic_trust, semantic_ws, settings, ssh, system, terminal,
-    media_session, tunnel, usage, usage_sessions, workspace, ws,
+    tunnel, usage, usage_sessions, workspace, ws,
 };
 
 /// Build the full Axum router without cross-origin browser access.
@@ -378,6 +378,10 @@ fn build_router_with_web_dir_and_origins(
         .route("/api/commands/search", get(commands::search_commands))
         .route("/api/commands", get(commands::list_commands))
         // Settings
+        .route(
+            "/api/settings/semantic-navigation",
+            get(settings::get_semantic_navigation).patch(settings::update_semantic_navigation),
+        )
         .route("/api/settings/cache-clear", post(settings::cache_clear))
         .route("/api/settings/reset", post(settings::reset))
         .route("/api/settings/export", get(settings::export_settings))

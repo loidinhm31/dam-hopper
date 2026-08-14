@@ -361,6 +361,17 @@ the PTY unchanged.
 
 Only DamHopper-managed xterm sessions participate in this feature. External terminals remain out of scope even if they launch Codex.
 
+### Semantic navigation server setting
+
+Semantic navigation is off by default and server-scoped across every project in the active workspace. Its only persisted preference is `[server.semantic].enabled` in the active `dam-hopper.toml`:
+
+```toml
+[server.semantic]
+enabled = false
+```
+
+Use the protected semantic settings endpoint from Settings to change it. The server atomically updates this key, preserves unrelated registry values, and applies a changed value immediately. `enabled` is independent from bundle availability: enabling requires at least one verified signed bundled Rust, TypeScript, or JavaScript descriptor and otherwise returns `409 Conflict` without changing the TOML. If an already-enabled bundle later becomes unavailable, the setting intentionally remains enabled while availability fails closed; disabling is still allowed and is the recovery path. Java support is not enabled by this setting.
+
 ### Server Configuration
 
 Optional: configure SQLite path and retention for terminal restart recovery. Session persistence is always enabled when the database can be opened.
@@ -538,12 +549,12 @@ path = "/tmp/test-workspace"
 
 ## Environment Variables
 
-| Var                    | Type   | Purpose                                                             |
-| ---------------------- | ------ | ------------------------------------------------------------------- |
-| `DAM_HOPPER_CONFIG`        | path   | Load an exact `dam-hopper.toml` registry file                       |
-| `DAM_HOPPER_WORKSPACE`     | path   | Override workspace path (takes priority over global config default) |
-| `DAM_HOPPER_CORS_ORIGINS`  | string | Comma-separated exact browser origins for credentialed CORS         |
-| `RUST_LOG`                 | string | Logging level (e.g., `dam_hopper=debug,axum=info`)                  |
+| Var                       | Type   | Purpose                                                             |
+| ------------------------- | ------ | ------------------------------------------------------------------- |
+| `DAM_HOPPER_CONFIG`       | path   | Load an exact `dam-hopper.toml` registry file                       |
+| `DAM_HOPPER_WORKSPACE`    | path   | Override workspace path (takes priority over global config default) |
+| `DAM_HOPPER_CORS_ORIGINS` | string | Comma-separated exact browser origins for credentialed CORS         |
+| `RUST_LOG`                | string | Logging level (e.g., `dam_hopper=debug,axum=info`)                  |
 
 ## Authentication Token
 

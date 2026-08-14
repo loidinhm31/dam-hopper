@@ -758,13 +758,18 @@ async fn semantic_event_loop(
                 connection
                     .invalidate_workspace(generation, workspace_epoch)
                     .await;
-                let _ = send_message(
+                if !send_lifecycle_message(
+                    &connection,
                     &out_tx,
+                    &shutdown_signal,
                     SemanticServerMessage::WorkspaceChanged {
                         reason: SemanticCloseReason::WorkspaceChanged,
                     },
                 )
-                .await;
+                .await
+                {
+                    return;
+                }
                 continue;
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
@@ -778,7 +783,9 @@ async fn semantic_event_loop(
                 policy_revision,
                 revoked,
             } => {
-                if fail_closed_for_stale_workspace(&connection, &state, &out_tx).await {
+                if fail_closed_for_stale_workspace(&connection, &state, &out_tx, &shutdown_signal)
+                    .await
+                {
                     continue;
                 }
                 if !state.semantic_supervisor.is_lifecycle_current(generation)
@@ -860,16 +867,31 @@ async fn semantic_event_loop(
                     .await;
             }
             SemanticSupervisorEvent::WorkspaceChanged {
-                workspace_epoch, ..
+                generation,
+                workspace_epoch,
             } => {
-                if fail_closed_for_stale_workspace(&connection, &state, &out_tx).await {
-                    continue;
-                }
-                if !state
-                    .semantic_supervisor
-                    .is_workspace_current(workspace_epoch)
+                let _lifecycle = state.semantic_supervisor.lifecycle_read().await;
+                if !state.semantic_supervisor.is_lifecycle_current(generation)
+                    || !state
+                        .semantic_supervisor
+                        .is_workspace_current(workspace_epoch)
                 {
                     continue;
+                }
+                connection
+                    .invalidate_workspace(generation, workspace_epoch)
+                    .await;
+                if !send_lifecycle_message(
+                    &connection,
+                    &out_tx,
+                    &shutdown_signal,
+                    SemanticServerMessage::WorkspaceChanged {
+                        reason: SemanticCloseReason::WorkspaceChanged,
+                    },
+                )
+                .await
+                {
+                    return;
                 }
             }
             SemanticSupervisorEvent::Shutdown { generation } => {
@@ -881,14 +903,18 @@ async fn semantic_event_loop(
                 connection
                     .invalidate_workspace(generation, workspace_epoch)
                     .await;
-                let _ = send_message(
+                let sent = send_lifecycle_message(
+                    &connection,
                     &out_tx,
+                    &shutdown_signal,
                     SemanticServerMessage::Closed {
                         reason: SemanticCloseReason::ServerShutdown,
                     },
                 )
                 .await;
-                shutdown_signal.notify_one();
+                if sent {
+                    shutdown_signal.notify_one();
+                }
                 return;
             }
         }
@@ -899,6 +925,7 @@ async fn fail_closed_for_stale_workspace(
     connection: &SemanticConnection,
     state: &AppState,
     out_tx: &mpsc::Sender<String>,
+    shutdown_signal: &Notify,
 ) -> bool {
     let Some(context) = connection.current_context().await else {
         return false;
@@ -919,14 +946,33 @@ async fn fail_closed_for_stale_workspace(
     connection
         .invalidate_workspace(generation, workspace_epoch)
         .await;
-    let _ = send_message(
+    let _ = send_lifecycle_message(
+        connection,
         out_tx,
+        shutdown_signal,
         SemanticServerMessage::WorkspaceChanged {
             reason: SemanticCloseReason::WorkspaceChanged,
         },
     )
     .await;
     true
+}
+
+async fn send_lifecycle_message(
+    connection: &SemanticConnection,
+    out_tx: &mpsc::Sender<String>,
+    shutdown_signal: &Notify,
+    message: SemanticServerMessage,
+) -> bool {
+    if send_message(out_tx, message).await {
+        return true;
+    }
+    // A full outbound queue must not strand a client across a lifecycle fence.
+    // Close the connection and wake the owning socket loop so it releases all
+    // sessions and reconnects through the normal client path.
+    connection.close().await;
+    shutdown_signal.notify_one();
+    false
 }
 
 fn session_error_code(error: SessionError) -> SemanticTransportErrorCode {
@@ -959,5 +1005,54 @@ async fn current_trust_state(
         can_transition: false,
         transition_reason: None,
         policy_revision,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::semantic::trust::{SemanticTrust, TrustTransitionReason};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn lifecycle_send_failure_closes_connection_and_wakes_socket_loop() {
+        let connection = SemanticConnection::new("test-actor");
+        connection
+            .select_project(
+                "profile".into(),
+                "project".into(),
+                0,
+                0,
+                SemanticTrustState {
+                    project_id: "project".into(),
+                    trust: SemanticTrust::Restricted,
+                    can_transition: true,
+                    transition_reason: Some(TrustTransitionReason::ConfirmationRequired),
+                    policy_revision: 0,
+                },
+            )
+            .await;
+        let (out_tx, mut out_rx) = mpsc::channel(1);
+        out_tx.try_send("queue already full".into()).unwrap();
+        let shutdown_signal = Notify::new();
+
+        let sent = send_lifecycle_message(
+            &connection,
+            &out_tx,
+            &shutdown_signal,
+            SemanticServerMessage::WorkspaceChanged {
+                reason: SemanticCloseReason::WorkspaceChanged,
+            },
+        )
+        .await;
+
+        assert!(!sent);
+        assert_eq!(out_rx.try_recv().as_deref(), Ok("queue already full"));
+        assert!(connection.current_context().await.is_none());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), shutdown_signal.notified())
+                .await
+                .is_ok()
+        );
     }
 }

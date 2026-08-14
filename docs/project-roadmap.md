@@ -33,6 +33,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 03 — [COMPLETED 2026-08-10 00:36:17 +07:00]**: full-project Rust/JS-TS/Java navigation, manual scan states, navigation-only capability gating, selection cleanup, commit-gated reveal, and focused release validation completed.
 - Release caveats: temporary-file checks require a `TMPDIR` workaround for exhausted `/tmp` quota; `pnpm check` is blocked at native package validation by disk quota; broad browser coverage retains an unrelated terminal import failure.
 
+### Semantic Navigation Settings Toggle (2026-08-14)
+
+- **Phases 01–04 — [COMPLETED 2026-08-14 15:28 +07:00]**: delivered protected server-owned GET/PATCH settings, active-TOML persistence, mutable supervisor lifecycle fencing, semantic WS invalidation, reload/workspace synchronization, and the global Settings switch. Rust 741 passed (1 ignored), UI 1,037 passed, TypeScript/build/lint/format/diff checks passed; review approved the scoped implementation.
+- Approved residuals: TOML comments/trivia may be rewritten; availability may be stale after bundle mutation; live browser and signed-bundle enable/editor validation remains incomplete; production port `4800` was not contacted. [Plan](../plans/260814-1247-semantic-navigation-settings-toggle/plan.md).
+
 ### Semantic Code Navigation via LSP (2026-08-11)
 
 - **Phase 02 — [COMPLETED 2026-08-11 22:36:24 +07:00; remediation approved]**: delivered the release-owned bundle/descriptor foundation, persisted project trust and policy model, bounded registry/supervisor admission, session identity, crash backoff/quarantine, metrics, stdio framing, stderr drain, and lifecycle shutdown foundations. Approved remediation fixed lifecycle-generation/revocation fencing, bounded the `initialize` → matching response → `initialized` handshake, assigned distinct JS/TS IDs, fixed the bundle-root `--stdio` command, added queued-byte accounting, enforced 100 ms request-write timeout, and added 60 s idle sweep plus oldest-idle pressure eviction. [Plan](../plans/260810-0145-semantic-code-navigation-lsp/phase-02-registry-supervisor-and-resource-lifecycle.md).

@@ -24,6 +24,9 @@ pub enum AppError {
     #[error("Unavailable: {0}")]
     Unavailable(String),
 
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
     #[error("PTY error: {0}")]
     PtyError(String),
 
@@ -32,6 +35,11 @@ pub enum AppError {
 
     #[error("Persistence error: {0}")]
     PersistenceError(String),
+
+    #[error(
+        "Configuration persistence is desynchronized; restore the active configuration before retrying"
+    )]
+    ConfigPersistenceDesynchronized,
 
     #[error("Invalid input: {0}")]
     InvalidInput(String),
@@ -78,6 +86,7 @@ impl AppError {
             | AppError::GitNotFound(_) => 404,
             AppError::GitUnavailable => 409,
             AppError::Config(_) | AppError::InvalidInput(_) => 400,
+            AppError::Conflict(_) => 409,
             AppError::Fs(e) => e.status_code(),
             AppError::Unavailable(_) => 503,
             AppError::Tunnel(e) => tunnel_error_status(e),
@@ -89,6 +98,7 @@ impl AppError {
     pub fn api_code(&self) -> Option<&'static str> {
         match self {
             AppError::GitUnavailable => Some("GIT_NOT_INITIALIZED"),
+            AppError::ConfigPersistenceDesynchronized => Some("CONFIG_PERSISTENCE_DESYNCHRONIZED"),
             _ => None,
         }
     }

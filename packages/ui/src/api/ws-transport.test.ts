@@ -133,6 +133,52 @@ describe("WsTransport terminal lifecycle", () => {
   });
 });
 
+describe("WsTransport semantic navigation settings endpoints", () => {
+  it("maps protected GET and PATCH settings calls", async () => {
+    installMockWebSocket();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            enabled: false,
+            available: false,
+            disabledReason:
+              "A valid signed semantic bundle is required on this server.",
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            enabled: true,
+            available: true,
+            disabledReason: null,
+          }),
+          { status: 200 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("settings:semanticNavigation:get");
+    await transport.invoke("settings:semanticNavigation:update", {
+      enabled: true,
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/settings/semantic-navigation",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "GET" });
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      method: "PATCH",
+      body: JSON.stringify({ enabled: true }),
+    });
+    transport.destroy();
+  });
+});
+
 describe("WsTransport usage setup endpoints", () => {
   it("maps setup status and configuration to protected usage routes", async () => {
     installMockWebSocket();
@@ -164,12 +210,14 @@ describe("WsTransport usage setup endpoints", () => {
 describe("WsTransport explorer language scan endpoint", () => {
   it("maps a project name to the protected language-files route", async () => {
     installMockWebSocket();
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({ files: [], truncated: false, limit: 20_000 }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ files: [], truncated: false, limit: 20_000 }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
     vi.stubGlobal("fetch", fetchMock);
     const transport = new WsTransport("http://localhost:4800");
 
@@ -291,7 +339,9 @@ describe("WsTransport typed API errors", () => {
         enabled: true,
         terminalCorrelationEnabled: true,
       }),
-    ).rejects.toThrow("Unsupported usage setup field: terminalCorrelationEnabled");
+    ).rejects.toThrow(
+      "Unsupported usage setup field: terminalCorrelationEnabled",
+    );
     expect(fetchMock).not.toHaveBeenCalled();
     transport.destroy();
   });

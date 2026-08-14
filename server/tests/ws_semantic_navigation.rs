@@ -263,6 +263,48 @@ async fn semantic_ws_syncs_unsaved_documents_and_returns_safe_navigation() {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[tokio::test]
+async fn semantic_ws_fences_active_client_across_off_on_transition() {
+    let tmp = tempfile::tempdir().unwrap();
+    let supervisor = fixture_supervisor(&tmp);
+    let state = make_state(&tmp, supervisor.clone());
+    let address = spawn_server(state).await;
+    let (mut socket, _) = connect_async(format!("ws://{address}/ws/semantic"))
+        .await
+        .unwrap();
+
+    assert_eq!(next_json(&mut socket).await["kind"], "semantic:handshake");
+    socket
+        .send(Message::Text(
+            json!({"kind":"semantic:project","profileId":"profile","projectId":"project"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_json(&mut socket).await["kind"], "semantic:project");
+
+    supervisor.reconfigure(false).await;
+    let off = next_json(&mut socket).await;
+    assert_eq!(off["kind"], "semantic:workspace_changed");
+
+    supervisor.reconfigure(true).await;
+    let on = next_json(&mut socket).await;
+    assert_eq!(on["kind"], "semantic:workspace_changed");
+
+    socket
+        .send(Message::Text(
+            json!({"kind":"semantic:project","profileId":"profile","projectId":"project"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_json(&mut socket).await["kind"], "semantic:project");
+    supervisor.shutdown().await;
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[tokio::test]
 async fn semantic_trust_routes_persist_and_revoke_without_host_fields() {
     let tmp = tempfile::tempdir().unwrap();
     let supervisor = fixture_supervisor(&tmp);

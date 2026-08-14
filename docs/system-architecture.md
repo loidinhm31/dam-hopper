@@ -1034,6 +1034,14 @@ The first version is extension-based and limited to `.rs`, `.js`, `.jsx`, `.ts`,
 automatic rescans, persistent indexes, streaming progress, or caller-configurable
 language families.
 
+### Semantic navigation settings lifecycle
+
+Semantic navigation is one server-scoped setting for the active workspace. The single source of truth is `[server.semantic].enabled` in the active `dam-hopper.toml`; it defaults to `false` and is never copied to global UI config, profiles, or projects. Protected `GET/PATCH /api/settings/semantic-navigation` reports the persisted gate separately from aggregate availability across verified bundled Rust, TypeScript, and JavaScript descriptors. Missing or invalid signed bundles fail closed with a bounded safe reason; Java remains unsupported and does not enable the switch.
+
+A changed PATCH updates only the semantic key with an atomic active-file write, reloads the file, and changes the mutable supervisor gate without restarting the server. Enabling is rejected with `409 Conflict` when availability is false, but disabling remains valid. Thus a later bundle failure can intentionally leave `enabled` true while `available` is false; PATCHing false persists the off state and recovers the runtime gate. On a setting transition, the supervisor takes its lifecycle write gate, advances both generation and workspace epoch, drains sessions and prewarm reservations, cancels pending admission, and emits one `WorkspaceChanged` event. Every attached authenticated semantic WebSocket invalidates its selection and receives the existing `semantic:workspace_changed` event; the client then reconnects, handshakes, reselects, and replays only current documents. Admission rechecks the mutable gate and current generation/epoch under the same lifecycle fence, so late results and stale work cannot cross an off/on boundary.
+
+Workspace switches and config reloads apply the newly loaded semantic bool through the same cleanup primitive. Trust records, descriptor fingerprints, signature checks, process caps, and authenticated semantic transport boundaries are independent and remain unchanged.
+
 ### Semantic code navigation (Phase 3 transport complete)
 
 Semantic navigation is an editor capability separate from the Explorer language

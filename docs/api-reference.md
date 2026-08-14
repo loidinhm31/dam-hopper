@@ -103,6 +103,24 @@ Phase 01 adds a client-side diagnostics ring for local troubleshooting. It is wr
 
 This phase does not expose a backend export endpoint yet.
 
+## Semantic navigation settings
+
+`GET /api/settings/semantic-navigation` and `PATCH /api/settings/semantic-navigation` are protected by the standard authenticated API boundary. The setting is global to all projects in the active workspace and is persisted only in the active `dam-hopper.toml`.
+
+GET response:
+
+```json
+{
+  "enabled": false,
+  "available": false,
+  "disabledReason": "A valid signed semantic bundle is required on this server."
+}
+```
+
+PATCH accepts exactly `{ "enabled": boolean }` and returns the same response shape. `enabled` is the persisted server gate; `available` is an independent capability result and is true when at least one verified bundled Rust, TypeScript, or JavaScript descriptor is ready. `disabledReason` is null when available and otherwise contains a bounded safe reason. The check never probes host executables.
+
+Enabling while unavailable returns `409 Conflict` with the safe reason and does not write the TOML. Disabling remains allowed and persists even while unavailable. If a previously enabled bundle later becomes unavailable, the response intentionally remains `enabled: true, available: false`; PATCHing `{"enabled": false}` is the recovery path. A changed setting applies immediately: it fences semantic sessions, prewarm work, and stale results without a restart, then emits the existing workspace lifecycle event so clients reconnect through the normal authenticated handshake.
+
 ## Semantic Runtime and WebSocket (Phase 3)
 
 `GET /ws/semantic` is the authenticated semantic transport. Authentication is
@@ -112,15 +130,15 @@ messages and bounded payloads.
 
 Client messages:
 
-| Kind | Required data | Purpose |
-| --- | --- | --- |
-| `semantic:project` | `profileId`, `projectId` | Select the project. |
-| `semantic:document_open` | `uri`, `documentVersion`, `text` | Open a complete document snapshot. |
-| `semantic:document_change` | `uri`, `documentVersion`, `text` | Replace a snapshot at a newer version. |
-| `semantic:document_close` | `uri`, `documentVersion` | Stop tracking a document. |
-| `semantic:navigate` | `requestId`, `documentVersion`, `operation`, `uri`, `position` | Request definition, implementation, or references. |
-| `semantic:cancel` | `requestId`, `documentVersion` | Cancel matching navigation. |
-| `semantic:resync` | `projectId` | Replay open document versions. |
+| Kind                       | Required data                                                  | Purpose                                            |
+| -------------------------- | -------------------------------------------------------------- | -------------------------------------------------- |
+| `semantic:project`         | `profileId`, `projectId`                                       | Select the project.                                |
+| `semantic:document_open`   | `uri`, `documentVersion`, `text`                               | Open a complete document snapshot.                 |
+| `semantic:document_change` | `uri`, `documentVersion`, `text`                               | Replace a snapshot at a newer version.             |
+| `semantic:document_close`  | `uri`, `documentVersion`                                       | Stop tracking a document.                          |
+| `semantic:navigate`        | `requestId`, `documentVersion`, `operation`, `uri`, `position` | Request definition, implementation, or references. |
+| `semantic:cancel`          | `requestId`, `documentVersion`                                 | Cancel matching navigation.                        |
+| `semantic:resync`          | `projectId`                                                    | Replay open document versions.                     |
 
 The server sends handshake, project/status/progress, document acknowledgements,
 replay, bounded navigation results, trust changes, and safe error/close events.
