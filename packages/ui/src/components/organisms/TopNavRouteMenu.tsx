@@ -1,4 +1,5 @@
-import { BASE_NAV } from "@/lib/navigation.js";
+import { getNavEntries } from "@/lib/navigation.js";
+import { useSshForwardHost } from "@/contexts/SshForwardHostContext.js";
 import { cn } from "@/lib/utils.js";
 import { TopNavRouteLink } from "@/components/molecules/TopNavRouteLink.js";
 
@@ -15,6 +16,12 @@ export function TopNavRouteMenu({
   compactTextClass,
   isCompactWorkspace,
 }: TopNavRouteMenuProps) {
+  const { host, environment } = useSshForwardHost();
+  const navEntries = getNavEntries({
+    sshForwardHostAvailable:
+      host !== null && environment.kind === "nativeDesktop",
+  });
+
   return (
     <>
       <nav
@@ -27,7 +34,7 @@ export function TopNavRouteMenu({
             : "ml-1 max-w-[120px] opacity-100 sm:ml-2 sm:max-w-[180px] lg:max-w-[500px] xl:max-w-[1000px]",
         )}
       >
-        {BASE_NAV.map((entry) => (
+        {navEntries.map((entry) => (
           <TopNavRouteLink
             key={entry.to}
             entry={entry}
@@ -43,7 +50,7 @@ export function TopNavRouteMenu({
           aria-label="Primary"
           className="grid grid-cols-2 gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]/70 p-2 sm:hidden"
         >
-          {BASE_NAV.map((entry, index) => (
+          {navEntries.map((entry, index) => (
             <TopNavRouteLink
               key={entry.to}
               entry={entry}
@@ -52,7 +59,7 @@ export function TopNavRouteMenu({
               isCompactWorkspace={isCompactWorkspace}
               mobileGrid
               fullWidth={
-                BASE_NAV.length % 2 === 1 && index === BASE_NAV.length - 1
+                navEntries.length % 2 === 1 && index === navEntries.length - 1
               }
             />
           ))}

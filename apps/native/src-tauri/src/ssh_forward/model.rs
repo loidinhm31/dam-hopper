@@ -331,6 +331,13 @@ pub(crate) struct HostKeyChallenge {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SshForwardTrustRepairMetadata {
+    pub(crate) trust_path: String,
+    pub(crate) executable_path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SshForwardSnapshot {
     pub(crate) context: DesktopClientContext,
     pub(crate) scope_id: String,
@@ -341,6 +348,8 @@ pub(crate) struct SshForwardSnapshot {
     pub(crate) profiles: Vec<SshForwardProfile>,
     pub(crate) runtimes: Vec<SshForwardRuntime>,
     pub(crate) host_key_challenges: Vec<HostKeyChallenge>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) trust_repair: Option<SshForwardTrustRepairMetadata>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
