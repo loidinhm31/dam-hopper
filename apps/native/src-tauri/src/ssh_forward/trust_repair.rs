@@ -208,6 +208,27 @@ mod tests {
     }
 
     #[test]
+    fn command_prompt_arguments_round_trip_through_native_parser() {
+        let command = TrustRepairCommand::parse(&args(&[
+            "--ssh-forward-trust-repair",
+            "restore",
+            "--scope",
+            SCOPE,
+            "--backup-id",
+            "20260810000000000-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            command,
+            TrustRepairCommand::Restore {
+                scope_id: SCOPE.into(),
+                backup_id: "20260810000000000-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            }
+        );
+    }
+
+    #[test]
     fn resolved_path_is_tauri_root_relative_and_copy_is_exact() {
         let path = resolved_trust_path(Path::new("C:\\Users\\test\\AppData"), SCOPE).unwrap();
         assert!(path.ends_with("known-hosts.toml"));

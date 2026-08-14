@@ -31,10 +31,12 @@ const snapshot: SshForwardSnapshot = {
   hostKeyChallenges: [],
 };
 let root: Root | null = null;
+let latest: ReturnType<typeof useSshForward> | null = null;
 
 afterEach(() => {
   act(() => root?.unmount());
   root = null;
+  latest = null;
 });
 
 describe("useSshForward", () => {
@@ -42,25 +44,41 @@ describe("useSshForward", () => {
     const container = document.createElement("div");
     root = createRoot(container);
     function Harness() {
-      const { refresh } = useSshForward();
-      React.useEffect(() => { void refresh(); }, [refresh]);
+      const state = useSshForward();
+      const { refresh } = state;
+      React.useEffect(() => {
+        latest = state;
+      }, [state]);
+      React.useEffect(() => {
+        void refresh();
+      }, [refresh]);
       return null;
     }
-    return act(async () => root?.render(
-      <SshForwardHostProvider host={host} environment={{ kind: "nativeDesktop" }}>
-        <Harness />
-      </SshForwardHostProvider>,
-    ));
+    return act(async () =>
+      root?.render(
+        <SshForwardHostProvider
+          host={host}
+          environment={{ kind: "nativeDesktop" }}
+        >
+          <Harness />
+        </SshForwardHostProvider>,
+      ),
+    );
   }
 
   it("uses an adapter-provided accepted snapshot without a second refresh", async () => {
     let listener!: (event: SshForwardHostEvent) => void;
-    const snapshotCall = vi.fn<() => Promise<SshForwardSnapshot>>().mockResolvedValue(snapshot);
+    const snapshotCall = vi
+      .fn<() => Promise<SshForwardSnapshot>>()
+      .mockResolvedValue(snapshot);
     const subscribe = vi.fn((next: (event: SshForwardHostEvent) => void) => {
       listener = next;
       return () => {};
     });
-    const host = { snapshot: snapshotCall, subscribe } as unknown as SshForwardHost;
+    const host = {
+      snapshot: snapshotCall,
+      subscribe,
+    } as unknown as SshForwardHost;
     await renderHarness(host);
     await act(async () => {});
     snapshotCall.mockClear();
@@ -79,14 +97,46 @@ describe("useSshForward", () => {
     expect(snapshotCall).not.toHaveBeenCalled();
   });
 
+  it("refreshes authoritative state after a revision conflict", async () => {
+    const refreshed = { ...snapshot, profilesRevision: counter("2") };
+    const snapshotCall = vi
+      .fn<() => Promise<SshForwardSnapshot>>()
+      .mockResolvedValueOnce(snapshot)
+      .mockResolvedValueOnce(refreshed);
+    const subscribe = vi.fn(() => () => {});
+    const updateProfile = vi.fn().mockRejectedValue({
+      code: "PROFILES_REVISION_CONFLICT",
+      message: "stale",
+      retryable: true,
+    });
+    const host = {
+      snapshot: snapshotCall,
+      subscribe,
+      updateProfile,
+    } as unknown as SshForwardHost;
+    await renderHarness(host);
+    await act(async () => {});
+    await expect(
+      act(async () =>
+        latest!.updateProfile("profile", counter("1"), {} as never),
+      ),
+    ).rejects.toMatchObject({ code: "PROFILES_REVISION_CONFLICT" });
+    expect(snapshotCall).toHaveBeenCalledTimes(2);
+  });
+
   it("refreshes only hints matching the current context, token, and scope", async () => {
     let listener!: (event: SshForwardHostEvent) => void;
-    const snapshotCall = vi.fn<() => Promise<SshForwardSnapshot>>().mockResolvedValue(snapshot);
+    const snapshotCall = vi
+      .fn<() => Promise<SshForwardSnapshot>>()
+      .mockResolvedValue(snapshot);
     const subscribe = vi.fn((next: (event: SshForwardHostEvent) => void) => {
       listener = next;
       return () => {};
     });
-    const host = { snapshot: snapshotCall, subscribe } as unknown as SshForwardHost;
+    const host = {
+      snapshot: snapshotCall,
+      subscribe,
+    } as unknown as SshForwardHost;
     await renderHarness(host);
     await act(async () => {});
     snapshotCall.mockClear();
@@ -103,7 +153,12 @@ describe("useSshForward", () => {
     };
     await act(async () => listener({ type: "changed", hint }));
     expect(snapshotCall).not.toHaveBeenCalled();
-    await act(async () => listener({ type: "changed", hint: { ...hint, clientEpoch: context.clientEpoch } }));
+    await act(async () =>
+      listener({
+        type: "changed",
+        hint: { ...hint, clientEpoch: context.clientEpoch },
+      }),
+    );
     expect(snapshotCall).toHaveBeenCalledOnce();
   });
 });
