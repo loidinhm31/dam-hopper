@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::http::{header, HeaderMap, Uri};
 use opaque_ke::ServerSetup;
 use tokio::sync::RwLock;
 
@@ -70,6 +71,8 @@ pub struct AppState {
     pub db: Option<mongodb::Database>,
     /// Dev mode: skip authentication checks
     pub no_auth: bool,
+    /// Exact origins allowed for credentialed CORS and cross-origin media/WS.
+    pub cors_origins: Arc<Vec<String>>,
     /// Tunnel session manager — Arc-backed, Clone is cheap.
     pub tunnel_manager: TunnelSessionManager,
     /// Port forward manager — tracks PTY-detected ports. Arc-backed, Clone is cheap.
@@ -200,6 +203,7 @@ impl AppState {
             workspace_context_guard: Arc::new(RwLock::new(())),
             db,
             no_auth,
+            cors_origins: Arc::new(Vec::new()),
             tunnel_manager,
             port_forward_manager,
             opaque_server_setup: Arc::new(opaque_server_setup),
@@ -219,6 +223,36 @@ impl AppState {
     pub fn with_codex_exporter(mut self, manager: CodexExporterManager) -> Self {
         self.codex_exporter = manager;
         self
+    }
+
+    /// Whether a request carries an exact configured or same-origin browser origin.
+    pub fn origin_is_allowed(&self, headers: &HeaderMap) -> bool {
+        let Some(origin) = headers
+            .get(header::ORIGIN)
+            .and_then(|value| value.to_str().ok())
+        else {
+            return false;
+        };
+        if self.cors_origins.iter().any(|allowed| allowed == origin) {
+            return true;
+        }
+        let Ok(uri) = origin.parse::<Uri>() else {
+            return false;
+        };
+        let Some(authority) = uri.authority() else {
+            return false;
+        };
+        if !matches!(uri.scheme_str(), Some("http" | "https"))
+            || (!uri.path().is_empty() && uri.path() != "/")
+            || uri.query().is_some()
+            || authority.as_str().contains('@')
+        {
+            return false;
+        }
+        headers
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|host| authority.as_str().eq_ignore_ascii_case(host))
     }
 
     pub fn set_telemetry(&self, telemetry: TelemetryHandle) {

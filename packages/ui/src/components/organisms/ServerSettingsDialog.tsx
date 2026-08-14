@@ -604,7 +604,9 @@ export function ServerSettingsDialog({
             )}
             {urlSchemeValid && crossOrigin && (
               <p className="mt-1.5 text-xs text-yellow-400/80">
-                Separate-origin browser access unsupported; use the server UI origin.
+                Separate-origin access requires this exact frontend origin in the
+                server&apos;s DAM_HOPPER_CORS_ORIGINS setting. Media still requires
+                authenticated tickets.
               </p>
             )}
           </div>

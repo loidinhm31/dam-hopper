@@ -39,4 +39,4 @@ pub mod ws_protocol;
 #[cfg(test)]
 mod tests;
 
-pub use router::build_router;
+pub use router::{build_router, build_router_with_origins};

@@ -35,15 +35,36 @@ pub(crate) async fn respond(
     expected_kind: MediaTicketKind,
     method: Method,
     request_headers: HeaderMap,
+    allow_ticket_only: bool,
 ) -> Response {
     let _workspace_context = state.workspace_context_guard.read().await;
-    let Some(token) = media_session_from_headers(&request_headers) else {
-        return empty(StatusCode::NOT_FOUND);
+    enum AuthorizationMode {
+        Cookie(crate::fs::media_session::MediaSessionToken),
+        Ticket,
+    }
+
+    let authorization = if let Some(token) = media_session_from_headers(&request_headers) {
+        state
+            .media_tickets
+            .authorize_bound(&ticket, expected_kind, &token)
+            .map(|authorization| (authorization, AuthorizationMode::Cookie(token)))
+            .or_else(|| {
+                allow_ticket_only.then(|| {
+                    state
+                        .media_tickets
+                        .authorize_ticket(&ticket, expected_kind)
+                        .map(|authorization| (authorization, AuthorizationMode::Ticket))
+                })?
+            })
+    } else if allow_ticket_only {
+        state
+            .media_tickets
+            .authorize_ticket(&ticket, expected_kind)
+            .map(|authorization| (authorization, AuthorizationMode::Ticket))
+    } else {
+        None
     };
-    let Some(authorization) = state
-        .media_tickets
-        .authorize_bound(&ticket, expected_kind, &token)
-    else {
+    let Some((authorization, authorization_mode)) = authorization else {
         return empty(StatusCode::NOT_FOUND);
     };
     let record = authorization.record.clone();
@@ -55,12 +76,20 @@ pub(crate) async fn respond(
         return empty(StatusCode::GONE);
     };
     if method == Method::HEAD {
-        if !state.media_tickets.finalize_bound_and_touch(
-            &ticket,
-            expected_kind,
-            &token,
-            &authorization,
-        ) {
+        let finalized = match &authorization_mode {
+            AuthorizationMode::Cookie(token) => state.media_tickets.finalize_bound_and_touch(
+                &ticket,
+                expected_kind,
+                token,
+                &authorization,
+            ),
+            AuthorizationMode::Ticket => state.media_tickets.finalize_ticket_and_touch(
+                &ticket,
+                expected_kind,
+                &authorization,
+            ),
+        };
+        if !finalized {
             return empty(StatusCode::NOT_FOUND);
         }
         return response_with_body(StatusCode::OK, &record, None, Body::empty(), disposition)
@@ -76,10 +105,20 @@ pub(crate) async fn respond(
     } else {
         None
     };
-    if !state
-        .media_tickets
-        .finalize_bound_and_touch(&ticket, expected_kind, &token, &authorization)
-    {
+    let finalized = match &authorization_mode {
+        AuthorizationMode::Cookie(token) => state.media_tickets.finalize_bound_and_touch(
+            &ticket,
+            expected_kind,
+            token,
+            &authorization,
+        ),
+        AuthorizationMode::Ticket => {
+            state
+                .media_tickets
+                .finalize_ticket_and_touch(&ticket, expected_kind, &authorization)
+        }
+    };
+    if !finalized {
         return empty(StatusCode::NOT_FOUND);
     }
     let (status, body_range) = match range {
