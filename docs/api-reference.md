@@ -14,7 +14,7 @@ Token stored at `~/.config/dam-hopper/server-token`.
 
 ### Dev Mode (--no-auth)
 
-The server supports a `--no-auth` authentication bypass mode for local development (Phase 01). When enabled:
+The server supports a `--no-auth` authentication bypass mode for development (Phase 01). It may bind to the configured host, including `0.0.0.0`; use only on a trusted development network, never publicly or with sensitive data. When enabled:
 
 - All protected routes bypass authentication checks
 - The `/ws` terminal/event stream accepts connections without a token
@@ -1488,19 +1488,21 @@ Response:
 
 ### Session-Bound Media Capabilities
 
-Video playback/download and image preview use opaque ticket URLs **and** a
-server-issued media-session cookie. Ticket issue requests require Bearer
-authentication and set `damhopper-media-session`; stream requests remain
-outside Bearer middleware so native browser media elements can load them, but
-must present the matching cookie. A ticket and cookie from different sessions,
-or a missing, expired, revoked, or malformed cookie, return the same `404 Not
-Found` response. Do not treat a ticket URL as a standalone credential or put a
-Bearer token in a media URL.
+Video playback/download and image preview use opaque ticket URLs and a
+server-issued media-session cookie when the browser can send it. Ticket issue
+requests require Bearer authentication and set `damhopper-media-session`.
+Same-origin streams use the matching cookie; allowlisted cross-origin native
+media uses the short-lived ticket capability because `SameSite=Lax` cookies are
+not sent cross-site. Tickets remain bound to the authenticated actor/session,
+purpose, workspace generation, and revalidated file identity; expiry and logout
+revocation still apply. Do not put a Bearer token in a media URL. Bearer remains
+required on issue/revoke/session-revoke routes.
 
-The cookie is `HttpOnly`, `Secure`, `SameSite=None`, `Partitioned`, and scoped
-to `Path=/api/fs`. Each successful image or video issuance creates or reuses
-that actor's media session, returns the opaque ticket response, and sets or
-refreshes this cookie. Ticket and session idle lifetime is 30 minutes and the
+The media cookie is host-only `HttpOnly; SameSite=Lax; Path=/api/fs` and
+non-`Secure` for HTTP compatibility. The auth fallback cookie is host-only
+`HttpOnly; SameSite=Strict; Path=/`, also non-`Secure`. Each successful image or
+video issuance creates or reuses that actor's media session, returns the opaque
+ticket response, and sets or refreshes the media cookie. Ticket and session idle lifetime is 30 minutes and the
 absolute lifetime is eight hours. Successful issuance and fully validated stream
 responses can refresh idle lifetime but never the absolute deadline. Shared
 limits are 256 tickets, 128 tickets per actor, 64 tickets per media session, 256
@@ -1531,8 +1533,8 @@ until their 30-minute idle or eight-hour absolute expiry. Conversely, if remote
 revocation succeeds but local token persistence or removal then fails, the UI
 intentionally does **not** recreate the remote session. Any restored or retained
 local credential must issue fresh media tickets (and a new media session) before
-streaming again. The shared revoke helper never sends a Bearer token to an HTTP
-origin; remote media itself also requires HTTPS.
+streaming again. The shared revoke helper sends the Bearer token to valid HTTP and
+HTTPS origins; HTTP is supported but exposes credentials and media traffic to interception.
 
 The browser client accepts only `authorizationMode: "session-cookie-v1"`, resolves
 only an opaque stream path on the configured server origin, performs a credentialed
@@ -1540,8 +1542,9 @@ only an opaque stream path on the configured server origin, performs a credentia
 the URL to a native image/video element or download anchor only after a 2xx probe.
 Native elements use `crossOrigin="use-credentials"`. Probe failures expose fixed,
 redacted compatibility guidance and never trigger a media-body or Blob fallback.
-Installed Chromium 151 passed the 112-test full browser suite twice, including 11
-media-specific tests. The broader gate also passed 1,013 UI tests and 740 Rust tests;
+Installed Chromium 151 passed the 116-test full browser suite, including 11
+media-specific tests. The broader gate also passed 1,018 UI tests and 691 Rust tests
+(one ignored performance test);
 `pnpm build` and `pnpm lint` were clean. The same-origin browser fixture does not
 qualify real cross-site CHIPS behavior. Edge, Tauri/WebView, Safari, and Firefox
 remain unqualified and must not be advertised as supported. Session and ticket state
@@ -1593,8 +1596,10 @@ foreign, unknown, or already revoked tickets do not reveal their prior state.
 
 **GET|HEAD /api/fs/image/stream/{ticket}**
 
-The URL contains only the opaque capability; the matching media-session cookie
-is also required. The stream is inline and uses the MIME captured at issuance.
+The URL contains only the opaque capability. The capability is bound to the
+authenticated actor/session that issued it; a matching media-session cookie is
+used when available, while the bound ticket itself authorizes cross-origin native
+media requests. The stream is inline and uses the MIME captured at issuance.
 `GET` returns `200` for the full representation or
 `206` for one valid byte range; malformed, multi-range, or unsatisfiable ranges
 return `416` with `Content-Range: bytes */size`. `HEAD` returns metadata with an
@@ -1602,9 +1607,10 @@ empty body and ignores range selection. Unknown/revoked capabilities return
 `404`; a file identity/version change revokes the capability and returns `410`.
 
 Responses include `Accept-Ranges`, `Content-Length`, `Content-Type`, `ETag`,
-`Last-Modified`, and `Cache-Control: private, no-store`. Range, length,
-validator, disposition, and cache headers are exposed only through the existing
-configured CORS policy. Image disposition is always `inline`; no image ticket
+`Last-Modified`, and `Cache-Control: private, no-store`. Cross-origin responses
+require the request origin to be in the server's exact `DAM_HOPPER_CORS_ORIGINS`
+allowlist. Image
+disposition is always `inline`; no image ticket
 can be upgraded to video playback or download behavior. Workspace, config, and
 settings context changes invalidate shared image and video capabilities.
 
@@ -1630,9 +1636,11 @@ media-session cookie is sent. It removes only a ticket bound to the presented
 actor and media session, returns `204 No Content`, and does not reveal whether
 the ticket was valid.
 
-**GET|HEAD /api/fs/video/stream/{ticket}** requires the matching media-session
-cookie, not a Bearer header. It supports the same range, validator, revalidation,
-private no-store, and indistinguishable `404` behavior as image streams.
+**GET|HEAD /api/fs/video/stream/{ticket}** requires the opaque ticket to remain
+bound to a live authenticated actor/session. It uses the matching media-session
+cookie when available and otherwise authorizes the bound ticket for cross-origin
+native media. It supports the same range, validator, revalidation, private
+no-store, and indistinguishable `404` behavior as image streams.
 Playback uses inline disposition; download uses a sanitized attachment filename.
 
 **GET /api/fs/language-files?project=NAME**

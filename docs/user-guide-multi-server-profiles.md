@@ -2,14 +2,9 @@
 
 ## Overview
 
-The **Multi-Server Profiles** feature (Phase 2) lets you manage and switch between multiple dam-hopper server configurations without restarting the application. This is useful for development workflows that involve:
+The **Multi-Server Profiles** feature (Phase 2) stores server profiles locally. Browser API/media access is same-origin by default; a separate browser frontend must be added to the server's exact `DAM_HOPPER_CORS_ORIGINS` allowlist. Ticket issuance requires authentication, and media URLs remain short-lived actor/session-bound capabilities. Packaged native browser transport ignores separate-origin profiles until a native transport exists.
 
-- Local development server (usually `localhost:4800`)
-- Staging server (e.g., `https://staging.example.com`)
-- Production server (e.g., `https://damhopper.example.com`)
-- Team server at a different IP
-
-All profiles are **stored in your browser's localStorage** — no server involvement, instant switching, automatic migration from legacy config.
+HTTP profiles are supported, but cleartext exposes Bearer tokens, cookies, ticket URLs, API actions, and media bytes to interception or modification; use HTTPS or a trusted encrypted network when needed.
 
 ## Creating Your First Profile
 
@@ -97,6 +92,8 @@ In the **Server Connections** dialog, each profile shows:
 | Auth token          | localStorage | Per-profile, survives browser close        |
 
 **Browser Tabs:** All tabs in the same browser share the profiles list. Switching profiles in one tab shows the new active profile in all open tabs.
+
+Media issue/revoke calls use Bearer credentials and `credentials: include`; native stream GET/HEAD uses only the host-only media cookie and opaque ticket. Profile switch, delete, and logout attempt bounded session revocation before local token removal.
 
 Profile selection and profile tokens are therefore shared by tabs in the same browser storage area. Use separate browser profiles or containers when you need independent simultaneous server sessions.
 

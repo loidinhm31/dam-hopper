@@ -27,13 +27,14 @@ type DamHopperNativeDeviceKind = "desktop" | "mobile";
 
 function syncNativePlatform(): void {
   const platform = __DAM_HOPPER_TAURI_PLATFORM__ || "";
+  const root = document.documentElement;
+  root.dataset.appHost = "native";
   if (!platform) {
     return;
   }
 
   const deviceKind: DamHopperNativeDeviceKind =
     platform === "android" || platform === "ios" ? "mobile" : "desktop";
-  const root = document.documentElement;
   const nativeWindow = window as Window & {
     damHopper?: {
       deviceKind?: DamHopperNativeDeviceKind;
@@ -62,6 +63,7 @@ configureLogger({
   ),
 });
 initializeClientDiagnostics();
+syncNativePlatform();
 
 const serverUrl = getNativeServerUrl();
 if (serverUrl) {
@@ -72,7 +74,6 @@ if (serverUrl) {
 } else {
   initTransport(new IdleTransport());
 }
-syncNativePlatform();
 
 const queryClient = new QueryClient({
   defaultOptions: {

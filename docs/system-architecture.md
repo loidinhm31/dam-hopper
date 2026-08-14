@@ -624,7 +624,7 @@ permissions to `core:default`.
 
 - `apps/native/src-tauri` contains the default Tauri builder, the main window config, and the checked-in Android Studio project under `src-tauri/gen/android`.
 - No filesystem, shell, opener, HTTP, or sidecar plugin permissions are granted in Phase 03. The native CSP allows local/profile HTTP and WebSocket connections but keeps default script execution to self.
-- Native desktop dev uses `http://localhost:1420`. Android dev uses `tauri android dev --host`, which sets `TAURI_DEV_HOST` so the Vite dev server and HMR bind to the LAN-reachable address for an emulator or physical device. Packaged desktop webview requests can present `tauri://localhost`, `http://tauri.localhost`, or `https://tauri.localhost` depending on platform/webview. DamHopper servers that enforce CORS must allow the origin used by the packaged client when it connects cross-origin.
+- Native desktop dev uses `http://localhost:1420`. Android dev uses `tauri android dev --host`, which sets `TAURI_DEV_HOST` so the Vite dev server and HMR bind to the LAN-reachable address for an emulator or physical device. Packaged desktop webview requests can present `tauri://localhost`, `http://tauri.localhost`, or `https://tauri.localhost` depending on platform/webview. Packaged native browser transport ignores separate-origin profiles by policy; a native HTTP/WebSocket transport is deferred. Separate web frontends require an exact backend `DAM_HOPPER_CORS_ORIGINS` entry.
 
 **Native browser-debug controller (Phase 03):**
 
@@ -778,21 +778,29 @@ pub struct PersistedSession {
 ### Explorer video playback and download (Phase 04 browser-host validation complete)
 
 Phase 1 delivered the authenticated, purpose-bound ticket boundary. Phase 2
-ships session-bound media: an opaque ticket URL is paired with an `HttpOnly`
-media-session cookie, so the stream endpoint is no longer capability-only. Phase
+ships session-bound media: an opaque ticket URL is paired with an HTTP-compatible,
+host-only `HttpOnly; SameSite=Lax; Path=/api/fs` media-session cookie without
+`Secure`, so the stream endpoint is no longer capability-only. Auth cookies remain
+`HttpOnly; SameSite=Strict`. Phase
 03 completes the browser-host `VideoPreview` integration. Phase 04 validates it
 with the repository Playwright/Vitest harness in installed Chromium 151 using a
 valid one-second VP8 WebM fixture, the real ticket client, and the native download
-helper. The 112-test full browser suite, including 11 media-specific tests,
-passed twice consecutively on Chromium 151. The broader gate also passed 1,013
-UI tests and 740 Rust tests; `pnpm build` and `pnpm lint` were clean. Checks cover the
+helper. The 116-test full browser suite, including 11 media-specific tests,
+passed on Chromium 151. The broader gate also passed 1,018 UI tests and 691 Rust
+tests (one ignored performance test); `pnpm build` and `pnpm lint` were clean. Checks cover the
 versioned session-cookie contract, credentialed `HEAD` before source exposure,
 `crossOrigin="use-credentials"`, playback/seek, direct anchor download, rejected
-probe retry, cleanup, and absence of `Blob`/object-URL conversion. This fixture is
-same-origin HTTP with only the transport assertion replaced; server/router tests
-separately own cookie, CORS, Range, and foreign/missing-session enforcement. It is
-not evidence for real cross-site CHIPS partitioning. Edge, Tauri/WebView, Safari,
-and Firefox remain unqualified.
+probe retry, cleanup, and absence of `Blob`/object-URL conversion. The fixture uses
+real same-origin HTTP cookie storage and native cookie sending, including cookie
+binding, DELETE clearing, and ticket-only cross-origin authorization; it does not
+expose the HttpOnly cookie to JavaScript. Separate browser frontends use an exact
+configured CORS allowlist. Media
+issuance requires authentication and stream URLs are actor/session-bound, short-lived
+capabilities; logout/session revocation still invalidates them. `SameSite=Lax` cookies
+are not sent cross-site, so cross-origin media uses the bound ticket capability.
+Cleartext HTTP still permits interception or modification of credentials, ticket URLs,
+actions, and media bytes. It is not evidence for real cross-site CHIPS partitioning.
+Edge, Tauri/WebView, Safari, and Firefox remain unqualified.
 Browser routing recognizes only the final, case-insensitive extensions `mp4`,
 `m4v`, `webm`, `ogv`, `ogg`, and `mov` (an extension/MIME hint, not codec proof);
 diff tabs retain their dedicated viewer.
@@ -832,8 +840,8 @@ ticket to one canonical project resource, one immutable purpose, issuance
 metadata, and the authenticated actor's media session. Tickets are never
 persisted into editor state, browser storage, diagnostics, or logs. Ticket and
 session idle expiry is 30 minutes and absolute expiry is eight hours. The stream
-must present the matching `damhopper-media-session` cookie (`HttpOnly`, `Secure`,
-`SameSite=None`, `Partitioned`, `Path=/api/fs`); ticket-only, foreign-session,
+must present the matching `damhopper-media-session` cookie (host-only, `HttpOnly`,
+`SameSite=Lax`, `Path=/api/fs`; no `Secure`); ticket-only, foreign-session,
 expired, and revoked requests return indistinguishable `404` responses. Idle TTL
 refreshes only after a fully validated stream response or ticket issuance, never
 past the absolute deadline. `DELETE /api/fs/media-session` requires Bearer
@@ -873,11 +881,10 @@ ticket. Bodies use an async reader bounded to 128 KiB with Hyper backpressure;
 client disconnect drops the body and file without a detached producer, and no
 filesystem or ticket-store lock is held while streaming.
 
-The configured CORS layer covers GET/HEAD and preflight headers needed for browser
-range playback (`Range`, `If-Range`, and validators), and exposes range, length,
-disposition, validator, and cache headers to allowed origins. Authenticated browser
-deployments require an explicit allowlist of exact HTTPS origins; credentialed
-responses never reflect an arbitrary origin.
+The backend emits credentialed CORS and preflight headers only for exact configured
+origins. Browser media playback requires an authenticated ticket; the ticket remains
+bound to the issuing actor/session and is revoked with that session. Cleartext
+interception or modification remains a deployment risk.
 
 The browser host routes recognized video extensions to `VideoPreview` before
 generic binary or large-text tiering. The player requests a fresh playback
@@ -949,7 +956,7 @@ reload, and Git reconciliation paths treat image tabs as preview-only and never
 materialize bytes. Diff tabs retain their dedicated viewer and video routing
 continues to take precedence. The shared store keeps the 256-ticket capacity,
 idle/absolute expiry, generation invalidation, stale-file `410`, range/HEAD,
-revalidation, CORS, and private no-store response invariants used by video.
+revalidation and private no-store response invariants used by video.
 
 ### git/
 
@@ -2216,7 +2223,13 @@ Test boundary: JSDOM wrapper and consumer tests verify the shared contract, port
 - Symbolic links are allowed but validated
 - Binary file detection prevents accidental text parsing
 
-**CORS:** Authenticated browser deployments require exact HTTPS origins through `--cors-origins`; empty, wildcard, HTTP, malformed, and ambiguous origins reject startup. Responses allow credentials only for listed origins and include `Vary: Origin`. Non-loopback authenticated binds require `--trusted-tls-proxy`, declaring trusted HTTPS termination before the HTTP listener; this is required for Secure partitioned media cookies. The declaration does not isolate the HTTP listener: operators must bind it to loopback or restrict it so only that proxy can reach it.
+**Browser origin:** The backend is same-origin by default. Separate browser
+frontends require exact `DAM_HOPPER_CORS_ORIGINS` entries; wildcard CORS is forbidden.
+Authenticated HTTP binds, including non-loopback binds, are supported. Media ticket
+issuance requires authentication and stream URLs are short-lived actor/session-bound
+capabilities, with expiry, revocation, and file revalidation preserved. HTTP exposes
+Bearer/auth credentials, ticket URLs, API actions, and media bytes to interception or
+modification; use HTTPS or a trusted encrypted network when needed.
 
 ## Feature Gating: IDE Explorer
 

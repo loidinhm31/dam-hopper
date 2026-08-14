@@ -5,7 +5,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 
 use dam_hopper_server::{
     agent_store::AgentStoreService,
-    api::{build_router, router::parse_cors_origins},
+    api::{build_router_with_origins, router::parse_cors_origins},
     config::{
         global_config_path, global_registry_path, read_global_config_at, resolve_startup_config,
         ConfigResolutionInput, ConfigSource, DamHopperConfig,
@@ -44,13 +44,9 @@ struct Cli {
     #[arg(long)]
     new_token: bool,
 
-    /// Comma-separated HTTPS origins allowed to make credentialed browser requests
+    /// Comma-separated exact HTTP/HTTPS origins allowed to make credentialed browser requests
     #[arg(long, env = "DAM_HOPPER_CORS_ORIGINS")]
     cors_origins: Option<String>,
-
-    /// Declare that a trusted HTTPS reverse proxy terminates TLS before this HTTP listener
-    #[arg(long, env = "DAM_HOPPER_TRUSTED_TLS_PROXY")]
-    trusted_tls_proxy: bool,
 
     /// Skip authentication (dev mode) — all requests bypass auth middleware
     #[arg(long, env = "DAM_HOPPER_NO_AUTH")]
@@ -71,7 +67,6 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    validate_startup_bind(cli.no_auth, cli.host, cli.trusted_tls_proxy)?;
 
     // ── Auth token ────────────────────────────────────────────────────────────
 
@@ -252,8 +247,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Build state + router ──────────────────────────────────────────────────
 
-    let allowed_origins = parse_cors_origins(cli.cors_origins.as_deref(), cli.no_auth)?;
-
+    let allowed_origins = parse_cors_origins(cli.cors_origins.as_deref())?;
     let fs = FsSubsystem::new(project_roots(&config));
 
     let db = if let (Ok(uri), Ok(name)) = (
@@ -311,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(proc_poll_loop(port_forward_manager));
 
     let telemetry_shutdown = state.telemetry_runtime.clone();
-    let router = build_router(state, allowed_origins);
+    let router = build_router_with_origins(state, allowed_origins);
 
     // ── Serve ─────────────────────────────────────────────────────────────────
 
@@ -368,24 +362,6 @@ async fn main() -> anyhow::Result<()> {
 
 // ── Token management ──────────────────────────────────────────────────────────
 
-fn validate_startup_bind(
-    no_auth: bool,
-    host: std::net::IpAddr,
-    trusted_tls_proxy: bool,
-) -> anyhow::Result<()> {
-    if no_auth && !host.is_loopback() {
-        anyhow::bail!(
-            "--no-auth requires a loopback --host (for example, --host 127.0.0.1); refusing non-loopback bind"
-        );
-    }
-    if !no_auth && !host.is_loopback() && !trusted_tls_proxy {
-        anyhow::bail!(
-            "non-loopback authenticated binds require --trusted-tls-proxy; the server listener is HTTP and Secure partitioned media cookies require HTTPS"
-        );
-    }
-    Ok(())
-}
-
 fn token_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("~/.config"))
@@ -432,21 +408,6 @@ fn manage_token(regen: bool) -> anyhow::Result<String> {
 
 fn generate_token() -> String {
     uuid::Uuid::new_v4().simple().to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use std::net::{IpAddr, Ipv4Addr};
-
-    use super::validate_startup_bind;
-
-    #[test]
-    fn no_auth_rejects_non_loopback_bind() {
-        assert!(validate_startup_bind(true, IpAddr::V4(Ipv4Addr::UNSPECIFIED), false).is_err());
-        assert!(validate_startup_bind(true, IpAddr::V4(Ipv4Addr::LOCALHOST), false).is_ok());
-        assert!(validate_startup_bind(false, IpAddr::V4(Ipv4Addr::UNSPECIFIED), false).is_err());
-        assert!(validate_startup_bind(false, IpAddr::V4(Ipv4Addr::UNSPECIFIED), true).is_ok());
-    }
 }
 
 fn write_token(path: &std::path::Path, token: &str) -> anyhow::Result<()> {

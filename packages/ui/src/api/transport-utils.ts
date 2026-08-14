@@ -20,6 +20,8 @@ export function reinitializeTransport(
   newServerUrl?: string,
   profileId?: string,
 ): void {
+  const transportUrl = resolveTransportUrl(newServerUrl);
+
   // 1. Get the current transport and destroy it (closes WebSocket, cleans up listeners)
   const oldTransport = getTransport();
   if (
@@ -35,11 +37,30 @@ export function reinitializeTransport(
 
   // 3. Use an idle transport when no profile remains, so the old authenticated
   // transport cannot reconnect after the last profile is deleted.
-  const newTransport = newServerUrl
-    ? new WsTransport(newServerUrl, profileId)
+  const newTransport = transportUrl
+    ? new WsTransport(transportUrl, profileId)
     : new IdleTransport();
 
   // 4. Install the new transport and attach its push listeners immediately.
   reconfigureTransport(newTransport);
   initTransportListeners();
+}
+
+function resolveTransportUrl(newServerUrl?: string): string | undefined {
+  if (typeof document === "undefined" || typeof window === "undefined") {
+    return newServerUrl;
+  }
+  if (document.documentElement.dataset.appHost !== "native") {
+    return newServerUrl;
+  }
+  if (!newServerUrl) return undefined;
+
+  try {
+    return new URL(newServerUrl, window.location.href).origin ===
+      window.location.origin
+      ? newServerUrl
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }

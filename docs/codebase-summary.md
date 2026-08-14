@@ -19,7 +19,7 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 - **Web Bootstrap Logging**: `apps/web` resolves its bootstrap log level from Vite env, with dev defaulting to `debug` and production defaulting to `warn` when no override is set.
 - **High-Value Call Sites**: transport, auth, terminal, dashboard, error boundary, and filesystem flows now use the shared logger instead of direct `console` calls.
 - **File Decorations**: `packages/ui/src/lib/file-decoration.ts` is the shared registry for file icon, badge, display-language, and Monaco-language lookup.
-- **Session-Bound Media**: `server/src/fs/media_ticket.rs` centrally tracks opaque video/image tickets and actor-bound media sessions; streams require the matching `HttpOnly; Secure; SameSite=None; Partitioned` media cookie, ticket/session expiry is bounded (30-minute idle, eight-hour absolute), and session revocation invalidates its tickets. Clients require `session-cookie-v1`, perform credentialed `HEAD` before native source/download exposure, and never use a Bearer/Blob fallback. Profile switch/delete, credential transitions, and logout use a five-second HTTPS-only revoke before token removal, including stale settings-dialog profiles. Qualification passed 1,013 UI tests, 112 full browser tests twice on Chromium 151 (11 media-specific), 740 Rust tests, build, and lint. Its same-origin fixture does not qualify real cross-site CHIPS, Edge, Tauri/WebView, Safari, or Firefox support. State is process-local; multi-instance deployment requires sticky routing to the issuing process.
+- **Session-Bound Media**: `server/src/fs/media_ticket.rs` centrally tracks opaque video/image tickets and actor-bound media sessions; same-origin streams use the matching host-only `HttpOnly; SameSite=Lax; Path=/api/fs` media cookie without `Secure`, while allowlisted cross-origin native streams use the actor/session-bound ticket capability. Ticket/session expiry is bounded (30-minute idle, eight-hour absolute), and session revocation invalidates tickets. Auth cookies remain `HttpOnly; SameSite=Strict`. Clients require `session-cookie-v1`, perform credentialed `HEAD` before native source/download exposure, and never use a Bearer/Blob fallback. Profile switch/delete, credential transitions, and logout use a five-second revoke before token removal, including stale settings-dialog profiles. The backend is same-origin by default; separate browser frontends require exact `DAM_HOPPER_CORS_ORIGINS` entries. Cleartext HTTP exposes credentials, ticket URLs, actions, and media bytes to interception or modification; cross-origin media uses an authenticated actor/session-bound ticket because `SameSite=Lax` cookies are not sent cross-site. Qualification passed 1,018 UI tests, 116 full browser tests on Chromium 151 (11 media-specific), 691 Rust tests (one ignored performance test), build, and lint. State is process-local; multi-instance deployment requires sticky routing to the issuing process.
 - **Compatibility Layer**: `packages/ui/src/lib/mime-to-language.ts` keeps MIME-only callers working while routing to the shared registry.
 - **Rendering Wrapper**: `packages/ui/src/lib/file-decoration-icon.tsx` is a thin icon component over the registry.
 - **Shared Surfaces**: explorer tree, editor tabs, search headers, and path labels all read from the same lookup so file identity stays aligned across the UI.
@@ -39,7 +39,7 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 - **File System Operations**: Streaming upload/download, directory traversal, conflict handling
 - **Terminal Management**: PTY session manager with WebSocket streaming
 - **Agent Store**: Version-controlled agent configurations, skills, and templates
-- **Authentication**: JWT-based with dev-mode bypass for local development
+- **Authentication**: JWT-based with dev-mode bypass; no-auth binds require a trusted development network
 - **WebSocket Transport**: Bi-directional communication for real-time updates
 
 ### Frontend (React + Vite)
@@ -52,7 +52,7 @@ This document provides a high-level overview of the DamHopper codebase. For deta
 
 ### Development Features
 
-- **Dev Mode**: `--no-auth` flag bypasses authentication for local development
+- **Dev Mode**: `--no-auth` bypasses authentication on the configured host; never expose publicly
 - **Agent Store Inventory**: Browse, ship, and manage agent templates
 - **Configuration Management**: Workspace and global configuration editors
 - **Search**: Command search (BM25 index), file search with fuzzy matching
@@ -214,7 +214,7 @@ Infrastructure
 ### Authentication Module (`server/src/api/auth.rs`)
 
 - JWT creation and validation
-- Cookie-based sessions (httpOnly, Secure, SameSite)
+- Cookie-based sessions (`HttpOnly; SameSite=Strict`; HTTP-compatible without `Secure`)
 - MongoDB-backed user management
 - Dev mode bypass with `no_auth` flag
 - Token expiry: 30 days (dev mode), configurable production
@@ -256,7 +256,6 @@ DAM_HOPPER_WORKSPACE     # Legacy workspace directory override / discovery root
 DAM_HOPPER_PORT          # Server port (default: 4800)
 DAM_HOPPER_HOST          # Bind address (default: 0.0.0.0)
 DAM_HOPPER_NO_AUTH       # Dev mode, bypasses auth
-DAM_HOPPER_CORS_ORIGINS  # Comma-separated CORS origins
 MONGODB_URI              # MongoDB connection (optional)
 MONGODB_DATABASE         # MongoDB database name (optional)
 RUST_ENV                 # Runtime environment (blocks if "production")
@@ -398,7 +397,7 @@ dam-hopper/
 ### Authentication
 
 - **JWT Signing**: Uses server-token (hex UUID) stored at `~/.config/dam-hopper/server-token`
-- **Cookie Security**: HttpOnly, Secure, SameSite=Strict
+- **Cookie Security**: auth cookies are `HttpOnly; SameSite=Strict`; HTTP media sessions use host-only `HttpOnly; SameSite=Lax` cookies. HTTP transport remains interceptable.
 - **Dev Mode Safety**: Production guards prevent unsafe configurations with `--no-auth`
 
 ### File System

@@ -87,7 +87,6 @@ pub async fn issue_ticket(
         Err(ImageTicketIssue::ContextChanged) => {
             return Err(ApiError::from(AppError::Fs(crate::fs::FsError::NotFound)))
         }
-        Err(ImageTicketIssue::Issued(_)) => unreachable!("bound issue cannot return a lease enum"),
     };
     let cookie = media_session_cookie(&session);
     Ok((
@@ -128,13 +127,22 @@ pub async fn revoke_ticket(
     StatusCode::NO_CONTENT
 }
 
-pub async fn stream_ticket(
+pub(crate) async fn stream_ticket(
     State(state): State<AppState>,
     AxumPath(ticket): AxumPath<String>,
     method: Method,
     headers: HeaderMap,
+    allowed_origin: Option<Extension<super::router::AllowedMediaOrigin>>,
 ) -> Response {
-    media_stream_response::respond(state, ticket, MediaTicketKind::Image, method, headers).await
+    media_stream_response::respond(
+        state,
+        ticket,
+        MediaTicketKind::Image,
+        method,
+        headers,
+        allowed_origin.is_some(),
+    )
+    .await
 }
 
 async fn resolve_image_path(
