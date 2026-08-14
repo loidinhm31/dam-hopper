@@ -135,7 +135,7 @@ Browser
 
 ## Key Design Decisions
 
-**Auth**: Bearer token in `Authorization` header. Token stored in `~/.config/dam-hopper/server-token`. Constant-time comparison via `subtle` crate. Backend browser access is same-origin only; no CORS feature.
+**Auth**: Bearer token in `Authorization` header. Token stored in `~/.config/dam-hopper/server-token`. Constant-time comparison via `subtle` crate. Cross-origin browser access uses an explicit `DAM_HOPPER_CORS_ORIGINS` allowlist; media remains authenticated by actor-bound tickets.
 
 **PTY execution**: All process execution happens in `portable-pty` sessions managed by `PtySessionManager`. Sessions identified by UUID. PTY output broadcast via `tokio::sync::broadcast` channel. Buffer retained for live sessions only.
 

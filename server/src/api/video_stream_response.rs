@@ -23,6 +23,7 @@ pub(crate) async fn respond(
         MediaTicketKind::Video,
         method,
         request_headers,
+        false,
     )
     .await
 }

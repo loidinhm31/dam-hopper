@@ -51,8 +51,9 @@ export function mediaTicketUrl(
 }
 
 /**
- * Verify native media can send the HttpOnly session cookie before exposing
- * a ticket URL to an image, video, or browser-managed download.
+ * Verify the authenticated, actor-bound ticket before exposing its URL to an
+ * image, video, or browser-managed download. Cookie transport is used when
+ * available; cross-origin media can authorize with the bound ticket itself.
  */
 export async function probeMediaTicket(
   url: string,

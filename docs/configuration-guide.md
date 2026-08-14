@@ -540,9 +540,10 @@ path = "/tmp/test-workspace"
 
 | Var                    | Type   | Purpose                                                             |
 | ---------------------- | ------ | ------------------------------------------------------------------- |
-| `DAM_HOPPER_CONFIG`    | path   | Load an exact `dam-hopper.toml` registry file                       |
-| `DAM_HOPPER_WORKSPACE` | path   | Override workspace path (takes priority over global config default) |
-| `RUST_LOG`             | string | Logging level (e.g., `dam_hopper=debug,axum=info`)                  |
+| `DAM_HOPPER_CONFIG`        | path   | Load an exact `dam-hopper.toml` registry file                       |
+| `DAM_HOPPER_WORKSPACE`     | path   | Override workspace path (takes priority over global config default) |
+| `DAM_HOPPER_CORS_ORIGINS`  | string | Comma-separated exact browser origins for credentialed CORS         |
+| `RUST_LOG`                 | string | Logging level (e.g., `dam_hopper=debug,axum=info`)                  |
 
 ## Authentication Token
 
@@ -607,6 +608,7 @@ pnpm server:restart
 Edit `~/.config/dam-hopper/server.conf` to set:
 
 - `DAM_HOPPER_CONFIG`
+- `DAM_HOPPER_CORS_ORIGINS` (comma-separated exact browser origins, optional)
 - `DAM_HOPPER_HOST`
 - `DAM_HOPPER_PORT`
 - `DAM_HOPPER_WORKSPACE` (legacy directory-discovery override, optional)
@@ -619,18 +621,37 @@ Runtime files:
 
 ## Browser origin and transport
 
-The backend serves the SPA and API as a same-origin application. CORS is not a
-server feature: no `Access-Control-*` headers or preflight behavior are emitted,
-and separate cross-origin browser frontends are unsupported. Packaged native
-browser transport also ignores separate-origin profiles until a native HTTP/WebSocket
-transport exists; it does not embed the DamHopper backend.
+The backend serves the SPA and API as a same-origin application by default. To use a
+separate browser frontend, configure an exact allowlist; wildcard and credentialed
+allow-all CORS are forbidden:
+
+```bash
+# One origin
+DAM_HOPPER_CORS_ORIGINS=https://loidinhm31.github.io \
+  dam-hopper-server --host 0.0.0.0 --port 4800
+
+# Multiple origins, comma-separated
+DAM_HOPPER_CORS_ORIGINS="https://loidinhm31.github.io,https://admin.example.com" \
+  dam-hopper-server --host 0.0.0.0 --port 4800
+```
+
+The equivalent CLI option is `--cors-origins "https://first.example,https://second.example"`.
+Each value must be an exact `http://` or `https://` origin with no path, query,
+fragment, credentials, or wildcard. Values are trimmed, while duplicate or
+ambiguous origins are rejected at startup. Restart the server after changing
+the setting.
+
+Each allowlisted origin may call authenticated APIs with credentials. CORS does
+not make media public: media ticket issuance still requires the authenticated
+actor, and each stream URL is a short-lived actor/session-bound capability with
+expiry, logout/session revocation, and file revalidation. Packaged native browser
+transport intentionally ignores separate-origin profiles until a native
+HTTP/WebSocket transport exists.
 
 Authenticated HTTP binds, including the default `0.0.0.0`, are supported. HTTP
-media uses host-only HttpOnly cookies (`SameSite=Lax` for media,
-`SameSite=Strict` for auth) and remains cookie-authorized. Cleartext exposes
-Bearer/auth cookies, ticket URLs, API actions, and media bytes to interception,
-replay, and modification; use HTTPS, a VPN/Tailscale network, or another trusted
-encrypted network when that risk is unacceptable.
+media and bearer credentials remain exposed to interception, replay, and modification;
+use HTTPS, a VPN/Tailscale network, or another trusted encrypted network when that
+risk is unacceptable.
 
 ### Media compatibility qualification status
 

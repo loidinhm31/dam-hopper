@@ -73,8 +73,8 @@ export function getServerUrl(): string {
     return activeProfile.url.replace(/\/$/, "");
   }
 
-  // Native browser transport cannot use separate-origin profiles without CORS.
-  // Skip legacy remote URLs and fall through to the packaged page origin.
+  // Packaged native browser transport intentionally stays same-origin until a
+  // native HTTP/WebSocket transport exists. Skip legacy remote URL overrides.
   if (isNativeBrowserHost()) return `${location.protocol}//${location.host}`;
 
   // Priority 2: Legacy localStorage (for migration period)
@@ -273,7 +273,7 @@ export function clearAuthUsername(): void {
 
 /**
  * Whether the configured server is cross-origin relative to the current page.
- * Browser API/media access requires the server UI and API to share an origin.
+ * Cross-origin API access requires the server's exact CORS allowlist entry.
  */
 export function isCrossOriginServer(serverUrl: string): boolean {
   try {
@@ -406,8 +406,10 @@ function isSameOriginProfile(profile: ServerProfile): boolean {
   if (typeof window === "undefined") return true;
 
   try {
-    return new URL(normalizeServerUrl(profile.url), window.location.href).origin ===
-      window.location.origin;
+    return (
+      new URL(normalizeServerUrl(profile.url), window.location.href).origin ===
+      window.location.origin
+    );
   } catch {
     return false;
   }
@@ -417,7 +419,9 @@ function isSameOriginProfile(profile: ServerProfile): boolean {
 export function getActiveProfile(): ServerProfile | null {
   const id = getActiveProfileId();
   if (!id) return null;
-  return getProfiles().find((p) => p.id === id && isSameOriginProfile(p)) ?? null;
+  return (
+    getProfiles().find((p) => p.id === id && isSameOriginProfile(p)) ?? null
+  );
 }
 
 /** Set the active profile by ID */

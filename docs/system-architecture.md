@@ -624,7 +624,7 @@ permissions to `core:default`.
 
 - `apps/native/src-tauri` contains the default Tauri builder, the main window config, and the checked-in Android Studio project under `src-tauri/gen/android`.
 - No filesystem, shell, opener, HTTP, or sidecar plugin permissions are granted in Phase 03. The native CSP allows local/profile HTTP and WebSocket connections but keeps default script execution to self.
-- Native desktop dev uses `http://localhost:1420`. Android dev uses `tauri android dev --host`, which sets `TAURI_DEV_HOST` so the Vite dev server and HMR bind to the LAN-reachable address for an emulator or physical device. Packaged desktop webview requests can present `tauri://localhost`, `http://tauri.localhost`, or `https://tauri.localhost` depending on platform/webview. Packaged native browser transport ignores separate-origin profiles because the backend emits no CORS headers; a native HTTP/WebSocket transport is deferred.
+- Native desktop dev uses `http://localhost:1420`. Android dev uses `tauri android dev --host`, which sets `TAURI_DEV_HOST` so the Vite dev server and HMR bind to the LAN-reachable address for an emulator or physical device. Packaged desktop webview requests can present `tauri://localhost`, `http://tauri.localhost`, or `https://tauri.localhost` depending on platform/webview. Packaged native browser transport ignores separate-origin profiles by policy; a native HTTP/WebSocket transport is deferred. Separate web frontends require an exact backend `DAM_HOPPER_CORS_ORIGINS` entry.
 
 **Native browser-debug controller (Phase 03):**
 
@@ -791,12 +791,14 @@ tests (one ignored performance test); `pnpm build` and `pnpm lint` were clean. C
 versioned session-cookie contract, credentialed `HEAD` before source exposure,
 `crossOrigin="use-credentials"`, playback/seek, direct anchor download, rejected
 probe retry, cleanup, and absence of `Blob`/object-URL conversion. The fixture uses
-real same-origin HTTP cookie storage and native cookie sending, including missing or
-foreign-cookie `404` and DELETE clearing; it does not expose the HttpOnly cookie to
-JavaScript. The backend is same-origin only; CORS is not a server feature and no
-cross-origin browser frontend or cross-site HTTP media is supported. `SameSite=Lax`
-cookies are not sent cross-site;
-cleartext HTTP still permits interception or modification of credentials, ticket URLs,
+real same-origin HTTP cookie storage and native cookie sending, including cookie
+binding, DELETE clearing, and ticket-only cross-origin authorization; it does not
+expose the HttpOnly cookie to JavaScript. Separate browser frontends use an exact
+configured CORS allowlist. Media
+issuance requires authentication and stream URLs are actor/session-bound, short-lived
+capabilities; logout/session revocation still invalidates them. `SameSite=Lax` cookies
+are not sent cross-site, so cross-origin media uses the bound ticket capability.
+Cleartext HTTP still permits interception or modification of credentials, ticket URLs,
 actions, and media bytes. It is not evidence for real cross-site CHIPS partitioning.
 Edge, Tauri/WebView, Safari, and Firefox remain unqualified.
 Browser routing recognizes only the final, case-insensitive extensions `mp4`,
@@ -879,8 +881,9 @@ ticket. Bodies use an async reader bounded to 128 KiB with Hyper backpressure;
 client disconnect drops the body and file without a detached producer, and no
 filesystem or ticket-store lock is held while streaming.
 
-The backend emits no CORS or preflight headers. Browser media playback is
-same-origin only; cross-origin browser frontends are unsupported. Cleartext
+The backend emits credentialed CORS and preflight headers only for exact configured
+origins. Browser media playback requires an authenticated ticket; the ticket remains
+bound to the issuing actor/session and is revoked with that session. Cleartext
 interception or modification remains a deployment risk.
 
 The browser host routes recognized video extensions to `VideoPreview` before
@@ -2220,13 +2223,13 @@ Test boundary: JSDOM wrapper and consumer tests verify the shared contract, port
 - Symbolic links are allowed but validated
 - Binary file detection prevents accidental text parsing
 
-**Browser origin:** The backend is same-origin only. CORS is not a server
-feature: it emits no `Access-Control-*` headers and does not implement OPTIONS
-preflight behavior. Authenticated HTTP binds, including non-loopback binds, are
-supported. HTTP exposes Bearer/auth cookies, ticket URLs, API actions, and media
-bytes to interception or modification; use HTTPS or a trusted encrypted network
-when needed. Cross-site HTTP media is unsupported because `SameSite=Lax` cookies
-are not sent cross-site.
+**Browser origin:** The backend is same-origin by default. Separate browser
+frontends require exact `DAM_HOPPER_CORS_ORIGINS` entries; wildcard CORS is forbidden.
+Authenticated HTTP binds, including non-loopback binds, are supported. Media ticket
+issuance requires authentication and stream URLs are short-lived actor/session-bound
+capabilities, with expiry, revocation, and file revalidation preserved. HTTP exposes
+Bearer/auth credentials, ticket URLs, API actions, and media bytes to interception or
+modification; use HTTPS or a trusted encrypted network when needed.
 
 ## Feature Gating: IDE Explorer
 

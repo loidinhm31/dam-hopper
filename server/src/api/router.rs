@@ -1,6 +1,13 @@
-use std::path::PathBuf;
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
-use axum::http::StatusCode;
+use axum::http::{
+    header::{
+        ACCEPT, ACCEPT_RANGES, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH,
+        CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, IF_RANGE,
+        LAST_MODIFIED, RANGE,
+    },
+    HeaderValue, Method, StatusCode, Uri,
+};
 use axum::{
     extract::DefaultBodyLimit,
     middleware,
@@ -8,6 +15,7 @@ use axum::{
     Router,
 };
 use tower_http::{
+    cors::CorsLayer,
     limit::RequestBodyLimitLayer,
     services::{ServeDir, ServeFile},
 };
@@ -24,12 +32,35 @@ use super::{
     usage_sessions, workspace, ws,
 };
 
-/// Build the full Axum router with auth middleware and all routes.
+/// Build the full Axum router without cross-origin browser access.
+///
+/// Production startup should use [`build_router_with_origins`] with an explicit
+/// allowlist when the UI is hosted separately.
 pub fn build_router(state: AppState) -> Router {
-    build_router_with_web_dir(state, static_web_dir())
+    build_router_with_origins(state, Vec::new())
+}
+
+/// Build the router with an exact allowlist for credentialed browser requests.
+pub fn build_router_with_origins(state: AppState, allowed_origins: Vec<HeaderValue>) -> Router {
+    build_router_with_web_dir_and_origins(state, allowed_origins, static_web_dir())
 }
 
 pub(crate) fn build_router_with_web_dir(state: AppState, web_dir: PathBuf) -> Router {
+    build_router_with_web_dir_and_origins(state, Vec::new(), web_dir)
+}
+
+fn build_router_with_web_dir_and_origins(
+    mut state: AppState,
+    allowed_origins: Vec<HeaderValue>,
+    web_dir: PathBuf,
+) -> Router {
+    state.cors_origins = Arc::new(
+        allowed_origins
+            .iter()
+            .filter_map(|origin| origin.to_str().ok().map(str::to_owned))
+            .collect(),
+    );
+
     // Public routes — no auth required
     let public = Router::new()
         .route("/api/health", get(settings::health))
@@ -363,15 +394,26 @@ pub(crate) fn build_router_with_web_dir(state: AppState, web_dir: PathBuf) -> Ro
             auth::require_auth,
         ));
 
-    // Streams remain outside bearer middleware; the bound media-session cookie authorizes them.
-    let video_stream = Router::new().route(
-        "/api/fs/video/stream/{ticket}",
-        get(fs_video::stream_ticket).head(fs_video::stream_ticket),
-    );
-    let image_stream = Router::new().route(
-        "/api/fs/image/stream/{ticket}",
-        get(fs_image::stream_ticket).head(fs_image::stream_ticket),
-    );
+    // Streams remain outside bearer middleware. A cookie authorizes same-origin
+    // requests; ticket-only fallback is marked only for an exact allowed origin.
+    let video_stream = Router::new()
+        .route(
+            "/api/fs/video/stream/{ticket}",
+            get(fs_video::stream_ticket).head(fs_video::stream_ticket),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            mark_allowed_media_origin,
+        ));
+    let image_stream = Router::new()
+        .route(
+            "/api/fs/image/stream/{ticket}",
+            get(fs_image::stream_ticket).head(fs_image::stream_ticket),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            mark_allowed_media_origin,
+        ));
 
     let router = Router::new()
         .merge(public)
@@ -389,11 +431,244 @@ pub(crate) fn build_router_with_web_dir(state: AppState, web_dir: PathBuf) -> Ro
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state);
 
-    router
+    if allowed_origins.is_empty() {
+        router
+    } else {
+        router.layer(build_cors(&allowed_origins))
+    }
 }
+
+pub(crate) async fn mark_allowed_media_origin(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    mut request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    if state.origin_is_allowed(request.headers()) {
+        request.extensions_mut().insert(AllowedMediaOrigin);
+    }
+    next.run(request).await
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct AllowedMediaOrigin;
 
 fn static_web_dir() -> PathBuf {
     std::env::var_os("DAM_HOPPER_WEB_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/opt/dam-hopper/web"))
+}
+
+/// Parse a strict, canonical origin allowlist before the server starts.
+pub fn parse_cors_origins(raw_origins: Option<&str>) -> anyhow::Result<Vec<HeaderValue>> {
+    let Some(raw_origins) = raw_origins.filter(|origins| !origins.trim().is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let mut canonical_origins = HashSet::new();
+    let mut headers = Vec::new();
+    for raw_origin in raw_origins.split(',') {
+        let origin = canonical_origin(raw_origin)?;
+        if !canonical_origins.insert(origin.clone()) {
+            anyhow::bail!("duplicate or ambiguous CORS origin: {origin}");
+        }
+        headers.push(origin.parse::<HeaderValue>()?);
+    }
+    Ok(headers)
+}
+
+fn canonical_origin(raw_origin: &str) -> anyhow::Result<String> {
+    let raw_origin = raw_origin.trim();
+    if raw_origin.is_empty() || raw_origin == "*" || raw_origin.contains('#') {
+        anyhow::bail!("empty and wildcard CORS origins are forbidden");
+    }
+    let uri: Uri = raw_origin
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid CORS origin: {raw_origin}"))?;
+    let scheme = uri
+        .scheme_str()
+        .filter(|scheme| matches!(*scheme, "http" | "https"))
+        .ok_or_else(|| anyhow::anyhow!("CORS origin must use http or https: {raw_origin}"))?;
+    let authority = uri
+        .authority()
+        .ok_or_else(|| anyhow::anyhow!("CORS origin must include a host: {raw_origin}"))?;
+    if uri.path() != "/" || uri.query().is_some() || authority.as_str().contains('@') {
+        anyhow::bail!("CORS origin must not include path, query, or user info: {raw_origin}");
+    }
+    let host = authority.host().to_ascii_lowercase();
+    if host.is_empty() {
+        anyhow::bail!("CORS origin must include a host: {raw_origin}");
+    }
+    let authority_text = authority.as_str();
+    let explicit_port = if authority_text.starts_with('[') {
+        authority_text
+            .split_once(']')
+            .is_some_and(|(_, suffix)| suffix.starts_with(':'))
+    } else {
+        authority_text.contains(':')
+    };
+    let port = authority.port_u16();
+    if explicit_port && port.is_none() {
+        anyhow::bail!("CORS origin has an invalid port: {raw_origin}");
+    }
+    let omit_port = matches!((scheme, port), ("http", Some(80)) | ("https", Some(443)));
+    let host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host
+    };
+    Ok(match (port, omit_port) {
+        (Some(port), false) => format!("{scheme}://{host}:{port}"),
+        _ => format!("{scheme}://{host}"),
+    })
+}
+
+fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
+    // Explicit methods and headers are required when credentials are enabled.
+    let methods = [
+        Method::GET,
+        Method::POST,
+        Method::PUT,
+        Method::PATCH,
+        Method::DELETE,
+        Method::OPTIONS,
+        Method::HEAD,
+    ];
+    let headers = [
+        AUTHORIZATION,
+        CONTENT_TYPE,
+        ACCEPT,
+        RANGE,
+        IF_RANGE,
+        IF_NONE_MATCH,
+        IF_MODIFIED_SINCE,
+    ];
+    let exposed_headers = [
+        ACCEPT_RANGES,
+        CONTENT_RANGE,
+        CONTENT_LENGTH,
+        CONTENT_DISPOSITION,
+        ETAG,
+        LAST_MODIFIED,
+        CACHE_CONTROL,
+    ];
+
+    CorsLayer::new()
+        .allow_origin(allowed_origins.to_vec())
+        .allow_methods(methods)
+        .allow_headers(headers)
+        .expose_headers(exposed_headers)
+        .allow_credentials(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{body::Body, http::Request, routing::get, Router};
+    use tower::ServiceExt;
+
+    use super::*;
+
+    #[test]
+    fn cors_origin_parser_rejects_dangerous_and_ambiguous_input() {
+        for origin in [
+            "*",
+            "https://trusted.example,https://trusted.example",
+            "https://trusted.example,https://trusted.example:443",
+            "https://trusted.example/path",
+            "https://trusted.example#fragment",
+            "https://trusted.example:not-a-port",
+            "https://trusted.example:99999",
+            "https://user@trusted.example",
+        ] {
+            assert!(parse_cors_origins(Some(origin)).is_err(), "{origin}");
+        }
+        assert_eq!(
+            parse_cors_origins(Some("https://Trusted.Example:443"))
+                .unwrap()
+                .as_slice(),
+            [HeaderValue::from_static("https://trusted.example")]
+        );
+        assert_eq!(
+            parse_cors_origins(Some("http://Trusted.Example:80"))
+                .unwrap()
+                .as_slice(),
+            [HeaderValue::from_static("http://trusted.example")]
+        );
+        assert!(parse_cors_origins(None).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cors_allows_only_configured_origin_and_varies_by_origin() {
+        let router = Router::new()
+            .route("/probe", get(|| async { "ok" }))
+            .layer(build_cors(&[HeaderValue::from_static(
+                "https://trusted.example",
+            )]));
+        let trusted = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/probe")
+                    .header("Origin", "https://trusted.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            trusted.headers()["access-control-allow-origin"],
+            "https://trusted.example"
+        );
+        assert_eq!(
+            trusted.headers()["access-control-allow-credentials"],
+            "true"
+        );
+        assert!(trusted.headers()["vary"]
+            .to_str()
+            .unwrap()
+            .contains("origin"));
+
+        let preflight = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/probe")
+                    .header("Origin", "https://trusted.example")
+                    .header("Access-Control-Request-Method", "HEAD")
+                    .header("Access-Control-Request-Headers", "range")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(preflight.status(), StatusCode::OK);
+        assert_eq!(
+            preflight.headers()["access-control-allow-origin"],
+            "https://trusted.example"
+        );
+        assert!(preflight.headers()["access-control-allow-methods"]
+            .to_str()
+            .unwrap()
+            .contains("HEAD"));
+        assert!(preflight.headers()["access-control-allow-headers"]
+            .to_str()
+            .unwrap()
+            .contains("range"));
+
+        let denied = router
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/probe")
+                    .header("Origin", "https://attacker.example")
+                    .header("Access-Control-Request-Method", "GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(denied
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
+    }
 }
