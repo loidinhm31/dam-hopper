@@ -343,9 +343,29 @@ impl HostKeyChallengeBook {
         })
     }
 
-    pub(crate) fn clear_profile(&mut self, profile_id: &str) {
-        self.challenges
-            .retain(|_, record| record.challenge.profile_id != profile_id);
+    pub(crate) fn clear_profile(&mut self, scope_id: &str, profile_id: &str) {
+        self.challenges.retain(|_, record| {
+            record.challenge.scope_id != scope_id || record.challenge.profile_id != profile_id
+        });
+    }
+
+    pub(crate) fn has_profile_generation(
+        &mut self,
+        now: UtcTimestamp,
+        scope_id: &str,
+        profile_id: &str,
+        context: ChallengeContext,
+        desktop_instance_id: &str,
+        manager_session_id: &str,
+    ) -> bool {
+        self.expire(now);
+        self.challenges.values().any(|record| {
+            record.challenge.scope_id == scope_id
+                && record.challenge.profile_id == profile_id
+                && record.context == context
+                && record.desktop_instance_id == desktop_instance_id
+                && record.manager_session_id == manager_session_id
+        })
     }
 
     pub(crate) fn expire(&mut self, now: UtcTimestamp) {
@@ -355,6 +375,18 @@ impl HostKeyChallengeBook {
 
     pub(crate) fn len(&self) -> usize {
         self.challenges.len()
+    }
+
+    pub(crate) fn snapshot(&mut self, now: UtcTimestamp, scope_id: &str) -> Vec<HostKeyChallenge> {
+        self.expire(now);
+        let mut challenges = self
+            .challenges
+            .values()
+            .filter(|record| record.challenge.scope_id == scope_id)
+            .map(|record| record.challenge.clone())
+            .collect::<Vec<_>>();
+        challenges.sort_by(|left, right| left.challenge_id.cmp(&right.challenge_id));
+        challenges
     }
 }
 
@@ -581,7 +613,7 @@ mod tests {
                 WireCounter::ZERO,
             )
             .unwrap();
-        book.clear_profile(PROFILE);
+        book.clear_profile(SCOPE, PROFILE);
         assert_eq!(book.len(), 0);
         assert_eq!(
             book.approve(
@@ -602,6 +634,52 @@ mod tests {
             .unwrap_err(),
             SshForwardErrorCode::HostKeyChallengeNotFound
         );
+    }
+
+    #[test]
+    fn challenge_snapshots_and_cleanup_are_scope_isolated() {
+        let now = UtcTimestamp::parse("2026-08-11T00:00:00.000Z").unwrap();
+        let endpoint = SshEndpoint::new("example.com", 22).unwrap();
+        let scope_two = "b2f5890a-55d7-46ca-949b-0d63972f0a68";
+        let mut book = HostKeyChallengeBook::default();
+        book.issue_or_repeat(
+            now,
+            context(),
+            SCOPE,
+            "desktop",
+            "manager",
+            PROFILE,
+            &endpoint,
+            &offered(1),
+            WireCounter::ZERO,
+        )
+        .unwrap();
+        book.issue_or_repeat(
+            now,
+            context(),
+            scope_two,
+            "desktop",
+            "manager",
+            PROFILE,
+            &endpoint,
+            &offered(2),
+            WireCounter::ZERO,
+        )
+        .unwrap();
+        assert_eq!(book.snapshot(now, SCOPE).len(), 1);
+        assert_eq!(book.snapshot(now, scope_two).len(), 1);
+        assert!(book.has_profile_generation(now, SCOPE, PROFILE, context(), "desktop", "manager"));
+        assert!(!book.has_profile_generation(
+            now,
+            "c2f5890a-55d7-46ca-949b-0d63972f0a68",
+            PROFILE,
+            context(),
+            "desktop",
+            "manager"
+        ));
+        book.clear_profile(SCOPE, PROFILE);
+        assert!(book.snapshot(now, SCOPE).is_empty());
+        assert_eq!(book.snapshot(now, scope_two).len(), 1);
     }
 
     #[test]

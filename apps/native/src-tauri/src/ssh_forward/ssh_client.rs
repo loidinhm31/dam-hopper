@@ -2,6 +2,9 @@
 
 use std::{fmt, future::Future, sync::Arc, time::Duration};
 
+#[cfg(test)]
+use std::sync::{Mutex, OnceLock};
+
 use russh::AgentAuthError;
 use russh::{
     client::{self, Handle, Handler},
@@ -33,6 +36,30 @@ const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 // russh 0.62 closes when `alive_timeouts > keepalive_max`, so 2 yields
 // closure on the third unanswered probe required by the Phase 03 contract.
 const KEEPALIVE_MAX: usize = 2;
+
+#[cfg(test)]
+pub(crate) const TEST_PRIVATE_KEY_ID: &str = "phase04-test-key";
+
+#[cfg(test)]
+static TEST_PRIVATE_KEY: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn install_test_private_key(bytes: Vec<u8>) {
+    *TEST_PRIVATE_KEY
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .expect("test private key mutex poisoned") = Some(bytes);
+}
+
+#[cfg(test)]
+fn test_private_key() -> Option<Vec<u8>> {
+    TEST_PRIVATE_KEY
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .expect("test private key mutex poisoned")
+        .clone()
+}
+
 pub(crate) const MAX_CHANNELS: usize = 64;
 
 type DynamicAgent = AgentClient<Box<dyn AgentStream + Send + Unpin + 'static>>;
@@ -201,6 +228,15 @@ impl SshSession {
                     }
                 }
                 SshForwardAuth::Key { key_id } => {
+                    #[cfg(test)]
+                    let bytes = if key_id == TEST_PRIVATE_KEY_ID {
+                        test_private_key()
+                            .ok_or(SshTransportError::Agent(CredentialError::KeyNotFound))?
+                    } else {
+                        crate::ssh_forward::credentials::load_safe_key(key_id)
+                            .map_err(SshTransportError::Agent)?
+                    };
+                    #[cfg(not(test))]
                     let bytes = crate::ssh_forward::credentials::load_safe_key(key_id)
                         .map_err(SshTransportError::Agent)?;
                     let key = PrivateKey::from_openssh(&bytes)

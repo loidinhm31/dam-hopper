@@ -1,0 +1,28 @@
+{
+  "platform": "windows",
+  "webview2Version": "150.0.4078.105",
+  "commitSha": "ea463704d001d8aa49f2087fca86700d8faff972",
+  "artifactSha256": "3B8C8E868A3A92D078F822FDCEE5EC62AF7AA5C7B2E9DDAEDC01A52A6D2F587A",
+  "checks": {
+    "lifecycle": true,
+    "documentStartTopFrame": true,
+    "documentStartNestedFrame": true,
+    "relayAccepted": true,
+    "relayRejected": true,
+    "navigationPolicy": true,
+    "popupDenied": true,
+    "downloadDenied": true,
+    "profileIsolation": true,
+    "rollback": true
+  },
+  "runtime": {
+    "geometry": "browser_debug_set_bounds succeeded in the packaged app",
+    "navigationAccepted": "loopback fixture navigation succeeded",
+    "navigationRejected": "external navigation returned navigation target is not approved",
+    "visibility": "hide and show commands succeeded",
+    "recovery": "destroy and recreate succeeded across isolated profiles",
+    "profileClear": "profile clear succeeded after child teardown",
+    "rollback": "debug-off packaged app mounted the web Browser iframe adapter",
+    "linux": "build-only; runtime unverified"
+  }
+}

@@ -62,6 +62,14 @@ impl ClientEpochIssuer {
             client_epoch: self.next_client_epoch,
         })
     }
+
+    pub(crate) fn desktop_instance_id(&self) -> &str {
+        &self.desktop_instance_id
+    }
+
+    pub(crate) fn manager_session_id(&self) -> &str {
+        &self.manager_session_id
+    }
 }
 
 #[cfg(test)]

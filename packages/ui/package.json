@@ -12,6 +12,7 @@
     ".": "./src/embed/dam-hopper-app.tsx",
     "./styles": "./src/index.css",
     "./api/*": "./src/api/*.ts",
+    "./lib/*": "./src/lib/*.ts",
     "./diagnostics-client": "./src/lib/diagnostics-client.ts"
   },
   "dependencies": {

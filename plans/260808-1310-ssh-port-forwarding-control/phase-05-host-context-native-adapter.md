@@ -13,7 +13,7 @@
 ## Overview
 
 - **Priority:** P1
-- **Status:** Pending
+- **Status:** Complete (100%)
 - **Effort:** 10h
 - **Description:** Add browser-safe host/context types, a 12-command desktop Tauri adapter, Rust-issued client context, caller-monotonic decimal activation tokens, authoritative hint reconciliation, profile-deletion purge, and browser/mobile zero-call behavior.
 
@@ -149,6 +149,18 @@ Shared UI owns intent/public state. Adapter owns Tauri/context/token injection. 
 - Host caches public endpoints/fingerprints only; no password/passphrase/key bytes/path/HTTP token.
 - Unknown IPC objects and raw errors are discarded, not interpolated into UI/logs.
 - Protected server port-forward, PTY, SSH API, query, and WS files remain untouched.
+
+## Acceptance
+
+- Final independent review: 8.8/10, conditional accept; no critical findings.
+- UI tests: 981/981 passed.
+- Native tests: 17/17 passed.
+- Builds passed; lint passed with 0 errors and 0 warnings.
+- `cargo fmt`, `cargo check`, and `cargo clippy` passed.
+- Diff check passed.
+- Windows native runtime validation is now covered by Phase 04; the `0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND` loader issue was fixed with the native Common Controls v6 manifest.
+- Root `pnpm test` also reports unrelated `windows_by_handle` `E0658`; neither issue is attributed to this phase.
+- This acceptance does not claim feature or release readiness.
 
 ## Next steps
 

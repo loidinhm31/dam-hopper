@@ -9,6 +9,7 @@ use super::{
     error::SshForwardErrorCode,
     instance::DesktopClientContext,
     profile::{LoopbackHost, SshForwardProfile},
+    scope_retention::KnownScopesInput,
 };
 
 const MAX_WIRE_COUNTER_DIGITS: usize = 20;
@@ -172,6 +173,108 @@ pub(crate) struct OpenClientResult {
     pub(crate) activation_token_floor: WireCounter,
     pub(crate) active_scope_id: Option<String>,
     pub(crate) scope_generation: WireCounter,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct OpenClientInput {
+    pub(crate) known_scopes: KnownScopesInput,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ScopeContextInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    pub(crate) scope_id: String,
+    pub(crate) scope_generation: WireCounter,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ActivateScopeInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    pub(crate) scope_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProfileMutationInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    pub(crate) scope_id: String,
+    pub(crate) scope_generation: WireCounter,
+    pub(crate) expected_profiles_revision: WireCounter,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct CreateProfileInput {
+    #[serde(flatten)]
+    pub(crate) request: ProfileMutationInput,
+    pub(crate) profile: SshForwardProfile,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct UpdateProfileInput {
+    #[serde(flatten)]
+    pub(crate) request: ProfileMutationInput,
+    pub(crate) profile_id: String,
+    pub(crate) expected_generation: WireCounter,
+    pub(crate) profile: SshForwardProfile,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DeleteProfileInput {
+    #[serde(flatten)]
+    pub(crate) request: ProfileMutationInput,
+    pub(crate) profile_id: String,
+    pub(crate) expected_generation: WireCounter,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProfileLifecycleInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    pub(crate) scope_id: String,
+    pub(crate) scope_generation: WireCounter,
+    pub(crate) profile_id: String,
+    pub(crate) expected_generation: WireCounter,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ApproveHostInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    pub(crate) scope_id: String,
+    pub(crate) scope_generation: WireCounter,
+    pub(crate) profile_id: String,
+    pub(crate) expected_generation: WireCounter,
+    pub(crate) challenge_id: String,
+    pub(crate) algorithm: String,
+    pub(crate) fingerprint: String,
+    pub(crate) expected_trust_revision: WireCounter,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PurgeScopeInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    pub(crate) scope_id: String,
+    pub(crate) known_scopes: KnownScopesInput,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PurgeScopeResult {
+    pub(crate) scope_id: String,
+    pub(crate) purged: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
