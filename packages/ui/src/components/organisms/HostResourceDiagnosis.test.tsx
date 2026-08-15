@@ -188,6 +188,40 @@ describe("HostResourceDiagnosis", () => {
     expect(emptyMarkup).not.toContain('aria-label="Battery"');
   });
 
+  it("hides battery fields when the reported count is invalid", () => {
+    const negativeMarkup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          battery: {
+            count: -1,
+            remainingEnergyWh: 12.5,
+            availability,
+          },
+        }}
+        alerts={[]}
+      />,
+    );
+    const fractionalMarkup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          battery: {
+            count: 1.5,
+            remainingEnergyWh: 12.5,
+            availability,
+          },
+        }}
+        alerts={[]}
+      />,
+    );
+
+    expect(negativeMarkup).not.toContain('aria-label="Battery"');
+    expect(fractionalMarkup).not.toContain('aria-label="Battery"');
+    expect(negativeMarkup).not.toContain("12.5 Wh");
+    expect(fractionalMarkup).not.toContain("12.5 Wh");
+  });
+
   it("keeps stale availability beside retained values and rejects invalid values", () => {
     const markup = renderToStaticMarkup(
       <HostResourceDiagnosis
@@ -373,5 +407,123 @@ describe("HostResourceDiagnosis", () => {
 
     expect(markup).toContain("Unsupported on this host");
     expect(markup).not.toContain("0 visible");
+  });
+
+  it("starts with incident evidence, keeps metadata in the popover, and consolidates the metric note", () => {
+    const markup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          currentAlerts: [
+            {
+              kind: "disk",
+              key: "disk:/workspace",
+              state: "diskFull",
+              severity: "critical",
+              incidentId: "disk-1",
+              openedAt: 1,
+              updatedAt: 1,
+              durationSeconds: 30,
+              scope: "disk:/workspace",
+              evidence: {
+                diskName: "workspace",
+                diskMountPoint: "/workspace",
+                diskUsagePercent: 95,
+              },
+              threshold: "usage>=95%",
+              nextAction: "Free space.",
+            },
+          ],
+        }}
+        alerts={[]}
+      />,
+    );
+
+    expect(markup.indexOf("Current host alert")).toBeLessThan(
+      markup.indexOf("Current resource incidents"),
+    );
+    expect(markup.indexOf("Current resource incidents")).toBeLessThan(
+      markup.indexOf("Memory available"),
+    );
+    expect(markup).toContain(
+      "Memory categories are reported separately and are not additive;",
+    );
+    expect(markup).not.toContain("monitor-host");
+    expect(markup).not.toContain("usage&gt;=95%");
+    expect(markup).not.toContain("Free space.");
+    expect(markup).not.toContain("disk-1");
+  });
+
+  it("uses one normalized result for valid, stale, zero, invalid, and over-total meters", () => {
+    const zeroMarkup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          memory: {
+            ...snapshot.memory,
+            availableBytes: 0,
+            totalBytes: 1_024,
+          },
+        }}
+        alerts={[]}
+      />,
+    );
+    expect(zeroMarkup).toContain('aria-valuenow="0"');
+    expect(zeroMarkup).toContain('aria-label="Memory available percentage"');
+
+    const staleMarkup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          memory: {
+            ...snapshot.memory,
+            availableBytes: 512,
+            totalBytes: 1_024,
+            availability: { state: "stale", sampledAt: 1 },
+          },
+        }}
+        alerts={[]}
+      />,
+    );
+    expect(staleMarkup).toContain('aria-valuenow="50"');
+    expect(staleMarkup).toContain("Stale data");
+
+    const invalidMarkup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          memory: {
+            ...snapshot.memory,
+            availableBytes: -1,
+            totalBytes: 1_024,
+            availability: { state: "stale", sampledAt: 1 },
+          },
+        }}
+        alerts={[]}
+        legacyMetrics={{
+          ...legacyMetrics,
+          disk: { ...legacyMetrics.disk, usagePercent: -1 },
+        }}
+      />,
+    );
+    expect(invalidMarkup).not.toContain('role="progressbar"');
+    expect(invalidMarkup).toContain("Unavailable");
+    expect(invalidMarkup).toContain("Stale data");
+
+    const overTotalMarkup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          memory: {
+            ...snapshot.memory,
+            availableBytes: 2_048,
+            totalBytes: 1_024,
+          },
+        }}
+        alerts={[]}
+      />,
+    );
+    expect(overTotalMarkup).toContain('aria-valuenow="100"');
+    expect(overTotalMarkup).toContain("100%");
   });
 });
