@@ -1,6 +1,6 @@
 # 2026-08-15
 
-- **Native SSH port-forwarding Windows gate (Phase 07 subset).** Added Windows CI and release pre-bundle checks for Rust formatting/lint/unit coverage, the real temporary OpenSSH remote-loopback forwarding gate, deterministic smoke/evidence validation, WebView2/OpenSSH preflight, no-bundle Tauri compilation, and the unsigned NSIS package profile. Protected packaged-runtime evidence remains manual-pending; cross-platform support, signed updater artifacts, and final security/product release approval remain deferred. [See phase gate](../plans/260808-1310-ssh-port-forwarding-control/phase-07-cross-platform-release-gates.md).
+- **Native SSH port-forwarding Windows gate (Phase 07; complete for Windows-only scope).** Added Windows CI and release pre-bundle checks for Rust formatting/lint/unit coverage, the real temporary OpenSSH remote-loopback forwarding gate, deterministic smoke/evidence validation, WebView2/OpenSSH preflight, no-bundle Tauri compilation, protected same-commit evidence binding, and the unsigned NSIS package profile. Protected packaged-runtime evidence remains a production-release prerequisite; cross-platform support and signed updater artifacts are deferred to a separate scope. [See phase gate](../plans/260808-1310-ssh-port-forwarding-control/phase-07-cross-platform-release-gates.md).
 
 ## 2026-08-11
 
