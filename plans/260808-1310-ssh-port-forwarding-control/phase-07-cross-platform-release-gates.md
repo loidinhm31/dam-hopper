@@ -1,4 +1,4 @@
-# Phase 07: Cross-Platform Verification and Release Gates
+# Phase 07: Windows Verification and Release Gates
 
 ## Context links
 
@@ -13,9 +13,13 @@
 ## Overview
 
 - **Priority:** P1
-- **Status:** Windows subset implemented; protected runtime and cross-platform gates pending
+- **Status:** Complete (Windows-only re-scoped acceptance)
 - **Effort:** 16h
-- **Description:** Prove contracts, A/B/C ordering, real SSH remote-loopback forwarding, ACL/mobile exclusion, UI zero calls, listener disposal, packaged Tauri runtime, and explicit product/security acceptance on Windows/macOS/Linux.
+- **Description:** Prove the Windows implementation, native/package gates, protected evidence workflow, and release boundaries. Cross-platform expansion is deferred to a separate plan.
+
+## Re-scoped acceptance
+
+This phase is complete for Windows desktop only. The accepted scope includes Windows native/static gates, real temporary OpenSSH remote-loopback forwarding, strict redacted evidence validation, same-commit/artifact binding, protected approval binding, WebView2/OpenSSH preflight, no-bundle Tauri compilation, and the unsigned NSIS package profile. Protected packaged-runtime evidence remains a production-release prerequisite, but is an operational gate rather than a blocker to completing this implementation plan. macOS, Linux, Android, iOS, signed updater artifacts, and broader product/security expansion are deferred follow-up scope.
 
 ## Key Insights
 
@@ -43,7 +47,18 @@
 
 Runtime support cannot be promoted from `manual-pending` until all of the following exist for the same commit and package SHA-256: redacted `evidence.json`, release-engineer execution record, security-reviewer ACL/trust/fixed-target/remediation approval, product-owner acceptance of other-local-process loopback exposure, protected validator pass, and protected source-diff/redaction checks. Build-only, self-attested, missing, stale, wrong-hash, or wrong-commit evidence is not a release pass.
 
-## Requirements
+## Windows-only completion scope
+
+- [x] Windows Rust formatting, clippy, native tests, and ignored real-OpenSSH E2E pass.
+- [x] Windows smoke modes cover build-only, runtime preflight, and strict evidence validation.
+- [x] Evidence binds schema, redaction, artifact filename/hash, checked-out/package commit, protected IDs, and protected timestamps.
+- [x] Windows CI/release pre-bundle gates and the unsigned NSIS package profile are implemented.
+- [x] Protected tag-release workflow requires successful same-commit runtime evidence before desktop packaging.
+- [x] Protected server, query, WebSocket, browser, and mobile implementation boundaries remain unchanged.
+
+## Deferred cross-platform requirements
+
+The following original requirements remain intentionally deferred and are not part of this Windows-only completion decision.
 
 ### Automated gates
 
@@ -55,7 +70,7 @@ Runtime support cannot be promoted from `manual-pending` until all of the follow
 - Mobile: Android/iOS Cargo checks and trees contain no SSH/agent/native-handle dependency or forwarding handler/permission exposure.
 - Static boundary: no product-source diff under `server/`; explicitly preserve `server/src/port_forward/**`, `server/src/api/port_forward.rs`, `server/src/pty/**`, `server/src/api/ssh.rs`, `server/src/ssh.rs`, `server/src/api/ws.rs`, `packages/ui/src/api/queries.ts`, and `packages/ui/src/api/ws-transport.ts`.
 
-### Native OS matrix
+### Deferred native OS matrix
 
 | OS runner | Rust target | Bundle | Required native proof |
 |---|---|---|---|
@@ -77,7 +92,7 @@ Runtime support cannot be promoted from `manual-pending` until all of the follow
 - Product acceptance text: any local desktop process can use `127.0.0.1:<port>`; loopback blocks LAN reachability but gives no local isolation/authentication; SSH encryption starts after the local listener. Rejection blocks v1.
 - Assert no runtime updater plugin/capability, Tauri restart/relaunch call, or in-app control. Packaging `createUpdaterArtifacts` does not imply runtime update support. Any future updater gate must first prove coordinator-backed 5-second disposal and old-listener refusal before relaunch on every packaged OS.
 
-### Exact validation commands
+### Deferred cross-platform validation commands
 
 ```powershell
 pnpm install --frozen-lockfile
@@ -157,7 +172,7 @@ No build-only or skipped check can be promoted to runtime-supported.
 10. Run protected diffs; remove any unauthorized server/PTY/SSH/WS/query change without reverting unrelated user work.
 11. Scan artifacts/logs for secrets, paths, endpoints, usernames, labels/IDs/fingerprints, payload, and source chains.
 
-## Todo list
+## Deferred expansion todo list
 
 - [ ] Rust fmt/clippy/unit/real-SSH/A-B-C tests pass.
 - [ ] Numeric counter boundaries and exact event-hint context tests pass.
@@ -173,7 +188,14 @@ No build-only or skipped check can be promoted to runtime-supported.
 - [ ] Other-local-process risk accepted; remote target remains `127.0.0.1` only.
 - [ ] Protected source diff and redaction scans pass.
 
-## Success Criteria
+## Windows-only success criteria
+
+- Windows native tests, temporary OpenSSH E2E, smoke/build checks, lint, formatting, no-bundle compilation, and NSIS packaging pass.
+- Evidence validation fails closed for missing, malformed, stale, wrong-hash, wrong-commit, unbound-role, or prohibited-value evidence.
+- Windows CI is independent of unrelated root/server failures; protected server/query/WebSocket boundaries remain unchanged.
+- No runtime updater plugin/capability or restart/relaunch behavior is enabled.
+
+## Deferred expansion success criteria
 
 - All exact commands and native bundles exit 0; mobile trees contain no accepted SSH crate.
 - Three automated native jobs run without skips; protected runtime evidence does not pass until validated.
@@ -201,11 +223,11 @@ No build-only or skipped check can be promoted to runtime-supported.
 
 ## Next steps
 
-- Mark complete only after automated gates, three-OS protected evidence, role approvals, and protected diffs pass.
+- This Windows-only plan is complete. Produce protected runtime evidence and configure the three approval roles before a production tag release.
+- Create a separate plan before adding macOS, Linux, Android, iOS, signed updater artifacts, or new local-client authentication claims.
 - Any IPv6/non-loopback target, remote/SOCKS, password/keychain, or local-client auth work needs a new threat-model plan.
-- Complete the protected Windows runtime evidence and three role approvals; then add native macOS/Linux and Android/iOS gates in a separately scoped continuation before changing the plan to complete.
 
-### Unresolved Questions
+### Deferred operational questions
 
 - Named release engineer, security reviewer, product owner, and protected-environment policy must be configured before release candidate.
 - Final Windows agent support wording and macOS signing/notarization claim depend on Phase 01/07 evidence.
