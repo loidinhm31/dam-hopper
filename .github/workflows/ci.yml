@@ -166,7 +166,6 @@ jobs:
   native-windows:
     name: Native Windows build gate (runtime evidence required separately)
     runs-on: windows-latest
-    needs: test
     steps:
       - uses: actions/checkout@v4
 
@@ -187,11 +186,32 @@ jobs:
       - name: Build native client
         run: pnpm --filter @dam-hopper/native build
 
+      - name: Check native Rust formatting
+        run: cargo fmt --manifest-path apps/native/src-tauri/Cargo.toml -- --check
+
+      - name: Run native Rust lint
+        run: cargo clippy --manifest-path apps/native/src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run native Rust tests
+        run: cargo test --manifest-path apps/native/src-tauri/Cargo.toml
+
+      - name: Verify updater relaunch remains blocked
+        run: cargo test --manifest-path apps/native/src-tauri/Cargo.toml updater_relaunch_remains_blocked
+
+      - name: Run real OpenSSH forwarding gate
+        run: pnpm --filter @dam-hopper/native test:e2e:ssh-forward
+
       - name: Run deterministic smoke checks
         run: pnpm --filter @dam-hopper/native smoke:build
 
+      - name: Run SSH forwarding smoke checks
+        run: pnpm --filter @dam-hopper/native smoke:ssh-forward -- --build-only
+
+      - name: Build native client without bundling
+        run: pnpm --filter @dam-hopper/native exec tauri build --no-bundle
+
       - name: Package Windows installer
-        run: pnpm --filter @dam-hopper/native tauri:build --bundles nsis
+        run: pnpm --filter @dam-hopper/native run tauri:build:windows
 
       - name: Record WebView2 preflight
         run: pnpm --filter @dam-hopper/native tauri:probe

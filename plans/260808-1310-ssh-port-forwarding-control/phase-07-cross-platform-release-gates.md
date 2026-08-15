@@ -13,7 +13,7 @@
 ## Overview
 
 - **Priority:** P1
-- **Status:** Pending
+- **Status:** Windows subset implemented; protected runtime and cross-platform gates pending
 - **Effort:** 16h
 - **Description:** Prove contracts, A/B/C ordering, real SSH remote-loopback forwarding, ACL/mobile exclusion, UI zero calls, listener disposal, packaged Tauri runtime, and explicit product/security acceptance on Windows/macOS/Linux.
 
@@ -24,6 +24,24 @@
 - Browser/mobile exclusion needs exact call-count assertions, not only hidden navigation.
 - Other-local-process access is intentional product risk and must be accepted explicitly. The test proving a second process can connect is not a vulnerability-test failure.
 - Existing server port-forward, PTY, Git SSH, HTTP SSH API, and WebSocket transport behavior is protected, not cleanup scope.
+
+## Final Windows-only execution status (2026-08-15T22:39:00+07:00)
+
+- Added a real temporary OpenSSH/remote-loopback forwarding gate, deterministic smoke/evidence validation, the strict twelve-command ACL boundary checks, and a Windows-only native package profile.
+- Windows CI now runs Rust formatting, lint, unit tests, the ignored real-OpenSSH gate, no-bundle Tauri compilation, and NSIS packaging independently of the unrelated server test job. Release pre-bundle checks run the same E2E before the desktop matrix, and Windows packaging uses the same explicit profile.
+- The base Tauri configuration keeps the updater/relaunch boundary assertion, but the unsigned Windows package profile disables updater artifact creation. This avoids inventing a signing key or endpoint; no updater plugin, capability, restart, or relaunch behavior is enabled.
+- WebView2/OpenSSH preflight is automated. Evidence validation enforces the schema shape, exact artifact filename/hash, checked-out and package-run commit, redaction, and approval IDs supplied by the protected environment. Packaged runtime behavior remains `manual-pending` until protected evidence carries release-engineer, security-reviewer, and product-owner approvals.
+- macOS, Linux, Android, iOS, signed updater artifacts, and final product/security approval remain deferred and are not claimed by this Windows-only continuation.
+
+### Validation conclusion
+
+- **Pass:** Windows static/native gates, real temporary OpenSSH remote-loopback gate, evidence redaction/schema checks, artifact SHA-256 and package-run commit binding, protected approval-ID binding, WebView2/OpenSSH preflight, no-bundle compilation, and NSIS packaging profile.
+- **Manual-pending:** Protected packaged-runtime execution evidence. It must be produced by the named release engineer for the exact package, then independently approved by security and product owners and accepted by `--validate-evidence` in the protected environment.
+- **Not validated:** macOS/Linux native gates; Android/iOS exclusion checks; signed/notarized packages or updater artifacts; final product acceptance of local-process exposure; final security acceptance.
+
+### Protected runtime evidence prerequisites
+
+Runtime support cannot be promoted from `manual-pending` until all of the following exist for the same commit and package SHA-256: redacted `evidence.json`, release-engineer execution record, security-reviewer ACL/trust/fixed-target/remediation approval, product-owner acceptance of other-local-process loopback exposure, protected validator pass, and protected source-diff/redaction checks. Build-only, self-attested, missing, stale, wrong-hash, or wrong-commit evidence is not a release pass.
 
 ## Requirements
 
@@ -87,7 +105,7 @@ git diff --exit-code $base -- packages/ui/src/api/queries.ts packages/ui/src/api
 On macOS also run `cargo tree/check --target aarch64-apple-ios`. Native bundle commands:
 
 ```text
-Windows: pnpm --filter @dam-hopper/native exec tauri build --bundles nsis
+Windows: pnpm --filter @dam-hopper/native run tauri:build:windows
 macOS:   pnpm --filter @dam-hopper/native exec tauri build --bundles app,dmg
 Linux:   pnpm --filter @dam-hopper/native exec tauri build --bundles deb,rpm
 ```
@@ -185,6 +203,7 @@ No build-only or skipped check can be promoted to runtime-supported.
 
 - Mark complete only after automated gates, three-OS protected evidence, role approvals, and protected diffs pass.
 - Any IPv6/non-loopback target, remote/SOCKS, password/keychain, or local-client auth work needs a new threat-model plan.
+- Complete the protected Windows runtime evidence and three role approvals; then add native macOS/Linux and Android/iOS gates in a separately scoped continuation before changing the plan to complete.
 
 ### Unresolved Questions
 
