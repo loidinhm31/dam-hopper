@@ -62,9 +62,26 @@ the UI adds no polling, legacy fallback metric, per-device expansion, chart, or
 mutation control for this data.
 
 Opening the popover acknowledges the presentation count but does not dismiss an
-active resource incident. Known accepted UI caveat: after acknowledgement, a
-resource-only critical badge can render with the info color; its active count
-and underlying incident state remain correct.
+active resource incident. The popover resolves one effective status from the
+legacy alert and unresolved `currentAlerts` entries: the maximum severity wins
+(`critical > warning > info`), ties use the generic `Critical`, `Warning`, or
+`Advisory` label, and source order cannot change the result. A healthy legacy
+alert with no active resource incident is `Healthy`; an absent legacy alert is
+`Monitoring`. Recent history, acknowledgement, and unread count are independent
+of rank and tone.
+
+Snapshot freshness is a qualifier on retained data. Cached data keeps its
+active severity while reporting `refresh failed`, `core data unavailable`,
+`resource alert status unavailable` for an omitted older-server field, `stale`,
+or `refreshing` as applicable. Without data, the status is `Snapshot
+unavailable` or `Sampling host` according to the query state. An explicit empty
+`currentAlerts` array is authoritative and means no active resource incidents;
+an omitted field is an older-server response and does not invent or clear one.
+The badge is decorative and uses the effective tone; its separate screen-reader
+text says either `N unread host incidents` or `Active host incident`, never `0
+unread`. Opening acknowledges the presentation count only; this read-only UI
+does not change query, acknowledgement, bounds, fallback, active incidents, or
+dismissal behavior.
 
 ## Error Boundary and stale lazy-chunk recovery
 

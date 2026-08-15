@@ -1,7 +1,10 @@
 import { useId, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { Availability, DiskMetrics, HostMetrics } from "@/api/client.js";
-import { formatAvailability } from "@/lib/host-resource-state.js";
+import {
+  formatAvailability,
+  normalizeProgressPercent,
+} from "@/lib/host-resource-state.js";
 import {
   formatBytes,
   formatCelsius,
@@ -14,36 +17,53 @@ export function HostResourceMetric({
   value,
   detail,
   availability,
-  percent,
+  progress,
 }: {
   label: string;
   value: string;
   detail: string;
   availability: Availability;
-  percent?: number;
+  progress?: { value: number };
 }) {
   return (
-    <section className="space-y-1.5">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-text)]">
+    <section className="min-w-0 space-y-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-2.5">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <span className="min-w-0 [overflow-wrap:anywhere] text-[10px] font-bold uppercase tracking-widest text-[var(--color-text)]">
           {label}
         </span>
-        <span className="text-[11px] font-bold text-[var(--color-primary)]">
+        <span className="min-w-0 text-right [overflow-wrap:anywhere] text-[11px] font-bold text-[var(--color-primary)]">
           {value}
         </span>
       </div>
-      {percent !== undefined && (
-        <div className="h-1.5 overflow-hidden rounded-sm bg-[var(--color-surface-2)]">
-          <div
-            className="h-full rounded-sm bg-[var(--color-primary)]"
-            style={{ width: formatPercent(percent) }}
-          />
-        </div>
-      )}
-      <p className="text-[10px] text-[var(--color-text-muted)]">
+      {progress && <HostResourceProgress label={label} progress={progress} />}
+      <p className="min-w-0 [overflow-wrap:anywhere] text-[10px] text-[var(--color-text-muted)]">
         {detail} · {formatAvailability(availability)}
       </p>
     </section>
+  );
+}
+
+function HostResourceProgress({
+  label,
+  progress,
+}: {
+  label: string;
+  progress: { value: number };
+}) {
+  return (
+    <div
+      className="h-1.5 overflow-hidden rounded-sm bg-[var(--color-surface-2)]"
+      role="progressbar"
+      aria-label={`${label} percentage`}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={progress.value}
+    >
+      <div
+        className="h-full rounded-sm bg-[var(--color-primary)]"
+        style={{ width: formatPercent(progress.value) }}
+      />
+    </div>
   );
 }
 
@@ -55,11 +75,13 @@ export function HostResourceSummaryCell({
   value: string;
 }) {
   return (
-    <div className="rounded border border-[var(--color-border)] px-2 py-1.5">
-      <p className="uppercase tracking-widest text-[var(--color-text-muted)]">
+    <div className="min-w-0 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5">
+      <p className="min-w-0 [overflow-wrap:anywhere] uppercase tracking-widest text-[var(--color-text-muted)]">
         {label}
       </p>
-      <p className="mt-0.5 font-bold text-[var(--color-text)]">{value}</p>
+      <p className="mt-0.5 min-w-0 [overflow-wrap:anywhere] font-bold text-[var(--color-text)]">
+        {value}
+      </p>
     </div>
   );
 }
@@ -72,9 +94,11 @@ export function HostResourceInfoRow({
   value: string;
 }) {
   return (
-    <div className="flex justify-between gap-3">
-      <span className="shrink-0 text-[var(--color-text-muted)]">{label}</span>
-      <span className="min-w-0 text-right text-[var(--color-text)]">
+    <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+      <span className="min-w-0 [overflow-wrap:anywhere] text-[var(--color-text-muted)]">
+        {label}
+      </span>
+      <span className="min-w-0 text-right [overflow-wrap:anywhere] text-[var(--color-text)]">
         {value}
       </span>
     </div>
@@ -118,7 +142,7 @@ export function HostResourceLegacyMetrics({
           Temperatures
         </p>
         {!hasTemperature ? (
-          <p className="text-[var(--color-text-muted)]">
+          <p className="[overflow-wrap:anywhere] text-[var(--color-text-muted)]">
             Temperature sensors unavailable
           </p>
         ) : (
@@ -129,15 +153,12 @@ export function HostResourceLegacyMetrics({
               return (
                 <li
                   key={`${temperature.source || "sensor"}-${index}`}
-                  className="flex min-w-0 justify-between gap-3"
+                  className="flex min-w-0 flex-wrap items-baseline justify-between gap-3"
                 >
-                  <span
-                    className="min-w-0 truncate text-[var(--color-text-muted)]"
-                    title={`${identity} (${temperature.source || "source unavailable"})`}
-                  >
+                  <span className="min-w-0 [overflow-wrap:anywhere] text-[var(--color-text-muted)]">
                     {identity}
                   </span>
-                  <span className="shrink-0 text-[var(--color-text)]">
+                  <span className="shrink-0 [overflow-wrap:anywhere] text-[var(--color-text)]">
                     {formatCelsius(temperature.celsius)}
                   </span>
                 </li>
@@ -153,7 +174,7 @@ export function HostResourceLegacyMetrics({
             id={buttonId}
             type="button"
             className={cn(
-              "flex min-h-11 w-full cursor-pointer items-center justify-between gap-3 text-left font-bold uppercase tracking-widest text-[var(--color-text-muted)]",
+              "flex min-h-11 min-w-11 w-full cursor-pointer items-center justify-between gap-3 text-left font-bold uppercase tracking-widest text-[var(--color-text-muted)]",
               "focus-visible:outline-2 focus-visible:outline-[var(--color-ring)]",
             )}
             aria-expanded={storageOpen}
@@ -187,9 +208,7 @@ export function HostResourceLegacyMetrics({
 
 function HostResourceDiskRow({ disk }: { disk: DiskMetrics }) {
   const identity = `${disk.name || "Disk"} · ${disk.mountPoint || "mount unavailable"}`;
-  const percent = Number.isFinite(disk.usagePercent)
-    ? Math.min(Math.max(disk.usagePercent, 0), 100)
-    : undefined;
+  const progress = normalizeProgressPercent(disk.usagePercent);
   const usage =
     Number.isFinite(disk.usedBytes) &&
     disk.usedBytes >= 0 &&
@@ -200,34 +219,34 @@ function HostResourceDiskRow({ disk }: { disk: DiskMetrics }) {
 
   return (
     <li className="min-w-0 space-y-1">
-      <div className="flex min-w-0 items-center justify-between gap-3">
-        <span
-          className="min-w-0 truncate text-[var(--color-text)]"
-          title={identity}
-          aria-label={identity}
-        >
+      <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-3">
+        <span className="min-w-0 [overflow-wrap:anywhere] text-[var(--color-text)]">
           {identity}
         </span>
-        <span className="shrink-0 text-[var(--color-text-muted)]">
-          {percent === undefined ? "unavailable" : formatPercent(percent)}
+        <span className="shrink-0 [overflow-wrap:anywhere] text-[var(--color-text-muted)]">
+          {progress === undefined
+            ? "unavailable"
+            : formatPercent(progress.value)}
         </span>
       </div>
-      {percent !== undefined && (
+      {progress && (
         <div
           className="h-1.5 overflow-hidden rounded-sm bg-[var(--color-surface-2)]"
           role="progressbar"
           aria-label={`${identity} usage`}
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={percent}
+          aria-valuenow={progress.value}
         >
           <div
             className="h-full rounded-sm bg-[var(--color-primary)]"
-            style={{ width: formatPercent(percent) }}
+            style={{ width: formatPercent(progress.value) }}
           />
         </div>
       )}
-      <p className="text-[var(--color-text-muted)]">{usage}</p>
+      <p className="min-w-0 [overflow-wrap:anywhere] text-[var(--color-text-muted)]">
+        {usage}
+      </p>
     </li>
   );
 }

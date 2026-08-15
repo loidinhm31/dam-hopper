@@ -12,6 +12,7 @@ import {
   formatAlertState,
   formatOptionalBytes,
   formatOptionalPercent,
+  normalizeProgressRatio,
   severityClass,
 } from "@/lib/host-resource-state.js";
 import { formatPercent } from "@/lib/host-metrics-format.js";
@@ -36,34 +37,27 @@ export function HostResourceDiagnosis({
   const { memory, pressure, processes, mountContext } = snapshot;
   const visibleCgroups = snapshot.cgroups.filter(isUsableCgroup);
   const alert = snapshot.alert;
-  const availablePercent = percentage(memory.availableBytes, memory.totalBytes);
+  const availableProgress = normalizeProgressRatio(
+    memory.availableBytes,
+    memory.totalBytes,
+  );
   const battery = getBatteryPresentation(snapshot.battery);
 
   return (
     <div className="space-y-4">
-      <section className="space-y-1 border-b border-[var(--color-border)] pb-3">
-        <p className="truncate text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-muted)]">
-          {snapshot.host.hostname ?? "Host"}
-        </p>
-        <p className="truncate text-[10px] text-[var(--color-text-muted)]">
-          {snapshot.host.osName ?? "System"} · sampled{" "}
-          {formatSampleAge(snapshot.sampledAt)} ago
-        </p>
-      </section>
-
       {alert && (
         <section
           aria-label="Current host alert"
-          className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/50 p-2.5"
+          className="rounded border border-[var(--color-border)] border-l-2 bg-[var(--color-surface)] p-2.5"
         >
           <p className={cn("text-xs font-bold", severityClass(alert.severity))}>
             {formatAlertState(alert.state)}
           </p>
-          <p className="mt-1 text-[10px] text-[var(--color-text-muted)]">
+          <p className="mt-1 min-w-0 [overflow-wrap:anywhere] text-[10px] text-[var(--color-text-muted)]">
             {alert.durationSeconds}s · {alert.confidence} confidence ·{" "}
             {alert.scope} scope
           </p>
-          <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">
+          <p className="mt-1.5 min-w-0 [overflow-wrap:anywhere] text-[10px] text-[var(--color-text-muted)]">
             Operator guidance: {alert.nextAction}
           </p>
           <div className="mt-2 space-y-1 border-t border-[var(--color-border)] pt-2">
@@ -90,50 +84,90 @@ export function HostResourceDiagnosis({
         </section>
       )}
 
-      <HostResourceMetric
-        label="Memory available"
-        value={
-          availablePercent === undefined
-            ? "Unavailable"
-            : formatPercent(availablePercent)
-        }
-        detail={`${formatOptionalBytes(memory.availableBytes)} free of ${formatOptionalBytes(memory.totalBytes)}`}
-        availability={memory.availability}
-        percent={availablePercent}
-      />
-      <HostResourceMetric
-        label="File cache"
-        value={formatOptionalBytes(memory.fileCacheBytes)}
-        detail="Reported separately; memory categories are not additive."
-        availability={memory.availability}
-      />
-      <HostResourceMetric
-        label="Anonymous memory"
-        value={formatOptionalBytes(memory.anonBytes)}
-        detail="Reported separately; memory categories are not additive."
-        availability={memory.availability}
-      />
-      <HostResourceMetric
-        label="Reclaimable slab"
-        value={formatOptionalBytes(memory.reclaimableSlabBytes)}
-        detail="Kernel slab eligible for reclamation when available."
-        availability={memory.availability}
-      />
-      <HostResourceMetric
-        label="Swap used"
-        value={formatOptionalBytes(memory.swapUsedBytes)}
-        detail="Swap activity is context, not a pressure verdict."
-        availability={memory.availability}
-      />
-      <HostResourceMetric
-        label="PSI memory"
-        value={formatPsi(
-          pressure.memory.some?.avg10,
-          pressure.memory.full?.avg10,
-        )}
-        detail="some / full, 10-second average"
-        availability={pressure.memory.availability}
-      />
+      {snapshot.currentAlerts && snapshot.currentAlerts.length > 0 && (
+        <section
+          aria-label="Current resource incidents"
+          className="space-y-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-2.5"
+        >
+          <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-muted)]">
+            Current resource incidents
+          </p>
+          <ul className="space-y-1.5">
+            {snapshot.currentAlerts.slice(0, 5).map((incident) => (
+              <li
+                key={incident.incidentId}
+                className="min-w-0 space-y-0.5 text-[10px]"
+              >
+                <p
+                  className={cn(
+                    "min-w-0 [overflow-wrap:anywhere] font-medium",
+                    severityClass(incident.severity),
+                  )}
+                >
+                  {formatAlertState(incident.state)} · {incident.scope}
+                </p>
+                <p className="min-w-0 [overflow-wrap:anywhere] text-[var(--color-text-muted)]">
+                  Evidence: {formatResourceEvidence(incident)}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <section aria-label="Core host metrics" className="space-y-3">
+        <HostResourceMetric
+          label="Memory available"
+          value={
+            availableProgress === undefined
+              ? "Unavailable"
+              : formatPercent(availableProgress.value)
+          }
+          detail={`${formatOptionalBytes(memory.availableBytes)} free of ${formatOptionalBytes(memory.totalBytes)}`}
+          availability={memory.availability}
+          progress={availableProgress}
+        />
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-2">
+          <HostResourceMetric
+            label="File cache"
+            value={formatOptionalBytes(memory.fileCacheBytes)}
+            detail="Reported separately"
+            availability={memory.availability}
+          />
+          <HostResourceMetric
+            label="Anonymous memory"
+            value={formatOptionalBytes(memory.anonBytes)}
+            detail="Reported separately"
+            availability={memory.availability}
+          />
+          <HostResourceMetric
+            label="Reclaimable slab"
+            value={formatOptionalBytes(memory.reclaimableSlabBytes)}
+            detail="Kernel memory eligible for reclamation"
+            availability={memory.availability}
+          />
+          <HostResourceMetric
+            label="Swap used"
+            value={formatOptionalBytes(memory.swapUsedBytes)}
+            detail="Context only"
+            availability={memory.availability}
+          />
+          <HostResourceMetric
+            label="PSI memory"
+            value={formatPsi(
+              pressure.memory.some?.avg10,
+              pressure.memory.full?.avg10,
+            )}
+            detail="some / full avg10"
+            availability={pressure.memory.availability}
+          />
+        </div>
+        <p className="min-w-0 rounded border border-[var(--color-border)] bg-[var(--color-background)] p-2 text-[10px] leading-relaxed text-[var(--color-text-muted)] [overflow-wrap:anywhere]">
+          Memory categories are reported separately and are not additive;
+          reclaimable slab is kernel memory eligible for reclamation; swap is
+          context, not a pressure verdict; PSI is some/full avg10.
+        </p>
+      </section>
 
       {battery && <BatterySection battery={battery} />}
 
@@ -177,12 +211,12 @@ export function HostResourceDiagnosis({
             {processes.processes.slice(0, 3).map((process) => (
               <li
                 key={`${process.pid}-${process.startTicks ?? "unknown"}`}
-                className="flex items-center justify-between gap-3 text-[10px]"
+                className="flex min-w-0 flex-wrap items-baseline justify-between gap-3 text-[10px]"
               >
-                <span className="min-w-0 truncate text-[var(--color-text)]">
+                <span className="min-w-0 [overflow-wrap:anywhere] text-[var(--color-text)]">
                   {process.name} · {process.pid}
                 </span>
-                <span className="shrink-0 text-[var(--color-text-muted)]">
+                <span className="shrink-0 [overflow-wrap:anywhere] text-[var(--color-text-muted)]">
                   {formatOptionalBytes(process.rssBytes)} RSS
                 </span>
               </li>
@@ -200,45 +234,17 @@ export function HostResourceDiagnosis({
             {visibleCgroups.slice(0, 3).map((cgroup) => (
               <li
                 key={`${cgroup.namespace}-${cgroup.path}`}
-                className="flex items-center justify-between gap-3 text-[10px]"
+                className="flex min-w-0 flex-wrap items-baseline justify-between gap-3 text-[10px]"
               >
-                <span className="min-w-0 truncate text-[var(--color-text)]">
+                <span className="min-w-0 [overflow-wrap:anywhere] text-[var(--color-text)]">
                   {cgroup.path}
                 </span>
-                <span className="shrink-0 text-[var(--color-text-muted)]">
+                <span className="shrink-0 [overflow-wrap:anywhere] text-[var(--color-text-muted)]">
                   {formatOptionalBytes(cgroup.currentBytes)} /{" "}
                   {cgroup.maxUnlimited
                     ? "max"
                     : formatOptionalBytes(cgroup.maxBytes)}
                 </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {snapshot.currentAlerts && snapshot.currentAlerts.length > 0 && (
-        <section
-          aria-label="Current resource incidents"
-          className="space-y-1.5 border-t border-[var(--color-border)] pt-3"
-        >
-          <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-muted)]">
-            Current resource incidents
-          </p>
-          <ul className="space-y-1.5">
-            {snapshot.currentAlerts.slice(0, 5).map((incident) => (
-              <li key={incident.incidentId} className="space-y-0.5 text-[10px]">
-                <p
-                  className={cn(
-                    "font-medium",
-                    severityClass(incident.severity),
-                  )}
-                >
-                  {formatAlertState(incident.state)} · {incident.scope}
-                </p>
-                <p className="text-[var(--color-text-muted)]">
-                  Evidence: {formatResourceEvidence(incident)}
-                </p>
               </li>
             ))}
           </ul>
@@ -254,17 +260,17 @@ export function HostResourceDiagnosis({
             {alerts.slice(0, 5).map((incident) => (
               <li
                 key={incident.incidentId}
-                className="flex items-center justify-between gap-3 text-[10px]"
+                className="flex min-w-0 flex-wrap items-baseline justify-between gap-3 text-[10px]"
               >
                 <span
                   className={cn(
-                    "min-w-0 truncate font-medium",
+                    "min-w-0 [overflow-wrap:anywhere] font-medium",
                     severityClass(incident.severity),
                   )}
                 >
                   {formatAlertState(incident.state)}
                 </span>
-                <span className="shrink-0 text-[var(--color-text-muted)]">
+                <span className="shrink-0 [overflow-wrap:anywhere] text-[var(--color-text-muted)]">
                   {incident.resolvedAt != null
                     ? "resolved"
                     : `${incident.durationSeconds}s`}
@@ -290,22 +296,17 @@ interface BatteryPresentation {
 function getBatteryPresentation(
   battery: HostResourceSnapshotV1["battery"],
 ): BatteryPresentation | undefined {
-  if (
-    !battery ||
-    battery.count === 0 ||
-    !battery.availability ||
-    battery.availability.state === "unsupported"
-  ) {
-    return undefined;
-  }
-
   const count =
-    typeof battery.count === "number" &&
+    battery &&
     Number.isFinite(battery.count) &&
     Number.isInteger(battery.count) &&
     battery.count > 0
       ? `${battery.count}`
       : undefined;
+  if (!battery || !count || battery.availability.state === "unsupported") {
+    return undefined;
+  }
+
   const status = formatBatteryStatus(battery.status);
   const capacity = formatBatteryCapacity(battery.capacityPercent);
   const energy = formatBatteryEnergy(battery.remainingEnergyWh);
@@ -368,15 +369,6 @@ function BatterySection({ battery }: { battery: BatteryPresentation }) {
   );
 }
 
-function percentage(
-  part?: number | null,
-  total?: number | null,
-): number | undefined {
-  return part != null && total != null && total > 0
-    ? (part / total) * 100
-    : undefined;
-}
-
 function formatResourceEvidence(
   incident: NonNullable<HostResourceSnapshotV1["currentAlerts"]>[number],
 ): string {
@@ -398,11 +390,6 @@ function formatPsi(some?: number | null, full?: number | null): string {
   return some == null && full == null
     ? "Unavailable"
     : `${some?.toFixed(1) ?? "—"}% / ${full?.toFixed(1) ?? "—"}%`;
-}
-
-function formatSampleAge(sampledAt: number): string {
-  const seconds = Math.max(0, Math.round((Date.now() - sampledAt) / 1_000));
-  return seconds < 60 ? `${seconds}s` : `${Math.round(seconds / 60)}m`;
 }
 
 function isUsableCgroup(
