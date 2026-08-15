@@ -201,9 +201,15 @@ let snapshotResult: {
 let legacyMetricsResult: { data?: HostMetrics };
 
 vi.mock("@/api/queries.js", () => ({
+  useGlobalConfig: () => ({ data: { ui: {} } }),
   useHostResourceSnapshot: () => snapshotResult,
   useHostResourceAlerts: () => ({ data: [] }),
   useHostMetrics: () => legacyMetricsResult,
+  useUpdateUiConfig: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+  }),
 }));
 
 import { HostResourcePopover } from "@/components/organisms/HostResourcePopover.js";
@@ -506,9 +512,9 @@ describe("host resource monitoring in Chromium", () => {
     });
     const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
     expect(document.activeElement).toBe(dialog);
-    const closeButton = dialog?.querySelector<HTMLButtonElement>(
-      'button[aria-label="Close host resources"]',
-    );
+    const disclosure = page.getByRole("button", {
+      name: "Diagnostics and storage controls",
+    });
     await act(async () => {
       document.dispatchEvent(
         new KeyboardEvent("keydown", {
@@ -518,10 +524,12 @@ describe("host resource monitoring in Chromium", () => {
         }),
       );
     });
-    expect(document.activeElement).toBe(closeButton);
+    expect(document.activeElement).toBe(disclosure.element());
+    expect(disclosure.element().getAttribute("aria-expanded")).toBe("false");
     expect(dialog?.textContent).toContain("Read-only monitoring and diagnosis");
     expect(dialog?.textContent).toContain("Operator guidance");
-    const battery = page.getByRole("region", { name: "Battery" });
+    await act(async () => userEvent.click(disclosure));
+    const battery = page.getByRole("region", { name: "Battery", exact: true });
     await expect.element(battery).toHaveTextContent("Remaining energy");
     await expect.element(battery).toHaveTextContent("12.5 Wh");
     await expect.element(battery).toHaveTextContent("Instantaneous power");
@@ -554,7 +562,7 @@ describe("host resource monitoring in Chromium", () => {
 
   it("keeps compatible basic metrics visible when the deep snapshot fails", async () => {
     snapshotResult = {
-      data: { ...snapshot, alert: undefined },
+      data: undefined,
       isLoading: false,
       isError: true,
     };
@@ -598,7 +606,11 @@ describe("host resource monitoring in Chromium", () => {
     );
     await act(async () => trigger?.click());
 
-    const battery = page.getByRole("region", { name: "Battery" });
+    const disclosure = page.getByRole("button", {
+      name: "Diagnostics and storage controls",
+    });
+    await act(async () => userEvent.click(disclosure));
+    const battery = page.getByRole("region", { name: "Battery", exact: true });
     await expect.element(battery).toHaveTextContent("12.5 Wh");
     await expect.element(battery).not.toHaveTextContent("Instantaneous power");
   });
@@ -612,12 +624,12 @@ describe("host resource monitoring in Chromium", () => {
     await act(async () => trigger?.click());
 
     const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
-    const storageButton = page.getByRole("button", { name: "Host storage" });
-    const storageElement = dialog?.querySelector<HTMLButtonElement>(
-      'button[aria-expanded="false"]',
-    );
+    const storageButton = page.getByRole("button", {
+      name: "Diagnostics and storage controls",
+    });
+    const storageElement = storageButton.element() as HTMLButtonElement;
     const storagePanel = dialog?.querySelector<HTMLElement>(
-      `[aria-labelledby="${storageElement?.id}"]`,
+      `#${storageElement.getAttribute("aria-controls")}`,
     );
     expect(dialog?.textContent).toContain("Package");
     expect(dialog?.textContent).toContain("61°C");
@@ -629,9 +641,7 @@ describe("host resource monitoring in Chromium", () => {
     expect(storagePanel?.hidden).toBe(false);
     expect(dialog?.textContent).toContain("/workspace");
     expect(dialog?.textContent).toContain("/cache/with/a/long/path");
-    expect(storagePanel?.querySelectorAll('[role="progressbar"]')).toHaveLength(
-      2,
-    );
+    expect(storagePanel?.querySelectorAll("meter")).toHaveLength(2);
 
     await act(async () => userEvent.click(storageButton));
     expect(storageElement?.getAttribute("aria-expanded")).toBe("false");
@@ -696,7 +706,7 @@ describe("host resource monitoring in Chromium", () => {
       'button[aria-label="Close host resources"]',
     );
     const storageButton = dialog.querySelector<HTMLButtonElement>(
-      "button[aria-expanded]",
+      'button[aria-controls$="-diagnosis"]',
     );
     expect(closeButton).not.toBeNull();
     expect(storageButton).not.toBeNull();
@@ -938,7 +948,7 @@ describe("host resource monitoring in Chromium", () => {
     assertNoHorizontalOverflow(dialog);
   });
 
-  it("keeps the critical fixture header and six core cards above the 1280px fold", async () => {
+  it("keeps the critical fixture header and expanded diagnostics reachable at desktop width", async () => {
     await page.viewport(1280, 800);
     setSafeAreas({ top: 0, right: 0, bottom: 0, left: 0 });
     snapshotResult = { data: snapshot, isLoading: false, isError: false };
@@ -948,6 +958,11 @@ describe("host resource monitoring in Chromium", () => {
       container,
       "desktop-density",
     );
+    const disclosure = dialog.querySelector<HTMLButtonElement>(
+      'button[aria-controls$="-diagnosis"]',
+    );
+    expect(disclosure).not.toBeNull();
+    await act(async () => userEvent.click(disclosure as HTMLButtonElement));
     const body = getScrollBody(dialog);
     body.scrollTop = 0;
     const bodyRect = body.getBoundingClientRect();
@@ -969,8 +984,8 @@ describe("host resource monitoring in Chromium", () => {
       expect(card).not.toBeNull();
       const cardRect = (card as HTMLElement).getBoundingClientRect();
       expect(cardRect.top).toBeGreaterThanOrEqual(bodyRect.top);
-      expect(cardRect.bottom).toBeLessThanOrEqual(bodyRect.bottom);
     }
+    expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
   });
 
   it("moves disconnect/reconnect handling to the replacement profile transport", async () => {
