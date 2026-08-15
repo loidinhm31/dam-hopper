@@ -13,7 +13,7 @@ use super::media_session::{
     MEDIA_SESSION_ABSOLUTE_TTL, MEDIA_SESSION_IDLE_TTL,
 };
 
-pub(crate) const MEDIA_TICKET_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
+pub(crate) const MEDIA_TICKET_IDLE_TTL: Duration = Duration::from_secs(15 * 60);
 pub(crate) const MEDIA_TICKET_ABSOLUTE_TTL: Duration = Duration::from_secs(8 * 60 * 60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -902,11 +902,15 @@ mod tests {
             MediaTicketIssue::Issued(lease) => lease.ticket,
             _ => panic!("ticket issue failed"),
         };
-        clock.advance(MEDIA_SESSION_IDLE_TTL - Duration::from_secs(1));
+        clock.advance(MEDIA_TICKET_IDLE_TTL - Duration::from_secs(1));
         assert!(store
             .lookup_and_touch_for_session(&ticket, MediaTicketKind::Video, &session.token)
             .is_some());
-        clock.advance(Duration::from_secs(2));
+        clock.advance(MEDIA_TICKET_IDLE_TTL - Duration::from_secs(1));
+        assert!(store
+            .lookup_and_touch_for_session(&ticket, MediaTicketKind::Video, &session.token)
+            .is_some());
+        clock.advance(Duration::from_secs(3));
         assert!(store
             .lookup_and_touch_for_session(&ticket, MediaTicketKind::Video, &session.token)
             .is_some());

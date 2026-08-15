@@ -1478,8 +1478,9 @@ The media cookie is host-only `HttpOnly; SameSite=Lax; Path=/api/fs` and
 non-`Secure` for HTTP compatibility. The auth fallback cookie is host-only
 `HttpOnly; SameSite=Strict; Path=/`, also non-`Secure`. Each successful image or
 video issuance creates or reuses that actor's media session, returns the opaque
-ticket response, and sets or refreshes the media cookie. Ticket and session idle lifetime is 30 minutes and the
-absolute lifetime is eight hours. Successful issuance and fully validated stream responses can
+ticket response, and sets or refreshes the media cookie. Ticket idle lifetime is
+15 minutes; media-session idle lifetime is 30 minutes; both have an eight-hour
+absolute lifetime. Successful issuance and fully validated stream responses can
 refresh idle lifetime but never the absolute deadline. Context changes, expiry,
 and explicit revocation remove affected tickets.
 
@@ -1503,7 +1504,8 @@ replacement, and before logout, including when an open settings dialog outlives
 a concurrently deleted profile. Remote revocation is bounded to five seconds;
 an unreachable server does
 not block local cleanup/logout, so the old cookie and tickets can remain usable
-until their 30-minute idle or eight-hour absolute expiry. Conversely, if remote
+until their 15-minute ticket or 30-minute session idle expiry, or eight-hour
+absolute expiry. Conversely, if remote
 revocation succeeds but local token persistence or removal then fails, the UI
 intentionally does **not** recreate the remote session. Any restored or retained
 local credential must issue fresh media tickets (and a new media session) before
