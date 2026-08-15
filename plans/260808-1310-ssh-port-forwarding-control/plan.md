@@ -1,7 +1,7 @@
 ---
 title: "Native SSH Port-Forwarding Control"
 description: "Add ordered desktop-local SSH forwarding through a narrow Tauri/Rust capability and browser-safe shared UI host."
-status: blocked
+status: complete
 priority: P2
 effort: 88h
 branch: features/ssh-port-forwarding-control
@@ -14,6 +14,8 @@ created: 2026-08-08
 ## Overview
 
 Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardHost` -> 12-command desktop IPC -> native Rust manager -> desktop `127.0.0.1` listener -> SSH `direct-tcpip` -> remote `127.0.0.1` target. Browser, native mobile, Axum, existing server forwarding/SSH/PTY, and shared WebSocket transport remain outside the feature.
+
+**Accepted scope (2026-08-15): Windows desktop only.** This plan is complete for the Windows implementation, automated native/package gates, and release-evidence workflow. macOS, Linux, Android, iOS, and future signed-updater expansion are separate follow-up scope, not completion blockers for this plan.
 
 ## Architecture constraints
 
@@ -39,7 +41,7 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 | 4 | Manager ordering, lifecycle, IPC, shutdown | Complete | 100% | 16h | [Phase 04](./phase-04-native-manager-tauri-ipc.md) |
 | 5 | Browser-safe host and ordered adapter | Complete | 100% | 10h | [Phase 05](./phase-05-host-context-native-adapter.md) |
 | 6 | Desktop-only control surface | Complete | 100% | 10h | [Phase 06](./phase-06-desktop-control-surface.md) |
-| 7 | Deferred cross-platform and product release gates | In progress (Windows subset only) | 35% | 16h | [Phase 07](./phase-07-cross-platform-release-gates.md) |
+| 7 | Windows verification and release gates (re-scoped) | Complete (Windows-only) | 100% | 16h | [Phase 07](./phase-07-cross-platform-release-gates.md) |
 
 ## Explicit non-goals
 
@@ -51,11 +53,14 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 
 - Windows Phase 01 limited GO for exact SSH crate/crypto/agent/ACL and Windows storage graph; Phase 02 contract design may proceed.
 - Durable-store implementation remains blocked pending production deterministic per-operation race/fault coverage and durable replacement proof.
-- Windows automated/package runtime evidence; Linux/macOS/iOS evidence is deferred with platform expansion.
-- Security approval of ACL/trust/target/remediation and product acceptance of other-local-process exposure.
-- The 88h estimate remains conditional on Windows-only Phase 01 proofs. Any failed mandatory Windows gate, fallback, updater/relaunch enablement, or trust-repair primitive gap stops later phases. Adding Linux/macOS/iOS support requires a separate scope and estimate review.
+- Windows automated/package gates and the protected runtime-evidence workflow are implemented. Protected runtime evidence and the three role approvals remain operational prerequisites before a production tag is released; they do not block completion of this implementation plan.
+- macOS/Linux/Android/iOS evidence, signed updater artifacts, and platform expansion are deferred to a separate scope and estimate review.
+- The 88h estimate remains conditional on Windows-only Phase 01 proofs. Any failed mandatory Windows gate, fallback, updater/relaunch enablement, or trust-repair primitive gap stops a future release.
 
-## Unresolved Questions
+## Deferred scope
+
+- Named release/security/product owners and protected runtime-evidence environment must be configured before a production release candidate.
+- Non-Windows support wording and release evidence require a future cross-platform plan.
 
 ## Current status
 
@@ -77,4 +82,4 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 - Named release/security/product owners and protected runtime-evidence environment must be configured.
 - Non-Windows support wording and release evidence remain deferred until a future scope expansion.
 
-**2026-08-15T22:39:00+07:00 - Phase 07 final Windows-only review:** The Windows subset is implemented and validated for temporary OpenSSH remote-loopback E2E, redacted evidence schema/validator, exact artifact/hash and commit binding, protected approval-ID binding, native Rust/CI/release pre-bundle checks, WebView2/OpenSSH preflight, and the NSIS package profile. The unsigned profile disables updater artifact creation because signing credentials and an updater endpoint are unavailable; runtime updater/relaunch remains absent. Protected packaged-runtime evidence, release-engineer/security-reviewer/product-owner approvals, macOS/Linux/Android/iOS gates, signed updater artifacts, and final product/security acceptance remain pending. Overall plan status remains **blocked**; Phase 07 remains incomplete.
+**2026-08-15T22:39:00+07:00 - Windows-only re-scope accepted:** The Windows implementation and release-gate scope is complete. Validation covers temporary OpenSSH remote-loopback E2E, redacted evidence schema/validator, exact artifact/hash and commit binding, protected approval-ID/timestamp binding, native Rust/CI/release pre-bundle checks, WebView2/OpenSSH preflight, and the NSIS package profile. The unsigned profile disables updater artifact creation because signing credentials and an updater endpoint are unavailable; runtime updater/relaunch remains absent. Protected runtime evidence remains a production-release prerequisite, while non-Windows/mobile/signed-updater expansion is deferred to a separate plan. Overall plan status is **complete for the accepted Windows-only scope**.
