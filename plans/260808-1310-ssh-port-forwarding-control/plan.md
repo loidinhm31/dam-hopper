@@ -39,7 +39,7 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 | 4 | Manager ordering, lifecycle, IPC, shutdown | Complete | 100% | 16h | [Phase 04](./phase-04-native-manager-tauri-ipc.md) |
 | 5 | Browser-safe host and ordered adapter | Complete | 100% | 10h | [Phase 05](./phase-05-host-context-native-adapter.md) |
 | 6 | Desktop-only control surface | Complete | 100% | 10h | [Phase 06](./phase-06-desktop-control-surface.md) |
-| 7 | Deferred cross-platform and product release gates | Deferred | 0% | 16h | [Phase 07](./phase-07-cross-platform-release-gates.md) |
+| 7 | Deferred cross-platform and product release gates | In progress (Windows subset only) | 35% | 16h | [Phase 07](./phase-07-cross-platform-release-gates.md) |
 
 ## Explicit non-goals
 
@@ -76,3 +76,5 @@ Implement SSH local forwarding in Tauri desktop: shared React UI -> `SshForwardH
 - Phase 02 must retain the approved `russh`/`ring` and Windows OpenSSH named-pipe choices until a separate security review changes them.
 - Named release/security/product owners and protected runtime-evidence environment must be configured.
 - Non-Windows support wording and release evidence remain deferred until a future scope expansion.
+
+**2026-08-15T22:39:00+07:00 - Phase 07 final Windows-only review:** The Windows subset is implemented and validated for temporary OpenSSH remote-loopback E2E, redacted evidence schema/validator, exact artifact/hash and commit binding, protected approval-ID binding, native Rust/CI/release pre-bundle checks, WebView2/OpenSSH preflight, and the NSIS package profile. The unsigned profile disables updater artifact creation because signing credentials and an updater endpoint are unavailable; runtime updater/relaunch remains absent. Protected packaged-runtime evidence, release-engineer/security-reviewer/product-owner approvals, macOS/Linux/Android/iOS gates, signed updater artifacts, and final product/security acceptance remain pending. Overall plan status remains **blocked**; Phase 07 remains incomplete.

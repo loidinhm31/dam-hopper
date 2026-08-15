@@ -32,10 +32,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 - The initial Phase 01 blocked/no-go entry is superseded by the completed Phase 01–06 Windows-only milestone below; Phase 07 release gates remain deferred.
 
-### Native SSH Port-Forwarding Control (2026-08-14)
+### Native SSH Port-Forwarding Control (2026-08-15)
 
 - **Phases 01–06 — [COMPLETED 2026-08-14; Windows-only scope]**: Phase 01 Windows dependency/ACL feasibility, Phase 02 native contracts and scope retention, Phase 03 SSH transport/trust, Phase 04 manager/IPC lifecycle, Phase 05 browser-safe host/adapter, and Phase 06 desktop-only control surface are complete. The delivered surface is host-gated to the native desktop, uses explicit reviewed endpoints and lifecycle actions, exposes agent/opaque-key inventory and host-key approval/remediation, and keeps browser/mobile forwarding routes and calls absent. Validation passed: UI 181 files/1,050 tests, Chromium 28 files/121 tests, and Rust 140 passed/1 ignored; build, lint, `cargo check`, `cargo fmt`, and diff checks passed. [Plan](../plans/260808-1310-ssh-port-forwarding-control/plan.md).
-- **Phase 07 — [DEFERRED]**: Cross-platform, packaged Tauri/runtime, real SSH/target, listener-closure, protected evidence, security approval, product loopback-risk acceptance, and manual release gates remain outstanding. Overall release status remains blocked; Phase 07 completion is not claimed.
+- **Phase 07 — [WINDOWS-ONLY SUBSET IMPLEMENTED]**: Windows CI/release gates now cover Rust format/lint/unit checks, the ignored real OpenSSH remote-loopback forwarding test, deterministic smoke/evidence validation, no-bundle Tauri compilation, and the explicit unsigned NSIS package profile. WebView2/OpenSSH preflight is automated; protected packaged-runtime evidence remains manual-pending. macOS, Linux, Android, iOS, signed updater artifacts, security/product approvals, and final release acceptance remain deferred. Overall release status remains blocked; Phase 07 completion is not claimed.
 
 ### Programming Language Navigation in Explorer (2026-08-10)
 
