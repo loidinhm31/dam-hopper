@@ -1,18 +1,27 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { Activity, AlertTriangle, CheckCircle2, X } from "lucide-react";
 import {
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  X,
+} from "lucide-react";
+import {
+  useGlobalConfig,
   useHostMetrics,
   useHostResourceAlerts,
   useHostResourceSnapshot,
+  useUpdateUiConfig,
 } from "@/api/queries.js";
 import { HostResourceDiagnosis } from "@/components/organisms/HostResourceDiagnosis.js";
-import { HostResourceLegacyMetrics } from "@/components/organisms/HostResourceDiagnosisRows.js";
+import { HostResourceGlance } from "@/components/organisms/HostResourceGlance.js";
 import { useHostResourceAlertPresentation } from "@/hooks/use-host-resource-alert-presentation.js";
 import {
   formatAlertState,
   resolveHostResourceStatus,
   type HostResourceStatusPresentation,
 } from "@/lib/host-resource-state.js";
+import { withUiConfigDefaults } from "@/lib/ui-config.js";
 import { cn } from "@/lib/utils.js";
 
 export function HostResourcePopover() {
@@ -21,9 +30,13 @@ export function HostResourcePopover() {
   const panelRef = useRef<HTMLElement>(null);
   const panelId = useId();
   const [open, setOpen] = useState(false);
+  const [diagnosisOpen, setDiagnosisOpen] = useState(false);
+  const { data: globalConfig } = useGlobalConfig();
+  const updateUiConfig = useUpdateUiConfig();
   const snapshot = useHostResourceSnapshot();
   const alerts = useHostResourceAlerts(true);
   const legacyMetrics = useHostMetrics(open);
+  const uiConfig = withUiConfigDefaults(globalConfig?.ui);
   const alert = snapshot.data?.alert;
   const currentAlerts = snapshot.data?.currentAlerts;
   const alertPresentation = useHostResourceAlertPresentation(
@@ -49,6 +62,10 @@ export function HostResourcePopover() {
       ? sourceLabel
       : `${sourceLabel}; ${effectiveStatus.label}`;
 
+  const savePinnedMount = (mountPoint: string | null) => {
+    updateUiConfig.mutate({ hostResourcePinnedMount: mountPoint });
+  };
+
   const closeAndRestoreFocus = () => {
     setOpen(false);
     requestAnimationFrame(() => triggerRef.current?.focus());
@@ -69,11 +86,13 @@ export function HostResourcePopover() {
         return;
       }
       if (event.key === "Tab") {
-        const focusable = panelRef.current?.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        );
-        const first = focusable?.[0];
-        const last = focusable?.[focusable.length - 1];
+        const focusable = Array.from(
+          panelRef.current?.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          ) ?? [],
+        ).filter((element) => !element.closest("[hidden]"));
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
         if (!first || !last) return;
         if (document.activeElement === panelRef.current) {
           event.preventDefault();
@@ -209,6 +228,7 @@ export function HostResourcePopover() {
               </div>
             )}
             {(!snapshot.data || snapshot.isError) &&
+              !snapshot.data &&
               effectiveStatus.mode !== "sampling" && (
                 <>
                   <div className="flex items-center gap-2 text-xs text-[var(--color-danger)]">
@@ -216,29 +236,63 @@ export function HostResourcePopover() {
                     Resource snapshot unavailable
                   </div>
                   {legacyMetrics.data && (
-                    <section
-                      aria-label="Compatible basic metrics"
-                      className="mt-3 rounded border border-[var(--color-border)] bg-[var(--color-background)] p-2.5"
-                    >
-                      <p className="text-xs font-bold text-[var(--color-text)]">
-                        Deep metrics unavailable; showing compatible basic
-                        metrics.
-                      </p>
-                      <div className="mt-2">
-                        <HostResourceLegacyMetrics
-                          metrics={legacyMetrics.data}
-                        />
-                      </div>
-                    </section>
+                    <p className="mt-3 text-xs text-[var(--color-text-muted)]">
+                      Deep metrics unavailable; showing compatible basic
+                      metrics.
+                    </p>
                   )}
                 </>
               )}
-            {!snapshot.isError && snapshot.data && (
-              <HostResourceDiagnosis
+            {(snapshot.data || legacyMetrics.data) && (
+              <HostResourceGlance
+                metrics={legacyMetrics.data}
                 snapshot={snapshot.data}
-                alerts={alerts.data ?? []}
-                legacyMetrics={legacyMetrics.data}
+                pinnedMount={uiConfig.hostResourcePinnedMount}
+                metricsStale={legacyMetrics.isStale}
+                metricsError={legacyMetrics.isError}
               />
+            )}
+            {snapshot.data && (
+              <section className="mt-3 border-t border-[var(--color-border)] pt-3">
+                <h3>
+                  <button
+                    type="button"
+                    className="flex min-h-11 min-w-11 w-full cursor-pointer items-center justify-between gap-3 text-left text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-muted)] focus-visible:outline-2 focus-visible:outline-[var(--color-ring)]"
+                    aria-expanded={diagnosisOpen}
+                    aria-controls={`${panelId}-diagnosis`}
+                    onClick={() => setDiagnosisOpen((value) => !value)}
+                  >
+                    <span>Diagnostics and storage controls</span>
+                    <ChevronDown
+                      aria-hidden="true"
+                      className={cn(
+                        "h-4 w-4 shrink-0 transition-transform",
+                        diagnosisOpen &&
+                          "rotate-180 text-[var(--color-primary)]",
+                      )}
+                    />
+                  </button>
+                </h3>
+                <div
+                  id={`${panelId}-diagnosis`}
+                  hidden={!diagnosisOpen}
+                  className="mt-3"
+                >
+                  <HostResourceDiagnosis
+                    snapshot={snapshot.data}
+                    alerts={alerts.data ?? []}
+                    legacyMetrics={legacyMetrics.data}
+                    pinnedMount={uiConfig.hostResourcePinnedMount}
+                    onPin={savePinnedMount}
+                    isPinPending={updateUiConfig.isPending}
+                    pinError={
+                      updateUiConfig.error instanceof Error
+                        ? updateUiConfig.error
+                        : null
+                    }
+                  />
+                </div>
+              </section>
             )}
           </div>
         </section>

@@ -37,9 +37,15 @@ const snapshot = {
 } as HostResourceSnapshotV1;
 
 vi.mock("@/api/queries.js", () => ({
+  useGlobalConfig: () => ({ data: { ui: {} } }),
   useHostMetrics: () => ({ data: undefined }),
   useHostResourceAlerts: () => ({ data: [] }),
   useHostResourceSnapshot: () => ({ data: snapshot }),
+  useUpdateUiConfig: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+  }),
 }));
 
 import { HostResourcePopover } from "./HostResourcePopover.js";
