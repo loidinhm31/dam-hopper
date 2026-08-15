@@ -6,11 +6,9 @@ use super::{
     media_session::MediaSessionToken,
     media_ticket::{
         MediaFileVersion, MediaTicketBoundIssue, MediaTicketKind, MediaTicketPurpose,
-        MediaTicketRecord, MediaTicketStore, MAX_MEDIA_TICKETS,
+        MediaTicketRecord, MediaTicketStore,
     },
 };
-
-pub const MAX_IMAGE_TICKETS: usize = MAX_MEDIA_TICKETS;
 
 const IMAGE_TYPES: [(&str, &str); 5] = [
     ("png", "image/png"),
