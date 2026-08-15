@@ -13,6 +13,7 @@ import {
 } from "@/lib/shortcuts.js";
 
 export const DEFAULT_UI_CONFIG: UiConfig = {
+  hostResourcePinnedMount: null,
   systemFontSize: 14,
   editorFontSize: 14,
   editorZoomWheelEnabled: true,
@@ -73,6 +74,7 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
   return {
     ...DEFAULT_UI_CONFIG,
     ...ui,
+    hostResourcePinnedMount: ui?.hostResourcePinnedMount ?? null,
     explorerLanguageFilter: normalizeExplorerLanguageFilter(
       (ui as { explorerLanguageFilter?: unknown } | null | undefined)
         ?.explorerLanguageFilter,

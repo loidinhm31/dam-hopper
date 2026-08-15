@@ -31,6 +31,8 @@ use crate::{
     tunnel::{CloudflaredDriver, TunnelSessionManager},
 };
 
+use crate::config::schema::MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES;
+
 use opaque_ke::ServerSetup;
 use rand::rngs::OsRng;
 
@@ -3062,6 +3064,42 @@ fn merge_global_ui_config_rejects_invalid_explorer_language_filter() {
     assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
 }
 
+#[test]
+fn merge_global_ui_config_accepts_and_rejects_host_resource_pinned_mount() {
+    let accepted = crate::api::config::merge_global_ui_config(
+        Some(crate::config::schema::UiConfig::default()),
+        &serde_json::json!({
+            "hostResourcePinnedMount": "/exact/mount",
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        accepted.host_resource_pinned_mount.as_deref(),
+        Some("/exact/mount")
+    );
+
+    let null_cleared = crate::api::config::merge_global_ui_config(
+        Some(accepted),
+        &serde_json::json!({"hostResourcePinnedMount": null}),
+    )
+    .unwrap();
+    assert_eq!(null_cleared.host_resource_pinned_mount, None);
+
+    for value in [
+        serde_json::json!({"hostResourcePinnedMount": ""}),
+        serde_json::json!({
+            "hostResourcePinnedMount": "x".repeat(MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES + 1)
+        }),
+    ] {
+        let err = crate::api::config::merge_global_ui_config(
+            Some(crate::config::schema::UiConfig::default()),
+            &value,
+        )
+        .unwrap_err();
+        assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+    }
+}
+
 #[tokio::test]
 async fn update_global_ui_at_path_persists_partial_merge_and_updates_state() {
     let tmp = tempfile::tempdir().unwrap();
@@ -3085,6 +3123,86 @@ async fn update_global_ui_at_path_persists_partial_merge_and_updates_state() {
 
     let ui = state.global_config.read().await.ui.clone().unwrap();
     assert!(ui.terminal_codex_notifications_enabled);
+}
+
+#[tokio::test]
+async fn update_global_ui_at_path_persists_and_clears_host_resource_pinned_mount() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "hostResourcePinnedMount": "/data",
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+
+    let written = std::fs::read_to_string(&gc_path).unwrap();
+    assert!(written.contains("host_resource_pinned_mount = \"/data\""));
+    assert!(!written.contains("hostResourcePinnedMount"));
+
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "hostResourcePinnedMount": null,
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+
+    let written = std::fs::read_to_string(&gc_path).unwrap();
+    assert!(!written.contains("host_resource_pinned_mount"));
+    assert_eq!(
+        state
+            .global_config
+            .read()
+            .await
+            .ui
+            .as_ref()
+            .unwrap()
+            .host_resource_pinned_mount,
+        None
+    );
+}
+
+#[tokio::test]
+async fn update_global_ui_at_path_rejects_invalid_host_resource_pinned_mount_without_overwrite() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "hostResourcePinnedMount": "/data",
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+    let before = std::fs::read_to_string(&gc_path).unwrap();
+
+    let err = crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "hostResourcePinnedMount": "x".repeat(MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES + 1),
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+    assert_eq!(std::fs::read_to_string(&gc_path).unwrap(), before);
 }
 
 #[tokio::test]

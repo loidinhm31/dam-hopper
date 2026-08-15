@@ -797,6 +797,7 @@ export interface AgentCommandPattern {
 }
 
 export interface UiConfig {
+  hostResourcePinnedMount?: string | null;
   systemFontSize: number;
   editorFontSize: number;
   editorZoomWheelEnabled: boolean;

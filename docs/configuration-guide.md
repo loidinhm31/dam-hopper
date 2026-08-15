@@ -285,7 +285,7 @@ server share a filesystem; remote/container agents need a future resource API.
 
 ### UI Configuration
 
-The global UI config includes terminal workspace/panel shortcuts, inline terminal suggestions, Codex terminal notification settings, and terminal project switching.
+The global UI config includes terminal workspace/panel shortcuts, inline terminal suggestions, Codex terminal notification settings, terminal project switching, and the host-resource storage presentation preference.
 
 | Field                                        | Type   | Default               | Notes                                                                                      |
 | -------------------------------------------- | ------ | --------------------- | ------------------------------------------------------------------------------------------ |
@@ -302,6 +302,7 @@ The global UI config includes terminal workspace/panel shortcuts, inline termina
 | terminal_codex_notification_sound_enabled    | bool   | `true`                | Persisted preference for the in-app chime                                                  |
 | terminal_codex_notification_sound_volume     | u8     | `100`                 | In-app chime volume, from `0` to `100`                                                     |
 | terminal_codex_notification_sound_pattern    | string | `"default"`           | One of `"default"`, `"soft"`, `"two-tone"`, or `"urgent"`                                  |
+| host_resource_pinned_mount                   | string or null | `null`          | Optional exact mount point for the host-resource storage row; UTF-8 length 1–4096 bytes    |
 
 Example:
 
@@ -320,6 +321,7 @@ terminal_codex_browser_notifications_enabled = true
 terminal_codex_notification_sound_enabled = true
 terminal_codex_notification_sound_volume = 100
 terminal_codex_notification_sound_pattern = "default"
+host_resource_pinned_mount = "/"
 ```
 
 When enabled, the terminal shows a compact floating control in the lower-right
@@ -328,7 +330,7 @@ step up/down (using the configured terminal scroll step), and jump-to-bottom.
 The menu closes on outside click or `Escape`; the preference is UI-only and does
 not affect retained server scrollback.
 
-The API exposes these UI fields in `camelCase` (for example, `terminalCodexNotificationToastEnabled` and `terminalAutoSwitchProjectEnabled`) and persists them as the snake_case TOML keys shown above. Older `terminal_agent_notifications_enabled` and `terminalAgentNotificationsEnabled` values remain read-compatible aliases for the master switch. Missing child preferences default to enabled, volume `100`, and pattern `"default"`.
+The API exposes these UI fields in `camelCase` (for example, `terminalCodexNotificationToastEnabled`, `terminalAutoSwitchProjectEnabled`, and `hostResourcePinnedMount`) and persists them as the snake_case TOML keys shown above. `hostResourcePinnedMount` accepts `null` to clear the pin; a non-null value must be UTF-8 encoded and 1–4096 bytes long. If the saved mount is absent from the current host-metrics disk list, the UI shows it as missing and does not silently select another mount. This preference is presentation-only and has no telemetry coupling. Older `terminal_agent_notifications_enabled` and `terminalAgentNotificationsEnabled` values remain read-compatible aliases for the master switch. Missing child preferences default to enabled, volume `100`, and pattern `"default"`.
 
 `terminalAutoSwitchProjectEnabled` is a global preference and defaults to `true` so terminal selection follows the requested project context immediately. In Settings > Appearance, the **Switch project on terminal selection** switch uses the copy: “Selecting a terminal assigned to a project activates that project; free terminals leave the current project unchanged.” When enabled, selecting a project-assigned terminal or an already-open project terminal tab changes the active project before the tab or panel renders; when disabled, selection opens the terminal without changing the active project. Free terminals, unowned terminals with blank project metadata, and unknown sessions (including unrecognized session-ID prefixes) never switch the active project; free terminals remain excluded even if incidental metadata contains a project. The top-bar project switcher and project-scoped panels (Explorer, Search, Git, Commit, Project Info, and editor) all consume the resulting active project. This uses the existing global UI-config persistence path and requires no new endpoint or migration.
 

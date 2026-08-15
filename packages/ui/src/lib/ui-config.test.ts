@@ -28,6 +28,7 @@ describe("withUiConfigDefaults", () => {
     expect(ui.terminalCommitStatusEnabled).toBe(false);
     expect(ui.runtimeGroupOrder).toEqual([]);
     expect(ui.runtimeItemOrder).toEqual({});
+    expect(ui.hostResourcePinnedMount).toBeNull();
   });
 
   it("preserves existing fields while normalizing provided shortcuts", () => {
@@ -55,6 +56,7 @@ describe("withUiConfigDefaults", () => {
       mobileCustomKeyboardFontSize: 14,
       mobileCustomKeyboardPadding: 9,
       mobileCustomKeyboardRowGap: 7,
+      hostResourcePinnedMount: "/data",
     });
 
     expect(ui.editorFontSize).toBe(18);
@@ -80,6 +82,15 @@ describe("withUiConfigDefaults", () => {
     expect(ui.mobileCustomKeyboardFontSize).toBe(14);
     expect(ui.mobileCustomKeyboardPadding).toBe(9);
     expect(ui.mobileCustomKeyboardRowGap).toBe(7);
+    expect(ui.hostResourcePinnedMount).toBe("/data");
+  });
+
+  it("normalizes an absent or null host resource pin to null", () => {
+    expect(withUiConfigDefaults({}).hostResourcePinnedMount).toBeNull();
+    expect(
+      withUiConfigDefaults({ hostResourcePinnedMount: null })
+        .hostResourcePinnedMount,
+    ).toBeNull();
   });
 
   it("falls back to the legacy terminal agent toggle for codex notifications", () => {

@@ -167,6 +167,9 @@ pub(crate) fn merge_global_ui_config(
     new_ui
         .validate_terminal_notification_sound_volume()
         .map_err(AppError::InvalidInput)?;
+    new_ui
+        .validate_host_resource_pinned_mount()
+        .map_err(AppError::InvalidInput)?;
     Ok(new_ui)
 }
 
