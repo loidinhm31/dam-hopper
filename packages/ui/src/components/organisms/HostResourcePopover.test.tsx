@@ -54,6 +54,8 @@ describe("HostResourcePopover", () => {
     expect(markup).not.toContain("bg-current");
     expect(markup).toContain("Active host incident");
     expect(markup).not.toContain("0 unread");
+    expect(markup).toMatch(/<span aria-hidden="true"[^>]*>!<\/span>/);
+    expect(markup).toContain("text-[var(--color-danger)]");
     const describedBy = markup.match(/aria-describedby="([^"]+)"/)?.[1];
     expect(describedBy).toBeDefined();
     expect(markup).toContain(`id="${describedBy}"`);
