@@ -135,6 +135,7 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
             "gitPanelShortcut" => "git_panel_shortcut",
             "portsPanelShortcut" => "ports_panel_shortcut",
             "fleetTerminalShortcut" => "fleet_terminal_shortcut",
+            "hostResourcePinnedMount" => "host_resource_pinned_mount",
             "terminalSuggestionsEnabled" => "terminal_suggestions_enabled",
             "terminalAutoSwitchProjectEnabled" => "terminal_auto_switch_project_enabled",
             "terminalCodexNotificationsEnabled" => "terminal_codex_notifications_enabled",
