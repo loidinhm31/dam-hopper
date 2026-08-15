@@ -494,6 +494,10 @@ pub enum ExplorerLanguageFilter {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiConfig {
+    /// Optional exact mount point selected by the host-resource presentation.
+    /// The server persists this value but never resolves or inspects it.
+    #[serde(default, alias = "host_resource_pinned_mount")]
+    pub host_resource_pinned_mount: Option<String>,
     #[serde(default = "default_system_font_size", alias = "system_font_size")]
     pub system_font_size: u16,
     #[serde(default = "default_editor_font_size", alias = "editor_font_size")]
@@ -648,6 +652,8 @@ pub struct UiConfig {
     pub terminal_scroll_step: u16,
 }
 
+pub const MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES: usize = 4096;
+
 fn default_terminal_scroll_step() -> u16 {
     3
 }
@@ -659,6 +665,7 @@ fn default_true() -> bool {
 impl Default for UiConfig {
     fn default() -> Self {
         UiConfig {
+            host_resource_pinned_mount: None,
             system_font_size: default_system_font_size(),
             editor_font_size: default_editor_font_size(),
             editor_zoom_wheel_enabled: default_editor_zoom_wheel_enabled(),
@@ -699,6 +706,20 @@ impl Default for UiConfig {
 }
 
 impl UiConfig {
+    pub fn validate_host_resource_pinned_mount(&self) -> Result<(), String> {
+        let Some(mount_point) = self.host_resource_pinned_mount.as_ref() else {
+            return Ok(());
+        };
+
+        if (1..=MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES).contains(&mount_point.len()) {
+            Ok(())
+        } else {
+            Err(format!(
+                "Host resource pinned mount must be between 1 and {MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES} UTF-8 bytes"
+            ))
+        }
+    }
+
     /// Validates that both font sizes are in the allowed range [10, 32].
     pub fn validate_font_sizes(&self) -> Result<(), String> {
         Self::validate_font_size(self.system_font_size)?;
