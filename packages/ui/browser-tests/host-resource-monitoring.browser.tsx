@@ -199,16 +199,36 @@ describe("host resource monitoring in Chromium", () => {
   it("opens a keyboard-dismissible read-only diagnosis panel", async () => {
     await act(async () => root.render(<HostResourcePopover />));
     const trigger = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Host resources: Memory pressure"]',
+      'button[aria-haspopup="dialog"]',
+    );
+    expect(trigger?.getAttribute("aria-label")).toBe(
+      "Host resources: Memory pressure; Critical · resource alert status unavailable",
     );
     expect(trigger).not.toBeNull();
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
-    expect(
-      container.querySelector('[aria-label="1 unread host incidents"]'),
-    ).not.toBeNull();
+    expect(container.textContent).toContain("1 unread host incidents");
 
-    await act(async () => trigger?.click());
+    await act(async () => {
+      trigger?.click();
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+    });
     const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
+    expect(document.activeElement).toBe(dialog);
+    const closeButton = dialog?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Close host resources"]',
+    );
+    await act(async () => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          key: "Tab",
+          shiftKey: true,
+        }),
+      );
+    });
+    expect(document.activeElement).toBe(closeButton);
     expect(dialog?.textContent).toContain("Read-only monitoring and diagnosis");
     expect(dialog?.textContent).toContain("Operator guidance");
     const battery = page.getByRole("region", { name: "Battery" });
@@ -252,7 +272,7 @@ describe("host resource monitoring in Chromium", () => {
     await act(async () => root.render(<HostResourcePopover />));
 
     const trigger = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Host resources: Sampling host"]',
+      'button[aria-haspopup="dialog"]',
     );
     await act(async () => trigger?.click());
     const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
@@ -284,7 +304,7 @@ describe("host resource monitoring in Chromium", () => {
     await act(async () => root.render(<HostResourcePopover />));
 
     const trigger = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Host resources: Memory pressure"]',
+      'button[aria-haspopup="dialog"]',
     );
     await act(async () => trigger?.click());
 
@@ -297,7 +317,7 @@ describe("host resource monitoring in Chromium", () => {
     legacyMetricsResult = { data: legacyMetrics };
     await act(async () => root.render(<HostResourcePopover />));
     const trigger = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Host resources: Memory pressure"]',
+      'button[aria-haspopup="dialog"]',
     );
     await act(async () => trigger?.click());
 
@@ -338,7 +358,7 @@ describe("host resource monitoring in Chromium", () => {
     };
     await act(async () => root.render(<HostResourcePopover />));
     const trigger = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Host resources: Memory pressure"]',
+      'button[aria-haspopup="dialog"]',
     );
     await act(async () => trigger?.click());
 
@@ -351,7 +371,7 @@ describe("host resource monitoring in Chromium", () => {
     await page.viewport(320, 700);
     await act(async () => root.render(<HostResourcePopover />));
     const trigger = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Host resources: Memory pressure"]',
+      'button[aria-haspopup="dialog"]',
     );
     await act(async () => trigger?.click());
 
