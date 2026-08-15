@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { HostResourceSnapshotV1 } from "@/api/client.js";
 import {
   formatAlertState,
   formatAvailability,
@@ -8,8 +9,40 @@ import {
   formatBatteryStatus,
   formatOptionalBytes,
   formatOptionalPercent,
+  normalizeProgressPercent,
+  normalizeProgressRatio,
+  resolveHostResourceStatus,
   severityClass,
 } from "./host-resource-state.js";
+
+const makeSnapshot = (
+  overrides: Partial<{
+    alert: HostResourceSnapshotV1["alert"];
+    currentAlerts: HostResourceSnapshotV1["currentAlerts"];
+    memoryState: HostResourceSnapshotV1["memory"]["availability"]["state"];
+  }> = {},
+) =>
+  ({
+    memory: {
+      availability: {
+        state: overrides.memoryState ?? "available",
+        sampledAt: 1,
+      },
+    },
+    alert: overrides.alert,
+    currentAlerts: overrides.currentAlerts,
+  }) as HostResourceSnapshotV1;
+
+const makeAlert = (severity: "info" | "warning" | "critical") =>
+  ({ state: "memoryPressure", severity }) as HostResourceSnapshotV1["alert"];
+
+const makeResource = (
+  severity: "info" | "warning" | "critical",
+  resolvedAt?: number | null,
+) =>
+  ({ severity, resolvedAt }) as NonNullable<
+    HostResourceSnapshotV1["currentAlerts"]
+  >[number];
 
 describe("host resource state formatting", () => {
   it("keeps alert and limited-data states explicit", () => {
@@ -48,5 +81,156 @@ describe("host resource state formatting", () => {
     expect(formatBatteryPower(3.256)).toBe("3.26 W");
     expect(formatBatteryEnergy(Number.NaN)).toBeUndefined();
     expect(formatBatteryPower(-1)).toBeUndefined();
+  });
+
+  it.each([
+    ["critical legacy plus info resource", "critical", ["info"], "Critical"],
+    ["info legacy plus critical resource", "info", ["critical"], "Critical"],
+    [
+      "warning resources in first order",
+      undefined,
+      ["warning", "info"],
+      "Warning",
+    ],
+    [
+      "warning resources in reverse order",
+      undefined,
+      ["info", "warning"],
+      "Warning",
+    ],
+    ["single info resource", undefined, ["info"], "Advisory"],
+    ["single warning resource", undefined, ["warning"], "Warning"],
+    ["single critical resource", undefined, ["critical"], "Critical"],
+  ])(
+    "uses maximum severity independent of source order: %s",
+    (_name, legacySeverity, resourceSeverities, expected) => {
+      const legacy = legacySeverity
+        ? makeAlert(legacySeverity as "info" | "warning" | "critical")
+        : undefined;
+      const snapshot = makeSnapshot({
+        alert: legacy,
+        currentAlerts: (
+          resourceSeverities as Array<"info" | "warning" | "critical">
+        ).map((severity) => makeResource(severity)),
+      });
+      const result = resolveHostResourceStatus({ snapshot });
+      expect(result.label).toBe(expected);
+    },
+  );
+
+  it("keeps healthy, monitoring, authoritative empty, and resolved states distinct", () => {
+    expect(
+      resolveHostResourceStatus({
+        snapshot: makeSnapshot({
+          alert: { state: "healthy" } as HostResourceSnapshotV1["alert"],
+          currentAlerts: [],
+        }),
+      }).label,
+    ).toBe("Healthy");
+    expect(
+      resolveHostResourceStatus({
+        snapshot: makeSnapshot({ currentAlerts: [] }),
+      }).label,
+    ).toBe("Monitoring");
+    expect(
+      resolveHostResourceStatus({
+        snapshot: makeSnapshot({
+          alert: undefined,
+          currentAlerts: [makeResource("critical", 1)],
+        }),
+      }).label,
+    ).toBe("Monitoring");
+    expect(
+      resolveHostResourceStatus({
+        snapshot: makeSnapshot({ alert: makeAlert("warning") }),
+      }).label,
+    ).toBe("Warning · resource alert status unavailable");
+  });
+
+  it("applies query precedence and preserves cached incident severity", () => {
+    expect(
+      resolveHostResourceStatus({ isError: true, isLoading: true }).label,
+    ).toBe("Snapshot unavailable");
+    expect(resolveHostResourceStatus({ isLoading: true }).label).toBe(
+      "Sampling host",
+    );
+    expect(resolveHostResourceStatus({}).label).toBe("Snapshot unavailable");
+
+    const cachedCritical = makeSnapshot({
+      alert: makeAlert("critical"),
+      currentAlerts: [],
+    });
+    for (const input of [
+      { isError: true },
+      { memoryState: "unsupported" as const },
+      { memoryState: "temporarilyUnavailable" as const },
+      { currentAlerts: undefined },
+      { isStale: true, isFetching: true },
+      { isStale: true },
+      { isFetching: true },
+    ]) {
+      const snapshot = makeSnapshot({
+        ...input,
+        alert: cachedCritical.alert,
+        currentAlerts: "currentAlerts" in input ? undefined : [],
+      });
+      const result = resolveHostResourceStatus({
+        snapshot,
+        isError: input.isError,
+        isFetching: input.isFetching,
+        isStale: input.isStale,
+      });
+      expect(result.label).toMatch(/^Critical · /);
+      expect(result.rank).toBe(3);
+      expect(result.tone).toBe("critical");
+    }
+  });
+
+  it("does not let unread count change rank, tone, or literal variants", () => {
+    const snapshot = makeSnapshot({
+      alert: makeAlert("critical"),
+      currentAlerts: [],
+    });
+    const read = resolveHostResourceStatus({ snapshot, unreadCount: 0 });
+    const unread = resolveHostResourceStatus({ snapshot, unreadCount: 3 });
+    expect(unread.label).toBe(read.label);
+    expect(unread.rank).toBe(read.rank);
+    expect(unread.tone).toBe(read.tone);
+    expect(unread.triggerClassName).toBe(read.triggerClassName);
+    expect(unread.badgeClassName).toBe(
+      "bg-[var(--color-danger)] text-[var(--color-background)]",
+    );
+    expect(unread.badgeLabel).toBe("3 unread host incidents");
+    expect(read.badgeLabel).toBe("Active host incident");
+    expect(unread.badgeClassName).not.toContain("bg-current");
+  });
+
+  it.each([
+    ["missing", undefined, undefined],
+    ["non-number", "50", undefined],
+    ["NaN", Number.NaN, undefined],
+    ["positive infinity", Number.POSITIVE_INFINITY, undefined],
+    ["negative infinity", Number.NEGATIVE_INFINITY, undefined],
+    ["negative", -1, undefined],
+    ["zero", 0, 0],
+    ["in range", 42.5, 42.5],
+    ["over 100", 125, 100],
+  ])("normalizes direct progress: %s", (_name, input, expected) => {
+    const result = normalizeProgressPercent(input);
+    expect(result?.value).toBe(expected);
+  });
+
+  it.each([
+    ["missing part", undefined, 100, undefined],
+    ["nonfinite part", Number.NaN, 100, undefined],
+    ["negative part", -1, 100, undefined],
+    ["zero", 0, 100, 0],
+    ["in range", 25, 100, 25],
+    ["part over total", 125, 100, 100],
+    ["zero total", 0, 0, undefined],
+    ["nonfinite total", 1, Number.POSITIVE_INFINITY, undefined],
+  ])("normalizes ratio progress: %s", (_name, part, total, expected) => {
+    const result = normalizeProgressRatio(part, total);
+    expect(result?.value).toBe(expected);
   });
 });
