@@ -3995,7 +3995,9 @@ async fn video_ticket_issuance_requires_auth_and_rejects_non_video_or_unsafe_pat
 }
 
 #[tokio::test]
-async fn video_ticket_capacity_returns_retryable_structured_error() {
+async fn video_ticket_issuance_is_not_limited_by_live_ticket_count() {
+    const FORMER_GLOBAL_TICKET_LIMIT: usize = 256;
+
     let tmp = tempfile::tempdir().unwrap();
     let video = tmp.path().join("clip.webm");
     std::fs::write(&video, b"metadata-only").unwrap();
@@ -4003,7 +4005,7 @@ async fn video_ticket_capacity_returns_retryable_structured_error() {
     let canonical = std::fs::canonicalize(&video).unwrap();
     let metadata = std::fs::metadata(&canonical).unwrap();
 
-    for _ in 0..crate::fs::video_ticket::MAX_VIDEO_TICKETS {
+    for _ in 0..=FORMER_GLOBAL_TICKET_LIMIT {
         let record = crate::fs::VideoTicketRecord {
             purpose: crate::fs::VideoTicketPurpose::Playback,
             project: "test-project".into(),
@@ -4030,13 +4032,8 @@ async fn video_ticket_capacity_returns_retryable_structured_error() {
         }),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(response.headers()["retry-after"], "1");
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["code"], "VIDEO_TICKET_CAPACITY");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert!(response.headers().get("retry-after").is_none());
 }
 
 #[tokio::test]
@@ -4479,12 +4476,14 @@ async fn image_tickets_use_a_closed_allowlist_and_fixed_preview_contract() {
 }
 
 #[tokio::test]
-async fn image_ticket_capacity_is_shared_and_has_image_specific_error_text() {
+async fn image_ticket_issuance_is_not_limited_by_live_ticket_count() {
+    const FORMER_PER_SESSION_TICKET_LIMIT: usize = 64;
+
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("preview.png"), b"image bytes").unwrap();
     let state = make_state_with_project(&tmp);
     let mut cookie = None;
-    for _ in 0..crate::fs::media_ticket::MAX_MEDIA_TICKETS_PER_SESSION {
+    for _ in 0..=FORMER_PER_SESSION_TICKET_LIMIT {
         let router = build_router(state.clone());
         let request = Request::builder()
             .method("POST")
@@ -4536,14 +4535,8 @@ async fn image_ticket_capacity_is_shared_and_has_image_specific_error_text() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(response.headers()["retry-after"], "1");
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["code"], "IMAGE_TICKET_CAPACITY");
-    assert_eq!(json["error"], "image ticket capacity reached");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert!(response.headers().get("retry-after").is_none());
 }
 
 #[tokio::test]
