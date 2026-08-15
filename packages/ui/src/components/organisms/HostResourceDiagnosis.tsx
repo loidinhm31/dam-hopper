@@ -9,17 +9,14 @@ import {
   formatBatteryPower,
   formatBatteryStatus,
   formatAvailability,
-  formatAlertState,
   formatOptionalBytes,
-  formatOptionalPercent,
   normalizeProgressRatio,
-  severityClass,
 } from "@/lib/host-resource-state.js";
 import { formatPercent } from "@/lib/host-metrics-format.js";
-import { cn } from "@/lib/utils.js";
+import { HostResourceIncidentDetails } from "./HostResourceIncidentDetails.js";
+import { HostResourceStorageDetails } from "./HostResourceStorageDetails.js";
 import {
   HostResourceInfoRow,
-  HostResourceLegacyMetrics,
   HostResourceMetric,
 } from "./HostResourceDiagnosisRows.js";
 
@@ -27,16 +24,23 @@ interface Props {
   snapshot: HostResourceSnapshotV1;
   alerts: HostResourceAlertIncident[];
   legacyMetrics?: HostMetrics;
+  pinnedMount?: string | null;
+  onPin?: (mountPoint: string | null) => void;
+  isPinPending?: boolean;
+  pinError?: Error | null;
 }
 
 export function HostResourceDiagnosis({
   snapshot,
   alerts,
   legacyMetrics,
+  pinnedMount,
+  onPin = () => undefined,
+  isPinPending = false,
+  pinError = null,
 }: Props) {
   const { memory, pressure, processes, mountContext } = snapshot;
   const visibleCgroups = snapshot.cgroups.filter(isUsableCgroup);
-  const alert = snapshot.alert;
   const availableProgress = normalizeProgressRatio(
     memory.availableBytes,
     memory.totalBytes,
@@ -45,75 +49,7 @@ export function HostResourceDiagnosis({
 
   return (
     <div className="space-y-4">
-      {alert && (
-        <section
-          aria-label="Current host alert"
-          className="rounded border border-[var(--color-border)] border-l-2 bg-[var(--color-surface)] p-2.5"
-        >
-          <p className={cn("text-xs font-bold", severityClass(alert.severity))}>
-            {formatAlertState(alert.state)}
-          </p>
-          <p className="mt-1 min-w-0 [overflow-wrap:anywhere] text-[10px] text-[var(--color-text-muted)]">
-            {alert.durationSeconds}s · {alert.confidence} confidence ·{" "}
-            {alert.scope} scope
-          </p>
-          <p className="mt-1.5 min-w-0 [overflow-wrap:anywhere] text-[10px] text-[var(--color-text-muted)]">
-            Operator guidance: {alert.nextAction}
-          </p>
-          <div className="mt-2 space-y-1 border-t border-[var(--color-border)] pt-2">
-            <HostResourceInfoRow label="Threshold" value={alert.threshold} />
-            <HostResourceInfoRow
-              label="Available"
-              value={formatOptionalPercent(alert.evidence.availablePercent)}
-            />
-            <HostResourceInfoRow
-              label="Reclaimable"
-              value={formatOptionalPercent(alert.evidence.reclaimablePercent)}
-            />
-            <HostResourceInfoRow
-              label="PSI some / full"
-              value={`${formatOptionalPercent(alert.evidence.psiSomeAvg10)} / ${formatOptionalPercent(alert.evidence.psiFullAvg10)}`}
-            />
-            <HostResourceInfoRow
-              label="Cgroup OOM event"
-              value={
-                alert.evidence.cgroupOomDelta ? "Observed" : "Not observed"
-              }
-            />
-          </div>
-        </section>
-      )}
-
-      {snapshot.currentAlerts && snapshot.currentAlerts.length > 0 && (
-        <section
-          aria-label="Current resource incidents"
-          className="space-y-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-2.5"
-        >
-          <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-muted)]">
-            Current resource incidents
-          </p>
-          <ul className="space-y-1.5">
-            {snapshot.currentAlerts.slice(0, 5).map((incident) => (
-              <li
-                key={incident.incidentId}
-                className="min-w-0 space-y-0.5 text-[10px]"
-              >
-                <p
-                  className={cn(
-                    "min-w-0 [overflow-wrap:anywhere] font-medium",
-                    severityClass(incident.severity),
-                  )}
-                >
-                  {formatAlertState(incident.state)} · {incident.scope}
-                </p>
-                <p className="min-w-0 [overflow-wrap:anywhere] text-[var(--color-text-muted)]">
-                  Evidence: {formatResourceEvidence(incident)}
-                </p>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      <HostResourceIncidentDetails snapshot={snapshot} alerts={alerts} />
 
       <section aria-label="Core host metrics" className="space-y-3">
         <HostResourceMetric
@@ -171,7 +107,13 @@ export function HostResourceDiagnosis({
 
       {battery && <BatterySection battery={battery} />}
 
-      {legacyMetrics && <HostResourceLegacyMetrics metrics={legacyMetrics} />}
+      <HostResourceStorageDetails
+        metrics={legacyMetrics}
+        pinnedMount={pinnedMount}
+        onPin={onPin}
+        isPending={isPinPending}
+        error={pinError}
+      />
 
       <section className="space-y-1.5 border-t border-[var(--color-border)] pt-3 text-[10px]">
         <p className="font-bold uppercase tracking-widest text-[var(--color-text-muted)]">
@@ -244,36 +186,6 @@ export function HostResourceDiagnosis({
                   {cgroup.maxUnlimited
                     ? "max"
                     : formatOptionalBytes(cgroup.maxBytes)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {alerts.length > 0 && (
-        <section className="space-y-1.5 border-t border-[var(--color-border)] pt-3">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-muted)]">
-            Recent incidents
-          </p>
-          <ul className="space-y-1" aria-label="Recent host incidents">
-            {alerts.slice(0, 5).map((incident) => (
-              <li
-                key={incident.incidentId}
-                className="flex min-w-0 flex-wrap items-baseline justify-between gap-3 text-[10px]"
-              >
-                <span
-                  className={cn(
-                    "min-w-0 [overflow-wrap:anywhere] font-medium",
-                    severityClass(incident.severity),
-                  )}
-                >
-                  {formatAlertState(incident.state)}
-                </span>
-                <span className="shrink-0 [overflow-wrap:anywhere] text-[var(--color-text-muted)]">
-                  {incident.resolvedAt != null
-                    ? "resolved"
-                    : `${incident.durationSeconds}s`}
                 </span>
               </li>
             ))}
@@ -369,27 +281,16 @@ function BatterySection({ battery }: { battery: BatteryPresentation }) {
   );
 }
 
-function formatResourceEvidence(
-  incident: NonNullable<HostResourceSnapshotV1["currentAlerts"]>[number],
-): string {
-  if (incident.kind === "temperature") {
-    const source = incident.evidence.temperatureSource ?? "source unavailable";
-    const value = Number.isFinite(incident.evidence.temperatureCelsius)
-      ? `${Math.round(incident.evidence.temperatureCelsius ?? 0)}°C`
-      : "unavailable";
-    return `${incident.evidence.temperatureLabel ?? source} · ${value}`;
-  }
-  const mount = incident.evidence.diskMountPoint ?? "mount unavailable";
-  const percent = Number.isFinite(incident.evidence.diskUsagePercent)
-    ? `${Math.round(incident.evidence.diskUsagePercent ?? 0)}% used`
-    : "usage unavailable";
-  return `${incident.evidence.diskName ?? mount} · ${mount} · ${percent}`;
-}
-
 function formatPsi(some?: number | null, full?: number | null): string {
-  return some == null && full == null
+  const someValue = Number.isFinite(some)
+    ? `${(some as number).toFixed(1)}%`
+    : "Unavailable";
+  const fullValue = Number.isFinite(full)
+    ? `${(full as number).toFixed(1)}%`
+    : "Unavailable";
+  return someValue === "Unavailable" && fullValue === "Unavailable"
     ? "Unavailable"
-    : `${some?.toFixed(1) ?? "—"}% / ${full?.toFixed(1) ?? "—"}%`;
+    : `${someValue} / ${fullValue}`;
 }
 
 function isUsableCgroup(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { HostResourceSnapshotV1 } from "@/api/client.js";
+import type { HostMetrics, HostResourceSnapshotV1 } from "@/api/client.js";
 import {
   formatAlertState,
   formatAvailability,
@@ -11,6 +11,8 @@ import {
   formatOptionalPercent,
   normalizeProgressPercent,
   normalizeProgressRatio,
+  resolveHostResourceMemory,
+  resolveHostResourceStorage,
   resolveHostResourceStatus,
   severityClass,
 } from "./host-resource-state.js";
@@ -443,5 +445,58 @@ describe("host resource state formatting", () => {
   ])("normalizes ratio progress: %s", (_name, part, total, expected) => {
     const result = normalizeProgressRatio(part, total);
     expect(result?.value).toBe(expected);
+  });
+
+  it("resolves used memory from compatibility first and deep data only as fallback", () => {
+    const metrics = {
+      memory: { usedBytes: 25, totalBytes: 100 },
+    } as HostMetrics;
+    expect(resolveHostResourceMemory(metrics).value).toBe(25);
+    expect(
+      resolveHostResourceMemory(undefined, {
+        memory: {
+          totalBytes: 100,
+          availableBytes: 25,
+          availability: { state: "stale", sampledAt: 1 },
+        },
+      } as HostResourceSnapshotV1),
+    ).toMatchObject({ value: 75, source: "deep" });
+    expect(
+      resolveHostResourceMemory(undefined, {
+        memory: {
+          totalBytes: 100,
+          availableBytes: 25,
+          availability: { state: "unsupported", sampledAt: 1 },
+        },
+      } as HostResourceSnapshotV1).value,
+    ).toBeUndefined();
+  });
+
+  it("resolves exact storage pins and falls back to the overall disk", () => {
+    const metrics = {
+      disk: { mountPoint: "/data", usagePercent: 20 },
+      disks: [
+        { mountPoint: "/data", usagePercent: 20 },
+        { mountPoint: "/data2", usagePercent: 40 },
+      ],
+    } as HostMetrics;
+    expect(resolveHostResourceStorage(metrics, null).state).toBe("default");
+    expect(resolveHostResourceStorage(metrics, "/data2")).toMatchObject({
+      state: "pinned",
+      selected: { mountPoint: "/data2" },
+    });
+    expect(resolveHostResourceStorage(metrics, "/missing")).toMatchObject({
+      state: "missing",
+      savedMount: "/missing",
+    });
+    expect(
+      resolveHostResourceStorage({ ...metrics, disks: [] }, "/data"),
+    ).toMatchObject({
+      state: "pinned",
+      selected: { mountPoint: "/data" },
+    });
+    expect(
+      resolveHostResourceStorage({ ...metrics, disks: [] }, "/"),
+    ).toMatchObject({ state: "missing", savedMount: "/" });
   });
 });

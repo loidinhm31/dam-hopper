@@ -266,14 +266,13 @@ describe("HostResourceDiagnosis", () => {
     expect(degradedMarkup).toContain("Temporarily unavailable");
   });
 
-  it("renders legacy temperatures and keeps storage collapsed by default", () => {
+  it("renders legacy storage inventory without a nested disclosure", () => {
     const markup = renderToStaticMarkup(
       <HostResourceDiagnosis
         snapshot={snapshot}
         alerts={[]}
         legacyMetrics={{
           ...legacyMetrics,
-          temperatures: [{ label: "Package", source: "pkg", celsius: 61 }],
           disks: [
             {
               ...legacyMetrics.disk,
@@ -292,15 +291,14 @@ describe("HostResourceDiagnosis", () => {
       />,
     );
 
-    expect(markup).toContain("Package");
-    expect(markup).toContain("61°C");
-    expect(markup).toContain('aria-expanded="false"');
-    expect(markup).toContain("hidden");
+    expect(markup).toContain("Storage");
+    expect(markup).not.toContain("aria-expanded");
+    expect(markup).not.toContain("Host storage");
     expect(markup).toContain("/workspace");
     expect(markup).toContain("/cache");
   });
 
-  it("shows unavailable state for empty temperatures", () => {
+  it("leaves temperature presentation to the glance projection", () => {
     const markup = renderToStaticMarkup(
       <HostResourceDiagnosis
         snapshot={snapshot}
@@ -309,7 +307,7 @@ describe("HostResourceDiagnosis", () => {
       />,
     );
 
-    expect(markup).toContain("Temperature sensors unavailable");
+    expect(markup).not.toContain("Temperature sensors");
     expect(markup).not.toContain("0°C");
   });
 
