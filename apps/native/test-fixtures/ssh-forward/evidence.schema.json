@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "native-ssh-forward-windows-evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "platform",
+    "osVersion",
+    "webview2Version",
+    "sshVersion",
+    "commitSha",
+    "artifactSha256",
+    "artifactName",
+    "checks",
+    "approvals"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "const": "pass" },
+    "platform": { "const": "windows" },
+    "osVersion": {
+      "type": "string",
+      "pattern": "^(?:Microsoft )?Windows(?: [A-Za-z0-9][A-Za-z0-9 .,_()-]*)?$"
+    },
+    "webview2Version": {
+      "type": "string",
+      "pattern": "^\\d+(?:\\.\\d+){1,5}$"
+    },
+    "sshVersion": {
+      "type": "string",
+      "pattern": "^OpenSSH(?:_for_Windows)?_[0-9][A-Za-z0-9._+-]*(?:, [A-Za-z]+ [0-9][A-Za-z0-9._+-]*)?$"
+    },
+    "commitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "artifactSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "artifactName": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$" },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "aclExact12",
+        "unauthorizedDenied",
+        "numericOrdering",
+        "eventHintContext",
+        "targetLoopback",
+        "trustApprovalAndRepair",
+        "openSshBytes",
+        "longIdleConcurrent",
+        "secondProcessExposureAccepted",
+        "listenerClosure",
+        "reloadSingleListener",
+        "updaterAbsent",
+        "redacted"
+      ],
+      "properties": {
+        "aclExact12": { "const": true },
+        "unauthorizedDenied": { "const": true },
+        "numericOrdering": { "const": true },
+        "eventHintContext": { "const": true },
+        "targetLoopback": { "const": true },
+        "trustApprovalAndRepair": { "const": true },
+        "openSshBytes": { "const": true },
+        "longIdleConcurrent": { "const": true },
+        "secondProcessExposureAccepted": { "const": true },
+        "listenerClosure": { "const": true },
+        "reloadSingleListener": { "const": true },
+        "updaterAbsent": { "const": true },
+        "redacted": { "const": true }
+      }
+    },
+    "approvals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["releaseEngineer", "securityReviewer", "productOwner"],
+      "properties": {
+        "releaseEngineer": { "$ref": "#/$defs/approval" },
+        "securityReviewer": { "$ref": "#/$defs/approval" },
+        "productOwner": { "$ref": "#/$defs/approval" }
+      }
+    }
+  },
+  "$defs": {
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "timestamp"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}
