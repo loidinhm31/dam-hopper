@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { Activity, AlertTriangle, Loader2, X } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, X } from "lucide-react";
 import {
   useHostMetrics,
   useHostResourceAlerts,
@@ -8,7 +8,11 @@ import {
 import { HostResourceDiagnosis } from "@/components/organisms/HostResourceDiagnosis.js";
 import { HostResourceLegacyMetrics } from "@/components/organisms/HostResourceDiagnosisRows.js";
 import { useHostResourceAlertPresentation } from "@/hooks/use-host-resource-alert-presentation.js";
-import { formatAlertState, severityClass } from "@/lib/host-resource-state.js";
+import {
+  formatAlertState,
+  resolveHostResourceStatus,
+  type HostResourceStatusPresentation,
+} from "@/lib/host-resource-state.js";
 import { cn } from "@/lib/utils.js";
 
 export function HostResourcePopover() {
@@ -21,11 +25,29 @@ export function HostResourcePopover() {
   const alerts = useHostResourceAlerts(true);
   const legacyMetrics = useHostMetrics(open);
   const alert = snapshot.data?.alert;
-  const currentAlerts = snapshot.data?.currentAlerts ?? [];
+  const currentAlerts = snapshot.data?.currentAlerts;
   const alertPresentation = useHostResourceAlertPresentation(
     alert,
-    snapshot.data?.currentAlerts,
+    currentAlerts,
   );
+  const effectiveStatus = resolveHostResourceStatus({
+    snapshot: snapshot.data,
+    isLoading: snapshot.isLoading,
+    isFetching: snapshot.isFetching,
+    isError: snapshot.isError,
+    isStale: snapshot.isStale,
+    unreadCount: alertPresentation.unreadCount,
+  });
+  const sourceLabel =
+    currentAlerts && currentAlerts.length > 0
+      ? `${currentAlerts.length} active resource incident${currentAlerts.length === 1 ? "" : "s"}`
+      : alert
+        ? formatAlertState(alert.state)
+        : effectiveStatus.label;
+  const triggerLabel =
+    sourceLabel === effectiveStatus.label
+      ? sourceLabel
+      : `${sourceLabel}; ${effectiveStatus.label}`;
 
   const closeAndRestoreFocus = () => {
     setOpen(false);
@@ -53,7 +75,10 @@ export function HostResourcePopover() {
         const first = focusable?.[0];
         const last = focusable?.[focusable.length - 1];
         if (!first || !last) return;
-        if (event.shiftKey && document.activeElement === first) {
+        if (document.activeElement === panelRef.current) {
+          event.preventDefault();
+          (event.shiftKey ? last : first).focus();
+        } else if (event.shiftKey && document.activeElement === first) {
           event.preventDefault();
           last.focus();
         } else if (!event.shiftKey && document.activeElement === last) {
@@ -72,14 +97,11 @@ export function HostResourcePopover() {
     };
   }, [open]);
 
-  const alertLabel =
-    currentAlerts.length > 0
-      ? `${currentAlerts.length} active resource incident${currentAlerts.length === 1 ? "" : "s"}`
-      : alert
-        ? formatAlertState(alert.state)
-        : "Sampling host";
-  const hasConcern =
-    currentAlerts.length > 0 || (alert != null && alert.state !== "healthy");
+  const hostname = snapshot.data?.host.hostname ?? "Host";
+  const osName = snapshot.data?.host.osName ?? "System";
+  const sampleLabel = snapshot.data
+    ? ` · sampled ${formatSampleAge(snapshot.data.sampledAt)} ago`
+    : "";
 
   return (
     <div ref={rootRef} className="relative">
@@ -95,31 +117,38 @@ export function HostResourcePopover() {
         className={cn(
           "relative inline-flex min-h-11 min-w-11 items-center justify-center rounded-sm text-[var(--color-text-muted)] transition-colors",
           "hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-2 focus-visible:outline-[var(--color-ring)]",
-          open && "bg-[var(--color-primary)]/15 text-[var(--color-primary)]",
+          effectiveStatus.triggerClassName,
+          open && "bg-[var(--color-surface-2)]",
         )}
-        title={`Host resources: ${alertLabel}`}
-        aria-label={`Host resources: ${alertLabel}`}
+        title={`Host resources: ${triggerLabel}`}
+        aria-label={`Host resources: ${triggerLabel}`}
+        aria-describedby={
+          effectiveStatus.badgeLabel
+            ? `${panelId}-badge-description`
+            : undefined
+        }
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={panelId}
       >
         <Activity aria-hidden="true" size={16} />
-        {(hasConcern || alertPresentation.unreadCount > 0) && (
+        {effectiveStatus.badgeText && effectiveStatus.badgeLabel && (
           <span
-            aria-label={`${alertPresentation.unreadCount} unread host incidents`}
+            aria-hidden="true"
             className={cn(
-              "absolute -right-0.5 -top-0.5 min-w-4 rounded-full px-1 text-center text-[9px] font-bold leading-4 text-white shadow-sm",
-              alertPresentation.unreadCount > 0
-                ? "bg-[var(--color-danger)]"
-                : cn("bg-current", severityClass(alert?.severity ?? "info")),
+              "absolute -right-0.5 -top-0.5 min-w-4 rounded-full px-1 text-center text-[9px] font-bold leading-4 shadow-sm",
+              effectiveStatus.badgeClassName,
             )}
           >
-            {alertPresentation.unreadCount > 0
-              ? Math.min(alertPresentation.unreadCount, 99)
-              : "!"}
+            {effectiveStatus.badgeText}
           </span>
         )}
       </button>
+      {effectiveStatus.badgeLabel && (
+        <span id={`${panelId}-badge-description`} className="sr-only">
+          {effectiveStatus.badgeLabel}
+        </span>
+      )}
 
       {open && (
         <section
@@ -129,7 +158,7 @@ export function HostResourcePopover() {
           aria-modal="true"
           tabIndex={-1}
           aria-labelledby={`${panelId}-title`}
-          className="glass-card-blur fixed left-1/2 top-[calc(var(--top-nav-height)+0.75rem)] z-[75] flex max-h-[min(38rem,calc(100dvh-var(--top-nav-height)-var(--safe-area-bottom)-1.5rem))] w-[min(26rem,calc(100vw-1rem-var(--safe-area-left)-var(--safe-area-right)))] -translate-x-1/2 flex-col overflow-hidden rounded-md border border-[var(--color-border)] shadow-2xl outline-none sm:absolute sm:left-auto sm:right-0 sm:top-12 sm:w-[26rem] sm:translate-x-0"
+          className="fixed left-1/2 top-[calc(var(--top-nav-height)+0.75rem)] z-[75] flex max-h-[min(38rem,calc(100dvh-var(--top-nav-height)-var(--safe-area-bottom)-1.5rem))] w-[min(26rem,calc(100vw-1rem-var(--safe-area-left)-var(--safe-area-right)))] -translate-x-1/2 flex-col overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl outline-none sm:absolute sm:left-auto sm:right-0 sm:top-12 sm:w-[26rem] sm:translate-x-0"
         >
           <header className="flex items-start justify-between gap-3 border-b border-[var(--color-border)] px-3 py-2.5">
             <div className="min-w-0">
@@ -139,14 +168,33 @@ export function HostResourcePopover() {
               >
                 Host resources
               </h2>
-              <p className="truncate text-[10px] text-[var(--color-text-muted)]">
+              <p className="min-w-0 [overflow-wrap:anywhere] text-[10px] text-[var(--color-text-muted)]">
                 Read-only monitoring and diagnosis
+              </p>
+              <div
+                aria-label={`Host resource status: ${effectiveStatus.label}`}
+                className={cn(
+                  "mt-2 flex min-w-0 items-start gap-2 rounded border-l-2 px-2 py-1.5",
+                  effectiveStatus.statusClassName,
+                )}
+              >
+                <StatusIcon presentation={effectiveStatus} />
+                <p className="min-w-0 [overflow-wrap:anywhere] text-xs font-bold text-[var(--color-text)]">
+                  {effectiveStatus.label}
+                </p>
+              </div>
+              <p className="mt-2 min-w-0 [overflow-wrap:anywhere] text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-muted)]">
+                {hostname}
+              </p>
+              <p className="min-w-0 [overflow-wrap:anywhere] text-[10px] text-[var(--color-text-muted)]">
+                {osName}
+                {sampleLabel}
               </p>
             </div>
             <button
               type="button"
               onClick={closeAndRestoreFocus}
-              className="rounded p-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-2 focus-visible:outline-[var(--color-ring)]"
+              className="flex min-h-11 min-w-11 items-center justify-center rounded text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-2 focus-visible:outline-[var(--color-ring)]"
               aria-label="Close host resources"
             >
               <X aria-hidden="true" size={15} />
@@ -154,34 +202,37 @@ export function HostResourcePopover() {
           </header>
 
           <div className="min-h-0 overflow-y-auto p-3">
-            {snapshot.isLoading && (
+            {!snapshot.data && effectiveStatus.mode === "sampling" && (
               <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--color-primary)]" />
+                <Activity className="h-3.5 w-3.5 text-[var(--color-primary)]" />
                 Sampling host
               </div>
             )}
-            {snapshot.isError && (
-              <>
-                <div className="flex items-center gap-2 text-xs text-[var(--color-danger)]">
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                  Resource snapshot unavailable
-                </div>
-                {legacyMetrics.data && (
-                  <section
-                    aria-label="Compatible basic metrics"
-                    className="mt-3 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/50 p-2.5"
-                  >
-                    <p className="text-xs font-bold text-[var(--color-text)]">
-                      Deep metrics unavailable; showing compatible basic
-                      metrics.
-                    </p>
-                    <div className="mt-2">
-                      <HostResourceLegacyMetrics metrics={legacyMetrics.data} />
-                    </div>
-                  </section>
-                )}
-              </>
-            )}
+            {(!snapshot.data || snapshot.isError) &&
+              effectiveStatus.mode !== "sampling" && (
+                <>
+                  <div className="flex items-center gap-2 text-xs text-[var(--color-danger)]">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    Resource snapshot unavailable
+                  </div>
+                  {legacyMetrics.data && (
+                    <section
+                      aria-label="Compatible basic metrics"
+                      className="mt-3 rounded border border-[var(--color-border)] bg-[var(--color-background)] p-2.5"
+                    >
+                      <p className="text-xs font-bold text-[var(--color-text)]">
+                        Deep metrics unavailable; showing compatible basic
+                        metrics.
+                      </p>
+                      <div className="mt-2">
+                        <HostResourceLegacyMetrics
+                          metrics={legacyMetrics.data}
+                        />
+                      </div>
+                    </section>
+                  )}
+                </>
+              )}
             {!snapshot.isError && snapshot.data && (
               <HostResourceDiagnosis
                 snapshot={snapshot.data}
@@ -194,4 +245,47 @@ export function HostResourcePopover() {
       )}
     </div>
   );
+}
+
+function StatusIcon({
+  presentation,
+}: {
+  presentation: HostResourceStatusPresentation;
+}) {
+  if (presentation.icon === "healthy") {
+    return (
+      <CheckCircle2
+        aria-hidden="true"
+        className={cn(
+          "mt-0.5 h-4 w-4 shrink-0",
+          presentation.statusIconClassName,
+        )}
+      />
+    );
+  }
+  if (presentation.icon === "alert") {
+    return (
+      <AlertTriangle
+        aria-hidden="true"
+        className={cn(
+          "mt-0.5 h-4 w-4 shrink-0",
+          presentation.statusIconClassName,
+        )}
+      />
+    );
+  }
+  return (
+    <Activity
+      aria-hidden="true"
+      className={cn(
+        "mt-0.5 h-4 w-4 shrink-0",
+        presentation.statusIconClassName,
+      )}
+    />
+  );
+}
+
+function formatSampleAge(sampledAt: number): string {
+  const seconds = Math.max(0, Math.round((Date.now() - sampledAt) / 1_000));
+  return seconds < 60 ? `${seconds}s` : `${Math.round(seconds / 60)}m`;
 }
