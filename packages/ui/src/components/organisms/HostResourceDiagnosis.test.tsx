@@ -454,6 +454,117 @@ describe("HostResourceDiagnosis", () => {
     expect(markup).not.toContain("disk-1");
   });
 
+  it("preserves visible diagnostics while keeping incident metadata hidden", () => {
+    const markup = renderToStaticMarkup(
+      <HostResourceDiagnosis
+        snapshot={{
+          ...snapshot,
+          memory: {
+            ...snapshot.memory,
+            totalBytes: 4_096,
+            availableBytes: 2_048,
+            anonBytes: 1_024,
+            fileCacheBytes: 1_280,
+            reclaimableSlabBytes: 512,
+            swapUsedBytes: 256,
+          },
+          pressure: {
+            memory: {
+              availability,
+              some: { avg10: 1.2, avg60: 1.1, avg300: 1, totalMicros: 10 },
+              full: { avg10: 0.4, avg60: 0.3, avg300: 0.2, totalMicros: 4 },
+            },
+          },
+          processes: {
+            ...snapshot.processes,
+            scannedCount: 2,
+            processes: [
+              {
+                pid: 42,
+                name: "worker-process",
+                rssBytes: 512,
+                availability,
+              },
+            ],
+          },
+          cgroups: [
+            {
+              path: "/user.slice/workload.slice",
+              namespace: "host",
+              currentBytes: 256,
+              maxUnlimited: true,
+              highUnlimited: true,
+              events: [],
+              pressure: { memory: { availability } },
+              availability,
+            },
+          ],
+          mountContext: {
+            ...snapshot.mountContext,
+            mountPoint: "/workspace/project",
+            cacheAttribution: {
+              ...snapshot.mountContext.cacheAttribution,
+              bytes: 768,
+            },
+          },
+          currentAlerts: [
+            {
+              kind: "temperature",
+              key: "temperature:cpu-package",
+              state: "temperatureHigh",
+              severity: "warning",
+              incidentId: "resource-incident-hidden",
+              openedAt: 1,
+              updatedAt: 1,
+              durationSeconds: 4,
+              scope: "cpu-package",
+              threshold: "temperature>=90",
+              nextAction: "Inspect thermal source.",
+              evidence: {
+                temperatureLabel: "CPU package",
+                temperatureSource: "coretemp",
+                temperatureCelsius: 91,
+              },
+            },
+          ],
+        }}
+        alerts={[
+          {
+            incidentId: "history-incident-hidden",
+            state: "limitedData",
+            severity: "info",
+            openedAt: 1,
+            updatedAt: 1,
+            resolvedAt: 2,
+            durationSeconds: 1,
+            scope: "host",
+            confidence: "low",
+            threshold: "hidden threshold",
+            evidence: { cgroupOomDelta: false },
+            nextAction: "hidden guidance",
+          },
+        ]}
+        legacyMetrics={legacyMetrics}
+      />,
+    );
+
+    expect(markup).toContain("Memory available");
+    expect(markup).toContain("File cache");
+    expect(markup).toContain("Anonymous memory");
+    expect(markup).toContain("Reclaimable slab");
+    expect(markup).toContain("Swap used");
+    expect(markup).toContain("PSI memory");
+    expect(markup).toContain("CPU package · 91°C");
+    expect(markup).toContain("/user.slice/workload.slice");
+    expect(markup).toContain("worker-process · 42");
+    expect(markup).toContain("resolved");
+    expect(markup).not.toContain("resource-incident-hidden");
+    expect(markup).not.toContain("temperature>=90");
+    expect(markup).not.toContain("Inspect thermal source.");
+    expect(markup).not.toContain("hidden threshold");
+    expect(markup).not.toContain("hidden guidance");
+  });
+
   it("uses one normalized result for valid, stale, zero, invalid, and over-total meters", () => {
     const zeroMarkup = renderToStaticMarkup(
       <HostResourceDiagnosis
@@ -521,6 +632,10 @@ describe("HostResourceDiagnosis", () => {
           },
         }}
         alerts={[]}
+        legacyMetrics={{
+          ...legacyMetrics,
+          disk: { ...legacyMetrics.disk, usagePercent: 125 },
+        }}
       />,
     );
     expect(overTotalMarkup).toContain('aria-valuenow="100"');

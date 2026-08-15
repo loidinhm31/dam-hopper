@@ -186,6 +186,215 @@ describe("host resource state formatting", () => {
     }
   });
 
+  it.each([
+    [
+      "critical incident",
+      {
+        snapshot: makeSnapshot({
+          alert: makeAlert("critical"),
+          currentAlerts: [],
+        }),
+      },
+      {
+        label: "Critical",
+        mode: "current",
+        rank: 3,
+        tone: "critical",
+        icon: "alert",
+        triggerClassName: "text-[var(--color-danger)]",
+        badgeClassName:
+          "bg-[var(--color-danger)] text-[var(--color-background)]",
+        statusClassName:
+          "border-[var(--color-danger)] bg-[var(--color-background)]",
+        statusIconClassName: "text-[var(--color-danger)]",
+        badgeLabel: "Active host incident",
+        badgeText: "!",
+      },
+    ],
+    [
+      "degraded core data",
+      {
+        snapshot: makeSnapshot({
+          currentAlerts: [],
+          memoryState: "temporarilyUnavailable",
+        }),
+      },
+      {
+        label: "Monitoring · core data unavailable",
+        mode: "unavailable",
+        rank: 0,
+        tone: "warning",
+        icon: "alert",
+        triggerClassName: "text-[var(--color-warning)]",
+        badgeClassName:
+          "bg-[var(--color-warning)] text-[var(--color-background)]",
+        statusClassName:
+          "border-[var(--color-warning)] bg-[var(--color-background)]",
+        statusIconClassName: "text-[var(--color-warning)]",
+      },
+    ],
+    [
+      "sampling",
+      { isLoading: true },
+      {
+        label: "Sampling host",
+        mode: "sampling",
+        rank: 0,
+        tone: "info",
+        icon: "activity",
+        triggerClassName: "text-[var(--color-primary)]",
+        badgeClassName:
+          "bg-[var(--color-primary)] text-[var(--color-background)]",
+        statusClassName:
+          "border-[var(--color-primary)] bg-[var(--color-background)]",
+        statusIconClassName: "text-[var(--color-primary)]",
+      },
+    ],
+    [
+      "healthy",
+      {
+        snapshot: makeSnapshot({
+          alert: { state: "healthy" } as HostResourceSnapshotV1["alert"],
+          currentAlerts: [],
+        }),
+      },
+      {
+        label: "Healthy",
+        mode: "current",
+        rank: 0,
+        tone: "success",
+        icon: "healthy",
+        triggerClassName: "text-[var(--color-success)]",
+        badgeClassName:
+          "bg-[var(--color-success)] text-[var(--color-background)]",
+        statusClassName:
+          "border-[var(--color-success)] bg-[var(--color-background)]",
+        statusIconClassName: "text-[var(--color-success)]",
+      },
+    ],
+    [
+      "terminal unavailable",
+      { isError: true },
+      {
+        label: "Snapshot unavailable",
+        mode: "terminal-unavailable",
+        rank: 0,
+        tone: "danger",
+        icon: "alert",
+        triggerClassName: "text-[var(--color-danger)]",
+        badgeClassName:
+          "bg-[var(--color-danger)] text-[var(--color-background)]",
+        statusClassName:
+          "border-[var(--color-danger)] bg-[var(--color-background)]",
+        statusIconClassName: "text-[var(--color-danger)]",
+      },
+    ],
+  ])("returns complete literal variants for %s", (_name, input, expected) => {
+    expect(resolveHostResourceStatus(input)).toMatchObject(expected);
+  });
+
+  it.each([
+    [
+      "cached refresh error",
+      {
+        snapshot: makeSnapshot({
+          alert: makeAlert("critical"),
+          currentAlerts: [],
+        }),
+        isError: true,
+      },
+      {
+        label: "Critical · refresh failed",
+        mode: "refresh-error",
+        tone: "critical",
+      },
+    ],
+    [
+      "cached core unavailable",
+      {
+        snapshot: makeSnapshot({
+          alert: makeAlert("critical"),
+          currentAlerts: [],
+          memoryState: "permissionDenied",
+        }),
+      },
+      {
+        label: "Critical · core data unavailable",
+        mode: "unavailable",
+        tone: "critical",
+      },
+    ],
+    [
+      "older server resource status",
+      { snapshot: makeSnapshot({ alert: makeAlert("critical") }) },
+      {
+        label: "Critical · resource alert status unavailable",
+        mode: "unavailable",
+        tone: "critical",
+      },
+    ],
+    [
+      "stale while refreshing",
+      {
+        snapshot: makeSnapshot({
+          alert: makeAlert("critical"),
+          currentAlerts: [],
+          memoryState: "stale",
+        }),
+        isStale: true,
+        isFetching: true,
+      },
+      {
+        label: "Critical · stale, refreshing",
+        mode: "stale-refreshing",
+        tone: "critical",
+      },
+    ],
+    [
+      "stale retained data",
+      {
+        snapshot: makeSnapshot({
+          alert: makeAlert("critical"),
+          currentAlerts: [],
+          memoryState: "stale",
+        }),
+        isStale: true,
+      },
+      { label: "Critical · stale", mode: "stale", tone: "critical" },
+    ],
+    [
+      "background refresh",
+      {
+        snapshot: makeSnapshot({
+          alert: makeAlert("critical"),
+          currentAlerts: [],
+        }),
+        isFetching: true,
+      },
+      {
+        label: "Critical · refreshing",
+        mode: "background-loading",
+        tone: "critical",
+      },
+    ],
+    [
+      "current snapshot",
+      {
+        snapshot: makeSnapshot({
+          alert: makeAlert("critical"),
+          currentAlerts: [],
+        }),
+      },
+      { label: "Critical", mode: "current", tone: "critical" },
+    ],
+  ])(
+    "adds deterministic freshness qualifiers without hiding active severity: %s",
+    (_name, input, expected) => {
+      expect(resolveHostResourceStatus(input)).toMatchObject(expected);
+      expect(resolveHostResourceStatus(input).rank).toBe(3);
+    },
+  );
+
   it("does not let unread count change rank, tone, or literal variants", () => {
     const snapshot = makeSnapshot({
       alert: makeAlert("critical"),
@@ -223,11 +432,13 @@ describe("host resource state formatting", () => {
   it.each([
     ["missing part", undefined, 100, undefined],
     ["nonfinite part", Number.NaN, 100, undefined],
+    ["infinite part", Number.POSITIVE_INFINITY, 100, undefined],
     ["negative part", -1, 100, undefined],
     ["zero", 0, 100, 0],
     ["in range", 25, 100, 25],
     ["part over total", 125, 100, 100],
     ["zero total", 0, 0, undefined],
+    ["negative total", 1, -1, undefined],
     ["nonfinite total", 1, Number.POSITIVE_INFINITY, undefined],
   ])("normalizes ratio progress: %s", (_name, part, total, expected) => {
     const result = normalizeProgressRatio(part, total);
