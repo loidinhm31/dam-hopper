@@ -828,12 +828,11 @@ sequenceDiagram
 a configured project, project-relative path, and closed `playback | download`
 purpose. It resolves through the existing `ProjectSandbox`, verifies a regular
 video candidate, and returns a random opaque ticket URL. `DELETE
-/api/fs/video/tickets` revokes a ticket idempotently. The in-memory ticket store is
-capped at 256 live tickets, prunes expired entries before admission, and binds each
-ticket to one canonical project resource, one immutable purpose, issuance
+/api/fs/video/tickets` revokes a ticket idempotently. The in-memory ticket store
+prunes expired entries and binds each ticket to one canonical project resource,
+one immutable purpose, issuance
 metadata, and the authenticated actor's media session. Tickets are never
-persisted into editor state, browser storage, diagnostics, or logs. Ticket and
-session idle expiry is 30 minutes and absolute expiry is eight hours. The stream
+persisted into editor state, browser storage, diagnostics, or logs. Ticket and session idle expiry is 30 minutes and absolute expiry is eight hours. The stream
 must present the matching `damhopper-media-session` cookie (host-only, `HttpOnly`,
 `SameSite=Lax`, `Path=/api/fs`; no `Secure`); ticket-only, foreign-session,
 expired, and revoked requests return indistinguishable `404` responses. Idle TTL
@@ -948,8 +947,8 @@ The editor assigns an `image` tier before binary/large classification, including
 large or binary-hinted allowlisted images. Open, hydration, save, force-overwrite,
 reload, and Git reconciliation paths treat image tabs as preview-only and never
 materialize bytes. Diff tabs retain their dedicated viewer and video routing
-continues to take precedence. The shared store keeps the 256-ticket capacity,
-idle/absolute expiry, generation invalidation, stale-file `410`, range/HEAD,
+continues to take precedence. The shared store keeps idle/absolute expiry,
+generation invalidation, stale-file `410`, range/HEAD,
 revalidation and private no-store response invariants used by video.
 
 ### git/

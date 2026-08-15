@@ -6,12 +6,10 @@ use super::{
     media_session::MediaSessionToken,
     media_ticket::{
         MediaFileVersion, MediaTicketBoundIssue, MediaTicketKind, MediaTicketPurpose,
-        MediaTicketRecord, MediaTicketStore, MAX_MEDIA_TICKETS, MEDIA_TICKET_ABSOLUTE_TTL,
-        MEDIA_TICKET_IDLE_TTL,
+        MediaTicketRecord, MediaTicketStore, MEDIA_TICKET_ABSOLUTE_TTL, MEDIA_TICKET_IDLE_TTL,
     },
 };
 
-pub const MAX_VIDEO_TICKETS: usize = MAX_MEDIA_TICKETS;
 pub const VIDEO_TICKET_IDLE_TTL: std::time::Duration = MEDIA_TICKET_IDLE_TTL;
 pub const VIDEO_TICKET_ABSOLUTE_TTL: std::time::Duration = MEDIA_TICKET_ABSOLUTE_TTL;
 
