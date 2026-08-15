@@ -832,7 +832,9 @@ video candidate, and returns a random opaque ticket URL. `DELETE
 prunes expired entries and binds each ticket to one canonical project resource,
 one immutable purpose, issuance
 metadata, and the authenticated actor's media session. Tickets are never
-persisted into editor state, browser storage, diagnostics, or logs. Ticket and session idle expiry is 30 minutes and absolute expiry is eight hours. The stream
+persisted into editor state, browser storage, diagnostics, or logs. Ticket idle
+expiry is 15 minutes; media-session idle expiry is 30 minutes; both have an
+eight-hour absolute expiry. The stream
 must present the matching `damhopper-media-session` cookie (host-only, `HttpOnly`,
 `SameSite=Lax`, `Path=/api/fs`; no `Secure`); ticket-only, foreign-session,
 expired, and revoked requests return indistinguishable `404` responses. Idle TTL
