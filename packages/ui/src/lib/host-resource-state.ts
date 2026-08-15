@@ -3,6 +3,8 @@ import type {
   AlertState,
   Availability,
   BatteryStatus,
+  DiskMetrics,
+  HostMetrics,
   HostResourceSnapshotV1,
   ResourceAlertState,
 } from "@/api/client.js";
@@ -49,13 +51,18 @@ export function formatAvailability(availability: Availability): string {
 }
 
 export function formatOptionalBytes(bytes: number | null | undefined): string {
-  return bytes == null ? "Unavailable" : formatBytes(bytes);
+  return typeof bytes === "number" && Number.isFinite(bytes) && bytes >= 0
+    ? formatBytes(bytes)
+    : "Unavailable";
 }
 
 export function formatOptionalPercent(
   percent: number | null | undefined,
 ): string {
-  return percent == null ? "Unavailable" : `${Math.round(percent)}%`;
+  const normalized = normalizeProgressPercent(percent);
+  return normalized === undefined
+    ? "Unavailable"
+    : `${Math.round(normalized.value)}%`;
 }
 
 export function formatBatteryStatus(
@@ -235,6 +242,120 @@ export function normalizeProgressRatio(
     return undefined;
   }
   return { value: Math.min((part / total) * 100, 100) };
+}
+
+export interface HostResourceMemoryProjection {
+  value?: number;
+  usedBytes?: number;
+  totalBytes?: number;
+  source: "compatibility" | "deep" | "unavailable";
+  availability?: Availability;
+}
+
+export function resolveHostResourceMemory(
+  metrics?: HostMetrics,
+  snapshot?: HostResourceSnapshotV1 | null,
+): HostResourceMemoryProjection {
+  if (metrics) {
+    const usedBytes = finiteNonNegative(metrics.memory?.usedBytes);
+    const totalBytes = finitePositive(metrics.memory?.totalBytes);
+    return {
+      value: ratioPercent(usedBytes, totalBytes),
+      usedBytes,
+      totalBytes,
+      source: "compatibility",
+    };
+  }
+
+  const availability = snapshot?.memory.availability;
+  if (
+    !snapshot ||
+    !availability ||
+    (availability.state !== "available" && availability.state !== "stale")
+  ) {
+    return { source: "unavailable", availability };
+  }
+
+  const totalBytes = finitePositive(snapshot.memory.totalBytes);
+  const availableBytes = finiteNonNegative(snapshot.memory.availableBytes);
+  const usedBytes =
+    totalBytes !== undefined && availableBytes !== undefined
+      ? Math.max(totalBytes - availableBytes, 0)
+      : undefined;
+  return {
+    value: ratioPercent(usedBytes, totalBytes),
+    usedBytes,
+    totalBytes,
+    source: "deep",
+    availability,
+  };
+}
+
+export type HostResourceStorageResolution =
+  | {
+      state: "default" | "pinned";
+      selected: DiskMetrics;
+      overall: DiskMetrics;
+      savedMount?: string;
+    }
+  | {
+      state: "missing";
+      selected?: undefined;
+      overall?: DiskMetrics;
+      savedMount: string;
+    }
+  | {
+      state: "unavailable";
+      selected?: undefined;
+      overall?: DiskMetrics;
+      savedMount?: string;
+    };
+
+export function resolveHostResourceStorage(
+  metrics?: HostMetrics,
+  pinnedMount?: string | null,
+): HostResourceStorageResolution {
+  const overall = metrics?.disk;
+  if (!overall || typeof overall.mountPoint !== "string") {
+    return {
+      state: "unavailable",
+      savedMount: pinnedMount || undefined,
+    };
+  }
+
+  if (!pinnedMount) {
+    return { state: "default", selected: overall, overall };
+  }
+
+  const disks =
+    Array.isArray(metrics.disks) && metrics.disks.length > 0
+      ? metrics.disks
+      : [overall];
+  const selected = disks.find((disk) => disk.mountPoint === pinnedMount);
+  return selected
+    ? { state: "pinned", selected, overall, savedMount: pinnedMount }
+    : { state: "missing", overall, savedMount: pinnedMount };
+}
+
+function finiteNonNegative(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function finitePositive(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function ratioPercent(
+  part: number | undefined,
+  total: number | undefined,
+): number | undefined {
+  return part === undefined || total === undefined
+    ? undefined
+    : Math.min((part / total) * 100, 100);
 }
 
 export function resolveHostResourceStatus({

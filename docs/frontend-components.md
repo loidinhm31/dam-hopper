@@ -49,6 +49,16 @@ reveals every server-ordered disk with its name, mount, percentage, and used/tot
 bytes; it does not add polling or persistence. Deep-snapshot failure uses the
 same legacy presentation so cached temperatures and disks remain visible.
 
+The popover presents a compact glance tier before the diagnosis disclosure in a
+stable order: memory used, CPU, selected storage, temperatures, and battery or
+power when available. Percentage-capable rows include bounded meters; the
+memory meter uses `usedBytes / totalBytes`. The diagnosis disclosure contains
+the detailed memory, pressure, storage, process/cgroup, alert, and incident
+sections. Storage selection is an optional `hostResourcePinnedMount` UI
+preference; a missing saved mount remains visibly missing and is never silently
+rebound to another filesystem. Updating that preference does not affect
+monitoring or alert classification.
+
 The diagnosis renders an optional `snapshot.battery` section only when the
 server reports at least one classified battery, the section is not unsupported,
 and at least one field passes the client-side finite/non-negative validation.
