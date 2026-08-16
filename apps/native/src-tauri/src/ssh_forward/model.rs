@@ -5,6 +5,9 @@ use std::fmt;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use time::{format_description, OffsetDateTime, PrimitiveDateTime, UtcOffset};
 
+#[cfg(windows)]
+use zeroize::Zeroizing;
+
 use super::{
     error::SshForwardErrorCode,
     instance::DesktopClientContext,
@@ -15,6 +18,87 @@ use super::{
 const MAX_WIRE_COUNTER_DIGITS: usize = 20;
 const UTC_MILLIS_FORMAT: &str =
     "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z";
+#[cfg(windows)]
+const MAX_PASSPHRASE_BYTES: usize = 4096;
+#[cfg(windows)]
+const MAX_PASSWORD_BYTES: usize = 4096;
+#[cfg(windows)]
+const MAX_USERNAME_SCALARS: usize = 64;
+const MAX_CREDENTIAL_ATTEMPT_ID_BYTES: usize = 128;
+
+fn valid_credential_attempt_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_CREDENTIAL_ATTEMPT_ID_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn deserialize_credential_attempt_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if !valid_credential_attempt_id(&value) {
+        return Err(de::Error::custom("credential_attempt_id_invalid"));
+    }
+    Ok(value)
+}
+
+fn deserialize_optional_credential_attempt_id<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    if value
+        .as_deref()
+        .is_some_and(|attempt_id| !valid_credential_attempt_id(attempt_id))
+    {
+        return Err(de::Error::custom("credential_attempt_id_invalid"));
+    }
+    Ok(value)
+}
+
+#[cfg(windows)]
+fn deserialize_bounded_passphrase<'de, D>(deserializer: D) -> Result<Zeroizing<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.len() > MAX_PASSPHRASE_BYTES {
+        return Err(de::Error::custom("passphrase_too_long"));
+    }
+    Ok(Zeroizing::new(value))
+}
+
+#[cfg(windows)]
+fn deserialize_bounded_password<'de, D>(deserializer: D) -> Result<Zeroizing<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.is_empty() || value.len() > MAX_PASSWORD_BYTES {
+        return Err(de::Error::custom("password_invalid"));
+    }
+    Ok(Zeroizing::new(value))
+}
+
+#[cfg(windows)]
+fn deserialize_bounded_username<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.trim().is_empty()
+        || value.chars().count() > MAX_USERNAME_SCALARS
+        || value.chars().any(char::is_control)
+    {
+        return Err(de::Error::custom("username_invalid"));
+    }
+    Ok(value)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) struct WireCounter(u64);
@@ -244,6 +328,42 @@ pub(crate) struct ProfileLifecycleInput {
     pub(crate) scope_generation: WireCounter,
     pub(crate) profile_id: String,
     pub(crate) expected_generation: WireCounter,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_credential_attempt_id"
+    )]
+    pub(crate) credential_attempt_id: Option<String>,
+}
+
+#[cfg(windows)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LoadKeyInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    pub(crate) scope_id: String,
+    pub(crate) scope_generation: WireCounter,
+    pub(crate) profile_id: String,
+    pub(crate) key_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_passphrase")]
+    pub(crate) passphrase: Zeroizing<String>,
+}
+
+#[cfg(windows)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LoadPasswordInput {
+    pub(crate) context: DesktopClientContext,
+    pub(crate) activation_token: WireCounter,
+    pub(crate) scope_id: String,
+    pub(crate) scope_generation: WireCounter,
+    pub(crate) profile_id: String,
+    #[serde(deserialize_with = "deserialize_credential_attempt_id")]
+    pub(crate) credential_attempt_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_username")]
+    pub(crate) username: String,
+    #[serde(deserialize_with = "deserialize_bounded_password")]
+    pub(crate) password: Zeroizing<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -369,6 +489,15 @@ pub(crate) struct SshKeyInventoryItem {
     pub(crate) label: String,
     pub(crate) algorithm: String,
     pub(crate) fingerprint: String,
+    pub(crate) encrypted: bool,
+    pub(crate) source: SshKeyInventorySource,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum SshKeyInventorySource {
+    Agent,
+    Local,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

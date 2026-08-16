@@ -51,8 +51,13 @@ export function SshForwardProfileDialog({
   const [keys, setKeys] = useState<KeyInventory["keys"] | null>(null);
   const [keyError, setKeyError] = useState<SshForwardError | null>(null);
   const keyRequestStarted = useRef(false);
+  const submitInFlight = useRef(false);
   const firstInput = useRef<HTMLInputElement>(null);
   const dialogRef = useDialogFocusTrap(open, pending, onClose, firstInput);
+
+  useEffect(() => {
+    if (!pending) submitInFlight.current = false;
+  }, [pending]);
 
   useEffect(() => {
     if (!open || draft.authMode !== "key" || keys || keyRequestStarted.current)
@@ -93,6 +98,7 @@ export function SshForwardProfileDialog({
   };
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
+    if (pending || submitInFlight.current) return;
     const nextErrors = validateSshForwardDraft(draft);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) return;
@@ -101,7 +107,10 @@ export function SshForwardProfileDialog({
       scopeId,
       existing ?? undefined,
     );
-    if (profile) onSubmit(profile);
+    if (profile) {
+      submitInFlight.current = true;
+      onSubmit(profile);
+    }
   };
   const errorPresentation = error
     ? getSshForwardErrorPresentation(error)
