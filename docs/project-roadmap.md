@@ -26,6 +26,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 - **Phase 01 — [COMPLETED 2026-08-16]**: persisted terminal font size and editable increase/decrease shortcuts, live xterm refit/PTY geometry updates, accessible Settings controls, and regression coverage delivered. Validation: 1,079 UI tests, 124 Chromium tests, UI build/lint, and 74 Rust config tests passed. [Plan](../plans/260816-1356-terminal-font-size-shortcuts/plan.md).
 
+### Terminal Output Activity Indicator (2026-08-17)
+
+- **Phases 01–03 — [COMPLETED 2026-08-17 01:20:11 +07:00]**: browser-local per-session receiving/quiet/unavailable/stopped indicator, lifecycle/replay/hidden-kept-alive coverage, accessibility and bounded-render regressions delivered. Validation: focused UI 26/26, focused browser 6/6, full UI 1,096/1,096, full browser 127/127, UI/root build, lint, and diff-check passed. Docs validation warn-only; no backend, transport/SSE, persistence, or output-content retention changes. [Plan](../plans/260816-1854-terminal-output-activity-indicator/plan.md).
+
 - **Current Phase:** Session Model Delegation Audit complete (Phase 07 released 2026-08-01)
 - **Last Milestone:** Release gates, tests, and documentation completed (review approved 9.3/10)
 - **Total Phases Completed:** 36 phases (prior roadmap phases plus Terminal Usage Analytics 03–07 and completed Session Model Delegation Audit 01, 02, 04–07)
