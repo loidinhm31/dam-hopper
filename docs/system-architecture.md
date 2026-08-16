@@ -2125,6 +2125,11 @@ API layer (handlers) catch AppError → HTTP status:
 **Phase 07 (Complete):** IDE explorer enhancements:
 
 - **Markdown split-view preview:** `MarkdownHost` + `MarkdownPreview` components in packages/ui/src/components/organisms/. EditorTabs routes .md/.mdx files to MarkdownHost. Toggle modes: Edit | Split | Preview-only.
+- Markdown view mode is one browser-local presentation preference shared by all
+  Markdown files across projects and workspaces in the app origin. It is stored
+  as a single versioned localStorage value; files without a valid value use
+  Split. Storage failures and invalid values are non-fatal; this preference
+  never changes server, workspace, project-file, API, or database state.
 - **Drag-and-drop file move:** FileTree.tsx DnD via react-arborist's built-in `onMove`. Drop on dir → move into dir. Drop on file → move to file's parent. Calls existing `ops.move()` with server-side sandbox validation.
 - **Backend search API:** `GET /api/fs/search?project=X&q=QUERY[&case=bool&max=N]` in server/src/api/fs.rs. Uses `ignore` crate v0.4 for .gitignore-aware directory walking. Plain text search (regex-escaped server-side). Results capped at 1000, default 200.
 - **Frontend search panel:** New "SEARCH" tab in SidebarTabSwitcher. SearchPanel component with debounced input (useDeferredValue), results grouped by file with match highlighting. `useFileSearch` hook in packages/ui/src/hooks/. Ctrl+Shift+F keyboard shortcut to focus search. Gated behind ide_explorer feature flag.

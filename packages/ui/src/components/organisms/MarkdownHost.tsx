@@ -9,6 +9,11 @@ import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import type { FileTier } from "@/lib/file-tier.js";
 import type { GitLineChange } from "@/api/client.js";
+import {
+  loadMarkdownViewMode,
+  saveMarkdownViewMode,
+  type MarkdownMode,
+} from "@/lib/markdown-view-mode-persistence.js";
 import { MarkdownPreview } from "./MarkdownPreview.js";
 
 const MonacoHost = lazy(() =>
@@ -16,8 +21,6 @@ const MonacoHost = lazy(() =>
     default: m.MonacoHost,
   })),
 );
-
-type MarkdownMode = "edit" | "split" | "preview";
 
 interface MarkdownHostProps {
   tabKey: string;
@@ -59,7 +62,12 @@ export function MarkdownHost({
   lineChanges,
   onGitIndicatorClick,
 }: MarkdownHostProps) {
-  const [mode, setMode] = useState<MarkdownMode>("split");
+  const [mode, setMode] = useState<MarkdownMode>(() => loadMarkdownViewMode());
+
+  function handleModeChange(nextMode: MarkdownMode) {
+    setMode(nextMode);
+    saveMarkdownViewMode(nextMode);
+  }
 
   return (
     <div className="h-full flex flex-col">
@@ -68,7 +76,9 @@ export function MarkdownHost({
         {MODES.map(({ id, label }) => (
           <button
             key={id}
-            onClick={() => setMode(id)}
+            type="button"
+            aria-pressed={mode === id}
+            onClick={() => handleModeChange(id)}
             className={cn(
               "px-2.5 py-0.5 text-[11px] font-medium rounded-sm transition-colors",
               mode === id
