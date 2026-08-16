@@ -34,6 +34,7 @@ function resetSettingsStore() {
   useSettingsStore.setState({
     systemFontSize: 14,
     editorFontSize: 14,
+    terminalFontSize: 13,
     editorZoomWheelEnabled: true,
     searchTextShortcut: "Mod+Shift+KeyF",
     searchFilenameShortcut: "DoubleShift",
@@ -43,6 +44,8 @@ function resetSettingsStore() {
     gitPanelShortcut: "Mod+Shift+KeyG",
     portsPanelShortcut: "Mod+Shift+KeyP",
     fleetTerminalShortcut: "Mod+Shift+KeyM",
+    terminalFontSizeIncreaseShortcut: "Ctrl+Alt+Shift+Equal",
+    terminalFontSizeDecreaseShortcut: "Ctrl+Alt+Minus",
     terminalSuggestionsEnabled: true,
     terminalAutoSwitchProjectEnabled: true,
     terminalCodexNotificationsEnabled: false,
@@ -94,6 +97,9 @@ describe("settings store terminal agent notification fields", () => {
     const state = useSettingsStore.getState();
     expect(state.hydrated).toBe(true);
     expect(state.systemFontSize).toBe(16);
+    expect(state.terminalFontSize).toBe(13);
+    expect(state.terminalFontSizeIncreaseShortcut).toBe("Ctrl+Alt+Shift+Equal");
+    expect(state.terminalFontSizeDecreaseShortcut).toBe("Ctrl+Alt+Minus");
     expect(state.terminalCodexNotificationsEnabled).toBe(false);
     expect(state.terminalCodexNotificationToastEnabled).toBe(true);
     expect(state.terminalCodexBrowserNotificationsEnabled).toBe(true);
@@ -255,6 +261,17 @@ describe("settings store terminal agent notification fields", () => {
     expect(updateUi).toHaveBeenCalledWith({
       terminalAutoSwitchProjectEnabled: false,
     });
+  });
+
+  it("clamps and persists terminal font size changes", async () => {
+    updateUi.mockResolvedValue({ updated: true });
+
+    useSettingsStore.getState().saveDebounced({ terminalFontSize: 50 });
+    expect(useSettingsStore.getState().terminalFontSize).toBe(32);
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(updateUi).toHaveBeenCalledWith({ terminalFontSize: 32 });
   });
 
   it("hydrates codex notifications from the legacy toggle when needed", async () => {
