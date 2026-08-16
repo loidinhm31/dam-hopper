@@ -42,6 +42,7 @@ import {
   createTerminalStreamReplayGate,
   resetTerminalStreamReplayGateForAttach,
 } from "@/lib/terminal-stream-replay-gate.js";
+import { registerTerminalOutputActivity } from "@/lib/terminal-output-activity.js";
 import {
   TerminalAttachRecoveryController,
   type TerminalConnectionStatus,
@@ -256,6 +257,11 @@ export function TerminalPanel({
     // remains fail-closed before a buffer arrives, then queues until replay parsing
     // is complete so historical OSC 9 events cannot be delivered as live alerts.
     const streamReplayGate = createTerminalStreamReplayGate();
+    const outputActivity = registerTerminalOutputActivity(safeSessionId);
+    const resetActivityForUnavailableStream = () => {
+      resetTerminalStreamReplayGateForAttach(streamReplayGate);
+      outputActivity.setStreamReady(false);
+    };
     let disposed = false;
     let recordedSuppressedOutput = false;
     let lastServerOffset = 0;
@@ -263,6 +269,7 @@ export function TerminalPanel({
     // Track all cleanups so the effect return can always run them
     let unsubData: (() => void) | null = null;
     let unsubExit: (() => void) | null = null;
+    let unsubExitEnhanced: (() => void) | null = null;
     let unsubRestart: (() => void) | null = null;
     let unsubBuffer: (() => void) | null = null;
     let unsubLifecycle: (() => void) | null = null;
@@ -303,6 +310,7 @@ export function TerminalPanel({
 
     const writeLiveData = (data: string) => {
       term.write(data);
+      if (data.length > 0) outputActivity.markOutput();
       lastServerOffset += utf8ByteLength(data);
       suggestionsRef.current.handleOutput(data);
       agentNotifications?.onOutput();
@@ -354,6 +362,7 @@ export function TerminalPanel({
         streamReplayGate.hasAttachBufferBeenReceived = true;
         streamReplayGate.isReplayWriting = true;
         streamReplayGate.isLiveStreamReady = false;
+        outputActivity.setStreamReady(false);
         const currentReplayGeneration = ++streamReplayGate.replayGeneration;
         agentNotifications?.setReplayActive(true);
         lastServerOffset = applyTerminalBufferReplay(term, replay, () => {
@@ -365,6 +374,7 @@ export function TerminalPanel({
 
           streamReplayGate.isReplayWriting = false;
           streamReplayGate.isLiveStreamReady = true;
+          outputActivity.setStreamReady(true);
           agentNotifications?.setReplayActive(false);
           const queuedLiveDataSnapshot =
             streamReplayGate.queuedLiveData.splice(0);
@@ -393,10 +403,15 @@ export function TerminalPanel({
       });
     }
 
-    // 3. Handle PTY exit with enhanced restart metadata
-    unsubExit =
+    // 3. Clear observed activity on every PTY exit. The enhanced listener below
+    // owns the existing banner/restart behavior when the transport supports it.
+    unsubExit = transport.onTerminalExit(safeSessionId, () => {
+      resetActivityForUnavailableStream();
+    });
+    unsubExitEnhanced =
       transport.onTerminalExitEnhanced?.(safeSessionId, (exitEvent) => {
         const { exitCode, willRestart, restartIn } = exitEvent;
+        resetActivityForUnavailableStream();
         const color = willRestart
           ? "\x1b[33m"
           : exitCode === 0
@@ -547,7 +562,7 @@ export function TerminalPanel({
       // Every attach starts a new replay ownership window. In particular, a
       // reconnect must close the prior live-ready gate before sending attach so
       // old-stream output cannot render ahead of the replacement replay.
-      resetTerminalStreamReplayGateForAttach(streamReplayGate);
+      resetActivityForUnavailableStream();
       setAttachState("attaching");
       if (retryAttempt === 0) {
         recordClientDiagnostic(
@@ -617,6 +632,7 @@ export function TerminalPanel({
 
     if (transport.onStatusChange) {
       unsubStatus = transport.onStatusChange((status) => {
+        if (status !== "connected") resetActivityForUnavailableStream();
         recoveryController?.onConnectionStatus(
           status as TerminalConnectionStatus,
           lastServerOffset,
@@ -671,10 +687,12 @@ export function TerminalPanel({
       streamReplayGate.queuedLiveData.length = 0;
       unsubData?.();
       unsubExit?.();
+      unsubExitEnhanced?.();
       unsubRestart?.();
       unsubBuffer?.();
       unsubLifecycle?.();
       unsubStatus?.();
+      outputActivity.dispose();
       recoveryController?.dispose();
       inputDisposable?.dispose();
       releaseCompositionGuards();
