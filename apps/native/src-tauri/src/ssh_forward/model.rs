@@ -132,6 +132,16 @@ impl WireCounter {
     }
 }
 
+/// Shared revision base for the v2 connection and forwarding-rule
+/// collections. Commands are added in a later phase; keeping this DTO here
+/// prevents each IPC surface from inventing a different revision shape.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SshForwardCollectionRevisions {
+    pub(crate) connections_revision: WireCounter,
+    pub(crate) rules_revision: WireCounter,
+}
+
 impl fmt::Display for WireCounter {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
