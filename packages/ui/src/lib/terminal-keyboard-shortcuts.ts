@@ -24,10 +24,46 @@ function matchesTerminalFontShortcut(
 ): boolean {
   if (!shortcut || event.type !== "keydown") return false;
   return matchesKeyboardShortcut(shortcut, {
-    ...event,
+    type: event.type,
+    code: event.code,
+    key: event.key,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey,
     repeat: false,
     isComposing: false,
+    keyCode: event.keyCode,
   });
+}
+
+interface TerminalFontSizeShortcutOptions {
+  increaseShortcut?: string;
+  decreaseShortcut?: string;
+  onIncrease?: () => void;
+  onDecrease?: () => void;
+}
+
+/** Handles configured font-size shortcuts before browser or terminal input. */
+export function handleTerminalFontSizeShortcut(
+  event: ShortcutKeyEvent,
+  {
+    increaseShortcut,
+    decreaseShortcut,
+    onIncrease,
+    onDecrease,
+  }: TerminalFontSizeShortcutOptions,
+): boolean {
+  const shouldIncrease = matchesTerminalFontShortcut(increaseShortcut, event);
+  const shouldDecrease = matchesTerminalFontShortcut(decreaseShortcut, event);
+  if (!shouldIncrease && !shouldDecrease) return true;
+
+  event.preventDefault?.();
+  if (!event.repeat && !event.isComposing && event.keyCode !== 229) {
+    if (shouldIncrease && !shouldDecrease) onIncrease?.();
+    else if (shouldDecrease && !shouldIncrease) onDecrease?.();
+  }
+  return false;
 }
 
 function matchesTerminalFindShortcut(event: ShortcutKeyEvent): boolean {
@@ -59,26 +95,14 @@ export function handleSharedTerminalKeyEvent(
     onDecreaseTerminalFontSize,
   }: SharedTerminalKeyOptions,
 ) {
-  const shouldIncreaseTerminalFontSize = matchesTerminalFontShortcut(
-    terminalFontSizeIncreaseShortcut,
-    event,
-  );
-  const shouldDecreaseTerminalFontSize = matchesTerminalFontShortcut(
-    terminalFontSizeDecreaseShortcut,
-    event,
-  );
-  if (shouldIncreaseTerminalFontSize || shouldDecreaseTerminalFontSize) {
-    event.preventDefault?.();
-    if (!event.repeat && !event.isComposing && event.keyCode !== 229) {
-      if (shouldIncreaseTerminalFontSize && !shouldDecreaseTerminalFontSize) {
-        onIncreaseTerminalFontSize?.();
-      } else if (
-        shouldDecreaseTerminalFontSize &&
-        !shouldIncreaseTerminalFontSize
-      ) {
-        onDecreaseTerminalFontSize?.();
-      }
-    }
+  if (
+    !handleTerminalFontSizeShortcut(event, {
+      increaseShortcut: terminalFontSizeIncreaseShortcut,
+      decreaseShortcut: terminalFontSizeDecreaseShortcut,
+      onIncrease: onIncreaseTerminalFontSize,
+      onDecrease: onDecreaseTerminalFontSize,
+    })
+  ) {
     return false;
   }
 
